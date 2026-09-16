@@ -192,7 +192,7 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     // patched. Publishing here is what lets the `for…of` index loop and the
     // array-destructuring fast arm decline a possibly-patched
     // `%ArrayIteratorPrototype%.next`, which neither can observe otherwise.
-    crate::object::iterator_prototypes::note_array_iterator_prototype_exposed(proto);
+    crate::object::iterator_prototypes::note_iterator_prototype_exposed(proto);
     proto
 }
 

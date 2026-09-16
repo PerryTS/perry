@@ -162,7 +162,7 @@ pub(super) static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(fa
 ///     HIR lowering, which never consults the iteration protocol, so such a
 ///     patch was ignored there even after the spread paths were fixed (#7542).
 ///   * The array-iterator PROTOTYPE object was handed to user code (#10086; see
-///     `object::iterator_prototypes::note_array_iterator_prototype_exposed`).
+///     `object::iterator_prototypes::note_iterator_prototype_exposed`).
 ///     A replaced `%ArrayIteratorPrototype%.next` is detected per `.next()` call
 ///     (`prototype_next_is_canonical`), which a fast arm that never calls
 ///     `.next()` cannot observe — and the only way to reach that object in order
@@ -172,10 +172,15 @@ pub(super) static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(fa
 ///     introspect array iterators, while under-approximating would silently
 ///     return unpatched elements.
 ///
-/// Both consumers — the `for…of` index loop and #10086's array-destructuring
-/// arm — branch on it ONCE, which is also what the spec wants: iteration
-/// performs GetIterator exactly once, so a patch landing mid-loop must not
-/// change the iterator already in hand.
+/// The two GENERATED consumers — the `for…of` index loop and #10086's
+/// array-destructuring arm — branch on it ONCE, which is also what the spec
+/// wants: iteration performs GetIterator exactly once, so a patch landing
+/// mid-loop must not change the iterator already in hand.
+///
+/// #9846 added a third, RUNTIME-side consumer through
+/// [`array_iteration_not_pristine`]: `dense_spread_source`'s element copy and
+/// `array_from_spread_value`'s `Array.prototype[Symbol.iterator]` delegation,
+/// which are the spread / `Array.from` equivalents of the same hole.
 ///
 /// A separate `u8` global rather than exposing the `AtomicBool`: codegen emits
 /// a plain volatile `i8` load, the same shape as
@@ -184,9 +189,12 @@ pub(super) static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(fa
 /// itself is emitted byte-identically to before.
 ///
 /// NOTE the asymmetry with [`ARRAY_PROTO_ITERATOR_MODIFIED`]: that bool keeps
-/// its exact original meaning (the `Symbol.iterator` slot was written) and still
-/// gates the Rust-side spread / `js_get_iterator` delegation. Only this byte
-/// carries the broader "not provably pristine" fact.
+/// its exact original meaning (the `Symbol.iterator` slot was written). This
+/// byte carries the broader "not provably pristine" fact, and since #9846 it
+/// is what the Rust-side spread / `js_get_iterator` delegation gates on too —
+/// the narrow bool implies it (`note_array_proto_iterator_write` sets both),
+/// so widening those call sites strictly grows the set of receivers that take
+/// the real protocol.
 #[no_mangle]
 pub static PERRY_ARRAY_ITERATION_NOT_PRISTINE: AtomicU8 = AtomicU8::new(0);
 
@@ -196,6 +204,13 @@ pub static PERRY_ARRAY_ITERATION_NOT_PRISTINE: AtomicU8 = AtomicU8::new(0);
 #[inline]
 pub(crate) fn note_array_iteration_not_pristine() {
     PERRY_ARRAY_ITERATION_NOT_PRISTINE.store(1, Ordering::Release);
+}
+
+/// Rust-side reader for [`PERRY_ARRAY_ITERATION_NOT_PRISTINE`]. Acquire-ordered
+/// to pair with `note_array_iteration_not_pristine`'s release.
+#[inline]
+pub(crate) fn array_iteration_not_pristine() -> bool {
+    PERRY_ARRAY_ITERATION_NOT_PRISTINE.load(Ordering::Acquire) != 0
 }
 
 /// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known

@@ -176,7 +176,7 @@ pub(crate) use self::indexing::{
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing_support::{
-    array_proto_iterator_modified, invalidate_array_index_fast_path,
+    array_iteration_not_pristine, array_proto_iterator_modified, invalidate_array_index_fast_path,
     keys_array_len_capped_to_capacity, keys_array_slot, note_array_index_write,
     note_array_iteration_not_pristine, note_array_proto_iterator_write,
     note_object_prototype_index_write, object_prototype_has_index_flag,
@@ -289,9 +289,10 @@ pub(crate) use self::header::{
     gc_element_slot_range, mark_array_layout_unknown, mark_array_raw_f64_holes_fresh,
     normalize_array_receiver, note_array_slot, note_array_slot_layout_only,
     note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
-    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, store_array_slot_resolved, transfer_array_numeric_layout,
-    typed_array_receiver, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    reclassify_array_numeric_layout_from_slots, refresh_array_numeric_layout,
+    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
+    store_array_slot_resolved, transfer_array_numeric_layout, typed_array_receiver,
+    value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,

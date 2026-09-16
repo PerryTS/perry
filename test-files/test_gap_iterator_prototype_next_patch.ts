@@ -36,6 +36,12 @@ withPatched(
     console.log("A-forof", got.join(","));
     console.log("A-spread", [...[4, 5]].join(","));
     console.log("A-from", Array.from([6].values()).join(","));
+    // `Array.from(array)` and the CALL / multi-operand spread forms reach
+    // different runtime entry points from `[...array]` — each one has its own
+    // element-copy fast arm, and each has to decline it here.
+    console.log("A-from-array", Array.from([11, 12]).join(","));
+    console.log("A-call-spread", ((...xs: number[]) => xs.join(","))(...[13, 14]));
+    console.log("A-multi-spread", [...[15], ...[16]].join(","));
     const it = [7, 8].values();
     console.log("A-manual", it.next().value, it.next().value, it.next().done);
   },
@@ -80,6 +86,8 @@ withPatched(
     const got: string[] = [];
     for (const [k, v] of new Map([["a", 1], ["b", 2]])) got.push(k + "=" + v);
     console.log("D-map", got.join(","));
+    console.log("D-map-spread", JSON.stringify([...new Map([["z", 5]])]));
+    console.log("D-map-from", JSON.stringify(Array.from(new Map([["y", 6]]))));
   },
 );
 console.log("D-map-restored", [...new Map([["a", 1]])].join(","));
@@ -93,6 +101,7 @@ withPatched(
     },
   () => {
     console.log("D-set", [...new Set([1, 2])].join(","));
+    console.log("D-set-from", Array.from(new Set([3, 4])).join(","));
   },
 );
 console.log("D-set-restored", [...new Set([3])].join(","));
@@ -108,6 +117,7 @@ withPatched(
     },
   () => {
     console.log("E-string", [..."ab"].join(","));
+    console.log("E-string-from", Array.from("cd").join(","));
   },
 );
 console.log("E-string-restored", [..."cd"].join(","));

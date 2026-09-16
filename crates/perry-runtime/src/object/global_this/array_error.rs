@@ -213,6 +213,17 @@ pub(crate) extern "C" fn object_prototype_is_prototype_of_thunk(
 
 /// #4533: native error subclass constructors whose `[[Prototype]]` is `Error`
 /// (their `.prototype.[[Prototype]]` already links to `Error.prototype`).
+///
+/// `SuppressedError` belongs here for the same reason the NativeErrors do —
+/// ECMA-262 (explicit resource management) gives `%SuppressedError%` the
+/// `[[Prototype]]` `%Error%` and `%SuppressedError.prototype%` the
+/// `[[Prototype]]` `%Error.prototype%`. Omitting it did not merely lose
+/// `Object.getPrototypeOf(SuppressedError.prototype) === Error.prototype`: once
+/// `js_instanceof` started answering `x instanceof Error` from the instance's
+/// RECORDED prototype chain (#9940), the missing link made that walk answer
+/// `false` and short-circuit the `extends_builtin_error(CLASS_ID_SUPPRESSED_ERROR)`
+/// registry fact that used to carry it, so `new SuppressedError(…) instanceof
+/// Error` regressed to `false`.
 pub(crate) fn is_native_error_subclass_constructor(name: &str) -> bool {
     matches!(
         name,
@@ -223,6 +234,7 @@ pub(crate) fn is_native_error_subclass_constructor(name: &str) -> bool {
             | "EvalError"
             | "URIError"
             | "AggregateError"
+            | "SuppressedError"
     )
 }
 
