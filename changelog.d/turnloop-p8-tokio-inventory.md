@@ -2,9 +2,11 @@
 
 The turnloop migration's remaining surface was recorded only as prose: eight
 lane reports, each ending with a list of what it did not move, each written at a
-different commit. Those lists had gone stale in both directions — paths named as
-remaining had been migrated by a later lane, and edges nobody named had appeared
-— so nobody could say how much was left, or when it would be done.
+different commit. Read against the tree, those lists are incomplete (none names
+the `perry` CLI, `perry-container-compose` or `perry-ui-gtk4`, which hold 6 of
+the 46 remaining edges between them), scope the same blocker differently each
+time, and contain no number at all — so nobody could say how much was left, or
+when it would be done.
 
 **`scripts/tokio_inventory.py`** re-derives it from the tree and runs in the
 required `lint` job. It gates two exact, machine-derived facts: every
@@ -41,3 +43,11 @@ day. Nothing lowers to those symbols and `perry-ext-cron` — the copy the
 well-known flip actually links — has always been a bare handle allocator, so the
 two copies now agree. And `scripts/turnloop/apps/tokio_worker_agent_census.ts`
 measures the decline every lane depends on instead of asserting it.
+
+Building the probe for that last point turned up a **regression on
+`turnloop/integration`**: `fetch()` inside a `node:worker_threads` Worker
+answers 200 on `main` and `error: fetch failed` on the branch, because a
+`worker_threads` Worker never claims an agent id and so reports itself as the
+primary agent to every turnloop availability check. That, three further Perry
+defects and a costed removal plan whose fourteen groups account for all 46
+edges are in `docs/turnloop/p8-report.md`.
