@@ -4,7 +4,7 @@ Branch `turnloop/p7-databases`, based on `turnloop/integration` at `7f77cce3c6`
 (P0 through P5 plus `main` through v0.5.1576). Built and tested on the shared
 Linux box (`perrybuilder`, EPYC 9354P) against the pinned gap oracle Node
 **26.5.1** (`/opt/node-v26.5.1-linux-x64/bin`, not the box default 26.8.1), with
-real PostgreSQL 16.15, MySQL 8.0.46, Redis 8 and MongoDB 8.0.32 servers. Nothing
+real PostgreSQL 16.15, MySQL 8.0.46, Redis 7.0.15 and MongoDB 8.0.32 servers. Nothing
 here was run on Windows or macOS, and nothing was benchmarked.
 
 ## The finding, before the change
@@ -248,6 +248,27 @@ migrated path buffers:
 A streaming API is a JS-surface change (`query().stream()`, a real cursor
 object) and belongs in its own phase.
 
+## Every remaining tokio-reachable database path
+
+Named exhaustively, because "the drivers moved off tokio" is not true and the
+difference matters to whoever deletes the dependency in P8.
+
+| site | what still runs on tokio | reachable when |
+|---|---|---|
+| `perry-ext-ioredis` `dispatch` / `get_connection` | `redis::aio::MultiplexedConnection` + `spawn_blocking` + `Handle::block_on` | the client declined at construction: no loop on this agent, the `tokio-wait-driver` arm, or `REDIS_TLS` not `false` |
+| `perry-ext-pg` (all ten entry points' legacy arm) | `sqlx::postgres` + `spawn_blocking` + `Handle::block_on` | ditto, plus a Unix-domain-socket host |
+| `perry-ext-mysql2` (all ten legacy arms) | `sqlx::mysql` + `spawn_blocking` + `Handle::block_on` | ditto |
+| `perry-ext-mongodb` (every entry point's legacy arm) | the `mongodb` driver (its own pool, SDAM monitors, rustls, hickory DNS) | ditto, plus `+srv`, `tls=`, several hosts, `replicaSet=`, `compressors=`, an unparsable URI, or no `/dev/urandom` |
+| `perry-stdlib/src/{ioredis.rs, mongodb.rs, mysql2/, pg/}` | `sqlx` / `redis` / `mongodb` on the shared **current-thread** runtime (cooperative `.await`, no thread per call) | only under `PERRY_DISABLE_WELL_KNOWN=1`, or when the ext crate's source is absent from disk; compiled out of every default build |
+| `perry-ext-better-sqlite3`, `perry-stdlib/src/sqlite/`, `bun_sql.rs` | nothing — SQLite is in-process | always; there is no transport here to move |
+
+Two things follow. First, **the tokio blocking pool is still reachable from a
+database binding** — a `worker_threads` agent takes the legacy path for all
+four, which is the same hole P4 left for its own subjects and which per-agent
+loops close rather than this phase. Second, the stdlib copies are the *only*
+database code that never needed a thread per call; they were already cooperative
+on the shared runtime, and they are also the copies nobody links.
+
 ## GC decisions
 
 * **No new root scanner, and the reason is structural**: no JS value and no heap
@@ -286,7 +307,7 @@ another session's expectations do not move. The control script is
 |---|---|---|---|
 | PostgreSQL | 16.15 | `127.0.0.1:55432` | `perry` / `perry_test`, db `perry_test`, **scram-sha-256** |
 | MySQL | 8.0.46 | `127.0.0.1:53306` | `perry` (caching_sha2) and `perrynat` (mysql_native_password) / `perry_test`, db `perry_test` |
-| Redis | 8.x (Ubuntu `redis-server`) | `127.0.0.1:56379` | none |
+| Redis | 7.0.15 (Ubuntu `redis-server`) | `127.0.0.1:56379` | none |
 | MongoDB | 8.0.32 | `127.0.0.1:57017` | none |
 
 Two things worth knowing before repeating this. `/root` is mode 700, so a
