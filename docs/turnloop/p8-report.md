@@ -383,11 +383,15 @@ runs each, and it is deterministic:
 | **`main` @ `fcd108bfb` (v0.5.1579)** | `status=200` | **`status=200`** |
 | **`turnloop/integration` @ `babc5f0d1f`** | `status=200` | **`status=error:fetch failed`** |
 
-Both Perry binaries were built from source in their own trees on the same box
-with the same package set, and the probe is the same file compiled by each. The
-commits `main` has that the integration branch does not (v0.5.1577–1579) touch
-no file matching `fetch|worker|agent|event_pump|turnloop`, so the difference is
-not a main-line fix the branch is missing.
+Both Perry binaries were built from source in their own clone on the same box
+with the same pinned toolchain, and the probe is the same source file compiled
+by each; each probe's `perry-ext-*` archives were built by auto-optimize from
+its own tree, so neither arm borrowed the other's. (The `main` tree's explicit
+build omitted the five prebuilt `perry-ext-*` wrappers the gap suite needs —
+it ran no sweep, only probes.) The commits `main` has that the integration
+branch does not, v0.5.1577–1579, touch no file matching
+`fetch|worker|agent|event_pump|turnloop`, so the difference is not a main-line
+fix the branch is missing.
 
 The counters say what happened:
 
