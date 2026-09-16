@@ -4806,6 +4806,21 @@ pub fn run_with_parse_cache(
                     if !class.is_exported {
                         continue;
                     }
+                    // #10356: this loop registers classes the importing module
+                    // never named in its specifier list. The comment above
+                    // argues that is safe because a same-named LOCAL class
+                    // wins in `compile_module` — true, but a global intrinsic
+                    // is not a local class, so nothing outranks the implicit
+                    // entry and `new Request(...)` in the importer builds the
+                    // exporter's `class Request` instead of the global one.
+                    // (A generated SDK exporting `Request`/`Response`/`Headers`
+                    // is common: hey-api, openapi-typescript, oazapfts.)
+                    // An EXPLICIT `import { Request } from "./mod.js"` is
+                    // pushed by the specifier-driven sites above and already
+                    // wins the name dedup below, so it is unaffected.
+                    if perry_hir::analysis::is_global_intrinsic_value_name(&class.name) {
+                        continue;
+                    }
                     // Dedup across multiple import statements: the same class
                     // may be transitively reachable from several imports, and
                     // the same-class-twice case would produce duplicate
