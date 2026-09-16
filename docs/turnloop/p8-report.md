@@ -118,9 +118,10 @@ reasons this tree demonstrates rather than hypothesises:
    (`perry-runtime`, `perry-hir`, `perry-codegen`, `perry-ffi`,
    `perry-db-turnloop`) is already tokio-free.
 2. **`cargo tree` cannot see a target-gated edge on the wrong host.**
-   `perry-ui-gtk4`'s tokio is `cfg(target_os = "linux")`; on the macOS
-   development host it is invisible. An inventory that misses it is not an
-   inventory.
+   `perry-ui-gtk4`'s tokio was `cfg(target_os = "linux")`; on the macOS
+   development host it was invisible. An inventory that misses it is not an
+   inventory. (That edge has since been removed — see group M — but it is
+   exactly the shape the gate has to be able to see.)
 
 ### What it does *not* gate, and why that is said out loud
 
@@ -151,7 +152,7 @@ is tracked — is in `scripts/tokio_inventory.json` and renders with
 | `perry-ext-mongodb` | mongodb, tokio | `MongoClient` on a declining path, `+srv`, `tls=`, replica sets | migrated for direct single-host plaintext (P7) |
 | `perry-ext-nodemailer` | lettre, tokio | `sendMail`/`verify` on a declining path | transport migrated (P6); the MIME builder is lettre forever |
 | `perry-stdlib` | hyper, hyper-util, lettre, mongodb, redis, reqwest, sqlx, tokio, tokio-rustls, tokio-tungstenite (all optional) | the global `fetch` on a declining path, `js_fetch_stream_start`, the bundled TLS server, and every bundled module under `PERRY_DISABLE_WELL_KNOWN=1` | mixed — and `tokio` here is the last edge that can go, not the first |
-| `perry-ui-gtk4` | tokio (`cfg(linux)`) | `perry/ui` tray + MPRIS | `ksni`/`mpris-server` require tokio |
+| `perry-ui-gtk4` | — (was tokio, `cfg(linux)`) | `perry/ui` tray + MPRIS | **removed** — the "require tokio" reading was wrong, see group M |
 | `perry-ui-android` | tungstenite (`cfg(android)`) | `perry/ui` WebSocket on Android | **not a tokio edge** — sync tungstenite 0.24 on its own thread |
 
 ## The one blocker that gates almost everything
@@ -596,7 +597,7 @@ fifteenth item late.
 | **J** | **The `perry` CLI** — `publish`, `login`, `verify`, `audit`, `run --remote`, `setup`, the update check, telemetry, compat reports. 14 `reqwest::Client` constructions (7 blocking, 7 async) across 11 files, 7 `Runtime::new` sites, 2 WebSocket clients | **3** — `perry` × 3 | medium, and it needs multipart in `turnloop-http`'s client, which does not have it |
 | **K** | **`perry-compose`** | **2** — `perry-container-compose` normal + dev | a rewrite of a 14.8k-line async tool with no JS surface |
 | **L** | **`perry-stdlib`'s `tokio`** — the `async-runtime` feature, `common::async_bridge`, and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI | **1** — the last edge | falls out of A–K; see below |
-| **M** | **`perry-ui-gtk4`** — `ksni` and `mpris-server` *require* tokio | **1** | replace both crates, or drop Linux tray/MPRIS |
+| **M** | ~~**`perry-ui-gtk4`** — `ksni` and `mpris-server` *require* tokio~~ — **this was wrong, and the edge is gone.** Neither crate requires tokio. `ksni`'s `async-io` feature is a first-class alternative to its `tokio` default (the two are mutually exclusive — `ksni::compat` has a `compile_error!` if both are on) and carries its own executor thread; `mpris-server`'s `tokio` feature is opt-in, is not in its defaults, and only forwards to `zbus/tokio`, which zbus needs no more than any of its other executor backends. Perry had asked for both features and then kept a direct tokio dependency to feed them. Removed with tray and MPRIS intact — `docs/turnloop/gtk4-report.md` | **1** | **done.** No crate replaced, no capability dropped |
 | **N** | **`perry-ui-android`'s `tungstenite`** — sync 0.24 on its own thread. **Not a tokio edge**; listed because it pins the third tungstenite major in the tree, which is part of E's cost | **1** | small, and only worth doing with E |
 | | | **46** | |
 

@@ -3,6 +3,9 @@
 pub mod app;
 pub mod audio;
 pub mod audio_playback;
+/// Shared background async driver (one parked thread, no tokio) for the
+/// crate's D-Bus services — see `background.rs`.
+mod background;
 pub mod camera;
 pub mod clipboard;
 pub mod deeplinks_stub;
@@ -28,8 +31,9 @@ pub mod window;
 pub mod screenshot;
 
 // Tray icon (issue #490). The body uses `ksni` (which transitively
-// pulls `zbus` + `tokio`) — all gated to `cfg(target_os = "linux")` in
-// Cargo.toml (mirrors `media_playback`'s mpris module). The FFI
+// pulls `zbus`, driven by ksni's own `async-io` executor) — all gated
+// to `cfg(target_os = "linux")` in Cargo.toml (mirrors
+// `media_playback`'s mpris module). The FFI
 // exports themselves stay unconditional below so the link surface is
 // stable on macOS / Windows hosts that build the gtk4 crate without a
 // real GTK FFI wired up.
