@@ -852,9 +852,10 @@ Named precisely, because each is a hole rather than a preference.
   report is a performance claim; the `[perry-loop]` counters are liveness
   evidence, not measurements.
 * **The auto-optimize gap tier** as a whole. The fast tier ran, which itself
-  takes the auto-optimize path per ext-routed test (#7629), so 35 of the 798
-  fixtures did build their own archives — but the 8-shard auto-optimize mode
-  did not run.
+  takes the auto-optimize path per ext-routed test (#7629) — 35 of the
+  `test-files/test_gap_*.ts` fixtures import a module the well-known flip
+  routes to a `perry-ext-*` wrapper, and each of those built its own coherent
+  archives — but the 8-shard auto-optimize mode did not run.
 * **`cargo test --workspace`**, and the `perry-runtime` unit suite. This
   branch's only Rust change is the removal of two `spawn_native` calls from
   `cron.rs`; `cargo check -p perry-stdlib --no-default-features --features full`
