@@ -352,10 +352,44 @@ client: close code=1006 reason=
 server: close code=1000 reason=tls-done
 ```
 
-The server receives and reports the peer's code correctly; what the peer does
-not get back is the *answering* close frame. `Codec::receive` queues and flushes
-it and `turnloop_link::on_data` writes it before `finish`, so the suspect is the
-ordering between that write and the graceful shutdown that follows it.
+A raw-socket probe settles what actually reaches the wire. The client does the
+handshake by hand, sends `hi`, then a masked close frame carrying `1000 "bye"`,
+and prints every byte back:
+
+```
+101 seen: HTTP/1.1 101 Switching Protocols
+frame op=1 fin=true len=7 hex=6563686f3a6869      <- the application's echo, "echo:hi"
+server sent FIN                                    <- and then nothing else
+socket closed hadError=false
+```
+
+So the connection is healthy, application frames go out, and the *answering
+close frame never leaves*. The server's own `'close'` handler reports
+`code=1000 reason=bye`, so the frame was decoded; a unit test
+(`a_peer_close_is_echoed_back_onto_the_wire`) proves the codec puts the echo in
+its output buffer on exactly this input; and `turnloop_link::on_data` takes that
+output and writes it **before** anything closes.
+
+Two hypotheses were tested and both are wrong, which is worth recording so the
+next person does not retest them:
+
+* **A second shutdown resetting the connection.** The peer's FIN reached
+  `on_eof`, which shut down again; the second `shutdown(2)` answers `ENOTCONN`,
+  and the error path answered *that* with `destroy_connection` — a
+  `Loop::close`, which cancels outstanding operations. Plausible, and fixed
+  anyway (`on_eof` / `on_error` now report whether this layer still owned the
+  connection, and the host tears down only when it did). **It did not change the
+  observable.**
+* **The shutdown racing the write it should follow.** Removing the shutdown
+  entirely — retiring the link and leaving the peer's FIN to drive it — made it
+  *worse*: with nothing closing, `ws` hit its own close timeout and still
+  reported 1006. Reverted.
+
+What that leaves is the write itself. The strongest remaining suspect is the
+`user` tag: the echo is submitted as `tl::write(id, bytes, 0)` and the shutdown
+as `tl::shutdown(id, 0)`, the same tag, on the same handle — and P5's TLS
+accounting treats `user == 0` as "not an application write". Untested; named so
+it can be tested first.
 
 Note carefully why `test_gap_turnloop_ws_attached` is byte-identical to Node
 anyway: its client is **Perry's own** `ws` client, and that client does receive
