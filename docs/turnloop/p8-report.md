@@ -745,19 +745,24 @@ GAP_TABLE_PLACEHOLDER
 
 ### Probes
 
-Every probe in this report was compiled by the arm it is attributed to, from
-that arm's own `target/release`, with `PERRY_RUNTIME_DIR` pointed at it:
+Each probe names the compiler that built it, and each was compiled from that
+tree's own `target/release` with `PERRY_RUNTIME_DIR` pointed at it. "base" is
+`turnloop/integration` @ `babc5f0d1f` in `/root/claude-turnloop-p8/base`; "P8"
+is this branch in `/root/claude-turnloop-p8/perry`; "main" is `fcd108bfb`
+(v0.5.1579) in `/root/claude-turnloop-p8/mainref`. The base and P8 arms differ
+by exactly the `cron.rs` change, which no probe here touches — so a probe built
+by one is evidence about the other for every subject in this report.
 
-| probe | what it establishes |
-|---|---|
-| `fetch_only.ts` / `g0.ts` | the global `fetch` is on turnloop, `tokio_ticks=0`, one thread |
-| `fetch_with_axios.ts` | axios does not take the global fetch with it; both transports in one process |
-| `g1.ts` (= `g0.ts` + `import 'node-fetch'`) | SIGSEGV, 3/3, on **both** `main` and the integration branch |
-| `g1_nowk` (same file, `PERRY_DISABLE_WELL_KNOWN=1`) | correct — isolates the crash to the well-known routing |
-| `nf_only.ts` | node-fetch alone: `r.status` is `undefined`, a bare-number handle |
-| `scripts/turnloop/apps/tokio_worker_agent_census.ts` | the Worker-agent regression, 3/3 on each arm |
-| `netw_main.ts` | `net.connect` inside a Worker: OK on both arms — the regression is fetch-specific |
-| `race.ts` | a Worker that parks (a 50 ms timer) before fetching: the fetch **hangs**, never settling |
+| probe | built by | what it establishes |
+|---|---|---|
+| `fetch_only.ts`, `g0.ts` | base | the global `fetch` is on turnloop: `p6 http_submitted=1 declined=0`, `tokio_ticks=0`, one thread |
+| `fetch_with_axios.ts` | base | axios does **not** take the global fetch with it — one turnloop fetch and one tokio tick in one process |
+| `g1.ts` (= `g0.ts` + `import 'node-fetch'`) | base **and** main | SIGSEGV, 3/3 on each — the crash is pre-existing, not a turnloop regression |
+| `g1_nowk` (same file, `PERRY_DISABLE_WELL_KNOWN=1`) | base | correct (`status=200`) — isolates the crash to the well-known routing |
+| `nf_only.ts` | base | node-fetch alone: `r.status` is `undefined`, a bare-number handle |
+| `scripts/turnloop/apps/tokio_worker_agent_census.ts` | P8 **and** main | the Worker-agent regression: 200 on main, `fetch failed` on the branch, 3/3 each |
+| `netw_main.ts` | P8 **and** main | `net.connect` inside a Worker: OK on both — the regression is fetch-specific |
+| `race.ts` (park, then fetch, inside a Worker) | P8 | the fetch **hangs** — never settles, never rejects |
 
 ### What was not run
 
