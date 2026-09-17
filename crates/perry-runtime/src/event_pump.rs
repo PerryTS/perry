@@ -367,6 +367,10 @@ pub fn shutdown_wait_driver() {
     {
         agent_loop::shutdown_current_thread();
         loop_stats::print_once("turnloop");
+        // P1's own census. `completions=` on the line above is the driver's
+        // whole turn output — net, process, JS timers and pool together — so it
+        // cannot say what one request cost. This one can.
+        crate::turnloop_net::census::print_once();
     }
     #[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
     {

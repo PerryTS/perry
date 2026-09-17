@@ -192,8 +192,18 @@ pub struct LoopStats {
     pub native_ticks: u64,
     /// Turns that returned an error; the park fell back to the condvar.
     pub turn_errors: u64,
-    /// Completions dispatched to a P1 net subsystem. Zero means turnloop
-    /// carried no I/O for this process, whatever the turn count says.
+    /// Every completion the driver returned, summed across ALL classes before
+    /// routing — P1 net, P2 process, P3 JS timers and P4 pool together.
+    ///
+    /// NOT "net completions", which this comment used to claim and which an
+    /// instrument then quoted: `scripts/turnloop/server_ab.py` justified its
+    /// "turnloop really carried the I/O" check with those words, so a server
+    /// that had declined its listener to hyper but armed a keep-alive deadline
+    /// would still have shown a non-zero count and passed. Nonzero here means
+    /// the loop did *something*, not that it did I/O.
+    ///
+    /// For a per-class answer use `turnloop_net::census`, whose
+    /// `[perry-loop] p1 comp_*` line counts net completions by operation.
     pub completions: u64,
     /// JS timer deadlines that expired as a turnloop timer completion (P3).
     /// Zero on a program with timers means the heap's deadline never reached

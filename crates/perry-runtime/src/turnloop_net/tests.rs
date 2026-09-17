@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use super::sink::{
     NetCompletion, NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_SHUTDOWN,
-    NET_WROTE,
+    NET_TIMER, NET_WROTE,
 };
 use super::*;
 
@@ -619,4 +619,59 @@ fn a_second_sink_on_an_occupied_slot_is_refused_not_swapped_in() {
         !super::register_sink(super::MAX_SUBSYSTEMS as u8, test_sink, test_alloc_id),
         "a slot at the ceiling must be refused"
     );
+}
+
+#[test]
+fn parking_a_deadline_keeps_its_handle_and_cancelling_destroys_it() {
+    let _fixture = Fixture::start();
+    let id = 4242;
+    let before = super::live_handles();
+
+    // Arm once: the deadline now owns a handle, which is the quantity that
+    // discriminates a park from a cancel. Without this the assertions below
+    // would pass against a fixture that never armed anything.
+    super::timer_arm(id, SUBSYSTEM, 60_000).expect("arm");
+    assert_eq!(
+        super::live_handles(),
+        before + 1,
+        "the subject must exist: arming a deadline takes a handle"
+    );
+
+    // Park: disarmed, but the handle survives, so the re-arm below is a
+    // deadline move rather than a fresh handle — and turnloop answers a move
+    // with no completion at all, where it answers a close with two.
+    super::timer_park(id).expect("park");
+    assert_eq!(
+        super::live_handles(),
+        before + 1,
+        "parking keeps the handle so the next arm moves it in place"
+    );
+
+    // The parked handle is still usable: re-arm it short and let it fire.
+    super::timer_arm(id, SUBSYSTEM, 1).expect("re-arm");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_TIMER && e.id == id)),
+        "a re-armed parked deadline still expires: {:?}",
+        events()
+    );
+    assert_eq!(
+        super::live_handles(),
+        before,
+        "a fired one-shot retires its handle"
+    );
+
+    // Cancelling is the other half of the contract and must still destroy.
+    super::timer_arm(id, SUBSYSTEM, 60_000).expect("arm again");
+    assert_eq!(super::live_handles(), before + 1);
+    super::timer_cancel(id).expect("cancel");
+    assert_eq!(
+        super::live_handles(),
+        before,
+        "cancelling releases the handle"
+    );
+
+    // Both are idempotent on an id with no deadline.
+    super::timer_park(id).expect("park is idempotent");
+    super::timer_cancel(id).expect("cancel is idempotent");
+    assert_eq!(super::live_handles(), before);
 }
