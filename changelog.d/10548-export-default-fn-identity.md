@@ -15,16 +15,22 @@
   name when the row names that local, so importers resolved the `default`
   closure wrapper instead of `F`'s. That wrapper forwards calls to `F`'s body
   but is a separate closure with no expandos and no registered arity.
-  `export { F as default }` already wrote `{ local: "F" }` and worked.
+  `export { F as default }` written after the declaration already wrote
+  `{ local: "F" }` and worked.
 
   Fix: when the exported expression is an identifier naming the function
   (through parentheses and erased TypeScript wrappers), the row is
-  `{ local: "F", exported: "default" }`, the same as the alias form. Separately,
-  every body listed in `exported_functions` is now marked `is_exported` after
-  the whole module is lowered. An export clause that comes before its hoisted
-  declaration (`export default F; function F(){}` or
-  `export { F as default }; function F(){}`) used to miss the flag, and the
-  alias form lost identity the same way.
+  `{ local: "F", exported: "default" }`, the same as the alias form.
+
+  A second, hoisting-order bug had the same symptoms. The export arms mark a
+  function `is_exported` only if its body is already lowered, so an export
+  clause that comes before its hoisted declaration (`export default F;
+  function F(){}` or `export { F as default }; function F(){}`) left the flag
+  unset, and the driver skipped the origin-name mapping. That made even the
+  alias form lose identity, but only in that ordering. After the whole module
+  is lowered, a function is now marked exported when an export row names it as
+  its local binding and `exported_functions` lists its id. A value alias
+  (`export const g = F`) names `g`, so `F` is left as it was.
 
   Validation: new `test_gap_10434_export_default_fn_identity` (identity across
   two importers, a barrel, a namespace import and a dynamic import; prototype
