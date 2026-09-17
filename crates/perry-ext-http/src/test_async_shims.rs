@@ -73,3 +73,17 @@ pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}
 // this crate's test binaries pulls the extern in with it.
 #[no_mangle]
 pub extern "C" fn perry_ffi_run_pending(_budget_ms: u64) {}
+
+// #10428: the client handle-dispatch extension registered from
+// `ensure_gc_scanner_registered` references the Agent's `createConnection`
+// path, which retains perry-ext-net's TLS connect and its host-provided
+// SNI/ALPN preflight hook. Same no-op shim perry-ext-net's own tests use.
+#[no_mangle]
+pub extern "C" fn js_tls_client_preflight(
+    _port: f64,
+    _servername_ptr: *const u8,
+    _servername_len: usize,
+    _options: f64,
+) -> i32 {
+    0
+}

@@ -113,6 +113,10 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // The Bun dispatch bucket can reach listen/connect through extracted
     // callable exports, so installing it also activates the net provider.
     ("js_bun_tcp_nm_install",                       OwnerKind::WellKnown("net")),
+    // #10428/#10429: a materialized `net` / `http`/`https`/`http2` namespace
+    // or bound export installs its provider's value-form dispatcher.
+    ("js_ext_net_nm_install",                       OwnerKind::WellKnown("net")),
+    ("js_ext_http_nm_install",                      OwnerKind::WellKnown("http")),
     // ── #835: Web Streams ────────────────────────────────────────────
     // `perry-stdlib::streams` owns the canonical implementations.
     // `perry-ext-streams` re-implements a subset, but `js_stream_unwrap_handle`
@@ -1052,6 +1056,27 @@ mod tests {
             "js_node_http_create_server_with_options",
             OwnerKind::WellKnown("http"),
         );
+    }
+
+    /// #10428/#10429: materializing a `net` / `http`/`https`/`http2`
+    /// namespace (or a bound export such as `require('net').createConnection`)
+    /// emits the PROVIDER's install wrapper, which registers the value-form
+    /// dispatcher. It lives in the ext crate, so emitting it must flip that
+    /// crate onto the link line even when no import made it visible.
+    #[test]
+    fn provider_namespace_installs_route_to_their_well_known_binding() {
+        let _guard = ProviderTestGuard::new();
+        for (module, owner) in [
+            ("net", "net"),
+            ("node:net", "net"),
+            ("http", "http"),
+            ("node:https", "http"),
+            ("http2", "http"),
+        ] {
+            let symbol = crate::nm_install::nm_install_symbol(module)
+                .unwrap_or_else(|| panic!("{module} has no namespace install symbol"));
+            assert_symbol_routes_to(symbol, OwnerKind::WellKnown(owner));
+        }
     }
 
     #[test]

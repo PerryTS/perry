@@ -373,6 +373,7 @@ pub extern "C" fn js_nm_install_net() {
         nm_dispatch_net as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
+    nm_register_ctor(NmBucket::Net, super::native_module_dispatch::nm_ctor_net);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_node_pty() {

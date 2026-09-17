@@ -61,6 +61,8 @@ mod http2_session_settings;
 mod http2_settings;
 mod http2_stream_props;
 mod https_server;
+// #10428: runtime callback for http/https/http2 exports used as values.
+mod native_dispatch;
 mod raw_upgrade;
 mod request;
 mod response;

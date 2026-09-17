@@ -388,6 +388,12 @@ fn compute_object_cache_key_with_env(
         "entry_source_path",
         opts.app_metadata.entry_source_path.as_deref().unwrap_or(""),
     );
+    // Provider installs are calls baked into the entry prologue (#10428):
+    // adding a `require('net')` elsewhere must not reuse an entry without it.
+    h.field(
+        "native_provider_installs",
+        &opts.app_metadata.native_provider_installs.join("|"),
+    );
 
     // Ordered lists (order is significant — topological init, FFI index,
     // bundled extension order, etc.)

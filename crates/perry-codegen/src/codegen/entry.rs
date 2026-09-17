@@ -648,6 +648,11 @@ pub(super) fn compile_module_entry(
             if cross_module.needs_stdlib {
                 blk.call_void("js_stdlib_init_dispatch", &[]);
             }
+            // #10428/#10429: linked providers register their module-export
+            // dispatchers before any module init (see `native_provider_installs`).
+            for install in &cross_module.app_metadata.native_provider_installs {
+                blk.call_void(install, &[]);
+            }
             // Start the Geisterhand HTTP inspector if requested. The
             // port comes from `--geisterhand-port` (default 7676). Calling
             // `perry_geisterhand_start` here also pins the geisterhand

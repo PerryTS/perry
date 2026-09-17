@@ -32,6 +32,14 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// Install wrappers of the well-known native providers this program links
+    /// (`js_ext_net_nm_install`, …; see `native_provider_install_symbols`).
+    /// Set only on the entry module, whose `main` / dylib initializer calls
+    /// each one before any module initializer runs, so module objects the
+    /// runtime creates itself — a CommonJS `require('net')` resolves through
+    /// `createRequire` — already reach the provider's export dispatcher.
+    /// (#10428, #10429)
+    pub native_provider_installs: Vec<String>,
 }
 
 impl Default for AppMetadata {
@@ -43,6 +51,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            native_provider_installs: Vec::new(),
         }
     }
 }
