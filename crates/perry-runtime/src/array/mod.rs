@@ -291,8 +291,8 @@ pub(crate) use self::header::{
     note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
     reclassify_array_numeric_layout_from_slots, refresh_array_numeric_layout,
     replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
-    store_array_slot_resolved, typed_array_receiver, value_bits_to_number,
-    NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    store_array_slot_resolved, typed_array_receiver, value_bits_to_number, NumericArrayLayout,
+    MIN_ARRAY_CAPACITY,
 };
 pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,
