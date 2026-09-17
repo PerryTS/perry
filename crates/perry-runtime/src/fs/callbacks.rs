@@ -10,34 +10,18 @@ pub extern "C" fn js_fs_read_file_callback(path_value: f64, encoding: f64, callb
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
     let cb_ptr = callback_from_options_arg(encoding, callback);
-    unsafe {
-        if let Some(err_val) = fs_callback_read_error(path_value, "open") {
-            if !cb_ptr.is_null() {
-                defer_fs_callback_chain(cb_ptr, &[err_val, f64::from_bits(TAG_UNDEFINED)], 4);
-            }
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-    }
     let encoding_is_callback = !extract_closure_ptr(encoding).is_null();
     let want_buffer = encoding_is_callback || read_file_encoding(encoding).is_none();
-    let data_val = if want_buffer {
-        let buf = js_fs_read_file_binary_options(path_value, encoding);
-        if buf.is_null() {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
-        }
-    } else {
-        let str_ptr = js_fs_read_file_sync_options(path_value, encoding);
-        if str_ptr.is_null() {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            f64::from_bits(crate::value::js_nanbox_string(str_ptr as i64).to_bits())
-        }
+    // One read decides both arms. The old pre-flight `stat` probe only saw a
+    // missing path, so a directory reached the reader, whose failure became
+    // `(null, undefined)` for a Buffer and a synchronous throw for a string
+    // (#10452); Node reports `EISDIR ... read` through the callback.
+    let args = match unsafe { read_file_value_result(path_value, encoding, !want_buffer) } {
+        Ok(data_val) => [f64::from_bits(TAG_NULL), data_val],
+        Err(err_val) => [err_val, f64::from_bits(TAG_UNDEFINED)],
     };
-
     if !cb_ptr.is_null() {
-        defer_fs_callback_chain(cb_ptr, &[f64::from_bits(TAG_NULL), data_val], 4);
+        defer_fs_callback_chain(cb_ptr, &args, 4);
     }
     f64::from_bits(TAG_UNDEFINED)
 }

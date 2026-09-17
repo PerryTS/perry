@@ -288,6 +288,12 @@ pub(crate) fn system_error_name_for_code(code: i64) -> String {
     }
 }
 
+/// libuv's message for a libuv-style code (`-2` → "no such file or
+/// directory"), if mapped. Shared with the fs error builders.
+pub(crate) fn system_error_message_for_code(code: i64) -> Option<&'static str> {
+    lookup(code).map(|(_, message)| message)
+}
+
 fn system_error_name(value: f64) -> String {
     let code = validate_system_error_code(value);
     system_error_name_for_code(code)
