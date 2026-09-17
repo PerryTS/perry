@@ -66,8 +66,16 @@ pub struct Transport {
 
 static TRANSPORT: OnceLock<Transport> = OnceLock::new();
 
-/// Install the host transport. Idempotent; the first registration wins, which
-/// matters because `perry-ext-http` registers from more than one entry point.
+/// Install the *default* host transport — the one [`adopt`] uses.
+///
+/// Idempotent; the first registration wins, which matters because
+/// `perry-ext-http` registers from more than one entry point. A second host in
+/// the same binary does not fight over this slot: it calls [`adopt_with`] and
+/// hands its own [`Transport`] per connection. That distinction is load-bearing
+/// now that three hosts exist — `perry-ext-http`'s turnloop server, its hyper
+/// upgrade path, and this crate's own standalone `WebSocketServer({ port })` —
+/// and a single global would have silently given all three the first one's
+/// writer.
 pub fn register_transport(transport: Transport) {
     let _ = TRANSPORT.set(transport);
 }
@@ -77,6 +85,9 @@ struct Link {
     codec: Codec,
     /// The closing handshake has been started from this side.
     closing: bool,
+    /// How this particular connection's bytes reach the wire. Per link, not
+    /// per process: see [`register_transport`].
+    transport: Transport,
 }
 
 fn links() -> &'static Mutex<HashMap<i64, Link>> {
@@ -92,23 +103,29 @@ pub fn owns(conn_id: i64) -> bool {
         .contains_key(&conn_id)
 }
 
+/// The transport a live link uses, or the default one for a link this side has
+/// already forgotten (a close racing a write).
+fn transport_of(conn_id: i64) -> Option<Transport> {
+    with_link(conn_id, |link| link.transport).or_else(|| TRANSPORT.get().copied())
+}
+
 fn write(conn_id: i64, bytes: &[u8]) {
     if bytes.is_empty() {
         return;
     }
-    if let Some(transport) = TRANSPORT.get() {
+    if let Some(transport) = transport_of(conn_id) {
         (transport.write)(conn_id, bytes);
     }
 }
 
 fn destroy(conn_id: i64) {
-    if let Some(transport) = TRANSPORT.get() {
+    if let Some(transport) = transport_of(conn_id) {
         (transport.destroy)(conn_id);
     }
 }
 
 fn finish(conn_id: i64) {
-    if let Some(transport) = TRANSPORT.get() {
+    if let Some(transport) = transport_of(conn_id) {
         (transport.finish)(conn_id);
     }
 }
@@ -154,7 +171,40 @@ pub fn reject_response(status: u16, message: &str) -> Vec<u8> {
 /// `leftover` is whatever followed the request head in the same read — frame
 /// data the peer pipelined behind its handshake, which `ws` delivers.
 pub fn adopt(conn_id: i64, leftover: &[u8]) -> i64 {
+    let Some(transport) = TRANSPORT.get().copied() else {
+        // No default transport was ever registered, so nothing could put a
+        // byte on this connection. Refusing is the honest answer; adopting
+        // would produce a client that silently never sends.
+        return 0;
+    };
+    adopt_with(conn_id, transport, Role::Server, leftover)
+}
+
+/// Adopt a connection whose host supplies its own [`Transport`].
+///
+/// `role` is this end of the WebSocket: [`Role::Server`] for a connection this
+/// process accepted, [`Role::Client`] for one it dialled — the codec masks
+/// client frames and refuses masked server ones, so it is not cosmetic.
+pub fn adopt_with(conn_id: i64, transport: Transport, role: Role, leftover: &[u8]) -> i64 {
     let ws_id = crate::register_turnloop_client(conn_id);
+    adopt_existing(conn_id, ws_id, transport, role, leftover);
+    ws_id as i64
+}
+
+/// Install the protocol on a connection whose JS-visible id already exists.
+///
+/// The outbound client and the standalone server both hand their id out — or
+/// publish their parent-server link — *before* the handshake finishes, so that
+/// `ws.on(...)` can be registered against a connecting socket and so that a
+/// frame pipelined behind the `101` routes to the server's own `'message'`
+/// listener. Allocating a second id here would strand both.
+pub(crate) fn adopt_existing(
+    conn_id: i64,
+    ws_id: usize,
+    transport: Transport,
+    role: Role,
+    leftover: &[u8],
+) {
     // Publish the link BEFORE decoding the leftover: `on_data` delivers events
     // through the same tables, and a message pipelined behind the handshake
     // would otherwise be emitted for a client nothing can route.
@@ -162,14 +212,14 @@ pub fn adopt(conn_id: i64, leftover: &[u8]) -> i64 {
         conn_id,
         Link {
             ws_id,
-            codec: Codec::new(Role::Server),
+            codec: Codec::new(role),
             closing: false,
+            transport,
         },
     );
     if !leftover.is_empty() {
         on_data(conn_id, leftover);
     }
-    ws_id as i64
 }
 
 /// The host's sink saw data. Runs on the loop thread inside the host's dispatch
@@ -362,9 +412,13 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static WRITES: AtomicUsize = AtomicUsize::new(0);
+    static SECOND_WRITES: AtomicUsize = AtomicUsize::new(0);
 
     fn count_write(_id: i64, bytes: &[u8]) {
         WRITES.fetch_add(bytes.len(), Ordering::SeqCst);
+    }
+    fn count_second_write(_id: i64, bytes: &[u8]) {
+        SECOND_WRITES.fetch_add(bytes.len(), Ordering::SeqCst);
     }
     fn noop_destroy(_id: i64) {}
 
@@ -411,6 +465,48 @@ mod tests {
             "{refusal}"
         );
         assert!(refusal.contains("connection: close"), "{refusal}");
+    }
+
+    /// A per-link transport is not a per-process one: two hosts in the same
+    /// binary each get their own writer. The single `OnceLock` this replaced
+    /// silently handed all of them the first registration's.
+    #[test]
+    fn each_link_keeps_the_transport_it_was_adopted_with() {
+        WRITES.store(0, Ordering::SeqCst);
+        SECOND_WRITES.store(0, Ordering::SeqCst);
+        adopt_existing(
+            -101,
+            9101,
+            Transport {
+                write: count_write,
+                finish: noop_destroy,
+                destroy: noop_destroy,
+            },
+            Role::Server,
+            &[],
+        );
+        adopt_existing(
+            -102,
+            9102,
+            Transport {
+                write: count_second_write,
+                finish: noop_destroy,
+                destroy: noop_destroy,
+            },
+            Role::Server,
+            &[],
+        );
+        // A ping is answered by the codec, so each link writes on its own
+        // transport and nowhere else.
+        on_data(-101, &[0x89, 0x80, 0, 0, 0, 0]);
+        assert!(WRITES.load(Ordering::SeqCst) > 0, "the first link wrote");
+        assert_eq!(
+            SECOND_WRITES.load(Ordering::SeqCst),
+            0,
+            "and not through the second link's transport"
+        );
+        forget(-101);
+        forget(-102);
     }
 
     #[test]

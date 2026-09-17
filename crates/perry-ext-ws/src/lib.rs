@@ -1,51 +1,53 @@
 //! Native bindings for the npm `ws` package — WebSocket client + server.
 //!
-//! # One codec, two transports
+//! # One codec, one transport, three hosts
 //!
 //! The protocol lives in [`codec`] and [`handshake`], which wrap
-//! `turnloop_websocket`'s sans-I/O state machine and do no I/O at all. Two
-//! transports drive it:
+//! `turnloop_websocket`'s sans-I/O state machine and do no I/O at all.
+//! [`turnloop_link`] drives it over a connection *someone else owns*, keyed by
+//! that owner's handle id, with a per-link [`turnloop_link::Transport`] of
+//! function pointers for the bytes. Three owners exist:
 //!
-//! * [`turnloop_link`] — a connection `perry-ext-http` keeps owning on a
-//!   turnloop handle. No task, no channel, no stream. This is what closes P5's
-//!   attached-`WebSocketServer` hole.
-//! * [`io`] — a tokio stream, for the standalone `WebSocketServer({port})`, the
-//!   outbound client, and any agent with no `turnloop::Loop` of its own.
+//! * [`turnloop_io`] — this crate's own outbound client (`new WebSocket(url)`),
+//!   a turnloop `tcp_connect` with a `perry_tls_session` layer for `wss://`.
+//! * [`server`] — the standalone `WebSocketServer({ port })`, a
+//!   `perry_http_server::Host` whose `on_upgrade` answers the `101`.
+//! * `perry-ext-http` — an attached `WebSocketServer({ server })`, on the
+//!   connection its own HTTP server already holds.
 //!
-//! Replacing `tokio-tungstenite` with the sans-I/O core is what let the second
-//! transport exist: a `WebSocketStream<S>` needs an owned `AsyncRead + AsyncWrite`,
-//! and a turnloop connection is an `i64` handle id. Nothing about the *protocol*
-//! ever needed the stream.
+//! There is no second transport. `tokio-tungstenite` went first (its
+//! `WebSocketStream<S>` needed an owned `AsyncRead + AsyncWrite`, which is what
+//! made a turnloop connection unservable), and with the protocol sans-I/O the
+//! tokio stream driver behind it had nothing left to justify it: the client's
+//! `TcpStream::connect`, the standalone server's `TcpListener` accept loop and
+//! the per-connection `select!` task are `tcp_connect`, `accept_start` and the
+//! completion sink. This crate declares no async runtime.
+//!
+//! A host with no turnloop loop — a `worker_threads` agent, the
+//! `tokio-wait-driver` A/B arm — therefore has no WebSocket transport at all,
+//! and says so: `new WebSocket(url)` rejects and `new WebSocketServer({port})`
+//! raises `'error'` rather than silently doing nothing. That is a real
+//! narrowing and it is written down in `changelog.d/`, not hidden behind a
+//! fallback nobody exercises.
 //!
 //! Architecture mirrors perry-stdlib's existing copy minus the iOS
 //! `NSURLSessionWebSocketTask` delegation path (out of scope for an
 //! in-tree port that doesn't depend on `perry-ui-ios`):
 //!
-//!   - Per-client: `tokio::spawn`-driven select loop reads incoming
-//!     messages and writes commands from an mpsc channel. Reader
-//!     pushes events onto `WS_PENDING_EVENTS`; main thread drains
-//!     them via `js_ws_process_pending`.
-//!   - Per-server: another spawned task accepts TCP connections, does
-//!     the WebSocket handshake, allocates a per-client id, spawns
-//!     the per-client task. Each connection carries a back-reference
-//!     to its parent server handle so events can route.
+//!   - Per-client: no task and no channel. Bytes arrive as completions on the
+//!     agent's loop, go through the codec, and leave as `PendingWsEvent`s that
+//!     `js_ws_process_pending` dispatches on the main thread's own tick.
+//!   - Per-server: one multishot `accept_start` inside `perry-http-server`,
+//!     which decodes the upgrade request and hands it to [`server`]'s `Host`.
 //!   - GC root scanner walks WS_CLIENT_LISTENERS + every
 //!     WsServerHandle's listeners, marking every closure pointer
 //!     so a malloc-triggered sweep can't free them between
 //!     registration and dispatch (issue #35 pattern).
 //!
-//! `spawn_blocking + tokio::Handle::current().block_on(async {...})`
-//! is used in place of perry-stdlib's `crate::common::async_bridge::spawn`.
-//! Each long-running task ties up one blocking-pool thread for the
-//! connection's lifetime; default tokio blocking pool is 512 threads,
-//! enough for typical WebSocket usage. Cooperative `spawn_async` is
-//! a v0.6.0 followup.
-
 pub mod codec;
 mod connect;
 mod dispatch;
 pub mod handshake;
-mod io;
 /// SIMD-widened WebSocket frame (un)masking (RFC 6455 §5.3). See
 /// [`mask::apply_mask`] / [`mask::apply_mask_from`]. The hot tungstenite
 /// read/write path masks internally with its own `u32`-blocked routine
@@ -55,7 +57,10 @@ mod io;
 pub mod mask;
 mod server;
 pub use server::*;
+mod host_upgrade;
+mod turnloop_io;
 pub mod turnloop_link;
+pub use host_upgrade::{accept_http_upgrade, drive_http_upgraded, Refusal, HTTP_SERVER_TRANSPORT};
 
 #[cfg(test)]
 mod test_async_shims;
@@ -64,30 +69,28 @@ use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
     iter_handles_of_mut, notify_main_thread, register_aux_event_pump, register_handle, set_add,
-    set_delete, spawn_async, spawn_blocking_with_reactor as spawn_blocking, take_handle,
-    GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+    set_delete, take_handle, GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader,
+    StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Mutex;
-use tokio::sync::mpsc;
 
-use crate::codec::{Codec, Incoming, Message, WsError};
+use crate::codec::{Incoming, Message, WsError};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
-/// #6117 — rustls panics resolving the process-level CryptoProvider on the
-/// first `wss://` handshake when both `ring` and `aws-lc-rs` end up
-/// feature-unified into the final link (perry-ext-http brings ring;
-/// perry-ext-net brings aws-lc-rs). Install one explicitly before
-/// connecting. Idempotent — `install_default` errors (ignored) if a
-/// provider is already set. Same pattern as perry-ext-net's tls module.
-fn ensure_tls_crypto_provider() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-}
-
+/// #6117 is no longer this crate's problem, and the call that used to be here
+/// is gone rather than kept "just in case".
+///
+/// rustls panics resolving the *process-level* default `CryptoProvider` when
+/// both `ring` and `aws-lc-rs` are feature-unified into one link, so this crate
+/// used to install one before its first `wss://` handshake. `turnloop_tls`'s
+/// `ClientOptions` names its provider explicitly (`turnloop_io::tls_config`),
+/// so no default is ever resolved on this path and installing one would only
+/// be a claim on a process-wide slot another binding may legitimately want.
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -102,11 +105,16 @@ struct WsClientHandle;
 
 /// How a connection's bytes reach the wire.
 ///
-/// The discriminant is the whole of the transport migration on this side:
-/// `Turnloop` carries only the host's connection id, because the host still
-/// owns the connection and this crate owns the protocol state keyed by it.
+/// `Turnloop` carries only the host's connection id, because the host owns the
+/// connection and this crate owns the protocol state keyed by it. There is no
+/// second transport: the variant that held a tokio task's command channel is
+/// gone with the task.
 enum WsTransport {
-    Tokio(mpsc::UnboundedSender<WsCommand>),
+    /// A client whose handshake has not finished. `ws.send(...)` before
+    /// `'open'` is queued here rather than dropped, which is what `ws` does
+    /// with its own `_sender` queue; the queue is replayed by
+    /// [`attach_turnloop_client`] the moment the connection is adopted.
+    Connecting(Vec<WsCommand>),
     Turnloop(i64),
 }
 
@@ -177,7 +185,9 @@ pub struct WsServerHandle {
     /// Stored as NaN-boxed bits so the mutable-root scanner can rewrite it
     /// when a moving collection evacuates the Set header.
     pub clients_bits: u64,
-    pub shutdown_tx: Option<mpsc::UnboundedSender<()>>,
+    /// The `perry-http-server` listener this server bound, once it has. `None`
+    /// for a `noServer` / attached server, and for one whose bind failed.
+    pub listener_id: Option<i64>,
 }
 
 enum PendingWsEvent {
@@ -361,81 +371,27 @@ pub(crate) fn connection_closed(ws_id: usize, code: u16, reason: String) {
 /// Register a client whose bytes a turnloop host carries. No channel and no
 /// task: `send`/`close` drive the codec inline and hand the bytes back.
 pub(crate) fn register_turnloop_client(conn_id: i64) -> usize {
-    ensure_runtime_hooks_registered();
-    let ws_id = register_handle(WsClientHandle) as usize;
-    WS_CONNECTIONS.lock().unwrap().insert(
-        ws_id,
-        WsConnection {
-            transport: WsTransport::Turnloop(conn_id),
-            messages: Vec::new(),
-            is_open: true,
-            is_closing: false,
-            is_closed: false,
-        },
-    );
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(
-        ws_id,
-        WsClientListeners {
-            listeners: HashMap::new(),
-        },
-    );
+    let ws_id = allocate_client_id();
+    // Nothing can have been queued against an id allocated one line ago.
+    let _ = attach_turnloop_client(ws_id, conn_id);
     ws_id
 }
 
-/// Register a client on a tokio stream and start its IO loop.
-fn register_stream_client<S: io::Transport>(
-    stream: S,
-    codec: Codec,
-    leftover: Vec<u8>,
-    open: bool,
-) -> usize {
-    ensure_runtime_hooks_registered();
-    let ws_id = register_handle(WsClientHandle) as usize;
-    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-    WS_CONNECTIONS.lock().unwrap().insert(
-        ws_id,
-        WsConnection {
-            transport: WsTransport::Tokio(tx),
-            messages: Vec::new(),
-            is_open: open,
-            is_closing: false,
-            is_closed: false,
-        },
-    );
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(
-        ws_id,
-        WsClientListeners {
-            listeners: HashMap::new(),
-        },
-    );
-    // `spawn_async` drives the loop on Perry's shared reactor-owned runtime.
-    // It does NOT bump the event-loop active-handle counter, so the connection
-    // is kept alive by `js_ws_has_pending` reporting live while it is open —
-    // the gate `WS_CONNECTIONS` above establishes before this call.
-    spawn_async(io::run(ws_id, stream, codec, leftover, rx));
-    ws_id
-}
-
-/// Register a client on a tokio stream that belongs to a `WebSocketServer`.
+/// Allocate the JS-visible id for a connection that has not been adopted yet.
 ///
-/// The parent link is published before the IO loop starts, so a message that
-/// arrived with the handshake is routed to the server's own `'message'`
-/// listener rather than parked forever.
-fn register_stream_client_for_server<S: io::Transport>(
-    server_handle: Handle,
-    stream: S,
-    codec: Codec,
-    leftover: Vec<u8>,
-) -> usize {
+/// Both openers hand the id out before the handshake finishes — the client so
+/// `ws.on('open', …)` can be registered on a connecting socket, the server so a
+/// frame pipelined behind the `101` has somewhere to route — so the id exists
+/// in `CONNECTING` (readyState 0) for a while, with no connection behind it.
+pub(crate) fn allocate_client_id() -> usize {
     ensure_runtime_hooks_registered();
     let ws_id = register_handle(WsClientHandle) as usize;
-    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
         WsConnection {
-            transport: WsTransport::Tokio(tx),
+            transport: WsTransport::Connecting(Vec::new()),
             messages: Vec::new(),
-            is_open: true,
+            is_open: false,
             is_closing: false,
             is_closed: false,
         },
@@ -446,76 +402,97 @@ fn register_stream_client_for_server<S: io::Transport>(
             listeners: HashMap::new(),
         },
     );
-    WS_CLIENT_PARENT_SERVER
-        .lock()
-        .unwrap()
-        .insert(ws_id, server_handle);
-    spawn_async(io::run(ws_id, stream, codec, leftover, rx));
     ws_id
 }
 
-/// `ws.send(...)` on either transport.
-fn send_on(ws_id: usize, outgoing: WsOutgoing) {
-    let target = WS_CONNECTIONS
-        .lock()
-        .unwrap()
-        .get(&ws_id)
-        .map(|c| match &c.transport {
-            WsTransport::Tokio(tx) => Ok(tx.clone()),
-            WsTransport::Turnloop(conn_id) => Err(*conn_id),
-        });
-    match target {
-        Some(Ok(tx)) => {
-            let _ = tx.send(WsCommand::Send(outgoing));
-        }
-        Some(Err(conn_id)) => {
+/// Bind an allocated id to the connection that now carries it.
+///
+/// Returns whatever `ws.send`/`ws.close` queued while it was connecting, for
+/// the caller to replay once the protocol link exists.
+pub(crate) fn attach_turnloop_client(ws_id: usize, conn_id: i64) -> Vec<WsCommand> {
+    let mut map = WS_CONNECTIONS.lock().unwrap();
+    let Some(connection) = map.get_mut(&ws_id) else {
+        return Vec::new();
+    };
+    let queued = match std::mem::replace(&mut connection.transport, WsTransport::Turnloop(conn_id))
+    {
+        WsTransport::Connecting(queued) => queued,
+        WsTransport::Turnloop(_) => Vec::new(),
+    };
+    connection.is_open = true;
+    queued
+}
+
+/// Apply one command that was queued before the connection opened.
+pub(crate) fn replay_command(conn_id: i64, command: WsCommand) {
+    match command {
+        WsCommand::Send(outgoing) => {
             turnloop_link::send(conn_id, outgoing);
         }
-        None => {}
+        WsCommand::Close(code, reason) => {
+            turnloop_link::close(conn_id, code, &reason);
+        }
+        WsCommand::Terminate => {
+            turnloop_link::terminate(conn_id);
+        }
     }
 }
 
-/// `ws.close(code, reason)` on either transport.
-fn close_on(ws_id: usize, code: Option<u16>, reason: &str) {
-    let target = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id).map(|c| {
-        // `readyState` is CLOSING (2) until the handshake finishes; the
-        // connection is NOT closed yet, and a peer frame may still arrive.
-        c.is_closing = true;
-        match &c.transport {
-            WsTransport::Tokio(tx) => Ok(tx.clone()),
-            WsTransport::Turnloop(conn_id) => Err(*conn_id),
-        }
-    });
-    match target {
-        Some(Ok(tx)) => {
-            let _ = tx.send(WsCommand::Close(code, reason.to_string()));
-        }
-        Some(Err(conn_id)) => {
-            turnloop_link::close(conn_id, code, reason);
-        }
-        None => {}
+/// The connection is up: `ws.on('open')`.
+pub(crate) fn connection_opened(ws_id: usize) {
+    push_ws_event(PendingWsEvent::Open(ws_id));
+}
+
+/// The connection never opened. `ws` raises `'error'` on a failed connect and
+/// `readyState` reports CLOSED (3) rather than CONNECTING (0) afterwards.
+pub(crate) fn connection_failed(ws_id: usize, message: &str) {
+    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+        c.is_closed = true;
+        c.is_open = false;
     }
+    push_ws_event(PendingWsEvent::Error(ws_id, message.to_string()));
+}
+
+/// Route one command to the connection, or queue it if it is still connecting.
+///
+/// The connection borrow is released before the link is touched: `send`/`close`
+/// re-enter this crate through `connection_error` / `connection_closed`, and
+/// `std::sync::Mutex` is not reentrant.
+fn command_on(ws_id: usize, command: WsCommand) {
+    let conn_id = {
+        let mut map = WS_CONNECTIONS.lock().unwrap();
+        match map.get_mut(&ws_id) {
+            Some(connection) => match &mut connection.transport {
+                WsTransport::Connecting(queued) => {
+                    queued.push(command);
+                    return;
+                }
+                WsTransport::Turnloop(conn_id) => *conn_id,
+            },
+            None => return,
+        }
+    };
+    replay_command(conn_id, command);
+}
+
+/// `ws.send(...)`.
+fn send_on(ws_id: usize, outgoing: WsOutgoing) {
+    command_on(ws_id, WsCommand::Send(outgoing));
+}
+
+/// `ws.close(code, reason)`.
+fn close_on(ws_id: usize, code: Option<u16>, reason: &str) {
+    // `readyState` is CLOSING (2) until the handshake finishes; the connection
+    // is NOT closed yet, and a peer frame may still arrive.
+    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
+        c.is_closing = true;
+    }
+    command_on(ws_id, WsCommand::Close(code, reason.to_string()));
 }
 
 /// `ws.terminate()` — no closing handshake.
 fn terminate_on(ws_id: usize) {
-    let target = WS_CONNECTIONS
-        .lock()
-        .unwrap()
-        .get(&ws_id)
-        .map(|c| match &c.transport {
-            WsTransport::Tokio(tx) => Ok(tx.clone()),
-            WsTransport::Turnloop(conn_id) => Err(*conn_id),
-        });
-    match target {
-        Some(Ok(tx)) => {
-            let _ = tx.send(WsCommand::Terminate);
-        }
-        Some(Err(conn_id)) => {
-            turnloop_link::terminate(conn_id);
-        }
-        None => {}
-    }
+    command_on(ws_id, WsCommand::Terminate);
 }
 
 #[inline]
@@ -574,34 +551,24 @@ fn untrack_server_client(ws_id: usize) -> Option<Handle> {
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut perry_ffi::Promise {
     ensure_runtime_hooks_registered();
-    ensure_tls_crypto_provider();
-    let promise = perry_ffi::JsPromise::new();
-    let raw = promise.as_raw();
+    // The runtime's pinned, root-scanned promise handle (#9552) rather than a
+    // bare `*mut Promise`: the connect settles from the completion sink, which
+    // is a different turn from this call, and a raw pointer parked across it
+    // is exactly the unrooted-cache shape `gc_runtime_root_holders.py` exists
+    // to catch.
+    let token = perry_ffi::JsNativeAsyncCompletion::new();
+    let promise = token.promise();
     let Some(url) = read_str(url_ptr) else {
-        promise.reject_string("Invalid URL");
-        return raw;
+        token.reject_string("Invalid URL");
+        return promise;
     };
-    // Issue #606 — `spawn_blocking_with_reactor` runs the closure inside a
-    // tokio worker task, where `Handle::current().block_on` panics. Use
-    // `tokio::spawn` so the connect awaits as a sibling task.
-    spawn_blocking(move || {
-        tokio::spawn(async move {
-            match connect::connect(&url, Vec::new(), Vec::new()).await {
-                Ok(connected) => {
-                    let id = register_stream_client(
-                        connected.stream,
-                        connected.codec,
-                        connected.leftover,
-                        true,
-                    );
-                    push_ws_event(PendingWsEvent::Open(id));
-                    promise.resolve(JsValue::from_number(id as f64));
-                }
-                Err(e) => promise.reject_string(&format!("WebSocket connect error: {e}")),
-            }
-        });
-    });
-    raw
+    let ws_id = allocate_client_id();
+    if let Err(message) = start_connect(ws_id, &url, Some(token)) {
+        // `start_connect` has already raised `'error'` on `ws_id`; the promise
+        // is this entry point's own contract.
+        let _ = message;
+    }
+    promise
 }
 
 /// `js_ws_connect_start(url_nanboxed)` — sync alternative used by codegen sites
@@ -613,7 +580,6 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
 #[no_mangle]
 pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
     ensure_runtime_hooks_registered();
-    ensure_tls_crypto_provider();
     let bits = url_nanboxed.to_bits();
     let string_tag = 0x7FFF_0000_0000_0000u64;
     let url = if (bits & TAG_MASK) == string_tag {
@@ -623,59 +589,46 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
         None
     };
     let Some(url) = url else { return 0.0 };
-
-    // A connection that has not opened yet still needs an id and a command
-    // channel, so `ws.send(...)` issued before `'open'` is queued rather than
-    // dropped — which is what `ws` does with its own `_sender` queue.
-    let ws_id = register_handle(WsClientHandle) as usize;
-    let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-    WS_CONNECTIONS.lock().unwrap().insert(
-        ws_id,
-        WsConnection {
-            transport: WsTransport::Tokio(tx),
-            messages: Vec::new(),
-            is_open: false,
-            is_closing: false,
-            is_closed: false,
-        },
-    );
-    WS_CLIENT_LISTENERS.lock().unwrap().insert(
-        ws_id,
-        WsClientListeners {
-            listeners: HashMap::new(),
-        },
-    );
-    spawn_blocking(move || {
-        tokio::spawn(async move {
-            match connect::connect(&url, Vec::new(), Vec::new()).await {
-                Ok(connected) => {
-                    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                        c.is_open = true;
-                    }
-                    push_ws_event(PendingWsEvent::Open(ws_id));
-                    spawn_async(io::run(
-                        ws_id,
-                        connected.stream,
-                        connected.codec,
-                        connected.leftover,
-                        rx,
-                    ));
-                }
-                Err(e) => {
-                    // #6117 — readyState must report CLOSED (3), not
-                    // CONNECTING (0), once the connect has failed.
-                    if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&ws_id) {
-                        c.is_closed = true;
-                    }
-                    push_ws_event(PendingWsEvent::Error(
-                        ws_id,
-                        format!("WebSocket connect error: {e}"),
-                    ));
-                }
-            }
-        });
-    });
+    let ws_id = allocate_client_id();
+    let _ = start_connect(ws_id, &url, None);
     ws_id as f64
+}
+
+/// Parse the URL and submit the connect.
+///
+/// A failure here is reported the way a failed connect is — `'error'` on the
+/// client id, and a rejection on the promise if there is one — rather than
+/// thrown, because `new WebSocket('nonsense')` in `ws` yields an object that
+/// errors, not a constructor that throws.
+fn start_connect(
+    ws_id: usize,
+    url: &str,
+    token: Option<perry_ffi::JsNativeAsyncCompletion>,
+) -> Result<(), String> {
+    let refuse = |message: String, token: Option<perry_ffi::JsNativeAsyncCompletion>| {
+        let text = format!("WebSocket connect error: {message}");
+        connection_failed(ws_id, &text);
+        if let Some(token) = token {
+            token.reject_string(&text);
+        }
+        Err(message)
+    };
+    let target = match connect::parse(url) {
+        Ok(target) => target,
+        Err(message) => return refuse(message, token),
+    };
+    if !turnloop_io::available() {
+        // The honest answer, not a silent no-op. This agent owns no
+        // `turnloop::Loop` — a `worker_threads` agent, or the
+        // `tokio-wait-driver` A/B arm — and this crate has no second
+        // transport to fall back to since the tokio one was deleted.
+        return refuse(
+            "no event loop on this thread: `ws` needs a turnloop agent".to_string(),
+            token,
+        );
+    }
+    // Every failure inside `connect` settles both the event and the promise.
+    turnloop_io::connect(ws_id, &target, Vec::new(), Vec::new(), token).map(|_| ())
 }
 
 // ── Send / close (client) ─────────────────────────────────────────
@@ -1188,31 +1141,47 @@ pub extern "C" fn js_ws_server_close_with(handle: i64, callback: f64) {
                 .push(callback_ptr);
         }
         server.is_listening = false;
-        server.shutdown_tx.take()
+        server.listener_id.take()
     };
-    if let Some(tx) = shutdown {
-        let _ = tx.send(());
+    if let Some(listener_id) = shutdown {
+        // Stop accepting. In-flight connections finish, which is what the
+        // accept loop's `shutdown_rx` arm did — it broke out of `select!` and
+        // left every spawned per-client task running.
+        perry_http_server::close_listener(listener_id);
+        WS_ACTIVE_SERVERS.fetch_sub(1, Ordering::Relaxed);
     }
     push_ws_event(PendingWsEvent::ServerClose(handle));
 }
 
-/// Adopt a stream whose WebSocket handshake a host crate has already completed
-/// — `perry-ext-http`'s and `perry-ext-fastify`'s hyper upgrade paths.
+/// Adopt a connection whose WebSocket handshake a host crate has already
+/// completed — `perry-ext-http`'s hyper upgrade path.
 ///
-/// The stream is any `AsyncRead + AsyncWrite`; in practice
-/// `TokioIo<hyper::upgrade::Upgraded>`. What changed with the codec swap is
-/// that the *caller* no longer constructs a `tokio_tungstenite::WebSocketStream`
-/// and therefore no longer needs `tokio-tungstenite` in its own dependency
-/// graph: it hands over the raw stream and this crate installs the protocol.
+/// The host keeps the connection and supplies a [`turnloop_link::Transport`]
+/// of function pointers for its bytes, exactly as `perry-ext-http`'s turnloop
+/// server does; `conn_id` is whatever id that host keys its own state by, and
+/// this crate only ever hands it back.
+///
+/// This replaces `register_upgraded_stream<S: AsyncRead + AsyncWrite>`, and the
+/// difference is the whole of group E on this side. That signature was the
+/// last thing in this crate that required an async runtime: it took an owned
+/// tokio stream and spawned a task to drive it. The protocol never needed
+/// either — it needs bytes in and bytes out — so the task moved to the one
+/// crate that still has a runtime to spawn it on, and `perry-ext-ws` stopped
+/// declaring tokio.
+///
+/// `leftover` is whatever arrived in the same read as the handshake: already
+/// frame data, and dropping it loses the peer's first message.
 ///
 /// Returns the assigned `ws_id`. The caller fires whatever `'connection'` /
 /// `'upgrade'` listeners are appropriate; this does not push a
 /// `PendingWsEvent::Connection`.
-pub fn register_upgraded_stream<S>(stream: S) -> i64
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
-{
-    register_stream_client(stream, Codec::new(codec::Role::Server), Vec::new(), true) as i64
+pub fn adopt_host_connection(
+    conn_id: i64,
+    transport: turnloop_link::Transport,
+    leftover: &[u8],
+) -> i64 {
+    ensure_runtime_hooks_registered();
+    turnloop_link::adopt_with(conn_id, transport, codec::Role::Server, leftover)
 }
 
 /// Validate an upgrade request and return the headers a `101` must carry, so a
@@ -1531,12 +1500,30 @@ pub extern "C" fn js_ws_has_pending() -> i32 {
     if WS_ACTIVE_SERVERS.load(Ordering::Relaxed) > 0 {
         return 1;
     }
-    let any_open = WS_CONNECTIONS.lock().unwrap().values().any(|c| c.is_open);
-    if any_open {
+    let any_live = WS_CONNECTIONS
+        .lock()
+        .unwrap()
+        .values()
+        .any(connection_is_live);
+    if any_live {
         1
     } else {
         0
     }
+}
+
+/// Whether this connection should keep the event loop alive.
+///
+/// A CONNECTING client counts: its handshake is in flight and its `'open'` or
+/// `'error'` has not been queued yet, so `is_open` alone would let the loop
+/// exit out from under a `new WebSocket(url)`.
+///
+/// `!is_closed` is the other half, and it is not decoration. A connect that
+/// FAILS leaves the transport `Connecting` — there was never a connection to
+/// attach — so testing the transport alone reports the process live for ever
+/// after one refused `new WebSocket(url)`.
+fn connection_is_live(c: &WsConnection) -> bool {
+    !c.is_closed && (c.is_open || matches!(c.transport, WsTransport::Connecting(_)))
 }
 
 fn listeners_on_client(ws_id: usize, event: &str) -> Vec<i64> {
@@ -1634,7 +1621,7 @@ mod tests {
             is_listening: false,
             client_ids: Vec::new(),
             clients_bits: clients_before,
-            shutdown_tx: None,
+            listener_id: None,
         });
 
         let _ = perry_runtime::gc::gc_collect_minor();
@@ -1798,6 +1785,48 @@ mod tests {
         perry_ffi::drop_handle(server);
     }
 
+    /// The event-loop keepalive predicate, on constructed connections rather
+    /// than the process-global map so it cannot race another test.
+    ///
+    /// The third case is the regression: a refused `new WebSocket(url)` leaves
+    /// the transport `Connecting` for ever (nothing ever attaches), so a
+    /// predicate that asked only about the transport would report the process
+    /// live until it was killed.
+    #[test]
+    fn keepalive_counts_connecting_clients_but_not_failed_ones() {
+        let connection = |transport, is_open, is_closed| WsConnection {
+            transport,
+            messages: Vec::new(),
+            is_open,
+            is_closing: false,
+            is_closed,
+        };
+        assert!(
+            connection_is_live(&connection(
+                WsTransport::Connecting(Vec::new()),
+                false,
+                false
+            )),
+            "a handshake in flight keeps the loop alive"
+        );
+        assert!(
+            connection_is_live(&connection(WsTransport::Turnloop(1), true, false)),
+            "an open connection keeps the loop alive"
+        );
+        assert!(
+            !connection_is_live(&connection(
+                WsTransport::Connecting(Vec::new()),
+                false,
+                true
+            )),
+            "a FAILED connect must not keep the loop alive for ever"
+        );
+        assert!(
+            !connection_is_live(&connection(WsTransport::Turnloop(1), false, true)),
+            "a closed connection must not keep the loop alive"
+        );
+    }
+
     /// #6117 — `readyState` walks the npm-ws lifecycle: CONNECTING (0)
     /// pre-open, OPEN (1), CLOSING (2) after `close()` is requested,
     /// CLOSED (3) once the IO loop marks the connection dead, and CLOSED
@@ -1806,11 +1835,14 @@ mod tests {
     #[test]
     fn ready_state_reports_npm_ws_lifecycle() {
         let ws_id = 990_077usize;
-        let (tx, _rx) = mpsc::unbounded_channel::<WsCommand>();
         WS_CONNECTIONS.lock().unwrap().insert(
             ws_id,
             WsConnection {
-                transport: WsTransport::Tokio(tx),
+                // CONNECTING is a real transport state now rather than a
+                // channel with nothing on the other end: a `close()` here is
+                // queued, which is exactly what the assertions below check
+                // does not disturb `readyState`.
+                transport: WsTransport::Connecting(Vec::new()),
                 messages: Vec::new(),
                 is_open: false,
                 is_closing: false,
