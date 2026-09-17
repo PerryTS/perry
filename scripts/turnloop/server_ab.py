@@ -337,12 +337,47 @@ def pick_marker(stderr_text, needle, startswith=False):
     return matches[0]
 
 
+# `[perry-loop] p1 comp_read=… comp_write=…` — the per-CLASS census.
+P1_CENSUS_RE = re.compile(r"\[perry-loop\] p1 (comp_[^\n]*)")
+
+
+def net_completions(stderr_text):
+    """Net completions actually delivered, from the `p1` census line.
+
+    This exists because the aggregate `completions=` field does NOT mean what
+    this harness used to claim it meant. It counts the driver's whole turn
+    output summed across every class — P1 net, P2 process, P3 JS timers, P4
+    pool — before routing. The runtime's doc comment said "completions
+    dispatched to a P1 net subsystem" and this file quoted that as its
+    justification, which made the check weaker than advertised: a server that
+    declined its listener to hyper but armed a keep-alive deadline would have
+    shown a non-zero count and passed. Until recently an HTTP keep-alive
+    connection produced TWO timer completions per request, so that was not a
+    hypothetical.
+
+    Returns None when the line is absent (a binary older than the census), so
+    the caller can fall back and say that it did.
+    """
+    match = P1_CENSUS_RE.search(stderr_text or "")
+    if not match:
+        return None
+    fields = dict(
+        pair.split("=", 1) for pair in match.group(1).split() if "=" in pair
+    )
+    # Only classes that mean "a socket moved bytes or was accepted". A timer
+    # completion is exactly what must NOT count here.
+    total = 0
+    for key in ("comp_accept", "comp_read", "comp_write", "comp_connect"):
+        value = fields.get(key, "0")
+        total += int(value) if value.isdigit() else 0
+    return total
+
+
 def marker_completions(marker_line):
     """`completions=N` from a `[perry-loop]` marker line, or None if absent.
 
-    The runtime's own doc for this counter is the reason it is here: "Completions
-    dispatched to a P1 net subsystem. Zero means turnloop carried no I/O for this
-    process, whatever the turn count says."
+    The weak fallback: every class summed, not net alone. See
+    `net_completions` for why that distinction matters.
     """
     if not marker_line:
         return None
@@ -353,7 +388,7 @@ def marker_completions(marker_line):
     return None
 
 
-def assert_turnloop_carried_io(arm, marker_line, where):
+def assert_turnloop_carried_io(arm, marker_line, where, stderr_text=None):
     """The arm marker proves the WAIT DRIVER; this proves turnloop did the I/O.
 
     They are not the same claim, and the gap is exactly the shape CLAUDE.md warns
@@ -371,6 +406,16 @@ def assert_turnloop_carried_io(arm, marker_line, where):
     prints no such line at all.
     """
     if arm != "turnloop":
+        return None
+    # Prefer the per-class census: it is the only one of the two that can tell
+    # a socket from a timer.
+    net = net_completions(stderr_text)
+    if net is not None:
+        if net == 0:
+            return (f"{where}: turnloop parked but carried NO net I/O "
+                    f"(p1 census: 0 accept/read/write/connect completions) — "
+                    f"the server declined to the tokio path, so these numbers "
+                    f"are not a turnloop measurement")
         return None
     completions = marker_completions(marker_line)
     if completions is None:
@@ -420,7 +465,9 @@ def verify_marker(arm, binary):
         raise SystemExit(f"{arm}: marker present but not selectable; stderr={server.stderr_text!r}")
     # `verify_marker` served one real request above, so a turnloop arm that
     # carried the listener MUST have completions by now.
-    carried = assert_turnloop_carried_io(arm, marker_line, f"{arm} build verification")
+    carried = assert_turnloop_carried_io(
+        arm, marker_line, f"{arm} build verification", server.stderr_text
+    )
     if carried:
         raise SystemExit(carried)
     log(f"verified {arm}: {marker_line}")
@@ -1180,7 +1227,9 @@ def finish_sample(sample, arm, server):
             problems.append("arm marker missing or wrong")
         if waits.get("arm") != ARM_WAITS[arm]:
             problems.append("wait metrics missing or wrong arm")
-        carried = assert_turnloop_carried_io(arm, sample["marker"], "sample")
+        carried = assert_turnloop_carried_io(
+            arm, sample["marker"], "sample", server.stderr_text
+        )
         if carried:
             problems.append(carried)
     if server.forced_kill:
