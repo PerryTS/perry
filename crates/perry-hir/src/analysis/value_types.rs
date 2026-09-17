@@ -1679,12 +1679,22 @@ fn infer_binary_type<F: HirTypeFacts + ?Sized>(
                 Type::Any
             }
         }
-        BinaryOp::BitAnd
-        | BinaryOp::BitOr
-        | BinaryOp::BitXor
-        | BinaryOp::Shl
-        | BinaryOp::Shr
-        | BinaryOp::UShr => Type::Number,
+        // `>>>` has no BigInt form (it throws), so it is always a Number.
+        BinaryOp::UShr => Type::Number,
+        // The other bitwise operators compute a BigInt for two BigInt operands
+        // and throw for a mixed pair, so the result is a Number only once an
+        // operand provably is not a BigInt (#10418).
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
+            let left_ty = infer_expr_type(left, env);
+            let right_ty = infer_expr_type(right, env);
+            if matches!(left_ty, Type::BigInt) && matches!(right_ty, Type::BigInt) {
+                Type::BigInt
+            } else if left_ty.is_non_bigint_primitive() || right_ty.is_non_bigint_primitive() {
+                Type::Number
+            } else {
+                Type::Any
+            }
+        }
     }
 }
 

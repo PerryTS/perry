@@ -79,8 +79,21 @@ fn any_param(id: u32) -> Param {
     }
 }
 
+/// `collect_int_valued_ta_locals` with the non-BigInt facts its production
+/// caller derives from the same body, params and binding types.
+fn collect(
+    stmts: &[Stmt],
+    params: &[Param],
+    binding_types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    guarded: &HashSet<u32>,
+) -> HashSet<u32> {
+    let not_bigint = NotBigIntFacts::collect(stmts, params, binding_types);
+    collect_int_valued_ta_locals(stmts, params, binding_types, ta_lens, guarded, &not_bigint)
+}
+
 fn run(stmts: &[Stmt], params: &[Param]) -> HashSet<u32> {
-    collect_int_valued_ta_locals(
+    collect(
         stmts,
         params,
         &HashMap::new(),
@@ -284,8 +297,7 @@ fn guarded_number_array_seed_is_native_after_bitwise_normalization() {
         }),
     ];
     let guarded = HashSet::from([0]);
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    let got = collect(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
     assert!(
         got.contains(&5),
         "guarded number-array accumulator missing: {got:?}"
@@ -307,8 +319,7 @@ fn guarded_number_array_bare_read_before_normalization_is_rejected() {
         set(5, xor(Expr::LocalGet(5), Expr::Integer(7))),
     ];
     let guarded = HashSet::from([0]);
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    let got = collect(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
     assert!(
         !got.contains(&5),
         "a pre-normalization bare read must remain observable: {got:?}"
@@ -328,8 +339,7 @@ fn conditional_bitwise_normalization_does_not_dominate_later_read() {
         Stmt::Return(Some(Expr::LocalGet(5))),
     ];
     let guarded = HashSet::from([0]);
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    let got = collect(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
     assert!(
         !got.contains(&5),
         "one-branch normalization must not license a later bare read: {got:?}"
@@ -351,8 +361,7 @@ fn unreachable_nested_normalization_does_not_license_later_read() {
         Stmt::Return(Some(Expr::LocalGet(5))),
     ];
     let guarded = HashSet::from([0]);
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    let got = collect(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
     assert!(
         !got.contains(&5),
         "a nested normalization bypassed by break must not dominate: {got:?}"
@@ -409,7 +418,7 @@ fn non_int_kind_typed_array_read_not_seeded() {
         let_stmt(5, HirType::Any, Some(idx_get(0, Expr::LocalGet(1)))),
         set(5, xor(Expr::LocalGet(5), Expr::Integer(3))),
     ];
-    let got = collect_int_valued_ta_locals(
+    let got = collect(
         &stmts,
         &params,
         &binding_types,
@@ -458,8 +467,7 @@ fn wrap_i32_additive_chain_with_proven_operands_is_admitted() {
         ),
         set(8, xor(Expr::LocalGet(8), Expr::LocalGet(9))),
     ];
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
+    let got = collect(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         got.contains(&9),
         "wrap-i32 additive accumulator wrongly excluded: {got:?}"
@@ -488,8 +496,7 @@ fn wrap_i32_additive_inside_loop_is_rejected() {
             )],
         },
     ];
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
+    let got = collect(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         !got.contains(&9),
         "loop-carried additive chain wrongly admitted: {got:?}"
@@ -515,8 +522,7 @@ fn wrap_i32_candidate_as_bare_index_is_rejected() {
         ),
         let_stmt(10, HirType::Any, Some(idx_get(0, Expr::LocalGet(9)))),
     ];
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
+    let got = collect(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         !got.contains(&9),
         "bare-index wrap-i32 candidate wrongly admitted: {got:?}"
@@ -549,8 +555,7 @@ fn wrap_i32_additive_operand_with_possibly_undefined_value_is_rejected() {
         set(10, xor(Expr::LocalGet(10), Expr::Integer(1))),
         set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
     ];
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
+    let got = collect(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         !got.contains(&10),
         "additive over possibly-undefined operand wrongly admitted: {got:?}"
@@ -587,8 +592,7 @@ fn wrap_i32_additive_operand_reset_in_bounds_is_admitted() {
         ),
         set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
     ];
-    let got =
-        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
+    let got = collect(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         got.contains(&9),
         "in-bounds-reset additive accumulator wrongly rejected: {got:?}"
@@ -613,7 +617,7 @@ fn wrap_i32_additive_without_length_proof_is_rejected() {
         ),
         set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
     ];
-    let got = collect_int_valued_ta_locals(
+    let got = collect(
         &stmts,
         &params,
         &HashMap::new(),
@@ -623,5 +627,62 @@ fn wrap_i32_additive_without_length_proof_is_rejected() {
     assert!(
         !got.contains(&9),
         "length-unproven additive operand wrongly admitted: {got:?}"
+    );
+}
+
+/// #10418: `a & b` over two operands that may be BigInts computes a BigInt, so
+/// it is not an exact i32 write — the slot would truncate it to `0`. One
+/// provably-Number operand (a literal, or another candidate) restores it.
+#[test]
+fn bigint_capable_bitwise_write_is_not_an_i32_write() {
+    // arr:Int32Array (0), a (1), b (2) untyped
+    //   let x = arr[0]; x = a & b; arr[1] = x;
+    let params = [int32_array_param(0), any_param(1), any_param(2)];
+    let store = |id: u32| {
+        Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(0)),
+            index: Box::new(Expr::Integer(1)),
+            value: Box::new(Expr::LocalGet(id)),
+        })
+    };
+    let bigint_capable = vec![
+        let_stmt(9, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        set(
+            9,
+            bin(BinaryOp::BitAnd, Expr::LocalGet(1), Expr::LocalGet(2)),
+        ),
+        store(9),
+    ];
+    let got = run(&bigint_capable, &params);
+    assert!(
+        !got.contains(&9),
+        "a possibly-BigInt `a & b` write must not admit an i32 slot: {got:?}"
+    );
+
+    // `a & 0xff` is a Number (a BigInt `a` throws), so the slot stays.
+    let masked = vec![
+        let_stmt(9, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        set(
+            9,
+            bin(BinaryOp::BitAnd, Expr::LocalGet(1), Expr::Integer(0xff)),
+        ),
+        store(9),
+    ];
+    let got = run(&masked, &params);
+    assert!(
+        got.contains(&9),
+        "literal-masked write lost its slot: {got:?}"
+    );
+
+    // `x ^ a` where `x` is itself a candidate: the candidate operand proves it.
+    let accumulator = vec![
+        let_stmt(9, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        set(9, xor(Expr::LocalGet(9), Expr::LocalGet(1))),
+        store(9),
+    ];
+    let got = run(&accumulator, &params);
+    assert!(
+        got.contains(&9),
+        "candidate-operand write lost its slot: {got:?}"
     );
 }

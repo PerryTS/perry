@@ -278,6 +278,32 @@ fn function_with_mixed_returns_bails_to_any() {
     assert_eq!(find_fn(&module, "mixed").return_type, Type::Any);
 }
 
+/// #10418: `a & b` over two operands that may be BigInts is a BigInt for
+/// BigInt inputs, so neither a binding initialized from it nor a function
+/// returning it may be typed `Number` — that type reached codegen as an int32
+/// slot that read the BigInt result back as `0`. One Number operand keeps it.
+#[test]
+fn bitwise_over_possible_bigints_is_not_inferred_number() {
+    let module = lower_src(
+        r#"
+        const A = BigInt(1003);
+        const B = BigInt(5);
+        const both = A & B;
+        const masked = A & 0xff;
+        const unsigned = A >>> 0;
+        function pair(a, b) { return a ^ b; }
+        function mask(a) { return a << 3; }
+        function typed(a: bigint, b: bigint) { return a >> b; }
+        "#,
+    );
+    assert_ne!(find_local_type(&module, "both"), &Type::Number);
+    assert_eq!(find_local_type(&module, "masked"), &Type::Number);
+    assert_eq!(find_local_type(&module, "unsigned"), &Type::Number);
+    assert_eq!(find_fn(&module, "pair").return_type, Type::Any);
+    assert_eq!(find_fn(&module, "mask").return_type, Type::Number);
+    assert_eq!(find_fn(&module, "typed").return_type, Type::BigInt);
+}
+
 #[test]
 fn function_with_no_returns_infers_void() {
     let module = lower_src(

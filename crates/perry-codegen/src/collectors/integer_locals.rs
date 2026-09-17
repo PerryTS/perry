@@ -27,12 +27,14 @@
 //!    unconditionally.
 //!
 //! `int32_producing_deps` is deliberately stricter than the admission-side
-//! `is_int32_producing_expr` in two places where the latter is optimistic:
-//! `Expr::Update` requires the updated local to itself be a candidate, and a
+//! `is_int32_producing_expr` in three places where the latter is optimistic:
+//! `Expr::Update` requires the updated local to itself be a candidate, a
 //! call to an *argument-dependent* clamp function (`clamp3`-shaped functions
 //! return one of their arguments verbatim) requires every argument to be
-//! int-producing. Anything admission accepted that judgment rejects is simply
-//! pruned.
+//! int-producing, and a BigInt-capable bitwise operator (`&` `|` `^` `<<`
+//! `>>`) requires an operand that is provably not a BigInt (#10418 — over two
+//! BigInts it computes a BigInt, which an i32 slot reads back as `0`).
+//! Anything admission accepted that judgment rejects is simply pruned.
 //!
 //! Scoping notes: `clamp_fn_ids` are *function* ids (module-global, no
 //! per-function contamination). `flat_const_ids` are module-init local ids of
@@ -369,6 +371,10 @@ fn collect_int_ta_load_let_ids(
     }
 }
 
+/// The integer-local proof with no spec seeds, and non-BigInt facts derived
+/// from the body alone. Production reaches `collect_integer_locals_with_seeds`
+/// through `collect_type_facts`, which has the params and binding types.
+#[cfg(test)]
 pub fn collect_integer_locals(
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &HashSet<u32>,
@@ -386,6 +392,7 @@ pub fn collect_integer_locals(
         arg_dependent_clamp_fn_ids,
         numeric_locals,
         &HashSet::new(),
+        &super::not_bigint_locals::NotBigIntFacts::collect(stmts, &[], &HashMap::new()),
     )
 }
 
@@ -400,6 +407,8 @@ pub(crate) fn collect_integer_locals_with_seeds(
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     numeric_locals: &HashSet<u32>,
     seed_locals: &HashSet<u32>,
+    // #10418: which bitwise results are Numbers rather than possible BigInts.
+    not_bigint: &super::not_bigint_locals::NotBigIntFacts,
 ) -> HashSet<u32> {
     let mut candidates: HashSet<u32> = seed_locals.clone();
 
@@ -475,6 +484,7 @@ pub(crate) fn collect_integer_locals_with_seeds(
         clamp_fn_ids,
         arg_dependent_clamp_fn_ids,
         numeric_locals,
+        not_bigint,
         int_ta_views: &int_ta_views,
         dependents: HashMap::new(),
         disqualified: HashSet::new(),
@@ -527,6 +537,8 @@ struct ProvenanceJudge<'a> {
     /// #7700: locals whose declared type says they hold a number, so a
     /// `u8[k]` keyed on one is a byte read.
     numeric_locals: &'a HashSet<u32>,
+    /// #10418: the non-BigInt proof a BigInt-capable bitwise obligation needs.
+    not_bigint: &'a super::not_bigint_locals::NotBigIntFacts,
     /// Const int-typed-array views (`id → length`) whose in-window element
     /// loads are integers by construction — obligations whose rhs is such a
     /// load pass without deps.
@@ -556,6 +568,7 @@ impl ProvenanceJudge<'_> {
             self.clamp_fn_ids,
             self.arg_dependent_clamp_fn_ids,
             self.numeric_locals,
+            self.not_bigint,
             &mut deps,
         ) {
             for dep in deps {
@@ -697,6 +710,10 @@ impl ProvenanceJudge<'_> {
 ///     int-producing, and the argument deps are recorded. `clampU8`-shaped
 ///     and `returns_integer` functions coerce internally (`| 0` / bitwise on
 ///     every value-returning path) and stay argument-independent.
+///   - `&` `|` `^` `<<` `>>` (#10418): int-producing only when their result
+///     cannot be a BigInt — an operand `not_bigint` proves, or an operand that
+///     is itself int-producing (whose deps are then recorded). Admission
+///     accepts every bitwise expression; `a & b` over two BigInts is a BigInt.
 #[allow(clippy::too_many_arguments)]
 fn int32_producing_deps(
     e: &perry_hir::Expr,
@@ -706,6 +723,7 @@ fn int32_producing_deps(
     clamp_fn_ids: &HashSet<u32>,
     arg_dependent_clamp_fn_ids: &HashSet<u32>,
     numeric_locals: &HashSet<u32>,
+    not_bigint: &super::not_bigint_locals::NotBigIntFacts,
     deps: &mut HashSet<u32>,
 ) -> bool {
     let recurse = |sub: &Expr, deps: &mut HashSet<u32>| {
@@ -717,6 +735,7 @@ fn int32_producing_deps(
             clamp_fn_ids,
             arg_dependent_clamp_fn_ids,
             numeric_locals,
+            not_bigint,
             deps,
         )
     };
@@ -754,15 +773,33 @@ fn int32_producing_deps(
                 false
             }
         }
-        Expr::Binary { op, .. } => matches!(
-            op,
-            BinaryOp::BitAnd
-                | BinaryOp::BitOr
-                | BinaryOp::BitXor
-                | BinaryOp::Shl
-                | BinaryOp::Shr
-                | BinaryOp::UShr
-        ),
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr
+            ) =>
+        {
+            if not_bigint.bitwise_result_is_number(e) {
+                return true;
+            }
+            // An int-producing operand is a Number too; keep only the deps of
+            // the side that carried the proof.
+            [left, right].into_iter().any(|side| {
+                let mut side_deps = HashSet::new();
+                let proven = recurse(side, &mut side_deps);
+                if proven {
+                    deps.extend(side_deps);
+                }
+                proven
+            })
+        }
+        Expr::Binary {
+            op: BinaryOp::UShr, ..
+        } => true,
         Expr::LocalGet(id) if candidates.contains(id) => {
             deps.insert(*id);
             true
@@ -1019,7 +1056,9 @@ pub fn collect_flat_row_aliases(
 ///   - `(expr) | 0` and `(expr) >>> 0`: the JS ToInt32 / ToUint32 idiom —
 ///     always yields a 32-bit integer regardless of the inner expression.
 ///   - Pure bitwise ops (`&`, `|`, `^`, `<<`, `>>`, `>>>`): per JS spec
-///     these coerce both operands to int32 and return int32.
+///     these coerce Number operands to int32 and return int32. Optimistic:
+///     `&` `|` `^` `<<` `>>` over two BigInts compute a BigInt, which the
+///     disqualification judgment rejects (#10418).
 ///   - `Expr::Update`: `++` / `--` on an integer-stable local (admission
 ///     doesn't verify the target; the disqualification judgment does).
 ///   - (issue #49) `LocalGet(id)` when `id` is itself in `known_int_locals` —

@@ -256,6 +256,10 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
 /// not a Number, so `5n - 3n` and `1n - 1` both take the cold arm and keep
 /// the helper's exact semantics (a BigInt result and a TypeError
 /// respectively).
+///
+/// The bitwise operators take the same guard (#10418): their numeric arm is
+/// `ToInt32 <op> ToInt32`, which `toint32_wrap` computes for every Number
+/// (NaN and ±Infinity included), with the shift count masked to 5 bits.
 fn lower_guarded_numeric_arith(
     ctx: &mut FnCtx<'_>,
     op: BinaryOp,
@@ -284,7 +288,31 @@ fn lower_guarded_numeric_arith(
         let native = |ctx: &mut FnCtx<'_>, l: &str, r: &str| match op {
             BinaryOp::Sub => ctx.block().fsub(l, r),
             BinaryOp::Mul => ctx.block().fmul(l, r),
-            _ => ctx.block().fdiv(l, r),
+            BinaryOp::Div => ctx.block().fdiv(l, r),
+            _ => {
+                let blk = ctx.block();
+                let li = blk.toint32_wrap(l);
+                let ri = blk.toint32_wrap(r);
+                let v = match op {
+                    BinaryOp::BitAnd => blk.and(I32, &li, &ri),
+                    BinaryOp::BitOr => blk.or(I32, &li, &ri),
+                    BinaryOp::BitXor => blk.xor(I32, &li, &ri),
+                    BinaryOp::Shl => {
+                        let shift = blk.and(I32, &ri, "31");
+                        blk.shl(I32, &li, &shift)
+                    }
+                    BinaryOp::Shr => {
+                        let shift = blk.and(I32, &ri, "31");
+                        blk.ashr(I32, &li, &shift)
+                    }
+                    _ => {
+                        let shift = blk.and(I32, &ri, "31");
+                        let v = blk.lshr(I32, &li, &shift);
+                        return blk.uitofp(I32, &v, DOUBLE);
+                    }
+                };
+                blk.sitofp(I32, &v, DOUBLE)
+            }
         };
         // Every leaf already vouched for: no diamond to emit.
         let Some(all_num) = cond else {
@@ -322,7 +350,7 @@ fn lower_guarded_numeric_arith(
 }
 
 /// `PERRY_GUARDED_ARITH=0` restores the unconditional dynamic helper for
-/// `-`, `*` and `/`.
+/// `-`, `*`, `/` and the bitwise operators.
 fn guarded_arith_enabled() -> bool {
     !matches!(
         std::env::var("PERRY_GUARDED_ARITH").as_deref(),
@@ -1205,8 +1233,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // operation while `s += v` did not. The guard needs no
                         // proof: a BigInt is not a Number, so it fails the test
                         // and the cold arm runs this same helper.
+                        //
+                        // #10418: so do the bitwise operators. An unproven
+                        // operand used to reach their int32 path anyway,
+                        // through an int32 local slot that also truncated a
+                        // BigInt result; the tag test keeps the Number case
+                        // inline without that hole.
                         if guarded_arith_enabled()
-                            && matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
+                            && (matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
+                                || (is_bitwise_op(*op) && inline_nonbigint_bitwise_enabled()))
                         {
                             return lower_guarded_numeric_arith(ctx, *op, left, right, fname);
                         }

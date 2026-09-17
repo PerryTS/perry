@@ -39,7 +39,8 @@
 //!    NOT `Uint32`, NOT the float / bigint kinds), or a numeric-array read
 //!    backed by the specialized entry's runtime guard. An erasable source
 //!    `number[]` annotation alone is never evidence. Other admitted writes are:
-//!    a bitwise op (`& | ^ << >> >>>`), `~`, `Math.imul`, an i32 literal,
+//!    a bitwise op (`& | ^ << >> >>>`) or `~` whose result is not a BigInt
+//!    (#10418), `Math.imul`, an i32 literal,
 //!    `undefined` (the hoisted-`var` seed — `ToInt32(undefined) == 0`, the
 //!    slot's seed value), or a `Uint8ArrayGet`/`BufferIndexGet`. NOT `*`
 //!    (a single product can exceed 2^53 and round). Additive `+`/`-` is
@@ -87,6 +88,8 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr, Param, Stmt, UnaryOp};
+
+use super::not_bigint_locals::NotBigIntFacts;
 
 /// `PERRY_INT_VALUED_LOCALS` gate. Enabled by default; `=0`/`off`/`false`
 /// disables the analysis (returns an empty set), reverting the affected locals
@@ -222,6 +225,46 @@ fn write_is_i32_producing_safe(
     }
 }
 
+/// Rule (1) with the BigInt case excluded (#10418). `&` `|` `^` `<<` `>>` and
+/// `~` compute a BigInt from BigInt operands, so such a write is an exact i32
+/// only when `not_bigint` proves its result a Number or an operand is one — a
+/// `pool` member or another rule-(1) value. Without this, `let x = u8[0]; x =
+/// a & b` truncated the BigInt `a & b` into the i32 slot.
+fn write_is_i32_number_safe(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
+    numeric_locals: &HashSet<u32>,
+    pool: &HashSet<u32>,
+    not_bigint: &NotBigIntFacts,
+) -> bool {
+    if !write_is_i32_producing_safe(e, types, guarded_number_array_params, numeric_locals) {
+        return false;
+    }
+    let operand_is_number = |operand: &Expr| {
+        matches!(operand, Expr::LocalGet(id) if pool.contains(id))
+            || write_is_i32_number_safe(
+                operand,
+                types,
+                guarded_number_array_params,
+                numeric_locals,
+                pool,
+                not_bigint,
+            )
+    };
+    match e {
+        Expr::Binary { left, right, .. } => {
+            not_bigint.bitwise_result_is_number(e)
+                || operand_is_number(left)
+                || operand_is_number(right)
+        }
+        Expr::Unary { operand, .. } => {
+            not_bigint.bitwise_result_is_number(e) || operand_is_number(operand)
+        }
+        _ => true,
+    }
+}
+
 /// True when the JavaScript value produced by a write is itself an exact i32,
 /// not merely a value whose `ToInt32` image is safe to retain.  Once such a
 /// write dominates a later read, non-coercing observations are safe too: the
@@ -302,7 +345,11 @@ fn additive_write_admissible(
     ta_lens: &HashMap<u32, i64>,
     pool: &HashSet<u32>,
     numeric_locals: &HashSet<u32>,
+    not_bigint: &NotBigIntFacts,
 ) -> bool {
+    let admissible = |sub: &Expr| {
+        additive_write_admissible(sub, types, ta_lens, pool, numeric_locals, not_bigint)
+    };
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::LocalGet(id) => pool.contains(id),
@@ -315,16 +362,18 @@ fn additive_write_admissible(
                     (Some(len), Some((lo, hi))) if lo >= 0 && hi < *len
                 ))
         }
-        // Exact ToInt32/ToUint32 producers regardless of operand shape.
-        Expr::Binary { op, .. } if is_bitwise_binop(*op) => true,
+        // Exact ToInt32/ToUint32 producers once the result is not a BigInt
+        // (#10418): proven by `not_bigint` or by an admissible operand.
+        Expr::Binary { op, left, right } if is_bitwise_binop(*op) => {
+            not_bigint.bitwise_result_is_number(e) || admissible(left) || admissible(right)
+        }
         Expr::Unary {
             op: UnaryOp::BitNot,
-            ..
-        } => true,
+            operand,
+        } => not_bigint.bitwise_result_is_number(e) || admissible(operand),
         Expr::MathImul(_, _) => true,
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            additive_write_admissible(left, types, ta_lens, pool, numeric_locals)
-                && additive_write_admissible(right, types, ta_lens, pool, numeric_locals)
+            admissible(left) && admissible(right)
         }
         _ => false,
     }
@@ -659,6 +708,8 @@ pub fn collect_int_valued_ta_locals(
     binding_types: &HashMap<u32, HirType>,
     extra_ta_lens: &HashMap<u32, i64>,
     guarded_number_array_params: &HashSet<u32>,
+    // #10418: which bitwise writes are Numbers rather than possible BigInts.
+    not_bigint: &NotBigIntFacts,
 ) -> HashSet<u32> {
     // Declared-type map (params + let bindings), used to classify typed-array
     // receivers. Params are included so `lr: Int32Array` resolves.
@@ -736,16 +787,23 @@ pub fn collect_int_valued_ta_locals(
         let snapshot = pool.clone();
         pool.retain(|id| {
             facts.writes[id].iter().all(|(w, in_loop)| {
-                write_is_i32_producing_safe(w, &types, guarded_number_array_params, &numeric_locals)
-                    || ((!in_loop || loop_reseeded.contains(id))
-                        && !additive_invalid.contains(id)
-                        && additive_write_admissible(
-                            w,
-                            &types,
-                            &ta_lens,
-                            &snapshot,
-                            &numeric_locals,
-                        ))
+                write_is_i32_number_safe(
+                    w,
+                    &types,
+                    guarded_number_array_params,
+                    &numeric_locals,
+                    &snapshot,
+                    not_bigint,
+                ) || ((!in_loop || loop_reseeded.contains(id))
+                    && !additive_invalid.contains(id)
+                    && additive_write_admissible(
+                        w,
+                        &types,
+                        &ta_lens,
+                        &snapshot,
+                        &numeric_locals,
+                        not_bigint,
+                    ))
             })
         });
         if pool.len() == before {
@@ -787,6 +845,7 @@ pub fn collect_int_valued_ta_locals(
             pool: &candidates,
             exact_after_root_normalization: &exact_after_root_normalization,
             numeric_locals: &numeric_locals,
+            not_bigint,
         };
         let mut exact_i32 = HashSet::new();
         observe_stmts(
@@ -810,11 +869,13 @@ pub fn collect_int_valued_ta_locals(
             let snapshot = candidates.clone();
             candidates.retain(|id| {
                 facts.writes[id].iter().all(|(w, in_loop)| {
-                    write_is_i32_producing_safe(
+                    write_is_i32_number_safe(
                         w,
                         &types,
                         guarded_number_array_params,
                         &numeric_locals,
+                        &snapshot,
+                        not_bigint,
                     ) || (!in_loop
                         && !additive_invalid.contains(id)
                         && additive_write_admissible(
@@ -823,6 +884,7 @@ pub fn collect_int_valued_ta_locals(
                             &ta_lens,
                             &snapshot,
                             &numeric_locals,
+                            not_bigint,
                         ))
                 })
             });
@@ -845,6 +907,8 @@ struct AdditiveCtx<'a> {
     exact_after_root_normalization: &'a HashSet<u32>,
     /// #7700: locals whose declared type says they hold a number.
     numeric_locals: &'a HashSet<u32>,
+    /// #10418: see `additive_write_admissible`.
+    not_bigint: &'a NotBigIntFacts,
 }
 
 // ---------------------------------------------------------------------------
@@ -1300,6 +1364,7 @@ fn observe_stmts(
                             additive.ta_lens,
                             additive.pool,
                             additive.numeric_locals,
+                            additive.not_bigint,
                         )
                     {
                         observe_additive_rhs(e, cands, types, additive, exact_i32, disq);
@@ -1539,6 +1604,7 @@ fn observe(
                     additive.ta_lens,
                     additive.pool,
                     additive.numeric_locals,
+                    additive.not_bigint,
                 )
             {
                 observe_additive_rhs(value, cands, types, additive, exact_i32, disq);

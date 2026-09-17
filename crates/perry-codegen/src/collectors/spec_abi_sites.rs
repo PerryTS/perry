@@ -583,12 +583,14 @@ fn judge_sites_in_body(
     let binding_types = HashMap::new();
     let numeric_locals = super::collect_numeric_typed_locals(stmts, params, &binding_types);
     let empty = HashSet::new();
-    let integer_locals = super::integer_locals::collect_integer_locals(
+    let integer_locals = super::integer_locals::collect_integer_locals_with_seeds(
         stmts,
         &empty,
         &empty,
         &empty,
         &numeric_locals,
+        &empty,
+        &super::not_bigint_locals::NotBigIntFacts::collect(stmts, params, &binding_types),
     );
     let mut ready: HashSet<u32> = HashSet::new();
     for s in stmts {
