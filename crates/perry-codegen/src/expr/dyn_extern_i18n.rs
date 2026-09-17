@@ -103,7 +103,9 @@ fn lower_dynamic_require(ctx: &mut FnCtx<'_>, paths: &[String], arg: &Expr) -> R
     // The no-match fallthrough resolves via the ambient require (builtin-or-throw)
     // rather than rejecting.
     let spec_val = lower_expr(ctx, arg)?;
-    let result_slot = ctx.block().alloca(DOUBLE);
+    // #10463: an entry-block slot; in the current block it grew the stack on
+    // every loop iteration.
+    let result_slot = ctx.func.alloca_entry(DOUBLE);
     let join_block_idx = ctx.new_block("dynamic_require_join");
     let path_handle =
         ctx.block()
@@ -381,7 +383,7 @@ fn emit_i18n_row_value(
         _ => return emit_i18n_template(ctx, &templates[default_idx], lowered_params),
     };
 
-    let result_slot = ctx.block().alloca(DOUBLE);
+    let result_slot = ctx.func.alloca_entry(DOUBLE);
     let join_block_idx = ctx.new_block("i18n_locale_join");
 
     for (li, template) in templates.iter().enumerate() {
@@ -683,7 +685,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
                 // a join block which loads and returns. Using an alloca
                 // keeps the IR straightforward without proper phi nodes.
-                let result_slot = ctx.block().alloca(DOUBLE);
+                // #10463: in the entry block, like every alloca.
+                let result_slot = ctx.func.alloca_entry(DOUBLE);
                 let join_block_idx = ctx.new_block("dynamic_import_join");
 
                 // Unbox the path argument once into an i64 StringHeader*.
@@ -1161,7 +1164,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .map(|(_, idx)| *idx)
                 .unwrap_or(*string_idx);
 
-            let result_slot = ctx.block().alloca(DOUBLE);
+            let result_slot = ctx.func.alloca_entry(DOUBLE);
             let join_block_idx = ctx.new_block("i18n_plural_join");
 
             for (cat, form_idx) in plural_forms.iter().filter(|(cat, _)| *cat != 5) {

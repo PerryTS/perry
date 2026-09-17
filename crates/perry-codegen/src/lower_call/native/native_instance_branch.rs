@@ -354,11 +354,13 @@
             }
         }
         let arr_box = lower_expr(ctx, recv)?;
+        // #10463: the fused push's length out-parameter is an entry-block
+        // alloca; `blk.alloca` here grew the stack on every loop iteration.
+        let length_slot = u31_value.as_ref().map(|_| ctx.func.alloca_entry(I32));
         let blk = ctx.block();
         let mut arr_handle = unbox_to_i64(blk, &arr_box);
         let orig_handle = arr_handle.clone();
-        let fused_length_slot = if let Some(value) = u31_value {
-            let length_slot = blk.alloca(I32);
+        let fused_length_slot = if let Some((value, length_slot)) = u31_value.zip(length_slot) {
             let fast_handle = blk.call(
                 I64,
                 "js_array_push_u31_with_length",

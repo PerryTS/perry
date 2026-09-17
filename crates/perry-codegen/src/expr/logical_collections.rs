@@ -52,8 +52,8 @@ use crate::type_analysis::{map_static_type_args, string_value_is_runtime_guarant
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{
-    emit_string_literal_global, i32_bool_to_nanbox, lower_expr, nanbox_pointer_inline,
-    nanbox_string_inline, record_collection_number_key_fallback,
+    emit_string_literal_global, i32_bool_to_nanbox, lower_expr, lower_js_args_array,
+    nanbox_pointer_inline, nanbox_string_inline, record_collection_number_key_fallback,
     record_collection_number_key_selected, record_collection_string_key_fallback,
     record_collection_string_key_selected, unbox_str_handle, unbox_to_i64, FnCtx,
 };
@@ -845,24 +845,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // of raw NaN-boxed doubles + count (mirrors the dense
                     // `js_array_concat_variadic` lowering).
                     "splice" | "concat" => {
-                        let n = arg_boxes.len();
-                        let (buf_reg, count_str) = if n == 0 {
-                            ("null".to_string(), "0".to_string())
-                        } else {
-                            let buf_reg = blk.next_reg();
-                            blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                            for (i, val) in arg_boxes.iter().enumerate() {
-                                let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                                blk.store(DOUBLE, val, &slot);
-                            }
-                            (buf_reg, format!("{}", n))
-                        };
+                        // #10463: an entry-block buffer; allocated in the
+                        // current block it grew the stack per loop iteration.
+                        let (buf_reg, count_str) = lower_js_args_array(ctx, &arg_boxes);
                         let fname = if method == "splice" {
                             "js_arraylike_splice"
                         } else {
                             "js_arraylike_concat"
                         };
-                        blk.call(
+                        ctx.block().call(
                             DOUBLE,
                             fname,
                             &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
@@ -880,24 +871,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // push(...) / unshift(...): variadic — pass an alloca buffer of
                     // raw NaN-boxed doubles + count (mirrors splice/concat above).
                     "push" | "unshift" => {
-                        let n = arg_boxes.len();
-                        let (buf_reg, count_str) = if n == 0 {
-                            ("null".to_string(), "0".to_string())
-                        } else {
-                            let buf_reg = blk.next_reg();
-                            blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                            for (i, val) in arg_boxes.iter().enumerate() {
-                                let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                                blk.store(DOUBLE, val, &slot);
-                            }
-                            (buf_reg, format!("{}", n))
-                        };
+                        let (buf_reg, count_str) = lower_js_args_array(ctx, &arg_boxes);
                         let fname = if method == "push" {
                             "js_arraylike_push"
                         } else {
                             "js_arraylike_unshift"
                         };
-                        blk.call(
+                        ctx.block().call(
                             DOUBLE,
                             fname,
                             &[(DOUBLE, &recv_box), (PTR, &buf_reg), (I32, &count_str)],
