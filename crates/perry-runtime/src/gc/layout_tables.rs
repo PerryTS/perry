@@ -1042,7 +1042,7 @@ pub(in crate::gc) fn per_object_layouts_maybe_nonempty() -> bool {
 /// where the two `transfer_*` entry points below each resolve the hot slot
 /// again for their own pair (#10362). Same answer, one thread-local
 /// resolution: the flag and the filter live in the same slot.
-#[inline]
+#[inline(always)]
 pub(in crate::gc) fn per_object_layouts_may_hold_either(old_user: usize, new_user: usize) -> bool {
     let hint = hot_per_object_layout_hint();
     hint.nonempty.get() && (hint_may_hold(hint, old_user) || hint_may_hold(hint, new_user))
