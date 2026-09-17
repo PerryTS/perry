@@ -1118,12 +1118,6 @@
       "why": "In-flight job counter for perry/thread."
     },
     {
-      "file": "crates/perry-runtime/src/timer.rs",
-      "name": "TIMER_HANDLE_KINDS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Maps scalar timer handle IDs to the CallbackTimerKind enum so clearTimeout/clearInterval can destroy the matching async_hooks resource. Neither the i64 keys nor the enum values contain a JS heap address."
-    },
-    {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
       "name": "DELIVERED",
       "verdict": "test_only",
