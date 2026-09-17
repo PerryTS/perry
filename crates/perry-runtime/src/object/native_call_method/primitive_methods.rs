@@ -350,7 +350,10 @@ pub(super) unsafe fn dispatch_primitive(
                 let receiver = object_handle.get_nanbox_f64();
                 let bound =
                     crate::closure::clone_closure_rebind_this(method.get_nanbox_u64(), receiver);
-                let _this = ImplicitThisScope::bind(object_handle.get_nanbox_f64());
+                let _this = crate::object::ImplicitThisScope::bind(
+                    root_scope,
+                    object_handle.get_nanbox_f64(),
+                );
                 let args = refreshed_args();
                 return Some(crate::closure::js_native_call_value(
                     f64::from_bits(bound),
@@ -389,7 +392,11 @@ pub(super) unsafe fn dispatch_primitive(
                 let receiver = object_handle.get_nanbox_f64();
                 let bound =
                     crate::closure::clone_closure_rebind_this(method.get_nanbox_u64(), receiver);
-                let _this = ImplicitThisScope::bind(receiver);
+                // Re-read: the clone above allocated (#10490).
+                let _this = crate::object::ImplicitThisScope::bind(
+                    root_scope,
+                    object_handle.get_nanbox_f64(),
+                );
                 let args = refreshed_args();
                 return Some(crate::closure::js_native_call_value(
                     f64::from_bits(bound),

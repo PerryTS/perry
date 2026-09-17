@@ -389,14 +389,18 @@ fn stream_emit_event(event: f64, arg: f64) -> f64 {
     };
     let args = [arg];
     let len = perry_runtime::array::js_array_length(arr);
+    // #10490: the displaced `this` crosses every listener (user code); restore
+    // it from a root, taken once.
+    let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let prev_this = this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
     for i in 0..len {
         let callback = perry_runtime::array::js_array_get_f64(arr, i);
-        let prev_this = perry_runtime::object::js_implicit_this_set(this);
+        perry_runtime::object::js_implicit_this_set(this);
         unsafe {
             let _ =
                 perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len());
         }
-        perry_runtime::object::js_implicit_this_set(prev_this);
+        perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
     js_bool(len > 0)
 }

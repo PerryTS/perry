@@ -461,9 +461,10 @@ pub(crate) unsafe fn temporal_subclass_super(
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let this_h = this_scope.root_nanbox_f64(this_box);
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
-    let prev_nt = crate::object::js_new_target_set(parent_val);
+    // #10490: the displaced `new.target` crosses the same call.
+    let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
     let cell = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
-    crate::object::js_new_target_set(prev_nt);
+    crate::object::js_new_target_set(prev_nt.get_nanbox_f64());
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if crate::temporal::is_temporal_value(cell) {
         attach_temporal_cell_to_this(this_h.get_nanbox_f64(), cell);

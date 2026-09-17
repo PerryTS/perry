@@ -159,18 +159,15 @@ mod rooted_iter_array_tests {
 /// Explicit-`thisArg` call sites route through the `js_arraylike_*` engine
 /// instead of these helpers. Arrow callbacks capture `this` lexically and
 /// are unaffected.
-struct DenseThisGuard(f64);
-impl DenseThisGuard {
-    fn bind_undefined() -> Self {
-        DenseThisGuard(crate::object::js_implicit_this_set(f64::from_bits(
-            crate::value::TAG_UNDEFINED,
-        )))
-    }
-}
-impl Drop for DenseThisGuard {
-    fn drop(&mut self) {
-        crate::object::js_implicit_this_set(self.0);
-    }
+///
+/// The displaced receiver is the caller's `this`, held across every callback
+/// in the loop, so it is restored from a root in the iteration's `scope`
+/// (#10490 — this guard used to keep it in a plain field).
+#[inline]
+fn bind_undefined_this(
+    scope: &crate::gc::RuntimeHandleScope,
+) -> crate::object::ImplicitThisScope<'_> {
+    crate::object::ImplicitThisScope::bind(scope, undefined_value())
 }
 
 /// #5989/#8117: `.forEach` on a receiver codegen could not prove is a
@@ -286,7 +283,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             Some(h) => h.get_nanbox_f64(),
             None => rooted.receiver(),
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
                 let arr = rooted.arr();
@@ -362,7 +359,7 @@ pub extern "C" fn js_array_map(
         // conservative scan; that knob was deleted in #7611, so there is no
         // longer a configuration in which this rooting is optional. See gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
 
         // ECMA-262 §23.1.3.20 step 5: ArraySpeciesCreate(O, len) runs BEFORE
         // the iteration — it reads `O.constructor` / `@@species` (firing any
@@ -485,7 +482,7 @@ pub extern "C" fn js_array_map_discard(arr: *const ArrayHeader, callback: *const
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         if crate::array::array_iteration_is_exotic(arr) {
             for i in 0..length as usize {
                 let arr = rooted.arr();
@@ -548,7 +545,7 @@ pub extern "C" fn js_array_filter(
         let cb_site = crate::closure::DirectCall3::resolve(callback);
         // Root the callback across the loop — see js_array_map / gh #6206.
         let cb_handle = scope.root_raw_const_ptr(callback);
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
 
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
         // iteration (validates `O.constructor` / `@@species`, throwing on a
@@ -644,7 +641,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -714,7 +711,7 @@ pub extern "C" fn js_array_findIndex(
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -769,7 +766,7 @@ pub extern "C" fn js_array_find_last(
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
@@ -821,7 +818,7 @@ pub extern "C" fn js_array_find_last_index(
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
             let element = if exotic {
@@ -930,7 +927,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -1091,7 +1088,7 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         let current_callback = || {
             crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
@@ -1160,7 +1157,7 @@ pub extern "C" fn js_array_flatMap(
                 crate::value::JSValue::pointer(result as *const u8).bits(),
             ));
         };
-        let _tg = DenseThisGuard::bind_undefined();
+        let _tg = bind_undefined_this(&scope);
 
         for i in 0..length as usize {
             let Some(element) = rooted.present(i) else {

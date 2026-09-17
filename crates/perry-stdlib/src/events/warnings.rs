@@ -49,9 +49,13 @@ unsafe fn emit_warning(warning: f64) {
         let emit_warning = js_object_get_field_by_name_f64(process_obj, key_ptr);
         if closure_ptr_from_value(emit_warning).is_some() {
             let args = [warning];
-            let previous_this = perry_runtime::object::js_implicit_this_set(process);
+            // #10490: root the displaced `this` across the (user-replaceable)
+            // `process.emitWarning`.
+            let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let previous_this =
+                this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(process));
             perry_runtime::closure::js_native_call_value(emit_warning, args.as_ptr(), args.len());
-            perry_runtime::object::js_implicit_this_set(previous_this);
+            perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
             return;
         }
     }

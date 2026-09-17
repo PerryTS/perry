@@ -1199,12 +1199,15 @@ pub unsafe extern "C" fn js_tls_client_preflight(
             nanbox_handle(alpn_callback),
             callback_socket,
         );
-        let previous_this = perry_runtime::object::js_implicit_this_set(callback_socket);
+        // #10490: root the displaced `this` across the ALPNCallback (user code).
+        let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let previous_this = this_scope
+            .root_nanbox_f64(perry_runtime::object::js_implicit_this_set(callback_socket));
         let selected = js_closure_call1(
             rebound_callback as *const ClosureHeader,
             js_nanbox_pointer(argument as i64),
         );
-        perry_runtime::object::js_implicit_this_set(previous_this);
+        perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
         let selected = value_to_string(selected).map(String::into_bytes);
         sockets().lock().unwrap().remove(&socket_id);
         listeners().lock().unwrap().remove(&socket_id);
