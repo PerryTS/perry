@@ -980,6 +980,18 @@
       "why": "Per-thread match scratch lent to one search at a time (#10166): registers are subject offsets in UTF-16 units, frames and undo entries are perex's own opaque evaluator scratch. No GC pointer is ever stored, exactly as for the per-call MatchBuffers it replaces (this module's header and perex_memory.rs). The cell is borrowed for one search and holds no program, subject or result: those stay in GcProgram/HeapSubject roots and in the operation's MemoryBudget-charged slots."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "PRE_SEARCH_POLLS_RUN",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<usize> counting pre-search polls that actually ran, so a test can assert the stride took and skipped the poll path rather than infer it from a timing (#10166). A count, never a pointer; absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "PRE_SEARCH_POLL_TICK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<usize> search counter for the pre-search safepoint poll's stride (#10166): one search in PRE_SEARCH_POLL_STRIDE runs the poll. It holds a wrapping tick count, never an address, and nothing reads it but the stride test in poll_on_stride."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/perex_split.rs",
       "name": "FORWARD_SPLITS",
       "verdict": "test_only",

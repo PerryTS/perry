@@ -15,6 +15,61 @@ fn bytes(ptr: *const StringHeader) -> Vec<u8> {
             .to_vec()
     }
 }
+/// The pre-search safepoint poll runs on one search in 64, not on every one.
+///
+/// It costs 502 of the 4,792 instructions a hoisted `.test()` call takes and
+/// buys very little (#10166): it cannot cancel — nothing in production
+/// constructs `EngineError::Cancelled` and `host::poll` returns `Ok(())`
+/// unconditionally — and removing it entirely left `cycle_starts`,
+/// `completions` and `steps` identical across 48,000,000 allocation-free
+/// calls. Striding keeps a participation point for a loop that allocates
+/// nothing while recovering most of the cost.
+///
+/// This asserts the poll path was taken AND skipped by counting it, rather
+/// than asserting "nothing broke" — which a stride that never polls at all
+/// would also satisfy.
+///
+/// The expected count is a literal, not `SEARCHES / PRE_SEARCH_POLL_STRIDE`.
+/// Deriving it made the test self-consistent at any stride — it passed
+/// unchanged with the stride set to 1, which is to say it asserted nothing.
+///
+/// Sabotage-proved after that fix: `PRE_SEARCH_POLL_STRIDE = 1` fails on the
+/// pinned stride and on 128 polls against an expected 2; removing the
+/// `poll_on_stride` call fails with 0.
+#[test]
+fn the_pre_search_poll_runs_on_one_search_in_sixty_four() {
+    use crate::regex::perex_runtime::{PRE_SEARCH_POLLS_RUN, PRE_SEARCH_POLL_STRIDE};
+
+    let scope = RuntimeHandleScope::new();
+    let re = construct(&scope, b"[0-9]+", b"");
+    let subject = text(&scope, b"ab12 cd345;");
+
+    // One search per call: unanchored and matching, so it returns on its first
+    // attempt and the tick advances exactly once.
+    const SEARCHES: usize = 128;
+    let before = PRE_SEARCH_POLLS_RUN.with(std::cell::Cell::get);
+    for _ in 0..SEARCHES {
+        assert_eq!(
+            re.with_const_ptr(|re| subject.with_const_ptr(|s| crate::regex::js_regexp_test(re, s))),
+            1,
+            "fixture: every call must run a search that matches"
+        );
+    }
+    let ran = PRE_SEARCH_POLLS_RUN.with(std::cell::Cell::get) - before;
+
+    // Pinned to literals on purpose. Deriving the expectation from
+    // PRE_SEARCH_POLL_STRIDE makes the test self-consistent at ANY stride: it
+    // passed unchanged with the stride set to 1, asserting nothing.
+    assert_eq!(
+        PRE_SEARCH_POLL_STRIDE, 64,
+        "this test pins the stride at 64; change both together"
+    );
+    assert_eq!(
+        ran, 2,
+        "128 searches must run the poll twice — once per 64, not on every call"
+    );
+}
+
 fn construct<'s>(scope: &'s RuntimeHandleScope, pattern: &[u8], flags: &[u8]) -> RuntimeHandle<'s> {
     let p = text(scope, pattern);
     let f = text(scope, flags);
