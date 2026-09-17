@@ -1494,7 +1494,7 @@ pub(super) fn emit_namespace_populator(
                         // not be collapsed to `_constructor` here (#7964).
                         sanitize_member(source_local)
                     );
-                    let arity = (*param_count).min(16);
+                    let arity = *param_count;
                     let mut wrapper_params: Vec<crate::types::LlvmType> = vec![I64];
                     wrapper_params.extend(std::iter::repeat_n(DOUBLE, arity));
                     ctx.pending_declares

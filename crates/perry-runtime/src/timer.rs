@@ -1238,7 +1238,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     crate::perf_hooks::note_event_loop_start();
     use crate::closure::{
         js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
-        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
+        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8,
     };
 
     if in_timer_callback_dispatch() {
@@ -1349,12 +1349,10 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
                     8 => {
                         js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
                     }
-                    _ => {
-                        // >= 9 args: clamp to 9. Real-world setTimeout
-                        // rarely exceeds 1-2 trailing args; this is a
-                        // conservative safety net rather than spec coverage.
-                        js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]);
-                    }
+                    // #10420: more than 8 trailing args used to clamp to 9.
+                    n => unsafe {
+                        crate::closure::js_closure_call_array(cb as i64, a.as_ptr(), n as i64);
+                    },
                 }
             });
             // #3870: Node runs a microtask checkpoint after *each* timer
@@ -1679,7 +1677,7 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
     crate::promise::bump(&PROFILE_INTERVAL_TIMER_TICKS);
     use crate::closure::{
         js_closure_call0, js_closure_call1, js_closure_call2, js_closure_call3, js_closure_call4,
-        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
+        js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8,
     };
 
     if in_timer_callback_dispatch() {
@@ -1746,7 +1744,10 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
                 6 => js_closure_call6(cb, a[0], a[1], a[2], a[3], a[4], a[5]),
                 7 => js_closure_call7(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6]),
                 8 => js_closure_call8(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]),
-                _ => js_closure_call9(cb, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8]),
+                // #10420: more than 8 trailing args used to clamp to 9.
+                n => unsafe {
+                    crate::closure::js_closure_call_array(cb as i64, a.as_ptr(), n as i64)
+                },
             };
         });
         crate::async_hooks::after(async_id);

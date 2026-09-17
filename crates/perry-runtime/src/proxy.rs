@@ -920,7 +920,14 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
         1 => js_closure_call1(closure, a(0)),
         2 => js_closure_call2(closure, a(0), a(1)),
         3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        4 => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        // #10425: this arm was `_ => js_closure_call4(…)`, so every argument
+        // after the fourth was dropped. The variadic entry point owns
+        // arbitrary-arity dispatch, rest bundling included. (`call_trap`
+        // above keeps its catch-all: a proxy trap receives at most four.)
+        n => unsafe {
+            crate::closure::js_closure_call_array(closure as i64, args.as_ptr(), n as i64)
+        },
     };
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result

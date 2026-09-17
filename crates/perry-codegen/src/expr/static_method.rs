@@ -360,33 +360,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     let blk = ctx.block();
                                     unbox_to_i64(blk, closure_box)
                                 };
-                                if lowered.len() <= 16 {
-                                    let runtime_fn = format!("js_closure_call{}", lowered.len());
-                                    let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-                                        vec![(I64, &closure_handle)];
-                                    for value in lowered.iter() {
-                                        call_args.push((DOUBLE, value.as_str()));
-                                    }
-                                    return Ok(ctx.block().call(DOUBLE, &runtime_fn, &call_args));
-                                }
-
                                 // #3527: namespace members backed by exported
                                 // closure getters need the same arbitrary-arity
                                 // array dispatch as ordinary closure values.
                                 // Effect's `Layer.mergeAll` is a rest closure
                                 // and OpenCode passes 18 layers here.
-                                let n = lowered.len();
-                                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                                let blk = ctx.block();
-                                for (i, value) in lowered.iter().enumerate() {
-                                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                                    blk.store(DOUBLE, value, &slot);
-                                }
-                                let argc = n.to_string();
-                                Ok(blk.call(
-                                    DOUBLE,
-                                    "js_closure_call_array",
-                                    &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
+                                Ok(crate::lower_call::emit_closure_handle_call(
+                                    ctx,
+                                    &closure_handle,
+                                    &lowered,
                                 ))
                             },
                         )?;

@@ -349,32 +349,14 @@ pub fn try_lower_namespace_member_call(
                     let blk = ctx.block();
                     unbox_to_i64(blk, closure_box)
                 };
-                if lowered.len() <= 16 {
-                    let runtime_fn = format!("js_closure_call{}", lowered.len());
-                    let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-                        vec![(I64, &closure_handle)];
-                    for v in lowered.iter() {
-                        call_args.push((DOUBLE, v.as_str()));
-                    }
-                    return Ok(ctx.block().call(DOUBLE, &runtime_fn, &call_args));
-                }
-
                 // #3527: the runtime's array dispatcher owns arbitrary-arity
                 // closure calls (including rest bundling). Keep the fixed-N
                 // entry points as the small fast path and marshal wider calls
                 // into a stack buffer after all rooted operand re-reads.
-                let n = lowered.len();
-                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                let blk = ctx.block();
-                for (i, value) in lowered.iter().enumerate() {
-                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                    blk.store(DOUBLE, value, &slot);
-                }
-                let argc = n.to_string();
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_closure_call_array",
-                    &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
+                Ok(super::emit_closure_handle_call(
+                    ctx,
+                    &closure_handle,
+                    &lowered,
                 ))
             },
         )?;

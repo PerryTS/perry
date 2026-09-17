@@ -31,7 +31,6 @@ pub use errors::throw_not_callable;
 
 pub use validate::{clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_func_ptr};
 
-pub(crate) use calln::{dispatch_registered_call, dispatch_rest_or_declared_arity};
 pub use calln::{
     js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
     js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16,
