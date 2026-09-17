@@ -424,9 +424,7 @@ pub(super) unsafe fn dispatch_handle(
                         // args, so frozen / non-writable-length must throw.
                         let arr = raw_ptr as *mut crate::array::ArrayHeader;
                         if crate::array::array_is_frozen(arr) {
-                            crate::collection_iter::throw_type_error(
-                                "Cannot mutate a frozen array",
-                            );
+                            crate::array::throw_non_extensible_array_push(unsafe { (*arr).length });
                         }
                         crate::array::guard_writable_length(arr);
                         let mut a = arr;
