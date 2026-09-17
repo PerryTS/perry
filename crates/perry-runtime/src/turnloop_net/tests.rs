@@ -317,7 +317,17 @@ fn queued_writes_report_backpressure_and_drain_in_order() {
     let (server, local) = listen_local();
     let client = 2;
     super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
-    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_CONNECT)));
+    // Wait for the SERVER's accept, not just the client's connect: they are two
+    // independent completions with nothing ordering them, and the next line
+    // needs the accepted id. Waiting on the connect alone made this test fail
+    // intermittently on a loaded machine — the accept simply landed a turn
+    // later and `accepted_id` returned None. Same shape as the UDS test below.
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT && e.id == server)
+            && e.iter().any(|e| e.kind == NET_CONNECT && e.id == client)),
+        "the connection must establish on both ends: {:?}",
+        events()
+    );
     let conn = accepted_id(server).expect("connection id");
     super::read_start(conn).expect("server read");
 
