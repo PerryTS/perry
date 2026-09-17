@@ -12,6 +12,7 @@ mod call_inliner;
 mod clamp;
 mod closure_analysis;
 mod cross_module;
+mod discarded_result;
 mod exact_receivers;
 mod factory_specialize;
 mod imul;
