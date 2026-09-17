@@ -313,19 +313,6 @@ impl CopyingNurseryCollector {
         }
     }
 
-    pub(super) fn visit_value_bits(&mut self, bits: u64) -> Option<u64> {
-        let (addr, is_nanbox, tag) = self.ptrs.decode_bits(bits)?;
-        let new_addr = self.mark_addr(addr)?;
-        if new_addr == addr {
-            return None;
-        }
-        Some(if is_nanbox {
-            tag | (new_addr as u64 & POINTER_MASK)
-        } else {
-            new_addr as u64
-        })
-    }
-
     pub(super) fn visit_raw_addr(&mut self, addr: usize) -> Option<usize> {
         let new_addr = self.mark_addr(addr)?;
         (new_addr != addr).then_some(new_addr)
@@ -430,6 +417,20 @@ impl CopyingNurseryCollector {
             return Some(self.memo_result);
         }
         let ptr = self.ptrs.classify(addr)?;
+        Some(self.mark_classified(addr, ptr))
+    }
+
+    /// [`mark_addr`](Self::mark_addr) for an address the caller has already
+    /// classified: the memo, then the mark, without classifying again.
+    #[inline]
+    pub(super) fn mark_classified_addr(&mut self, addr: usize, ptr: CopyingPointer) -> usize {
+        if addr == self.memo_addr {
+            return self.memo_result;
+        }
+        self.mark_classified(addr, ptr)
+    }
+
+    fn mark_classified(&mut self, addr: usize, ptr: CopyingPointer) -> usize {
         let result = match ptr.kind {
             CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => unsafe {
                 self.move_young(ptr)
@@ -457,7 +458,7 @@ impl CopyingNurseryCollector {
         };
         self.memo_addr = addr;
         self.memo_result = result;
-        Some(result)
+        result
     }
 
     /// #7742: the object's block is being promoted whole, in place. It does not
