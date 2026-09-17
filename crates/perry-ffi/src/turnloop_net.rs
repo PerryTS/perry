@@ -251,6 +251,7 @@ extern "C" {
     fn js_perry_net_timer_arm(id: i64, subsystem: i32, delay_ms: u64, err: *mut RawNetError)
         -> i32;
     fn js_perry_net_timer_cancel(id: i64, err: *mut RawNetError) -> i32;
+    fn js_perry_net_timer_park(id: i64, err: *mut RawNetError) -> i32;
     fn js_perry_net_transfer(id: i64, subsystem: i32, err: *mut RawNetError) -> i32;
     fn js_perry_net_write(
         id: i64,
@@ -590,6 +591,23 @@ pub fn transfer(id: i64, subsystem: u8) -> Result<(), NetError> {
         },
         {
             let _ = (id, subsystem);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Disarm a deadline while keeping its handle, so the next `timer_arm` for the
+/// same id moves the deadline in place instead of building a handle. Idempotent.
+pub fn timer_park(id: i64) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            let mut raw = RawNetError::blank();
+            // SAFETY: `raw` is writable.
+            let rc = unsafe { js_perry_net_timer_park(id, &mut raw) };
+            check(rc, raw)
+        },
+        {
+            let _ = id;
             Err(unavailable())
         }
     )

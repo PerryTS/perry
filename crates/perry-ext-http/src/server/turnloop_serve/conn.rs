@@ -346,8 +346,13 @@ pub(crate) fn adopt_alpn_http1(
 
 fn on_data(id: i64, bytes: &[u8]) {
     // Every read refreshes the idle deadline; the connection is only "idle"
-    // between a completed response and the next request byte.
-    cancel_idle(id);
+    // between a completed response and the next request byte. Park it rather
+    // than cancel it: cancelling destroys the timer handle, and turnloop
+    // answers that with a `Cancelled` and a `Closed` — two completions per
+    // request, both routed nowhere — after which `arm_idle` has to build a
+    // fresh handle. Parking keeps the handle, so this disarm and the re-arm in
+    // `complete_response` are both a deadline move, which costs nothing.
+    park_idle(id);
     let plaintext: Option<Vec<u8>> = if with_conn(id, |c| c.secure).unwrap_or(false) {
         match perry_ext_net::turnloop_tls_io::receive(id, bytes) {
             Some(received) => {
@@ -1114,6 +1119,12 @@ fn arm_idle(id: i64) {
         return;
     }
     let _ = tl::timer_arm(id, super::SUBSYSTEM, ms);
+}
+
+/// Disarm the idle close for the duration of an exchange, keeping the handle.
+/// Teardown still uses `cancel_idle`: there the handle really is going away.
+fn park_idle(id: i64) {
+    let _ = tl::timer_park(id);
 }
 
 fn cancel_idle(id: i64) {

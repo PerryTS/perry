@@ -458,6 +458,16 @@ pub unsafe extern "C" fn js_perry_net_timer_cancel(id: i64, err: *mut PerryNetEr
     finish(super::timer_cancel(id), err)
 }
 
+/// Disarm a deadline but keep its handle, so re-arming it costs no completion.
+/// Idempotent.
+///
+/// # Safety
+/// `err` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_timer_park(id: i64, err: *mut PerryNetError) -> i32 {
+    finish(super::timer_park(id), err)
+}
+
 /// Nonzero when `id` names a live turnloop-backed handle on this thread.
 #[no_mangle]
 pub extern "C" fn js_perry_net_is_live(id: i64) -> i32 {

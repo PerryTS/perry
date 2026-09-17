@@ -62,6 +62,7 @@ use turnloop::{
 };
 
 pub mod abi;
+pub mod census;
 pub(crate) mod errors;
 mod sink;
 
@@ -372,6 +373,7 @@ pub fn accept_start(id: i64) -> NetResult<()> {
                 .accept_start(entry.handle, token(OP_ACCEPT, id))
                 .map_err(|e| map_error(e, "accept"))?;
             entry.accept_op = Some(op);
+            census::note_submit(OP_ACCEPT);
             Ok(())
         })
     })
@@ -462,6 +464,7 @@ pub fn timer_arm(id: i64, subsystem: u8, delay_ms: u64) -> NetResult<()> {
         let existing = NET.with(|net| net.borrow().timers.get(&id).map(|t| t.handle));
         if let Some(handle) = existing {
             if driver.timer_reset(handle, at) {
+                census::note_timer_reset();
                 return Ok(());
             }
             // The timer already fired or is closing: replace it below.
@@ -471,6 +474,7 @@ pub fn timer_arm(id: i64, subsystem: u8, delay_ms: u64) -> NetResult<()> {
         let handle = driver
             .timer(at, None, token(OP_TIMER, id))
             .map_err(|e| map_error(e, "timer"))?;
+        census::note_timer_create();
         // Must not hold the loop alive on its own (see `TimerEntry`).
         let _ = driver.set_ref(handle, false);
         NET.with(|net| {
@@ -509,6 +513,50 @@ pub fn transfer(id: i64, subsystem: u8) -> NetResult<()> {
     })
 }
 
+/// How far out a parked deadline is moved. Long enough that no process
+/// outlives it, so a parked timer is observably identical to a cancelled one;
+/// short enough to stay well inside `Instant`'s range on every platform.
+const PARK_AHEAD: std::time::Duration = std::time::Duration::from_secs(365 * 24 * 60 * 60);
+
+/// Disarm a deadline without destroying its handle.
+///
+/// A connection that disarms its timeout on every read and re-arms it on every
+/// response — which is exactly what an HTTP keep-alive connection does — used
+/// to pay a handle per request. `timer_cancel` closes the handle, and turnloop
+/// answers a close with *two* completions: the pending timer operation's
+/// `Cancelled`, then the handle's own `Closed`. Neither routes anywhere,
+/// because [`dispatch`] drops an unfired deadline. Moving the deadline out of
+/// reach instead keeps the handle alive, so both the disarm and the later
+/// re-arm are a `timer_reset` — no completion at all, and one handle for the
+/// life of the connection rather than one per request.
+///
+/// Idempotent, and observably identical to [`timer_cancel`]: the only thing
+/// that could tell them apart is the deadline firing, which is what
+/// `timer_cancel` prevented and what a park a year out prevents too. A timer
+/// that has already fired or is closing cannot be moved, so that case falls
+/// back to destroying the handle rather than leaving a live deadline armed.
+pub fn timer_park(id: i64) -> NetResult<()> {
+    let handle = NET.with(|net| net.borrow().timers.get(&id).map(|t| t.handle));
+    let Some(handle) = handle else {
+        return Ok(());
+    };
+    with_driver(|driver| {
+        if let Some(at) = driver.now().checked_add(PARK_AHEAD) {
+            if driver.timer_reset(handle, at) {
+                census::note_timer_park();
+                return Ok(());
+            }
+        }
+        // Expired, closing, or a clock near the end of its range: fall back to
+        // the destroying path, which is what the caller asked for.
+        NET.with(|net| net.borrow_mut().timers.remove(&id));
+        census::note_submit(OP_TIMER);
+        let _ = driver.close(handle, token(OP_TIMER, id));
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
 /// Cancel a deadline. Idempotent: an id with no deadline is not an error,
 /// because a connection cancels its timeout on every completion path.
 pub fn timer_cancel(id: i64) -> NetResult<()> {
@@ -517,6 +565,7 @@ pub fn timer_cancel(id: i64) -> NetResult<()> {
         return Ok(());
     };
     with_driver(|driver| {
+        census::note_submit(OP_TIMER);
         let _ = driver.close(handle, token(OP_TIMER, id));
         Ok(())
     })
@@ -538,6 +587,7 @@ pub fn read_start(id: i64) -> NetResult<()> {
                 .read_start(entry.handle, token(OP_READ, id))
                 .map_err(|e| map_error(e, "read"))?;
             entry.read_op = Some(op);
+            census::note_submit(OP_READ);
             Ok(())
         })
     })
@@ -563,6 +613,7 @@ pub fn write(id: i64, bytes: Vec<u8>, user: u64) -> NetResult<usize> {
             driver
                 .write(entry.handle, WriteBuf::Owned(bytes), token(OP_WRITE, id))
                 .map_err(|e| map_error(e, "write"))?;
+            census::note_submit(OP_WRITE);
             entry.writes.push_back(PendingWrite { user, len });
             entry.queued += len;
             Ok(entry.queued)
@@ -590,6 +641,7 @@ pub fn shutdown(id: i64, user: u64) -> NetResult<()> {
             driver
                 .shutdown(entry.handle, token(OP_SHUTDOWN, id))
                 .map_err(|e| map_error(e, "shutdown"))?;
+            census::note_submit(OP_SHUTDOWN);
             entry.writes.push_back(PendingWrite { user, len: 0 });
             Ok(())
         })
@@ -609,6 +661,7 @@ pub fn close(id: i64) -> NetResult<()> {
                 return Ok(());
             }
             entry.closing = true;
+            census::note_submit(OP_CLOSE);
             driver
                 .close(entry.handle, token(OP_CLOSE, id))
                 .map_err(|e| map_error(e, "close"))
@@ -674,6 +727,7 @@ pub fn is_live(id: i64) -> bool {
 /// submit new operations on the same loop.
 pub(crate) fn dispatch(completion: Completion) {
     let (op_class, id) = token_parts(completion.token);
+    census::note_completion(op_class);
     let Completion {
         result, terminal, ..
     } = completion;
@@ -682,6 +736,7 @@ pub(crate) fn dispatch(completion: Completion) {
     // expiry retires the operation, and its `Closed` is the terminal the
     // cancel path produces — neither reaches the binding twice.
     if op_class == OP_TIMER {
+        census::note_timer_result(&result);
         let fired = matches!(result, OpResult::Timer);
         let subsystem = NET.with(|net| {
             let mut net = net.borrow_mut();
@@ -711,6 +766,7 @@ pub(crate) fn dispatch(completion: Completion) {
     }) else {
         // A completion for an entry that is already gone. `Cancelled` results
         // after a close race here routinely; they are not errors.
+        census::note_no_entry();
         return;
     };
 
