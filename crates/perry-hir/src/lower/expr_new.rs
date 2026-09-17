@@ -140,6 +140,37 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args,
             });
         }
+        // #10430: `new Stream()` for the legacy `node:stream` `Stream`
+        // constructor — the named export (any alias) or the default import,
+        // which IS that constructor. The by-name `Expr::New { "Stream" }`
+        // fallback built a prototype-less placeholder with no `on`/`emit`;
+        // construct the export value instead, so the runtime makes the
+        // instance inherit `Stream.prototype` (and through it EventEmitter).
+        // A namespace import keeps its builtin-module alias and is excluded.
+        let callee_name = callee_ident.sym.as_ref();
+        let is_stream_constructor_value = ctx.lookup_local(callee_name).is_none()
+            && match ctx.lookup_native_module(callee_name) {
+                Some(("stream" | "node:stream", Some("Stream"))) => true,
+                Some(("stream" | "node:stream", None)) => {
+                    ctx.lookup_builtin_module_alias(callee_name).is_none()
+                }
+                _ => false,
+            };
+        let has_spread_arg = new_expr
+            .args
+            .as_deref()
+            .is_some_and(|args| args.iter().any(|arg| arg.spread.is_some()));
+        if is_stream_constructor_value && !has_spread_arg {
+            return Ok(Expr::NewDynamic {
+                callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::NativeModuleRef("stream".to_string())),
+                    property: "Stream".to_string(),
+                }),
+                args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                byte_offset: new_byte_offset,
+            });
+        }
         // #4995: `new EE()` where `EE` is the events module *value* — the
         // default import (`import EE from 'events'`) or a CJS alias
         // (`var EE = require('events')`). Node's `events` module exports the

@@ -31,6 +31,8 @@ mod assignment;
 mod helpers;
 mod json_literal;
 mod reactive_text;
+#[cfg(test)]
+mod stream_module_value_tests;
 
 pub(crate) use arm_bin::lower_bin_expr;
 pub(crate) use arm_class::lower_class_expr;

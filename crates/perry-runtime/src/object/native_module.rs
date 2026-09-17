@@ -487,8 +487,10 @@ unsafe fn nm_ee_dynamic_super(
     args_len: usize,
 ) -> Option<f64> {
     let (module, method) = bound_native_callable_module_and_method(func_value)?;
-    if module.trim_start_matches("node:") == "events"
-        && (method == "EventEmitter" || method == "EventEmitterAsyncResource")
+    let module = module.trim_start_matches("node:");
+    // #10430: legacy `Stream` is `function Stream(opts) { EE.call(this, opts) }`.
+    if (module == "events" && (method == "EventEmitter" || method == "EventEmitterAsyncResource"))
+        || (module == "stream" && method == "Stream")
     {
         let this_val = super::js_implicit_this_get();
         if crate::value::JSValue::from_bits(this_val.to_bits()).is_pointer() {
@@ -691,6 +693,9 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
         "assert" | "assert/strict" => Some(callable_exports::assert_cjs_export_value(module_name)),
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
+        // #10431: `stream`'s `module.exports` IS the legacy `Stream` constructor
+        // (exports hang off it: `attach_stream_legacy_prototype`).
+        "stream" => Some(bound_native_callable_export_value("stream", "Stream")),
         // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
         // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the
         // bare `import * as` namespace).
