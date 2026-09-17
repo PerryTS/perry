@@ -9,7 +9,8 @@
 //! - Console and other global functions
 
 #![recursion_limit = "256"]
-#![feature(used_with_arg)] // anchors are #[used(compiler)]: retained by rustc, not ld64 dead-strip roots
+// Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
+#![feature(used_with_arg)]
 
 /// Issue #62: route every Rust heap allocation through mimalloc instead of
 /// the system `malloc`. `gc_malloc`, arena block allocation, Vec/HashMap
