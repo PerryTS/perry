@@ -237,9 +237,13 @@ impl<'a> Pieces<'a> {
         })
     }
 
-    /// A `Pieces` whose records stay native. Only a string-template
-    /// replacement may use it: `whole` falls back to the list, so a mixed
-    /// caller still produces correct output, just without the saving.
+    /// A `Pieces` whose records stay native. ONLY a string-template
+    /// replacement may use it, and the two backings must never both be
+    /// populated: `walk` emits every native record before any list entry, so a
+    /// caller that mixed them would silently lose the interleaving and produce
+    /// reordered output. `append` and `whole` therefore refuse a native
+    /// `Pieces` rather than falling back to the list, and `walk` asserts the
+    /// same invariant.
     pub(super) fn new_native(scope: &'a RuntimeHandleScope) -> Result<Self, EngineError> {
         #[cfg(test)]
         NATIVE_PIECES.with(|n| n.set(n.get() + 1));
@@ -309,6 +313,17 @@ impl<'a> Pieces<'a> {
         end: usize,
         budget: &mut Budget,
     ) -> Result<(), EngineError> {
+        // A native `Pieces` must not also hold list entries: `walk` emits all
+        // of one before any of the other, so mixing them reorders the output
+        // rather than merely costing the saving. Fail here, where the mistake
+        // is, instead of producing wrong bytes at `finish`.
+        debug_assert!(
+            self.native.is_none(),
+            "a native Pieces cannot take an arbitrary source; walk would reorder the output"
+        );
+        if self.native.is_some() {
+            return Err(EngineError::InvalidSpan);
+        }
         if start > end || end > length(source) {
             return Err(EngineError::InvalidSpan);
         }
@@ -372,9 +387,15 @@ impl<'a> Pieces<'a> {
                     }
                 }
             }
-            if self.list.len() == 0 {
-                return Ok(());
+            debug_assert!(
+                self.list.len() == 0,
+                "native and list records must never both be populated; walk emits \
+                 every native record before any list entry"
+            );
+            if self.list.len() != 0 {
+                return Err(EngineError::InvalidSpan);
             }
+            return Ok(());
         }
         for index in (0..self.list.len()).step_by(3) {
             let local = RuntimeHandleScope::new();
