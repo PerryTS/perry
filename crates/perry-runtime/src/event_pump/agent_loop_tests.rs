@@ -883,3 +883,121 @@ fn a_full_postbox_hands_the_payload_back_so_the_caller_can_retry() {
         "every accepted post was delivered exactly once"
     );
 }
+
+/// perry#10395 step 2: the posted **host job** — the shape a binding crate can
+/// reach across the C ABI, where `post_to_agent`'s `Payload` cannot go.
+///
+/// This is the end of the decline. A thread acting for an agent another thread
+/// owns used to have exactly one answer — keep a tokio driver — and now has
+/// this: hand the work to the owner, which is a thread serving the *same JS
+/// heap*, so the result is built where that agent's values live.
+///
+/// Asserts the mechanism rather than the absence of a panic: the callback runs
+/// **on the owner and not on the poster**, exactly once, with its context
+/// intact, and the runtime's liveness counter moves so a green run cannot mean
+/// "nothing listened".
+#[test]
+fn a_posted_host_job_runs_on_the_owner_not_on_the_poster() {
+    use crate::turnloop_post::{self, Posted};
+    use std::os::raw::c_void;
+    use std::sync::atomic::AtomicUsize;
+
+    struct Job {
+        value: u64,
+        ran_on: Option<std::thread::ThreadId>,
+        dropped: &'static AtomicUsize,
+    }
+    impl Drop for Job {
+        fn drop(&mut self) {
+            self.dropped.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    static SEEN_VALUE: AtomicU64 = AtomicU64::new(0);
+    static SEEN_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+
+    extern "C" fn run(ctx: *mut c_void) {
+        // SAFETY: the runtime hands back exactly the context `post` was given,
+        // exactly once, and this is that invocation.
+        let mut job = unsafe { Box::from_raw(ctx.cast::<Job>()) };
+        job.ran_on = Some(std::thread::current().id());
+        SEEN_VALUE.store(job.value, Ordering::SeqCst);
+        *SEEN_THREAD.lock().unwrap_or_else(PoisonError::into_inner) = job.ran_on;
+        DONE.fetch_add(1, Ordering::SeqCst);
+    }
+
+    const VALUE: u64 = 0x0DEF_ACED;
+
+    let _g = serial();
+    take_primary_route();
+    let owner = std::thread::current().id();
+    assert!(
+        turnloop_post::available(),
+        "this thread owns the primary agent's published loop, so a post lands"
+    );
+
+    let poster = std::thread::spawn(move || {
+        // A second thread acting FOR the primary agent: it has no agent of its
+        // own, so `current_agent()` resolves to PRIMARY_AGENT — the Android
+        // UI-thread shape, and the reason the tokio drivers are still alive.
+        assert_ne!(
+            std::thread::current().id(),
+            owner,
+            "the poster must not be the owner, or this proves nothing"
+        );
+        assert!(turnloop_post::available(), "the owner's route is published");
+        let ctx = Box::into_raw(Box::new(Job {
+            value: VALUE,
+            ran_on: None,
+            dropped: &DROPPED,
+        }));
+        // SAFETY: a live leaked box; on a non-negative outcome the runtime owns
+        // it and `run` consumes it, on a negative one this thread reclaims it.
+        let outcome = unsafe { turnloop_post::post(run, ctx.cast()) };
+        if !outcome.consumed() {
+            // SAFETY: refused, so the box is still ours.
+            drop(unsafe { Box::from_raw(ctx) });
+        }
+        outcome
+    });
+    let outcome = poster.join().expect("posting thread");
+    assert_eq!(
+        outcome,
+        Posted::Accepted,
+        "a published loop with an empty postbox accepts and wakes"
+    );
+
+    let before = turnloop_post::dispatched();
+    let limit = Instant::now() + Duration::from_secs(10);
+    while turnloop_post::dispatched() == before {
+        assert!(
+            Instant::now() < limit,
+            "the posted job never reached the owner"
+        );
+        settle_turn();
+    }
+
+    assert_eq!(
+        turnloop_post::dispatched(),
+        before + 1,
+        "the owner ran the job exactly once — a post is delivered, not retried"
+    );
+    assert_eq!(DONE.load(Ordering::SeqCst), 1, "the callback ran once");
+    assert_eq!(
+        SEEN_VALUE.load(Ordering::SeqCst),
+        VALUE,
+        "the context survived the thread hop intact"
+    );
+    assert_eq!(
+        *SEEN_THREAD.lock().unwrap_or_else(PoisonError::into_inner),
+        Some(owner),
+        "the job ran on the agent's OWNER, which is the whole point: that is \
+         the thread where this agent's JS values live"
+    );
+    assert_eq!(
+        DROPPED.load(Ordering::SeqCst),
+        1,
+        "the context was consumed exactly once, by the callback"
+    );
+}

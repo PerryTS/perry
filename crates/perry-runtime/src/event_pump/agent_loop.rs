@@ -429,14 +429,18 @@ fn dispatch_staged() {
             }
             continue;
         }
-        // One router, four token spaces. P1's classes are 1..=7, P2's are
-        // 0x10..=0x1F, P4's are 0x20..=0x2F and P3 owns TIMER_TOKEN above, so
-        // `owns` is a range test and no module can be handed another's
-        // completion (`turnloop_proc`'s module note).
+        // One router, five token spaces. P1's classes are 1..=7, P2's are
+        // 0x10..=0x1F, P4's are 0x20..=0x2F, P10's posted host jobs are
+        // 0x30..=0x3F and P3 owns TIMER_TOKEN above, so `owns` is a range test
+        // and no module can be handed another's completion (`turnloop_proc`'s
+        // module note). P1 is the fall-through, so every other class must be
+        // branched on here or its completions land in the net subsystem.
         if crate::turnloop_proc::owns(completion.token) {
             crate::turnloop_proc::dispatch(completion);
         } else if crate::turnloop_pool::owns(completion.token) {
             crate::turnloop_pool::dispatch(completion);
+        } else if crate::turnloop_post::owns(completion.token) {
+            crate::turnloop_post::dispatch(completion);
         } else {
             crate::turnloop_net::dispatch(completion);
         }
@@ -982,6 +986,27 @@ pub fn post_to_agent(
         .map_err(|err| PostToAgentError::Refused {
             payload: err.payload,
         })
+}
+
+/// Whether a post to `agent` would reach a loop, asked without building a job.
+///
+/// A binding has to decide which transport a connection lives on *before* it
+/// has any work to post, and [`post_to_agent`] consumes its payload on the way
+/// in — so "would this land?" cannot be answered by trying. True means a route
+/// exists **and its loop is published**, i.e. exactly the two cases
+/// [`PostToAgentError::NoRoute`] and [`PostToAgentError::NotPublished`] rule
+/// out; a post can still be refused afterwards by a full postbox, which is
+/// transient and which the caller retries or falls back on.
+///
+/// Deliberately says nothing about whether the *calling* thread owns that loop.
+/// A caller that owns it should submit directly instead of posting to itself,
+/// and it already knows that from `net_available()`.
+pub fn has_route(agent: AgentId) -> bool {
+    ROUTES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|route| route.agent == agent && route.poster.is_some())
 }
 
 /// How many agents hold a route slot. A leak check for tests: a program that

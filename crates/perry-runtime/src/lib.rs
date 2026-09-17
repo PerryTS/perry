@@ -224,6 +224,13 @@ pub mod turnloop_proc;
 // is a native-only dependency, and the pool it wraps is turnloop's.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_pool;
+// turnloop P10: run a host job on the loop of the agent this thread acts for
+// (`turnloop_post/mod.rs`). Same target gate as P1, P2 and P4. This is what a
+// thread that could not get a loop of its own uses INSTEAD of keeping a tokio
+// driver alive — the single decline reason behind most of the remaining tokio
+// edges in the binding crates.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_post;
 pub mod url;
 pub mod v8;
 pub mod validators;
