@@ -9839,8 +9839,7 @@ dependencies = [
 [[package]]
 name = "turnloop"
 version = "0.1.0-alpha.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d296095946a4c01f02de0fb1d1cf9abd8341ab5d3175aba71542157df4cba9a6"
+source = "git+https://github.com/PerryTS/turnloop?rev=ee8060e#ee8060e1fa45285fc70027b21ba1a4a77d2c8a99"
 dependencies = [
  "js-sys",
  "libc",
