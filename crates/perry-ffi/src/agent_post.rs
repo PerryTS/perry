@@ -237,10 +237,15 @@ mod tests {
     /// `Rejected` must keep the two refusals apart: one says "use your fallback
     /// forever", the other "try again". Collapsing them would make a binding
     /// either spin on a dead agent or abandon a live one.
+    ///
+    /// Deliberately carries a plain `u64` rather than a `Probe`: the drop
+    /// counter above is process-global, and `cargo test` runs these in
+    /// parallel, so a second test that dropped a `Probe` would make the first
+    /// one's "nothing was dropped" assertion race.
     #[test]
     fn the_two_refusals_stay_distinguishable() {
-        assert!(Rejected::NoRoute(Box::new(Probe(1))).is_permanent());
-        assert!(!Rejected::Again(Box::new(Probe(2))).is_permanent());
-        assert_eq!(Rejected::Again(Box::new(Probe(3))).into_job().0, 3);
+        assert!(Rejected::NoRoute(Box::new(1u64)).is_permanent());
+        assert!(!Rejected::Again(Box::new(2u64)).is_permanent());
+        assert_eq!(*Rejected::Again(Box::new(3u64)).into_job(), 3);
     }
 }

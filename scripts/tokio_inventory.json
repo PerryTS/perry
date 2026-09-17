@@ -160,9 +160,9 @@
       "optional": false,
       "target": null,
       "surface": "`new Redis()` / ioredis \u2014 every command",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed. **TLS is no longer one of the conditions**: `rediss://` \u2014 which is the DEFAULT, since `REDIS_TLS` defaults to true \u2014 is carried by turnloop now.",
-      "blocker": "`spawn_blocking` + `Handle::current().block_on` per command, for the agent-shaped declines only. TLS is done: perry-db-turnloop installs a client session through perry-tls-turnloop, so the decline no longer lands on a path with no TLS backend compiled in.",
-      "issue": "#10335",
+      "reached_when": "the `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed. **The agent-shaped decline is CLOSED** (turnloop P10, perry#10395 step 2): a second thread acting for an agent another thread already owns \u2014 a host pump thread, Android's UI thread for `perry-native` \u2014 now hands its work to that owner through `perry_ffi::agent_post` instead of keeping this driver alive for itself. No longer a worker agent (P9 gave every agent a loop), and no longer TLS (`rediss://`, the default since `REDIS_TLS` defaults to true, is carried by turnloop).",
+      "blocker": "two reasons left, and neither is specific to redis or to this binding \u2014 both are an ABSENCE of a loop rather than a hole in the path. (1) The `tokio-wait-driver` A/B arm compiles no agent loop at all; it is the baseline of the tokio-vs-turnloop measurement and exists to run the transport this work replaces, so it must decline. (2) A host where `Loop::new` failed has no loop to post to. Both are one shared decision, not four conversions: every plan-A and plan-B edge names the same pair. Narrow third case, documented rather than fixed: `net_available()` CLAIMS a route without building a loop, so a client created in the window between the owner claiming its slot and publishing its `Poster` sees no route and is created on the legacy transport for its life. TLS is done: perry-db-turnloop installs a client session through perry-tls-turnloop.",
+      "issue": "#10335 \u2014 spawn_blocking/block_on CLOSED for the agent-shaped decline by #10395 step 2",
       "plan": "B"
     },
     {
@@ -172,9 +172,9 @@
       "optional": false,
       "target": null,
       "surface": "as `redis` above",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed. No longer the REDIS_TLS default.",
-      "blocker": "`spawn_blocking` + `Handle::current().block_on` per command, and the #1824 hazard of building the JS result on that thread (#10336).",
-      "issue": "#10336, #10339",
+      "reached_when": "the `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed. **The agent-shaped decline is CLOSED** (turnloop P10, perry#10395 step 2): a second thread acting for an agent another thread already owns \u2014 a host pump thread, Android's UI thread for `perry-native` \u2014 now hands its work to that owner through `perry_ffi::agent_post` instead of keeping this driver alive for itself. No longer a worker agent (P9 gave every agent a loop), and no longer TLS (`rediss://`, the default since `REDIS_TLS` defaults to true, is carried by turnloop).",
+      "blocker": "two reasons left, and neither is specific to redis or to this binding \u2014 both are an ABSENCE of a loop rather than a hole in the path. (1) The `tokio-wait-driver` A/B arm compiles no agent loop at all; it is the baseline of the tokio-vs-turnloop measurement and exists to run the transport this work replaces, so it must decline. (2) A host where `Loop::new` failed has no loop to post to. Both are one shared decision, not four conversions: every plan-A and plan-B edge names the same pair. Narrow third case, documented rather than fixed: `net_available()` CLAIMS a route without building a loop, so a client created in the window between the owner claiming its slot and publishing its `Poster` sees no route and is created on the legacy transport for its life. The #1824 hazard of building the JS result on a foreign thread goes with it: a posted command is answered on the agent's OWNER, which is where that agent's values live.",
+      "issue": "#10336, #10339 \u2014 agent-shaped decline CLOSED by #10395 step 2",
       "plan": "B"
     },
     {

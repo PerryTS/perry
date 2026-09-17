@@ -37,6 +37,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use perry_db_turnloop::{subsystem, DbCore, NetCompletion, Registry, TlsClientOptions, TlsFacts};
+use perry_ffi::agent_post::{self, AgentJob};
 use perry_ffi::{
     alloc_string, build_object_shape, js_object_alloc_with_shape, js_object_set_field, Handle,
     JsPromise, JsValue,
@@ -432,6 +433,179 @@ pub(crate) fn enabled() -> bool {
     REGISTRY.with(|reg| reg.enabled(sink))
 }
 
+/// Which transport a client created *now, on this thread* lives on.
+///
+/// Three answers, not two. [`enabled`] asks whether **this thread** can drive
+/// the agent's loop, and until turnloop P10 a "no" left only the `redis` crate.
+/// But since P9 every JS agent has a loop, so a "no" usually means the loop
+/// exists and *another thread of this same agent* owns it — the Android shape,
+/// where `perry-native` runs the compiled TypeScript while the UI thread pumps
+/// for the same heap. That case is [`Transport::Posted`]: the owner does the
+/// I/O, on the thread where this agent's JS values live.
+///
+/// Only the third answer keeps tokio, and it is a genuine absence of a loop:
+/// the `tokio-wait-driver` A/B arm, which compiles no agent loop because it
+/// exists to measure the transport this replaces, and a host where `Loop::new`
+/// failed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Transport {
+    /// This thread owns the agent's loop: submit directly.
+    Direct,
+    /// Another thread of this same agent owns the loop: post the work to it.
+    Posted,
+    /// No loop exists for this agent at all: keep the `redis` crate.
+    Legacy,
+}
+
+/// Pick the transport for a client being created on this thread.
+///
+/// Asked once per client, at creation, because a connection belongs to one
+/// transport for its whole life — there is no handover, and a command may
+/// already be queued behind the next one.
+pub(crate) fn transport() -> Transport {
+    if enabled() {
+        Transport::Direct
+    } else if agent_post::available() {
+        Transport::Posted
+    } else {
+        Transport::Legacy
+    }
+}
+
+/// One operation handed to the thread that owns this agent's loop.
+enum PostedOp {
+    Command {
+        label: &'static str,
+        shape: Shape,
+        args: Vec<Vec<u8>>,
+    },
+    Connect,
+    Quit,
+    Disconnect,
+}
+
+/// The job that crosses to the owner. `Send` because every field is: `Handle`
+/// is an `i64`, `JsPromise` carries its own `unsafe impl Send`, and the command
+/// arguments are owned bytes — the borrowed `&[u8]` slices a direct submission
+/// uses cannot cross, so they are copied here and only here.
+struct PostedWork {
+    handle: Handle,
+    /// `None` only for `Disconnect`, which JS does not await.
+    promise: Option<JsPromise>,
+    op: PostedOp,
+}
+
+impl AgentJob for PostedWork {
+    fn run(self: Box<Self>) {
+        let PostedWork {
+            handle,
+            promise,
+            op,
+        } = *self;
+        // We are on the owner now, so this is the thread that can drive the
+        // loop — unless it lost it between the post and this turn. There is no
+        // falling back at this point: the promise is already in JS's hands and
+        // a command may be queued behind it, so settle rather than drop. A
+        // dropped `JsPromise` is a promise that never settles, which is the one
+        // outcome a caller cannot recover from.
+        if !enabled() {
+            if let Some(promise) = promise {
+                promise.reject_string("Redis connection is closed");
+            }
+            return;
+        }
+        match op {
+            PostedOp::Command { label, shape, args } => {
+                let Some(promise) = promise else { return };
+                let borrowed: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
+                command(handle, promise, label, shape, &borrowed);
+            }
+            PostedOp::Connect => {
+                if let Some(promise) = promise {
+                    connect(handle, promise);
+                }
+            }
+            PostedOp::Quit => {
+                if let Some(promise) = promise {
+                    quit(handle, promise);
+                }
+            }
+            PostedOp::Disconnect => {
+                disconnect(handle);
+            }
+        }
+    }
+}
+
+/// Hand one operation to the thread that owns this agent's loop.
+///
+/// A refused post settles the promise here rather than dropping it. `NoRoute`
+/// means the owner's loop went away — this client cannot fall back, because it
+/// was created on turnloop and may have commands queued. `Again` means the
+/// owner's postbox is momentarily full, which is a back-pressure condition and
+/// reads to JS the same way a full socket buffer does.
+fn post(handle: Handle, promise: Option<JsPromise>, op: PostedOp) {
+    let work = Box::new(PostedWork {
+        handle,
+        promise,
+        op,
+    });
+    match agent_post::post_job(work) {
+        Ok(()) => {}
+        Err(rejected) => {
+            let permanent = rejected.is_permanent();
+            let mut job = rejected.into_job();
+            if let Some(promise) = job.promise.take() {
+                promise.reject_string(if permanent {
+                    "Redis connection is closed"
+                } else {
+                    "Redis is busy: the agent loop could not accept this command"
+                });
+            }
+        }
+    }
+}
+
+/// Submit one command through the agent's owner. See [`command`], which this
+/// runs over there.
+pub(crate) fn post_command(
+    handle: Handle,
+    promise: JsPromise,
+    label: &'static str,
+    shape: Shape,
+    args: &[&[u8]],
+) {
+    post(
+        handle,
+        Some(promise),
+        PostedOp::Command {
+            label,
+            shape,
+            args: args.iter().map(|a| a.to_vec()).collect(),
+        },
+    );
+}
+
+/// `redis.connect()`, run on the agent's owner.
+pub(crate) fn post_connect(handle: Handle, promise: JsPromise) {
+    post(handle, Some(promise), PostedOp::Connect);
+}
+
+/// `redis.quit()`, run on the agent's owner.
+pub(crate) fn post_quit(handle: Handle, promise: JsPromise) {
+    post(handle, Some(promise), PostedOp::Quit);
+}
+
+/// `redis.disconnect()`, run on the agent's owner.
+///
+/// Fire-and-forget, like ioredis's own: the connection table lives on the
+/// owner, so whether an entry was actually removed is not knowable here. The
+/// `true` says "this client is on turnloop", which is what the caller branches
+/// on.
+pub(crate) fn post_disconnect(handle: Handle) {
+    post(handle, None, PostedOp::Disconnect);
+}
+
 /// Install the sink and report whether the runtime accepted it.
 ///
 /// Separate from [`enabled`] so a test can assert the part that is a property
@@ -684,7 +858,7 @@ mod tests {
             username: None,
             password: None,
             tls: false,
-            turnloop: true,
+            transport: Transport::Direct,
         };
         let config = config_for(&endpoint);
         assert!(!config.prefer_resp3);
@@ -738,7 +912,7 @@ mod tests {
             username: None,
             password: password.map(str::to_string),
             tls,
-            turnloop: true,
+            transport: Transport::Direct,
         }
     }
 
@@ -813,5 +987,127 @@ mod tests {
             String::from_utf8_lossy(core.output()).contains("s3cret"),
             "the AUTH goes out after the upgrade, encrypted by the session"
         );
+    }
+}
+
+#[cfg(test)]
+mod posted_transport_tests {
+    use super::*;
+
+    /// Become the agent's owner — and its **published** owner, which is not the
+    /// same thing.
+    ///
+    /// Asking `transport()` alone only CLAIMS the route: `net_available()`
+    /// answers "may I take a loop?" without paying for one, so a thread that
+    /// has merely asked holds the slot with no `Poster` behind it. Nothing can
+    /// be posted to a claim. A turn is what builds the loop and publishes the
+    /// endpoint, so this drives one and checks both halves.
+    ///
+    /// `cargo test` puts each test on its own thread and the agent's route is a
+    /// single slot, so a thread that ran before this one may still be releasing
+    /// it; that is what the retry is for.
+    fn become_the_owner() {
+        let limit = Instant::now() + Duration::from_secs(10);
+        loop {
+            perry_runtime::event_pump::js_loop_turn_bounded(0);
+            if transport() == Transport::Direct && agent_post::available() {
+                return;
+            }
+            assert!(
+                Instant::now() < limit,
+                "this thread never became the primary agent's PUBLISHED loop \
+                 owner, so the rest of this test would prove nothing"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// turnloop P10, end to end through this binding: a thread that cannot get
+    /// a loop of its own no longer has to keep a tokio driver alive for itself.
+    ///
+    /// This is the Android shape — `perry-native` runs the compiled TypeScript
+    /// while the UI thread pumps for the same heap, and whichever claims the
+    /// route first leaves the other unable to submit. Before P10 the loser's
+    /// only answer was `spawn_blocking` + `Handle::current().block_on`.
+    ///
+    /// Asserts the work CROSSED, not merely that nothing threw: the runtime's
+    /// dispatch counter is per-thread, so it moving on the owner while staying
+    /// at zero on the poster is the discriminating fact. A post that silently
+    /// went nowhere would leave both at zero and fail here.
+    #[test]
+    fn a_thread_that_does_not_own_the_loop_posts_its_work_to_the_thread_that_does() {
+        become_the_owner();
+        assert!(
+            perry_ffi::turnloop_net::sink_installed(SUBSYSTEM),
+            "the sink must be installed, or 'turnloop carried this' is vacuous"
+        );
+        let before = agent_post::dispatched();
+
+        let poster_ran_its_own = std::thread::spawn(|| {
+            // A second thread acting FOR the same agent. It has no agent of its
+            // own, so `current_agent()` resolves to the primary agent — the one
+            // whose loop the thread above owns.
+            assert_eq!(
+                transport(),
+                Transport::Posted,
+                "a second thread of an agent that HAS a loop must post to it, \
+                 not fall back to the legacy driver"
+            );
+            assert_eq!(
+                agent_post::dispatched(),
+                0,
+                "this thread has run no posted job"
+            );
+            // A handle no client owns: harmless on the owner (the connection
+            // table has no entry for it), and it is the crossing this test is
+            // about, not what the job does when it lands.
+            post_disconnect(Handle::MAX);
+            agent_post::dispatched()
+        })
+        .join()
+        .expect("posting thread");
+
+        assert_eq!(
+            poster_ran_its_own, 0,
+            "the poster must NOT have run the job itself — if it did, the work \
+             never crossed and this binding is still doing its own I/O"
+        );
+
+        let limit = Instant::now() + Duration::from_secs(10);
+        while agent_post::dispatched() == before {
+            assert!(
+                Instant::now() < limit,
+                "the posted work never reached the owner"
+            );
+            perry_runtime::event_pump::js_loop_turn_bounded(0);
+        }
+        assert_eq!(
+            agent_post::dispatched(),
+            before + 1,
+            "the owner ran it exactly once — a post is delivered, not retried"
+        );
+    }
+
+    /// The three transports must stay distinct at the type level, because the
+    /// two turnloop ones take different code paths and the third is the only
+    /// one that may reach the `redis` crate. A client records its answer once,
+    /// at creation: a connection belongs to one transport for its whole life.
+    #[test]
+    fn the_transport_is_recorded_once_and_only_legacy_reaches_the_redis_crate() {
+        become_the_owner();
+        assert_eq!(transport(), Transport::Direct);
+        assert_ne!(Transport::Direct, Transport::Posted);
+        assert_ne!(Transport::Posted, Transport::Legacy);
+        // The endpoint carries it, so every later command reads the same
+        // answer rather than re-asking on a thread that may differ.
+        let endpoint = crate::RedisEndpoint {
+            host: "127.0.0.1".into(),
+            port: 6379,
+            username: None,
+            password: None,
+            tls: false,
+            transport: transport(),
+        };
+        assert_eq!(endpoint.transport, Transport::Direct);
     }
 }

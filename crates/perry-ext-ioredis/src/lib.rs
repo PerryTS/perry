@@ -54,8 +54,9 @@ pub(crate) struct RedisEndpoint {
     pub(crate) username: Option<String>,
     pub(crate) password: Option<String>,
     pub(crate) tls: bool,
-    /// This client lives on turnloop.
-    pub(crate) turnloop: bool,
+    /// The transport this client was created on: its own thread's loop, the
+    /// loop of another thread of the same agent, or the legacy `redis` driver.
+    pub(crate) transport: turnloop_io::Transport,
 }
 
 lazy_static! {
@@ -66,13 +67,9 @@ pub(crate) fn endpoint_for(handle: Handle) -> Option<RedisEndpoint> {
     ENDPOINTS.lock().unwrap().get(&handle).cloned()
 }
 
-/// Whether this client was created on the turnloop transport.
-fn on_turnloop(handle: Handle) -> bool {
-    ENDPOINTS
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .is_some_and(|e| e.turnloop)
+/// How this client reaches its server, or `None` for an unknown handle.
+fn transport_of(handle: Handle) -> Option<turnloop_io::Transport> {
+    ENDPOINTS.lock().unwrap().get(&handle).map(|e| e.transport)
 }
 
 /// Submit one command on the turnloop transport, or report that this client is
@@ -83,12 +80,23 @@ fn tl_command(
     shape: Shape,
     args: &[&[u8]],
 ) -> Option<*mut Promise> {
-    if !on_turnloop(handle) {
+    let transport = transport_of(handle)?;
+    if transport == turnloop_io::Transport::Legacy {
         return None;
     }
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    turnloop_io::command(handle, promise, label, shape, args);
+    match transport {
+        // This thread owns the loop: submit where the FFI call happens.
+        turnloop_io::Transport::Direct => turnloop_io::command(handle, promise, label, shape, args),
+        // Another thread of this same agent owns it. Hand the work over rather
+        // than keeping a tokio driver alive for this thread: the owner serves
+        // the same JS heap, so the reply is built where these values live.
+        turnloop_io::Transport::Posted => {
+            turnloop_io::post_command(handle, promise, label, shape, args)
+        }
+        turnloop_io::Transport::Legacy => unreachable!("returned above"),
+    }
     Some(raw)
 }
 
@@ -145,9 +153,13 @@ pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) ->
     URLS.lock().unwrap().insert(handle, url);
     // TLS no longer sends a client to the legacy transport: `turnloop_redis`
     // asks its host for the upgrade and `perry-db-turnloop` now performs it.
-    // Nothing else about the decision moves — the remaining decliners are the
-    // agent-shaped ones `enabled` answers for.
-    let turnloop = turnloop_io::enabled();
+    // Nor is the agent-shaped decline one any more: `transport()` answers with
+    // three values, and the middle one — another thread of this same agent owns
+    // the loop — hands its commands to that owner instead of to tokio. Only a
+    // genuine absence of a loop (the `tokio-wait-driver` A/B arm, or a host
+    // where `Loop::new` failed) still reaches the `redis` crate. Asked once,
+    // here: a connection belongs to one transport for its whole life.
+    let transport = turnloop_io::transport();
     ENDPOINTS.lock().unwrap().insert(
         handle,
         RedisEndpoint {
@@ -156,7 +168,7 @@ pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) ->
             username: None,
             password: password.clone(),
             tls: use_tls,
-            turnloop,
+            transport,
         },
     );
     handle
@@ -263,9 +275,16 @@ where
 pub extern "C" fn js_ioredis_connect(handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    if on_turnloop(handle) {
-        turnloop_io::connect(handle, promise);
-        return raw;
+    match transport_of(handle) {
+        Some(turnloop_io::Transport::Direct) => {
+            turnloop_io::connect(handle, promise);
+            return raw;
+        }
+        Some(turnloop_io::Transport::Posted) => {
+            turnloop_io::post_connect(handle, promise);
+            return raw;
+        }
+        _ => {}
     }
     spawn_blocking(move || {
         match tokio::runtime::Handle::current().block_on(get_connection(handle)) {
@@ -630,8 +649,18 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
 /// `redis.disconnect()` — drop the cached connection synchronously.
 #[no_mangle]
 pub extern "C" fn js_ioredis_disconnect(handle: Handle) {
-    if turnloop_io::disconnect(handle) {
-        return;
+    match transport_of(handle) {
+        Some(turnloop_io::Transport::Direct) => {
+            turnloop_io::disconnect(handle);
+            return;
+        }
+        // The connection table lives on the owner, so the close goes there too.
+        // Fire-and-forget, exactly as ioredis's own `disconnect()` is.
+        Some(turnloop_io::Transport::Posted) => {
+            turnloop_io::post_disconnect(handle);
+            return;
+        }
+        _ => {}
     }
     let mut conns = CONNECTIONS.lock().unwrap();
     conns.remove(&handle);
@@ -646,15 +675,31 @@ pub extern "C" fn js_ioredis_quit(handle: Handle) -> *mut Promise {
     // Checked before the promise moves: `turnloop_io::quit` takes it by value,
     // so asking afterwards would have dropped it — and a dropped `JsPromise` is
     // a promise that never settles.
-    if on_turnloop(handle) {
-        turnloop_io::quit(handle, promise);
-        // The client is retired either way; drop the legacy bookkeeping too so
-        // a later `new Redis()` cannot inherit this handle's entries.
-        URLS.lock().unwrap().remove(&handle);
-        ENDPOINTS.lock().unwrap().remove(&handle);
-        take_handle::<RedisClient>(handle);
-        return raw;
+    let transport = transport_of(handle);
+    match transport {
+        Some(turnloop_io::Transport::Direct) => turnloop_io::quit(handle, promise),
+        // The QUIT goes to the thread that owns the connection, same as every
+        // other command on this client.
+        Some(turnloop_io::Transport::Posted) => turnloop_io::post_quit(handle, promise),
+        _ => {
+            // Legacy transport: fall through to the `redis`-crate path below,
+            // which still owns `promise`.
+            return js_ioredis_quit_legacy(handle, promise, raw);
+        }
     }
+    // The client is retired either way; drop the legacy bookkeeping too so a
+    // later `new Redis()` cannot inherit this handle's entries.
+    URLS.lock().unwrap().remove(&handle);
+    ENDPOINTS.lock().unwrap().remove(&handle);
+    take_handle::<RedisClient>(handle);
+    raw
+}
+
+/// `redis.quit()` on the legacy `redis`-crate transport.
+///
+/// Split out so the turnloop paths above can settle the promise and return
+/// without the borrow checker having to prove `promise` survives them.
+fn js_ioredis_quit_legacy(handle: Handle, promise: JsPromise, raw: *mut Promise) -> *mut Promise {
     spawn_blocking(move || {
         let outcome: Result<(), String> = tokio::runtime::Handle::current().block_on(async move {
             let conn_opt = CONNECTIONS.lock().unwrap().remove(&handle);
