@@ -1801,17 +1801,27 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         {
             return false;
         }
-        if crate::object::get_property_attrs(raw_addr, "length")
-            .map(|attrs| !attrs.writable())
-            .unwrap_or(false)
-        {
-            return false;
-        }
+        // A non-writable `length` is reachable only through a descriptor
+        // write, and every one of those marks the receiver
+        // `OBJ_FLAG_ARRAY_DESCRIPTORS` (`array::named_props::mark_array_descriptors`
+        // — the bit is documented there as the shared "index-accessor /
+        // non-writable-length / sparse-index" gate). The flag test above has
+        // already returned `false` for any receiver carrying it, so by this
+        // point the array provably has no descriptors and its `length` is
+        // provably writable. `array::push_pop::array_length_is_non_writable_with_flags`
+        // encodes the same implication the other way round, short-circuiting on
+        // the flag before it will look a descriptor up at all.
+        //
+        // The lookup that used to sit here was therefore unreachable-true, and
+        // it was not cheap: a string-keyed descriptor probe on EVERY push. In a
+        // `for (…) { a.push(v); a.pop(); }` loop it was the single heaviest
+        // frame in the profile at 16.5% of all samples, more than the append it
+        // was guarding.
         len <= 16_000_000
             && cap <= 16_000_000
             && len < cap
             && is_numeric_value_bits(value.to_bits())
-            && crate::array::js_array_is_numeric_f64_layout(arr) != 0
+            && crate::array::js_array_is_numeric_f64_layout_resolved(arr) != 0
     }
 }
 

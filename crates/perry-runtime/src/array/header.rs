@@ -1340,6 +1340,18 @@ pub(crate) unsafe fn array_numeric_layout(arr: *const ArrayHeader) -> Option<Num
     if arr.is_null() {
         return None;
     }
+    unsafe { array_numeric_layout_resolved(arr) }
+}
+
+/// [`array_numeric_layout`] for an already-resolved head.
+///
+/// # Safety
+/// `arr` is a non-null [`clean_arr_ptr`] result with no intervening allocation
+/// or safepoint.
+#[inline]
+pub(crate) unsafe fn array_numeric_layout_resolved(
+    arr: *const ArrayHeader,
+) -> Option<NumericArrayLayout> {
     array_has_raw_f64_layout_flag(arr).then_some(NumericArrayLayout::RawF64)
 }
 
@@ -1375,6 +1387,17 @@ pub(crate) unsafe fn ensure_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool
     if arr.is_null() {
         return false;
     }
+    unsafe { ensure_array_numeric_raw_f64_resolved(arr) }
+}
+
+/// [`ensure_array_numeric_raw_f64`] for a receiver the caller has already put
+/// through [`clean_arr_ptr_mut`].
+///
+/// # Safety
+/// `arr` is that non-null resolved head, with no intervening allocation or
+/// safepoint — the same contract [`array_object_flags_resolved`] carries.
+#[inline]
+pub(crate) unsafe fn ensure_array_numeric_raw_f64_resolved(arr: *mut ArrayHeader) -> bool {
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
@@ -1442,7 +1465,28 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
     value: f64,
 ) -> bool {
     let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() || !ensure_array_numeric_raw_f64(arr) {
+    if arr.is_null() {
+        return false;
+    }
+    unsafe { array_numeric_raw_f64_push_inbounds_resolved(arr, value) }
+}
+
+/// [`array_numeric_raw_f64_push_inbounds`] for an already-resolved receiver.
+///
+/// The append chain re-entered `clean_arr_ptr` — allocator-ownership plus
+/// forwarding classification — once per helper: the unboxed push entry
+/// resolved, then this did, then `ensure_array_numeric_raw_f64` did again, all
+/// on the one pointer the entry had already proved live. Threading the resolved
+/// head through removes the repeats instead of caching their answer.
+///
+/// # Safety
+/// `arr` is a non-null [`clean_arr_ptr_mut`] result with no intervening
+/// allocation or safepoint.
+pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds_resolved(
+    arr: *mut ArrayHeader,
+    value: f64,
+) -> bool {
+    if !ensure_array_numeric_raw_f64_resolved(arr) {
         return false;
     }
     let length = (*arr).length;
@@ -1617,8 +1661,22 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
     if arr.is_null() {
         return 0;
     }
+    unsafe { js_array_is_numeric_f64_layout_resolved(arr) }
+}
+
+/// [`js_array_is_numeric_f64_layout`] for a caller holding a resolved head.
+///
+/// The typed-feedback push guard reaches this with a pointer it has already
+/// normalized, header-checked and proved non-forwarded, so the entry's own
+/// `clean_arr_ptr` — and the second one `array_numeric_layout` used to perform
+/// inside it — were both re-deriving that proof once per push.
+///
+/// # Safety
+/// `arr` is a non-null resolved head with no intervening allocation or
+/// safepoint.
+pub(crate) unsafe fn js_array_is_numeric_f64_layout_resolved(arr: *const ArrayHeader) -> i32 {
     unsafe {
-        if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
+        if array_numeric_layout_resolved(arr) == Some(NumericArrayLayout::RawF64) {
             return 1;
         }
         // #6011 follow-up: a holes-flagged array (`new Array(n)` mid-fill)

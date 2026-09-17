@@ -897,7 +897,10 @@ pub(super) unsafe fn dispatch_common(
                 jsval.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
             // Spec §23.1.3.21: length is Set even with 0 args, so guards fire regardless
             if crate::array::array_is_frozen(arr_ptr) {
-                crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
+                // What fails is CreateDataProperty for the NEW index, not a
+                // write to an existing read-only one, so node words this the
+                // same for freeze / seal / preventExtensions.
+                crate::array::throw_non_extensible_array_push(unsafe { (*arr_ptr).length });
             }
             crate::array::guard_writable_length(arr_ptr);
             let mut arr = arr_ptr;
