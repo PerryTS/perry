@@ -243,7 +243,14 @@ pub(super) fn replace(
     let captures = (width / 2).saturating_sub(1);
     let tokens = template.map(|t| parse(t, captures, budget)).transpose()?;
     let mut copies = SpanCopies::new(bound)?;
-    let mut output = Pieces::new(scope)?;
+    // A string template's pieces are all spans of the subject or the template,
+    // so they need no traced heap entry (#10411). A callback's do: user code
+    // produces the replacement string.
+    let mut output = if tokens.is_some() {
+        Pieces::new_native(scope)?
+    } else {
+        Pieces::new(scope)?
+    };
     let mut next_source = 0;
     for record in spans.values.chunks_exact(width) {
         let local = RuntimeHandleScope::new();
@@ -251,22 +258,27 @@ pub(super) fn replace(
         let position = start.min(input_length);
         let accepted = position >= next_source;
         if accepted {
-            output.append(input, next_source, position, budget)?;
+            output.append_original(input, next_source, position, budget)?;
         }
         if let Some(tokens) = tokens.as_ref() {
             if accepted {
                 for token in tokens {
                     match *token {
-                        Token::Template(a, b) => output.append(template.unwrap(), a, b, budget)?,
-                        Token::Matched => output.append(input, start, end, budget)?,
-                        Token::Before => output.append(input, 0, position, budget)?,
-                        Token::After => {
-                            output.append(input, end.min(input_length), input_length, budget)?
+                        Token::Template(a, b) => {
+                            output.append_template(template.unwrap(), a, b, budget)?
                         }
+                        Token::Matched => output.append_original(input, start, end, budget)?,
+                        Token::Before => output.append_original(input, 0, position, budget)?,
+                        Token::After => output.append_original(
+                            input,
+                            end.min(input_length),
+                            input_length,
+                            budget,
+                        )?,
                         Token::Capture(index) => {
                             let (a, b) = (record[2 * index], record[2 * index + 1]);
                             if a != u32::MAX {
-                                output.append(input, a as usize, b as usize, budget)?;
+                                output.append_original(input, a as usize, b as usize, budget)?;
                             }
                         }
                     }
@@ -299,7 +311,7 @@ pub(super) fn replace(
         host::poll()?;
     }
     if next_source < input_length {
-        output.append(input, next_source, input_length, budget)?;
+        output.append_original(input, next_source, input_length, budget)?;
     }
     output
         .finish(input, template, budget)

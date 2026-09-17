@@ -57,6 +57,13 @@ pub(crate) mod perex_replace;
 pub(crate) mod perex_replace_direct;
 #[cfg(feature = "regex-engine")]
 mod perex_replace_storage;
+
+/// Test-only reader for the native-piece counter (#10411): which backing a
+/// replacement's pieces took, rather than a timing that only implies it.
+#[cfg(test)]
+pub(crate) fn test_native_pieces() -> usize {
+    perex_replace_storage::NATIVE_PIECES.with(std::cell::Cell::get)
+}
 #[cfg(feature = "regex-engine")]
 mod perex_substitution;
 #[cfg(feature = "regex-engine")]
