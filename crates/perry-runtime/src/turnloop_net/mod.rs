@@ -57,8 +57,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use turnloop::{
-    Completion, Error, ErrorKind, Handle, ListenOpts, OpId, OpResult, PipeName, TcpOpts, Token,
-    WriteBuf,
+    Completion, Error, ErrorKind, Handle, ListenOpts, OpId, OpResult, PipeName, ReusePort, TcpOpts,
+    Token, WriteBuf,
 };
 
 pub mod abi;
@@ -286,9 +286,34 @@ fn with_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
 /// `SO_REUSEPORT` on every HTTP listener and left `TCP_NODELAY` unset on every
 /// accepted connection. Two defects, one misplaced argument, and nothing in
 /// between could observe it.
+///
+/// `reuse_port: true` maps to [`ReusePort::Share`] and NOT to
+/// [`ReusePort::Distribute`], which is the variant that sounds right and is
+/// wrong. turnloop 0.1.0-alpha.6 split the old `bool` into three:
+///
+/// * `No` — exclusive bind.
+/// * `Share` — permit the duplicate bind, promise nothing about delivery.
+///   `SO_REUSEPORT` everywhere it exists: Linux, Android, macOS, the BSDs.
+/// * `Distribute` — permit the duplicate bind **and** spread connections
+///   across every listener holding the address. Linux/Android `SO_REUSEPORT`
+///   and FreeBSD `SO_REUSEPORT_LB` only; `Unsupported` on macOS, NetBSD,
+///   OpenBSD, DragonFly, Windows, WASI and the web, because none of them can
+///   distribute and setting plain `SO_REUSEPORT` there would produce exactly
+///   the silently-starved listener the variant exists to prevent.
+///
+/// `Share` is what `perry-ext-http`'s `cluster_bind.rs` already does by hand
+/// (`socket.set_reuse_port(true)`), so mapping to it preserves behaviour on
+/// every platform Perry ships. `Distribute` is the kernel-balanced route a
+/// cluster wants, but it is an opt-in a caller must make deliberately, on a
+/// platform that has it — not something to inherit from a `bool` that has
+/// meant `Share` all along.
 pub(crate) fn listen_opts(backlog: u32, reuse_port: bool, nodelay: bool) -> ListenOpts {
     ListenOpts {
-        reuse_port,
+        reuse_port: if reuse_port {
+            ReusePort::Share
+        } else {
+            ReusePort::No
+        },
         backlog,
         // turnloop 0.1.0-alpha.5 applies these to every accepted socket before
         // the `Accepted` completion reaches the host, which is where Node
@@ -339,7 +364,9 @@ pub fn tcp_listen(
 pub fn pipe_listen(id: i64, subsystem: u8, path: &Path, backlog: u32) -> NetResult<()> {
     with_driver(|driver| {
         let opts = ListenOpts {
-            reuse_port: false,
+            // A UDS listener cannot share an address; turnloop reports
+            // `Unsupported` for anything but `No` on a local listener.
+            reuse_port: ReusePort::No,
             backlog,
             ..ListenOpts::default()
         };
