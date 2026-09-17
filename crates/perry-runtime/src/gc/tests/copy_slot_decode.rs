@@ -11,8 +11,7 @@ use crate::gc::copying_parent_facts::copy_decode_sabotage::{Guard, CHILD, RAW_MA
 fn string_bytes(addr: usize) -> Vec<u8> {
     unsafe {
         let s = addr as *const crate::StringHeader;
-        let data = (s as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        std::slice::from_raw_parts(data, (*s).byte_len as usize).to_vec()
+        std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize).to_vec()
     }
 }
 
