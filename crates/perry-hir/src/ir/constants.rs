@@ -436,9 +436,35 @@ fn package_name_of(path: &str) -> &str {
 /// must not register the import as a native module (which would
 /// cascade into `obj.prop` being lowered as a zero-arg FFI getter call
 /// instead of a real PropertyGet → bound-method-closure).
+/// Builtins Node exposes ONLY under the `node:` prefix.
+///
+/// Every other builtin answers to both `fs` and `node:fs`, which is why
+/// [`is_native_module`] strips the prefix. These do not: they postdate the
+/// prefix convention, and Node deliberately refuses to shadow the bare names
+/// because they are live npm package names. Measured on the pinned oracle
+/// (Node 26.5.1) — none appears in `module.builtinModules`, and
+/// `require('test')` / `require('sqlite')` raise `MODULE_NOT_FOUND` while
+/// `require('node:test')` resolves.
+///
+/// Treating them as prefix-agnostic is not a cosmetic divergence: `test` and
+/// `sqlite` are real packages, so a project depending on either got Perry's
+/// builtin instead of the dependency it asked for. Found by the Node compat
+/// matrix on Windows (#10385), which flagged all four as `perry-extra` —
+/// resolved by Perry, unresolved by Node.
+pub const PREFIX_ONLY_BUILTINS: &[&str] = &["sea", "sqlite", "test", "test/reporters"];
+
+/// True when `path` names a builtin that requires the `node:` prefix and does
+/// not carry it — i.e. a name Perry must leave to normal package resolution.
+fn is_unprefixed_prefix_only_builtin(path: &str) -> bool {
+    !path.starts_with("node:") && PREFIX_ONLY_BUILTINS.contains(&path)
+}
+
 pub fn is_native_module(path: &str) -> bool {
     let normalized = path.strip_prefix("node:").unwrap_or(path);
     if !NATIVE_MODULES.contains(&normalized) {
+        return false;
+    }
+    if is_unprefixed_prefix_only_builtin(path) {
         return false;
     }
     // #8513: @parcel/watcher's root and platform packages are native facade
@@ -529,7 +555,16 @@ pub fn is_node_builtin_module(name: &str) -> bool {
 /// External modules are provided by packages with `perry.nativeLibrary` in package.json.
 pub fn is_native_module_with_externals(path: &str, externals: &[String]) -> bool {
     let normalized = path.strip_prefix("node:").unwrap_or(path);
-    NATIVE_MODULES.contains(&normalized) || externals.iter().any(|ext| ext == normalized)
+    // An explicit `externals` entry still wins — that is the caller naming the
+    // module deliberately — but the builtin list does not answer to a bare
+    // prefix-only name. See `PREFIX_ONLY_BUILTINS`.
+    if externals.iter().any(|ext| ext == normalized) {
+        return true;
+    }
+    if is_unprefixed_prefix_only_builtin(path) {
+        return false;
+    }
+    NATIVE_MODULES.contains(&normalized)
 }
 
 /// Check if a native module import requires linking perry-stdlib.
@@ -615,3 +650,69 @@ pub type InterfaceId = u32;
 
 /// Unique identifier for a type alias
 pub type TypeAliasId = u32;
+
+#[cfg(test)]
+mod prefix_only_builtin_tests {
+    use super::*;
+
+    /// #10385: `node:test` is the test runner; bare `test` is an npm package.
+    ///
+    /// Every other builtin answers to both spellings, so `is_native_module`
+    /// strips the prefix unconditionally — which silently claimed four names
+    /// Node leaves alone. Verified against the pinned oracle (Node 26.5.1):
+    /// none of these is in `module.builtinModules`, and `require('test')`
+    /// raises MODULE_NOT_FOUND while `require('node:test')` resolves. A project
+    /// depending on the `test` or `sqlite` package got Perry's builtin instead
+    /// of the dependency it asked for.
+    #[test]
+    fn prefix_only_builtins_need_their_prefix() {
+        // The constant is Node's list. Perry only claims a subset of it in
+        // `NATIVE_MODULES` (`test/reporters` is absent today), and asserting
+        // resolution for a name Perry never claimed would be asserting the
+        // wrong thing. Gate on membership so the check stays true now AND
+        // starts covering any name later added to the manifest.
+        let mut covered = 0;
+        for name in PREFIX_ONLY_BUILTINS {
+            if !NATIVE_MODULES.contains(name) {
+                continue;
+            }
+            covered += 1;
+            assert!(
+                is_native_module(&format!("node:{name}")),
+                "node:{name} must resolve as a builtin"
+            );
+            assert!(
+                !is_native_module(name),
+                "bare `{name}` must NOT resolve as a builtin - it is a real npm \
+                 package name and Node does not shadow it"
+            );
+        }
+        // Never let this pass vacuously: if the manifest stops claiming all of
+        // them, the gate has nothing to hold and should say so.
+        assert!(
+            covered >= 3,
+            "expected Perry to claim at least sea/sqlite/test; covered {covered}"
+        );
+    }
+
+    /// The rule is specific to that list, not to prefixes in general: an
+    /// ordinary builtin must keep answering to both spellings, or stripping
+    /// the prefix would have been pointless.
+    #[test]
+    fn ordinary_builtins_still_answer_to_both_spellings() {
+        for name in ["fs", "path", "crypto", "events", "os"] {
+            assert!(is_native_module(name), "{name} bare");
+            assert!(is_native_module(&format!("node:{name}")), "node:{name}");
+        }
+    }
+
+    /// An explicit `externals` entry is the caller naming the module on
+    /// purpose, so it still wins over the prefix rule.
+    #[test]
+    fn an_explicit_external_still_wins() {
+        let externals = vec!["test".to_string()];
+        assert!(is_native_module_with_externals("test", &externals));
+        assert!(!is_native_module_with_externals("test", &[]));
+        assert!(is_native_module_with_externals("node:test", &[]));
+    }
+}
