@@ -324,7 +324,7 @@ where
                 finish_read_stream(id);
                 return Ok(());
             }
-            Err(message) => return Err(make_error_value(&message)),
+            Err(failure) => return Err(unsafe { failure.error_value() }),
         }
     }
 }
