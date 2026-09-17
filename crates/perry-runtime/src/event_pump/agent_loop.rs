@@ -163,7 +163,14 @@ fn net_config() -> Config {
         // 65_536-handle ceiling.
         max_operations: 32_768,
         events_per_turn: 64,
-        pooled_buffers: 64,
+        // DIAGNOSTIC ONLY, not shippable: this breaks the documented coupling
+        // with `events_per_turn` above and costs an extra turn per read beyond
+        // the 8th in a turn. It exists to answer one question — is the buffer
+        // pool actually where the remaining idle-RSS penalty lives? 8 x 16 KiB
+        // is 128 KiB against 64 x 16 KiB = 1 MiB, so if the pool is resident
+        // the floor must fall by ~900 KiB. If it does not, turnloop#90's mmap
+        // slab would be unsafe code written for nothing.
+        pooled_buffers: 8,
         pooled_buffer_size: 16 * 1024,
         post_capacity: 256,
         ..Config::default()
