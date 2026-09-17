@@ -32,6 +32,16 @@
 //!                             Sink::on_done → queue_promise_resolution
 //! ```
 //!
+//! # Who still declines
+//!
+//! `reqwest` stays beside this engine for what it cannot serve, which is the P1
+//! coexistence rule rather than an omission. Since turnloop P10 that list no
+//! longer includes a thread without a loop of its own: `submit` posts to the
+//! thread that owns the agent's loop (`posted`). What is left is a genuine
+//! absence of a loop for the whole agent — the `tokio-wait-driver` A/B arm, or
+//! a host where `Loop::new` failed — plus three request-shaped declines the
+//! owner would refuse identically (`Declined`).
+//!
 //! Every policy decision — redirects, the pool, the per-phase deadlines, the
 //! proxy environment, `Content-Encoding` — comes from `turnloop_http::client`
 //! and `turnloop_http::compression` rather than being written here. This module
@@ -78,6 +88,7 @@ use turnloop_http::client::{self as tlc, ConnectionId, PoolKey, RedirectMode};
 use turnloop_http::http1;
 
 mod exchange;
+mod posted;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -129,14 +140,28 @@ static TUNNELS: AtomicU64 = AtomicU64::new(0);
 /// not deleted (P1's coexistence rule).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Declined {
-    /// This agent has no loop (a `worker_threads` agent before its own loop
-    /// lands, or the `tokio-wait-driver` A/B arm).
+    /// No loop exists for this AGENT — not merely for this thread.
+    ///
+    /// turnloop P9 gave every agent a loop and P10 (`posted`) lets a thread
+    /// that does not own its agent's loop hand the submission to the thread
+    /// that does, so the two cases left are both a genuine absence: the
+    /// `tokio-wait-driver` A/B arm, which compiles no agent loop because it
+    /// exists to measure the transport this replaces, and a host where
+    /// `Loop::new` failed.
     NoLoop,
     /// A proxy this client cannot drive. An `http://` proxy is served here now
     /// — `turnloop_http::client::Route` supplies the CONNECT head and the
     /// tunnel decision, and `exchange` runs it — so this variant is reached
     /// only for a proxy URL `ProxyEnvironment::proxy_for` refuses: a scheme
     /// other than `http` (socks5, https-to-proxy), or one that will not parse.
+    ///
+    /// Only the `https://`-proxy half of that is a configuration the fallback
+    /// actually serves. reqwest is built here without its `socks` feature, and
+    /// every socks arm of its connector is behind that `cfg`, so a
+    /// `socks5://` proxy fails on the fallback too — declining routes it to a
+    /// transport that cannot do it either. Kept as a decline rather than
+    /// promoted to an error because the two paths' error TEXT differs and the
+    /// suite pins reqwest's.
     Proxy,
     /// Not an `http:`/`https:` URL, or the URL is malformed in a way
     /// `client::Request::new` rejects for a reason the caller must report the
@@ -457,22 +482,138 @@ fn drain_pending() {
     }
 }
 
+/// Serializes the tests that must OWN this agent's loop, and hands the slot
+/// back when one is done.
+///
+/// The route is a single slot per agent, claimed for the life of the CLAIMING
+/// THREAD (`agent_loop::claim_route`). Two libtest threads racing for it stall
+/// each other for the whole retry window: the loser spins while the winner is
+/// still alive holding a claim it gives up only at thread exit, which is after
+/// the test body has returned. The lease makes that explicit — one owner at a
+/// time — and [`OwnerLease::drop`] releases the route at the END OF THE TEST
+/// rather than at thread exit, which is what lets the next holder have it.
+#[cfg(test)]
+static OWNER_LEASE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Proof that the holder owns this agent's loop, for as long as it is alive.
+#[cfg(test)]
+pub(crate) struct OwnerLease(Option<std::sync::MutexGuard<'static, ()>>);
+
+#[cfg(test)]
+impl Drop for OwnerLease {
+    fn drop(&mut self) {
+        // Give the route back BEFORE releasing the lease. The other order lets
+        // the next holder start spinning against a claim this thread still
+        // holds and has nothing left to do with.
+        perry_runtime::event_pump::shutdown_agent_loop();
+        self.0 = None;
+    }
+}
+
+/// Drive turns until this thread is the agent's PUBLISHED loop owner.
+///
+/// `turnloop_net::available()` only CLAIMS the route — it answers "may I take a
+/// loop?" without paying for one, so a thread that has merely asked holds the
+/// slot with no `Poster` behind it and nothing can be posted to it. A turn is
+/// what builds the loop and publishes the endpoint, so this drives one and
+/// checks both halves.
+#[cfg(test)]
+#[must_use = "the lease must outlive the assertions ownership makes possible"]
+pub(crate) fn become_the_owner_for_test() -> OwnerLease {
+    let guard = OWNER_LEASE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let limit = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+        if tl::available() && perry_ffi::agent_post::available() {
+            return OwnerLease(Some(guard));
+        }
+        assert!(
+            std::time::Instant::now() < limit,
+            "this thread never became the primary agent's PUBLISHED loop owner, \
+             so the rest of this test would prove nothing"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 // ── Submission ─────────────────────────────────────────────────────────────
+
+/// Everything about a submission that is a property of the REQUEST rather than
+/// of the thread that made it.
+///
+/// Computed *before* the transport is chosen, and that order is the point: a
+/// decline that belongs to the request must still reach the caller's fallback.
+/// The agent's owner would refuse an unsupported URL, an undrivable proxy or a
+/// missing TLS config for exactly the same reason this thread would, and by the
+/// time the job lands over there the caller has already been told the engine
+/// took the request and never spawned its reqwest future. Only
+/// [`Declined::NoLoop`] is a property of the thread, and only that one is worth
+/// posting.
+struct Prepared {
+    request: tlc::Request,
+    proxy: Option<url::Url>,
+}
+
+fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
+    let request = tlc::Request::new(&spec.url, &spec.method).map_err(|_| Declined::Unsupported)?;
+    let proxy = proxy_for(&request.url)?;
+    if request.url.scheme() == "https" && exchange::tls_config().is_none() {
+        return Err(Declined::NoTls);
+    }
+    Ok(Prepared { request, proxy })
+}
 
 /// Take the turnloop path for one outbound request.
 ///
 /// `Err(Declined)` means the caller must keep its existing transport for this
 /// request; nothing has been allocated and no completion will arrive. `Ok(())`
 /// means the sink will be called exactly once.
+///
+/// # The thread that has no loop of its own
+///
+/// turnloop P9 gave every JS *agent* a loop, so a thread without one is not a
+/// worker: it is a second thread acting for an agent another thread already
+/// owns — Android's shape, where `perry-native` runs the compiled TypeScript
+/// while the UI thread pumps for the same heap. P10 lets that thread hand the
+/// whole submission to the owner ([`posted`]), which is a thread serving the
+/// *same* JS heap, so the promise is settled where that agent's values live.
+/// Only a genuine absence of a loop — the `tokio-wait-driver` A/B arm, or a
+/// host where `Loop::new` failed — still declines to reqwest.
 pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
+    let direct = tl::available();
+    if !direct && !posted::available() {
+        // No loop anywhere for this agent, so the caller's own transport is the
+        // only one. Decline BEFORE preparing the request: on the
+        // `tokio-wait-driver` A/B arm this is every request, and `prepare`
+        // reaches `tls_config()`, whose first call loads the platform root
+        // store. The arm exists to measure the transport this replaces, and it
+        // must not be charged for a client it can never use.
+        return Err(Declined::NoLoop);
+    }
+    let prepared = prepare(&spec)?;
+    if direct {
+        start_here(spec, sink, prepared)
+    } else {
+        posted::try_submit(spec, sink)
+    }
+}
+
+/// The submission the agent's owner runs on behalf of a thread that had no
+/// loop. Never posts — it is already on the owner, and a second hop would be a
+/// bounce rather than a fallback.
+fn submit_on_owner(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
+    let prepared = prepare(&spec)?;
     if !tl::available() {
         return Err(Declined::NoLoop);
     }
-    let request = tlc::Request::new(&spec.url, &spec.method).map_err(|_| Declined::Unsupported)?;
-    let proxy = proxy_for(&request.url)?;
-    if request.url.scheme() == "https" && exchange::tls_config().is_none() {
-        return Err(Declined::NoTls);
-    }
+    start_here(spec, sink, prepared)
+}
+
+/// Enter a prepared request into THIS thread's engine and start it.
+fn start_here(spec: RequestSpec, sink: Sink, prepared: Prepared) -> Result<(), Declined> {
+    let Prepared { request, proxy } = prepared;
     let id = ENGINE.with(|e| {
         let mut engine = e.borrow_mut();
         if !ensure_registered(&mut engine) {
@@ -524,6 +665,10 @@ pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
 /// Cancel every request bound to `signal_ptr`. Called from the abort bridge on
 /// the main thread when `controller.abort()` or an `AbortSignal.timeout`
 /// deadline fires. A miss is a no-op.
+///
+/// A thread that posted its requests to the agent's owner holds none of them in
+/// its own engine, so the abort is posted too — otherwise `controller.abort()`
+/// would be silently inert for exactly the requests P10 moved.
 pub(crate) fn abort_signal(signal_ptr: usize) -> usize {
     let ids = ENGINE.with(|e| {
         e.borrow_mut()
@@ -536,7 +681,25 @@ pub(crate) fn abort_signal(signal_ptr: usize) -> usize {
         exchange::abort(id);
     }
     drain_pending();
+    if !tl::available() {
+        posted::try_abort(signal_ptr);
+    }
     n
+}
+
+/// Cancel every request bound to `signal_ptr` in THIS thread's engine, without
+/// posting. The owner's arm of [`abort_signal`].
+fn abort_signal_here(signal_ptr: usize) {
+    let ids = ENGINE.with(|e| {
+        e.borrow_mut()
+            .aborts
+            .remove(&signal_ptr)
+            .unwrap_or_default()
+    });
+    for id in ids {
+        exchange::abort(id);
+    }
+    drain_pending();
 }
 
 /// Node's proxy environment, read through `turnloop_http`'s own matcher so the
