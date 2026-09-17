@@ -194,6 +194,7 @@ pub(crate) struct Env {
     external_memory: i64,
     pending_exception_bits: Option<u64>,
     last_status: NapiStatus,
+    last_message: &'static str,
     last_error_message: CString,
     error_info: NapiExtendedErrorInfo,
 }
@@ -234,6 +235,7 @@ impl Env {
             external_memory: 0,
             pending_exception_bits: None,
             last_status: NapiStatus::Ok,
+            last_message: "napi_ok",
             last_error_message: CString::new("napi_ok").unwrap(),
             error_info: NapiExtendedErrorInfo {
                 error_message: std::ptr::null(),
@@ -252,8 +254,14 @@ impl Env {
     }
 
     fn set_status(&mut self, status: NapiStatus, message: &'static str) -> NapiStatus {
-        self.last_status = status;
-        self.last_error_message = CString::new(message).expect("static N-API error has no NUL");
+        // Nearly every call reports the `napi_ok` it reported last time; only
+        // a changed status or message needs a new NUL-terminated copy, so a
+        // successful call no longer allocates for its bookkeeping.
+        if self.last_status != status || self.last_message != message {
+            self.last_status = status;
+            self.last_message = message;
+            self.last_error_message = CString::new(message).expect("static N-API error has no NUL");
+        }
         self.refresh_error_info();
         status
     }

@@ -83,11 +83,20 @@ extern "C" fn napi_callback_thunk(
         new_target,
     });
     let info_ptr = (&mut *info) as *mut CallbackInfoRecord as NapiCallbackInfo;
-    with_env_mut(env, |env| env.active_callback_infos.push(info_ptr as usize));
+    // The callback runs attributed to the addon that created the function.
+    // The switch rides on the borrows this trampoline already takes, so a
+    // native call pays no extra environment lookups for it.
+    let previous_module = with_env_mut(env, |env| {
+        env.active_callback_infos.push(info_ptr as usize);
+        let previous = env.active_module;
+        if callback.module.is_some() {
+            env.active_module = callback.module;
+        }
+        previous
+    })
+    .flatten();
 
-    let returned = with_active_module(env, callback.module, || unsafe {
-        native_callback(env, info_ptr)
-    });
+    let returned = unsafe { native_callback(env, info_ptr) };
     let returned_bits = if returned.is_null() {
         crate::value::TAG_UNDEFINED
     } else {
@@ -95,6 +104,7 @@ extern "C" fn napi_callback_thunk(
     };
 
     with_env_mut(env, |env| {
+        env.active_module = previous_module;
         if let Some(position) = env
             .active_callback_infos
             .iter()
