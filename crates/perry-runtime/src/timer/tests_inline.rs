@@ -56,6 +56,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         async_id: 0,
         trigger_async_id: 0,
         cleared: false,
+        _scheduled: ref_states::ScheduledTimerId::unregistered(),
     });
     INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
         // #6185: test scaffolding runs on the primary agent.
@@ -69,6 +70,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
         async_id: 0,
         trigger_async_id: 0,
         cleared: false,
+        _scheduled: ref_states::ScheduledTimerId::unregistered(),
     });
 }
 
@@ -184,6 +186,7 @@ mod expired_batch_order_tests {
             async_id: 0,
             trigger_async_id: 0,
             cleared: false,
+            _scheduled: crate::timer::ref_states::ScheduledTimerId::unregistered(),
         }
     }
 
