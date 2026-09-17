@@ -337,6 +337,51 @@ def pick_marker(stderr_text, needle, startswith=False):
     return matches[0]
 
 
+def marker_completions(marker_line):
+    """`completions=N` from a `[perry-loop]` marker line, or None if absent.
+
+    The runtime's own doc for this counter is the reason it is here: "Completions
+    dispatched to a P1 net subsystem. Zero means turnloop carried no I/O for this
+    process, whatever the turn count says."
+    """
+    if not marker_line:
+        return None
+    for pair in marker_line.split():
+        key, _, value = pair.partition("=")
+        if key == "completions":
+            return int(value) if value.isdigit() else None
+    return None
+
+
+def assert_turnloop_carried_io(arm, marker_line, where):
+    """The arm marker proves the WAIT DRIVER; this proves turnloop did the I/O.
+
+    They are not the same claim, and the gap is exactly the shape CLAUDE.md warns
+    about: a gate that runs while its subject never did. `try_listen_on_turnloop`
+    legitimately DECLINES — a thread that cannot get a loop of its own keeps the
+    hyper/tokio accept loop (the P1 coexistence rule, and the reason group A's
+    edges survive). A server that declined still parks in a turnloop loop, so it
+    still prints `driver=turnloop`, and every number we would then publish would
+    describe a hyper server wearing the turnloop label.
+
+    Necessary, not sufficient: a non-zero count proves turnloop carried SOME P1
+    net I/O in this process, not specifically this server's listener. That is
+    still the discriminating quantity the runtime exposes, and it is infinitely
+    better than the marker alone. Only the turnloop arm is checked; the baseline
+    prints no such line at all.
+    """
+    if arm != "turnloop":
+        return None
+    completions = marker_completions(marker_line)
+    if completions is None:
+        return f"{where}: marker carries no completions= field: {marker_line!r}"
+    if completions == 0:
+        return (f"{where}: turnloop parked but carried NO net I/O "
+                f"(completions=0) — the server declined to the tokio path, so "
+                f"these numbers are not a turnloop measurement")
+    return None
+
+
 def verify_marker(arm, binary):
     logdir = Path(tempfile.mkdtemp(prefix="server-ab-verify-"))
     server = Server(binary, free_port(), logdir)
@@ -373,6 +418,11 @@ def verify_marker(arm, binary):
         # Explicit anyway, because `pick_marker` returning None where `next(...)`
         # used to raise is exactly how a verification turns into a log line.
         raise SystemExit(f"{arm}: marker present but not selectable; stderr={server.stderr_text!r}")
+    # `verify_marker` served one real request above, so a turnloop arm that
+    # carried the listener MUST have completions by now.
+    carried = assert_turnloop_carried_io(arm, marker_line, f"{arm} build verification")
+    if carried:
+        raise SystemExit(carried)
     log(f"verified {arm}: {marker_line}")
     return marker_line
 
@@ -1130,6 +1180,9 @@ def finish_sample(sample, arm, server):
             problems.append("arm marker missing or wrong")
         if waits.get("arm") != ARM_WAITS[arm]:
             problems.append("wait metrics missing or wrong arm")
+        carried = assert_turnloop_carried_io(arm, sample["marker"], "sample")
+        if carried:
+            problems.append(carried)
     if server.forced_kill:
         problems.append("server needed SIGKILL")
     if sample.get("rusage_missing"):
