@@ -29,6 +29,7 @@ fn current_callback_record(index: usize) -> Option<NativeCallbackRecord> {
         env.callbacks.get(index).map(|record| NativeCallbackRecord {
             callback: record.callback,
             data: record.data,
+            module: record.module,
         })
     })
     .flatten()
@@ -84,7 +85,9 @@ extern "C" fn napi_callback_thunk(
     let info_ptr = (&mut *info) as *mut CallbackInfoRecord as NapiCallbackInfo;
     with_env_mut(env, |env| env.active_callback_infos.push(info_ptr as usize));
 
-    let returned = unsafe { native_callback(env, info_ptr) };
+    let returned = with_active_module(env, callback.module, || unsafe {
+        native_callback(env, info_ptr)
+    });
     let returned_bits = if returned.is_null() {
         crate::value::TAG_UNDEFINED
     } else {
@@ -149,6 +152,7 @@ pub unsafe extern "C" fn napi_create_function(
         env.callbacks.push(NativeCallbackRecord {
             callback,
             data: data as usize,
+            module: env.active_module,
         });
         index
     }) {

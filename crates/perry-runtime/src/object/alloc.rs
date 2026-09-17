@@ -149,6 +149,11 @@ pub extern "C" fn js_object_coerce(value: f64) -> f64 {
     if jsval.is_any_string() {
         return crate::builtins::js_boxed_string_new(value, 1);
     }
+    if crate::object::class_ref_id(value).is_some() {
+        // A constructor ClassRef shares the INT32 encoding but is already a
+        // Function object, so ToObject returns it unchanged (#10461).
+        return value;
+    }
     crate::builtins::js_boxed_number_new(value)
 }
 

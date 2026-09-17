@@ -31,6 +31,11 @@ fn write_handle(env: NapiEnv, bits: u64, result: *mut NapiValue) -> NapiStatus {
 fn value_as_number(bits: u64) -> Option<f64> {
     let value = JSValue::from_bits(bits);
     if value.is_int32() {
+        // A compiled class constructor shares the INT32 encoding. It is a
+        // function, as `napi_typeof` reports, not its class id (#10461).
+        if crate::object::class_ref_id(f64::from_bits(bits)).is_some() {
+            return None;
+        }
         Some(value.as_int32() as f64)
     } else if value.is_number() {
         Some(value.as_number())
@@ -286,7 +291,9 @@ pub unsafe extern "C" fn napi_create_int32(
     value: i32,
     result: *mut NapiValue,
 ) -> NapiStatus {
-    write_handle(env, JSValue::int32(value).bits(), result)
+    // A plain double, like every other JavaScript number: the INT32 encoding
+    // is shared with class constructor refs, so `1` could read as a class.
+    write_handle(env, JSValue::number(value as f64).bits(), result)
 }
 
 #[no_mangle]
@@ -295,12 +302,7 @@ pub unsafe extern "C" fn napi_create_uint32(
     value: u32,
     result: *mut NapiValue,
 ) -> NapiStatus {
-    let bits = if value <= i32::MAX as u32 {
-        JSValue::int32(value as i32).bits()
-    } else {
-        JSValue::number(value as f64).bits()
-    };
-    write_handle(env, bits, result)
+    write_handle(env, JSValue::number(value as f64).bits(), result)
 }
 
 #[no_mangle]
@@ -420,27 +422,27 @@ pub unsafe extern "C" fn napi_typeof(
         return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
     };
     let js = JSValue::from_bits(bits);
-    let value_type = if js.is_undefined() {
-        NapiValueType::Undefined
-    } else if js.is_null() {
+    let value_type = if js.is_null() {
         NapiValueType::Null
-    } else if js.is_bool() {
-        NapiValueType::Boolean
-    } else if js.is_number() || js.is_int32() {
-        NapiValueType::Number
-    } else if js.is_any_string() {
-        NapiValueType::String
-    } else if js.is_bigint() {
-        NapiValueType::Bigint
-    } else if crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 {
-        NapiValueType::Symbol
     } else if js.is_pointer() && super::metadata::is_external_owner(js.as_pointer::<u8>() as usize)
     {
         NapiValueType::External
-    } else if js.is_pointer() && crate::closure::is_closure_ptr(js.as_pointer::<u8>() as usize) {
-        NapiValueType::Function
     } else {
-        NapiValueType::Object
+        // Everything else classifies exactly as the `typeof` operator does,
+        // so Perry's other callable representations (INT32-tagged class
+        // refs, class objects, callable proxies) are functions here too
+        // (#10461).
+        use crate::builtins::arithmetic::ValueTypeofTag;
+        match crate::builtins::arithmetic::classify_value_typeof(f64::from_bits(bits)) {
+            ValueTypeofTag::Undefined => NapiValueType::Undefined,
+            ValueTypeofTag::Object => NapiValueType::Object,
+            ValueTypeofTag::Boolean => NapiValueType::Boolean,
+            ValueTypeofTag::Number => NapiValueType::Number,
+            ValueTypeofTag::String => NapiValueType::String,
+            ValueTypeofTag::Function => NapiValueType::Function,
+            ValueTypeofTag::BigInt => NapiValueType::Bigint,
+            ValueTypeofTag::Symbol => NapiValueType::Symbol,
+        }
     };
     *result = value_type;
     ok(env)
@@ -509,6 +511,112 @@ pub unsafe extern "C" fn napi_create_string_utf16(
     }
     let wtf8 = utf16_to_wtf8(std::slice::from_raw_parts(value, length));
     create_string(env, &wtf8, true, result)
+}
+
+// Node creates a property key as an internalized V8 string. Perry strings have
+// no separate internalized form, so a key is an ordinary string.
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_property_key_latin1(
+    env: NapiEnv,
+    value: *const c_char,
+    length: usize,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    napi_create_string_latin1(env, value, length, result)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_property_key_utf8(
+    env: NapiEnv,
+    value: *const c_char,
+    length: usize,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    napi_create_string_utf8(env, value, length, result)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_property_key_utf16(
+    env: NapiEnv,
+    value: *const u16,
+    length: usize,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    napi_create_string_utf16(env, value, length, result)
+}
+
+/// Finish an external string that was copied into a Perry string. This is the
+/// path Node itself takes when V8 cannot adopt external storage: report
+/// `copied = true` and run the finalizer before returning, so the addon's
+/// buffer is released exactly once.
+unsafe fn finish_copied_external_string(
+    env: NapiEnv,
+    status: NapiStatus,
+    data: *mut c_void,
+    finalize_callback: NapiFinalize,
+    finalize_hint: *mut c_void,
+    copied: *mut bool,
+) -> NapiStatus {
+    if status != NapiStatus::Ok {
+        return status;
+    }
+    if !copied.is_null() {
+        *copied = true;
+    }
+    if let Some(callback) = finalize_callback {
+        let exception_was_pending = pending_exception(env).is_some();
+        callback(env, data, finalize_hint);
+        if !exception_was_pending {
+            super::modules::settle_callback_exception(
+                env,
+                super::modules::active_module(env),
+                true,
+            );
+        }
+    }
+    ok(env)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_external_string_latin1(
+    env: NapiEnv,
+    value: *mut c_char,
+    length: usize,
+    finalize_callback: NapiFinalize,
+    finalize_hint: *mut c_void,
+    result: *mut NapiValue,
+    copied: *mut bool,
+) -> NapiStatus {
+    let status = napi_create_string_latin1(env, value, length, result);
+    finish_copied_external_string(
+        env,
+        status,
+        value.cast(),
+        finalize_callback,
+        finalize_hint,
+        copied,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_external_string_utf16(
+    env: NapiEnv,
+    value: *mut u16,
+    length: usize,
+    finalize_callback: NapiFinalize,
+    finalize_hint: *mut c_void,
+    result: *mut NapiValue,
+    copied: *mut bool,
+) -> NapiStatus {
+    let status = napi_create_string_utf16(env, value, length, result);
+    finish_copied_external_string(
+        env,
+        status,
+        value.cast(),
+        finalize_callback,
+        finalize_hint,
+        copied,
+    )
 }
 
 #[no_mangle]
@@ -974,10 +1082,11 @@ fn create_error_kind(
         as *mut crate::string::StringHeader;
     let scope = crate::gc::RuntimeHandleScope::new();
     let message_root = scope.root_string_ptr(message_ptr);
-    // `kind` is js_typeerror_new / js_rangeerror_new / js_error_new_with_message,
-    // all of which route through `alloc_error`; that opens its own handle scope
-    // and roots `message` before its first allocation, so a scoped raw argument
-    // is sound here (#7341 self-rooting entry point).
+    // `kind` is js_typeerror_new / js_rangeerror_new / js_syntaxerror_new /
+    // js_error_new_with_message, all of which route through `alloc_error`;
+    // that opens its own handle scope and roots `message` before its first
+    // allocation, so a scoped raw argument is sound here (#7341 self-rooting
+    // entry point).
     let error =
         message_root.with_const_ptr::<crate::string::StringHeader, _>(|ptr| kind(ptr.cast_mut()));
     let status = write_handle(env, pointer_bits(error.cast()), result);
@@ -1022,6 +1131,16 @@ pub unsafe extern "C" fn napi_create_range_error(
     result: *mut NapiValue,
 ) -> NapiStatus {
     create_error_kind(env, code, message, result, crate::error::js_rangeerror_new)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_syntax_error(
+    env: NapiEnv,
+    code: NapiValue,
+    message: NapiValue,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    create_error_kind(env, code, message, result, crate::error::js_syntaxerror_new)
 }
 
 #[no_mangle]
@@ -1177,6 +1296,34 @@ pub unsafe extern "C" fn napi_create_symbol(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn node_api_symbol_for(
+    env: NapiEnv,
+    description: *const c_char,
+    length: usize,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    if result.is_null() {
+        return set_status(env, NapiStatus::InvalidArg, "result must not be null");
+    }
+    let mut key = std::ptr::null_mut();
+    let status = napi_create_string_utf8(env, description, length, &mut key);
+    if status != NapiStatus::Ok {
+        return status;
+    }
+    let Ok(key_bits) = value_bits(env, key) else {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "symbol key is not a live handle",
+        );
+    };
+    // A string key cannot throw. The registry copies the key text out before
+    // creating the symbol, which is process-lifetime rather than GC-owned.
+    let symbol = crate::symbol::js_symbol_for(f64::from_bits(key_bits));
+    write_handle(env, symbol.to_bits(), result)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn napi_create_date(
     env: NapiEnv,
     time: f64,
@@ -1280,6 +1427,15 @@ pub unsafe extern "C" fn napi_throw_range_error(
     message: *const c_char,
 ) -> NapiStatus {
     throw_c_error(env, code, message, napi_create_range_error)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn node_api_throw_syntax_error(
+    env: NapiEnv,
+    code: *const c_char,
+    message: *const c_char,
+) -> NapiStatus {
+    throw_c_error(env, code, message, node_api_create_syntax_error)
 }
 
 #[no_mangle]

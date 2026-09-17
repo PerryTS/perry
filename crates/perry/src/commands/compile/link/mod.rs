@@ -212,6 +212,7 @@ mod node_api_symbol_inventory_tests {
             include_str!("../../../../../perry-runtime/src/node_api_host/loader.rs"),
             include_str!("../../../../../perry-runtime/src/node_api_host/metadata.rs"),
             include_str!("../../../../../perry-runtime/src/node_api_host/mod.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/modules.rs"),
             include_str!("../../../../../perry-runtime/src/node_api_host/promises.rs"),
             include_str!("../../../../../perry-runtime/src/node_api_host/properties.rs"),
             include_str!("../../../../../perry-runtime/src/node_api_host/scopes.rs"),
