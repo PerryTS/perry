@@ -1,10 +1,15 @@
-//! The copying minor reads two facts once per traced object that it used to
-//! re-derive for every slot of that object: whether the parent is a weak
-//! holder, and whether the parent is in old-gen.
+//! The copying minor reads the parent's weak-holder fact once per traced
+//! object instead of re-deriving it for every slot of that object (#10362).
 //!
-//! Both are pinned by a COLLECTION and its observable outcome, not by reading
-//! the hoisted value back — and each has a sabotaged twin that forgets the
-//! fact, so the hoist is shown to be load-bearing rather than merely present.
+//! Pinned by a COLLECTION and its observable outcome, not by reading the
+//! hoisted value back, and paired with a sabotaged twin that forgets the fact,
+//! so the hoist is shown to be load-bearing rather than merely present.
+//!
+//! The parent's old-generation fact is deliberately NOT hoisted, so there is no
+//! test for it here. No sabotage of that hoist could be made to fail: sticky
+//! dirty-page coverage carries an old→young edge independently of the
+//! remembered-set re-insertion the fact controls. A future hoist of it needs
+//! its own witness first (#10388).
 
 use super::super::*;
 use super::support::*;
