@@ -968,6 +968,12 @@
       "why": "#10164: #[cfg(test)] Cell<u64> counting how many searches resumed from a recorded cross-call position, so tests can tell the position was used. A count, never an address, and absent from shipped binaries."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_replace_storage.rs",
+      "name": "NATIVE_PIECES",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<usize> counter for asserting which backing a replacement's pieces took \u2014 native records for a string template, the JS list for a callback (#10411). It stores only a construction count and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
       "name": "LENT_SCRATCH",
       "verdict": "not_a_gc_pointer",
