@@ -1,0 +1,31 @@
+typeof class Plain function function
+typeof class Tagged function function
+typeof class MyError extends Error function function
+typeof class expression function function
+typeof function decl function function
+typeof arrow function function
+typeof bound function function
+typeof Map function function
+typeof object object object
+typeof array object object
+typeof null object null
+typeof undefined undefined undefined
+typeof number number number
+typeof string string string
+typeof symbol symbol symbol
+typeof bigint bigint bigint
+typeof boolean boolean boolean
+created int32 number,number,number,number
+number status 6 0
+new instance true made
+version 10 10
+symbol for true
+syntax error true SyntaxError ERR_FIXTURE made syntax
+throw syntax true ERR_FIXTURE_SYNTAX fixture syntax
+module file current.node legacy.node
+external external latin1 é utf16 😀 true
+keys {"latin1é":1,"utf8":2,"utf16é":3}
+buffer true 4 3,4,5,6
+shared 42
+range ERR_OUT_OF_RANGE The byte offset + length is out of range
+callback exceptions uncaught: async work completion failed | uncaught: tsfn callback failed (10) | warning: DEP0168

@@ -365,20 +365,17 @@ pub unsafe extern "C" fn napi_module_register(module: *mut NapiModule) {
 
 unsafe fn initialize_addon(
     env: NapiEnv,
+    path: &Path,
     handle: usize,
     legacy: Option<usize>,
 ) -> Result<u64, String> {
     type VersionFn = unsafe extern "C" fn() -> i32;
     type RegisterFn = unsafe extern "C" fn(NapiEnv, NapiValue) -> NapiValue;
-    if let Some(version) = find_symbol(handle, b"node_api_module_get_api_version_v1") {
+    let declared = find_symbol(handle, b"node_api_module_get_api_version_v1").map(|version| {
         let version: VersionFn = std::mem::transmute(version);
-        let requested = version();
-        if requested < 1 || requested as u32 > NAPI_VERSION {
-            return Err(format!(
-                "addon requests Node-API version {requested}, but Perry supports versions 1 through {NAPI_VERSION}"
-            ));
-        }
-    }
+        version()
+    });
+    let api_version = effective_module_version(declared)?;
     let mut exports = std::ptr::null_mut();
     let status = napi_create_object(env, &mut exports);
     if status != NapiStatus::Ok {
@@ -404,7 +401,8 @@ unsafe fn initialize_addon(
                     .to_string(),
             );
         };
-    let returned = register(env, exports);
+    let module = register_module(env, path, api_version);
+    let returned = with_active_module(env, module, || register(env, exports));
     if pending_exception(env).is_some() {
         return Err("addon initializer left a pending JavaScript exception".to_string());
     }
@@ -467,7 +465,7 @@ pub fn load_addon(request: &str) -> Result<f64, String> {
                 return Err(error);
             }
         };
-        match unsafe { initialize_addon(env, handle, legacy) } {
+        match unsafe { initialize_addon(env, &path, handle, legacy) } {
             Ok(bits) => Ok((handle, bits)),
             Err(error) => {
                 unsafe { close_library(handle) };

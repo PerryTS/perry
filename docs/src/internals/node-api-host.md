@@ -7,7 +7,7 @@ contract kept alongside the implementation and its gates.
 
 ## Implementation status
 
-The optional `perry-runtime/node-api-host` feature contains the version-8 host:
+The optional `perry-runtime/node-api-host` feature contains the version-10 host:
 opaque handle scopes and references, GC root rewriting and weak clearing,
 object metadata/finalization, values and descriptors, native callbacks,
 buffers/views, promises, async work, threadsafe functions, cleanup hooks, and
@@ -18,7 +18,7 @@ Approved addons are screened for direct libuv/V8/NAN/Node C++ imports, copied
 to the relocatable `<executable>.perry-native` sidecar, hashed into its manifest
 and build cache, and loaded only after every payload hash is verified.
 `require()` and `process.dlopen()` share that authorization and cache. Linker
-exports come from the checked-in version-8 symbol inventory and are absent when
+exports come from the checked-in version-10 symbol inventory and are absent when
 the addon graph is empty, preserving the zero-byte default path.
 
 The integration gate compiles and executes a direct C addon, verifies its
@@ -40,8 +40,8 @@ Perry facade remains on that facade: the host never supersedes a
 
 | Area | Decision |
 |---|---|
-| Advertised API | Node-API version 8 |
-| `napi_env` | One environment per Perry agent/realm, owned by its JavaScript thread |
+| Advertised API | Node-API version 10 (`napi_get_version`); modules declaring 1 through 10 load |
+| `napi_env` | One environment per Perry agent/realm, owned by its JavaScript thread; per-module facts are attributed to the running addon |
 | `napi_value` | Opaque host token containing an index and generation for an environment-local handle slot; never a Perry heap address |
 | Handle roots | Open handle scopes are mutable GC roots and are rewritten after evacuation |
 | `napi_ref` | Strong references root their value; zero-count references use Perry's existing weak-target machinery |
@@ -54,13 +54,43 @@ Perry facade remains on that facade: the host never supersedes a
 | Policy | Exact package-name allowlist in `package.json` under `perry.nativeAddons` |
 | Size gate | No addon in the graph means no host archive references, no exported Node-API symbols, and a zero-byte executable delta |
 
-Version 8 is the baseline selected by Node's own v22 headers when an addon does
-not request a newer version. It includes BigInt, dates, detach, type tags,
-async cleanup, and the complete TSFN surface needed by current napi-rs and
-node-addon-api packages, while avoiding a false claim for the version 9 and 10
-extras. A module whose `node_api_module_get_api_version_v1()` returns more than
-8 is rejected before its initializer runs, with the requested and supported
-versions in the diagnostic.
+The host implements every stable entry point through Node-API version 10, the
+highest version Node 26 supports (#10456). Current releases of argon2,
+better-sqlite3 and sharp declare version 9 or 10 through node-addon-api, so a
+version-8 ceiling rejected them before their initializers ran. Module versions
+follow Node's rules: no `node_api_module_get_api_version_v1()` export, or any
+version below 8, runs as version 8; 9 and 10 run as declared; a higher version,
+or `NAPI_VERSION_EXPERIMENTAL` (the experimental entry points are not
+exported), is rejected before the initializer runs with the requested and
+supported versions in the diagnostic.
+
+### Module attribution and version-dependent behavior
+
+Node creates one `napi_env` per module and stores that module's version and
+file URL on it. Perry keeps one environment per agent, so the two per-module
+facts Node-API exposes are attributed instead. Every host-initiated entry into
+addon code that receives an environment runs with its module marked active:
+the initializer, native function callbacks (recorded when the function is
+created), async-work completions, TSFN `call_js_cb` and finalize callbacks, and
+object/instance-data finalizers (each recorded when created). An environment
+cleanup hook receives no environment and is not attributed.
+
+- `node_api_get_module_file_name` returns the active module's `file://` URL of
+  the canonical sidecar path it was loaded from. Code outside every attributed
+  entry point sees the most recently loaded module.
+- An exception left pending by a callback with no JavaScript caller follows
+  `node_napi_env__::CallbackIntoModule`: async-work completions and finalizers
+  report it as an uncaught exception for every module version; TSFN callbacks
+  report it for version 10 and later, while a module declaring a lower version
+  gets the `DEP0168` deprecation warning and the exception is dropped. Once the
+  environment is shutting down, the exception is dropped.
+- `napi_create_reference` accepts any value type, the version-10 rule, for
+  every module.
+- Node returns `napi_cannot_run_js` (version 10) or `napi_pending_exception`
+  when an environment can no longer run JavaScript. Perry has no such state:
+  JavaScript stays callable while the environment shuts down.
+- Instance data (`napi_set_instance_data`) belongs to the shared environment,
+  not to a module.
 
 ## Environment and handle representation
 
@@ -355,7 +385,8 @@ following:
 4. reject an unresolved `uv_*`, V8, NAN, or non-Node-API Node symbol with the
    exact symbol and addon path in the error;
 5. if present, call `node_api_module_get_api_version_v1` and reject versions
-   above 8;
+   above 10 or `NAPI_VERSION_EXPERIMENTAL`, then record the module for
+   attribution;
 6. prefer `napi_register_module_v1(env, exports)`; otherwise use the descriptor
    captured by `napi_module_register` while the library constructor ran;
 7. use the initializer's returned object, or the supplied exports object when
@@ -374,10 +405,9 @@ flags are rejected rather than ignored. Runtime-computed paths may load only a
 file present in the compile-time addon manifest; the allowlist is not a general
 `dlopen` capability.
 
-The environment stores the active canonical module filename during
-initialization. It is the future source for the version 9
-`node_api_get_module_file_name` API, even though the version 8 host does not
-export that symbol.
+The initializer runs attributed to its module, which is how
+`node_api_get_module_file_name` answers during initialization; see
+[Module attribution](#module-attribution-and-version-dependent-behavior).
 
 ## Linking and exported symbols
 
@@ -510,7 +540,7 @@ The inventory is pinned to Node v26.5.1's
 and [`node_api.h`](https://github.com/nodejs/node/blob/v26.5.1/src/node_api.h).
 `v1` means required before the host is usable. `later` means the declaration is
 newer than the advertised version or experimental and is not exported.
-`never` means Perry exports the version-8 symbol when necessary for binary
+`never` means Perry exports the symbol when necessary for binary
 resolution, but it deterministically reports the stated unsupported facility.
 
 ### `js_native_api.h`: core through version 4
@@ -520,11 +550,11 @@ resolution, but it deterministically reports the stated unsupported facility.
 | v1 | `napi_get_last_error_info` | Stable per-environment storage |
 | v1 | `napi_get_undefined`, `napi_get_null`, `napi_get_global`, `napi_get_boolean` | Singleton values receive ordinary scoped handles |
 | v1 | `napi_create_object`, `napi_create_array`, `napi_create_array_with_length` | Perry object/array allocators |
-| v1 | `napi_create_double`, `napi_create_int32`, `napi_create_uint32`, `napi_create_int64` | Perry NaN-box conversions |
+| v1 | `napi_create_double`, `napi_create_int32`, `napi_create_uint32`, `napi_create_int64` | Plain doubles, never the INT32 encoding that class refs share |
 | v1 | `napi_create_string_latin1`, `napi_create_string_utf8`, `napi_create_string_utf16` | Length-bounded; `NAPI_AUTO_LENGTH` supported |
 | v1 | `napi_create_symbol`, `napi_create_function` | Native callbacks use host records |
 | v1 | `napi_create_error`, `napi_create_type_error`, `napi_create_range_error` | `code` is installed when supplied |
-| v1 | `napi_typeof` | Includes function, external, symbol, and bigint distinctions |
+| v1 | `napi_typeof` | Classifies exactly like the `typeof` operator (class refs, class objects and callable proxies are functions), plus `null` and `external` |
 | v1 | `napi_get_value_double`, `napi_get_value_int32`, `napi_get_value_uint32`, `napi_get_value_int64`, `napi_get_value_bool` | Checked type/status behavior |
 | v1 | `napi_get_value_string_latin1`, `napi_get_value_string_utf8`, `napi_get_value_string_utf16` | Query-length and NUL-termination semantics included |
 | v1 | `napi_coerce_to_bool`, `napi_coerce_to_number`, `napi_coerce_to_object`, `napi_coerce_to_string` | User code is exception-trapped |
@@ -544,7 +574,7 @@ resolution, but it deterministically reports the stated unsupported facility.
 | v1 | `napi_is_arraybuffer`, `napi_create_arraybuffer`, `napi_create_external_arraybuffer`, `napi_get_arraybuffer_info` | Stable backing pointers |
 | v1 | `napi_is_typedarray`, `napi_create_typedarray`, `napi_get_typedarray_info` | All eleven declared typed-array kinds |
 | v1 | `napi_create_dataview`, `napi_is_dataview`, `napi_get_dataview_info` | Backing identity and offsets preserved |
-| v1 | `napi_get_version` | Returns 8 |
+| v1 | `napi_get_version` | Returns 10 |
 | v1 | `napi_create_promise`, `napi_resolve_deferred`, `napi_reject_deferred`, `napi_is_promise` | Deferred records are environment-owned roots |
 | never | `napi_run_script` | Returns `napi_generic_failure`; arbitrary runtime source execution would violate the no-runtime-engine model |
 | v1 | `napi_adjust_external_memory` | Collector pressure accounting |
@@ -565,11 +595,11 @@ resolution, but it deterministically reports the stated unsupported facility.
 
 ### `js_native_api.h`: version 9, version 10, and experimental
 
-| Status | Version | Entry points | Reason |
+| Status | Version | Entry points | Notes |
 |---|---:|---|---|
-| later | 9 | `node_api_symbol_for`, `node_api_create_syntax_error`, `node_api_throw_syntax_error` | Advertise only with a complete version-9 surface |
-| later | 10 | `node_api_create_external_string_latin1`, `node_api_create_external_string_utf16` | Requires external string lifetime/accounting work |
-| later | 10 | `node_api_create_property_key_latin1`, `node_api_create_property_key_utf8`, `node_api_create_property_key_utf16` | Version-10 fast-path aliases |
+| v1 | 9 | `node_api_symbol_for`, `node_api_create_syntax_error`, `node_api_throw_syntax_error` | Global `Symbol.for` registry; `code` is installed when supplied |
+| v1 | 10 | `node_api_create_external_string_latin1`, `node_api_create_external_string_utf16` | Copied into a Perry string: `copied` is `true` and the finalizer runs before the call returns, the same path Node takes when V8 cannot adopt the storage |
+| v1 | 10 | `node_api_create_property_key_latin1`, `node_api_create_property_key_utf8`, `node_api_create_property_key_utf16` | Ordinary strings; Perry has no separate internalized form |
 | later | experimental | `node_api_post_finalizer` | Not part of the advertised stable ABI |
 | later | experimental | `node_api_create_object_with_properties`, `node_api_set_prototype` | Not part of the advertised stable ABI |
 | later | experimental | `node_api_create_sharedarraybuffer`, `node_api_create_external_sharedarraybuffer`, `node_api_is_sharedarraybuffer` | Not part of the advertised stable ABI |
@@ -589,8 +619,8 @@ resolution, but it deterministically reports the stated unsupported facility.
 | v1 | 4 | `napi_create_threadsafe_function`, `napi_get_threadsafe_function_context`, `napi_call_threadsafe_function` | Event-pump-backed TSFN |
 | v1 | 4 | `napi_acquire_threadsafe_function`, `napi_release_threadsafe_function`, `napi_unref_threadsafe_function`, `napi_ref_threadsafe_function` | Thread count and event-loop keepalive |
 | v1 | 8 | `napi_add_async_cleanup_hook`, `napi_remove_async_cleanup_hook` | Shutdown waits for completion |
-| later | 9 | `node_api_get_module_file_name` | Environment already records the future value |
-| later | 10 | `node_api_create_buffer_from_arraybuffer` | Advertise with version 10 |
+| v1 | 9 | `node_api_get_module_file_name` | `file://` URL of the attributed module's sidecar path |
+| v1 | 10 | `node_api_create_buffer_from_arraybuffer` | Buffer view sharing the ArrayBuffer's storage; out-of-range windows throw `ERR_OUT_OF_RANGE` |
 
 The addon-side initializer exports
 `node_api_module_get_api_version_v1` and `napi_register_module_v1`; these are

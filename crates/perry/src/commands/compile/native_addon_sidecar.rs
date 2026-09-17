@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use super::{host_target_triple, rust_target_triple, CompilationContext, NativeAddonModule};
 
 pub(super) const NODE_API_POLICY_VERSION: u32 = 1;
-pub(super) const NODE_API_VERSION: u32 = 8;
+pub(super) const NODE_API_VERSION: u32 = 10;
 pub(super) const SHIPPING_MODEL: &str = "sidecar-v1";
 
 #[derive(Serialize)]

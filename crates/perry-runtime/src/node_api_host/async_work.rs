@@ -21,6 +21,7 @@ pub(crate) struct AsyncWorkInner {
     execute: usize,
     complete: usize,
     data: usize,
+    module: Option<u32>,
     state: AtomicU8,
     deleted: AtomicBool,
 }
@@ -92,6 +93,7 @@ pub unsafe extern "C" fn napi_create_async_work(
         execute: execute.unwrap() as usize,
         complete: complete.unwrap() as usize,
         data: data as usize,
+        module: active_module(env),
         state: AtomicU8::new(WORK_CREATED),
         deleted: AtomicBool::new(false),
     });
@@ -230,9 +232,9 @@ pub(crate) fn drain_async_completions() -> i32 {
         let opened = unsafe { napi_open_handle_scope(env, &mut scope) } == NapiStatus::Ok;
         let complete: unsafe extern "C" fn(NapiEnv, NapiStatus, *mut c_void) =
             unsafe { std::mem::transmute(work.complete) };
-        unsafe {
+        with_active_module(env, work.module, || unsafe {
             complete(env, status, work.data as *mut c_void);
-        }
+        });
         if opened {
             unsafe {
                 napi_close_handle_scope(env, scope);
@@ -241,6 +243,9 @@ pub(crate) fn drain_async_completions() -> i32 {
         work.state.store(WORK_COMPLETE, Ordering::Release);
         ACTIVE_WORK.fetch_sub(1, Ordering::AcqRel);
         ran = ran.saturating_add(1);
+        // Node completes async work with the uncaught-exception policy
+        // enforced for every module version.
+        settle_callback_exception(env, work.module, true);
     }
     ran
 }

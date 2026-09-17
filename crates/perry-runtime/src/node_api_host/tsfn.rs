@@ -42,6 +42,7 @@ pub(crate) struct ThreadsafeFunctionInner {
     finalize_callback: usize,
     context: usize,
     call_js: usize,
+    module: Option<u32>,
 }
 
 struct ThreadsafeFunctionToken {
@@ -138,6 +139,7 @@ pub unsafe extern "C" fn napi_create_threadsafe_function(
         finalize_callback: thread_finalize_cb.map_or(0, |callback| callback as usize),
         context: context as usize,
         call_js: call_js_cb.map_or(0, |callback| callback as usize),
+        module: active_module(env),
     });
     // Tokens are permanent tombstones. Their tiny allocation is intentionally
     // not reused, so a stale addon handle can never alias a later TSFN.
@@ -323,37 +325,40 @@ fn invoke_item(inner: &Arc<ThreadsafeFunctionInner>, env: NapiEnv, data: usize, 
             .and_then(|bits| add_handle(env, bits).ok())
             .unwrap_or(std::ptr::null_mut())
     };
-    if inner.call_js != 0 {
-        let callback: unsafe extern "C" fn(NapiEnv, NapiValue, *mut c_void, *mut c_void) =
-            unsafe { std::mem::transmute(inner.call_js) };
-        unsafe {
-            callback(
-                if aborted { std::ptr::null_mut() } else { env },
-                function,
-                inner.context as *mut c_void,
-                data as *mut c_void,
-            );
-        }
-    } else if !aborted && !function.is_null() {
-        let mut global = std::ptr::null_mut();
-        if unsafe { napi_get_global(env, &mut global) } == NapiStatus::Ok {
+    with_active_module(env, inner.module, || {
+        if inner.call_js != 0 {
+            let callback: unsafe extern "C" fn(NapiEnv, NapiValue, *mut c_void, *mut c_void) =
+                unsafe { std::mem::transmute(inner.call_js) };
             unsafe {
-                napi_call_function(
-                    env,
-                    global,
+                callback(
+                    if aborted { std::ptr::null_mut() } else { env },
                     function,
-                    0,
-                    std::ptr::null(),
-                    std::ptr::null_mut(),
+                    inner.context as *mut c_void,
+                    data as *mut c_void,
                 );
             }
+        } else if !aborted && !function.is_null() {
+            let mut global = std::ptr::null_mut();
+            if unsafe { napi_get_global(env, &mut global) } == NapiStatus::Ok {
+                unsafe {
+                    napi_call_function(
+                        env,
+                        global,
+                        function,
+                        0,
+                        std::ptr::null(),
+                        std::ptr::null_mut(),
+                    );
+                }
+            }
         }
-    }
+    });
     if opened {
         unsafe {
             napi_close_handle_scope(env, scope);
         }
     }
+    settle_callback_exception(env, inner.module, false);
 }
 
 fn maybe_finalize(handle: usize, inner: &Arc<ThreadsafeFunctionInner>, env: NapiEnv) -> bool {
@@ -368,13 +373,14 @@ fn maybe_finalize(handle: usize, inner: &Arc<ThreadsafeFunctionInner>, env: Napi
     if inner.finalize_callback != 0 {
         let callback: unsafe extern "C" fn(NapiEnv, *mut c_void, *mut c_void) =
             unsafe { std::mem::transmute(inner.finalize_callback) };
-        unsafe {
+        with_active_module(env, inner.module, || unsafe {
             callback(
                 env,
                 inner.finalize_data as *mut c_void,
                 inner.context as *mut c_void,
             );
-        }
+        });
+        settle_callback_exception(env, inner.module, false);
     }
     if let Ok(mut js) = inner.js.lock() {
         js.function_bits = None;

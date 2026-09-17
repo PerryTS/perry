@@ -17,6 +17,7 @@ mod functions;
 mod lifecycle;
 mod loader;
 mod metadata;
+mod modules;
 mod promises;
 mod properties;
 mod scopes;
@@ -35,6 +36,7 @@ pub use functions::*;
 pub use lifecycle::*;
 pub use loader::*;
 pub use metadata::*;
+pub use modules::*;
 pub use promises::*;
 pub use properties::*;
 pub use scopes::*;
@@ -55,7 +57,9 @@ pub type NapiThreadsafeFunction = *mut c_void;
 pub type NapiAsyncCleanupHookHandle = *mut c_void;
 
 pub const NAPI_AUTO_LENGTH: usize = usize::MAX;
-pub const NAPI_VERSION: u32 = 8;
+/// Highest Node-API version the host implements, and what `napi_get_version`
+/// reports: Node 26's `NODE_API_SUPPORTED_VERSION_MAX` (#10456).
+pub const NAPI_VERSION: u32 = 10;
 
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,6 +135,8 @@ pub(crate) struct ReferenceRecord {
 pub(crate) struct NativeCallbackRecord {
     pub callback: usize,
     pub data: usize,
+    /// The addon that created the function; see [`modules::ModuleRecord`].
+    pub module: Option<u32>,
 }
 
 pub(crate) struct CallbackInfoRecord {
@@ -180,6 +186,8 @@ pub(crate) struct Env {
     async_work_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
     tsfns: Vec<std::sync::Arc<ThreadsafeFunctionInner>>,
     loaded_addons: Vec<LoadedAddon>,
+    modules: Vec<ModuleRecord>,
+    active_module: Option<u32>,
     currently_loading_filename: Option<String>,
     instance_data: Option<InstanceDataRecord>,
     shutting_down: bool,
@@ -218,6 +226,8 @@ impl Env {
             async_work_lookup: crate::fast_hash::new_ptr_hash_map(),
             tsfns: Vec::new(),
             loaded_addons: Vec::new(),
+            modules: Vec::new(),
+            active_module: None,
             currently_loading_filename: None,
             instance_data: None,
             shutting_down: false,
@@ -563,3 +573,5 @@ pub(crate) fn reset_env_for_test() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod v10_tests;

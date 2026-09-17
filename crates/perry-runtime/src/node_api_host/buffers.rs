@@ -236,6 +236,54 @@ pub unsafe extern "C" fn napi_create_external_arraybuffer(
     write_pointer_handle(env, buffer.cast(), result)
 }
 
+/// A Buffer view over `byte_length` bytes of an ArrayBuffer, sharing its
+/// storage (Node-API 10). Status and exception behavior follow Node 26: a
+/// non-ArrayBuffer is `napi_invalid_arg`, and an out-of-range window throws
+/// `ERR_OUT_OF_RANGE` and returns that throw's status.
+#[no_mangle]
+pub unsafe extern "C" fn node_api_create_buffer_from_arraybuffer(
+    env: NapiEnv,
+    arraybuffer: NapiValue,
+    byte_offset: usize,
+    byte_length: usize,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    if pending_exception(env).is_some() {
+        return set_status(env, NapiStatus::PendingException, "an exception is pending");
+    }
+    if result.is_null() {
+        return set_status(env, NapiStatus::InvalidArg, "result must not be null");
+    }
+    let owner = match pointer_owner(env, arraybuffer) {
+        Ok(owner) if crate::buffer::is_array_buffer(owner) => owner,
+        _ => return set_status(env, NapiStatus::InvalidArg, "value must be an ArrayBuffer"),
+    };
+    let available = (*(owner as *const BufferHeader)).length as usize;
+    let window = byte_offset
+        .checked_add(byte_length)
+        .filter(|end| *end <= available)
+        .and_then(|_| {
+            Some((
+                i32::try_from(byte_offset).ok()?,
+                i32::try_from(byte_length).ok()?,
+            ))
+        });
+    let Some((offset, length)) = window else {
+        return super::values::napi_throw_range_error(
+            env,
+            c"ERR_OUT_OF_RANGE".as_ptr(),
+            c"The byte offset + length is out of range".as_ptr(),
+        );
+    };
+    // Nothing has allocated since the owner was read from its live handle.
+    let view = crate::buffer::js_buffer_from_arraybuffer_slice(
+        JSValue::pointer(owner as *const u8).bits() as i64,
+        offset,
+        length,
+    );
+    write_pointer_handle(env, view.cast(), result)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn napi_is_arraybuffer(
     env: NapiEnv,
