@@ -9,6 +9,7 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+mod default_export_binding;
 mod namespace;
 pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
@@ -18,6 +19,8 @@ mod typescript;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
+use default_export_binding::default_export_function_binding;
+pub(super) use default_export_binding::mark_exported_function_bodies;
 pub(crate) use namespace::lower_namespace_as_class;
 use native_default_import::{
     canonicalize_native_import_source, is_cjs_style_native_default_import,
@@ -1887,8 +1890,14 @@ pub(crate) fn lower_module_decl(
                         break;
                     }
                 }
+                // #10434: `export default F` of a declared function exports
+                // the binding `F` itself (the `export { F as default }` row),
+                // so importers share F's function object.
+                let local =
+                    default_export_function_binding(ctx, &export_default_expr.expr, func_id)
+                        .unwrap_or_else(|| "default".to_string());
                 module.exports.push(Export::Named {
-                    local: "default".to_string(),
+                    local,
                     exported: "default".to_string(),
                 });
             } else if let Expr::ClassRef(class_name) = &lowered {

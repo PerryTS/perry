@@ -1714,6 +1714,7 @@ pub fn lower_module_full_with_platform_globals(
         );
     }
 
+    module_decl::mark_exported_function_bodies(&mut module);
     module_decl::register_exported_local_variables(&ctx, &mut module);
 
     // Populate exported_native_instances by matching native_instances with exports
