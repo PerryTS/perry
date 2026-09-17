@@ -356,6 +356,18 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # Two bindings on one turnloop completion-sink slot is a correctness bug:
+      # every completion goes to whichever registered last, which reads the
+      # token's low bits as one of its OWN connection ids. Three pairs shipped
+      # that way — the P7 database lane and the P5 server lane numbered from
+      # two different ledgers — and reaching one needs a program linking both
+      # bindings (a fastify app using mysql2), so no test caught it. The
+      # runtime now refuses a duplicate registration; this makes the collision
+      # fail the build instead of quietly costing one binding its transport.
+      - name: turnloop subsystem slot collisions
+        if: ${{ !cancelled() }}
+        run: python3 scripts/subsystem_slots.py
+
       # turnloop migration (docs/turnloop/): Perry is moving off tokio, and the
       # only record of what is left used to be eight lane reports written at
       # eight different commits — which had already gone stale in both

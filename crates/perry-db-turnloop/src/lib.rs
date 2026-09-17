@@ -121,14 +121,30 @@ fn diag() -> bool {
 /// binding is a separately linked `staticlib` with its own sink function — they
 /// cannot share one slot even though they share this module.
 pub mod subsystem {
+    //! The database bindings' completion-sink slots.
+    //!
+    //! These are a contiguous band ABOVE the slots the server and client lanes
+    //! hardcode in their own crates (0 `perry-ext-net`, 1 `perry-ext-http`, 2
+    //! `perry-stdlib`'s turnloop HTTP client, 3 `perry-stdlib`'s SMTP, 4
+    //! `perry-ext-fastify`, 5 `perry-stdlib`'s framework server, 7 and 8
+    //! `perry-ext-ws`). They used to be 2/4/5/6, which collided with three of
+    //! those, because the P7 database lane and the P5 server lane numbered
+    //! from two different ledgers. A collision needs a program that links both
+    //! bindings — a fastify app using mysql2 — and `register_sink` used to
+    //! accept both and route every completion to whichever registered last.
+    //!
+    //! Keep this band contiguous and keep it here: it is the one authority for
+    //! the database slots, and `perry-runtime`'s `turnloop_net::sink` carries
+    //! the full map. The ceiling is `MAX_SUBSYSTEMS` (16).
+
     /// `perry-ext-pg`.
-    pub const PG: u8 = 2;
+    pub const PG: u8 = 9;
     /// `perry-ext-mysql2`.
-    pub const MYSQL: u8 = 4;
+    pub const MYSQL: u8 = 10;
     /// `perry-ext-ioredis`.
-    pub const REDIS: u8 = 5;
+    pub const REDIS: u8 = 11;
     /// `perry-ext-mongodb`.
-    pub const MONGODB: u8 = 6;
+    pub const MONGODB: u8 = 12;
 }
 
 /// Driver ids are handed out process-wide even though the tables are

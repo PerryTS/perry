@@ -575,3 +575,48 @@ fn listen_opts_put_each_argument_in_its_own_field() {
         "keep-alive is not wired on either transport; do not invent a default"
     );
 }
+
+/// A second binding that lands on an occupied slot must be REFUSED, not
+/// silently swapped in.
+///
+/// Until this check existed, `register_sink` stored and returned `true` to
+/// both. Both bindings then believed they were registered — `available()` was
+/// true for each — while every completion for that slot went to whichever
+/// registered last, which reads the token's low bits as one of its OWN
+/// connection ids. That is exactly what three colliding slot pairs did
+/// (`perry-ext-fastify` with `perry-ext-mysql2` on 4, and two more), reachable
+/// by any program linking both bindings.
+///
+/// Refusing makes `available()` false for the loser, so it keeps its fallback
+/// transport instead of corrupting the winner's table.
+#[test]
+fn a_second_sink_on_an_occupied_slot_is_refused_not_swapped_in() {
+    extern "C" fn other_sink(_completion: *const super::NetCompletion) {
+        unreachable!("the refused sink must never be routed to");
+    }
+    extern "C" fn other_alloc() -> i64 {
+        unreachable!("the refused allocator must never be called");
+    }
+
+    // A slot no other test uses, so this cannot race the shared fixture.
+    const SLOT: u8 = 13;
+    assert!(
+        super::register_sink(SLOT, test_sink, test_alloc_id),
+        "the first registration must succeed, or the rest is vacuous"
+    );
+    assert!(
+        !super::register_sink(SLOT, other_sink, other_alloc),
+        "a DIFFERENT sink on an occupied slot must be refused"
+    );
+    // Re-registering the SAME sink stays idempotent: that is the documented
+    // contract, and a binding whose module initialises twice relies on it.
+    assert!(
+        super::register_sink(SLOT, test_sink, test_alloc_id),
+        "re-registering the same sink must remain idempotent"
+    );
+    // Out of range is still refused, rather than writing past the array.
+    assert!(
+        !super::register_sink(super::MAX_SUBSYSTEMS as u8, test_sink, test_alloc_id),
+        "a slot at the ceiling must be refused"
+    );
+}

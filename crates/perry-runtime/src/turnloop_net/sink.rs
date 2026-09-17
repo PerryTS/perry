@@ -45,15 +45,17 @@ use super::NodeError;
 /// routing to one relaxed load, and `register_sink` refuses an out-of-range
 /// slot rather than letting a binding write past the end.
 ///
-/// **The slot map is not gated, and it is currently over-subscribed.** Three
-/// pairs collide today — `perry-stdlib`'s turnloop HTTP client with
-/// `perry-ext-pg` on 2, `perry-ext-fastify` with `perry-ext-mysql2` on 4, and
-/// `perry-stdlib`'s bundled framework server with `perry-ext-ioredis` on 5 —
-/// because the P7 database lane and the P5 server lane numbered their slots
-/// from two different ledgers. Each pair is only reachable in a program that
-/// links both bindings, which is why nothing has caught it. That is a separate
-/// fix (the numbering wants one authority and a test); this note exists so the
-/// next lane to take a slot does not read the list above as complete.
+/// The slot map was over-subscribed until the database ledger moved to its own
+/// band: the P7 database lane and the P5 server lane numbered from two
+/// different ledgers, so `perry-ext-pg` sat on 2 with `perry-stdlib`'s turnloop
+/// HTTP client, `perry-ext-mysql2` on 4 with `perry-ext-fastify`, and
+/// `perry-ext-ioredis` on 5 with `perry-stdlib`'s bundled framework server.
+/// Each pair needs a program linking both bindings to reach, which is why
+/// nothing caught it — and a fastify app that uses mysql2 is not an exotic
+/// shape. The database bindings now occupy 9..=12
+/// (`perry-db-turnloop::subsystem`, which is the one authority for that band),
+/// and [`register_sink`] refuses a slot already held by a *different* sink, so
+/// a future collision declines loudly instead of silently misrouting.
 pub const MAX_SUBSYSTEMS: usize = 16;
 
 /// A completion sink: called on the loop-owning thread, once per completion.
@@ -266,6 +268,20 @@ static ALLOCS: [AtomicPtr<()>; MAX_SUBSYSTEMS] =
 pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
     let slot = subsystem as usize;
     if slot >= MAX_SUBSYSTEMS {
+        return false;
+    }
+    // A slot already held by a DIFFERENT sink means two bindings were numbered
+    // the same, and the old behaviour — store and return true to both — is the
+    // worst available answer: each binding believes it is registered, so
+    // `available()` is true for both, and every completion goes to whichever
+    // registered last, which reads the token's low bits as one of ITS OWN
+    // connection ids. Refusing instead makes `available()` false for the
+    // loser, so it keeps its fallback transport and nothing is misrouted.
+    //
+    // Re-registering the same sink stays idempotent, which is the documented
+    // contract and what a binding whose module is initialised twice relies on.
+    let held = SINKS[slot].load(Ordering::Acquire);
+    if !held.is_null() && held != sink as *mut () {
         return false;
     }
     // Publish the allocator first: an accept completion needs it, and a sink
