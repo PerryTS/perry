@@ -2,6 +2,7 @@ use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Expr, Function, Param, Stmt};
 use std::collections::{HashMap, HashSet};
 
+use super::discarded_result::discard_inlined_returns;
 use super::*;
 
 pub fn stmt_contains_return(s: &Stmt) -> bool {
@@ -378,7 +379,13 @@ pub fn inline_calls_in_stmts(
 
         match &mut stmts[i] {
             Stmt::Expr(expr) => {
-                if let Some((mut inlined_stmts, _result_expr)) = try_inline_call(
+                // Statement position: the result is discarded. The spliced
+                // body must not keep a `return` — it would return from the
+                // CALLER (#10416), including from an `if` that is the callee's
+                // last statement. When `discard_inlined_returns` declines,
+                // the call stays and only calls nested in its arguments are
+                // inlined, spliced BEFORE the (kept) call statement.
+                let inlined = try_inline_call(
                     expr,
                     func_candidates,
                     method_candidates,
@@ -387,65 +394,10 @@ pub fn inline_calls_in_stmts(
                     next_local_id,
                     enclosing_class,
                     class_field_types,
-                ) {
-                    // When inlining into Stmt::Expr context (result discarded),
-                    // convert Stmt::Return(Some(expr)) to Stmt::Expr(expr) and
-                    // remove Stmt::Return(None). This prevents emitting a
-                    // `ret` terminator mid-block (e.g., inside a for loop body).
-                    // Only do this if returns are in safe positions (trailing).
-                    let has_nested_return = inlined_stmts
-                        .iter()
-                        .take(inlined_stmts.len().saturating_sub(1))
-                        .any(|s| {
-                            fn stmt_has_return(s: &Stmt) -> bool {
-                                match s {
-                                    Stmt::Return(_) => true,
-                                    Stmt::If {
-                                        then_branch,
-                                        else_branch,
-                                        ..
-                                    } => {
-                                        then_branch.iter().any(stmt_has_return)
-                                            || else_branch
-                                                .as_ref()
-                                                .is_some_and(|eb| eb.iter().any(stmt_has_return))
-                                    }
-                                    _ => false,
-                                }
-                            }
-                            stmt_has_return(s)
-                        });
-                    if has_nested_return {
-                        // Can't safely convert early returns; skip inlining
-                        let hoisted = inline_calls_in_expr(
-                            expr,
-                            func_candidates,
-                            method_candidates,
-                            local_types,
-                            exact_receiver_facts,
-                            next_local_id,
-                            enclosing_class,
-                            class_field_types,
-                        );
-                        if !hoisted.is_empty() {
-                            new_stmts = Some(hoisted);
-                        }
-                    } else {
-                        // Convert trailing return to expression (discard result)
-                        if let Some(last) = inlined_stmts.last_mut() {
-                            match last {
-                                Stmt::Return(Some(ret_expr)) => {
-                                    let e = std::mem::replace(ret_expr, Expr::Undefined);
-                                    *last = Stmt::Expr(e);
-                                }
-                                Stmt::Return(None) => {
-                                    inlined_stmts.pop();
-                                }
-                                _ => {}
-                            }
-                        }
-                        new_stmts = Some(inlined_stmts);
-                    }
+                )
+                .and_then(|(inlined_stmts, _result_expr)| discard_inlined_returns(inlined_stmts));
+                if inlined.is_some() {
+                    new_stmts = inlined;
                 } else {
                     let hoisted = inline_calls_in_expr(
                         expr,
@@ -1909,7 +1861,9 @@ pub fn try_inline_simple_call(
 
                         for stmt in &method_candidate.func.body {
                             match stmt {
-                                Stmt::Return(None) => {}
+                                // Anything after `return;` is dead: splicing
+                                // it would run it (#10416's sibling shape).
+                                Stmt::Return(None) => break,
                                 Stmt::Expr(e) => {
                                     let mut expr = e.clone();
                                     substitute_locals(&mut expr, &shared_param_map, next_local_id);
