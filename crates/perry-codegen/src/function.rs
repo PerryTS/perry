@@ -15,6 +15,9 @@ use crate::types::LlvmType;
 /// #7173 / #7174). A sibling file only because of the 2,000-line cap.
 mod precise_roots;
 
+/// #10463: the entry-block `alloca` invariant, enforced on the final stream.
+mod entry_allocas;
+
 use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints};
 
 pub struct LlFunction {
@@ -1111,12 +1114,19 @@ impl LlFunction {
                 usize::MAX
             };
             let mut idx = 0usize;
+            let mut in_entry_block = is_entry;
             for inst in blk.insts() {
                 if idx == boundary {
                     for line in &self.entry_post_init_setup {
                         self.text_item(line, rewrite_rets, &mut seq, sink)?;
                     }
                 }
+                entry_allocas::refuse_alloca_outside_entry_block(
+                    &self.name,
+                    &blk.label,
+                    inst,
+                    &mut in_entry_block,
+                );
                 self.inst_item(inst, rewrite_rets, &mut seq, sink)?;
                 idx += 1;
             }

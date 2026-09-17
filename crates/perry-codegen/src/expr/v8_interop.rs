@@ -103,7 +103,6 @@ pub(crate) fn emit_v8_export_call(
 
     let argc = lowered_args.len();
     let alloca_count = if argc == 0 { 1 } else { argc };
-    let blk = ctx.block();
     let argc_lit = format!("{}", argc);
     let spec_ptr = format!("@{}", spec_global);
     let name_ptr = format!("@{}", name_global);
@@ -112,12 +111,10 @@ pub(crate) fn emit_v8_export_call(
 
     // Stack-allocate the args buffer (zero-len → still need a pointer; an
     // `alloca [1 x double]` is well-formed in LLVM and never dereferenced
-    // because argc=0 in that branch of the runtime).
-    let args_slot = blk.fresh_reg();
-    blk.emit_raw(format!(
-        "{} = alloca [{} x double], align 8",
-        args_slot, alloca_count
-    ));
+    // because argc=0 in that branch of the runtime). #10463: in the entry
+    // block, so a call inside a loop does not grow the stack per iteration.
+    let args_slot = ctx.func.alloca_entry_array(DOUBLE, alloca_count);
+    let blk = ctx.block();
     for (i, v) in lowered_args.iter().enumerate() {
         let slot = blk.fresh_reg();
         blk.emit_raw(format!(
@@ -207,7 +204,6 @@ pub(crate) fn emit_v8_member_method_call(
 
     let argc = lowered_args.len();
     let alloca_count = if argc == 0 { 1 } else { argc };
-    let blk = ctx.block();
     let argc_lit = format!("{}", argc);
     let spec_ptr = format!("@{}", spec_global);
     let member_ptr = format!("@{}", member_global);
@@ -216,11 +212,9 @@ pub(crate) fn emit_v8_member_method_call(
     let member_len_lit = format!("{}", member_bytes);
     let method_len_lit = format!("{}", method_bytes);
 
-    let args_slot = blk.fresh_reg();
-    blk.emit_raw(format!(
-        "{} = alloca [{} x double], align 8",
-        args_slot, alloca_count
-    ));
+    // #10463: entry-block args buffer (see `emit_v8_export_call`).
+    let args_slot = ctx.func.alloca_entry_array(DOUBLE, alloca_count);
+    let blk = ctx.block();
     for (i, v) in lowered_args.iter().enumerate() {
         let slot = blk.fresh_reg();
         blk.emit_raw(format!(

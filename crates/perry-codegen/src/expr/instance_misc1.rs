@@ -69,7 +69,8 @@ use crate::types::{DOUBLE, I1, I32, I64, PTR};
 use super::{
     emit_root_nanbox_store_on_block, emit_shadow_slot_bind_for_local, emit_string_literal_global,
     emit_write_barrier, extract_array_of_object_shape, i32_bool_to_nanbox, lower_array_literal,
-    lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx,
+    lower_expr, lower_js_args_array, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
+    unbox_to_i64, FnCtx,
 };
 
 /// Reserved runtime class id for a built-in constructor usable as a class
@@ -1425,10 +1426,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let item_vals: Vec<String> = vals[items_at..].to_vec();
 
+                // Scratch out-parameter slot receiving the modified-array
+                // handle from js_array_splice. #10463: an entry-block alloca —
+                // `blk.alloca` in the current block grew the stack on every
+                // loop iteration, as did the item buffer below.
+                let out_slot = ctx.func.alloca_entry(I64);
                 let blk = ctx.block();
-                // Scratch out-parameter slot — used only in this block to
-                // receive the modified-array handle from js_array_splice.
-                let out_slot = blk.alloca(I64);
                 blk.store(I64, "0", &out_slot);
                 let arr_handle = unbox_to_i64(blk, &arr_box);
                 // ToIntegerOrInfinity via the clamping helper: `fptosi` on
@@ -1439,25 +1442,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let count_i32 =
                     blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
 
-                let (items_ptr, items_count_str) = if item_vals.is_empty() {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    // Allocate a stack buffer of [N x double] for the
-                    // items, store each value, and pass the base pointer.
-                    let n = item_vals.len();
-                    let items_count_str = format!("{}", n);
-                    let buf_reg = blk.next_reg();
-                    blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                    for (i, val) in item_vals.iter().enumerate() {
-                        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                        blk.store(DOUBLE, val, &slot);
-                    }
-                    (buf_reg, items_count_str)
-                };
+                // A stack buffer of [N x double] holding the items (null/0
+                // when there are none).
+                let (items_ptr, items_count_str) = lower_js_args_array(ctx, &item_vals);
 
                 // Note: js_array_splice's return value is the DELETED
                 // array; the modified-in-place arr is written to *out_arr.
-                let deleted_handle = blk.call(
+                let deleted_handle = ctx.block().call(
                     I64,
                     "js_array_splice",
                     &[

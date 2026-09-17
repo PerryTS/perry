@@ -49,8 +49,8 @@ use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
-    emit_root_nanbox_store_on_block, emit_write_barrier, nanbox_pointer_inline,
-    nanbox_string_inline, unbox_to_i64, FnCtx,
+    emit_root_nanbox_store_on_block, emit_write_barrier, lower_js_args_array,
+    nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::rooting;
@@ -302,21 +302,12 @@ pub(crate) fn lower_array_method(
                 //
                 // The buffer stores are pure, so the group's re-read above them
                 // is the last thing that has to happen below a collection point.
+                let recv_handle = unbox_to_i64(ctx.block(), recv_box);
+                // No args: a null buffer + 0 count (concat() returns a copy).
+                // #10463: otherwise an entry-block buffer — allocated in the
+                // current block it grew the stack on every loop iteration.
+                let (buf_reg, count_str) = lower_js_args_array(ctx, &arg_vals);
                 let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                let n = arg_vals.len();
-                let (buf_reg, count_str) = if n == 0 {
-                    // No args: pass a null buffer + 0 count (concat() returns a copy).
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let buf_reg = blk.next_reg();
-                    blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                    for (i, val) in arg_vals.iter().enumerate() {
-                        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                        blk.store(DOUBLE, val, &slot);
-                    }
-                    (buf_reg, format!("{}", n))
-                };
                 let result = blk.call(
                     I64,
                     "js_array_concat_variadic",
@@ -901,19 +892,8 @@ pub(crate) fn lower_array_method(
                 // items at the front in source order via the variadic helper.
                 // The (possibly reallocated) array forwards from its old pointer,
                 // so in-place mutation stays visible to the receiver slot.
-                let (buf_ptr, count_str) = if arg_vals.is_empty() {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let n = arg_vals.len();
-                    let blk = ctx.block();
-                    let buf_reg = blk.next_reg();
-                    blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                    for (i, val) in arg_vals.iter().enumerate() {
-                        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                        blk.store(DOUBLE, val, &slot);
-                    }
-                    (buf_reg, format!("{}", n))
-                };
+                // #10463: an entry-block buffer (null/0 for no arguments).
+                let (buf_ptr, count_str) = lower_js_args_array(ctx, &arg_vals);
                 let recv_handle = {
                     let blk = ctx.block();
                     unbox_to_i64(blk, recv_box)
@@ -968,8 +948,10 @@ pub(crate) fn lower_array_method(
                     "2147483647.0".to_string()
                 };
                 let item_vals: Vec<String> = arg_vals.iter().skip(2).cloned().collect();
+                // #10463: the out-parameter and the item buffer are entry-block
+                // allocas; `blk.alloca` here would grow the stack per iteration.
+                let out_slot = ctx.func.alloca_entry(I64);
                 let blk = ctx.block();
-                let out_slot = blk.alloca(I64);
                 blk.store(I64, "0", &out_slot);
                 let recv_handle = unbox_to_i64(blk, recv_box);
                 // ToIntegerOrInfinity via the clamping helper: `fptosi` on
@@ -981,19 +963,8 @@ pub(crate) fn lower_array_method(
                     blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &start_d)]);
                 let count_i32 =
                     blk.call(I32, "js_array_splice_delete_count", &[(DOUBLE, &count_d)]);
-                let (items_ptr, items_count_str) = if item_vals.is_empty() {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let n = item_vals.len();
-                    let buf_reg = blk.next_reg();
-                    blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                    for (i, val) in item_vals.iter().enumerate() {
-                        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                        blk.store(DOUBLE, val, &slot);
-                    }
-                    (buf_reg, format!("{}", n))
-                };
-                let deleted_handle = blk.call(
+                let (items_ptr, items_count_str) = lower_js_args_array(ctx, &item_vals);
+                let deleted_handle = ctx.block().call(
                     I64,
                     "js_array_splice",
                     &[

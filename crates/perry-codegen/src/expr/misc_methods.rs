@@ -14,9 +14,9 @@ use crate::type_analysis::{is_numeric_expr, is_provably_not_bigint};
 use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 
 use super::{
-    i32_bool_to_nanbox, lower_expr, lower_expr_native, lower_expr_value, lower_math_operand,
-    materialize_js_value, nanbox_pointer_inline, nanbox_string_inline, unbox_str_handle,
-    unbox_to_i64, FnCtx,
+    i32_bool_to_nanbox, lower_expr, lower_expr_native, lower_expr_value, lower_js_args_array,
+    lower_math_operand, materialize_js_value, nanbox_pointer_inline, nanbox_string_inline,
+    unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
 fn lowered_value_to_iter_result_f64(
@@ -189,20 +189,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             for a in args.iter() {
                 vals.push(lower_expr(ctx, a)?);
             }
-            let blk = ctx.block();
-            let (args_ptr, argc) = if vals.is_empty() {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let n = vals.len();
-                let buf_reg = blk.next_reg();
-                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                for (i, val) in vals.iter().enumerate() {
-                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, val, &slot);
-                }
-                (buf_reg, format!("{}", n))
-            };
-            Ok(blk.call(DOUBLE, "js_date_utc", &[(PTR, &args_ptr), (I32, &argc)]))
+            // #10463: an entry-block buffer, not one per loop iteration.
+            let (args_ptr, argc) = lower_js_args_array(ctx, &vals);
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_date_utc", &[(PTR, &args_ptr), (I32, &argc)]))
         }
 
         // -------- Object.defineProperty --------

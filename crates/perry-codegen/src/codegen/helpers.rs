@@ -1388,17 +1388,13 @@ pub(super) fn emit_namespace_populator(
     // per-entry loop simply doesn't execute.
     let n = entries.len();
     let buf_len = n.max(1);
-    let blk = ctx.block();
 
-    // Alloca the four parallel buffers.
-    let keys_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x ptr]", keys_buf, buf_len));
-    let lens_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x i32]", lens_buf, buf_len));
-    let vals_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, buf_len));
-    let live_buf = blk.next_reg();
-    blk.emit_raw(format!("{} = alloca [{} x i8]", live_buf, buf_len));
+    // Alloca the four parallel buffers — in the entry block, like every
+    // alloca (#10463).
+    let keys_buf = ctx.func.alloca_entry_array(PTR, buf_len);
+    let lens_buf = ctx.func.alloca_entry_array(I32, buf_len);
+    let vals_buf = ctx.func.alloca_entry_array(DOUBLE, buf_len);
+    let live_buf = ctx.func.alloca_entry_array(I8, buf_len);
 
     // #7210 (2): `vals_buf` is a plain stack alloca, not a shadow slot the
     // collector scans. Each entry's value is a NaN-boxed JSValue that can be

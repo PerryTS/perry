@@ -49,7 +49,9 @@ pub(super) fn lower_candidates(
         let bits = ctx.block().bitcast_double_to_i64(&file);
         let tag = ctx.block().lshr(I64, &bits, "48");
         let is_url = ctx.block().icmp_eq(I64, &tag, POINTER_TAG_TOP16_I64);
-        let normalized = ctx.block().alloca(DOUBLE);
+        // #10463: both join slots are entry-block allocas, so a `new Worker`
+        // inside a loop does not grow the stack per iteration.
+        let normalized = ctx.func.alloca_entry(DOUBLE);
         let url_block = ctx.new_block("worker_url");
         let string_block = ctx.new_block("worker_string");
         let dispatch = ctx.new_block("worker_dispatch");
@@ -75,7 +77,7 @@ pub(super) fn lower_candidates(
             .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &file)]);
         // Comparisons below do not allocate. Only the selected spawn can
         // collect, after the last use of `spec`; options remain rooted.
-        let result = ctx.block().alloca(DOUBLE);
+        let result = ctx.func.alloca_entry(DOUBLE);
         let join = ctx.new_block("worker_join");
         for (path, target) in &aliases {
             let key = ctx.strings.intern(path);

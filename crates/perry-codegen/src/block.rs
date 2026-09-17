@@ -693,6 +693,12 @@ impl LlBlock {
 
     // -------- Memory --------
 
+    /// An `alloca` in THIS block. Legal only while this is the entry block
+    /// (the parameter prologues): anywhere else the slot is a per-execution
+    /// stack bump, and `LlFunction::for_each_final_item` refuses it (#10463).
+    /// Lowering code allocates with `LlFunction::alloca_entry` /
+    /// `alloca_entry_array`, which place the slot in the entry block whatever
+    /// block is current.
     pub fn alloca(&mut self, ty: LlvmType) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Alloca { dst: r.clone(), ty });
