@@ -484,8 +484,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                             String::new()
                         };
                         format!(
-                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} {warnings}{link_child}return required;",
+                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} {warnings}{link_child}const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
                             path = target.to_string_lossy(),
+                            local = local,
                         )
                     })
             } else {
@@ -521,7 +522,21 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 )
             } else {
                 if needs_runtime_record {
-                    format!("        if (specifier === '{spec}') {{ {required_value} }}")
+                    // A repeat require must not re-enter the path registry.
+                    // The registry call exists so a DEFERRED target initializes
+                    // even with no default-export getter, but it is only needed
+                    // until the target is loaded; after that it was costing a
+                    // registry lookup, a `globalThis` write pair and a
+                    // try/finally on EVERY call — 3.4x on a hot require.
+                    //
+                    // The RECORD is cached rather than the exports, and only
+                    // once `loaded === true`, so a module that replaces
+                    // `module.exports` after evaluation still reads through
+                    // (matching Node), and a cyclic target mid-initialisation
+                    // keeps going through the registry until it completes.
+                    format!(
+                        "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined) return {local}__rec.exports; {required_value} }}"
+                    )
                 } else if link_child.is_empty() {
                     format!("        if (specifier === '{spec}') return {local};")
                 } else {
@@ -531,6 +546,17 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 }
             }
         })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // One memo slot per deferred specifier, declared in the factory so each
+    // module INSTANCE gets its own (they are per-module state, not global).
+    // A plain local is deliberate: an object keyed by specifier would put a
+    // property read on the hot require path, which is what this is removing.
+    let lazy_cache_decls = require_specs
+        .iter()
+        .zip(import_local_names.iter())
+        .filter(|(spec, _)| lazy_specs.contains(*spec))
+        .map(|(_, local)| format!("    let {local}__rec;"))
         .collect::<Vec<_>>()
         .join("\n");
     // Heuristic: is any `require('<spec>')` call site lexically inside a
@@ -1051,6 +1077,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // `test/reporters` are builtins only in their `node:` form, and the switch
     // accepted the bare spelling too. The runtime predicate agrees with Node
     // 26 on all 58 names in both spellings.
+{lazy_cache_decls}
     function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
