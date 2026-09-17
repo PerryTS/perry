@@ -85,3 +85,29 @@ Both tests need to OWN the agent's loop, and the route is a single slot per agen
 claimed for the life of the *claiming thread* — two libtest threads racing for it
 stall each other for the whole retry window. `OwnerLease` serializes them and
 gives the route back at the end of the test body rather than at thread exit.
+
+#### Group H, read against the tree but not moved
+
+`perry-stdlib -> tokio-rustls` (`node:tls`) stays, and its inventory note is
+corrected rather than acted on. The note said it "needs a turnloop-tls SERVER
+session (an accept-side counterpart to `perry-tls-session`) first — a transport
+job, not a policy one". That is half stale: an accept-side session over a
+turnloop handle exists and is in production use —
+`perry_ext_net::turnloop_tls_io::install_server_session` over `perry-ext-net`'s
+own `turnloop_tls::TlsSession::server`, which is what `https.createServer()` and
+`http2.createSecureServer()` ride on the turnloop path. What is missing is that
+it was never extracted into a shared crate the way `perry-tls-session` /
+`perry-tls-turnloop` extracted the client half, and perry-stdlib cannot depend on
+perry-ext-net.
+
+An extraction alone would still not move the edge, because the session is the
+second half of the job. All three surfaces that hold it run on **tokio sockets**,
+not turnloop handles: `tls.rs`'s `TlsAcceptor` server with its own
+`tokio::net::TcpListener` accept loop, `net/mod.rs`'s `TlsConnector` client, and
+`ws.rs`'s `wss://` connector — which already uses `turnloop-websocket` for its
+*codec* while keeping a tokio stream underneath, and says in its own comment why
+it builds a `tokio_rustls` connector instead of reaching for the sans-I/O one.
+`grep turnloop` over those ~3,700 lines returns eight hits and every one is a
+comment or the WS codec. The prerequisite is P1 (put the bundled net/tls/ws
+sockets on turnloop handles) plus P5 (install sessions above them) for this
+stack — the work perry-ext-net and perry-ext-http each had a whole phase for.
