@@ -1460,16 +1460,6 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
 }
 
 #[inline]
-pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
-    arr: *mut ArrayHeader,
-    value: f64,
-) -> bool {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
-        return false;
-    }
-    unsafe { array_numeric_raw_f64_push_inbounds_resolved(arr, value) }
-}
 
 /// [`array_numeric_raw_f64_push_inbounds`] for an already-resolved receiver.
 ///
