@@ -179,6 +179,71 @@ fixed:
 With those, `RUST_TEST_THREADS=1 cargo test --profile perry-dev --lib
 -p perry-runtime` is **3942 passed, 0 failed** on Windows.
 
+### Auto-optimize can reuse an archive its own stamp check will reject
+
+Not fixed here, but it cost this pass real time and it manufactures failures
+that look exactly like regressions.
+
+`target/perry-auto-<hash>/` archives are kept or rebuilt on
+`auto_optimized_source_fingerprint`, while the link then validates them against
+`perry-runtime`'s build stamp. The two answer the same question differently, so
+a cached archive can be judged FRESH, reused, and then fatally rejected:
+
+```
+Error: runtime library does not match this Perry compiler:
+  library build: v0.5.1581 (commit 7f4b3e750a05)
+  Perry build:   v0.5.1581 (commit 0aa9a0f8a263)
+```
+
+Seven gap fixtures reported COMPILE_FAIL in a full Windows run for exactly this
+reason — `3527_http_ctor_prototype`, `3662_node_argvalidation`,
+`constants_tail_3683plus`, and the whole `6316`/`6326`/`6336`/`6343`
+native-base-subclassing cluster. Re-run with `target/perry-auto-*` cleared,
+all of them pass (the 63xx slice is 21/21). Nothing was wrong with the
+compiler; the archive was one commit stale and the freshness check did not
+notice.
+
+Two aggravating properties. The stamp covers the WHOLE compiler source tree
+(`RUNTIME_BUILD_INPUTS` in `perry-runtime/build.rs` lists `crates/perry/src`,
+`crates/perry-codegen/src`, `Cargo.lock`, …), so editing any compiler source —
+a doc comment suffices — desynchronises every cached archive. And the error's
+advice ("Rebuild it with `cargo build --release -p perry-runtime-static`") does
+not fix it: the archive is rebuilt by auto-optimize, not by that command, and
+what actually has to be rebuilt is `perry.exe`.
+
+### The whole gap suite, on Windows, for the first time
+
+835 fixtures against Node 26.5.1: **784 pass / 38 parity-fail / 7 compile-fail /
+5 crash**, a 94.8% parity rate.
+
+None of those seven compile failures is real — re-run with `target/perry-auto-*`
+cleared, every one of them builds. Six then pass outright
+(`3527_http_ctor_prototype`, `3662_node_argvalidation`, and the
+`6316`/`6326`/`6336`/`6343` native-base cluster, whose slice is 21/21); the
+seventh, `constants_tail_3683plus`, builds and then diverges on output, so it
+is a parity gap rather than a build one. Corrected:
+**790 pass / 39 parity-fail / 0 compile-fail / 5 crash**.
+
+All five crashes are `test_gap_http2_wire_*` (`client_ping`, `goaway_recv`,
+`goaway_send`, `session_lifecycle`, `settings_ack`), every one a 10s timeout
+rather than a memory fault. #10385 designates the `http2` fixtures an
+expected-fail ratchet for work in progress and says a failure there is not a
+Windows finding, so they are reported rather than triaged.
+
+That leaves 39 parity failures as the genuine remaining gap list. They are NOT
+triaged into Windows-specific versus pre-existing here: that needs the same
+suite run on the merge base, which this pass did not do (see below).
+
+### Not done
+
+The two-arm A/B §1 asks for — this suite on `turnloop/integration` AND on its
+merge base, compared per test — was not run. It needs a second full build, and
+the box could not hold both trees' `target/` at once (a full ext-routed gap run
+transiently needs ~20 GB of auto-optimize scratch on top of the build). The
+single-arm number above is the more useful artefact for "does Windows work",
+but it cannot tell you which of the 38 the migration caused. Anyone picking
+this up should run the merge base next and diff per test, not by totals.
+
 ### Validation
 
 `test_gap_turnloop_*` on Windows against Node 26.5.1: **15/16 pass**, 0 crashes
