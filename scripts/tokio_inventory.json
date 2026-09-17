@@ -46,42 +46,6 @@
       "plan": "K"
     },
     {
-      "crate": "perry-ext-fastify",
-      "dep": "hyper",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 the `app.server.on('upgrade', \u2026)` WebSocket handshake only; the HTTP server itself is on turnloop",
-      "reached_when": "an app that registers an `app.server.on('upgrade', \u2026)` handler before `listen()`; every other fastify program is served on turnloop and links this only as dead weight",
-      "blocker": "perry-ext-ws. The accept loop moved to turnloop (`perry-http-server`, the shared HTTP/1.1 server core); what is left is the `app.server.on('upgrade', \u2026)` handshake, which ends in `perry_ext_ws::register_external_ws_stream` and needs an owned `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce. An app with upgrade handlers therefore declines the turnloop path AT LISTEN TIME and keeps the whole hyper loop \u2014 the same blocker and the same decline P5 recorded for perry-ext-http's attached WebSocketServer. Two things would close it: a descriptor handoff (turnloop has `Driver::detach` + `Detached::into_fd`; nothing exposes it through `perry_ffi::turnloop_net`), or perry-ext-ws on `turnloop-websocket`.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it, the fastify lane narrowed it to perry-ext-ws",
-      "plan": "F"
-    },
-    {
-      "crate": "perry-ext-fastify",
-      "dep": "hyper-util",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 the `app.server.on('upgrade', \u2026)` WebSocket handshake only; the HTTP server itself is on turnloop",
-      "reached_when": "an app that registers an `app.server.on('upgrade', \u2026)` handler before `listen()`; every other fastify program is served on turnloop and links this only as dead weight",
-      "blocker": "perry-ext-ws. The accept loop moved to turnloop (`perry-http-server`, the shared HTTP/1.1 server core); what is left is the `app.server.on('upgrade', \u2026)` handshake, which ends in `perry_ext_ws::register_external_ws_stream` and needs an owned `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce. An app with upgrade handlers therefore declines the turnloop path AT LISTEN TIME and keeps the whole hyper loop \u2014 the same blocker and the same decline P5 recorded for perry-ext-http's attached WebSocketServer. Two things would close it: a descriptor handoff (turnloop has `Driver::detach` + `Detached::into_fd`; nothing exposes it through `perry_ffi::turnloop_net`), or perry-ext-ws on `turnloop-websocket`.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it, the fastify lane narrowed it to perry-ext-ws",
-      "plan": "F"
-    },
-    {
-      "crate": "perry-ext-fastify",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import Fastify from 'fastify'` \u2014 its HTTP server accept loop, and the hyper protocol switch behind `@fastify/websocket` (whose WebSocket protocol is perry-ext-ws's now)",
-      "reached_when": "always, in any program that imports fastify",
-      "blocker": "the runtime those futures need, entered through `spawn_blocking_with_reactor`. P5 migrated perry-ext-http's server; this crate has no dependency edge to it, so sharing that core needs either a new crate for the sans-I/O server or a new edge.",
-      "issue": "unfiled \u2014 P5 named it, P8 confirms it",
-      "plan": "F"
-    },
-    {
       "crate": "perry-ext-http",
       "dep": "h2",
       "kind": "normal",
@@ -272,18 +236,6 @@
       "blocker": "`spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
       "issue": "#10339",
       "plan": "B"
-    },
-    {
-      "crate": "perry-ext-ws",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`import WebSocket from 'ws'` \u2014 the outbound client's connect and the standalone `WebSocketServer({ port })` accept loop. NOT the attached `WebSocketServer({ server })`, which runs on turnloop through perry-ext-http.",
-      "reached_when": "any `new WebSocket(url)` or `new WebSocketServer({ port })`. An attached `WebSocketServer` reaches neither and is on turnloop.",
-      "blocker": "the transport, and only the transport. The protocol left with `tokio-tungstenite`: the codec and the handshake are `turnloop_websocket`'s sans-I/O core (`codec.rs`, `handshake.rs`) and already drive both transports, so what remains is a turnloop connect (DNS + `tcp_connect` + a `turnloop_tls_io` client install for `wss://`) and a turnloop `tcp_listen`/`accept_start` for the standalone server. Both primitives exist. The tokio path then stays as the declining transport under the P1 coexistence rule, the way perry-ext-net's socket task did.",
-      "issue": "unfiled \u2014 turnloop WS lane",
-      "plan": "E"
     },
     {
       "crate": "perry-stdlib",

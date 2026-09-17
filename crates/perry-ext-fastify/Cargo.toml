@@ -3,7 +3,7 @@ name = "perry-ext-fastify"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for the npm `fastify` HTTP server framework — hyper-based router with Hono-style request/reply context. Uses only `perry-ffi`."
+description = "Native bindings for the npm `fastify` HTTP server framework — router with Hono-style request/reply context, served on turnloop through `perry-http-server`. No async runtime."
 
 [lints]
 workspace = true
@@ -13,36 +13,20 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-# #1113: cross-crate WS upgrade handoff. perry-ext-ws exposes
-# `register_external_ws_stream<S>(WebSocketStream<S>) -> i64`; we call
-# it from upgrade::handle_fastify_websocket_upgrade so the fastify
-# `app.server.on("upgrade", …)` path produces a ws_id usable through
-# the rest of the perry-ext-ws FFI surface. Mirrors the proven
-# perry-ext-http (#577 Phase 4) dependency.
+# #1113: cross-crate WS upgrade handoff. `perry_ext_ws::accept_http_upgrade`
+# answers an `app.server.on("upgrade", …)` handshake over bytes and installs
+# `turnloop_websocket`'s sans-I/O codec on the connection `perry-http-server`
+# already owns, producing a ws_id usable through the rest of the perry-ext-ws
+# FFI surface. Its predecessor took an owned `AsyncRead + AsyncWrite` stream,
+# which is why this crate used to carry a whole hyper accept loop for apps that
+# registered upgrade handlers.
 perry-ext-ws = { path = "../perry-ext-ws" }
-# turnloop: the shared HTTP/1.1 server core. See its lib.rs header for why the
-# core lives in a crate both this binding and perry-stdlib's bundled framework
-# server depend on, rather than this crate taking an edge to perry-ext-http.
+# turnloop: the shared HTTP/1.1 server core, and now the only transport. See its
+# lib.rs header for why the core lives in a crate both this binding and
+# perry-stdlib's bundled framework server depend on, rather than this crate
+# taking an edge to perry-ext-http.
 perry-http-server.workspace = true
-# Kept for exactly one case: an app with `app.server.on("upgrade", …)` handlers
-# declines the turnloop path at listen time, because the handshake ends in
-# `perry_ext_ws::register_external_ws_stream`, which needs an owned
-# `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce. Every
-# other fastify app is served on turnloop and touches none of this.
-hyper = { workspace = true, features = ["server", "http1"] }
-hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
-http-body-util.workspace = true
-bytes.workspace = true
-tokio = { workspace = true }
 serde_json.workspace = true
-
-# #cluster — SO_REUSEPORT bind for `cluster.fork()` workers (unix only),
-# mirroring perry-ext-http's cluster_bind. The
-# `perry_cluster_worker_listening` symbol it reports to resolves at final link
-# (defined in perry-runtime), like perry-ffi's runtime helpers — no Cargo dep on
-# perry-runtime is needed.
-[target.'cfg(unix)'.dependencies]
-socket2.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

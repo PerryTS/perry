@@ -1,36 +1,30 @@
-//! The outbound client connect, over the tokio transport.
+//! The outbound client's URL, and nothing else.
 //!
-//! This replaces `tokio_tungstenite::connect_async`, which did four things in
-//! one call: parse the URL, open the TCP connection, negotiate TLS for `wss://`,
-//! and run the handshake. Only the third is not already in the tree — and it is
-//! `perry-ext-net`'s, reached through [`perry_ext_net::connect_tls_client`] so
-//! this crate never names a TLS stack of its own. The handshake is
-//! [`crate::handshake`], which needs no stream.
+//! This is what is left of the module that used to *be* the client connect.
+//! `tokio_tungstenite::connect_async` did four things in one call — parse the
+//! URL, open the TCP connection, negotiate TLS for `wss://`, and run the
+//! handshake — and replacing it left four separate pieces, three of which are
+//! now somewhere better: the socket and the TLS session are
+//! [`crate::turnloop_io`]'s (a turnloop `tcp_connect` with a
+//! `perry_tls_session` layer above the same handle), and the handshake is
+//! [`crate::handshake`]'s, which needs no transport at all.
+//!
+//! What remains is the parse, which is pure and therefore testable on its own.
 
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-
-use crate::codec::{Codec, Role};
-use crate::handshake::ClientUpgrade;
-use crate::io::Transport;
-
-/// A connected, handshaken WebSocket and whatever frame bytes rode along with
-/// the `101`.
-pub(crate) struct Connected {
-    pub stream: Box<dyn Transport>,
-    pub codec: Codec,
-    pub leftover: Vec<u8>,
+/// Where a `ws://` / `wss://` URL points, in the shape a connect needs.
+#[derive(Debug)]
+pub(crate) struct Target {
+    pub(crate) secure: bool,
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    /// The `Host:` header value. `ws` sends the default port implicitly, like
+    /// a browser, so this is not always `host:port`.
+    pub(crate) authority: String,
+    /// The request target: path plus query.
+    pub(crate) path: String,
 }
 
-struct Target {
-    secure: bool,
-    host: String,
-    port: u16,
-    authority: String,
-    path: String,
-}
-
-fn parse(url: &str) -> Result<Target, String> {
+pub(crate) fn parse(url: &str) -> Result<Target, String> {
     let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
     let secure = match parsed.scheme() {
         "ws" | "http" => false,
@@ -70,74 +64,37 @@ fn parse(url: &str) -> Result<Target, String> {
     })
 }
 
-/// Connect, upgrade, and hand back a stream carrying frames.
-pub(crate) async fn connect(
-    url: &str,
-    protocols: Vec<String>,
-    headers: Vec<(String, String)>,
-) -> Result<Connected, String> {
-    let target = parse(url)?;
-    let tcp = tokio::net::TcpStream::connect((target.host.as_str(), target.port))
-        .await
-        .map_err(|e| format!("connect ECONNREFUSED: {e}"))?;
-    // Node's `ws` sets TCP_NODELAY on its sockets; a handshake that sat in
-    // Nagle's queue would add a round trip to every connect.
-    let _ = tcp.set_nodelay(true);
-    let mut stream: Box<dyn Transport> = if target.secure {
-        // `Box<dyn TlsClientStream>` is itself a `Transport` (tokio implements
-        // AsyncRead/AsyncWrite for Box), so the extra box costs one indirection
-        // and keeps every TLS type name inside perry-ext-net.
-        let tls = perry_ext_net::connect_tls_client(tcp, &target.host)
-            .await
-            .map_err(|e| format!("TLS handshake failed: {e}"))?;
-        Box::new(tls)
-    } else {
-        Box::new(tcp)
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let mut nonce = [0u8; 16];
-    // RFC 6455 §4.1: the nonce must be unpredictable, not merely unique.
-    secure_random(&mut nonce)?;
-    let (mut upgrade, request) =
-        ClientUpgrade::start(&target.authority, &target.path, nonce, protocols, &headers)
-            .map_err(|e| e.message)?;
-    stream
-        .write_all(&request)
-        .await
-        .map_err(|e| format!("write: {e}"))?;
-
-    let mut buffer = vec![0u8; 16 * 1024];
-    loop {
-        let n = stream
-            .read(&mut buffer)
-            .await
-            .map_err(|e| format!("read: {e}"))?;
-        if n == 0 {
-            return Err("socket hang up before the upgrade completed".to_string());
-        }
-        if let Some(upgraded) = upgrade.receive(&buffer[..n]).map_err(|e| e.message)? {
-            return Ok(Connected {
-                stream,
-                codec: Codec::new(Role::Client),
-                leftover: upgraded.leftover,
-            });
-        }
+    #[test]
+    fn a_default_port_is_implicit_in_the_authority() {
+        let target = parse("wss://example.test/socket").expect("a target");
+        assert!(target.secure);
+        assert_eq!(target.port, 443);
+        assert_eq!(target.authority, "example.test");
+        assert_eq!(target.path, "/socket");
     }
-}
 
-/// RFC 6455 §4.1's unpredictable nonce, from the same crypto provider the TLS
-/// path installs. `ensure_tls_crypto_provider` has already run by the time any
-/// connect reaches here, so the default is normally already set.
-fn secure_random(out: &mut [u8]) -> Result<(), String> {
-    use std::sync::OnceLock;
-    static PROVIDER: OnceLock<std::sync::Arc<rustls::crypto::CryptoProvider>> = OnceLock::new();
-    let provider = PROVIDER.get_or_init(|| {
-        rustls::crypto::CryptoProvider::get_default()
-            .cloned()
-            .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()))
-    });
-    provider
-        .secure_random
-        .fill(out)
-        .map_err(|_| "no secure random source".to_string())
+    #[test]
+    fn an_explicit_port_is_carried_into_the_host_header() {
+        let target = parse("ws://example.test:8080/a?b=c").expect("a target");
+        assert!(!target.secure);
+        assert_eq!(target.port, 8080);
+        assert_eq!(target.authority, "example.test:8080");
+        assert_eq!(target.path, "/a?b=c");
+    }
+
+    #[test]
+    fn an_empty_path_becomes_a_slash() {
+        let target = parse("ws://example.test").expect("a target");
+        assert_eq!(target.path, "/");
+    }
+
+    #[test]
+    fn a_protocol_ws_does_not_speak_is_refused_by_name() {
+        let error = parse("ftp://example.test").expect_err("a refusal");
+        assert!(error.contains("\"ftp:\""), "{error}");
+    }
 }

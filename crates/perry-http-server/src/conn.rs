@@ -13,7 +13,7 @@ use perry_ffi::turnloop_net as tl;
 use turnloop_http::http1;
 
 use crate::wire::{self, Framing};
-use crate::{Host, Request, Response};
+use crate::{Host, Request, Response, Upgraded};
 
 /// The request being decoded, before it becomes a [`Request`].
 struct Building {
@@ -76,6 +76,10 @@ pub(crate) struct Conn {
     /// A nested `decode` arrived while one was draining; drain again when the
     /// outer one finishes rather than recursing.
     decode_again: bool,
+    /// The host took this connection over through [`Host::on_upgrade`]. HTTP
+    /// decoding has stopped for good: every later byte and every terminal
+    /// completion goes to [`Host::on_upgraded`] instead.
+    upgraded: bool,
 }
 
 fn conns() -> &'static Mutex<HashMap<i64, Conn>> {
@@ -178,6 +182,7 @@ fn on_accept(listener_id: i64, conn_id: i64) {
             destroyed: false,
             in_decode: false,
             decode_again: false,
+            upgraded: false,
         },
     );
     host.on_connection(conn_id);
@@ -188,10 +193,24 @@ fn on_accept(listener_id: i64, conn_id: i64) {
 }
 
 fn on_data(id: i64, bytes: &[u8]) {
+    // An upgraded connection is no longer HTTP: no decoder, and no idle
+    // deadline to refresh (the takeover cancelled it and nothing re-arms it —
+    // a WebSocket that says nothing for an hour is not an idle keep-alive).
+    if upgraded(id) {
+        if let Some(host) = host_of(id) {
+            host.on_upgraded(id, Upgraded::Data(bytes));
+        }
+        return;
+    }
     // Every read refreshes the idle deadline; the connection is only "idle"
     // between a completed response and the next request byte.
     cancel_idle(id);
     feed(id, bytes);
+}
+
+/// Whether the host has taken this connection over.
+fn upgraded(id: i64) -> bool {
+    with_conn(id, |c| c.upgraded).unwrap_or(false)
 }
 
 fn feed(id: i64, bytes: &[u8]) {
@@ -260,10 +279,19 @@ fn drain(id: i64) {
             /// A decoded request, and whether the client is waiting for a
             /// `100 Continue` before it sends the body.
             Dispatch(Request, bool),
+            /// A `Connection: upgrade` request on a host that takes them, plus
+            /// whatever the peer pipelined behind the handshake.
+            Upgrade(Request, Vec<u8>),
             Failed,
         }
         let step = with_conn(id, |c| {
-            if c.destroyed || c.paused {
+            // `upgraded` is the third and permanent one: the host owns the
+            // connection, `input` was handed over whole, and the decoder must
+            // never see another byte of it. `on_data` already routes past
+            // `feed`, so this only closes the re-entrant path — `decode`'s
+            // outer loop runs once more when a nested `decode` arrived while
+            // the upgrade was being handed over.
+            if c.destroyed || c.paused || c.upgraded {
                 return Step::Idle;
             }
             let step = match c.decoder.receive(&c.input) {
@@ -302,9 +330,19 @@ fn drain(id: i64) {
                         Some(building) => {
                             c.requests += 1;
                             c.seq += 1;
-                            c.paused = true;
-                            let (request, send_continue) = finish_request(c, building);
-                            Step::Dispatch(request, send_continue)
+                            if building.upgrade && takes_upgrades(c) {
+                                // No `active`, no `paused`, no idle deadline:
+                                // this connection stops being an HTTP exchange
+                                // here. `leftover` is filled below, once the
+                                // head's own bytes have been drained off
+                                // `input`.
+                                c.upgraded = true;
+                                Step::Upgrade(upgrade_request(c, building), Vec::new())
+                            } else {
+                                c.paused = true;
+                                let (request, send_continue) = finish_request(c, building);
+                                Step::Dispatch(request, send_continue)
+                            }
                         }
                         None => Step::Again,
                     };
@@ -317,11 +355,30 @@ fn drain(id: i64) {
                 }
             }
             c.input.drain(..consumed.min(c.input.len()));
+            if let Step::Upgrade(_, leftover) = &mut outcome {
+                // Everything still buffered arrived in the same read as the
+                // handshake and belongs to the upgraded protocol. Handing it
+                // over here is what stops it being parsed as a second HTTP
+                // request — and dropping it would lose a message a client
+                // pipelined behind its `Sec-WebSocket-Key`.
+                *leftover = std::mem::take(&mut c.input);
+            }
             outcome
         });
         match step {
             None | Some(Step::Idle) => return,
             Some(Step::Again) => continue,
+            Some(Step::Upgrade(request, leftover)) => {
+                // Outside the borrow: the host writes its `101` with
+                // `write_raw`, which takes the same lock.
+                cancel_idle(id);
+                if let Some(host) = host_of(id) {
+                    host.on_upgrade(request, leftover);
+                } else {
+                    destroy(id);
+                }
+                return;
+            }
             Some(Step::Dispatch(request, send_continue)) => {
                 // Outside the connection borrow: `write_raw` takes the same
                 // lock, and `std::sync::Mutex` is not reentrant.
@@ -374,6 +431,34 @@ fn building_from(head: &http1::Head) -> Building {
         expects_continue,
         connection,
         upgrade,
+    }
+}
+
+/// Whether this connection's listener diverts upgrades to its host.
+fn takes_upgrades(c: &Conn) -> bool {
+    crate::with_listener(c.listener_id, |l| l.host.takes_upgrades()).unwrap_or(false)
+}
+
+/// The [`Request`] handed to [`Host::on_upgrade`].
+///
+/// Deliberately not [`finish_request`]: that installs an `Active` so the
+/// connection can be answered, and an upgraded connection is never answered
+/// again. `seq` is carried anyway so a host can key its own state by the same
+/// `(conn_id, seq)` pair every other request uses.
+fn upgrade_request(c: &Conn, building: Building) -> Request {
+    Request {
+        conn_id: c.id,
+        seq: c.seq,
+        method: building.method,
+        target: building.target,
+        version: building.version,
+        headers: building.headers,
+        body: building.body,
+        peer_address: c.peer_address.clone(),
+        peer_port: c.peer_port,
+        expects_continue: building.expects_continue,
+        upgrade: true,
+        request_number: c.requests,
     }
 }
 
@@ -701,6 +786,19 @@ pub fn destroy(conn_id: i64) {
     }
 }
 
+/// End the connection gracefully: everything already queued goes out, then FIN.
+///
+/// Public because a host that took a connection over through
+/// [`Host::on_upgrade`](crate::Host::on_upgrade) needs the distinction
+/// [`destroy`] does not make. A WebSocket closing handshake ends with a close
+/// frame written and *then* a shutdown, and turnloop's `close` cancels the
+/// connection's outstanding operations — including the write that was just
+/// queued — so ending with `destroy` makes the peer see a reset and report
+/// 1006 instead of the code it was just sent.
+pub fn finish(conn_id: i64) {
+    finish_and_close(conn_id);
+}
+
 /// End the write side and close once it has drained. turnloop orders a
 /// handle's writes ahead of its shutdown, so a completed shutdown means every
 /// queued byte left — closing outright would cancel them.
@@ -741,6 +839,15 @@ fn bad_request(conn_id: i64) {
 // ── Terminal completions ────────────────────────────────────────────────────
 
 fn on_eof(id: i64) {
+    if upgraded(id) {
+        // The upgraded protocol decides what a half-close means — a WebSocket
+        // close handshake ends in exactly one — so the core neither aborts a
+        // request (there is none) nor closes the handle here.
+        if let Some(host) = host_of(id) {
+            host.on_upgraded(id, Upgraded::Eof);
+        }
+        return;
+    }
     let state = with_conn(id, |c| {
         let already = std::mem::replace(&mut c.read_eof, true) || c.closing;
         (already, c.active.is_some(), c.building.is_some())
@@ -790,6 +897,11 @@ fn on_shutdown(id: i64) {
 }
 
 fn on_closed(id: i64) {
+    if upgraded(id) {
+        if let Some(host) = host_of(id) {
+            host.on_upgraded(id, Upgraded::Closed);
+        }
+    }
     // A peer that vanished mid-request reaches the terminal `Closed` without
     // ever passing through `destroy`.
     note_aborted(id);
@@ -810,8 +922,12 @@ fn on_closed(id: i64) {
 
 fn on_timer(id: i64) {
     // The idle keep-alive deadline. Node closes the connection; an exchange
-    // that started in the meantime cancelled the deadline already.
-    let idle = with_conn(id, |c| c.active.is_none() && c.building.is_none()).unwrap_or(false);
+    // that started in the meantime cancelled the deadline already, and an
+    // upgraded connection has no keep-alive deadline at all.
+    let idle = with_conn(id, |c| {
+        !c.upgraded && c.active.is_none() && c.building.is_none()
+    })
+    .unwrap_or(false);
     if idle {
         finish_and_close(id);
     }
@@ -825,6 +941,11 @@ fn on_error(id: i64, terminal: bool) {
             crate::close_listener(id);
         }
         return;
+    }
+    if upgraded(id) {
+        if let Some(host) = host_of(id) {
+            host.on_upgraded(id, Upgraded::Error("socket error"));
+        }
     }
     destroy(id);
 }

@@ -58,15 +58,18 @@
 //!   (its own stream handles, settings, ALPN and flow control) and is not part
 //!   of this core. Neither consumer here serves HTTP/2: fastify declares
 //!   hyper's `http2` feature but has only ever built an `http1::Builder`.
-//! * **A WebSocket upgrade handoff**, for the same reason as TLS and stated
-//!   once for both: no consumer takes it. An upgrade request is served as an
-//!   ordinary request, which is what Node does when no `'upgrade'` listener
-//!   exists (#4973), and [`Request::upgrade`] says which it was. A host that
-//!   wants the other behaviour needs somewhere to hand the socket *to*, and
-//!   the only WebSocket implementation in the tree (`perry-ext-ws`) needs an
-//!   owned `AsyncRead + AsyncWrite` stream a turnloop connection cannot
-//!   produce — P5 recorded the same blocker. The hook goes in when that is
-//!   solved, with a caller.
+//! * **HTTP/2** — see above. A protocol *upgrade*, on the other hand, is now
+//!   here: [`Host::takes_upgrades`] / [`Host::on_upgrade`] / [`Host::on_upgraded`]
+//!   hand the connection over. The hook was withheld while its only possible
+//!   caller could not use it — `perry-ext-ws` needed an owned
+//!   `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce — and
+//!   it went in with that caller, not before: `perry-ext-ws`'s standalone
+//!   `WebSocketServer({ port })` is a `Host` whose `on_upgrade` answers the
+//!   `101` and adopts the connection into `turnloop_websocket`'s sans-I/O
+//!   codec. A host that leaves [`Host::takes_upgrades`] false is unaffected:
+//!   an upgrade request is still served as an ordinary request, which is what
+//!   Node does when no `'upgrade'` listener exists (#4973), and
+//!   [`Request::upgrade`] still says which it was.
 //!
 //! # GC
 //!
@@ -87,8 +90,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use perry_ffi::turnloop_net as tl;
 
 pub use conn::{
-    connections_of, destroy, is_busy, respond, send_interim, stream_begin, stream_body, stream_end,
-    write_raw,
+    connections_of, destroy, finish, is_busy, respond, send_interim, stream_begin, stream_body,
+    stream_end, write_raw,
 };
 pub use wire::{align_headers, body_forbidden, encode_head, framing_for, Framing};
 
@@ -192,6 +195,58 @@ pub trait Host: Send + Sync + 'static {
     fn intercepts_continue(&self) -> bool {
         false
     }
+
+    /// Divert `Connection: upgrade` requests to [`Host::on_upgrade`] instead of
+    /// [`Host::on_request`].
+    ///
+    /// A listener-level decision, not a per-request one, because that is the
+    /// shape of the thing it models: Node diverts an upgrade only when the
+    /// server has an `'upgrade'` listener, and both consumers here answer the
+    /// same way for every upgrade on a given server. It is read once per
+    /// decoded upgrade request, the same way [`Host::intercepts_continue`] is
+    /// read once per `Expect: 100-continue`.
+    fn takes_upgrades(&self) -> bool {
+        false
+    }
+
+    /// An upgrade request on a host that asked for them.
+    ///
+    /// The core has already stopped decoding HTTP on `request.conn_id`: it
+    /// will not parse another request, arm another idle deadline or answer
+    /// anything on that connection. The host writes its own `101` (or its
+    /// refusal) with [`write_raw`], and from then on every byte, half-close,
+    /// error and terminal close arrives at [`Host::on_upgraded`].
+    ///
+    /// `leftover` is whatever followed the request head in the same read —
+    /// bytes the peer pipelined behind its handshake, which belong to the
+    /// upgraded protocol and would otherwise be parsed as a second HTTP
+    /// request.
+    ///
+    /// Like every other method here this runs inside the completion sink, so
+    /// it must not run JS.
+    fn on_upgrade(&self, _request: Request, _leftover: Vec<u8>) {}
+
+    /// A transport event on a connection this host took over.
+    fn on_upgraded(&self, _conn_id: i64, _event: Upgraded<'_>) {}
+}
+
+/// What happened on a connection a host took over through
+/// [`Host::on_upgrade`].
+///
+/// One enum rather than four trait methods: a host that takes upgrades must
+/// handle all four, and a default-empty method per event is four places for
+/// one to be forgotten silently.
+#[derive(Debug)]
+pub enum Upgraded<'a> {
+    /// Bytes arrived. Borrowed for the duration of the call only — they live
+    /// in turnloop's pooled read buffer.
+    Data(&'a [u8]),
+    /// The peer closed its write side.
+    Eof,
+    /// A transport error. The connection is being torn down.
+    Error(&'a str),
+    /// The connection's final completion; no event can name it again.
+    Closed,
 }
 
 /// A bound listener and the host it serves.
@@ -266,7 +321,10 @@ pub fn available(subsystem: u8) -> bool {
 /// ids come from a single global domain, so two consumers on two slots never
 /// see each other's completions.
 fn registered_subsystems(subsystem: u8) {
-    static REGISTERED: Mutex<[bool; 8]> = Mutex::new([false; 8]);
+    // Width must be at least the runtime's `MAX_SUBSYSTEMS`; a slot past the
+    // end is simply never remembered as registered, so it would re-register on
+    // every `listen()` rather than mis-route.
+    static REGISTERED: Mutex<[bool; 16]> = Mutex::new([false; 16]);
     let slot = subsystem as usize;
     let mut guard = REGISTERED.lock().unwrap_or_else(|e| e.into_inner());
     if slot >= guard.len() || guard[slot] {

@@ -31,10 +31,30 @@ use super::NodeError;
 /// P7's four database bindings (`perry-db-turnloop::subsystem`). A binding is a
 /// separately linked `staticlib` with its own sink function, so four database
 /// bindings really do need four slots even though they share one transport
-/// module. 7 is the remaining headroom. A fixed array keeps routing to one
-/// relaxed load, and `register_sink` refuses an out-of-range slot rather than
-/// letting a binding write past the end.
-pub const MAX_SUBSYSTEMS: usize = 8;
+/// module. 7 is `perry-ext-ws`'s outbound client and 8 the HTTP/1.1 listener
+/// its standalone `WebSocketServer({ port })` binds through
+/// `perry-http-server`; those are two slots and not one because they are two
+/// sink functions in the same binary — the crate's own, and the server core's.
+///
+/// The ceiling was 8, which slot 8 would have failed to register on: a
+/// `register_sink` that returns `false` leaves `available()` false, so the
+/// binding would have declined to a transport that no longer exists. Raising
+/// it costs sixteen relaxed loads' worth of static array and nothing else —
+/// it is **not** part of the ABI digest (`js_perry_net_abi_layout`), because a
+/// binding names a slot number, never this constant. A fixed array keeps
+/// routing to one relaxed load, and `register_sink` refuses an out-of-range
+/// slot rather than letting a binding write past the end.
+///
+/// **The slot map is not gated, and it is currently over-subscribed.** Three
+/// pairs collide today — `perry-stdlib`'s turnloop HTTP client with
+/// `perry-ext-pg` on 2, `perry-ext-fastify` with `perry-ext-mysql2` on 4, and
+/// `perry-stdlib`'s bundled framework server with `perry-ext-ioredis` on 5 —
+/// because the P7 database lane and the P5 server lane numbered their slots
+/// from two different ledgers. Each pair is only reachable in a program that
+/// links both bindings, which is why nothing has caught it. That is a separate
+/// fix (the numbering wants one authority and a test); this note exists so the
+/// next lane to take a slot does not read the list above as complete.
+pub const MAX_SUBSYSTEMS: usize = 16;
 
 /// A completion sink: called on the loop-owning thread, once per completion.
 pub type SinkFn = extern "C" fn(*const NetCompletion);

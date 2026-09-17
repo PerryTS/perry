@@ -269,7 +269,7 @@ pub struct HttpPendingRequest {
 /// Phase 4 — pending WebSocket upgrade ready to fire `'upgrade'`
 /// listeners. Sent by the hyper service fn after the underlying
 /// `hyper::upgrade::on` future resolves and the upgraded stream has
-/// been registered with `perry_ext_ws::register_external_ws_stream`.
+/// been adopted by `websocket_upgrade::adopt_upgraded_stream`.
 pub struct HttpPendingUpgrade {
     pub server_handle: i64,
     pub request_handle: i64,

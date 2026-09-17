@@ -13,7 +13,7 @@
 //!    stream to complete the WebSocket handshake server-side.
 //! 3. The resulting `WebSocketStream<Upgraded>` is registered in
 //!    perry-ext-ws's connection registry through
-//!    `perry_ext_ws::register_external_ws_stream`, yielding the
+//!    `websocket_upgrade::adopt_upgraded_stream`, yielding the
 //!    standard `ws_id` that the rest of perry-ext-ws's surface
 //!    consumes.
 //! 4. The `'upgrade'` listeners on the HTTP server are fired with

@@ -5953,17 +5953,11 @@ dependencies = [
 name = "perry-ext-fastify"
 version = "0.5.1582"
 dependencies = [
- "bytes",
- "http-body-util",
- "hyper",
- "hyper-util",
  "perry-ext-ws",
  "perry-ffi",
  "perry-http-server",
  "perry-runtime",
  "serde_json",
- "socket2",
- "tokio",
 ]
 
 [[package]]
@@ -6241,14 +6235,13 @@ dependencies = [
 name = "perry-ext-ws"
 version = "0.5.1582"
 dependencies = [
- "futures-util",
  "lazy_static",
- "perry-ext-net",
  "perry-ffi",
+ "perry-http-server",
  "perry-runtime",
- "rustls",
- "tokio",
+ "perry-tls-session",
  "turnloop-http",
+ "turnloop-tls",
  "turnloop-websocket",
  "url",
 ]

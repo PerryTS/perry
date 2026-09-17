@@ -72,13 +72,10 @@ pub struct FastifyApp {
     /// See the doc-comment on `js_fastify_app_server` for the full
     /// rationale — the short version is that `app.server` returns the
     /// FastifyApp handle pointer-tagged so `.on(…)` dispatches back
-    /// into this same struct's `upgrade_handlers` Vec. Today only
-    /// stores the callbacks — the hyper accept-loop in `server.rs`
-    /// doesn't yet route `Upgrade:` requests through
-    /// `hyper::upgrade::on(req)` and hand the raw socket + head
-    /// bytes back to TypeScript. Full bidirectional WebSocket
-    /// upgrade dispatch through perry-ext-ws's `noServer` mode is
-    /// the tracked #1113 follow-up.
+    /// into this same struct's `upgrade_handlers` Vec. Non-empty here is
+    /// also what makes `FastifyHost::takes_upgrades` true at listen
+    /// time, which is what diverts an `Upgrade:` request to
+    /// `FastifyHost::on_upgrade` instead of the router.
     pub upgrade_handlers: Vec<ClosurePtr>,
 }
 
@@ -218,8 +215,8 @@ impl FastifyApp {
     ) -> Option<(&Route, HashMap<String, String>)> {
         // Normalize the method the same way `add_route` does (it stores
         // `to_uppercase()`), so a lowercase/mixed-case caller hits both the index
-        // and the scan rather than silently missing. Requests off the hyper accept
-        // loop are already upper-case (the hot path), so only allocate when a
+        // and the scan rather than silently missing. Requests off the wire are
+        // already upper-case (the hot path), so only allocate when a
         // direct caller actually passes a lower-case letter.
         let method_upper: std::borrow::Cow<'_, str> =
             if method.bytes().any(|b| b.is_ascii_lowercase()) {
@@ -548,15 +545,15 @@ pub unsafe extern "C" fn js_fastify_register(app_handle: Handle, plugin: i64, op
 /// routes through the same FastifyApp method dispatch (the
 /// `"on"` arm in `js_fastify_app_on` below).
 ///
-/// **Today only stores the handler list** — the hyper accept loop in
-/// `server.rs` doesn't yet route `Upgrade:` requests through
-/// `hyper::upgrade::on(req)` and hand the raw socket + head bytes
-/// back to TypeScript, so registered upgrade handlers never fire.
-/// Full bidirectional WebSocket upgrade dispatch through
-/// `perry-ext-ws`'s `noServer` mode is tracked as the #1113
-/// follow-up. The diagnostic line emitted from `server.rs` at
-/// request-dispatch time tells the user when an Upgrade arrived
-/// despite the gap.
+/// Registering an `"upgrade"` handler here is what makes
+/// `FastifyHost::takes_upgrades` true, and therefore what diverts an
+/// `Upgrade:` request out of the router: `FastifyHost::on_upgrade`
+/// answers the handshake through `perry_ext_ws::accept_http_upgrade`
+/// and queues the `ws_id` for `js_fastify_process_pending` to fire
+/// these handlers with. That id is the same integer the standalone
+/// `WebSocketServer({port})` path produces, so
+/// `wss.handleUpgrade(req, socket, head, cb)` re-dispatches it through
+/// perry-ext-ws's `noServer` mode (#1113).
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_app_server(app_handle: Handle) -> Handle {
     app_handle
@@ -565,8 +562,8 @@ pub unsafe extern "C" fn js_fastify_app_server(app_handle: Handle) -> Handle {
 /// `app.server.on(event, cb)` — register an event handler. Only
 /// `"upgrade"` is meaningful today; other event names
 /// (`"connection"`, `"error"`, `"listening"`, …) are silently
-/// accepted so boot-time registrations don't crash, but the
-/// hyper accept loop doesn't currently fire them. See
+/// accepted so boot-time registrations don't crash, but nothing
+/// fires them. See
 /// `js_fastify_app_server` for the broader rationale.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_app_on(app_handle: Handle, event: i64, callback: i64) {

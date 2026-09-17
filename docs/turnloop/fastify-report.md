@@ -1,5 +1,15 @@
 # turnloop — `perry-ext-fastify` and the bundled framework server
 
+> **Partly superseded, 2026-09-17.** This report's group-F conclusion — that
+> fastify's four edges survive because `perry-ext-ws` needs an owned
+> `AsyncRead + AsyncWrite` stream — was correct when written and is no longer
+> true. The group E/F lane removed `perry-ext-ws`'s tokio transport, which
+> removed the blocker, and **group F's edges and group E's are all gone**:
+> `perry-ext-fastify` declares no hyper, hyper-util or tokio, and the hyper
+> accept loop is deleted. Every statement below about group F surviving, about
+> the listen-time decline, and about `perry-ext-ws` being untouched should be
+> read as history. See "The one declining case, and how it was closed".
+
 Branch `turnloop/fastify`, based on `turnloop/integration` at `0f0a4d6b6f`.
 Built and tested on the shared Linux box (EPYC 9354P) against the pinned gap
 oracle Node **26.5.1**. Nothing here was run on Windows, and nothing was
@@ -94,28 +104,43 @@ has **two consumers on the day it lands**, not one.
 | a `404` on an unmatched route | **turnloop**, answered in the sink | the hyper service fn answered it without a main-thread hop either |
 | HEAD shadowing a GET route | **turnloop** | the core frames a HEAD response body-forbidden from the *real* request method |
 | `{ reusePort: true }` and a `cluster.fork()` worker | **turnloop** | `turnloop_net::tcp_listen` takes `reuse_port`; fastify's cluster path is SO_REUSEPORT only, no fd passing |
-| a fastify app with `app.server.on('upgrade', …)` handlers | hyper | see below |
+| a fastify app with `app.server.on('upgrade', …)` handlers | **turnloop** (was hyper) | closed by the group E/F lane — see below |
 | the bundled `js_http_server_*` framework server | **turnloop** | — |
 
-### The one declining case, named precisely
+### The one declining case, and how it was closed
 
-`app.server.on('upgrade', …)` ends in
-`perry_ext_ws::register_external_ws_stream`, whose signature is
+> **Superseded 2026-09-17 by the group E/F lane.** The section below is kept
+> because the diagnosis was right and the fix followed it exactly; what changed
+> is the premise's second half.
+
+`app.server.on('upgrade', …)` used to end in
+`perry_ext_ws::register_external_ws_stream`, whose signature was
 `<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(WebSocketStream<S>)`. A
-turnloop connection cannot produce such a stream, and `perry-ext-ws` has no
-turnloop path at all — it is entirely `tokio` + `tokio-tungstenite`. This is
-the same blocker P5 recorded for `perry-ext-http`'s attached
-`WebSocketServer`, and it is decided the same way: at **listen** time, from
-whether the app has any upgrade handler, so the choice is a property of the
-listen call rather than of whichever request happens to arrive.
+turnloop connection cannot produce such a stream. That much still holds. What
+this report got wrong was "`perry-ext-ws` has no turnloop path at all": by the
+time it was read, the *protocol* had already moved to `turnloop_websocket`'s
+sans-I/O codec and only the transport was left on tokio.
 
-**So group F's four edges all survive**, and they survive for one reason
-rather than four. The path that would remove them is a descriptor handoff:
-`turnloop::Driver::detach` exists and is documented for exactly this, but it is
-not reachable through `perry_ffi::turnloop_net`, and exposing it is a new
-runtime primitive with fd-ownership semantics rather than a fastify change.
-That, or `perry-ext-ws` moving to `turnloop-websocket`, is the next step — see
-"What this did not do".
+So the fix was neither of the two the report proposed. Not a descriptor
+handoff — `turnloop::Driver::detach` is still not exposed through
+`perry_ffi::turnloop_net`, and did not need to be. Not "`perry-ext-ws` moving
+to `turnloop-websocket`" either — it was already there. It was the *transport*:
+
+* `perry-ext-ws` lost its tokio driver outright (a turnloop `tcp_connect` plus
+  a `perry_tls_session` layer for `wss://`, and `perry-http-server` for the
+  standalone `WebSocketServer({port})`);
+* `perry-http-server` grew the upgrade hook its own module header had recorded
+  as withheld "until that is solved, with a caller"
+  (`Host::takes_upgrades` / `on_upgrade` / `on_upgraded`);
+* `FastifyHost` implements it, answering the handshake with
+  `perry_ext_ws::accept_http_upgrade` on the connection the core already owns.
+
+**Group F's four edges are gone, and so is group E's.** `perry-ext-fastify`
+declares no `hyper`, `hyper-util`, `http-body-util`, `bytes`, `socket2` or
+`tokio`; the whole hyper accept loop, its service fn and its upgrade task are
+deleted. The listen-time decline is deleted with them: an agent with no
+`turnloop::Loop` now reports that through `listen()`'s `(err, address)`
+callback instead of falling back to a second transport.
 
 ## Group H: four of its six edges are not this lane's
 
