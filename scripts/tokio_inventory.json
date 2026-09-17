@@ -287,30 +287,6 @@
     },
     {
       "crate": "perry-stdlib",
-      "dep": "mongodb",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `mongodb` module.",
-      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or the ext crate's source being absent from disk",
-      "blocker": "as sqlx. Compiled out of every default build, so the cheapest removal in the tree is to DELETE these copies \u2014 which is a policy decision (they are the fallback when a wrapper cannot be built), not a transport one.",
-      "issue": "unfiled \u2014 P7 named them, P8 confirms them",
-      "plan": "H"
-    },
-    {
-      "crate": "perry-stdlib",
-      "dep": "redis",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `ioredis` module.",
-      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or the ext crate's source being absent from disk",
-      "blocker": "as sqlx. Compiled out of every default build, so the cheapest removal in the tree is to DELETE these copies \u2014 which is a policy decision (they are the fallback when a wrapper cannot be built), not a transport one.",
-      "issue": "unfiled \u2014 P7 named them, P8 confirms them",
-      "plan": "H"
-    },
-    {
-      "crate": "perry-stdlib",
       "dep": "reqwest",
       "kind": "normal",
       "optional": true,
@@ -323,25 +299,13 @@
     },
     {
       "crate": "perry-stdlib",
-      "dep": "sqlx",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. the bundled `pg` and `mysql2` modules.",
-      "reached_when": "`PERRY_DISABLE_WELL_KNOWN=1`, or the ext crate's source being absent from disk",
-      "blocker": "these are the only database copies that never needed a thread per call \u2014 they were already cooperative on the shared current-thread runtime. Compiled out of every default build, so the cheapest removal in the tree is to DELETE these copies \u2014 which is a policy decision (they are the fallback when a wrapper cannot be built), not a transport one.",
-      "issue": "unfiled \u2014 P7 named them, P8 confirms them",
-      "plan": "H"
-    },
-    {
-      "crate": "perry-stdlib",
       "dep": "tokio",
       "kind": "normal",
       "optional": true,
       "target": null,
       "surface": "every async stdlib surface: the `async-runtime` feature gates `common::async_bridge` and `perry_ffi_async`, i.e. the whole promise bridge and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI every perry-ext-* crate settles its promises through.",
       "reached_when": "always \u2014 `full` implies it, and 20 other features imply it individually",
-      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures (reqwest, hyper, tokio-tungstenite, sqlx, redis, mongodb, lettre). It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
+      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib those clients are now reqwest and tokio-rustls (the bundled sqlx / redis / mongodb copies were deleted in group H); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
       "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 upstream",
       "plan": "L"
     },
@@ -351,10 +315,10 @@
       "kind": "normal",
       "optional": true,
       "target": null,
-      "surface": "perry-stdlib is the bundled implementation. For every module below, the well-known flip compiles the bundled copy OUT and routes the import to the perry-ext-* wrapper \u2014 so these are reachable only under `PERRY_DISABLE_WELL_KNOWN=1`, when the wrapper's source is absent, or in a prebuilt release archive that ships `full`. `tls.connect()`, `socket.upgradeToTLS()` and the bundled TLS server.",
-      "reached_when": "the `tls-runtime` feature, which `external-net-tls` and `external-tls-server` also pull in \u2014 so this one survives the well-known flip",
-      "blocker": "the bundled TLS server and preflight were never a P5 subject; only perry-ext-net's client TLS and perry-ext-http's accepted-connection TLS moved.",
-      "issue": "unfiled \u2014 P8",
+      "surface": "`tls.createServer()` / `tls.connect()` / `socket.upgradeToTLS()` (the bundled `node:tls` module, ~3.7k lines across `src/tls.rs` + `src/tls/`), the bundled net client's TLS in `src/net/mod.rs`, and the `wss://` client connector in `src/ws.rs` (which declares its own `dep:tokio-rustls` under `bundled-ws`).",
+      "reached_when": "the `tls-runtime` feature, which `external-net-tls` and `external-tls-server` also pull in \u2014 so this one SURVIVES the well-known flip, and the flip actively turns it ON: optimized_libs/driver.rs inserts `external-tls-server` for every `node:http` / `node:https` / `node:http2` import (the ext-net TLS preflight hook `js_tls_client_preflight` is defined here) and `external-net-tls` whenever net/http own the transport. Plus `bundled-ws` for `wss://`.",
+      "blocker": "NOT a bundled-fallback copy \u2014 group H's \u201ccompiled out of every default build\u201d framing never applied to this edge, and its own `reached_when` above said so. There is no perry-ext-* wrapper that owns a TLS SERVER: perry-ext-net has the client, and P5 moved perry-ext-http's accepted-connection TLS to turnloop-tls, but `tls.createServer()` and the preflight provider are only here. Deleting it would delete `node:tls` server support and `wss://` under `bundled-ws`, not relocate them. It needs a turnloop-tls SERVER session (an accept-side counterpart to `perry-tls-session`) first \u2014 a transport job, not a policy one.",
+      "issue": "unfiled \u2014 P8; group H's other three edges were deleted, this one was not",
       "plan": "H"
     },
     {
@@ -435,7 +399,7 @@
     "perry-container-compose": 14,
     "perry-ext-ads": 5,
     "perry-ext-axios": 2,
-    "perry-ext-fastify": 8,
+    "perry-ext-fastify": 11,
     "perry-ext-http": 104,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
@@ -444,7 +408,7 @@
     "perry-ext-pg": 20,
     "perry-ext-ws": 26,
     "perry-ffi": 2,
-    "perry-stdlib": 114,
+    "perry-stdlib": 73,
     "perry-ui-gtk4": 6
   }
 }

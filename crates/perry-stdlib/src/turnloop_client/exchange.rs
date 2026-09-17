@@ -1472,6 +1472,7 @@ pub(super) fn decode_connect_status_for_test(
     decode_connect_status(http, input)
 }
 
+#[cfg(test)]
 pub(super) fn intern_syscall_for_test(syscall: Option<&str>) -> &'static str {
     intern_syscall(syscall)
 }

@@ -230,24 +230,21 @@ external-tls-server = [
 ]
 
 # Databases
-database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
-# `database-postgres` umbrella retained for backwards-compat;
-# v0.5.566's well-known flip toggles `bundled-pg` instead.
-database-postgres = ["bundled-pg"]
-bundled-pg = ["dep:sqlx", "async-runtime"]
-# `database-mysql` umbrella retained for backwards-compat;
-# v0.5.567's well-known flip toggles `bundled-mysql2` instead.
-database-mysql = ["bundled-mysql2"]
-bundled-mysql2 = ["dep:sqlx", "async-runtime"]
+#
+# turnloop P8 group H: the bundled `pg` / `mysql2` / `ioredis` / `mongodb`
+# copies are GONE. They were the pre-#466 in-stdlib implementations, kept as
+# the fallback the well-known flip declined to. Every `extern "C"` symbol they
+# defined is also defined — and strictly extended — by perry-ext-pg /
+# perry-ext-mysql2 / perry-ext-ioredis / perry-ext-mongodb, which is the only
+# path the flip has routed those imports down since v0.5.565-568. Keeping them
+# cost perry-stdlib a `sqlx` + `redis` + `mongodb` manifest edge, and 76 of the
+# 502 packages in this crate's own dependency closure (502 -> 426), for code no
+# default compile reached. Cargo.lock itself does NOT shrink: perry-ext-pg /
+# -mysql2 / -ioredis / -mongodb keep the same drivers. `database-sqlite` is
+# NOT in that set: rusqlite is not a tokio dependency and `dispatch_sqlite_stmt`
+# is deliberately retained through the flip (Refs #643).
+database = ["database-sqlite"]
 database-sqlite = ["dep:rusqlite"]
-# `database-redis` umbrella retained for backwards-compat;
-# v0.5.565's well-known flip toggles `bundled-ioredis` instead.
-database-redis = ["bundled-ioredis"]
-bundled-ioredis = ["dep:redis", "async-runtime"]
-# `database-mongodb` umbrella retained for backwards-compat;
-# v0.5.568's well-known flip toggles `bundled-mongodb` instead.
-database-mongodb = ["bundled-mongodb"]
-bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime"]
 
 # Crypto (sha256, md5, bcrypt, jwt, etc.)
 # Implies `async-runtime` because bcrypt/jwt/argon2 hashing offloads to
@@ -409,11 +406,6 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], defaul
 # WebSocket — the sans-I/O protocol core the `ws` module's codec is built on.
 # `turnloop-http` is declared with the other turnloop client engines above.
 turnloop-websocket = { workspace = true, optional = true }
-# Still optional for `bundled-mongodb`'s `TryStreamExt`; the `ws` module no
-# longer needs a futures `Sink`/`Stream` now that its codec drives tokio's
-# `AsyncRead`/`AsyncWrite` directly.
-futures-util = { version = "0.3", optional = true }
-
 # TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.
 tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
@@ -421,10 +413,10 @@ rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 
 # Database
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
-redis = { version = "1.2", features = ["tokio-comp", "connection-manager"], optional = true }
-mongodb = { version = "3.7", default-features = false, features = ["bson-3", "compat-3-3-0", "rustls-tls", "dns-resolver"], optional = true }
-bson = { version = "3.1", optional = true, features = ["serde"] }
+#
+# No sqlx / redis / mongodb / bson here any more (turnloop P8 group H): the
+# bundled copies that needed them were deleted, and the perry-ext-* wrappers
+# carry their own edges. rusqlite stays — it is not a tokio driver.
 rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
