@@ -366,3 +366,32 @@ pub(super) extern "C" fn proxy_revoke_trampoline(
     js_proxy_revoke(proxy);
     f64::from_bits(TAG_UNDEFINED)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    extern "C" fn weighted_six(
+        _: *const crate::closure::ClosureHeader,
+        a0: f64,
+        a1: f64,
+        a2: f64,
+        a3: f64,
+        a4: f64,
+        a5: f64,
+    ) -> f64 {
+        a0 + 10.0 * a1 + 100.0 * a2 + 1_000.0 * a3 + 10_000.0 * a4 + 100_000.0 * a5
+    }
+
+    /// #10425: `Reflect.apply` dispatched every list of four or more arguments
+    /// through `js_closure_call4`, so the body read whatever the fifth and sixth
+    /// argument registers held.
+    #[test]
+    fn reflect_apply_forwards_every_argument() {
+        let closure = crate::closure::js_closure_alloc(weighted_six as *const u8, 0);
+        let f = crate::value::js_nanbox_pointer(closure as i64);
+        let args = array_from_args(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let result = js_reflect_apply(f, f64::from_bits(TAG_UNDEFINED), args);
+        assert_eq!(result, 654_321.0);
+    }
+}

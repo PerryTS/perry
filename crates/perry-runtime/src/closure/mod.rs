@@ -12,6 +12,7 @@ mod dynamic_props;
 mod registry;
 mod unbox;
 mod v8_stubs;
+mod wide_call;
 
 #[cfg(test)]
 mod tests;
@@ -30,6 +31,7 @@ pub use alloc::{
 
 pub(crate) use registry::closure_registry_census;
 pub(crate) use registry::DispatchKind;
+pub(crate) use wide_call::{dispatch_wide_abi, MAX_DYNAMIC_CALL_WIDTH};
 
 /// `PERRY_GC_CENSUS`: every closure-keyed side table outside the registries.
 pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow> {

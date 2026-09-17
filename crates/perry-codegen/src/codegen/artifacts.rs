@@ -777,16 +777,17 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // dead-code elimination at link time will remove unused ones.
     for f in &hir.functions {
         let original_name = func_names.get(&f.id).cloned().unwrap();
-        // Wrapper signature: i64 closure_ptr + N doubles for args. Cap at 16 to
-        // match the `js_closure_call0..16` dispatch family (the closure-call ABI
-        // tops out at 16 positional args; a function with more must be reached
-        // via a rest-bundling path). Pre-fix this was capped at 5 with a stale
-        // "js_closure_call only goes up to 5 args" comment, so any function
-        // invoked as a closure value (object-literal method, callback, `apply`
-        // target) with 6+ params silently dropped every argument past the 5th
-        // — e.g. test262's `TemporalHelpers.assertDuration(d, y, mo, w, d, h, …)`
-        // (11 args) read `hours` onward as 0.
-        let arity = f.params.len().min(16);
+        // Wrapper signature: i64 closure_ptr + one double per declared param —
+        // the full ABI arity `user_fn_wrapper_arity` registers for dynamic
+        // dispatch. Any cap here silently drops arguments: at 5, test262's
+        // `TemporalHelpers.assertDuration(d, y, mo, w, d, h, …)` (11 args) read
+        // `hours` onward as 0; at 16 (#10420), every `apply`/`call`/spread or
+        // object-literal-method call of an 18-param function passed `0` for
+        // params 17 and 18, because the runtime dispatched the registered
+        // 18-slot signature into a 16-param wrapper. Calls wider than the
+        // `js_closure_call0..16` family reach the wrapper through
+        // `js_closure_call_array`.
+        let arity = f.params.len();
         let arg_names: Vec<String> = (0..arity).map(|i| format!("%a{}", i)).collect();
         let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
         for name in &arg_names {
@@ -839,7 +840,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 continue;
             }
 
-            let arity = f.params.len().min(16);
+            let arity = f.params.len();
             let mut params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
             params.extend((0..arity).map(|i| (DOUBLE, format!("%a{}", i))));
             let alias = llmod.define_function(&alias_wrap, DOUBLE, params);
@@ -1064,9 +1065,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 let target_wrap = format!("__perry_wrap_{}", target);
                 if !llmod.has_function(&raw_wrap) && emitted_aliases.insert(raw_wrap.clone()) {
                     if llmod.has_function(&target_wrap) {
-                        // Match the canonical wrapper's closure-call ABI (up to
-                        // 16 positional arguments), including renamed exports.
-                        let arity = function.map(|f| f.params.len().min(16)).unwrap_or(5);
+                        // Match the canonical wrapper's closure-call ABI (one
+                        // double per declared param), including renamed exports.
+                        let arity = function.map(|f| f.params.len()).unwrap_or(5);
                         let mut params = vec![(I64, "%this_closure".to_string())];
                         params.extend((0..arity).map(|i| (DOUBLE, format!("%a{}", i))));
                         let wf = llmod.define_function(&raw_wrap, DOUBLE, params.clone());
@@ -1234,7 +1235,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             if !emitted_wrappers.insert(wrap_name.clone()) {
                 continue;
             }
-            let arity = method.params.len().min(32);
+            let arity = method.params.len();
             let mut wrap_params: Vec<(LlvmType, String)> = vec![(I64, "%this_closure".to_string())];
             for i in 0..arity {
                 wrap_params.push((DOUBLE, format!("%a{}", i)));

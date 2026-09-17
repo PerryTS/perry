@@ -39,6 +39,10 @@ mod builtin;
 mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
+/// #10420: closure-value calls with more than 16 arguments compile and take
+/// the array path; function-value wrappers keep every declared param.
+#[cfg(test)]
+mod closure_call_arity_tests;
 mod console_promise;
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
@@ -255,6 +259,51 @@ pub(crate) fn emit_rooted_call(
     let result = ctx.block().call(crate::types::DOUBLE, fname, &arg_slices);
     group.release(ctx);
     result
+}
+
+/// Widest call the per-arity `js_closure_call{N}` runtime entry points take.
+pub(crate) const MAX_FIXED_CLOSURE_CALL_ARGS: usize = 16;
+
+/// Dispatch an unboxed closure handle over already-lowered arguments through
+/// the closure-call ABI.
+///
+/// Up to [`MAX_FIXED_CLOSURE_CALL_ARGS`] arguments use the per-arity
+/// `js_closure_call{N}` register entry points — the fast path, unchanged.
+/// Wider calls marshal the arguments into an entry-block `[N x double]` buffer
+/// and dispatch through the variadic `js_closure_call_array(closure, args_ptr,
+/// argc)`, which owns arbitrary-arity dispatch including rest bundling (#3527).
+/// #10420: every closure-value call site used to either reject a 17th argument
+/// at compile time or truncate the list to 16; they all route here now.
+///
+/// The buffer is NOT a GC root, so callers pass values that are already valid
+/// below their last collection point; nothing emitted between the stores and
+/// the call can collect.
+pub(crate) fn emit_closure_handle_call(
+    ctx: &mut FnCtx<'_>,
+    closure_handle: &str,
+    args: &[String],
+) -> String {
+    use crate::types::{DOUBLE, I64, PTR};
+    if args.len() <= MAX_FIXED_CLOSURE_CALL_ARGS {
+        let runtime_fn = format!("js_closure_call{}", args.len());
+        let mut call_args: Vec<(crate::types::LlvmType, &str)> = Vec::with_capacity(args.len() + 1);
+        call_args.push((I64, closure_handle));
+        call_args.extend(args.iter().map(|value| (DOUBLE, value.as_str())));
+        return ctx.block().call(DOUBLE, &runtime_fn, &call_args);
+    }
+    let n = args.len();
+    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+    let blk = ctx.block();
+    for (i, value) in args.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+        blk.store(DOUBLE, value, &slot);
+    }
+    let argc = n.to_string();
+    blk.call(
+        DOUBLE,
+        "js_closure_call_array",
+        &[(I64, closure_handle), (PTR, &buf), (I64, &argc)],
+    )
 }
 
 /// One array a rest/`arguments` call has to materialize from its argument

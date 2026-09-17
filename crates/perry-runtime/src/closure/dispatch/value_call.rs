@@ -655,10 +655,16 @@ pub unsafe extern "C" fn js_closure_call_array(
         // arg slice and dispatch through the strategy resolver so the
         // closure body is called with ALL its args (the old `_ =>
         // js_closure_call16(...)` silently dropped args 16.. — breaking
-        // qs's recursive `stringify`, which self-calls with 18 args). For
-        // a plain (Direct) closure with no registered rest/arity, dispatch
-        // through `dispatch_with_arity` with the provided count so the body
-        // is transmuted to its real N-arg signature.
+        // qs's recursive `stringify`, which self-calls with 18 args).
+        //
+        // #10420: ONE memoized strategy probe decides the route, as in
+        // `js_closure_callN` — the registry helpers this arm used to chain
+        // re-read the body record on every call. A body with a registered
+        // arity is called at exactly that width: padded when it declares
+        // more than `n`, and never handed slots it does not declare (so a
+        // `fn.apply(null, arr)` with thousands of elements costs the body's
+        // own width). An unregistered body is a runtime-provided callee with
+        // a handful of params; clamp it to the widest dynamic call.
         _ => {
             let mut full: Vec<f64> = Vec::with_capacity(n);
             for i in 0..n {
@@ -668,18 +674,20 @@ pub unsafe extern "C" fn js_closure_call_array(
             if func_ptr.is_null() {
                 throw_not_callable();
             }
-            if let Some(result) = dispatch_registered_call(closure, func_ptr, &full) {
-                return result;
+            match resolve_strategy(func_ptr).kind() {
+                DispatchKind::BoundMethod => dispatch_bound_method(closure, &full),
+                DispatchKind::BoundFunction => dispatch_bound_function(closure, &full),
+                DispatchKind::Rest(fixed_arity, synth) => {
+                    dispatch_rest_bundled(closure, func_ptr, &full, fixed_arity, synth)
+                }
+                DispatchKind::Arity(declared) => {
+                    dispatch_with_arity(closure, func_ptr, &full, declared)
+                }
+                DispatchKind::Direct => {
+                    let width = n.min(crate::closure::MAX_DYNAMIC_CALL_WIDTH) as u32;
+                    dispatch_with_arity(closure, func_ptr, &full, width)
+                }
             }
-            if let Some(result) =
-                dispatch_rest_or_declared_arity(closure, func_ptr, &full, n as u32)
-            {
-                return result;
-            }
-            // Direct closure: declared arity == provided count. Reuse the
-            // arity dispatcher (it transmutes to the concrete N-arg fn and
-            // forwards the slice unchanged when provided == declared).
-            dispatch_with_arity(closure, func_ptr, &full, n as u32)
         }
     }
 }
