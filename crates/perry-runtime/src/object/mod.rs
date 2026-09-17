@@ -310,7 +310,7 @@ pub(crate) use this_binding::{
 pub use this_binding::{
     js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
     js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve,
+    js_static_this_resolve, ImplicitThisScope,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;

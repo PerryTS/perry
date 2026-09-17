@@ -1189,29 +1189,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
-/// Bind `IMPLICIT_THIS` for the duration of one call and restore the previous
-/// value on the way out — including when the callee unwinds, which this
-/// `extern "C-unwind"` dispatch surface makes an ordinary outcome rather than an
-/// exotic one. A plain set/restore pair would leak the receiver into every later
-/// implicit-`this` read once a method throws. #9244.
-struct ImplicitThisScope {
-    previous: f64,
-}
-
-impl ImplicitThisScope {
-    fn bind(receiver: f64) -> Self {
-        Self {
-            previous: crate::object::js_implicit_this_set(receiver),
-        }
-    }
-}
-
-impl Drop for ImplicitThisScope {
-    fn drop(&mut self) {
-        crate::object::js_implicit_this_set(self.previous);
-    }
-}
-
 #[no_mangle]
 // Dynamic native calls may synchronously throw from the selected module
 // implementation. Keep this bridge unwind-capable so a generated caller's JS
@@ -1369,10 +1346,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     ) as usize);
                 if resolved {
                     let method_handle = root_scope.root_nanbox_f64(f64::from_bits(method.bits()));
-                    let receiver = object();
                     let bound = crate::closure::clone_closure_rebind_this(
                         method_handle.get_nanbox_f64().to_bits(),
-                        receiver,
+                        object(),
                     );
                     let args = refreshed_args();
                     // `clone_closure_rebind_this` only rewrites a closure that
@@ -1385,8 +1361,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     // saw no `this` ("called on null or undefined") and
                     // `Object(true).valueOf()` saw the wrong one ("called on
                     // incompatible receiver"). #9244. Restored on the way out,
-                    // including when the callee throws.
-                    let _this_scope = ImplicitThisScope::bind(receiver);
+                    // including when the callee throws — from a ROOT: the
+                    // displaced `this` is the caller's receiver and the callee
+                    // is user code that can move it (#10490). The receiver is
+                    // re-read here, after the clone above allocated.
+                    let _this_scope = crate::object::ImplicitThisScope::bind(&root_scope, object());
                     return crate::closure::js_native_call_value(
                         f64::from_bits(bound),
                         args.as_ptr(),

@@ -662,20 +662,6 @@ fn object_has_property_chain(obj_ptr: usize, key_val: f64) -> bool {
     false
 }
 
-/// RAII-ish guard binding the callback `this` (the optional `thisArg`) for the
-/// duration of a generic iteration, restoring the previous binding on drop.
-struct ThisGuard(f64);
-impl ThisGuard {
-    fn new(this_arg: f64) -> Self {
-        ThisGuard(crate::object::js_implicit_this_set(this_arg))
-    }
-}
-impl Drop for ThisGuard {
-    fn drop(&mut self) {
-        crate::object::js_implicit_this_set(self.0);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Callback iteration methods. The callback receives `(value, index, O)` with
 // `O` the *original* receiver value; `this_arg` binds the callback's `this`.
@@ -700,7 +686,7 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
         return undef();
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -726,7 +712,7 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
 #[no_mangle]
 pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -774,7 +760,7 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -816,7 +802,7 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
 #[no_mangle]
 pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -845,7 +831,7 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -877,7 +863,7 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -905,7 +891,7 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -931,7 +917,7 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)
@@ -961,7 +947,7 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
 #[no_mangle]
 pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let _g = ThisGuard::new(this_arg);
+    let _g = crate::object::ImplicitThisScope::bind(&scope, this_arg);
     let cb_h = scope.root_nanbox_f64(cb);
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // Spec order: LengthOfArrayLike(O) is read *before* the IsCallable(cb)

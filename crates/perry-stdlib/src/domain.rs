@@ -270,10 +270,14 @@ unsafe fn emit_domain_event(handle: Handle, event: &str, args: &[f64]) -> bool {
         return false;
     }
     let receiver = nanbox_handle(handle);
+    // #10490: the displaced `this` is the caller's receiver and every listener
+    // is user code that can move it; restore it from a root, taken once.
+    let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let previous_this = this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
     for listener in listeners {
-        let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
+        perry_runtime::object::js_implicit_this_set(receiver);
         let _ = perry_runtime::closure::js_native_call_value(listener, args.as_ptr(), args.len());
-        perry_runtime::object::js_implicit_this_set(previous_this);
+        perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     }
     true
 }

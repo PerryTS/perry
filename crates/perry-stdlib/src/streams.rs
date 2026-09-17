@@ -91,6 +91,14 @@ extern "C" {
     ) -> f64;
     #[link_name = "js_implicit_this_set"]
     fn provider_js_implicit_this_set(value: f64) -> f64;
+    #[link_name = "js_ffi_root_scope_enter"]
+    fn provider_js_ffi_root_scope_enter() -> usize;
+    #[link_name = "js_ffi_root_push_nanbox"]
+    fn provider_js_ffi_root_push_nanbox(bits: u64) -> usize;
+    #[link_name = "js_ffi_root_get_nanbox"]
+    fn provider_js_ffi_root_get_nanbox(index: usize) -> u64;
+    #[link_name = "js_ffi_root_scope_exit"]
+    fn provider_js_ffi_root_scope_exit(base: usize);
     #[link_name = "js_promise_new"]
     fn provider_js_promise_new() -> *mut Promise;
     #[link_name = "js_promise_all"]
@@ -223,6 +231,23 @@ fn js_native_call_value(function: f64, arguments: *const f64, argument_count: us
 
 fn js_implicit_this_set(value: f64) -> f64 {
     provider_call!(provider_js_implicit_this_set(value))
+}
+
+/// Call `f` with `IMPLICIT_THIS` bound to `receiver`, restoring the displaced
+/// value from a transient ROOT afterwards (#10490): it is the caller's
+/// receiver, and `f` runs user code that an evacuating minor can move it
+/// across. Uses the provider's root stack like every other runtime-owned
+/// operation in this file.
+fn with_implicit_this(receiver: f64, f: impl FnOnce() -> f64) -> f64 {
+    let base = provider_call!(provider_js_ffi_root_scope_enter());
+    let previous = js_implicit_this_set(receiver);
+    let slot = provider_call!(provider_js_ffi_root_push_nanbox(previous.to_bits()));
+    let result = f();
+    js_implicit_this_set(f64::from_bits(provider_call!(
+        provider_js_ffi_root_get_nanbox(slot)
+    )));
+    provider_call!(provider_js_ffi_root_scope_exit(base));
+    result
 }
 
 fn js_promise_new() -> *mut Promise {
@@ -1482,9 +1507,7 @@ unsafe fn call_symbol_async_iterator(value: f64) -> Option<f64> {
     if !is_callable_value(method) {
         return None;
     }
-    let prev_this = js_implicit_this_set(value);
-    let iterator = js_native_call_value(method, std::ptr::null(), 0);
-    js_implicit_this_set(prev_this);
+    let iterator = with_implicit_this(value, || js_native_call_value(method, std::ptr::null(), 0));
     if iterator.to_bits() == TAG_UNDEFINED {
         None
     } else {
@@ -1538,9 +1561,8 @@ unsafe fn call_iterator_next(iterator: f64) -> Option<f64> {
     let next_val = js_object_get_field_by_name(iter_obj, next_key);
     let next = f64::from_bits(next_val.bits());
     if is_callable_value(next) {
-        let prev_this = js_implicit_this_set(iterator);
-        let result = js_native_call_value(next, std::ptr::null(), 0);
-        js_implicit_this_set(prev_this);
+        let result =
+            with_implicit_this(iterator, || js_native_call_value(next, std::ptr::null(), 0));
         Some(result)
     } else {
         Some(perry_runtime::object::js_native_call_method(

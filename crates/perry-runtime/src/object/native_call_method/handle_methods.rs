@@ -1154,16 +1154,19 @@ pub(super) unsafe fn dispatch_handle(
                                 let prev_this_h = prev_this_scope.root_nanbox_u64(
                                     IMPLICIT_THIS.with(|c| c.replace(receiver_f64.to_bits())),
                                 );
+                                // #10490: the displaced accessor receiver rides
+                                // through the same getter call — root it too.
                                 let prev_override =
                                     super::super::field_get_set::accessor_receiver_override_begin(
                                         receiver_f64,
-                                    );
+                                    )
+                                    .map(|value| prev_this_scope.root_nanbox_f64(value));
                                 let field_val = js_object_get_field_by_name(
                                     proto_obj as *const _,
                                     method_key as *const crate::StringHeader,
                                 );
                                 super::super::field_get_set::accessor_receiver_override_end(
-                                    prev_override,
+                                    prev_override.map(|handle| handle.get_nanbox_f64()),
                                 );
                                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                                 if !field_val.is_undefined() && !field_val.is_null() {

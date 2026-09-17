@@ -969,10 +969,13 @@ unsafe fn call_emitter_listener(
             arr_handle.get_raw_mut_ptr::<ArrayHeader>() as i64,
         );
     }
-    let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
+    // #10490: root the displaced `this` across the listener (user code).
+    let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let previous_this =
+        this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(receiver));
     let result =
         perry_runtime::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
-    perry_runtime::object::js_implicit_this_set(previous_this);
+    perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     result
 }
 

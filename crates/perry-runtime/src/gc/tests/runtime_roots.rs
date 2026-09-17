@@ -8,6 +8,7 @@ mod fs_options_object;
 mod generator_attach_prototype;
 mod handle_stack;
 mod hook_dispatch_handles;
+mod implicit_this_scope;
 mod interned_string_caches;
 mod iter_result_keys;
 mod json_construction;

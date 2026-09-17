@@ -1777,13 +1777,16 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 /// steady-state allocation).
 unsafe fn emit_socket_no_arg(handle: i64, event: &str) {
     let receiver = f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF));
-    let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
+    // #10490: root the displaced `this` across the listeners (user code).
+    let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let previous_this =
+        this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(receiver));
     for callback in listeners_for(handle, event) {
         if callback != 0 {
             js_closure_call0(callback as *const ClosureHeader);
         }
     }
-    perry_runtime::object::js_implicit_this_set(previous_this);
+    perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
 }
 
 #[cfg(feature = "tls")]

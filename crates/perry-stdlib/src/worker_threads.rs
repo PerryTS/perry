@@ -722,9 +722,13 @@ fn call_callback1(callback_bits: u64, this_bits: u64, arg: f64) {
     if closure.is_null() {
         return;
     }
-    let prev_this = perry_runtime::object::js_implicit_this_set(f64::from_bits(this_bits));
+    // #10490: root the displaced `this` across the callback (user code).
+    let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let prev_this = this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(
+        f64::from_bits(this_bits),
+    ));
     perry_runtime::closure::js_closure_call1(closure, arg);
-    perry_runtime::object::js_implicit_this_set(prev_this);
+    perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 fn object_event_handler(target_bits: u64, name: &str) -> Option<u64> {
