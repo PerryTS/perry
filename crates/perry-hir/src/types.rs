@@ -146,6 +146,17 @@ impl Type {
         matches!(self, Type::String | Type::StringLiteral(_))
     }
 
+    /// Check if this type is a primitive whose `ToNumeric` can never be a
+    /// BigInt. One such operand makes `&` `|` `^` `<<` `>>` produce a Number
+    /// (a BigInt on the other side throws); `Any`, objects (whose
+    /// `valueOf` may return a BigInt) and unions are not proof (#10418).
+    pub fn is_non_bigint_primitive(&self) -> bool {
+        matches!(
+            self,
+            Type::Number | Type::Int32 | Type::Boolean | Type::String | Type::StringLiteral(_)
+        )
+    }
+
     /// Check if this type is definitely not represented as a JS number.
     ///
     /// `Any`/`Unknown`/type variables return false because they might still be

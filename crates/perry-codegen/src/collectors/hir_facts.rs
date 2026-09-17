@@ -509,6 +509,10 @@ pub(crate) fn collect_type_facts(
     // above all the counter in `for (let i = …) sum += buf[i]`, have to be
     // walked for or the hottest buffer shape loses its i32 representation.
     let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
+    // #10418: computed ahead of the integer-local proofs, which may treat a
+    // bitwise result as an int32 only when it cannot be a BigInt.
+    let not_bigint =
+        super::not_bigint_locals::NotBigIntFacts::collect(stmts, params, binding_types);
     let mut integer_locals = super::integer_locals::collect_integer_locals_with_seeds(
         stmts,
         flat_const_ids,
@@ -516,6 +520,7 @@ pub(crate) fn collect_type_facts(
         arg_dependent_clamp_fn_ids,
         &numeric_locals,
         spec_i32_params,
+        &not_bigint,
     );
     // Native-i32 residency for integer-valued locals whose init/writes include a
     // possibly-out-of-bounds INT typed-array element read or a numeric-array
@@ -533,6 +538,7 @@ pub(crate) fn collect_type_facts(
             binding_types,
             spec_ta_lens,
             spec_number_array_params,
+            &not_bigint,
         );
         // `--opt-report` (#6952) / promotion census (#7106): the win column
         // for this analysis, recorded at the ONE site where a candidate
@@ -594,8 +600,7 @@ pub(crate) fn collect_type_facts(
     // feed the stronger fact into its downstream consumers explicitly. This
     // is a consequence of the range proof, not an additional assumption.
     integer_locals.extend(loop_bounded_i32_locals.iter().copied());
-    let not_bigint_locals =
-        super::not_bigint_locals::collect_not_bigint_locals(stmts, params, binding_types);
+    let not_bigint_locals = not_bigint.into_locals();
     // #8105: locals that hold a JS Number by construction. Computed here, not
     // inside the `Ptr<Shape>` pass, so the fact does not vanish under
     // `PERRY_PTR_SHAPE_LOCALS=0` — `is_numeric_expr` is not a repsel consumer.
@@ -2797,5 +2802,94 @@ mod tests {
             !ints.contains(&2),
             "`x++` over a disqualified local must not stay integer"
         );
+    }
+
+    /// #10418: `&` `|` `^` `<<` `>>` over two operands that may be BigInts
+    /// compute a BigInt, so their result must not make a local integer-valued
+    /// — the int32 slot read `const x = a & b` back as `0`. A literal operand,
+    /// a proven-Number local or an integer candidate (here a raw-i32 spec
+    /// parameter) still proves the Number result.
+    #[test]
+    fn bigint_capable_bitwise_init_is_not_an_integer_local() {
+        let any_param = |id: u32| perry_hir::Param {
+            id,
+            name: format!("p{id}"),
+            ty: Type::Any,
+            default: None,
+            decorators: vec![],
+            is_rest: false,
+            arguments_object: None,
+        };
+        let any_const = |id: u32, init: Expr| Stmt::Let {
+            id,
+            name: format!("v{id}"),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(init),
+        };
+        let bin = |op: BinaryOp, left: Expr, right: Expr| Expr::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        };
+        const A: u32 = 10;
+        const B: u32 = 11;
+        let params = [any_param(A), any_param(B)];
+        let stmts = vec![
+            // const x = a & b;
+            any_const(
+                1,
+                bin(BinaryOp::BitAnd, Expr::LocalGet(A), Expr::LocalGet(B)),
+            ),
+            // const y = a & 255;
+            any_const(
+                2,
+                bin(BinaryOp::BitAnd, Expr::LocalGet(A), Expr::Integer(255)),
+            ),
+            // const z = b << y;
+            any_const(3, bin(BinaryOp::Shl, Expr::LocalGet(B), Expr::LocalGet(2))),
+            // const w = x ^ b;
+            any_const(
+                4,
+                bin(BinaryOp::BitXor, Expr::LocalGet(1), Expr::LocalGet(B)),
+            ),
+        ];
+        let not_bigint = super::super::not_bigint_locals::NotBigIntFacts::collect(
+            &stmts,
+            &params,
+            &HashMap::new(),
+        );
+        let empty = HashSet::new();
+        let ints = super::super::integer_locals::collect_integer_locals_with_seeds(
+            &stmts,
+            &empty,
+            &empty,
+            &empty,
+            &empty,
+            &empty,
+            &not_bigint,
+        );
+        assert!(!ints.contains(&1), "`a & b` may be a BigInt: {ints:?}");
+        assert!(ints.contains(&2), "`a & 255` is a Number: {ints:?}");
+        assert!(
+            ints.contains(&3),
+            "`b << y` has a proven-Number operand: {ints:?}"
+        );
+        assert!(!ints.contains(&4), "`x ^ b` may be a BigInt: {ints:?}");
+
+        // A raw-i32 spec parameter is an integer candidate, so it proves the
+        // Number result of every bitwise operator it is an operand of.
+        let seeds: HashSet<u32> = [A].into_iter().collect();
+        let ints = super::super::integer_locals::collect_integer_locals_with_seeds(
+            &stmts,
+            &empty,
+            &empty,
+            &empty,
+            &empty,
+            &seeds,
+            &not_bigint,
+        );
+        assert!(ints.contains(&1), "an i32 operand proves `a & b`: {ints:?}");
+        assert!(ints.contains(&4), "`x ^ b` inherits `x`'s proof: {ints:?}");
     }
 }

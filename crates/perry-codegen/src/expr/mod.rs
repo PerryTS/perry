@@ -3008,6 +3008,8 @@ mod string_length;
 pub(crate) mod string_window;
 pub(crate) mod suffix_cursor;
 
+#[cfg(test)]
+mod bigint_bitwise_tests;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
 mod u8_buffer_read;

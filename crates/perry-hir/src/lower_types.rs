@@ -432,14 +432,19 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 }
 
                 // Bitwise operators preserve BigInt when either side is
-                // inferred as BigInt; otherwise they produce Number.
+                // inferred as BigInt. They produce a Number only when an
+                // operand is provably not a BigInt: `a & b` over two unknown
+                // operands is a BigInt for BigInt inputs (#10418 — typing it
+                // Number gave `const x = a & b` an int32 slot that read `0`).
                 BitAnd | BitOr | BitXor | LShift | RShift => {
                     let left = infer_type_from_expr(&bin.left, ctx);
                     let right = infer_type_from_expr(&bin.right, ctx);
                     if bigint_result_type_from_operand_types(&left, &right) {
                         Type::BigInt
-                    } else {
+                    } else if left.is_non_bigint_primitive() || right.is_non_bigint_primitive() {
                         Type::Number
+                    } else {
+                        Type::Any
                     }
                 }
                 ZeroFillRShift => Type::Number,
