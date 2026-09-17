@@ -495,3 +495,288 @@ entry:
         "inline asm lost its structural gc-leaf-function attribute:\n{printed}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #10545: a constant operand must mean what LLVM's own parser says it means
+// ---------------------------------------------------------------------------
+//
+// `types::constant` is where every operand token becomes an LLVM value, on the
+// typed-instruction path and the line path alike. A token it builds differently
+// from LLVM's assembler fails nothing: the module verifies, runs, and computes
+// with a different number — in split modules only, the reader's only default.
+// #10545 was exactly that: `i128` literals kept their low 64 bits, so BigInt
+// literals wider than 64 bits changed value. The tests below therefore compare
+// against LLVM's parse of the SAME text rather than against expectations
+// written down here.
+
+use crate::module::LlModule;
+use crate::types::{LlvmType, DOUBLE, F32, I1, I128, I16, I32, I64, I8, PTR, VOID};
+use inkwell::values::AnyValue;
+
+/// `(type, token)` for every constant operand form perry-codegen emits in a
+/// function body. Globals, `c"…"` byte strings and aggregate initializers are
+/// deliberately absent: they live in the module skeleton, which LLVM's own
+/// parser reads (`native_emit`), never this reader.
+fn emitted_constant_forms() -> Vec<(LlvmType, String)> {
+    let mut forms: Vec<(LlvmType, String)> = Vec::new();
+    macro_rules! push {
+        ($ty:expr, $toks:expr $(,)?) => {
+            forms.extend($toks.iter().map(|t: &&str| ($ty, t.to_string())))
+        };
+    }
+    push!(I1, &["true", "false", "0", "1"]);
+    // Narrow operands spelled past their signed range (`and i8 %f, 128`).
+    push!(I8, &["0", "127", "128", "255", "-1", "-128"]);
+    push!(I16, &["1024", "32767", "65535", "-32768"]);
+    push!(
+        I32,
+        &["16000000", "2147483647", "-2147483648", "4294967295", "-1"],
+    );
+    push!(
+        I64,
+        &[
+            "-1",
+            "9218868437227405312",
+            "9223372036854775807",
+            "-9223372036854775808",
+            "12345678901234567890",
+            "18446744073709551615",
+            "ptrtoint (ptr @constant_forms_global to i64)",
+            "undef",
+            "poison",
+        ],
+    );
+    // `NativeRep::SmallBigInt` spells its literal with `i128::to_string`.
+    for v in [
+        0i128,
+        -1,
+        64,
+        (1 << 64) - 1,
+        1 << 64,
+        -(1 << 64),
+        1 << 70,
+        -98_765_432_109_876_543_210_987_654_321,
+        i128::MAX,
+        i128::MIN,
+    ] {
+        forms.push((I128, v.to_string()));
+    }
+    // LLVM also accepts the unsigned spelling of a full-width word.
+    forms.push((I128, u128::MAX.to_string()));
+    // `nanbox::double_literal` is the emitter's only decimal spelling; cover
+    // each class it distinguishes (signed zero, non-finite hex, shortest
+    // round-trip digits, the longest expansions).
+    for v in [
+        0.0,
+        -0.0,
+        1.5,
+        -1.0,
+        0.1,
+        1e21,
+        1e300,
+        f64::MAX,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ] {
+        forms.push((DOUBLE, crate::nanbox::double_literal(v)));
+    }
+    // NaN-boxed tag words and raw bit patterns, including a signalling NaN.
+    push!(
+        DOUBLE,
+        &[
+            "0x7FFC000000000001",
+            "0x7FFD000000000000",
+            "0x7FFF000000000000",
+            "0xFFF8000000000000",
+            "0x7FF0000000000001",
+            "0x7FF4000000000000",
+        ],
+    );
+    push!(
+        F32,
+        &["1.5", "-0.0", "0x3FF8000000000000", "0x7FF0000000000000"]
+    );
+    push!(PTR, &["null", "@constant_forms_global", "undef"]);
+    push!(
+        "<2 x i64>",
+        &[
+            "<i64 207232172546, i64 0>",
+            "<i64 -1, i64 18446744073709551615>",
+            "zeroinitializer",
+        ],
+    );
+    push!(
+        "<4 x i32>",
+        &["<i32 0, i32 0, i32 0, i32 0>", "zeroinitializer", "poison"]
+    );
+    forms
+}
+
+/// One sink call per form: calls are never constant-folded by the C-API
+/// builder, so the printed operand is exactly the constant that was built.
+fn constant_forms_module() -> LlModule {
+    let forms = emitted_constant_forms();
+    let mut m = LlModule::new(crate::codegen::default_target_triple());
+    m.add_global("constant_forms_global", I64, "0");
+    for (i, (ty, _)) in forms.iter().enumerate() {
+        m.declare_function(&format!("constant_sink_{i}"), VOID, &[*ty]);
+    }
+    let f = m.define_function("constant_forms", VOID, vec![]);
+    let entry = f.create_block("entry");
+    for (i, (ty, tok)) in forms.iter().enumerate() {
+        entry.call_void(&format!("constant_sink_{i}"), &[(*ty, tok.as_str())]);
+    }
+    entry.ret_void();
+    m
+}
+
+fn print_function(module: &inkwell::module::Module<'_>, name: &str) -> String {
+    module
+        .get_function(name)
+        .unwrap_or_else(|| panic!("@{name} missing"))
+        .print_to_string()
+        .to_string()
+}
+
+fn assert_same_function_print(label: &str, llvm: &str, reader: &str) {
+    let diffs: Vec<String> = llvm
+        .lines()
+        .zip(reader.lines())
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| format!("  LLVM:   {}\n  reader: {}", a.trim(), b.trim()))
+        .collect();
+    assert!(
+        diffs.is_empty() && llvm.lines().count() == reader.lines().count(),
+        "{label} built constants that differ from LLVM's own parse of the same \
+         text:\n{}",
+        diffs.join("\n")
+    );
+}
+
+#[test]
+fn constant_operands_match_llvms_own_parse_on_typed_and_line_paths() {
+    let m = constant_forms_module();
+    let forms = emitted_constant_forms().len();
+    let function = m
+        .deduped_function_refs()
+        .into_iter()
+        .find(|f| f.name == "constant_forms")
+        .expect("fixture function");
+    let text = function.to_ir();
+    let header = text.lines().next().expect("define header");
+
+    // Reference: LLVM's assembler over the complete module text.
+    let llvm_ctx = Context::create();
+    let llvm_module = crate::inprocess::parse_ir_text(&llvm_ctx, &m.to_ir(), "forms_llvm")
+        .expect("LLVM parses the fixture");
+    let llvm = print_function(&llvm_module, "constant_forms");
+    assert_eq!(
+        llvm.matches("call void @constant_sink_").count(),
+        forms,
+        "fixture lost sink calls, so some forms would go uncompared:\n{llvm}"
+    );
+
+    // Typed path: `FnStream::item`, what split modules stream.
+    let typed_ctx = Context::create();
+    let typed_module = crate::inprocess::parse_ir_text(&typed_ctx, &m.skeleton_ir(), "forms_typed")
+        .expect("skeleton parses");
+    let mut stream = FnStream::begin(&typed_ctx, &typed_module, header).expect("begin");
+    function
+        .for_each_final_item::<anyhow::Error>(&mut |item| stream.item(&item))
+        .unwrap_or_else(|e| panic!("typed construction: {e:#}"));
+    let (typed, _) = stream.finish().expect("finish");
+    assert!(typed >= forms, "only {typed} typed instructions were built");
+    typed_module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected typed module:\n{}", e.to_string()));
+    assert_same_function_print(
+        "typed path",
+        &llvm,
+        &print_function(&typed_module, "constant_forms"),
+    );
+
+    // Line path: what personality/stack-map functions stream.
+    let line_ctx = Context::create();
+    let line_module = crate::inprocess::parse_ir_text(&line_ctx, &m.skeleton_ir(), "forms_line")
+        .expect("skeleton parses");
+    predeclare_function_from_text(&line_ctx, &line_module, &text).expect("predeclare");
+    add_function_from_text(&line_ctx, &line_module, &text)
+        .unwrap_or_else(|e| panic!("line construction: {e:#}"));
+    line_module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected line module:\n{}", e.to_string()));
+    assert_same_function_print(
+        "line path",
+        &llvm,
+        &print_function(&line_module, "constant_forms"),
+    );
+}
+
+/// #10545 from the real emitter: a BigInt literal that fits `i128` lowers to
+/// `NativeRep::SmallBigInt` and is boxed by splitting it into two words
+/// (`trunc i128 C to i64`, `ashr i128 C, 64`). The C-API builder folds both at
+/// construction, so the built call's operands ARE the words the runtime gets.
+#[test]
+fn wide_bigint_literal_words_survive_native_construction() {
+    let literals: [i128; 3] = [
+        1 << 70,
+        -98_765_432_109_876_543_210_987_654_321,
+        i128::MIN + 1,
+    ];
+    let mut m = Module::new("wide_bigint_literals.ts");
+    m.init = literals
+        .iter()
+        .enumerate()
+        .map(|(i, v)| Stmt::Let {
+            id: 4100 + i as u32,
+            name: format!("b{i}"),
+            ty: Type::BigInt,
+            mutable: false,
+            init: Some(Expr::BigInt(v.to_string())),
+        })
+        .collect();
+    m.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        is_entry_module: true,
+        ..Default::default()
+    };
+    let ir = String::from_utf8(compile_module(&m, opts).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    for v in literals {
+        assert!(
+            ir.contains(&format!("i128 {v}")),
+            "fixture no longer lowers {v}n to an i128 operand, so this test \
+             would construct nothing relevant:\n{ir}"
+        );
+    }
+
+    let (skeleton, fns) = split_corpus(&ir);
+    let ctx = Context::create();
+    let module = crate::inprocess::parse_ir_text(&ctx, &skeleton, "wide_bigint_skel")
+        .expect("skeleton parses");
+    for f in &fns {
+        predeclare_function_from_text(&ctx, &module, f).expect("predeclare");
+    }
+    for f in &fns {
+        add_function_from_text(&ctx, &module, f).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    let printed = module.print_to_string().to_string();
+    for v in literals {
+        let words = format!(
+            "@js_bigint_from_i128_parts(i64 {}, i64 {})",
+            v as i64,
+            (v >> 64) as i64
+        );
+        assert!(
+            printed.contains(&words),
+            "{v}n was not boxed from its two's-complement words `{words}`:\n{printed}"
+        );
+    }
+}

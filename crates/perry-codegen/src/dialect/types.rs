@@ -9,7 +9,7 @@
 use anyhow::{anyhow, bail, Result};
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, VectorType};
+use inkwell::types::{BasicType, BasicTypeEnum, FunctionType, IntType, VectorType};
 use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 
@@ -296,14 +296,46 @@ pub(super) fn constant<'ctx>(
                     .into()
                 }
             }
-            BasicTypeEnum::IntType(t) => {
-                let v: i128 = tok.parse().map_err(|_| anyhow!("bad integer `{tok}`"))?;
-                t.const_int(v as u64, v < 0).into()
-            }
+            BasicTypeEnum::IntType(t) => return int_constant(t, tok),
             BasicTypeEnum::VectorType(t) => return vector_constant(ctx, module, t, tok),
             other => bail!("cannot materialize `{tok}` as {other:?}"),
         },
     })
+}
+
+/// A decimal integer literal at its operand's width, with the text parser's
+/// semantics: LLVM reads the literal at arbitrary precision, then sign-extends
+/// (negative) or zero-extends (non-negative) and truncates it to the width.
+///
+/// `IntType::const_int` takes ONE 64-bit word, and this used to hand it
+/// `v as u64` for every width — so an `i128` operand kept only its low word.
+/// `NativeRep::SmallBigInt` lowers every BigInt literal that fits in `i128`
+/// to exactly such an operand (`trunc i128 1180591620717411303424 to i64`,
+/// `ashr i128 …, 64`), and this reader is the default only for split modules:
+/// in a split module `2n ** 70n` stopped equalling the literal `2n ** 70n`,
+/// which read back as `0n`, while every single-unit build was right (#10545).
+/// Widths above 64 now build the full two's-complement words.
+fn int_constant<'ctx>(t: IntType<'ctx>, tok: &str) -> Result<BasicValueEnum<'ctx>> {
+    let bad = || anyhow!("bad integer `{tok}`");
+    // (low word, high word, negative). A non-negative literal may use the
+    // whole unsigned range of an `i128`, as LLVM's assembler accepts.
+    let (low, high, negative) = if tok.starts_with('-') {
+        let v: i128 = tok.parse().map_err(|_| bad())?;
+        (v as u64, (v >> 64) as u64, true)
+    } else {
+        let v: u128 = tok.parse().map_err(|_| bad())?;
+        (v as u64, (v >> 64) as u64, false)
+    };
+    let width = t.get_bit_width();
+    if width <= 64 {
+        return Ok(t.const_int(low, negative).into());
+    }
+    // `basic_type` names no integer wider than `i128`; a wider one would need
+    // sign extension past the two words parsed above, so refuse it loudly.
+    if width > 128 {
+        bail!("integer literal `{tok}` for i{width}: the reader builds at most i128");
+    }
+    Ok(t.const_int_arbitrary_precision(&[low, high]).into())
 }
 
 /// `<i64 207232172546, i64 0>` — an LLVM constant vector literal.
