@@ -1502,7 +1502,27 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds_resolved(
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
     // GC_STORE_AUDIT(POINTER_FREE): raw-f64 push stores numeric payloads only.
     std::ptr::write(elements_ptr.add(length as usize), number);
-    crate::gc::layout_note_slot(arr as usize, length as usize, number.to_bits());
+    // `layout_note_slot`'s MASK work is a provable no-op for a value that is a
+    // plain number, and `value_bits_to_number` just proved that above. The
+    // argument is the one already written out for the codegen-side elision on
+    // `array_store_needs_layout_note`'s object twin, and it holds in every
+    // layout state the receiver can be in: `GC_LAYOUT_UNKNOWN` returns at the
+    // note's own state check; an intact typed descriptor lets a non-pointer
+    // fall through the pointer-mask arm untouched; `GC_LAYOUT_POINTER_FREE`
+    // hits the note's `!pointer && POINTER_FREE` early return; and under
+    // `GC_LAYOUT_SIDE_MASK` the note could only ever CLEAR this slot's bit, so
+    // skipping it leaves at worst a stale set bit over a non-pointer word —
+    // which costs one extra visit and nothing else, because
+    // `gc::trace::mark_field_into_worklist` re-validates every slot word and
+    // rejects f64 bit patterns as out-of-range addresses.
+    //
+    // That leaves the #7480 element-shape invariant, which is NOT part of that
+    // argument and is kept — through the resolved-flags entry, so it reads the
+    // header this function already holds instead of classifying the parent a
+    // second time. Measured: `layout_note_slot` was 15.0% of a push/pop loop,
+    // 96 of its 109 samples from this one call.
+    let flags = array_object_flags_resolved(arr);
+    crate::array::note_element_store_resolved_flags(arr, length as usize, number.to_bits(), flags);
     (*arr).length = length + 1;
     true
 }
