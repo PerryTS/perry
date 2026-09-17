@@ -155,7 +155,24 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     if header.is_null() || (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
         return;
     }
+    let obj_type = (*header).obj_type;
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
+    // An explicit `Object.setPrototypeOf` value recorded in the residual
+    // registry is a child edge of its owner, whatever the owner's kind: marking
+    // retains it and a moving collection rewrites it after
+    // `gc/layout/transfer.rs` rekeyed the entry. It used to be emitted from the
+    // array and ordinary-object arms only, so a Map, Set, Error, Promise, Date,
+    // RegExp, Temporal cell, lazy JSON array or closure owner kept a stale
+    // prototype address once the prototype moved. First, ahead of the kind
+    // arms, so no arm's early return can skip it.
+    if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
+        && crate::object::prototype_chain::residual_prototype_owner_type(obj_type)
+    {
+        crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
+            user_ptr as usize,
+            |slot| visit(fixed_slot(slot)),
+        );
+    }
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {
             visit_gc_layout_slot_descriptors(header, &mut visit);
@@ -172,16 +189,6 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                     |slot| visit(fixed_slot(slot)),
                 );
             }
-            // #9304: unlike shaped objects, real arrays keep an explicit
-            // [[Prototype]] in the residual side table. Treat that value as
-            // the array's child edge so collection retains and rewrites a
-            // movable custom prototype after layout_transfer rekeys its owner.
-            crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
-                user_ptr as usize,
-                |slot| {
-                    visit(fixed_slot(slot));
-                },
-            );
         }
         GcRewriteDescriptorKind::Object => {
             // #6759 Phase B / #6812: the per-object meta record is a raw-
@@ -195,14 +202,6 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             crate::object::visit_overflow_field_slots_mut(user_ptr as usize, |slot| {
                 visit(fixed_slot(slot));
             });
-            // #2820: the recorded `Object.setPrototypeOf` value is a live
-            // reference; rewrite it if the prototype object moved.
-            crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
-                user_ptr as usize,
-                |slot| {
-                    visit(fixed_slot(slot));
-                },
-            );
         }
         GcRewriteDescriptorKind::RegExp => {
             visit_gc_layout_slot_descriptors(header, &mut visit);

@@ -511,6 +511,34 @@ pub(crate) fn object_static_prototypes_maybe_nonempty() -> bool {
     OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
 }
 
+/// Can a cell of `obj_type` own an entry in the residual registry?
+///
+/// The registry's population is every owner [`meta_capable_object`] turns
+/// away, and the recorder is reached with whatever the caller holds:
+/// `Object.setPrototypeOf` with an array, lazy JSON array, Map, Set, Error,
+/// Promise, Date, RegExp or Temporal cell, `dyn_eval` with a closure. Only the
+/// kinds that can never be a receiver stand outside it: strings and bigints
+/// are primitives, meta records and compiled regex programs are internal.
+/// `GC_TYPE_OBJECT` stays inside — its prototypes live in its meta record, and
+/// the registry's obligations were always met for it too.
+///
+/// The collector keys both of the registry's per-owner obligations on this
+/// one predicate: the relocation rekey (`gc/layout/transfer.rs`) and the
+/// value visit (`gc/layout_slot_visit.rs`). Both used to be wired to arrays
+/// and ordinary objects by hand, so every other movable owner lost its
+/// explicit prototype at its first relocation, and none had the prototype
+/// value traced or rewritten.
+#[inline]
+pub(crate) fn residual_prototype_owner_type(obj_type: u8) -> bool {
+    !matches!(
+        obj_type,
+        crate::gc::GC_TYPE_STRING
+            | crate::gc::GC_TYPE_BIGINT
+            | crate::gc::GC_TYPE_OBJECT_META
+            | crate::gc::GC_TYPE_REGEX_PROGRAM
+    )
+}
+
 /// Migrate the residual side-table entry when an owner's allocation address
 /// changes, either through moving GC or an `ArrayHeader` growth replacement.
 /// Mirrors `closure_dynamic_props_owner_moved`.

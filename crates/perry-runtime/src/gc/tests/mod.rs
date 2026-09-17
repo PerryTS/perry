@@ -60,6 +60,7 @@ mod os_tag;
 mod promote_in_place;
 mod promoted_cohort;
 mod proxy_registry;
+mod residual_prototype_relocation;
 mod restore_coverage;
 mod retention_9628_9629;
 mod root_words;
