@@ -124,6 +124,13 @@ extern "C" fn run_job<J: AgentJob>(ctx: *mut c_void) {
 ///
 /// `Ok(())` means the owner will run it exactly once. `Err` hands the job back
 /// unrun, and says whether retrying could help.
+///
+/// One qualification on "will run": a job still queued when the owner's loop
+/// goes down is dropped without being invoked — turnloop's postbox is not
+/// drained at teardown. The job's `Drop` runs, so a binding that must settle
+/// something can do it there; nothing is freed twice. This is bounded to agent
+/// teardown (a retiring Worker, or process exit), when that agent's heap is
+/// going away anyway.
 pub fn post_job<J: AgentJob>(job: Box<J>) -> Result<(), Rejected<J>> {
     #[cfg(any(not(test), feature = "runtime-link"))]
     {

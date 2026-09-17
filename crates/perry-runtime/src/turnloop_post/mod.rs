@@ -176,6 +176,18 @@ pub fn available() -> bool {
 
 /// Hand `run(ctx)` to the loop of the agent this thread is acting for.
 ///
+/// # The one case where an accepted job never runs
+///
+/// turnloop's `Loop` has no `Drop` that drains its postbox, so a job still
+/// queued when the owner's loop goes down is dropped without being invoked.
+/// That is the safe direction — the context leaks rather than being freed twice
+/// — but a caller whose job was going to settle something (a `JsPromise`, say)
+/// gets neither a completion nor an error. It is bounded to agent teardown:
+/// the owner's loop is dropped at `shutdown_agent_loop` (a retiring Worker) or
+/// at the process-exit funnel, when that agent's heap is going away regardless.
+/// Named here rather than papered over, because "accepted" otherwise reads as
+/// "will run" without qualification.
+///
 /// # Safety
 ///
 /// `ctx` must be valid until `run` is invoked, and safe to use from the agent's
