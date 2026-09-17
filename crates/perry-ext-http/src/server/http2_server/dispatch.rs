@@ -91,9 +91,6 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
                 session.closed = true;
                 session.destroyed = true;
-                if let Ok(mut slot) = session.sender.lock() {
-                    *slot = None;
-                }
                 if callback != 0 {
                     session.close_callbacks.push(callback);
                 }
@@ -115,9 +112,6 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
                 session.closed = true;
                 session.destroyed = true;
-                if let Ok(mut slot) = session.sender.lock() {
-                    *slot = None;
-                }
             }
             // `destroy()` is the abrupt one: no GOAWAY, no drain.
             if let Some(conn) = turnloop {

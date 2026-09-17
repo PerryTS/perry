@@ -3,7 +3,7 @@
     "The turnloop migration's remaining tokio surface (docs/turnloop/p8-report.md).",
     "",
     "`edges` and `lockfile` are GATED by scripts/tokio_inventory.py, strictly and in",
-    "both directions: a NEW edge fails, and a STALE entry fails too \u2014 so a lane that",
+    "both directions: a NEW edge fails, and a STALE entry fails too — so a lane that",
     "removes an edge must delete its own line, and this file can never describe a tree",
     "that is gone. Regenerate with `python3 scripts/tokio_inventory.py --update`, which",
     "preserves every surviving entry's annotations.",
@@ -30,7 +30,7 @@
       "surface": "none. The separate `perry-compose` binary (a Docker-Compose-like driver for Apple Container / Podman). perry-stdlib reaches it only under the non-default `container` feature, which `full` does not enable.",
       "reached_when": "running `perry-compose`, or a build that explicitly enables `perry-stdlib/container`",
       "blocker": "async end-to-end across ~14.8k lines (`async-trait` backends, `tokio::process::Command`, `tokio::time::timeout`). A rewrite of a non-JS tool; no event-loop transport is involved.",
-      "issue": "unfiled \u2014 P8",
+      "issue": "unfiled — P8",
       "plan": "K"
     },
     {
@@ -42,20 +42,8 @@
       "surface": "none. The separate `perry-compose` binary (a Docker-Compose-like driver for Apple Container / Podman). perry-stdlib reaches it only under the non-default `container` feature, which `full` does not enable.",
       "reached_when": "running `perry-compose`, or a build that explicitly enables `perry-stdlib/container`",
       "blocker": "async end-to-end across ~14.8k lines (`async-trait` backends, `tokio::process::Command`, `tokio::time::timeout`). A rewrite of a non-JS tool; no event-loop transport is involved.",
-      "issue": "unfiled \u2014 P8",
+      "issue": "unfiled — P8",
       "plan": "K"
-    },
-    {
-      "crate": "perry-ext-http",
-      "dep": "h2",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`http2.createSecureServer()` (server) and `http2.connect()` (client)",
-      "reached_when": "`http2.connect('https://\u2026')` (the TLS client), and `http2.createServer` / `createSecureServer` on a thread that could not get a loop of its own or in a cluster worker. NOT the ordinary case any more: since the HTTP/2 turnloop lane, a cleartext or TLS **server** and a cleartext `http2.connect` on the primary agent are on `turnloop_http::http2` and never construct an `h2` connection.",
-      "blocker": "the TLS **client**: `perry_ext_net::turnloop_tls_io` exposes `install_server_session` publicly but only `begin_client_upgrade` (`pub(crate)`, takes perry-ext-net's own `TlsClientConfigData`, settles a `JsNativeAsyncCompletion`), so `http2.connect('https://\u2026')` has no way to install a client session on a turnloop socket. Plus the same declining paths hyper keeps: a thread with no loop, and a cluster worker. Removing the edge means deleting HTTP/2 on those paths, not migrating it.",
-      "issue": "#10327",
-      "plan": "D"
     },
     {
       "crate": "perry-ext-http",
@@ -64,9 +52,9 @@
       "optional": false,
       "target": null,
       "surface": "`http.createServer()` / `https.createServer()` on a declining path, and http2.createSecureServer",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed; also a cluster worker (needs SO_REUSEPORT or a passed descriptor) and a server with `new WebSocketServer({ server })` attached at listen time",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed; also a cluster worker (needs SO_REUSEPORT or a passed descriptor) and a server with `new WebSocketServer({ server })` attached at listen time",
       "blocker": "one reason left, and it is the P1 coexistence rule rather than a hole: a thread that cannot get a loop of its own keeps this accept loop. turnloop P9 closed the per-agent-loop case; PerryTS/turnloop#49 (SO_REUSEPORT) is what the cluster worker still waits on. The attached `WebSocketServer` blocker is CLOSED: its handshake and framing are `turnloop_websocket`'s sans-I/O core now, driven over the connection perry-ext-http already owns (`turnloop_serve::conn::on_websocket`), so it needs no owned stream and `try_listen_on_turnloop` no longer declines for it. See docs/turnloop/ws-report.md.",
-      "issue": "unfiled \u2014 P8",
+      "issue": "unfiled — P8",
       "plan": "A"
     },
     {
@@ -75,10 +63,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "as `hyper` above \u2014 the `server-auto` connection builder",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "surface": "as `hyper` above — the `server-auto` connection builder",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
       "blocker": "goes with hyper.",
-      "issue": "unfiled \u2014 P8",
+      "issue": "unfiled — P8",
       "plan": "A"
     },
     {
@@ -87,10 +75,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`http.request()` / `https.get()` / `https.request()` \u2014 the node:http CLIENT half",
+      "surface": "`http.request()` / `https.get()` / `https.request()` — the node:http CLIENT half",
       "reached_when": "always: P5 migrated this crate's SERVER, the client was never migrated",
       "blocker": "`agent.rs` alone is ~1,950 lines, a second Node-semantics connection pool layered over reqwest's own. Plus three raw `tokio::net::TcpStream` bypasses (`TE: trailers`, `Expect: 100-continue`, an `agent.createConnection` override) that are not reqwest at all.",
-      "issue": "#10328 (the agent cache never evicts); the transport is unfiled \u2014 P6 named it, P8 confirms it",
+      "issue": "#10328 (the agent cache never evicts); the transport is unfiled — P6 named it, P8 confirms it",
       "plan": "C"
     },
     {
@@ -99,10 +87,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "every row above, plus the three raw-TcpStream client bypasses",
-      "reached_when": "always (the client) or a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed (the server)",
-      "blocker": "the union of the rows above.",
-      "issue": "unfiled \u2014 P8",
+      "surface": "every row above, plus the three raw-TcpStream client bypasses. NO LONGER `http2.connect`: the HTTP/2 client is turnloop-only now (the `h2` row is gone), and `node:http2` reaches no tokio of its own.",
+      "reached_when": "always (the node:http client) or a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed (the server)",
+      "blocker": "the union of the rows above, and NOT group D's own work — the plan's row D already said so (“its last, once C and E are done”). E is done and D's `h2` half is done; what is left is `reqwest` + `tokio-rustls` (plan C, the node:http/https CLIENT: ~1,950 lines of `agent.rs` plus three raw `tokio::net::TcpStream` bypasses) and `hyper` + `hyper-util` (plan A, the declining HTTP/1.1 and HTTP/2 SERVER accept loop in `http2_server.rs`). `node:http2`'s CLIENT reaches no tokio at all now — `http2_server/session.rs` contains no `tokio::` code — so this edge is held open entirely by A and C.",
+      "issue": "unfiled — P8",
       "plan": "D"
     },
     {
@@ -112,9 +100,9 @@
       "optional": false,
       "target": null,
       "surface": "`https.createServer()` on a declining path, and TLS for the node:https client",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
       "blocker": "P5 put the accepted-connection TLS on turnloop-tls; the declining server and the whole client still use tokio_rustls.",
-      "issue": "unfiled \u2014 P8",
+      "issue": "unfiled — P8",
       "plan": "C"
     },
     {
@@ -123,10 +111,10 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`new Redis()` / ioredis \u2014 every command",
-      "reached_when": "the `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed. **The agent-shaped decline is CLOSED** (turnloop P10, perry#10395 step 2): a second thread acting for an agent another thread already owns \u2014 a host pump thread, Android's UI thread for `perry-native` \u2014 now hands its work to that owner through `perry_ffi::agent_post` instead of keeping this driver alive for itself. No longer a worker agent (P9 gave every agent a loop), and no longer TLS (`rediss://`, the default since `REDIS_TLS` defaults to true, is carried by turnloop).",
-      "blocker": "two reasons left, and neither is specific to redis or to this binding \u2014 both are an ABSENCE of a loop rather than a hole in the path. (1) The `tokio-wait-driver` A/B arm compiles no agent loop at all; it is the baseline of the tokio-vs-turnloop measurement and exists to run the transport this work replaces, so it must decline. (2) A host where `Loop::new` failed has no loop to post to. Both are one shared decision, not four conversions: every plan-A and plan-B edge names the same pair. Narrow third case, documented rather than fixed: `net_available()` CLAIMS a route without building a loop, so a client created in the window between the owner claiming its slot and publishing its `Poster` sees no route and is created on the legacy transport for its life. TLS is done: perry-db-turnloop installs a client session through perry-tls-turnloop.",
-      "issue": "#10335 \u2014 spawn_blocking/block_on CLOSED for the agent-shaped decline by #10395 step 2",
+      "surface": "`new Redis()` / ioredis — every command",
+      "reached_when": "the `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed. **The agent-shaped decline is CLOSED** (turnloop P10, perry#10395 step 2): a second thread acting for an agent another thread already owns — a host pump thread, Android's UI thread for `perry-native` — now hands its work to that owner through `perry_ffi::agent_post` instead of keeping this driver alive for itself. No longer a worker agent (P9 gave every agent a loop), and no longer TLS (`rediss://`, the default since `REDIS_TLS` defaults to true, is carried by turnloop).",
+      "blocker": "two reasons left, and neither is specific to redis or to this binding — both are an ABSENCE of a loop rather than a hole in the path. (1) The `tokio-wait-driver` A/B arm compiles no agent loop at all; it is the baseline of the tokio-vs-turnloop measurement and exists to run the transport this work replaces, so it must decline. (2) A host where `Loop::new` failed has no loop to post to. Both are one shared decision, not four conversions: every plan-A and plan-B edge names the same pair. Narrow third case, documented rather than fixed: `net_available()` CLAIMS a route without building a loop, so a client created in the window between the owner claiming its slot and publishing its `Poster` sees no route and is created on the legacy transport for its life. TLS is done: perry-db-turnloop installs a client session through perry-tls-turnloop.",
+      "issue": "#10335 — spawn_blocking/block_on CLOSED for the agent-shaped decline by #10395 step 2",
       "plan": "B"
     },
     {
@@ -136,9 +124,9 @@
       "optional": false,
       "target": null,
       "surface": "as `redis` above",
-      "reached_when": "the `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed. **The agent-shaped decline is CLOSED** (turnloop P10, perry#10395 step 2): a second thread acting for an agent another thread already owns \u2014 a host pump thread, Android's UI thread for `perry-native` \u2014 now hands its work to that owner through `perry_ffi::agent_post` instead of keeping this driver alive for itself. No longer a worker agent (P9 gave every agent a loop), and no longer TLS (`rediss://`, the default since `REDIS_TLS` defaults to true, is carried by turnloop).",
-      "blocker": "two reasons left, and neither is specific to redis or to this binding \u2014 both are an ABSENCE of a loop rather than a hole in the path. (1) The `tokio-wait-driver` A/B arm compiles no agent loop at all; it is the baseline of the tokio-vs-turnloop measurement and exists to run the transport this work replaces, so it must decline. (2) A host where `Loop::new` failed has no loop to post to. Both are one shared decision, not four conversions: every plan-A and plan-B edge names the same pair. Narrow third case, documented rather than fixed: `net_available()` CLAIMS a route without building a loop, so a client created in the window between the owner claiming its slot and publishing its `Poster` sees no route and is created on the legacy transport for its life. The #1824 hazard of building the JS result on a foreign thread goes with it: a posted command is answered on the agent's OWNER, which is where that agent's values live.",
-      "issue": "#10336, #10339 \u2014 agent-shaped decline CLOSED by #10395 step 2",
+      "reached_when": "the `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed. **The agent-shaped decline is CLOSED** (turnloop P10, perry#10395 step 2): a second thread acting for an agent another thread already owns — a host pump thread, Android's UI thread for `perry-native` — now hands its work to that owner through `perry_ffi::agent_post` instead of keeping this driver alive for itself. No longer a worker agent (P9 gave every agent a loop), and no longer TLS (`rediss://`, the default since `REDIS_TLS` defaults to true, is carried by turnloop).",
+      "blocker": "two reasons left, and neither is specific to redis or to this binding — both are an ABSENCE of a loop rather than a hole in the path. (1) The `tokio-wait-driver` A/B arm compiles no agent loop at all; it is the baseline of the tokio-vs-turnloop measurement and exists to run the transport this work replaces, so it must decline. (2) A host where `Loop::new` failed has no loop to post to. Both are one shared decision, not four conversions: every plan-A and plan-B edge names the same pair. Narrow third case, documented rather than fixed: `net_available()` CLAIMS a route without building a loop, so a client created in the window between the owner claiming its slot and publishing its `Poster` sees no route and is created on the legacy transport for its life. The #1824 hazard of building the JS result on a foreign thread goes with it: a posted command is answered on the agent's OWNER, which is where that agent's values live.",
+      "issue": "#10336, #10339 — agent-shaped decline CLOSED by #10395 step 2",
       "plan": "B"
     },
     {
@@ -147,9 +135,9 @@
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "`new MongoClient()` \u2014 connect, find, insert, update, delete, aggregate",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus `mongodb+srv://`, several hosts, `replicaSet=`, `compressors=`, a per-connection TLS key (`tlsCAFile`, `tlsInsecure`, \u2026), an unparsable URI, or no /dev/urandom. A plain `tls=true`/`ssl=true` no longer declines.",
-      "blocker": "SRV lookup and topology discovery/SDAM monitors stay in the `mongodb` driver; turnloop-mongodb is a single-connection protocol core. TLS itself is done \u2014 perry-db-turnloop installs a client session at connect time \u2014 but a URI naming its own trust store still declines, because this path honours the process TLS environment and has nowhere to put a per-URI store.",
+      "surface": "`new MongoClient()` — connect, find, insert, update, delete, aggregate",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus `mongodb+srv://`, several hosts, `replicaSet=`, `compressors=`, a per-connection TLS key (`tlsCAFile`, `tlsInsecure`, …), an unparsable URI, or no /dev/urandom. A plain `tls=true`/`ssl=true` no longer declines.",
+      "blocker": "SRV lookup and topology discovery/SDAM monitors stay in the `mongodb` driver; turnloop-mongodb is a single-connection protocol core. TLS itself is done — perry-db-turnloop installs a client session at connect time — but a URI naming its own trust store still declines, because this path honours the process TLS environment and has nowhere to put a per-URI store.",
       "issue": "#10332, #10341",
       "plan": "B"
     },
@@ -160,7 +148,7 @@
       "optional": false,
       "target": null,
       "surface": "as `mongodb` above",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, or any of the URI features above (TLS by itself is no longer one).",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, or any of the URI features above (TLS by itself is no longer one).",
       "blocker": "`spawn_blocking` + `Handle::current().block_on` per operation. Goes with the driver.",
       "issue": "#10339",
       "plan": "B"
@@ -172,8 +160,8 @@
       "optional": false,
       "target": null,
       "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed. A TLS connection no longer declines.",
-      "blocker": "sqlx::mysql is the only path that serves a UDS host. TLS is done (perry-db-turnloop installs a client session when the core raises its SSLRequest); a client that asks for `ssl` and still declines now gets a REFUSAL from sqlx \u2014 `to_url` emits `ssl-mode=REQUIRED` and this crate's sqlx has no TLS backend \u2014 rather than a silent plaintext downgrade.",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed. A TLS connection no longer declines.",
+      "blocker": "sqlx::mysql is the only path that serves a UDS host. TLS is done (perry-db-turnloop installs a client session when the core raises its SSLRequest); a client that asks for `ssl` and still declines now gets a REFUSAL from sqlx — `to_url` emits `ssl-mode=REQUIRED` and this crate's sqlx has no TLS backend — rather than a silent plaintext downgrade.",
       "issue": "#10339, #10341",
       "plan": "B"
     },
@@ -184,7 +172,7 @@
       "optional": false,
       "target": null,
       "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
       "blocker": "`spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
       "issue": "#10339",
       "plan": "B"
@@ -196,9 +184,9 @@
       "optional": false,
       "target": null,
       "surface": "`net.createServer()`, `net.connect()`, `tls.connect()`, `socket.upgradeToTLS()`, and node:net IPC",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
-      "blocker": "turnloop P9 landed per-agent loops. P1 and P5 moved every one of these to turnloop for the primary agent and kept the tokio socket task for the declining ones \u2014 that is the P1 coexistence rule, not an omission.",
-      "issue": "unfiled \u2014 P8",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "blocker": "turnloop P9 landed per-agent loops. P1 and P5 moved every one of these to turnloop for the primary agent and kept the tokio socket task for the declining ones — that is the P1 coexistence rule, not an omission.",
+      "issue": "unfiled — P8",
       "plan": "A"
     },
     {
@@ -208,9 +196,9 @@
       "optional": false,
       "target": null,
       "surface": "`tls.connect()` and `socket.upgradeToTLS()` on a declining path",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
       "blocker": "goes with the tokio socket task.",
-      "issue": "unfiled \u2014 P8",
+      "issue": "unfiled — P8",
       "plan": "A"
     },
     {
@@ -220,8 +208,8 @@
       "optional": false,
       "target": null,
       "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus a Unix-domain-socket host (turnloop's driver submits a TCP connect). A TLS connection no longer declines.",
-      "blocker": "sqlx::postgres is the only path that serves a UDS host. TLS is done, SCRAM-SHA-256-PLUS with RFC 5929 `tls-server-end-point` channel binding included; a client that asks for `ssl` and still declines now gets a REFUSAL from sqlx \u2014 `to_url` emits `sslmode=verify-full` and this crate's sqlx has no TLS backend \u2014 rather than a silent plaintext downgrade.",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus a Unix-domain-socket host (turnloop's driver submits a TCP connect). A TLS connection no longer declines.",
+      "blocker": "sqlx::postgres is the only path that serves a UDS host. TLS is done, SCRAM-SHA-256-PLUS with RFC 5929 `tls-server-end-point` channel binding included; a client that asks for `ssl` and still declines now gets a REFUSAL from sqlx — `to_url` emits `sslmode=verify-full` and this crate's sqlx has no TLS backend — rather than a silent plaintext downgrade.",
       "issue": "#10337, #10338, #10339, #10341",
       "plan": "B"
     },
@@ -232,7 +220,7 @@
       "optional": false,
       "target": null,
       "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
       "blocker": "`spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
       "issue": "#10339",
       "plan": "B"
@@ -244,9 +232,9 @@
       "optional": true,
       "target": null,
       "surface": "the global `fetch()` when the turnloop engine DECLINES, `js_fetch_stream_start` (the SSE line-poll surface, which never takes the turnloop path), a proxied fetch, and the `axios.rs` mirror.",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, a proxy (`HTTP_PROXY`/`HTTPS_PROXY` or `setGlobalDispatcher(new ProxyAgent(...))`), or a URL `turnloop_http::client::Request::new` rejects; `js_fetch_stream_start` and `axios.rs` take it unconditionally",
-      "blocker": "per-agent loops for the decline; a CONNECT tunnel driven from a URL rather than from a prebuilt `reqwest::Client` for the proxy; and a line-splitting state machine over the engine's `Sink::on_head`/`on_chunk` hooks for the stream surface \u2014 those hooks exist and NOTHING calls them, which by CLAUDE.md's kill-policy makes them a decision nobody has made.",
-      "issue": "unfiled \u2014 P6 named all three, P8 confirms them; P11 removed the axios/node-fetch half of group G",
+      "reached_when": "a thread that could not get a loop of its own — since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, a proxy (`HTTP_PROXY`/`HTTPS_PROXY` or `setGlobalDispatcher(new ProxyAgent(...))`), or a URL `turnloop_http::client::Request::new` rejects; `js_fetch_stream_start` and `axios.rs` take it unconditionally",
+      "blocker": "per-agent loops for the decline; a CONNECT tunnel driven from a URL rather than from a prebuilt `reqwest::Client` for the proxy; and a line-splitting state machine over the engine's `Sink::on_head`/`on_chunk` hooks for the stream surface — those hooks exist and NOTHING calls them, which by CLAUDE.md's kill-policy makes them a decision nobody has made.",
+      "issue": "unfiled — P6 named all three, P8 confirms them; P11 removed the axios/node-fetch half of group G",
       "plan": "G"
     },
     {
@@ -256,9 +244,9 @@
       "optional": true,
       "target": null,
       "surface": "every async stdlib surface: the `async-runtime` feature gates `common::async_bridge` and `perry_ffi_async`, i.e. the whole promise bridge and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI every perry-ext-* crate settles its promises through.",
-      "reached_when": "always \u2014 `full` implies it, and 20 other features imply it individually",
+      "reached_when": "always — `full` implies it, and 20 other features imply it individually",
       "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib those clients are now reqwest and tokio-rustls (the bundled sqlx / redis / mongodb copies were deleted in group H); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
-      "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 upstream",
+      "issue": "unfiled — P8; PerryTS/turnloop#42 upstream",
       "plan": "L"
     },
     {
@@ -268,9 +256,9 @@
       "optional": true,
       "target": null,
       "surface": "`tls.createServer()` / `tls.connect()` / `socket.upgradeToTLS()` (the bundled `node:tls` module, ~3.7k lines across `src/tls.rs` + `src/tls/`), the bundled net client's TLS in `src/net/mod.rs`, and the `wss://` client connector in `src/ws.rs` (which declares its own `dep:tokio-rustls` under `bundled-ws`).",
-      "reached_when": "the `tls-runtime` feature, which `external-net-tls` and `external-tls-server` also pull in \u2014 so this one SURVIVES the well-known flip, and the flip actively turns it ON: optimized_libs/driver.rs inserts `external-tls-server` for every `node:http` / `node:https` / `node:http2` import (the ext-net TLS preflight hook `js_tls_client_preflight` is defined here) and `external-net-tls` whenever net/http own the transport. Plus `bundled-ws` for `wss://`.",
-      "blocker": "NOT a bundled-fallback copy \u2014 group H's \u201ccompiled out of every default build\u201d framing never applied to this edge, and its own `reached_when` above said so. There is no perry-ext-* wrapper that owns a TLS SERVER: perry-ext-net has the client, and P5 moved perry-ext-http's accepted-connection TLS to turnloop-tls, but `tls.createServer()` and the preflight provider are only here. Deleting it would delete `node:tls` server support and `wss://` under `bundled-ws`, not relocate them. It needs a turnloop-tls SERVER session (an accept-side counterpart to `perry-tls-session`) first \u2014 a transport job, not a policy one.",
-      "issue": "unfiled \u2014 P8; group H's other three edges were deleted, this one was not",
+      "reached_when": "the `tls-runtime` feature, which `external-net-tls` and `external-tls-server` also pull in — so this one SURVIVES the well-known flip, and the flip actively turns it ON: optimized_libs/driver.rs inserts `external-tls-server` for every `node:http` / `node:https` / `node:http2` import (the ext-net TLS preflight hook `js_tls_client_preflight` is defined here) and `external-net-tls` whenever net/http own the transport. Plus `bundled-ws` for `wss://`.",
+      "blocker": "NOT a bundled-fallback copy — group H's “compiled out of every default build” framing never applied to this edge, and its own `reached_when` above said so. There is no perry-ext-* wrapper that owns a TLS SERVER: perry-ext-net has the client, and P5 moved perry-ext-http's accepted-connection TLS to turnloop-tls, but `tls.createServer()` and the preflight provider are only here. Deleting it would delete `node:tls` server support and `wss://` under `bundled-ws`, not relocate them. It needs a turnloop-tls SERVER session (an accept-side counterpart to `perry-tls-session`) first — a transport job, not a policy one.",
+      "issue": "unfiled — P8; group H's other three edges were deleted, this one was not",
       "plan": "H"
     },
     {
@@ -281,8 +269,8 @@
       "target": "cfg(target_os = \"android\")",
       "surface": "`perry/ui` WebSocket on Android (`crates/perry-ui-android/src/ws.rs`)",
       "reached_when": "an Android target build only",
-      "blocker": "SYNC tungstenite 0.24 on its own thread \u2014 not a tokio edge at all. It is now the LAST holder of a second tungstenite major: the turnloop WS lane took 0.29 out of the tree, so this edge and turnloop-websocket's 0.30 are all that remain. `turnloop_websocket::Connection` works over a blocking `std::net::TcpStream` as happily as over anything else, so the migration is mechanical \u2014 but it cannot be built or run from the shared Linux box, and an unexecutable migration is not one to land blind.",
-      "issue": "unfiled \u2014 P8",
+      "blocker": "SYNC tungstenite 0.24 on its own thread — not a tokio edge at all. It is now the LAST holder of a second tungstenite major: the turnloop WS lane took 0.29 out of the tree, so this edge and turnloop-websocket's 0.30 are all that remain. `turnloop_websocket::Connection` works over a blocking `std::net::TcpStream` as happily as over anything else, so the migration is mechanical — but it cannot be built or run from the shared Linux box, and an unexecutable migration is not one to land blind.",
+      "issue": "unfiled — P8",
       "plan": "N"
     }
   ],
@@ -351,14 +339,12 @@
     "perry-container-compose": 14,
     "perry-ext-ads": 5,
     "perry-ext-axios": 2,
-    "perry-ext-fastify": 11,
-    "perry-ext-http": 104,
+    "perry-ext-http": 99,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
     "perry-ext-mysql2": 35,
     "perry-ext-net": 55,
     "perry-ext-pg": 20,
-    "perry-ext-ws": 26,
     "perry-ffi": 2,
     "perry-stdlib": 73,
     "perry-ui-gtk4": 6

@@ -19,7 +19,6 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -217,14 +216,13 @@ pub struct Http2SessionHandle {
     pub local_settings: Http2SettingsState,
     pub remote_settings: Http2SettingsState,
     pub local_window_size: i64,
-    pub sender: Arc<Mutex<Option<h2::client::SendRequest<Bytes>>>>,
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
     pub pending_callbacks: Vec<i64>,
     pub timeout_callback: i64,
-    /// The turnloop connection carrying this session, or zero when the session
-    /// is on the legacy `h2`/hyper transport. Every control surface routes on
-    /// this: non-zero means the frame reaches a wire.
+    /// The turnloop connection carrying this session, or zero when the
+    /// session has no transport at all. Every control surface routes on this:
+    /// non-zero means the frame reaches a wire.
     pub turnloop_conn: i64,
 }
 

@@ -570,7 +570,6 @@ pub(crate) fn process_pending_h2_events() -> i32 {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
 
     fn test_session(
         server_handle: i64,
@@ -595,7 +594,6 @@ mod tests {
             local_settings: Http2SettingsState::default(),
             remote_settings: Http2SettingsState::default(),
             local_window_size: 65_535,
-            sender: Arc::new(Mutex::new(None)),
             listeners: HashMap::new(),
             close_callbacks: Vec::new(),
             pending_callbacks: Vec::new(),
