@@ -325,8 +325,9 @@ fn row_to_js_object(row: &PgRow) -> *mut ObjectHeader {
 /// (#4917): `dataTypeID` is the numeric type OID, `tableID`/`columnID` come
 /// from the RowDescription (0 for expression columns, like Node).
 /// `dataTypeSize`/`dataTypeModifier` are not exposed by sqlx 0.8 and report
-/// the "unknown/variable" sentinel -1. Twin of
-/// `perry_stdlib::pg::types::column_to_field_def` — keep in sync.
+/// the "unknown/variable" sentinel -1. This was a twin of
+/// `perry_stdlib::pg::types::column_to_field_def` until turnloop P8 group H
+/// deleted perry-stdlib's bundled `pg` copy; this is now the only impl.
 fn column_to_field_def(col: &PgColumn) -> *mut ObjectHeader {
     let (packed, shape_id) = build_object_shape(&FIELD_KEYS);
     let obj =

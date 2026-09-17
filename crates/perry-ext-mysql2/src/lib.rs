@@ -437,8 +437,9 @@ fn raw_row_to_js_array(row: &RawRowData) -> *mut ArrayHeader {
 
 /// Map sqlx's MySQL type *name* back to the wire-protocol numeric type ID
 /// (`enum_field_types`, what Node's mysql2 puts in `field.type`/`columnType`).
-/// Twin of `perry_stdlib::mysql2::types::mysql_type_id_from_name` (#4917) —
-/// this crate cannot depend on perry-stdlib, keep the two in sync.
+/// Was a twin of `perry_stdlib::mysql2::types::mysql_type_id_from_name`
+/// (#4917) until turnloop P8 group H deleted perry-stdlib's bundled `mysql2`
+/// copy; this is now the only impl, so there is nothing left to keep in sync.
 fn mysql_type_id_from_name(name: &str) -> f64 {
     let base = name.strip_suffix(" UNSIGNED").unwrap_or(name);
     let id: u8 = match base {

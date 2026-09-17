@@ -79,6 +79,30 @@ pub(crate) fn build_optimized_libs(
         );
         std::process::exit(1);
     }
+    // turnloop P8 group H: same shape as fastify/undici. perry-stdlib's bundled
+    // pg / mysql2 / ioredis / mongodb copies were deleted, so with the flip
+    // disabled there is nothing left to define `js_pg_*` / `js_mysql_*` /
+    // `js_ioredis_*` / `js_mongodb_*` and the link would fail with a wall of
+    // undefined symbols. Say so up front instead.
+    if let Some(module) = iteration_set
+        .iter()
+        .map(|m| m.strip_prefix("node:").unwrap_or(m))
+        .find(|m| {
+            matches!(
+                *m,
+                "pg" | "mysql2" | "mysql2/promise" | "ioredis" | "redis" | "iovalkey" | "mongodb"
+            )
+        })
+        .filter(|_| !use_well_known)
+    {
+        eprintln!(
+            "error: `import '{module}'` requires an external perry-ext-* wrapper, but the \
+             well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). perry-stdlib's bundled \
+             pg / mysql2 / ioredis / mongodb copies were removed; unset \
+             PERRY_DISABLE_WELL_KNOWN so the import routes to its wrapper crate."
+        );
+        std::process::exit(1);
+    }
     if imports_fastify && !use_well_known {
         eprintln!(
             "error: `import 'fastify'` requires the external perry-ext-fastify wrapper, but the \
@@ -277,6 +301,28 @@ pub(crate) fn build_optimized_libs(
                         );
                         std::process::exit(1);
                     }
+                    // turnloop P8 group H removed the bundled db copies too, so
+                    // the fall-back below has nothing to fall back to.
+                    if matches!(
+                        module_normalized,
+                        "pg" | "mysql2"
+                            | "mysql2/promise"
+                            | "ioredis"
+                            | "redis"
+                            | "iovalkey"
+                            | "mongodb"
+                    ) {
+                        eprintln!(
+                            "error: `import '{}'` requires the external {} wrapper, but its \
+                             source crate was not found at `{}`. perry-stdlib's bundled copy was \
+                             removed; build or restore {}.",
+                            module,
+                            binding.krate,
+                            crate_dir.display(),
+                            binding.krate
+                        );
+                        std::process::exit(1);
+                    }
                     if matches!(format, OutputFormat::Text) && verbose > 0 {
                         eprintln!(
                             "  well-known: skipping `{}` — crate `{}` source not on disk; \
@@ -357,16 +403,24 @@ pub(crate) fn build_optimized_libs(
                     "bundled-bcrypt"
                         | "bundled-argon2"
                         | "bundled-nodemailer"
-                        | "bundled-ioredis"
-                        | "bundled-pg"
-                        | "bundled-mysql2"
-                        | "bundled-mongodb"
                         | "bundled-ws"
                         | "bundled-net"
                         | "http-client"
                         | "bundled-streams"
                 )
             }) {
+                features.insert("async-runtime");
+            }
+            // turnloop P8 group H: the bundled pg / mysql2 / ioredis / mongodb
+            // modules were deleted, so `module_to_features` names no feature
+            // for them and the check above cannot see them. The wrappers still
+            // settle every promise through perry-stdlib's `perry_ffi_*` shim,
+            // which only compiles under `async-runtime` — key it on the module
+            // name, the same way `undici` / `nodemailer` / `fastify` do below.
+            if matches!(
+                module_normalized,
+                "pg" | "mysql2" | "mysql2/promise" | "ioredis" | "redis" | "iovalkey" | "mongodb"
+            ) {
                 features.insert("async-runtime");
             }
             // `undici` (#466): perry-ext-undici is thin glue over the
