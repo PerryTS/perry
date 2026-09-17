@@ -336,7 +336,10 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             frames: &mut cell.frames[..],
             undo: &mut cell.undo[..],
         };
-        poll()?;
+        // PROBE ONLY (#10166 poll experiment) — NEVER MERGE. Prices the
+        // pre-search safepoint poll by removing it. Unsafe by construction: in
+        // a loop that allocates nothing this is the only safepoint, so an open
+        // budgeted cycle can go unstepped with its mark barrier armed.
         let mut search = match near {
             Some(near) => Search::new_near(resources, start, near, scratch, *budget),
             None => Search::new(resources, start, scratch, *budget),
