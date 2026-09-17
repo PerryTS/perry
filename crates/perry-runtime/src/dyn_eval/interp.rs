@@ -111,15 +111,6 @@ pub(crate) fn scan_function_supported(func: &ast::Function) {
     if func.is_async {
         throw_unsupported("async function (no async codegen target needs it yet)");
     }
-    for p in &func.params {
-        scan_param_supported(&p.pat);
-    }
-}
-
-fn scan_param_supported(pat: &ast::Pat) {
-    if let ast::Pat::Rest(_) = pat {
-        throw_unsupported("rest parameter (...args)");
-    }
 }
 
 /// `var` hoisting prepass: collect `var` names declared anywhere in the
@@ -405,6 +396,17 @@ pub(crate) fn invoke_interp_fn(
 
     // Parameters.
     for (i, pat) in fun.params.iter().enumerate() {
+        // #10424: `...rest` (always the last parameter) collects every argument
+        // from its position on. `new Function('...a', body)` used to refuse it
+        // while the constant-fold spelling of the same call compiled.
+        if let ast::Pat::Rest(rest) = pat {
+            let rest_idx = root_push(bridge::array_new());
+            for &arg_idx in arg_idxs.iter().skip(i) {
+                bridge::array_push_rooted(rest_idx, root_get(arg_idx));
+            }
+            bind_pattern(&ctx, &rest.arg, root_get(rest_idx), env_idx, true);
+            break;
+        }
         let value = if i < nargs {
             root_get(arg_idxs[i])
         } else {

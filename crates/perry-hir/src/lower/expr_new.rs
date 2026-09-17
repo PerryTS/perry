@@ -813,6 +813,29 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         // still catchable, still located, never a crash.
                         crate::eval_classifier::EvalDecision::DeferToRuntimeError(_message) => {}
                     }
+                    // #10421: whichever bucket the body landed in (a
+                    // known-library body, or constant strings the fold could
+                    // not use), the function is built at runtime, so the
+                    // auto-optimized runtime must keep the interpreter.
+                    crate::eval_classifier::note_dynamic_function_reachable();
+                    // #10424: a spread argument list (`new Function(...parts)`)
+                    // must reach the constructor element by element. The
+                    // by-name `Expr::New` below lowers each argument as one
+                    // value, so the whole array became a single non-string
+                    // argument and the function got an empty body.
+                    if args_slice.iter().any(|a| a.spread.is_some()) {
+                        let callee = Expr::PropertyGet {
+                            byte_offset: 0,
+                            object: Box::new(Expr::GlobalGet(0)),
+                            property: "Function".to_string(),
+                        };
+                        let args = lower_new_spread_args(ctx, args_slice)?;
+                        return Ok(Expr::NewDynamicSpread {
+                            callee: Box::new(callee),
+                            args,
+                            byte_offset: new_byte_offset,
+                        });
+                    }
                 }
             }
 

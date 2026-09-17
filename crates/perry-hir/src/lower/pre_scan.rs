@@ -11,9 +11,11 @@ use super::*;
 use crate::ir::*;
 
 mod class_decl_names;
+mod function_ctor_reach;
 mod weakref_locals;
 
 pub(crate) use class_decl_names::pre_scan_class_decl_names;
+pub(crate) use function_ctor_reach::pre_scan_function_ctor_reach;
 pub(crate) use weakref_locals::pre_scan_weakref_locals;
 
 /// Pre-scan top-level function declarations for the standard TypeScript

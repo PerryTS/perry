@@ -474,6 +474,17 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             std::slice::from_raw_parts(args_ptr, args_len)
         };
         match name {
+            // Reflective construction of the intrinsic `Function` —
+            // `new F(p, body)` through a value, `Reflect.construct(Function, …)`,
+            // a spread `new Function(...parts)` — goes to the same from-strings
+            // entry the literal `new Function(...)` reaches from codegen
+            // (`lower_call/new.rs`). Identified by closure identity, so it holds
+            // when `globalThis.Function` is reassigned. Routed here, before the
+            // generic path allocates an instance: `args_ptr` is a plain copy of
+            // the arguments, not a GC root (#10424).
+            "Function" => {
+                return super::super::js_function_ctor_from_strings(args_ptr, args_len);
+            }
             #[cfg(feature = "global-webcrypto")]
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
                 return crate::object::js_webcrypto_illegal_constructor();
@@ -1129,25 +1140,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     // `js_native_call_value` dispatch on a verified closure pointer
     // here — otherwise `new <non-callable>()` would dereference an
     // arbitrary pointer as a `ClosureHeader` and crash.
-    //
-    // Reflective `Function.apply(self, scope, code)` (and `Reflect.construct`
-    // on Function) reach here with `func_value` = the reified Function
-    // constructor — a plain callable closure singleton, so
-    // `is_callable_function_value` below reports it callable and it would be
-    // CALLED as a value → "Function is not a function". The literal
-    // `new Function(...)` path routes to the Function-from-strings shim in
-    // codegen (`lower_call/new.rs`); route the reflective form to the SAME shim
-    // here. Identify the constructor by its intrinsic closure identity
-    // (`identify_global_builtin_constructor`, keyed on the builtin `func_ptr`) —
-    // robust to `globalThis.Function` reassignment, unlike reading the mutable
-    // global property. (User classes / other builtins / proxies were handled
-    // above and don't match.)
-    if matches!(
-        identify_global_builtin_constructor(func_value),
-        Some("Function")
-    ) {
-        return super::super::js_function_ctor_from_strings(args_ptr, args_len);
-    }
     if is_callable_function_value(func_value) {
         // Bind `this` to the new instance, dispatch the constructor,
         // then restore the previous IMPLICIT_THIS. The dispatch

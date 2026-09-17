@@ -428,12 +428,21 @@ pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: 
     js_function_ctor_from_strings_impl(args_ptr, args_len)
 }
 
-fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> f64 {
-    let arg_str = |i: usize| -> String {
-        if i >= args_len || args_ptr.is_null() {
-            return String::new();
-        }
-        let v = unsafe { *args_ptr.add(i) };
+/// #10424: CreateDynamicFunction applies ToString to every argument, left to
+/// right, before it assembles the source. The arguments used to be read as
+/// strings only, so anything else became `""`: `new Function(['a', 'b'], body)`
+/// lost its parameters (lodash `_.template` passes its import names as an
+/// array) and an object with a `toString` did too.
+///
+/// All-string argument lists (the common case) read the bytes directly. Any
+/// other argument can run user code (`toString` / `valueOf` /
+/// `Symbol.toPrimitive`), which can collect, so every argument is rooted
+/// before the first conversion and re-read from its handle.
+fn function_ctor_arg_strings(args_ptr: *const f64, args_len: usize) -> Vec<String> {
+    if args_ptr.is_null() || args_len == 0 {
+        return Vec::new();
+    }
+    let string_of = |v: f64| -> String {
         let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         match crate::string::str_bytes_from_jsvalue(v, &mut scratch) {
             Some((p, n)) if !p.is_null() => {
@@ -443,6 +452,36 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
             _ => String::new(),
         }
     };
+    let args = unsafe { std::slice::from_raw_parts(args_ptr, args_len) };
+    if args
+        .iter()
+        .all(|v| crate::value::JSValue::from_bits(v.to_bits()).is_any_string())
+    {
+        return args.iter().map(|v| string_of(*v)).collect();
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handles = scope.root_nanbox_f64_slice(args);
+    handles
+        .iter()
+        .map(|handle| {
+            let v = handle.get_nanbox_f64();
+            if crate::value::JSValue::from_bits(v.to_bits()).is_any_string() {
+                return string_of(v);
+            }
+            if unsafe { crate::symbol::js_is_symbol(v) != 0 } {
+                super::super::object_ops::throw_object_type_error(
+                    b"Cannot convert a Symbol value to a string",
+                );
+            }
+            let s = crate::builtins::js_string_coerce(v);
+            string_of(crate::value::js_nanbox_string(s as i64))
+        })
+        .collect()
+}
+
+fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> f64 {
+    let args_vec = function_ctor_arg_strings(args_ptr, args_len);
+    let arg_str = |i: usize| -> &str { args_vec.get(i).map(String::as_str).unwrap_or("") };
     // depd `wrapfunction`: `new Function("fn","log","deprecate","message",
     // "site", '…return function (…) { log.call(deprecate, message, site)\n
     // return fn.apply(this, arguments)\n}')`. The outer, called with
@@ -483,7 +522,6 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
     // interpreted.
     #[cfg(feature = "dyn-eval")]
     {
-        let args_vec: Vec<String> = (0..args_len).map(arg_str).collect();
         return crate::dyn_eval::dyn_function_from_strings(&args_vec);
     }
     // Without the `dyn-eval` feature (size-optimized builds that carry no
@@ -492,13 +530,40 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
     // eprintln names the offending library for diagnostics.
     #[cfg(not(feature = "dyn-eval"))]
     {
-        let body = if args_len > 0 {
-            arg_str(args_len - 1)
-        } else {
-            String::new()
-        };
-        refuse_dynamic_function(args_len, &body)
+        let body = args_vec.last().map(String::as_str).unwrap_or("");
+        refuse_dynamic_function(args_len, body)
     }
+}
+
+/// #10423: the `Function` constructor called WITHOUT `new` through a value —
+/// `const F = Function; F(p, body)`, lodash's `var Function = context.Function`,
+/// `Function.bind(null, p)(body)`, `module.exports = Function`. `Function(…)`
+/// is spec-identical to `new Function(…)`, so this is the same entry the
+/// construct paths reach (`lower_call/new.rs` and `construct.rs`). The value
+/// used to carry the shared no-op thunk, so every such call returned
+/// `undefined`. Registered as a rest closure (`populate.rs`), so `rest` holds
+/// every argument.
+#[cfg(not(panic = "abort"))]
+pub(crate) extern "C-unwind" fn global_this_function_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    function_call_thunk_impl(rest)
+}
+
+#[cfg(panic = "abort")]
+pub(crate) extern "C" fn global_this_function_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
+) -> f64 {
+    function_call_thunk_impl(rest)
+}
+
+fn function_call_thunk_impl(rest: f64) -> f64 {
+    // A plain copy of the rest array's slots; the impl reads them before
+    // anything can allocate, and roots them before running user code.
+    let values = global_this_rest_array_values(rest);
+    js_function_ctor_from_strings_impl(values.as_ptr(), values.len())
 }
 
 #[cfg(any(not(feature = "dyn-eval"), test))]
@@ -599,5 +664,60 @@ mod tests {
             crate::error::js_error_get_kind(error),
             crate::error::ERROR_KIND_TYPE_ERROR,
         );
+    }
+
+    fn string_value(s: &str) -> f64 {
+        let header = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        crate::value::js_nanbox_string(header as i64)
+    }
+
+    fn array_value(items: &[f64]) -> f64 {
+        let mut arr = crate::array::js_array_alloc(items.len() as u32);
+        for item in items {
+            arr = crate::array::js_array_push_f64(arr, *item);
+        }
+        crate::value::js_nanbox_pointer(arr as i64)
+    }
+
+    /// #10424: every argument goes through ToString. A non-string used to read
+    /// as `""`, so `new Function(['a', 'b'], body)` had no parameters.
+    #[test]
+    fn function_ctor_arguments_are_converted_with_to_string() {
+        let params = array_value(&[string_value("a"), string_value("b")]);
+        let args = [
+            params,
+            f64::from_bits(crate::value::JSValue::number(1.5).bits()),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::JSValue::bool(true).bits()),
+            string_value("return a"),
+        ];
+        assert_eq!(
+            function_ctor_arg_strings(args.as_ptr(), args.len()),
+            vec!["a,b", "1.5", "null", "true", "return a"],
+        );
+        let strings = [string_value("a"), string_value("return a")];
+        assert_eq!(
+            function_ctor_arg_strings(strings.as_ptr(), strings.len()),
+            vec!["a", "return a"],
+        );
+        assert!(function_ctor_arg_strings(std::ptr::null(), 0).is_empty());
+    }
+
+    /// #10423: the `Function` value called without `new` builds a function
+    /// from its (rest-bundled) arguments instead of returning `undefined`.
+    #[cfg(feature = "dyn-eval")]
+    #[test]
+    fn function_value_call_builds_a_function() {
+        let rest = array_value(&[
+            array_value(&[string_value("a"), string_value("b")]),
+            string_value("return a + b"),
+        ]);
+        let f = global_this_function_call_thunk(std::ptr::null(), rest);
+        let args = [
+            f64::from_bits(crate::value::JSValue::number(2.0).bits()),
+            f64::from_bits(crate::value::JSValue::number(3.0).bits()),
+        ];
+        let result = unsafe { crate::closure::js_native_call_value(f, args.as_ptr(), args.len()) };
+        assert_eq!(crate::builtins::js_number_coerce(result), 5.0);
     }
 }
