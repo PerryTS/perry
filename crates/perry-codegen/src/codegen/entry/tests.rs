@@ -395,6 +395,39 @@ fn executable_seeds_process_argv_script_path_but_dylib_does_not() {
     );
 }
 
+/// #10428/#10429: every linked provider's install wrapper runs from the entry
+/// prologue (executable and dylib alike), BEFORE module initializers — a
+/// CommonJS `require('net')` creates its module object at runtime, where no
+/// codegen install is emitted. Nothing is emitted when the list is empty.
+#[test]
+fn entry_prologue_calls_native_provider_installs_before_module_init() {
+    for output_type in ["executable", "dylib"] {
+        let mut opts = entry_opts(output_type);
+        opts.non_entry_module_prefixes = vec!["lib_cjs".to_string()];
+        opts.app_metadata.native_provider_installs = vec![
+            "js_ext_http_nm_install".to_string(),
+            "js_ext_net_nm_install".to_string(),
+        ];
+        let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+        let http = ir.find("call void @js_ext_http_nm_install()");
+        let net = ir.find("call void @js_ext_net_nm_install()");
+        let init = ir
+            .find("call void @lib_cjs__init()")
+            .unwrap_or_else(|| panic!("{output_type}: module init not called\n{ir}"));
+        assert!(
+            http.is_some() && net.is_some(),
+            "{output_type}: missing installs\n{ir}"
+        );
+        assert!(
+            net.unwrap() < init,
+            "{output_type}: install after module init\n{ir}"
+        );
+    }
+    let ir = emitted_ir("executable");
+    assert!(!ir.contains("call void @js_ext_net_nm_install()"), "{ir}");
+    assert!(!ir.contains("call void @js_ext_http_nm_install()"), "{ir}");
+}
+
 #[test]
 fn executable_and_app_dylib_both_register_lazy_path_initializers() {
     for output_type in ["executable", "dylib"] {

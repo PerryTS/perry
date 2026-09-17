@@ -1099,6 +1099,20 @@ pub fn run_with_parse_cache(
     classify_eager_modules(&mut ctx, &entry_path);
     let non_entry_module_names: Vec<String> =
         topo_sort_non_entry_modules(&ctx, &entry_path, format, verbose);
+    // #10428/#10429: every imported module the well-known flip serves from a
+    // provider crate (net, http/https/http2) gets that provider's install
+    // wrapper called from the entry prologue, so the provider's export
+    // dispatcher is live for module objects the runtime creates itself (a
+    // CommonJS `require('net')` goes through `createRequire`, not codegen).
+    // No flip, no provider on the link line: emit nothing.
+    let native_provider_installs: Vec<String> =
+        if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_some() {
+            Vec::new()
+        } else {
+            perry_codegen::native_provider_install_symbols(
+                ctx.native_module_imports.iter().map(String::as_str),
+            )
+        };
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>
@@ -5358,6 +5372,11 @@ pub fn run_with_parse_cache(
                     Some(path.to_string_lossy().into_owned())
                 } else {
                     None
+                },
+                native_provider_installs: if is_entry {
+                    native_provider_installs.clone()
+                } else {
+                    Vec::new()
                 },
                 ..ctx.app_metadata.clone()
             },

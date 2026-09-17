@@ -75,6 +75,8 @@ use client_dispatch::dispatch_request;
 // Client-request event drain helpers (#4905) — extracted from this file
 // to stay under the 2000-line lint cap.
 mod client_abort;
+// #10428: erased-receiver dispatch for client handles without the stdlib pump.
+mod client_dispatch_ext;
 mod client_events;
 mod client_surface;
 pub(crate) use client_surface::*;
@@ -409,6 +411,7 @@ pub(crate) fn ensure_gc_scanner_registered() {
         unsafe {
             js_register_http_agent_handle_probe(http_agent_probe);
         }
+        client_dispatch_ext::ensure_registered();
     });
 }
 

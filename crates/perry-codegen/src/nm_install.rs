@@ -28,14 +28,17 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "domain" => Some("js_nm_install_domain"),
         "events" => Some("js_nm_install_events"),
         "fs" => Some("js_nm_install_fs"),
-        "http" | "http2" | "https" => Some("js_nm_install_http"),
+        // #10428/#10429: http/https/http2 and net exports are implemented by
+        // their well-known providers, whose install wrappers register the
+        // value-form dispatcher before chaining to the runtime bucket install.
+        "http" | "http2" | "https" => Some("js_ext_http_nm_install"),
         "inspector"
         | "inspector.Network"
         | "inspector.NetworkResources"
         | "inspector.DOMStorage"
         | "inspector/promises" => Some("js_nm_install_inspector"),
         "module" => Some("js_nm_install_module"),
-        "net" => Some("js_nm_install_net"),
+        "net" => Some("js_ext_net_nm_install"),
         // #6563: node-pty + the API-identical @lydell fork share one bucket.
         "node-pty" | "@lydell/node-pty" | "bun-pty" => Some("js_nm_install_node_pty"),
         "os" => Some("js_nm_install_os"),
@@ -78,6 +81,25 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
     }
 }
 
+/// #10428/#10429: the provider-owned install wrappers (`js_ext_*_nm_install`)
+/// for a program's native module imports, sorted and deduplicated. Their
+/// crates are linked whenever the module is imported, and the entry prologue
+/// calls each one so runtime-created module objects (a CommonJS
+/// `require('net')`) reach the provider's export dispatcher too.
+pub fn native_provider_install_symbols<'a>(
+    modules: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut symbols: Vec<String> = modules
+        .into_iter()
+        .filter_map(nm_install_symbol)
+        .filter(|symbol| symbol.starts_with("js_ext_"))
+        .map(str::to_string)
+        .collect();
+    symbols.sort_unstable();
+    symbols.dedup();
+    symbols
+}
+
 /// All dispatch-install symbols + the dynamic fallback — declared so codegen can
 /// emit calls to them.
 #[allow(dead_code)] // consumed only by codegen configurations that emit dispatch declarations
@@ -98,10 +120,10 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_domain",
     "js_nm_install_events",
     "js_nm_install_fs",
-    "js_nm_install_http",
+    "js_ext_http_nm_install",
     "js_nm_install_inspector",
     "js_nm_install_module",
-    "js_nm_install_net",
+    "js_ext_net_nm_install",
     "js_nm_install_node_pty",
     "js_nm_install_os",
     "js_nm_install_path",
@@ -184,7 +206,16 @@ pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::nm_install_symbol;
+    use super::{native_provider_install_symbols, nm_install_symbol};
+
+    #[test]
+    fn provider_installs_cover_net_and_the_http_family_once() {
+        assert_eq!(
+            native_provider_install_symbols(["fs", "net", "node:http", "https", "http2", "bun"]),
+            vec!["js_ext_http_nm_install", "js_ext_net_nm_install"]
+        );
+        assert!(native_provider_install_symbols(["fs", "path", "events"]).is_empty());
+    }
 
     #[test]
     fn top_level_test_module_installs_its_submodule_registry() {

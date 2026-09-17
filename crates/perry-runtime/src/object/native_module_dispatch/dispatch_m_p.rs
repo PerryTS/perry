@@ -108,35 +108,11 @@ pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name
         typed_kind
     );
     match (module_name, method_name) {
-        // `net.connect(port, host)` / `net.createConnection(...)` as a bound
-        // VALUE (mysql2-via-turbopack's externals wrapper requires 'net' and
-        // calls the export dynamically) — the socket factory lives in
-        // perry-stdlib, so route through the registered stdlib dispatcher,
-        // the same bridge the http client entry points use.
-        ("net", "connect") | ("net", "createConnection") => {
-            let ptr =
-                crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
-            if ptr.is_null() {
-                f64::from_bits(JSValue::undefined().bits())
-            } else {
-                let dispatch: unsafe extern "C" fn(
-                    *const u8,
-                    usize,
-                    *const u8,
-                    usize,
-                    *const f64,
-                    usize,
-                ) -> f64 = std::mem::transmute(ptr);
-                dispatch(
-                    module_name.as_ptr(),
-                    module_name.len(),
-                    method_name.as_ptr(),
-                    method_name.len(),
-                    args_ptr,
-                    args_len,
-                )
-            }
-        }
+        // node:net exports reached as VALUES — `require('net').connect(...)`,
+        // `const n = net; n.isIP(...)`, ioredis' `(0, net_1.createConnection)(...)`.
+        // Sockets, servers and the IP helpers live in perry-ext-net, which registers
+        // this dispatcher from its `net` namespace install (#10429).
+        ("net", name) if net_export_routes_to_provider(name) => net_provider_dispatch(ctx, name),
         ("net", "_normalizeArgs") => crate::net_validate::js_net_normalize_args(arg(0)),
         ("net", "_createServerHandle") => crate::net_validate::js_net_create_server_handle_stub(
             arg(0),
@@ -151,6 +127,63 @@ pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name
         // also serve the generic namespace-object method-dispatch path.
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
+}
+
+/// node:net exports implemented by perry-ext-net (see `nm_dispatch_net`).
+fn net_export_routes_to_provider(name: &str) -> bool {
+    matches!(
+        name,
+        "connect"
+            | "createConnection"
+            | "createServer"
+            | "Server"
+            | "Socket"
+            | "Stream"
+            | "isIP"
+            | "isIPv4"
+            | "isIPv6"
+            | "getDefaultAutoSelectFamily"
+            | "setDefaultAutoSelectFamily"
+            | "getDefaultAutoSelectFamilyAttemptTimeout"
+            | "setDefaultAutoSelectFamilyAttemptTimeout"
+            | "BlockList"
+            | "SocketAddress"
+    )
+}
+
+/// Forward a node:net export to perry-ext-net's registered dispatcher, or
+/// `undefined` when no net provider is linked.
+unsafe fn net_provider_dispatch(ctx: &NmCtx, name: &str) -> f64 {
+    let ptr = crate::value::JS_NATIVE_NET_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(JSValue::undefined().bits());
+    }
+    let dispatch: crate::value::JsNativeNetDispatchFn = std::mem::transmute(ptr);
+    dispatch(name.as_ptr(), name.len(), ctx.args_ptr, ctx.args_len)
+}
+
+/// `new` on a bound node:net class value (`const Sock = net.Socket; new Sock()`,
+/// pg's function-local `new (require('net')).Socket()`). Registered by
+/// `js_nm_install_net`; the classes are provider-owned like the factories.
+pub(crate) unsafe fn nm_ctor_net(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !matches!(
+        method,
+        "Socket" | "Stream" | "Server" | "BlockList" | "SocketAddress"
+    ) {
+        return None;
+    }
+    let ctx = NmCtx {
+        obj: std::ptr::null(),
+        args_ptr,
+        args_len,
+        assert_skip_prototype: false,
+    };
+    Some(net_provider_dispatch(&ctx, method))
 }
 
 /// #6563: node-pty / @lydell/node-pty — one shared bucket (the namespace name
@@ -818,5 +851,101 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
         ("process", "cpuUsage") => crate::process::js_process_cpu_usage(arg(0)),
         // ── crypto module ──
         _ => f64::from_bits(JSValue::undefined().bits()),
+    }
+}
+
+#[cfg(test)]
+mod net_provider_dispatch_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use std::sync::Mutex;
+
+    static LAST_CALL: Mutex<Option<(String, usize)>> = Mutex::new(None);
+
+    unsafe extern "C" fn recording_provider(
+        method_ptr: *const u8,
+        method_len: usize,
+        _args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64 {
+        let method = std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len))
+            .expect("method name is UTF-8");
+        *LAST_CALL.lock().unwrap() = Some((method.to_string(), args_len));
+        42.0
+    }
+
+    fn take_last_call() -> Option<(String, usize)> {
+        LAST_CALL.lock().unwrap().take()
+    }
+
+    /// #10429: every node:net export perry-ext-net implements must reach the
+    /// registered provider from the namespace-method path (`n.connect(...)`,
+    /// a bound `createConnection`) and, for the classes, from the ctor
+    /// registry `js_nm_install_net` fills (`new (net.Socket)()`). Before the
+    /// fix only connect/createConnection were forwarded, through a dispatcher
+    /// registered solely by an auto-optimized http build.
+    #[test]
+    fn net_exports_reach_the_registered_provider() {
+        crate::value::js_set_native_net_dispatch(recording_provider);
+        crate::object::native_module_registry::js_nm_install_net();
+        let ns = crate::object::js_create_native_module_namespace(b"node:net".as_ptr(), 8);
+        let ns = (ns.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
+        let args = [f64::from_bits(crate::value::TAG_UNDEFINED); 2];
+        for method in [
+            "connect",
+            "createConnection",
+            "createServer",
+            "Server",
+            "Socket",
+            "Stream",
+            "isIP",
+            "isIPv4",
+            "isIPv6",
+            "getDefaultAutoSelectFamily",
+            "setDefaultAutoSelectFamilyAttemptTimeout",
+            "BlockList",
+            "SocketAddress",
+        ] {
+            let got = unsafe { dispatch_native_module_method(ns, method, args.as_ptr(), 2) };
+            assert_eq!(got, 42.0, "net.{method}(...) did not reach the provider");
+            assert_eq!(take_last_call(), Some((method.to_string(), 2)));
+        }
+
+        let ctor = crate::object::nm_ctor_lookup("net")
+            .expect("js_nm_install_net must register the net class constructors");
+        for class in ["Socket", "Stream", "Server", "BlockList", "SocketAddress"] {
+            assert_eq!(unsafe { ctor("net", class, args.as_ptr(), 1) }, Some(42.0));
+            assert_eq!(take_last_call(), Some((class.to_string(), 1)));
+        }
+        assert_eq!(unsafe { ctor("net", "connect", args.as_ptr(), 0) }, None);
+        assert_eq!(take_last_call(), None);
+
+        // No provider linked: the value forms stay `undefined`.
+        crate::value::JS_NATIVE_NET_DISPATCH.store(std::ptr::null_mut(), Ordering::SeqCst);
+        let got = unsafe { dispatch_native_module_method(ns, "isIP", args.as_ptr(), 1) };
+        assert_eq!(got.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(take_last_call(), None);
+    }
+
+    /// #10428: `require('node:http') === require('http')` in Node; the
+    /// provider-owned namespaces are cached like `fs` / `path` so both
+    /// spellings (and repeated requires) yield one object.
+    #[test]
+    fn prefixed_and_bare_provider_namespaces_are_one_object() {
+        for (prefixed, bare) in [
+            ("node:http", "http"),
+            ("node:https", "https"),
+            ("node:http2", "http2"),
+            ("node:net", "net"),
+        ] {
+            let a =
+                crate::object::js_create_native_module_namespace(prefixed.as_ptr(), prefixed.len());
+            let b = crate::object::js_create_native_module_namespace(bare.as_ptr(), bare.len());
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "require('{prefixed}') !== require('{bare}')"
+            );
+        }
     }
 }

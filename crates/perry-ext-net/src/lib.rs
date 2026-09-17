@@ -45,6 +45,8 @@ mod ip;
 // `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
 mod bun_tcp;
+// #10429: runtime callback for `net` exports used as values.
+mod native_dispatch;
 mod tls;
 pub use tls::{js_ext_tls_connect, js_tls_connect};
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
@@ -449,8 +451,8 @@ fn mark_closed(id: i64) {
 ///
 /// All three args must be NaN-boxed Perry-runtime values per the
 /// codegen ABI — see `NA_F64` lowering in perry-codegen.
-/// Distinct-symbol alias of `js_net_socket_connect` for perry-stdlib's
-/// dynamic-dispatch bridge (`js_node_http_native_dispatch`'s net arm). The
+/// Distinct-symbol alias of `js_net_socket_connect` for generated code and the
+/// value-form dispatcher (`native_dispatch.rs`). The
 /// shared name has a bundled-stdlib twin, and in a build that links BOTH
 /// archives the shared symbol can bind to the twin whose socket registry the
 /// handle-dispatch never consults — connect then "succeeds" into one registry

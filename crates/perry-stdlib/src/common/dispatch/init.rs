@@ -193,255 +193,6 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
     f64::from_bits(perry_runtime::JSValue::undefined().bits())
 }
 
-/// #2533: route a captured / aliased `http`/`https`/`http2` `createServer`
-/// (or the `Server` / `createSecureServer` aliases) back to the
-/// perry-ext-http factories. Registered with the runtime via
-/// `js_set_native_http_dispatch` under `external-http-server-pump` (enabled
-/// whenever the program imports one of those modules), so we can safely
-/// `extern "C"`-reference the ext-crate symbols — they're guaranteed linked.
-///
-/// The method-call form (`http.createServer(...)`) already lowers through the
-/// codegen NATIVE_MODULE_TABLE; this only serves the value-read form, where the
-/// factory reaches the runtime as a bound-method closure (see
-/// `is_native_module_callable_export`) and lands here when invoked.
-///
-/// Node's overloads are `createServer([options][, requestListener])`, while
-/// `@hono/node-server` calls `createServer(serverOptions, requestListener)`. We
-/// classify each arg by type rather than position — the function/closure arg is
-/// the handler, the remaining object arg is the options — so both orders work.
-#[cfg(feature = "external-http-server-pump")]
-unsafe extern "C" fn js_node_http_native_dispatch(
-    module_ptr: *const u8,
-    module_len: usize,
-    method_ptr: *const u8,
-    method_len: usize,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> f64 {
-    use perry_runtime::JSValue;
-    extern "C" {
-        fn js_bun_serve(options: f64) -> i64;
-        fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
-        fn js_node_http_outgoing_message_new() -> i64;
-        fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
-        fn js_node_http2_create_server(first_arg: f64, second_arg: f64) -> i64;
-        fn js_node_http2_create_secure_server(opts_f64: f64, handler: i64) -> i64;
-        fn js_value_is_closure(value_bits: i64) -> i32;
-    }
-    let undefined = f64::from_bits(JSValue::undefined().bits());
-    let module = if module_ptr.is_null() || module_len == 0 {
-        ""
-    } else {
-        std::str::from_utf8(std::slice::from_raw_parts(module_ptr, module_len)).unwrap_or("")
-    };
-    let method = if method_ptr.is_null() || method_len == 0 {
-        ""
-    } else {
-        std::str::from_utf8(std::slice::from_raw_parts(method_ptr, method_len)).unwrap_or("")
-    };
-    let arg = |n: usize| -> f64 {
-        if n < args_len && !args_ptr.is_null() {
-            *args_ptr.add(n)
-        } else {
-            undefined
-        }
-    };
-    if module == "bun" && method == "serve" {
-        let handle = js_bun_serve(arg(0));
-        return if handle == 0 {
-            undefined
-        } else {
-            perry_runtime::js_nanbox_pointer(handle)
-        };
-    }
-    if module == "http" && method == "OutgoingMessage" {
-        let handle = js_node_http_outgoing_message_new();
-        return if handle == 0 {
-            undefined
-        } else {
-            perry_runtime::js_nanbox_pointer(handle)
-        };
-    }
-    // #4904: Node exposes Agent / ClientRequest / IncomingMessage /
-    // ServerResponse as constructable classes. Construction through any
-    // value/aliasing path (`const { Agent } = require('http')`,
-    // `new http.IncomingMessage(socket)`, …) lands here via the
-    // class_registry http construct arm.
-    if module == "http" && method == "IncomingMessage" {
-        extern "C" {
-            fn js_node_http_incoming_message_standalone_new(socket: f64) -> i64;
-        }
-        let handle = js_node_http_incoming_message_standalone_new(arg(0));
-        return if handle == 0 {
-            undefined
-        } else {
-            perry_runtime::js_nanbox_pointer(handle)
-        };
-    }
-    if module == "http" && method == "ServerResponse" {
-        extern "C" {
-            fn js_node_http_server_response_standalone_new(req: f64) -> i64;
-        }
-        let handle = js_node_http_server_response_standalone_new(arg(0));
-        return if handle == 0 {
-            undefined
-        } else {
-            perry_runtime::js_nanbox_pointer(handle)
-        };
-    }
-    // `net.connect` / `net.createConnection` reached as a bound VALUE —
-    // mysql2 (bundled by turbopack) does `const net = require('net');
-    // net.connect(port, host)` through the externals wrapper, so the call
-    // arrives here instead of the static codegen table. Route to the same
-    // event-driven socket factory the static path uses. Same cfg gate as the
-    // `net` module itself (the auto-opt stdlib is feature-pruned) — and
-    // deliberately OUTSIDE the `external-http-client-pump` block below, which
-    // is not enabled for every build that has sockets.
-    if module == "net" && matches!(method, "connect" | "createConnection") {
-        // Route to the net implementation that OWNS the handle-dispatch
-        // registries in this build: crate-path under bundled-net, the
-        // DISTINCT `js_ext_net_socket_connect` symbol under the well-known
-        // ext-net flip. The shared `js_net_socket_connect` name has twins in
-        // both archives, and binding to the wrong one splits the socket
-        // registry from the `.on('data')` listener registry — the mysql2
-        // handshake then times out with the bytes silently dropped (#5021's
-        // twin-symbol disease).
-        #[cfg(all(
-            feature = "bundled-net",
-            not(target_os = "ios"),
-            not(target_os = "android")
-        ))]
-        let handle = crate::net::js_net_socket_connect(arg(0), arg(1), arg(2));
-        #[cfg(all(
-            not(feature = "bundled-net"),
-            feature = "external-net-pump",
-            not(target_os = "ios"),
-            not(target_os = "android")
-        ))]
-        let handle = {
-            extern "C" {
-                fn js_ext_net_socket_connect(arg1: f64, arg2: f64, arg3: f64) -> i64;
-            }
-            js_ext_net_socket_connect(arg(0), arg(1), arg(2))
-        };
-        #[cfg(not(any(
-            all(
-                feature = "bundled-net",
-                not(target_os = "ios"),
-                not(target_os = "android")
-            ),
-            all(
-                not(feature = "bundled-net"),
-                feature = "external-net-pump",
-                not(target_os = "ios"),
-                not(target_os = "android")
-            )
-        )))]
-        let handle: i64 = 0;
-        return if handle == 0 {
-            undefined
-        } else {
-            perry_runtime::js_nanbox_pointer(handle)
-        };
-    }
-    #[cfg(feature = "external-http-client-pump")]
-    {
-        extern "C" {
-            fn js_http_agent_new(options_f64: f64) -> i64;
-            fn js_https_agent_new(options_f64: f64) -> i64;
-            fn js_http_client_request_standalone_new(options_f64: f64) -> i64;
-            fn js_http_get_overload(args_array: i64) -> i64;
-            fn js_https_get_overload(args_array: i64) -> i64;
-            fn js_http_request_overload(args_array: i64) -> i64;
-            fn js_https_request_overload(args_array: i64) -> i64;
-        }
-        // #4904/#4975: captured / aliased `get` / `request` (`const { get } =
-        // require('http')`). Preserve the complete argument list and route it
-        // through the same overload normalizer as a statically-known call.
-        // Picking only the first non-closure argument lost `(url, options,
-        // callback)` and treated WHATWG URL objects as plain option bags.
-        if matches!(method, "get" | "request") && matches!(module, "http" | "https") {
-            let scope = perry_runtime::gc::RuntimeHandleScope::new();
-            let args = (0..args_len)
-                .map(|n| scope.root_nanbox_f64(arg(n)))
-                .collect::<Vec<_>>();
-            let overload_args = scope.root_raw_mut_ptr::<perry_runtime::ArrayHeader>(
-                perry_runtime::js_array_alloc(args_len as u32),
-            );
-            for arg in args {
-                overload_args.with_mut_ptr(|array: *mut perry_runtime::ArrayHeader| {
-                    let _ = perry_runtime::js_array_push_f64(array, arg.get_nanbox_f64());
-                });
-            }
-            let handle =
-                overload_args.with_mut_ptr(|array: *mut perry_runtime::ArrayHeader| {
-                    match (module, method) {
-                        ("http", "get") => js_http_get_overload(array as i64),
-                        ("http", "request") => js_http_request_overload(array as i64),
-                        ("https", "get") => js_https_get_overload(array as i64),
-                        _ => js_https_request_overload(array as i64),
-                    }
-                });
-            return if handle == 0 {
-                undefined
-            } else {
-                perry_runtime::js_nanbox_pointer(handle)
-            };
-        }
-        if method == "Agent" && (module == "http" || module == "https") {
-            let handle = if module == "https" {
-                js_https_agent_new(arg(0))
-            } else {
-                js_http_agent_new(arg(0))
-            };
-            return if handle == 0 {
-                undefined
-            } else {
-                perry_runtime::js_nanbox_pointer(handle)
-            };
-        }
-        if module == "http" && method == "ClientRequest" {
-            let handle = js_http_client_request_standalone_new(arg(0));
-            return if handle == 0 {
-                undefined
-            } else {
-                perry_runtime::js_nanbox_pointer(handle)
-            };
-        }
-    }
-    // Disambiguate handler (function/closure) from options (object),
-    // independent of argument order.
-    let mut handler_ptr: i64 = 0;
-    let mut options_f64 = undefined;
-    for n in 0..args_len.min(2) {
-        let a = arg(n);
-        if js_value_is_closure(a.to_bits() as i64) != 0 {
-            handler_ptr = perry_runtime::js_nanbox_get_pointer(a);
-        } else if JSValue::from_bits(a.to_bits()).is_pointer() {
-            options_f64 = a;
-        }
-    }
-    let handler_f64 = if handler_ptr == 0 {
-        undefined
-    } else {
-        perry_runtime::js_nanbox_pointer(handler_ptr)
-    };
-    let handle = match module {
-        "http" => js_node_http_create_server_with_options(options_f64, handler_f64),
-        "https" => js_node_https_create_server(options_f64, handler_ptr),
-        "http2" if method == "createSecureServer" => {
-            js_node_http2_create_secure_server(options_f64, handler_ptr)
-        }
-        "http2" => js_node_http2_create_server(options_f64, handler_f64),
-        _ => return undefined,
-    };
-    if handle == 0 {
-        undefined
-    } else {
-        perry_runtime::js_nanbox_pointer(handle)
-    }
-}
-
 /// Initialize the handle method and property dispatch systems.
 /// This registers our dispatch functions with perry-runtime.
 /// Must be called before any user code runs.
@@ -785,12 +536,26 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     ))]
     perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
-    // #2533: route captured / aliased http/https/http2 `createServer` back to
-    // the perry-ext-http factories. Only registered when the http ext
-    // crate is linked (its symbols are referenced by the dispatcher), so the
-    // runtime arm stays null-and-undefined for non-http programs.
+    // #2533: route captured / aliased http/https/http2 exports back to
+    // perry-ext-http. The dispatcher lives in that crate (#10428), which also
+    // registers it from its namespace install so the prebuilt no-auto archives
+    // work too; registering here keeps value forms that never materialize an
+    // http namespace (`bun.serve`, `class extends http.Server`) covered when
+    // the feature guarantees the crate is linked.
     #[cfg(feature = "external-http-server-pump")]
-    perry_runtime::js_set_native_http_dispatch(js_node_http_native_dispatch);
+    {
+        extern "C" {
+            fn js_ext_http_native_dispatch(
+                module_ptr: *const u8,
+                module_len: usize,
+                method_ptr: *const u8,
+                method_len: usize,
+                args_ptr: *const f64,
+                args_len: usize,
+            ) -> f64;
+        }
+        perry_runtime::js_set_native_http_dispatch(js_ext_http_native_dispatch);
+    }
 
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream

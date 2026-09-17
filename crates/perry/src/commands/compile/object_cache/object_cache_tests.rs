@@ -404,6 +404,17 @@ fn key_changes_with_embedded_entry_source_path() {
 }
 
 #[test]
+fn key_changes_with_native_provider_installs() {
+    let a = empty_opts();
+    let mut b = empty_opts();
+    b.app_metadata.native_provider_installs = vec!["js_ext_net_nm_install".to_string()];
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
+    );
+}
+
+#[test]
 fn key_changes_with_imported_class_signature() {
     let mut a = empty_opts();
     let mut b = empty_opts();
