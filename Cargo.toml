@@ -627,16 +627,3 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
-
-# MEASUREMENT BRANCH ONLY — do not merge into turnloop/integration.
-# turnloop#89 (merged, unreleased) stops `Queue::new` writing every ring slot,
-# which made a 32_768-operation `WorkPort` ring fully resident at construction.
-# No alpha was cut, deliberately: the version stays 0.1.0-alpha.5, so this
-# patch applies to every turnloop-* crate in the graph without a version bump.
-#
-# The rev is the alpha.5 release commit plus #89 ALONE, not turnloop main:
-# main also carries #83 (multi-threaded accept, which changes `reuse_port` from
-# `bool` to a `ReusePort` type and does not even compile against this tree) and
-# #85. Pinning to main would have measured three changes and called it one.
-[patch.crates-io]
-turnloop = { git = "https://github.com/PerryTS/turnloop", rev = "ee8060e" }
