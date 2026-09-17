@@ -637,3 +637,180 @@ fn a_connect_answer_split_across_reads_is_reassembled() {
         "nothing follows the head in this fixture"
     );
 }
+
+// ── turnloop P10: the thread that has no loop of its own ───────────────────
+//
+// P8's inventory named "per-agent loops for the decline" as the first of group
+// G's three blockers. P9 landed those loops, so the thread that still cannot
+// submit is a SECOND thread acting for an agent another thread already owns —
+// and `perry_ffi::agent_post` lets it hand the whole submission to that owner
+// instead of keeping a reqwest future alive for itself.
+
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
+
+/// How many times the P10 test's sink has been called, and on which thread.
+///
+/// A `Sink` is a plain `fn`, so there is nowhere to hang a closure's captured
+/// state — which is the same reason the engine holds function pointers in the
+/// first place.
+static P10_SINK_CALLS: AtomicUsize = AtomicUsize::new(0);
+static P10_SINK_THREAD: AtomicU64 = AtomicU64::new(0);
+
+fn thread_fingerprint() -> u64 {
+    // `ThreadId` has no stable numeric form on stable Rust, and the test only
+    // needs "the same thread or not". The address of a thread-local is exactly
+    // that, and is cheap.
+    thread_local! {
+        static ANCHOR: u8 = const { 0 };
+    }
+    ANCHOR.with(|a| a as *const u8 as u64)
+}
+
+fn p10_sink_done(_ctx: usize, _outcome: super::Outcome) {
+    P10_SINK_THREAD.store(thread_fingerprint(), AtomicOrdering::SeqCst);
+    P10_SINK_CALLS.fetch_add(1, AtomicOrdering::SeqCst);
+}
+
+/// turnloop P10, end to end through `submit`: a thread that cannot get a loop
+/// of its own hands the whole request to the thread that owns one, instead of
+/// declining to reqwest.
+///
+/// Three discriminating facts, not one "nothing threw":
+///
+/// * the poster's own `agent_post::dispatched()` stays at zero — if it moved,
+///   the work never crossed;
+/// * `submitted_total()` does not move while the poster is running and DOES
+///   move once the owner has run the job — the counter is bumped by
+///   `start_here`, so it is the proof the owner actually entered the request
+///   into its engine rather than merely receiving a box;
+/// * the sink runs on the OWNER's thread, which is what makes the promise get
+///   settled where that agent's JS values live (#1824).
+///
+/// The request is aimed at a closed loopback port, so it fails fast. The
+/// subject here is the crossing, not the response.
+#[test]
+fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
+    let _lease = super::become_the_owner_for_test();
+    let owner = thread_fingerprint();
+    let before_dispatched = perry_ffi::agent_post::dispatched();
+    let before_submitted = super::submitted_total();
+    let before_calls = P10_SINK_CALLS.load(AtomicOrdering::SeqCst);
+
+    let poster_ran_its_own = std::thread::spawn(move || {
+        // A second thread acting FOR the same agent: it has no agent of its
+        // own, so `current_agent()` resolves to the primary agent — the one
+        // whose loop the thread above owns.
+        assert!(
+            !super::tl::available(),
+            "this thread must NOT own the loop, or the post under test never \
+             happens and the assertions below are vacuous"
+        );
+        assert!(
+            perry_ffi::agent_post::available(),
+            "the agent HAS a loop; a second thread of it must be able to post"
+        );
+        assert_eq!(
+            perry_ffi::agent_post::dispatched(),
+            0,
+            "this thread has run no posted job"
+        );
+
+        // Only a decline that belongs to the THREAD may be posted.
+        // `Unsupported`, `Proxy` and `NoTls` are properties of the request and
+        // of process-wide configuration, so the agent's owner would refuse them
+        // for exactly the same reason — and by then the caller has been told
+        // the engine took the request and has not spawned its fallback.
+        // `submit` therefore prepares the request BEFORE it chooses a
+        // transport; this is the assertion that pins that order, and it is made
+        // here because this is the thread that would otherwise post. Were the
+        // order reversed, the post would be accepted and this would be `Ok`.
+        assert_eq!(
+            super::submit(
+                super::RequestSpec {
+                    url: "ftp://example.test/x".to_string(),
+                    method: "GET".to_string(),
+                    headers: Vec::new(),
+                    body: None,
+                    redirect: RedirectMode::Follow,
+                    abort_key: None,
+                },
+                super::Sink {
+                    ctx: 0,
+                    on_head: None,
+                    on_chunk: None,
+                    on_done: p10_sink_done,
+                },
+            ),
+            Err(super::Declined::Unsupported),
+            "an unsupported URL must decline to the caller's fallback, not be \
+             handed to a thread that would refuse it identically"
+        );
+        let spec = super::RequestSpec {
+            url: "http://127.0.0.1:1/p10".to_string(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: None,
+            redirect: RedirectMode::Follow,
+            abort_key: None,
+        };
+        let sink = super::Sink {
+            ctx: 0,
+            on_head: None,
+            on_chunk: None,
+            on_done: p10_sink_done,
+        };
+        super::submit(spec, sink).expect(
+            "a thread whose agent has a loop must not decline — that decline is \
+             exactly what P10 deletes",
+        );
+        assert_eq!(
+            super::submitted_total(),
+            before_submitted,
+            "the poster must not have entered the request into an engine of its \
+             own; it has no loop to drive one"
+        );
+        perry_ffi::agent_post::dispatched()
+    })
+    .join()
+    .expect("posting thread");
+
+    assert_eq!(
+        poster_ran_its_own, 0,
+        "the poster must NOT have run the job itself — if it did, the work never \
+         crossed and this surface is still doing its own I/O"
+    );
+
+    let limit = Instant::now() + Duration::from_secs(10);
+    while perry_ffi::agent_post::dispatched() == before_dispatched {
+        assert!(
+            Instant::now() < limit,
+            "the posted request never reached the owner"
+        );
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+    }
+    assert_eq!(
+        perry_ffi::agent_post::dispatched(),
+        before_dispatched + 1,
+        "the owner ran it exactly once — a post is delivered, not retried"
+    );
+    assert!(
+        super::submitted_total() > before_submitted,
+        "the owner entered the request into ITS engine; without this the job \
+         crossed and did nothing"
+    );
+
+    let limit = Instant::now() + Duration::from_secs(10);
+    while P10_SINK_CALLS.load(AtomicOrdering::SeqCst) == before_calls {
+        assert!(
+            Instant::now() < limit,
+            "the posted request never settled on the owner"
+        );
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+    }
+    assert_eq!(
+        P10_SINK_THREAD.load(AtomicOrdering::SeqCst),
+        owner,
+        "the sink must run on the agent's OWNER, which is the thread this \
+         agent's JS values live on"
+    );
+}

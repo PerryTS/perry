@@ -8,9 +8,12 @@
 //!
 //! # What declines, and why each is real
 //!
-//! * **A worker agent**, which has no `turnloop::Loop` of its own yet (P3/P4
-//!   left per-agent loops to a later phase), and the `tokio-wait-driver` A/B
-//!   arm, where there is no loop at all.
+//! * **No loop for this agent at all** — the `tokio-wait-driver` A/B arm, which
+//!   compiles none because it exists to measure the transport this replaces,
+//!   and a host where `Loop::new` failed. A *worker* agent is no longer one of
+//!   these (turnloop P9 gave every agent a loop), and neither is a second
+//!   thread acting for an agent another thread owns: turnloop P10 hands that
+//!   thread's whole submission to the owner (`turnloop_client::posted`).
 //! * **A proxy this client cannot drive** — a proxy URL whose scheme is not
 //!   `http` (socks5, https-to-proxy), or one that will not parse. An ordinary
 //!   `http://` proxy is no longer a decline: `HTTP_PROXY`/`HTTPS_PROXY` and the
