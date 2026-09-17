@@ -41,7 +41,6 @@ pub(crate) fn register_turnloop_server_session(
         local_settings,
         remote_settings: Http2SettingsState::default(),
         local_window_size: 65_535,
-        sender: std::sync::Arc::new(std::sync::Mutex::new(None)),
         listeners: HashMap::new(),
         close_callbacks: Vec::new(),
         pending_callbacks: Vec::new(),

@@ -554,6 +554,22 @@ fn arm_settings_timeout(c: &mut H2Conn) {
 
 // ── Client connect ──────────────────────────────────────────────────────────
 
+/// What `http2.connect('https://…')` offers in ALPN: `h2` alone, which is what
+/// Node offers.
+///
+/// Offering `http/1.1` as well would let a server select it and leave this
+/// connection holding a protocol its core cannot speak — there is no HTTP/1.1
+/// client on this path to hand it to, the way an accepted connection hands a
+/// negotiated `http/1.1` to P5.
+///
+/// Named rather than written inline at the install so the offer is one thing a
+/// test can read; the capability behind it is
+/// `perry_ext_net::turnloop_tls_io::install_client_session`, the public client
+/// twin of `install_server_session`.
+pub(crate) fn client_alpn() -> Vec<Vec<u8>> {
+    vec![b"h2".to_vec()]
+}
+
 /// `http2.connect('http://host:port')` on the loop, in place of the private
 /// `current_thread` tokio runtime the `h2` client built **per session** — and
 /// the second one `start_client_request` built **per request** (perry#10327).
@@ -669,14 +685,11 @@ fn on_connect(id: i64) {
                 destroy_connection(id);
                 return;
             };
-            // `h2` alone, which is what Node offers for `http2.connect` over
-            // TLS. Offering `http/1.1` as well would let a server select it and
-            // leave this connection holding a protocol its core cannot speak.
             if perry_ext_net::turnloop_tls_io::install_client_session(
                 id,
                 tls.servername,
                 tls.verify,
-                vec![b"h2".to_vec()],
+                client_alpn(),
                 tls.ca,
             )
             .is_err()

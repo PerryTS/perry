@@ -5966,7 +5966,6 @@ version = "0.5.1582"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "h2",
  "http",
  "http-body-util",
  "httpdate",

@@ -3,19 +3,20 @@
 //! # Two transports, and only one of them reaches a wire
 //!
 //! On turnloop these encode a frame (`turnloop_h2::control`) and the peer's
-//! acknowledgement is what fires the callback. On the legacy `h2`/hyper
-//! transport they are a **loopback simulation**: they enumerate
-//! `Http2SessionHandle`s with `iter_handle_ids_of`, pick the ones whose
-//! `session_type` is the opposite of the caller's, and push a synthetic event
-//! into their queues. No frame is encoded, which is why
-//! `test-parity/node-suite/http2/` passes today — every case in it is a Perry
-//! client talking to a Perry server in one process.
+//! acknowledgement is what fires the callback. Off it they are a **loopback
+//! simulation**: they enumerate `Http2SessionHandle`s with
+//! `iter_handle_ids_of`, pick the ones whose `session_type` is the opposite of
+//! the caller's, and push a synthetic event into their queues. No frame is
+//! encoded, which is why `test-parity/node-suite/http2/` passes today — every
+//! case in it is a Perry client talking to a Perry server in one process.
 //!
-//! The simulation is kept, unchanged, for sessions that are still on `h2`
-//! (`http2.connect` over TLS, and any agent with no turnloop loop). It is not
-//! extended to turnloop sessions: a real SETTINGS frame and a synthetic
-//! `'remoteSettings'` on some unrelated in-process peer would fire the event
-//! twice on a loopback pair.
+//! Which sessions are still off turnloop is narrower than it was. The `h2`
+//! CLIENT is gone entirely — `http2.connect`, TLS included, is turnloop or it
+//! is an `'error'` — so what routes here is a SERVER session on the hyper
+//! declining path (`turnloop_conn == 0`, plan A), and a declined client for the
+//! moment before it is destroyed. The simulation is not extended to turnloop
+//! sessions: a real SETTINGS frame and a synthetic `'remoteSettings'` on some
+//! unrelated in-process peer would fire the event twice on a loopback pair.
 
 use super::*;
 

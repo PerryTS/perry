@@ -12,6 +12,13 @@
 //! | `tokio_rustls::TlsAcceptor` | `perry_ext_net::turnloop_tls_io`'s unbuffered session |
 //! | an `mpsc` + `oneshot` pair per request | a queue on this thread, because the codec already runs on it |
 //!
+//! The three CLIENT rows are now *deletions*, not bypasses: `perry-ext-http`
+//! has no `h2` manifest edge left, and there is no second HTTP/2 client behind
+//! this one. An agent that cannot reach a loop gets an `'error'` from
+//! `http2.connect` (`http2_server::session::decline_client_session`), the
+//! `perry-ext-ws` rule. The SERVER rows are still bypasses: the hyper accept
+//! path in `http2_server.rs` stays for plan A's declining cases.
+//!
 //! # Why sans-I/O
 //!
 //! Identical to P5's reason, and it applies to `turnloop_http::asynchronous`'s
