@@ -85,9 +85,19 @@ read the list as complete.
 
 #### The narrowing, stated plainly
 
-There is no second transport now, so an agent that owns no `turnloop::Loop` — a
-`worker_threads` agent, the `tokio-wait-driver` A/B arm — has **no WebSocket
-client, no standalone WebSocket server and no fastify server at all**. Each says
+There is no second transport now, so an agent that owns no `turnloop::Loop` has
+**no WebSocket client, no standalone WebSocket server and no fastify server at
+all**. That is the `tokio-wait-driver` A/B arm, which compiles no agent loop by
+construction, and a host where `Loop::new` failed — the same pair every
+remaining plan-A and plan-B edge names.
+
+It is **not** `worker_threads`. turnloop P9 gave every JS agent its own loop, and
+`agent_loop_tests::a_worker_agent_gets_its_own_loop` asserts exactly that: a
+worker agent's `net_available()` is true and its `ensure_loop()` succeeds. The
+code here is right — it gates on `perry_ffi::turnloop_net::available()`, which
+answers true for a worker — so workers keep WebSockets; only this sentence was
+wrong, and a false "WebSockets do not work in a Worker" is too expensive a
+belief to leave in the changelog. Each says
 so rather than doing nothing: `new WebSocket(url)` rejects and raises `'error'`,
 `new WebSocketServer({port})` raises `'error'`, and fastify's `listen()` reports
 it through the `(err, address)` callback. Previously these agents silently got
