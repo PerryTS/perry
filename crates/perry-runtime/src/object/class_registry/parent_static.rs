@@ -166,9 +166,12 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
                 register_class(class_id, parent);
             }
         }
-        if module == "events" {
+        if module == "events" || (module == "stream" && method == "Stream") {
+            // #10430: the legacy `Stream` constructor extends EventEmitter, so a
+            // `class X extends require('stream')` subclass inherits the same
+            // EventEmitter parent edge (`new X() instanceof EventEmitter`).
             let parent = match method.as_str() {
-                "EventEmitter" => 0xFFFF0076,
+                "EventEmitter" | "Stream" => 0xFFFF0076,
                 "EventEmitterAsyncResource" => 0xFFFF0077,
                 _ => 0,
             };

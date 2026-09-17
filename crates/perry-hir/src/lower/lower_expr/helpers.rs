@@ -426,6 +426,26 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
             property: "default".to_string(),
         };
     }
+    // #10431: `import Stream from "node:stream"` binds `module.exports`, and
+    // for `stream` that is the legacy `Stream` constructor itself (which also
+    // carries every export as a static) — not a namespace object. Read the
+    // `default` export so the binding's VALUE is that constructor:
+    // `x instanceof Stream` needs a callable right-hand side and
+    // `Stream === NamedStream` needs the same object. Member reads/calls
+    // (`Stream.Readable`, `Stream.pipeline(…)`) are lowered from the binding,
+    // not from this value, and keep their static dispatch. A namespace import
+    // (`import * as ns`) registers a builtin-module alias and stays the
+    // namespace object; this is the same discriminator the `typeof` fold in
+    // `arm_unary` uses to report "function" for the default binding only.
+    if matches!(module_name, "stream" | "node:stream")
+        && ctx.lookup_builtin_module_alias(name).is_none()
+    {
+        return Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::NativeModuleRef("stream".to_string())),
+            property: "default".to_string(),
+        };
+    }
     // Native module reference (e.g., mysql from 'mysql2/promise')
     Expr::NativeModuleRef(module_name.to_string())
 }
