@@ -25,6 +25,7 @@
 //! (listener closures, write callbacks) are unaffected and keep their existing
 //! scanner.
 
+#[cfg(any(not(test), feature = "runtime-link"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Completion kind: a client socket finished connecting.
@@ -138,6 +139,7 @@ pub struct RawNetError {
 }
 
 impl RawNetError {
+    #[cfg(any(not(test), feature = "runtime-link"))]
     fn blank() -> Self {
         Self {
             code: std::ptr::null(),
@@ -174,6 +176,7 @@ impl NetError {
         }
     }
 
+    #[cfg(any(not(test), feature = "runtime-link"))]
     fn from_raw(raw: RawNetError, no_loop: bool) -> Self {
         // SAFETY: the runtime writes `'static` string data or nulls.
         let read = |ptr: *const u8, len: usize| -> String {
@@ -284,7 +287,15 @@ extern "C" {
     ) -> i32;
 }
 
+// Everything below is reached only when a runtime is linked: a standalone
+// `cargo test -p perry-ffi` takes the `runtime_call!` fallback arm on every
+// path. Gated so that build is warning-clean too — without this, an isolated
+// `cargo check -p perry-ffi --all-targets` is red before anyone touches it,
+// and a workspace build hides that because a binding crate's dev-dependency
+// unifies `runtime-link` on.
+#[cfg(any(not(test), feature = "runtime-link"))]
 const OK: i32 = 0;
+#[cfg(any(not(test), feature = "runtime-link"))]
 const ENOLOOP: i32 = -2;
 
 /// Revision of the ABI this file is written against; must match the runtime's.
@@ -301,8 +312,10 @@ fn layout_digest() -> u64 {
         | ABI_VERSION as u64
 }
 
+#[cfg(any(not(test), feature = "runtime-link"))]
 static REGISTERED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(any(not(test), feature = "runtime-link"))]
 fn check(rc: i32, raw: RawNetError) -> Result<(), NetError> {
     match rc {
         OK => Ok(()),
@@ -716,7 +729,7 @@ pub fn live_handles() -> usize {
             // SAFETY: a plain getter in the linked runtime.
             unsafe { js_perry_net_live_handles() }
         },
-        { 0 }
+        0
     )
 }
 
@@ -779,6 +792,7 @@ pub struct Endpoint {
     pub family: i32,
 }
 
+#[cfg(any(not(test), feature = "runtime-link"))]
 fn endpoint(
     id: i64,
     f: unsafe extern "C" fn(i64, *mut u8, usize, *mut usize, *mut u16, *mut i32) -> i32,

@@ -57,7 +57,11 @@ pub use agent_loop::{register_stats_reporter, StatsReporter};
 // owner — is the single root cause behind 19 of the remaining tokio edges, and
 // this is what those bindings convert to instead of keeping a tokio fallback.
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
-pub use agent_loop::{post_to_agent, PostToAgentError};
+pub use agent_loop::{has_route, post_to_agent, PostToAgentError};
+// P3's timer token, so P10's token-space test can name the real constant it
+// must not collide with rather than restate `u64::MAX` and drift from it.
+#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+pub(crate) use agent_loop::TIMER_TOKEN;
 
 /// The A/B and wasm arms have no agent loop, so there is no stats line to add
 /// to. Registration is accepted and dropped rather than `#[cfg]`-ed at every
