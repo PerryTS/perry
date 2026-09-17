@@ -405,7 +405,7 @@ ecb = { version = "0.2", optional = true }
 ctr = { version = "0.9", optional = true }
 scrypt = { version = "0.11", optional = true }
 pbkdf2 = { version = "0.13", features = ["hmac"], optional = true }
-argon2 = { version = "0.5", optional = true }
+argon2 = { version = "0.6", optional = true }
 base64 = { workspace = true, optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
 x448 = { version = "0.14.0-pre.9", features = ["static_secrets"], optional = true }
