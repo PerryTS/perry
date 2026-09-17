@@ -240,6 +240,51 @@ crate::perry_thread_local! {
     };
 }
 
+/// One call in `PRE_SEARCH_POLL_STRIDE` runs the pre-search safepoint poll.
+///
+/// The poll costs 502 instructions of the 4,792 a hoisted `.test()` call takes,
+/// and measurement says it buys very little (#10166). It cannot cancel: nothing
+/// in production constructs `EngineError::Cancelled`, and `host::poll` returns
+/// `Ok(())` unconditionally. It performs no cycle stepping in practice either —
+/// with it removed entirely, `cycle_starts`, `completions` and `steps` were
+/// identical across 48,000,000 allocation-free calls interleaved with churn.
+///
+/// What it does retain is the one thing a witness could not rule out: the
+/// option of servicing a due collection from a loop that allocates nothing,
+/// which is how a non-allocating mutator participates in an incremental cycle.
+/// That is why it is strided rather than removed. A stride of 64 keeps a
+/// participation point every 64 searches while recovering most of the cost.
+pub(crate) const PRE_SEARCH_POLL_STRIDE: usize = 64;
+
+crate::perry_thread_local! {
+    /// Counts searches for the stride above. A tick count, never an address.
+    static PRE_SEARCH_POLL_TICK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Test-only: how many pre-search polls actually ran, so a test can assert
+    /// the stride took the poll path rather than infer it from a timing.
+    pub(crate) static PRE_SEARCH_POLLS_RUN: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Run the pre-search poll on one call in `PRE_SEARCH_POLL_STRIDE`.
+#[inline]
+fn poll_on_stride(poll: &mut impl FnMut() -> Result<(), EngineError>) -> Result<(), EngineError> {
+    let due = PRE_SEARCH_POLL_TICK.with(|tick| {
+        let next = tick.get().wrapping_add(1);
+        tick.set(next);
+        next % PRE_SEARCH_POLL_STRIDE == 0
+    });
+    if !due {
+        return Ok(());
+    }
+    #[cfg(test)]
+    PRE_SEARCH_POLLS_RUN.with(|n| n.set(n.get() + 1));
+    poll()
+}
+
 /// What a lent attempt produced: an answer, or a reason to run the owned path.
 enum Lent<'mem> {
     Done(Option<Match<'mem>>, Position),
@@ -336,10 +381,7 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             frames: &mut cell.frames[..],
             undo: &mut cell.undo[..],
         };
-        // PROBE ONLY (#10166 poll experiment) — NEVER MERGE. Prices the
-        // pre-search safepoint poll by removing it. Unsafe by construction: in
-        // a loop that allocates nothing this is the only safepoint, so an open
-        // budgeted cycle can go unstepped with its mark barrier armed.
+        poll_on_stride(poll)?;
         let mut search = match near {
             Some(near) => Search::new_near(resources, start, near, scratch, *budget),
             None => Search::new(resources, start, scratch, *budget),
