@@ -140,6 +140,24 @@ following the crate's delegate-when-not-fluent idiom.
   **claimed-but-broken**. This is the worse of the two: the first failure is
   loud, this one produces confident wrong answers. Measured before/after on
   `os`, `path`, `url` — `UNRESOLVED/UNRESOLVED` becomes `match/match`.
+- `COMPILE_TIMEOUT_MS` was 300s, which is under the ~4-5 min a cold
+  auto-optimize rebuild takes for an ext-routed module on Windows. The matrix
+  probes the UNPREFIXED form first, so that one timed out while the
+  `node:`-prefixed form reused the now-warm cache and succeeded — and the
+  harness reports that asymmetry as a PREFIX DIVERGENCE, which its own docs
+  call "a real Perry bug". A cold run invented ten of them (crypto, net, tls,
+  zlib, http, http2, assert, events, fs/promises, vm) and an identical warm run
+  reported four. CI runs cold. Raised to 900s.
+
+First Windows measurement of the builtin surface, warm, after all three fixes:
+58 probed, 23 both-forms match, 33 shape-diff, **0 unresolved**, 4 prefix
+divergences (`sea`, `sqlite`, `test`, `test/reporters` — reproduced on every
+run, cold and warm, and not ext-routed, so these are genuine), and one
+works-but-unclaimed (`trace_events` resolves but is in neither
+`NATIVE_MODULES` nor `NODE_SUBMODULES`). The 33 shape-diffs are a first
+measurement rather than a regression list: the committed baseline is
+Linux-derived, so `--check` against it is not meaningful from Windows until a
+`windows` baseline exists.
 
 ### Two perry-runtime tests failed on Windows for reasons unrelated to it
 

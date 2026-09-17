@@ -102,7 +102,17 @@ const PERRY_BIN =
 
 // Compile can be slow on the FIRST call (it builds the auto-optimized
 // runtime once), then warm calls are sub-second. Runs are tiny.
-const COMPILE_TIMEOUT_MS = 300_000
+//
+// 300s was not enough for that first call on Windows, and the way it failed
+// was silent rather than loud (#10385): an ext-routed module's cold
+// auto-optimize rebuild is ~4-5 min on its own, so the UNPREFIXED probe — the
+// one the matrix runs first — timed out while the `node:`-prefixed form then
+// reused the warm cache and succeeded. That asymmetry is reported as a PREFIX
+// DIVERGENCE, which the harness documents as "a real Perry bug". A cold run
+// invented ten of them (crypto, net, tls, zlib, http, http2, assert, events,
+// fs/promises, vm); the identical warm run reported four, all genuine. CI
+// runs cold, so this was a false-positive generator aimed squarely at it.
+const COMPILE_TIMEOUT_MS = 900_000
 const RUN_TIMEOUT_MS = 15_000
 const NODE_TIMEOUT_MS = 15_000
 
