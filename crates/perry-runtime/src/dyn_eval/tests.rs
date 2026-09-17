@@ -64,6 +64,21 @@ fn returns_arithmetic_on_parameters() {
     assert_eq!(as_num(r), 42.0);
 }
 
+/// #10424: a rest parameter collects the trailing arguments — on the
+/// constructed function and on a function declared inside its body. The
+/// interpreter used to refuse it at construction.
+#[test]
+fn rest_parameters_collect_trailing_arguments() {
+    let f = dyn_fn(&["a", "...rest", "return a + rest.length * 10 + rest[1]"]);
+    let r = call(f, &[num(1.0), num(2.0), num(3.0), num(4.0)]);
+    assert_eq!(as_num(r), 34.0);
+    let r = call(f, &[num(1.0)]);
+    assert!(as_num(r).is_nan(), "rest is empty, so rest[1] is undefined");
+
+    let inner = dyn_fn(&["return ((...xs) => xs.length)(7, 8, 9)"]);
+    assert_eq!(as_num(call(inner, &[])), 3.0);
+}
+
 #[test]
 fn empty_body_returns_undefined_zod_probe() {
     // zod's JIT probe is `new Function("")` — it must now SUCCEED and yield a

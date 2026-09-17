@@ -1,16 +1,20 @@
 //! `Function.apply(null, <args assembled at runtime>)` is a CreateDynamicFunction
 //! surface, exactly like `new Function(body)` — the constructor is merely reached
-//! indirectly. Perry cannot compile a body built from runtime data, so the site must
-//! be classified as an eval surface and lowered to the deferred, located
-//! "cannot run in an ahead-of-time compiled binary" error.
+//! indirectly. Perry cannot compile a body built from runtime data ahead of time,
+//! so the site is classified as an eval surface.
 //!
-//! Before the fix the classifier only recognized `Function.apply(this, [<literal
-//! array>])`. A runtime-built argument list fell through to the generic lowering and
-//! evaluated to `undefined`; the caller then invoked `.apply` on that `undefined` and
-//! failed several frames away with a misleading "Function.prototype.apply was called
-//! on a value that is not a function". mysql2's row-parser codegen is exactly this
-//! shape — `Function.apply(null, argNames.concat(body)).apply(null, argValues)` —
-//! so a real MySQL query died with an error naming neither eval nor the real cause.
+//! Before the classifier recognized it, a runtime-built argument list fell through
+//! to the generic lowering and evaluated to `undefined`; the caller then invoked
+//! `.apply` on that `undefined` and failed several frames away with a misleading
+//! "Function.prototype.apply was called on a value that is not a function".
+//! mysql2's row-parser codegen is exactly this shape —
+//! `Function.apply(null, argNames.concat(body)).apply(null, argValues)`.
+//!
+//! The classified site then compiled to a stub that always threw "cannot run in an
+//! ahead-of-time compiled binary", even though `new Function(body)` with the same
+//! runtime body already ran on the #6559 interpreter. #10422: every call spelling
+//! now builds the function at runtime through that interpreter, so the mysql2 shape
+//! produces the function Node produces.
 //!
 //! Literal-source forms must keep working: those are const-folded and compiled AOT.
 
@@ -137,7 +141,7 @@ fn compile(root: &std::path::Path, extra_args: &[&str]) -> std::process::Output 
 }
 
 #[test]
-fn function_apply_with_runtime_args_defers_to_a_located_aot_error() {
+fn function_apply_with_runtime_args_builds_the_function_at_runtime() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     write_fixture(root);
@@ -168,8 +172,9 @@ fn function_apply_with_runtime_args_defers_to_a_located_aot_error() {
         "literal-source Function/apply/call must still be compiled AOT; got:\n{stdout}"
     );
 
-    // Reaching it throws a catchable, descriptive Error — NOT `undefined` flowing on
-    // into a bogus "apply was called on a value that is not a function".
+    // Reaching it builds the function from the runtime-assembled arguments and
+    // calls it, as node does — not `undefined` flowing on into a bogus "apply was
+    // called on a value that is not a function", and not the always-throwing stub.
     let run2 = Command::new(&bin)
         .arg("--dynamic")
         .output()
@@ -183,19 +188,11 @@ fn function_apply_with_runtime_args_defers_to_a_located_aot_error() {
     );
     let stdout2 = String::from_utf8_lossy(&run2.stdout);
     assert!(
-        stdout2.contains("CAUGHT:"),
-        "the runtime-assembled Function.apply must throw a catchable Error; got:\n{stdout2}"
+        stdout2.contains("NO_THROW:101"),
+        "the runtime-assembled Function.apply must build a working function; got:\n{stdout2}"
     );
     assert!(
-        stdout2.contains("cannot run in an ahead-of-time compiled binary"),
-        "the thrown Error must name the AOT limitation; got:\n{stdout2}"
-    );
-    assert!(
-        !stdout2.contains("was called on a value that is not a function"),
-        "must NOT degrade into `undefined` and fail later inside `.apply`; got:\n{stdout2}"
-    );
-    assert!(
-        !stdout2.contains("NO_THROW"),
-        "the dynamic Function site must not silently produce a value; got:\n{stdout2}"
+        !stdout2.contains("CAUGHT:"),
+        "the dynamic Function site must not throw; got:\n{stdout2}"
     );
 }

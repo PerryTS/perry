@@ -1788,6 +1788,26 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
+            // #10423: `fn.constructor(p, body)` with no own `constructor` calls
+            // the inherited one — the `Function` constructor (or a generator
+            // function's intrinsic one) — exactly as the `fn.constructor` read
+            // resolves it (`get_field_by_name_tail.rs`). Every other miss on a
+            // function receiver ends in the empty-object stub below, which is
+            // what this call used to return.
+            if method_name == "constructor" {
+                let ctor = crate::object::generator_function_constructor_of(raw_addr)
+                    .unwrap_or_else(|| {
+                        crate::object::js_get_global_this_builtin_value(b"Function".as_ptr(), 8)
+                    });
+                let ctor = root_scope.root_nanbox_f64(ctor);
+                // The global lookup allocates; re-read the rooted arguments.
+                let call_args = refreshed_args();
+                return crate::closure::js_native_call_value(
+                    ctor.get_nanbox_f64(),
+                    call_args.as_ptr(),
+                    call_args.len(),
+                );
+            }
             // `fn.length()` / `fn.name()` — the own slots hold a number /
             // string, never a callable; calling one is a TypeError
             // (`f.length is not a function`), not a read.

@@ -293,6 +293,10 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             // each back to "Array"/"Object"/"Date".
             || func_ptr == global_this_array_thunk as *const u8 as usize
             || func_ptr == global_this_object_thunk as *const u8 as usize
+            // #10423: `Function` carries its own call thunk now; `new F(…)` /
+            // `Reflect.construct(Function, …)` must still route to the
+            // from-strings constructor in construct.rs.
+            || func_ptr == global_this_function_call_thunk as *const u8 as usize
             || func_ptr == global_this_date_thunk as *const u8 as usize
             || func_ptr == global_this_blob_thunk as *const u8 as usize
             || func_ptr == global_this_file_thunk as *const u8 as usize
@@ -364,6 +368,8 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
                 Some("Array")
             } else if func_ptr == global_this_object_thunk as *const u8 as usize {
                 Some("Object")
+            } else if func_ptr == global_this_function_call_thunk as *const u8 as usize {
+                Some("Function")
             } else if func_ptr == global_this_string_thunk as *const u8 as usize {
                 Some("String")
             } else if func_ptr == global_this_number_thunk as *const u8 as usize {
