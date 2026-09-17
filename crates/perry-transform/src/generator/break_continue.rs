@@ -323,19 +323,45 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                     }
                 }
             }
-            Stmt::While { body, .. } if body_contains_yield(body) => {
+            // A yield in a loop HEADER (while / do-while condition, for
+            // condition / update) suspends too (#10419). The linearizer's
+            // header arms split such a loop into per-iteration states, but
+            // they only run if every enclosing `if` / `try` / `switch` /
+            // label / loop is linearized as well — which is decided here.
+            // Checking only loop bodies left `if (n) while ((yield t), t > 0)`
+            // emitted inline: its residual `Expr::Yield` never suspended and
+            // the generator yielded nothing (minified lru-cache iterators).
+            Stmt::While { condition, body }
+                if super::hoist_yields::expr_contains_yield(condition)
+                    || body_contains_yield(body) =>
+            {
                 return true;
             }
             // A yield buried in a do-while or labeled loop must still be seen
             // by the enclosing construct's linearization (#1824), otherwise it
             // is never split into resume states.
-            Stmt::DoWhile { body, .. } if body_contains_yield(body) => {
+            Stmt::DoWhile { body, condition }
+                if super::hoist_yields::expr_contains_yield(condition)
+                    || body_contains_yield(body) =>
+            {
                 return true;
             }
             Stmt::Labeled { body, .. } if body_contains_yield(std::slice::from_ref(&**body)) => {
                 return true;
             }
-            Stmt::For { body, .. } if body_contains_yield(body) => {
+            Stmt::For {
+                condition,
+                update,
+                body,
+                ..
+            } if condition
+                .as_ref()
+                .is_some_and(super::hoist_yields::expr_contains_yield)
+                || update
+                    .as_ref()
+                    .is_some_and(super::hoist_yields::expr_contains_yield)
+                || body_contains_yield(body) =>
+            {
                 return true;
             }
             Stmt::Try {

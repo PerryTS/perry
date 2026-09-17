@@ -412,6 +412,21 @@ pub struct FinallyRoute {
     pub completion_check_state: Option<u32>,
 }
 
+/// Normalize statements built from a loop HEADER (a condition or update the
+/// header arms move into the loop body / update state) into the statement
+/// shapes this linearizer splits. `hoist_yields_in_stmts` and — for an async
+/// generator — `await_async_generator_yield_operands` ran over the function
+/// body before linearization, but neither descends into loop headers, so a
+/// header yield reaches this point un-hoisted and, in an `async function*`,
+/// with its operand never awaited (spec `AsyncGeneratorYield(? Await(v))`:
+/// `yield promise` in a loop condition delivered the promise itself, #10419).
+fn normalize_loop_header_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut u32) {
+    hoist_yields_in_stmts(stmts, next_local_id);
+    if linearize_async_generator() {
+        super::lower::await_async_generator_yield_operands(stmts, next_local_id);
+    }
+}
+
 /// Linearize the generator body into a sequence of states.
 /// Splits at yield points and handles for-loops with yields.
 pub fn linearize_body(
@@ -694,7 +709,7 @@ pub fn linearize_body(
                     mutable: true,
                     init: Some(condition.clone()),
                 }];
-                hoist_yields_in_stmts(&mut prefix, next_local_id);
+                normalize_loop_header_stmts(&mut prefix, next_local_id);
                 prefix.push(Stmt::If {
                     condition: Expr::Unary {
                         op: UnaryOp::Not,
@@ -799,7 +814,7 @@ pub fn linearize_body(
                         mutable: true,
                         init: condition.clone(),
                     }];
-                    hoist_yields_in_stmts(&mut prefix, next_local_id);
+                    normalize_loop_header_stmts(&mut prefix, next_local_id);
                     new_body.append(&mut prefix);
                     new_body.push(Stmt::If {
                         condition: Expr::Unary {
@@ -813,7 +828,7 @@ pub fn linearize_body(
                 let mut taken_body = body.clone();
                 if upd_yields {
                     let mut upd_stmts = vec![Stmt::Expr(update.clone().unwrap())];
-                    hoist_yields_in_stmts(&mut upd_stmts, next_local_id);
+                    normalize_loop_header_stmts(&mut upd_stmts, next_local_id);
                     prefix_loop_continues(&mut taken_body, &upd_stmts);
                     new_body.append(&mut taken_body);
                     new_body.extend(upd_stmts);
@@ -839,13 +854,21 @@ pub fn linearize_body(
                 );
             }
 
-            // For-loop containing yield(s)
+            // For-loop containing yield(s) — in the body, or in an update the
+            // header arm above left in place (a `continue` inside
+            // try/finally must run the finally BEFORE the update, which the
+            // move-to-body-end rewrite cannot express). The update is then
+            // linearized in its own `continue`-target state below (#10419).
             Stmt::For {
                 init,
                 condition,
                 update,
                 body,
-            } if body_contains_yield(body) => {
+            } if body_contains_yield(body)
+                || update
+                    .as_ref()
+                    .is_some_and(super::hoist_yields::expr_contains_yield) =>
+            {
                 // State N: pre-loop code + init, goto condition check
                 let init_state = *state_num;
                 *state_num += 1;
@@ -954,11 +977,6 @@ pub fn linearize_body(
                 // residual, and (depending on guard placement) loop forever
                 // on the same iteration.
                 let update_state = *state_num;
-                *state_num += 1;
-                let mut update_body: Vec<Stmt> = Vec::new();
-                if let Some(upd) = update {
-                    update_body.push(Stmt::Expr(upd.clone()));
-                }
 
                 // Push tail_state pointing at update_state.
                 states.push(State {
@@ -966,10 +984,35 @@ pub fn linearize_body(
                     body: tail_body,
                     exit: StateExit::Goto(update_state),
                 });
-                // Push update_state pointing at cond_state.
+                // Update statements, then the state that jumps back to
+                // cond_state. A yield in the update is split into its own
+                // states starting AT `update_state` (the first state pushed
+                // takes that number); without one, the final push below IS
+                // `update_state`, exactly as before.
+                if let Some(upd) = update {
+                    let mut upd_stmts = vec![Stmt::Expr(upd.clone())];
+                    if super::hoist_yields::expr_contains_yield(upd) {
+                        normalize_loop_header_stmts(&mut upd_stmts, next_local_id);
+                        linearize_body(
+                            &upd_stmts,
+                            states,
+                            current,
+                            state_num,
+                            state_id,
+                            next_local_id,
+                            sent_id,
+                            catches,
+                            finallys,
+                        );
+                    } else {
+                        current.append(&mut upd_stmts);
+                    }
+                }
+                let update_tail_state = *state_num;
+                *state_num += 1;
                 states.push(State {
-                    num: update_state,
-                    body: update_body,
+                    num: update_tail_state,
+                    body: std::mem::take(current),
                     exit: StateExit::Goto(cond_state),
                 });
 
