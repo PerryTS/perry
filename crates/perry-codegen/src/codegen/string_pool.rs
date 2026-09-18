@@ -230,7 +230,9 @@ pub(super) fn emit_string_pool(
                 entry.bytes_global
             ));
         }
-        llmod.add_internal_global(&entry.handle_global, DOUBLE, "0.0");
+        // #10399: the string pool is populated by each module's init, which
+        // runs once per thread when the program has a Worker.
+        llmod.add_internal_module_state_global(&entry.handle_global, DOUBLE, "0.0");
     }
 
     // Per-class packed-keys constants (rodata) — referenced by the

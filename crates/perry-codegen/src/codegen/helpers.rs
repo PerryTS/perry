@@ -672,6 +672,38 @@ pub(super) fn enable_module_init_shadow_frame(
 /// `PERRY_WRITE_BARRIERS=0`/`off`/`false` to disable emission for
 /// benchmark/debug bisection. `=1`/`on`/`true` remain accepted and
 /// equivalent to the default.
+/// #10399: whether the program being compiled constructs a `worker_threads`
+/// Worker anywhere in its module graph.
+///
+/// When it does, the module-init once-guard (`__perry_init_done_*`) and the
+/// module-global value slots are emitted **thread-local**, so every worker
+/// thread runs its own module init and allocates its own objects in its own
+/// thread-local arena — the Node/bun Worker model, where each worker
+/// evaluates its own copy of the module graph.
+///
+/// Without this, the guard is a process-wide flag: a worker reaching
+/// `<mod>__init` finds the flag the MAIN thread already set, skips the body
+/// entirely, and then reads module-global slots pointing into the *main*
+/// thread's arena. `classify_heap_generation` returns `Unknown` there, so
+/// the object reads back with no keys at all.
+///
+/// Set once by the compile driver before any module codegen runs, and folded
+/// into the object-cache key (a cached `.o` from a worker-free build must not
+/// be served to a build that has one). A program with no Worker keeps the
+/// process-wide globals and pays no TLS cost.
+static PROGRAM_HAS_WORKER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record whether this program constructs a Worker. See [`program_has_worker`].
+pub fn set_program_has_worker(value: bool) {
+    PROGRAM_HAS_WORKER.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// See [`set_program_has_worker`].
+pub fn program_has_worker() -> bool {
+    PROGRAM_HAS_WORKER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();

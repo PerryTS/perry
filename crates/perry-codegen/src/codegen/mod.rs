@@ -216,6 +216,8 @@ mod tdz_names;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 pub(crate) mod helpers;
+// #10399: the driver sets this before any module codegen runs.
+pub use helpers::{program_has_worker, set_program_has_worker};
 mod literal_constructor;
 mod method;
 mod method_registry;
@@ -1188,12 +1190,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &c.name,
             &mut used_class_keys_globals,
         );
-        llmod.add_internal_global(&global_name, I64, "0");
+        // #10399: the keys array, the ShapeId and the header image are all
+        // composed by module init, so with a Worker in the program they are
+        // per-thread — which is also what #10399 Paths 2 and 3 were patching
+        // up at runtime (a foreign keys array / foreign ShapeId).
+        llmod.add_internal_module_state_global(&global_name, I64, "0");
         // #8772: the immutable class ShapeId is a producer-authored
         // whole-program capability. Generic callers in other modules load it
         // to guard reverse-discovered direct method arms. The keys array stays
         // private; only the opaque process-unique identity is exported.
-        llmod.add_global(
+        llmod.add_module_state_global(
             &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
             I32,
             "0",
@@ -1208,7 +1214,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         );
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
-        llmod.add_internal_global(
+        llmod.add_internal_module_state_global(
             &crate::typed_shape::header_image_global_name_from_keys_global(&global_name),
             "<2 x i64>",
             "zeroinitializer",
@@ -1393,8 +1399,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             &c.name,
             &mut used_class_keys_globals,
         );
-        llmod.add_internal_global(&global_name, I64, "0");
-        llmod.add_internal_global(
+        // #10399: composed by module init -> per-thread when the program
+        // constructs a Worker.
+        llmod.add_internal_module_state_global(&global_name, I64, "0");
+        llmod.add_internal_module_state_global(
             &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
             I32,
             "0",
@@ -1406,7 +1414,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         );
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
-        llmod.add_internal_global(
+        llmod.add_internal_module_state_global(
             &crate::typed_shape::header_image_global_name_from_keys_global(&global_name),
             "<2 x i64>",
             "zeroinitializer",

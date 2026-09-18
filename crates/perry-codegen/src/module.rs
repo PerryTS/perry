@@ -365,6 +365,55 @@ impl LlModule {
             .push(format!("@{} = internal global {} {}", name, ty, init));
     }
 
+    /// #10399: the thread-local form of [`Self::add_global`]. Emitted only
+    /// when the program constructs a `worker_threads` Worker
+    /// (`program_has_worker`), so every thread instantiates its own copy of
+    /// the module graph the way Node and bun do. A program with no worker
+    /// keeps the process-wide form and pays nothing.
+    ///
+    /// The TLS model is left to LLVM: these are `internal`/hidden symbols in
+    /// the program being linked, so it relaxes them to local-exec on its own.
+    pub fn add_thread_local_global(&mut self, name: &str, ty: LlvmType, init: &str) {
+        self.globals
+            .push(format!("@{} = thread_local global {} {}", name, ty, init));
+    }
+
+    /// #10399: the thread-local form of [`Self::add_internal_global`].
+    pub fn add_internal_thread_local_global(&mut self, name: &str, ty: LlvmType, init: &str) {
+        self.globals.push(format!(
+            "@{} = internal thread_local global {} {}",
+            name, ty, init
+        ));
+    }
+
+    /// #10399: a global that **module init writes**.
+    ///
+    /// When the program constructs a `worker_threads` Worker every thread
+    /// runs its own module init (the `__perry_init_done_*` guard is
+    /// thread-local), so each of these slots must be per-thread too —
+    /// otherwise a worker's init would overwrite the main thread's slot with
+    /// a pointer into the worker's own arena and corrupt the main thread.
+    /// The two properties travel together and must never be split.
+    ///
+    /// External linkage is preserved: module-global slots are deliberately
+    /// non-`internal` so clang cannot constant-fold reads to 0.0 across TUs.
+    pub fn add_module_state_global(&mut self, name: &str, ty: LlvmType, init: &str) {
+        if crate::codegen::program_has_worker() {
+            self.add_thread_local_global(name, ty, init);
+        } else {
+            self.add_global(name, ty, init);
+        }
+    }
+
+    /// `internal`-linkage sibling of [`Self::add_module_state_global`].
+    pub fn add_internal_module_state_global(&mut self, name: &str, ty: LlvmType, init: &str) {
+        if crate::codegen::program_has_worker() {
+            self.add_internal_thread_local_global(name, ty, init);
+        } else {
+            self.add_internal_global(name, ty, init);
+        }
+    }
+
     /// Module-private read-only constant. Goes into `.rodata` instead of
     /// `.data` and the linker may merge identical copies across compilation
     /// units. Used by the ExternFuncRef-as-value path to emit static

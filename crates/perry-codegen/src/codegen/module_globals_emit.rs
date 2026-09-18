@@ -456,7 +456,9 @@ pub(crate) fn emit_module_globals(
                 // linkage, the optimizer can't make cross-TU assumptions.
                 // The module-unique name (perry_global_<prefix>__N)
                 // prevents symbol collisions across modules.
-                llmod.add_global(&global_name, DOUBLE, &init_value);
+                // #10399: written by module init -> per-thread when the
+                // program has a Worker.
+                llmod.add_module_state_global(&global_name, DOUBLE, &init_value);
                 module_globals.insert(*id, global_name.clone());
 
                 // For exported variables, also emit a trivial getter
@@ -612,7 +614,8 @@ pub(crate) fn emit_module_globals(
             // The init loop still walks every `c.static_fields` entry, so both
             // assignments execute against this single slot.
             if external_globals_emitted.insert(name.clone()) {
-                llmod.add_global(&name, DOUBLE, "0.0");
+                // #10399: static class fields are written by module init.
+                llmod.add_module_state_global(&name, DOUBLE, "0.0");
             }
             static_field_globals.insert((c.name.clone(), sf.name.clone()), name);
         }

@@ -578,15 +578,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             {
                 bail!("worker_threads Worker target must be a compiled source file: {path}");
             }
-            // Call the module's unguarded `__init_body`, NOT the guarded
-            // `__init` wrapper. The wrapper's process-global
-            // `__perry_init_done_*` flag is set by the first worker (or by
-            // main-thread import init) and would make every later worker's
-            // entry a no-op — leaving the spawned thread idle and the parent
-            // waiting forever. The body re-runs the module top-level on each
-            // worker thread (each has its own thread-local arena), so every
-            // worker actually executes its entry and posts its result back.
-            let init_name = format!("{}__init_body", target_prefix);
+            // #10399: which entry symbol the worker thread starts on.
+            //
+            // `<prefix>__init` is the guarded wrapper: it initializes the
+            // module's DEPENDENCIES and then runs the body. `__init_body` is
+            // the body alone.
+            //
+            // When the program has a Worker the `__perry_init_done_*` guard is
+            // thread-local, so the wrapper is correct and necessary: it runs
+            // once per thread, and it is the only thing that initializes the
+            // worker entry's own imports. Calling the bare body instead left
+            // every module the entry imports uninitialized on that thread —
+            // a module reachable only from the worker never ran at all and its
+            // bindings stayed `undefined`.
+            //
+            // The bare body remains the fallback for the (unreachable in
+            // practice) case where the guard is still process-wide: there the
+            // wrapper's flag would be set by the first worker or by
+            // main-thread import init and every later worker's entry would be
+            // a no-op, leaving the spawned thread idle and the parent waiting
+            // forever.
+            let init_name = if crate::codegen::program_has_worker() {
+                format!("{}__init", target_prefix)
+            } else {
+                format!("{}__init_body", target_prefix)
+            };
             ctx.pending_declares
                 .push((init_name.clone(), crate::types::VOID, vec![]));
             let entry_ptr = ctx.block().ptrtoint(&format!("@{}", init_name), I64);

@@ -89,6 +89,8 @@ pub use codegen::{
     NamespaceEntryKind, ObjectLiteralMethodCandidate, ResolvedConstructorContracts,
     ShortSpreadMethodCandidate,
 };
+// #10399: whole-program Worker flag, set by the driver before module codegen.
+pub use codegen::{program_has_worker, set_program_has_worker};
 pub use collectors::CjsPreambleCensus;
 // #9843: the segment-view for-of matcher's counter. Exported so the
 // driver can run it at the HIR-trace point — after every transform, on

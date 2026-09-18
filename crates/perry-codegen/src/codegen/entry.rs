@@ -1477,7 +1477,18 @@ pub(super) fn compile_module_entry(
         // partially observable. The wrapper sets `done = 1` BEFORE
         // calling the body so the re-entry path returns immediately.
         let done_global = format!("__perry_init_done_{}", module_prefix);
-        llmod.add_internal_global(&done_global, I8, "0");
+        // #10399: with a Worker in the program this guard MUST be per-thread.
+        // A process-wide flag means a worker reaching `<mod>__init` finds the
+        // 1 the main thread stored, skips the body, and then reads module
+        // globals that point into the main thread's arena — where
+        // `classify_heap_generation` is `Unknown`, so the object reads back
+        // with no keys. Node and bun evaluate the module graph once per
+        // worker; a thread-local flag is what makes that happen here.
+        if crate::codegen::program_has_worker() {
+            llmod.add_internal_thread_local_global(&done_global, I8, "0");
+        } else {
+            llmod.add_internal_global(&done_global, I8, "0");
+        }
         let init_name = format!("{}__init", module_prefix);
         let init_body_name = format!("{}__init_body", module_prefix);
         {
