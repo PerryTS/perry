@@ -42,3 +42,17 @@ was checked by hand as an unprivileged user. New `fs::errors` unit tests cover
 the libuv text and the open-vs-read failure shape. User-space instructions for
 50k `readFileSync` calls on a small file: Buffer form −0.6 %, UTF-8 form −9.5 %
 (it no longer decodes the path twice per call).
+
+Consuming a failed read stream through `fs.promises.writeFile` reported the
+missing fd (`EBADF: bad file descriptor, read`) rather than the failure the
+constructor stored; the consumer now returns the stored Node-shaped value
+before it tries to read.
+
+On Windows `io::Error::raw_os_error()` is a Win32 error code, not an errno, so
+keying `code`/`errno`/message on it reported an `errno` of -2 where Node reports
+libuv's -4058, with Rust's message text. `win32_error_to_uv` ports libuv's
+`uv_translate_sys_error` (`src/win/error.c`, v1.52.1) for the filesystem arms and
+`UV_WINDOWS_ERRNOS` holds libuv's Windows error numbers and messages;
+`io_error_code`/`io_error_errno` consult them under `cfg(windows)`. The mapping
+is pure and stays compiled under `cfg(test)`, so its unit tests run on every
+host — Windows itself was not run.
