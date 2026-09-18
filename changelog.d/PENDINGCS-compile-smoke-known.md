@@ -10,7 +10,7 @@ Compile smoke: 1360 passed, 1 failed, 67 skipped
 
 (`test_issue_340_axios_response_props` — the other case this note originally
 tracked — was removed along with the native axios binding; see
-`changelog.d/<PR>-axios-native-binding-removal.md`.)
+`changelog.d/10679-axios-native-binding-removal.md`, PR #10679.)
 
 It is the tokio-coherence refusal. Auto-optimize rebuilds the stdlib static
 into `target/perry-auto-<hash>/` **without** the ext wrappers in the same cargo
