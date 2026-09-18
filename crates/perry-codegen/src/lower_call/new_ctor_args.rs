@@ -297,12 +297,13 @@ pub(super) fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<S
 /// Marshal the lowered `new`-site args into the value list a cross-module
 /// imported constructor symbol expects. The source module compiled the
 /// standalone `<class>_constructor(this, p0, …)` with `ctor.param_count`
-/// explicit slots. When the constructor's last param is `...rest`
-/// (`ctor.has_rest`), that final slot must receive a PACKED ARRAY of every
-/// trailing arg — not the first trailing arg passed raw. Mirrors the
-/// inline-ctor `inline_constructor_param_values` rest packing and the
-/// `method_has_rest` path for imported methods (#672). Returns exactly
-/// `ctor.param_count` value strings; missing leading args are padded with
+/// explicit slots, laid out as `[fixed..., user_rest?, arguments?]`. A user
+/// `...rest` slot (`ctor.has_rest`) must receive a PACKED ARRAY of every
+/// trailing arg — not the first trailing arg passed raw — and the synthesized
+/// `arguments` slot (`ctor.has_synthetic_arguments`, #10484) a packed array of
+/// EVERY arg. Mirrors the inline-ctor `inline_constructor_param_values`
+/// packing and the `method_has_rest` path for imported methods (#672). Returns
+/// exactly `ctor.param_count` value strings; missing fixed args are padded with
 /// `undefined`.
 pub(super) fn marshal_imported_ctor_args(
     ctx: &mut FnCtx<'_>,
@@ -311,10 +312,9 @@ pub(super) fn marshal_imported_ctor_args(
 ) -> Vec<String> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let param_count = ctor.param_count;
-    if ctor.has_rest && param_count > 0 {
-        // The first `param_count - 1` slots are positional; the last slot is
-        // the rest array packing every remaining arg.
-        let n_positional = param_count - 1;
+    let trailing = usize::from(ctor.has_rest) + usize::from(ctor.has_synthetic_arguments);
+    if trailing > 0 && param_count >= trailing {
+        let n_positional = param_count - trailing;
         let mut out: Vec<String> = Vec::with_capacity(param_count);
         for i in 0..n_positional {
             out.push(
@@ -324,8 +324,13 @@ pub(super) fn marshal_imported_ctor_args(
                     .unwrap_or_else(|| undef.clone()),
             );
         }
-        let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
-        out.push(pack_lowered_args_array(ctx, &tail));
+        if ctor.has_rest {
+            let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
+            out.push(pack_lowered_args_array(ctx, &tail));
+        }
+        if ctor.has_synthetic_arguments {
+            out.push(pack_lowered_args_array(ctx, lowered_args));
+        }
         out
     } else {
         // No rest: positional, padded to `param_count` with `undefined`.

@@ -288,6 +288,7 @@ fn imported_class_from_hir(
     proven_this_method_names: Vec<String>,
     proven_this_tower_method_names: Vec<String>,
 ) -> perry_codegen::ImportedClass {
+    let ctor_abi = perry_codegen::context_free_ctor_abi(class).unwrap_or_default();
     perry_codegen::ImportedClass {
         name: class.name.clone(),
         local_alias,
@@ -300,11 +301,11 @@ fn imported_class_from_hir(
             .as_ref()
             .map_or(0, |ctor| ctor.params.len()),
         has_own_constructor: class.constructor.is_some(),
-        constructor_has_rest: class
-            .constructor
-            .as_ref()
-            .map(|ctor| ctor.params.iter().any(|param| param.is_rest))
-            .unwrap_or(false),
+        // Trailing array slots this class's own constructor declares. A
+        // no-own-ctor class emits a positional forwarder, so it reports none
+        // until the constructor contract resolves its ancestor's ABI (#10484).
+        constructor_has_rest: ctor_abi.has_rest,
+        constructor_has_synthetic_arguments: ctor_abi.has_synthetic_arguments,
         has_instance_fields: !class.fields.is_empty(),
         method_names: class
             .methods
@@ -436,6 +437,7 @@ fn imported_object_literal_from_capability(
         constructor_param_count: capability.field_names.len(),
         has_own_constructor: true,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: !capability.field_names.is_empty(),
         method_names: Vec::new(),
         proven_this_method_names: Vec::new(),

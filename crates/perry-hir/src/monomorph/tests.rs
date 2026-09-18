@@ -1022,3 +1022,118 @@ fn a_specialized_class_reports_the_generics_display_name() {
         "only the specialization gets an entry"
     );
 }
+
+/// #10484: a constructor that reads `arguments` must see the call site's own
+/// argument count, so the default-fill pass may not pad its `new` sites.
+#[test]
+fn fill_defaults_skips_constructors_that_read_arguments() {
+    fn class_with_ctor(name: &str, id: u32, reads_arguments: bool) -> Class {
+        let mut params = vec![
+            Param {
+                id: 1,
+                name: "p".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            },
+            Param {
+                id: 2,
+                name: "q".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            },
+        ];
+        if reads_arguments {
+            params.push(Param {
+                id: 3,
+                name: "arguments".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: true,
+                arguments_object: Some(crate::ArgumentsObjectMeta {
+                    strict: true,
+                    simple_parameters: false,
+                    mapped_parameter_ids: Vec::new(),
+                    restricted_callee: true,
+                }),
+            });
+        }
+        Class {
+            id,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: Vec::new(),
+            constructor: Some(Function {
+                id: 100 + id,
+                name: format!("{}_constructor", name),
+                type_params: Vec::new(),
+                params,
+                return_type: Type::Void,
+                body: Vec::new(),
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                was_plain_async: false,
+                was_unrolled: false,
+                is_exported: false,
+                captures: Vec::new(),
+                decorators: Vec::new(),
+            }),
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            computed_members: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+            aliases: Vec::new(),
+        }
+    }
+
+    let mut module = Module::new("test");
+    module.classes.push(class_with_ctor("Plain", 1, false));
+    module.classes.push(class_with_ctor("Args", 2, true));
+    for class_name in ["Plain", "Args"] {
+        module.init.push(Stmt::Expr(Expr::New {
+            class_name: class_name.to_string(),
+            args: vec![Expr::String("x".to_string())],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }));
+    }
+
+    super::fill_default_arguments(&mut module);
+
+    let arg_counts: Vec<usize> = module
+        .init
+        .iter()
+        .map(|stmt| match stmt {
+            Stmt::Expr(Expr::New { args, .. }) => args.len(),
+            other => panic!("unexpected statement {:?}", other),
+        })
+        .collect();
+    assert_eq!(
+        arg_counts,
+        vec![2, 1],
+        "the plain constructor keeps its `undefined` padding; the one reading \
+         `arguments` must observe exactly the argument the call site passed"
+    );
+}

@@ -182,6 +182,7 @@ fn imported_archetype() -> ImportedClass {
         constructor_param_count: 0,
         has_own_constructor: true,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: true,
         method_names: Vec::new(),
         proven_this_method_names: Vec::new(),
