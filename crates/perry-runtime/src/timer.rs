@@ -634,6 +634,17 @@ pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
 
 pub use ref_states::is_known_timer_id;
 
+/// Whether `id` is specifically a `setImmediate` handle, as opposed to a
+/// `Timeout` (`setTimeout`/`setInterval`, which Node also names `Timeout`).
+/// #10542: Node's `Timeout` has a numeric conversion (`+setTimeout(...)` is
+/// its internal id) but `Immediate` does not (`+setImmediate(...)` is
+/// `NaN`) -- `js_number_coerce` gates its Timeout-only numeric shortcut on
+/// this so an Immediate falls through to the generic (object-shaped)
+/// ToPrimitive path instead.
+pub(crate) fn is_immediate_timer_id(id: i64) -> bool {
+    matches!(timer_handle_kind(id), Some(CallbackTimerKind::Immediate))
+}
+
 fn throw_mock_timer_invalid_state(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_INVALID_STATE");
@@ -921,6 +932,14 @@ pub extern "C" fn js_timer_unref(timer_id: i64) {
 /// resets the next-deadline cursor to one full interval from now.
 #[no_mangle]
 pub extern "C" fn js_timer_refresh(timer_id: i64) {
+    // #10541: refresh() reschedules only -- it must NOT change ref state.
+    // Node's Timeout.refresh() "sets the timer's start time to the current
+    // time" and says nothing about ref/unref; a timer that was unref'd
+    // before refresh() stays unref'd (and a ref'd one stays ref'd). The
+    // id's ref-state entry is left untouched here -- it was set at
+    // schedule() time and by any ref()/unref() call since, and it cannot
+    // have been evicted while this timer is still queued (its
+    // `_scheduled: ScheduledTimerId` field pins the registry entry).
     let now = Instant::now();
 
     {
@@ -928,7 +947,6 @@ pub extern "C" fn js_timer_refresh(timer_id: i64) {
         if let Some(timer) = timers.iter_mut().find(|t| t.id == timer_id) {
             timer.deadline = now + Duration::from_millis(timer.delay_ms);
             timer.cleared = false;
-            set_timer_ref_state(timer_id, true);
             return;
         }
     }
@@ -937,7 +955,6 @@ pub extern "C" fn js_timer_refresh(timer_id: i64) {
     if let Some(timer) = intervals.iter_mut().find(|t| t.id == timer_id) {
         timer.next_deadline = now + Duration::from_millis(timer.interval_ms);
         timer.cleared = false;
-        set_timer_ref_state(timer_id, true);
     }
 }
 

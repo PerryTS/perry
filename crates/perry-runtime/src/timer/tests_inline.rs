@@ -314,3 +314,74 @@ mod mock_dispatch_own_pin_tests {
         js_mock_timers_reset();
     }
 }
+
+#[cfg(test)]
+mod refresh_and_immediate_primitive_tests {
+    use super::*;
+
+    /// #10541: `refresh()` reschedules a timer but must not touch its ref
+    /// state -- neither re-ref an unref'd timer/interval nor unref a ref'd
+    /// one. Before the fix `js_timer_refresh` unconditionally called
+    /// `set_timer_ref_state(id, true)`.
+    #[test]
+    fn refresh_preserves_ref_state() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        test_clear_all_timer_scanner_roots();
+
+        let unrefd = js_set_timeout_callback(0, 50_000.0);
+        js_timer_unref(unrefd);
+        assert_eq!(js_timer_has_ref(unrefd), 0, "setup: unref() didn't take");
+        js_timer_refresh(unrefd);
+        assert_eq!(
+            js_timer_has_ref(unrefd),
+            0,
+            "refresh() re-ref'd an unref'd timeout"
+        );
+
+        let refd = js_set_timeout_callback(0, 50_000.0);
+        assert_eq!(js_timer_has_ref(refd), 1, "setup: new timer isn't ref'd");
+        js_timer_refresh(refd);
+        assert_eq!(
+            js_timer_has_ref(refd),
+            1,
+            "refresh() unref'd a ref'd timeout"
+        );
+
+        let unrefd_interval = setInterval(0, 50_000.0);
+        js_timer_unref(unrefd_interval);
+        js_timer_refresh(unrefd_interval);
+        assert_eq!(
+            js_timer_has_ref(unrefd_interval),
+            0,
+            "refresh() re-ref'd an unref'd interval"
+        );
+
+        clearTimeout(unrefd);
+        clearTimeout(refd);
+        clearInterval(unrefd_interval);
+    }
+
+    /// #10542: a `setImmediate` handle is distinguished from a
+    /// `setTimeout`/`setInterval` handle by kind, so `js_number_coerce` can
+    /// gate its Timeout-only numeric shortcut on it.
+    #[test]
+    fn immediate_kind_is_distinguished_from_timeout() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        test_clear_all_timer_scanner_roots();
+
+        let timeout = js_set_timeout_callback(0, 50_000.0);
+        let interval = setInterval(0, 50_000.0);
+        let immediate = js_set_immediate_callback(0);
+
+        assert!(!is_immediate_timer_id(timeout), "setTimeout is a Timeout");
+        assert!(!is_immediate_timer_id(interval), "setInterval is a Timeout");
+        assert!(
+            is_immediate_timer_id(immediate),
+            "setImmediate is an Immediate"
+        );
+
+        clearTimeout(timeout);
+        clearInterval(interval);
+        clearImmediate(immediate);
+    }
+}
