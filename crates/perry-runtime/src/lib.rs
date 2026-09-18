@@ -91,6 +91,7 @@ pub mod cluster;
 pub mod cluster_sched;
 pub mod collection_iter;
 pub mod collection_iter_object;
+pub mod collection_receiver;
 pub mod color_parse;
 pub mod date;
 #[cfg(feature = "mod-dgram")]

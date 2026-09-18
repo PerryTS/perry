@@ -19,7 +19,7 @@ use super::{
     record_collection_number_key_selected, record_collection_string_key_fallback,
     record_collection_string_key_selected, record_collection_string_key_value_selected,
     record_collection_typed_value_fallback, record_collection_typed_value_selected,
-    unbox_str_handle, unbox_to_i64, FnCtx,
+    unbox_collection_receiver, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
 fn is_static_string_number_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
@@ -286,8 +286,7 @@ fn reread_map_set_receiver_and_key(
         Some(handle) => handle.clone(),
         None => {
             let m_box = values[0].clone();
-            let blk = ctx.block();
-            unbox_to_i64(blk, &m_box)
+            unbox_collection_receiver(ctx, &m_box, "set")
         }
     };
     Ok((m_handle, k_box))
@@ -595,8 +594,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     None
                 } else {
                     let m_box = group.reread(ctx, 0)?;
-                    let blk = ctx.block();
-                    Some(unbox_to_i64(blk, &m_box))
+                    Some(unbox_collection_receiver(ctx, &m_box, "set"))
                 };
                 let new_handle = if use_string_i32_map {
                     let value_i32 =
@@ -911,10 +909,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // receiver would otherwise sit unrooted in an SSA register across it.
             let value = with_operands_rooted(ctx, &[map, key], |ctx, values| {
                 let (m_box, k_box) = (values[0].clone(), values[1].clone());
-                let m_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &m_box)
-                };
+                let m_handle = unbox_collection_receiver(ctx, &m_box, "get");
                 let value = if use_string_key_map {
                     let (k_handle, value) = {
                         let blk = ctx.block();
@@ -971,10 +966,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // while the receiver is live only in an SSA register.
             let i32_v = with_operands_rooted(ctx, &[map, key], |ctx, values| {
                 let (m_box, k_box) = (values[0].clone(), values[1].clone());
-                let m_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &m_box)
-                };
+                let m_handle = unbox_collection_receiver(ctx, &m_box, "has");
                 let i32_v = if use_string_key_map {
                     let (k_handle, i32_v) = {
                         let blk = ctx.block();

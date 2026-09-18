@@ -1359,6 +1359,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         }
                     }
                     bind_derived_this_after_super(ctx);
+                    // #10443: derived field initializers run once `super()`
+                    // returns, exactly as in every other arm of this block.
+                    // This was the one arm without it, so `class E extends
+                    // Error { labels = new Set(); constructor(m) { super(m); } }`
+                    // constructed directly left `labels` undefined (mongodb's
+                    // `MongoError.errorLabelSet`). A root reached as an
+                    // ANCESTOR is not staged up front for the same reason
+                    // (`root_fields_run_at_own_super`), so this runs once.
+                    crate::lower_call::apply_field_initializers_recursive(
+                        ctx,
+                        &current_class_name,
+                        crate::lower_call::FieldInitMode::SelfOnly,
+                    )?;
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }
             };

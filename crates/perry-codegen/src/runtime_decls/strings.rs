@@ -396,6 +396,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         VOID,
         &[I32, PTR, I64],
     );
+    // #10446: the failure arm of the static-type Map/Set receiver guard
+    // (`expr::collection_receiver`). Args: (receiver, method_ptr, method_len).
+    // Helper diverges (`-> !`); declared as void-return for LLVM purposes.
+    module.declare_function(
+        "js_throw_collection_receiver_type_error",
+        VOID,
+        &[DOUBLE, PTR, I64],
+    );
     // Issue #510: thrown by `lower_string_method`'s unknown-method
     // catch-all for primitive (string-typed) receivers. Args:
     // (kind_ptr, kind_len, prop_ptr, prop_len). Helper diverges
