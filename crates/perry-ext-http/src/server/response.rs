@@ -9,7 +9,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
-use hyper::header::{HeaderName, HeaderValue};
+use http::header::{HeaderName, HeaderValue};
 use hyper::{HeaderMap, Response, StatusCode};
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
@@ -292,7 +292,7 @@ pub struct ServerResponse {
 pub struct HyperResponseShape {
     pub status: u16,
     pub status_message: Option<String>,
-    pub response_version: Option<hyper::Version>,
+    pub response_version: Option<http::Version>,
     pub headers: Vec<(String, String)>,
     pub trailers: Vec<(String, String)>,
     pub body: ShapeBody,
@@ -373,8 +373,8 @@ impl HyperResponseShape {
     /// no explicit length or chunked framing and whose client did not
     /// advertise `TE: chunked`. Hyper sees a full body and would otherwise add
     /// Content-Length, changing the connection edge.
-    pub fn apply_http10_eof_framing(&mut self, version: hyper::Version, request_te: Option<&str>) {
-        if version != hyper::Version::HTTP_10 || !self.auto_content_length {
+    pub fn apply_http10_eof_framing(&mut self, version: http::Version, request_te: Option<&str>) {
+        if version != http::Version::HTTP_10 || !self.auto_content_length {
             return;
         }
         let client_accepts_chunked = request_te
@@ -402,10 +402,10 @@ impl HyperResponseShape {
     /// Transfer-Encoding without changing hyper's keep-alive accounting.
     pub fn apply_http10_chunked_framing(
         &mut self,
-        version: hyper::Version,
+        version: http::Version,
         request_te: Option<&str>,
     ) -> bool {
-        if version != hyper::Version::HTTP_10 {
+        if version != http::Version::HTTP_10 {
             return false;
         }
         let client_accepts_chunked = request_te

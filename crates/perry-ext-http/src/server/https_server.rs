@@ -794,8 +794,8 @@ async fn handle_https_request(
     perry_ffi::notify_main_thread();
     match response_rx.await {
         Ok(mut shape) => {
-            if http_version == hyper::Version::HTTP_10 {
-                shape.response_version = Some(hyper::Version::HTTP_10);
+            if http_version == http::Version::HTTP_10 {
+                shape.response_version = Some(http::Version::HTTP_10);
             }
             let server_closing = get_handle::<HttpsServer>(server_handle)
                 .map(|server| !server.base.listening)

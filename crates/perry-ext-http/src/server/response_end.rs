@@ -7,7 +7,7 @@
 //! `EndTail`, which parks every snapshot the sequence consumes in the
 //! runtime's transient-root stack before any of it crosses a JS call.
 
-use hyper::StatusCode;
+use http::StatusCode;
 use perry_ffi::{get_handle, get_handle_mut, JsClosure, JsValue, RawClosureHeader};
 
 use crate::server::request::emit_no_arg_to_listeners;

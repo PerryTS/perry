@@ -20,13 +20,13 @@ impl HyperResponseShape {
     /// connection reuse at the protocol level, so it gets neither header.
     pub fn apply_default_connection_headers(
         &mut self,
-        version: hyper::Version,
+        version: http::Version,
         req_connection: Option<&str>,
         keep_alive_timeout_ms: f64,
     ) {
         let wire = match version {
-            hyper::Version::HTTP_10 => 0u8,
-            hyper::Version::HTTP_2 | hyper::Version::HTTP_3 => 2,
+            http::Version::HTTP_10 => 0u8,
+            http::Version::HTTP_2 | http::Version::HTTP_3 => 2,
             _ => 1,
         };
         self.apply_default_connection_headers_for(wire, req_connection, keep_alive_timeout_ms);

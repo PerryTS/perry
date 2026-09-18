@@ -1320,8 +1320,8 @@ async fn handle_request(
     // HTTP/1.0 request must read "1.0" (test-http-1.0 asserts all three
     // httpVersion fields).
     im.http_version = match http_version {
-        hyper::Version::HTTP_10 => "1.0".to_string(),
-        hyper::Version::HTTP_2 => "2.0".to_string(),
+        http::Version::HTTP_10 => "1.0".to_string(),
+        http::Version::HTTP_2 => "2.0".to_string(),
         _ => "1.1".to_string(),
     };
     let im_handle = alloc_incoming_message(im);
@@ -1365,8 +1365,8 @@ async fn handle_request(
 
     match response_rx.await {
         Ok(mut shape) => {
-            if http_version == hyper::Version::HTTP_10 {
-                shape.response_version = Some(hyper::Version::HTTP_10);
+            if http_version == http::Version::HTTP_10 {
+                shape.response_version = Some(http::Version::HTTP_10);
             }
             let server_closing = get_handle::<HttpServer>(server_handle)
                 .map(|server| !server.listening)
