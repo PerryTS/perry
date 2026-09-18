@@ -433,7 +433,11 @@ impl EventEmitterHandle {
         let callback_handles = root_listener_callbacks(&scope, &snapshot);
         for handle in &callback_handles {
             let closure_ptr = handle.get_heap_word_u64() as *const ClosureHeader;
-            js_closure_call2(closure_ptr, event_arg_h.get_nanbox_f64(), listener_arg_h.get_nanbox_f64());
+            js_closure_call2(
+                closure_ptr,
+                event_arg_h.get_nanbox_f64(),
+                listener_arg_h.get_nanbox_f64(),
+            );
         }
     }
 
