@@ -1992,5 +1992,6 @@ mod function_ctor_runtime_routing;
 mod mixin_parent_chain;
 mod native_module_sync;
 
+mod class_expr_subclass_captures;
 mod nullish_over_optional_chain;
 mod ui_widget_add_child;
