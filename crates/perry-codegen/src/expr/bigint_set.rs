@@ -1277,7 +1277,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             value,
                             crate::native_value::ExpectedNativeRep::StringRef,
                         )?;
-                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
+                        let s_handle =
+                            reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                         let i32_v = {
                             let blk = ctx.block();
                             let i32_v = blk.call(
@@ -1308,7 +1309,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         i32_v
                     } else {
                         let v_box = lower_expr(ctx, value)?;
-                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
+                        let s_handle =
+                            reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                         let i32_v = {
                             let blk = ctx.block();
                             blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)])

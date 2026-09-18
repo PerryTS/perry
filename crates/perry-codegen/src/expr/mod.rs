@@ -41,9 +41,9 @@ pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;
 mod channel;
-mod collection_receiver;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
+mod collection_receiver;
 #[cfg(test)]
 mod conforming_layout_note_tests;
 mod helpers;
@@ -82,11 +82,11 @@ pub(crate) use buffer_views::{
     invalidate_native_owned_views_for_dispose, native_arena_canonical_owner_id,
     record_native_arena_owner_assignment, update_buffer_view_for_assignment,
 };
-pub(crate) use collection_receiver::unbox_collection_receiver;
 pub(crate) use channel::{
     extract_array_of_object_shape, lower_channel_reduction, try_match_channel_reduction,
     variant_name,
 };
+pub(crate) use collection_receiver::unbox_collection_receiver;
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
     class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,

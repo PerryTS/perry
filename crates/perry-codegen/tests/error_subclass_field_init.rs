@@ -63,7 +63,13 @@ fn ctor(id: u32, body: Vec<Stmt>) -> Function {
     }
 }
 
-fn class(id: u32, name: &str, extends: &str, fields: Vec<ClassField>, ctor: Option<Function>) -> Class {
+fn class(
+    id: u32,
+    name: &str,
+    extends: &str,
+    fields: Vec<ClassField>,
+    ctor: Option<Function>,
+) -> Class {
     Class {
         id,
         name: name.to_string(),
