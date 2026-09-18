@@ -1112,6 +1112,54 @@ pub(crate) struct OwnedCodegenUnitPart {
 
 #[cfg(test)]
 mod tests {
+
+    /// #10399: a `thread_local` global's cross-unit DECLARATION must keep the
+    /// TLS specifier. Without it `external_decl_for_global` returned `None`
+    /// and `split_units` panicked with "cannot form external declaration"; a
+    /// declaration that dropped `thread_local` would name a different symbol
+    /// than the definition.
+    #[test]
+    fn external_decl_keeps_thread_local() {
+        use crate::module::linkage::external_decl_for_global;
+        assert_eq!(
+            external_decl_for_global("@perry_global_m__0 = thread_local global double 0.0")
+                .as_deref(),
+            Some("@perry_global_m__0 = external thread_local global double")
+        );
+        assert_eq!(
+            external_decl_for_global("@__perry_init_done_m = internal thread_local global i8 0")
+                .as_deref(),
+            Some("@__perry_init_done_m = external thread_local global i8")
+        );
+        // The non-TLS form is unchanged.
+        assert_eq!(
+            external_decl_for_global("@perry_global_m__0 = global double 0.0").as_deref(),
+            Some("@perry_global_m__0 = external global double")
+        );
+        // Aggregate types still parse with a TLS specifier in front.
+        assert_eq!(
+            external_decl_for_global(
+                "@perry_class_header_m__C = internal thread_local global <2 x i64> zeroinitializer"
+            )
+            .as_deref(),
+            Some("@perry_class_header_m__C = external thread_local global <2 x i64>")
+        );
+    }
+
+    /// #10399: duplicating a TLS global across codegen units must not drop the
+    /// specifier either.
+    #[test]
+    fn unit_promotion_keeps_thread_local() {
+        use crate::module::linkage::{make_unique_owner_global, promote_global_for_units};
+        assert_eq!(
+            promote_global_for_units("@g = internal thread_local global i8 0"),
+            "@g = linkonce_odr thread_local global i8 0"
+        );
+        assert_eq!(
+            make_unique_owner_global("@g = internal thread_local global i8 0"),
+            "@g = thread_local global i8 0"
+        );
+    }
     use super::*;
     use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
