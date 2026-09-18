@@ -1182,3 +1182,40 @@ fn the_ordinary_slot_query_declines_a_class_kind_shape() {
         );
     }
 }
+
+#[cfg(test)]
+mod issue_10595_tests {
+    use super::*;
+
+    /// #10595: the >=`KEYS_INDEX_THRESHOLD` indexed lookup must agree with
+    /// the linear-scan lookups fixed in `object/keys_lookup.rs` — a
+    /// duplicate key name (a subclass field re-declaring an ancestor's
+    /// field, never deduplicated in the packed keys) must resolve to the
+    /// HIGHEST slot index among the candidates a hash bucket returns, not
+    /// whichever one the open-addressing probe order happens to visit
+    /// first.
+    #[test]
+    fn indexed_lookup_duplicate_key_name_resolves_to_the_highest_slot() {
+        let ancestor_key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+        let override_key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+        let keys = crate::array::js_array_alloc(4);
+        let keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(ancestor_key));
+        let keys = crate::array::js_array_push(keys, crate::JSValue::string_ptr(override_key));
+
+        let h = crate::object::key_bytes_hash(b"tag".as_ptr(), 3);
+        unsafe {
+            // build=true: force the index to cover both slots regardless of
+            // KEYS_INDEX_THRESHOLD — the verdict function itself does not
+            // gate on that threshold, only its linear-scan callers do.
+            let verdict = shape_slot_lookup_verdict(keys, b"tag", h, 2, true);
+            match verdict {
+                KeysIndexVerdict::Found(slot) => assert_eq!(
+                    slot, 1,
+                    "must resolve to the most-derived slot (index 1), not the ancestor's (index 0)"
+                ),
+                KeysIndexVerdict::Absent => panic!("expected Found(1), got Absent"),
+                KeysIndexVerdict::Unindexed => panic!("expected Found(1), got Unindexed"),
+            }
+        }
+    }
+}

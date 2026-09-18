@@ -100,7 +100,20 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
     }
     let n = (key_count as usize).min(slot_len);
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    for i in 0..n {
+    // #10595: scan back-to-front. A subclass field that re-declares an
+    // ancestor's field name (`class Sub extends Base { tag = ... }` where
+    // `Base` also declares `tag`) is NOT deduplicated in the packed keys —
+    // `codegen/mod.rs` lists ancestor fields first, then the class's own, so
+    // the array holds one entry per DECLARATION, oldest ancestor first, most
+    // derived last. `class_field_global_index` (the compile-time-typed read's
+    // index resolver) already picks the most-derived declaration ("TS
+    // shadowing"); this dynamic by-name lookup must agree, or a receiver
+    // whose static type is unknown (an inherited accessor's `this.field`, a
+    // computed `obj[key]`) sees the ancestor's stale slot instead of the
+    // override. Scanning in reverse finds that same most-derived match first,
+    // with no change to storage layout and no cost in the (common, no
+    // shadowing) case where a name occurs once.
+    for i in (0..n).rev() {
         let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
             if stored == key_bytes {
@@ -204,7 +217,8 @@ pub(crate) unsafe fn keys_find_slot_by_key_ptr(
         return None;
     }
     let n = (key_count as usize).min(slot_len);
-    for i in 0..n {
+    // #10595: same most-derived-wins scan direction as the fast path above.
+    for i in (0..n).rev() {
         let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if crate::string::js_string_key_matches(v, key) {
             return Some(i as u32);
@@ -248,4 +262,75 @@ pub(crate) fn keys_index_insert(
         return;
     }
     shapes::shape_note_append(keys, new_count, key_hash, slot);
+}
+
+#[cfg(test)]
+mod tests_10595 {
+    use super::*;
+
+    /// #10595: a subclass field that re-declares an ancestor's field name is
+    /// not deduplicated in the packed keys array built by
+    /// `crates/perry-codegen/src/codegen/mod.rs` (ancestor fields first,
+    /// then the class's own) — the array genuinely holds two entries for
+    /// one logical property, oldest declaration first. Only the LAST
+    /// (most-derived) slot is ever written, matching
+    /// `class_field_global_index`'s "TS shadowing" resolution for the
+    /// compile-time-typed path. A dynamic by-name lookup that returned the
+    /// first match instead found the never-initialized ancestor slot.
+    #[test]
+    fn duplicate_key_name_resolves_to_the_last_occurrence() {
+        let ancestor_key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+        let override_key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+        let keys = crate::array::js_array_alloc(4);
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(ancestor_key));
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(override_key));
+
+        let lookup_key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+        unsafe {
+            assert_eq!(
+                keys_find_slot_by_key_ptr(keys, 2, lookup_key),
+                Some(1),
+                "must resolve to the most-derived slot (index 1), not the ancestor's (index 0)"
+            );
+            // `keys_find_slot_by_bytes` is the byte-slice twin the pointer
+            // form delegates to for a valid header; pin it directly too.
+            assert_eq!(
+                keys_find_slot_by_bytes(keys, 2, b"tag"),
+                Some(1),
+                "byte-slice lookup must agree with the pointer-key lookup"
+            );
+        }
+    }
+
+    /// The common (non-shadowing) case — a name that occurs exactly once —
+    /// must be completely unaffected by scanning in reverse.
+    #[test]
+    fn single_occurrence_key_is_unaffected_by_scan_direction() {
+        let a = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+        let b = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+        let keys = crate::array::js_array_alloc(4);
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(a));
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(b));
+
+        let lookup_x = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+        let lookup_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
+        unsafe {
+            assert_eq!(keys_find_slot_by_key_ptr(keys, 2, lookup_x), Some(0));
+            assert_eq!(keys_find_slot_by_key_ptr(keys, 2, lookup_y), Some(1));
+        }
+    }
+
+    /// A key that is genuinely absent must still miss, in both scan
+    /// directions.
+    #[test]
+    fn absent_key_is_not_found() {
+        let a = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
+        let keys = crate::array::js_array_alloc(4);
+        let keys = crate::array::js_array_push(keys, JSValue::string_ptr(a));
+
+        let lookup = crate::string::js_string_from_bytes(b"tagViaGetter".as_ptr(), 12);
+        unsafe {
+            assert_eq!(keys_find_slot_by_key_ptr(keys, 1, lookup), None);
+        }
+    }
 }

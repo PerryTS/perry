@@ -2027,6 +2027,22 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
     };
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (slots, slot_len) = super::keys_array_dense_slots(keys);
+    // #10595: keep scanning past the first content match and keep the
+    // HIGHEST slot index among them, not the probe order's first hit.
+    // A field name that a subclass re-declares (`class Sub extends Base {
+    // tag = ... }` where `Base` also declares `tag`) is NOT deduplicated in
+    // the packed keys — `codegen/mod.rs` lists ancestor fields first, then
+    // the class's own, so a genuine duplicate always has the most-derived
+    // declaration at the HIGHER slot index, regardless of this table's probe
+    // order (which is insertion order for a fresh table, but open-addressing
+    // growth/rehash can reshuffle it). `class_field_global_index` — the
+    // compile-time-typed read's index resolver — already picks the
+    // most-derived declaration ("TS shadowing"); this dynamic by-name lookup
+    // must agree, or a receiver whose static type is unknown (an inherited
+    // accessor's `this.field`, a computed `obj[key]`) sees the ancestor's
+    // stale slot instead of the override. A name with only one candidate
+    // (the common, non-shadowing case) is unaffected.
+    let mut found: Option<u32> = None;
     for i in shape.slots.candidates(key_hash) {
         if (i as usize) >= slot_len || i >= key_count {
             continue;
@@ -2034,9 +2050,12 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
         let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
             if stored == key_bytes {
-                return KeysIndexVerdict::Found(i);
+                found = Some(found.map_or(i, |prev| prev.max(i)));
             }
         }
+    }
+    if let Some(i) = found {
+        return KeysIndexVerdict::Found(i);
     }
     // Hash-bucket candidates existed but none matched: with a complete index
     // that still proves absence (the bucket held colliding OTHER keys).
