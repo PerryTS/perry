@@ -90,6 +90,7 @@ pub(super) fn poison_class_guard_shapes() {
 /// Production never does this — the disable decision is monotonic — but a test
 /// that flips the latch must not leave later tests guarding against
 /// [`CLASS_GUARD_SHAPE_POISON`].
+#[cfg(test)]
 pub(super) fn restore_class_guard_shapes_for_test() {
     if let Ok(slots) = CLASS_GUARD_SHAPE_SLOTS.lock() {
         for &(addr, seeded) in slots.iter() {
