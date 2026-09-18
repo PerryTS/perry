@@ -42,6 +42,7 @@ pub use super::class_handles::{
 };
 use super::*;
 
+mod accessor_attrs;
 mod builtin_alias_construct;
 mod class_meta;
 mod construct;
@@ -62,6 +63,14 @@ pub(crate) mod prototype_objects;
 mod registration;
 mod state;
 mod vm_brand;
+
+// ── accessor_attrs.rs ───────────────────────────────────────────────────────
+pub(crate) use accessor_attrs::{
+    class_accessor_attrs, class_accessor_attrs_in_use, class_accessor_descriptor,
+    class_declared_accessor_ptrs, class_enumerable_accessor_names,
+    class_prototype_enumerable_accessor, class_set_accessor_attrs,
+    decl_prototype_enumerable_key_snapshot, decl_prototype_keys_with_enumerable_accessors,
+};
 
 // ── state.rs ────────────────────────────────────────────────────────────────
 #[cfg(test)]
