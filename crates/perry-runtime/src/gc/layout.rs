@@ -481,6 +481,76 @@ pub(super) unsafe fn layout_header_for_user(user_ptr: usize) -> Option<*mut GcHe
     }
 }
 
+/// True when a traced object provably yields NO child slot to any collector
+/// walk, so the walk can be SKIPPED rather than performed and found empty. On a
+/// chain-node heap half the traced objects are of this shape.
+///
+/// This is a claim about four independent edge sources, and every one of them
+/// needs its own term. `GC_LAYOUT_POINTER_FREE` alone is NOT enough, because it
+/// describes the PAYLOAD and nothing else:
+///
+/// * **the payload** — `GC_LAYOUT_POINTER_FREE`, which
+///   `heap_payload_slot_selection` already trusts to skip the whole payload
+///   without consulting a mask;
+/// * **the kind's prefix and meta edges** — the reason for the kind term, and
+///   the reason it comes first. `gc_child_slots` builds `ArrayElements` as
+///   `new(header, None, range)`: no prefix, no meta, no meta2. Every other
+///   layout kind carries at least one. `ObjectFields` carries the meta record,
+///   which #6812 records as "fatal for the spill buffer, reachable through meta
+///   alone"; `RegExpFields` and `ObjectMeta` carry a prefix and two meta edges
+///   each. And POINTER_FREE is emphatically not an array-only bit: a closure is
+///   ALLOCATED pointer-free (`symbol/properties.rs`, #7154) and only leaves that
+///   state when a capture store records a pointer, and a typed object whose
+///   shape has an empty pointer mask acquires it (`gc/layout/typed_shape.rs`).
+///   Skipping either would drop edges the payload bit says nothing about — the
+///   closure's dynamic property values and static `.prototype`, the object's
+///   meta record, shape `keys` edge and overflow fields;
+/// * **the array's named-property reserve slots** — `GC_ARRAY_NAMED_PROPS`,
+///   which live in front of element 0, outside every layout range;
+/// * **a residual `Object.setPrototypeOf` entry** — the per-owner header bit
+///   from #10611, which is what makes this affordable to ask per object.
+///
+/// A FORWARDED header is never skippable, whatever its layout: array growth
+/// installs PERMANENT forwarding stubs, and walking the stub is what propagates
+/// liveness across the hop (#6228). The same guard on the sibling leaf skip in
+/// `gc/trace.rs` is there for this reason.
+///
+/// NOT SUFFICIENT ON ITS OWN FOR THE FULL MARK. `gc/trace.rs` reads every word
+/// of a pointer-free payload through `proxy::gc_observe_traced_value` when a
+/// proxy trace is active, because a proxy id is a `POINTER_TAG` value in the
+/// proxy-id band rather than a heap pointer — which is precisely why the layout
+/// mask is entitled to call a payload holding one pointer free. The full mark's
+/// call site therefore ANDs in `!proxy_trace_active`; the copying minor and the
+/// remembered-set rebuild both ignore `PointerFreeRange` and need no such term.
+#[inline]
+pub(crate) unsafe fn gc_object_yields_no_child_slots(header: *const GcHeader) -> bool {
+    // ORDER IS LOAD-BEARING, and it is a measurement, not a preference. Every
+    // object the copying minor moves asks this, and most say no; a first
+    // version that asked the type table first cost +0.07% to +0.12% on the
+    // three fixtures where almost nothing qualifies. The three header-word
+    // terms fold into ONE mask compare on a word `move_young` has already
+    // loaded, so a non-candidate is rejected in two instructions.
+    let reserved = (*header)._reserved;
+    if reserved
+        & (GC_LAYOUT_STATE_MASK
+            | crate::gc::GC_ARRAY_NAMED_PROPS
+            | crate::gc::GC_RESIDUAL_PROTO_OWNER)
+        != GC_LAYOUT_POINTER_FREE
+    {
+        return false;
+    }
+    if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+        return false;
+    }
+    // Keyed on the TYPE rather than the rewrite kind, so the surviving path is
+    // a byte compare instead of a table load. This is conservative in the safe
+    // direction: a future type that also had no prefix/meta edge and no
+    // uncovered sibling would simply not be admitted here, costing a walk it
+    // could have skipped. `the_array_type_still_pairs_with_the_prefix_free_
+    // layout_kind` pins the two table facts this leans on.
+    (*header).obj_type == crate::gc::GC_TYPE_ARRAY
+}
+
 #[inline]
 pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
