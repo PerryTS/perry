@@ -1294,6 +1294,44 @@ pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.
 pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+/// #10362: this cell owns an entry in the residual static-prototype registry
+/// (`object::prototype_chain`) — i.e. an `Object.setPrototypeOf` whose receiver
+/// `meta_capable_object` turned away, so the prototype could not go in a meta
+/// record and went into the address-keyed table instead.
+///
+/// The registry's readers used to ask only the process-global
+/// `OBJECT_PROTOTYPES_NONEMPTY` latch, which is exact for a process that has
+/// never re-prototyped a non-object and useless for one that has: a single
+/// `Object.setPrototypeOf(anArray, p)` made EVERY traced cell of every
+/// owner-capable kind take the registry's global mutex and a SipHash probe, and
+/// every relocation of one call the rekey hook. Measured on a 200k-array
+/// fixture: 400,000 armed hook calls from three lines of setup, against 155
+/// unarmed. This bit answers the same question per OWNER, so an armed process
+/// pays only for the cells that actually have an entry.
+///
+/// Bit 6, shared with `OBJ_FLAG_NULL_PROTO` exactly as bits 7..12 are already
+/// shared between the OBJECT and ARRAY namespaces, and disjoint from it by
+/// `obj_type`: `OBJ_FLAG_NULL_PROTO` has one setter,
+/// `js_object_alloc_null_proto`, which returns `*mut ObjectHeader`, and every
+/// reader of it is behind an `obj_type == GC_TYPE_OBJECT` guard (audited:
+/// `field_get_set/accessors.rs`, `field_get_set/for_in_stable.rs`,
+/// `field_set_by_name.rs`, `field_set_by_name/tail.rs` via `object_is_regular`,
+/// `builtins/formatting.rs` via both callers' `gc_type` dispatch,
+/// `builtins/formatting/prototype_equality.rs` via `heap_object_addr`,
+/// `native_call_method/object_proto.rs` via `object_ptr_from_value`).
+/// So this bit is **only meaningful for `obj_type != GC_TYPE_OBJECT`**, and a
+/// `GC_TYPE_OBJECT` owner that reaches the registry anyway keeps the
+/// latch-only gate (see `residual_entry_possible_for`).
+///
+/// Set-only, like `GC_ARRAY_NAMED_PROPS` and for the same reason: an entry is
+/// never deleted while its owner lives (a second `setPrototypeOf` overwrites
+/// the same key; the prune only removes DEAD owners, whose header is gone; the
+/// two rekey paths remove-then-insert and the entry survives). So the error is
+/// on the safe side by construction — a stale-set bit costs one probe that the
+/// map answers `None` to, while the dangerous direction (entry present, bit
+/// absent) has no code path that can produce it, because the only writer of the
+/// entry is also the only writer of the bit, under one lock.
+pub(crate) const GC_RESIDUAL_PROTO_OWNER: u16 = 0x40;
 /// Array was synthesized for a function's `arguments` binding. This is only
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.

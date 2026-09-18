@@ -249,6 +249,12 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     // arms, so no arm's early return can skip it.
     if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
         && crate::object::prototype_chain::residual_prototype_owner_type(obj_type)
+        // #10362: the per-OWNER half. The latch above is exact for a process
+        // that never re-prototyped a non-object and useless for one that has —
+        // it is what made a single `Object.setPrototypeOf(anArray, p)` charge
+        // every traced cell of every owner-capable kind a global mutex and a
+        // SipHash probe. This asks the owner's own header instead.
+        && crate::object::prototype_chain::residual_entry_possible_for(header)
     {
         crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
             user_ptr as usize,

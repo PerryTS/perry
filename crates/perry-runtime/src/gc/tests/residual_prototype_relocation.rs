@@ -175,6 +175,80 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
     );
 }
 
+/// #10362 SABOTAGE: with `GC_RESIDUAL_PROTO_OWNER` never set, the per-owner
+/// gates answer "no entry here" and the collector skips the prototype edge.
+///
+/// This is the test that proves the bit is load-bearing rather than
+/// documentation. Its subject is the same one the two tests around it assert on
+/// — the entry must follow the owner and the recorded address must be rewritten
+/// — so a green run here with the bit suppressed would mean the gates it feeds
+/// are not gating anything, and A' should be withdrawn.
+///
+/// The membership assertion (`debug_assert_residual_owner_bit`) stands itself
+/// down while the sabotage is armed, so this test fails at the real verdict
+/// rather than at an assertion the sabotage itself provoked.
+#[test]
+fn test_suppressing_the_residual_owner_bit_loses_the_prototype() {
+    let _serialized = crate::array::test_serialize();
+    let _feedback = crate::typed_feedback::typed_feedback_test_lock();
+    let _latch = ArrayPrototypeLatchRestore::capture();
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let owner = crate::array::js_array_alloc(4) as usize;
+    let obj_type = obj_type_at(owner);
+    assert!(
+        crate::arena::pointer_in_nursery(owner) && crate::gc::gc_type_is_movable(obj_type),
+        "premise: a nursery owner of a movable kind"
+    );
+    assert_ne!(
+        obj_type, GC_TYPE_OBJECT,
+        "premise: the subject must be a kind the bit actually gates"
+    );
+    js_shadow_slot_set(0, ptr_bits(owner));
+
+    let sabotage = crate::object::prototype_chain::residual_proto_bit_sabotage::Guard::arm();
+    let proto = marked_prototype();
+    crate::object::js_object_set_prototype_of(
+        f64::from_bits(ptr_bits(owner)),
+        f64::from_bits(ptr_bits(proto)),
+    );
+    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_eq!(
+        crate::object::prototype_chain::object_static_prototype(owner),
+        Some(ptr_bits(proto)),
+        "premise: the entry is recorded even with the bit suppressed — the \
+         sabotage removes the PROOF, not the entry"
+    );
+    unsafe {
+        let header =
+            (owner as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        assert_eq!(
+            (*header)._reserved & crate::gc::GC_RESIDUAL_PROTO_OWNER,
+            0,
+            "premise: the sabotage really did suppress the bit"
+        );
+    }
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(owner_after, owner, "premise: the owner must actually move");
+
+    let recorded = crate::object::prototype_chain::object_static_prototype(owner_after);
+    forget_owners(&[owner, owner_after]);
+    js_shadow_slot_set(0, 0);
+    drop(sabotage);
+
+    assert!(
+        recorded.is_none(),
+        "the bit is not load-bearing: with `GC_RESIDUAL_PROTO_OWNER` suppressed the \
+         entry still followed its owner, so the per-owner gates in \
+         `gc/layout_slot_visit.rs` and `gc/layout/transfer.rs` are not gating \
+         anything. A' is documentation — withdraw it."
+    );
+}
+
 /// Every movable receiver kind that keeps its prototype in the residual
 /// registry, with the prototype held by NOTHING but that entry. One copying
 /// minor has to rekey the entry, retain the prototype through it, and rewrite
