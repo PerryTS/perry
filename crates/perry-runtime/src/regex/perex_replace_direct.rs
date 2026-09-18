@@ -20,7 +20,9 @@ use super::perex_api::{self as api, ExecOutput, Reuse};
 use super::perex_match_search::advance;
 use super::perex_memory::{MemoryBudget, StorageError};
 use super::perex_owner::HeapSubject;
-use super::perex_replace_storage::{boxed, call, length, text, List, Pieces, Units};
+use super::perex_replace_storage::{
+    boxed, call, call_native, length, text, List, NativeArgs, Pieces, Units,
+};
 use super::perex_runtime::{self as host, EngineError};
 use super::perex_strings::SpanCopies;
 use super::RegExpHeader;
@@ -251,6 +253,16 @@ pub(super) fn replace(
     } else {
         Pieces::new(scope)?
     };
+    // An ordinary replacer's arguments never reach user code as an array, so
+    // they are produced straight into shadow-stack slots. A proxy replacer's do
+    // reach it, through the `apply` trap, and keep the JS array. Sized once:
+    // the program's capture count fixes the argument count for every match.
+    let mut native_args =
+        if tokens.is_some() || crate::proxy::js_proxy_is_proxy(replacement.get_nanbox_f64()) == 1 {
+            None
+        } else {
+            Some(NativeArgs::new(captures + 3)?)
+        };
     let mut next_source = 0;
     for record in spans.values.chunks_exact(width) {
         let local = RuntimeHandleScope::new();
@@ -283,6 +295,30 @@ pub(super) fn replace(
                         }
                     }
                 }
+            }
+        } else if let Some(args) = native_args.as_mut() {
+            let this = local.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
+            let copies = &mut copies;
+            let value = call_native(replacement, &this, args, memory, |set| {
+                let matched = copies.copy(start, end, budget)?;
+                set(0, js_nanbox_string(matched as i64));
+                let mut slot = 1;
+                for pair in record[2..].as_chunks::<2>().0 {
+                    // An unset capture is the `undefined` the slot already holds.
+                    if pair[0] != u32::MAX {
+                        let capture = copies.copy(pair[0] as usize, pair[1] as usize, budget)?;
+                        set(slot, js_nanbox_string(capture as i64));
+                    }
+                    slot += 1;
+                }
+                set(slot, position as f64);
+                set(slot + 1, boxed(input));
+                Ok(())
+            })?;
+            let value = local.root_nanbox_f64(value);
+            let value = text(&local, &value)?;
+            if accepted {
+                output.whole(&value, budget)?;
             }
         } else {
             let mut args = List::new(&local)?;
