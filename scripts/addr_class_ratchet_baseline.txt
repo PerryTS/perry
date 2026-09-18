@@ -67,7 +67,6 @@ handle-floor | crates/perry-runtime/src/child_process/registry.rs | 1
 handle-floor | crates/perry-runtime/src/child_process/v8_serde.rs | 1
 handle-floor | crates/perry-runtime/src/closure/dispatch/validate.rs | 1
 handle-floor | crates/perry-runtime/src/cluster.rs | 1
-handle-floor | crates/perry-runtime/src/collection_iter_object.rs | 1
 handle-floor | crates/perry-runtime/src/date.rs | 3
 handle-floor | crates/perry-runtime/src/dgram.rs | 1
 handle-floor | crates/perry-runtime/src/dns.rs | 4
@@ -126,7 +125,7 @@ handle-floor | crates/perry-runtime/src/object/field_set_by_name/write_helpers.r
 handle-floor | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/ctor_thunks.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/typed_array.rs | 4
-handle-floor | crates/perry-runtime/src/object/instanceof.rs | 8
+handle-floor | crates/perry-runtime/src/object/instanceof.rs | 6
 handle-floor | crates/perry-runtime/src/object/mod.rs | 1
 handle-floor | crates/perry-runtime/src/object/native_call_method.rs | 3
 handle-floor | crates/perry-runtime/src/object/native_call_method/collection_methods.rs | 2

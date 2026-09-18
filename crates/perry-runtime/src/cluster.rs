@@ -1526,15 +1526,15 @@ fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
-    if raw < 0x10000 || crate::buffer::is_registered_buffer(raw) {
+    if crate::buffer::is_registered_buffer(raw) {
         return None;
     }
-    unsafe {
-        let header =
-            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return None;
-        }
+    // #10556: `x instanceof EventEmitter` asks `is_worker_instance_value`, and a
+    // native `new EventEmitter()` is a POINTER_TAG registry handle (`0x38000`)
+    // that sailed over the old `0x10000` floor into a header read.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
     }
     Some(raw as *mut ObjectHeader)
 }
@@ -1545,18 +1545,10 @@ fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
         return None;
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
-    if raw < 0x10000 {
-        return None;
-    }
-    unsafe {
-        let header =
-            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        match (*header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                Some(raw as *mut ArrayHeader)
-            }
-            _ => None,
-        }
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
+    match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => Some(raw as *mut ArrayHeader),
+        _ => None,
     }
 }
 

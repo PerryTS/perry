@@ -146,6 +146,9 @@ pub(crate) fn ensure_function_prototype_object(
     proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| proto)
 }
 
+/// Floor of the synthetic class-id range (see [`NEXT_SYNTHETIC_CLASS_ID`]).
+pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 = 0x8000_0000;
+
 per_test_global! {
     /// Synthetic class id allocator for prototype-object classes. High bit
     /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
@@ -153,7 +156,24 @@ per_test_global! {
     /// concern in practice — would require ~2 billion `Function.prototype = X`
     /// statements at module init.
     pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
-        std::sync::atomic::AtomicU32::new(0x8000_0000);
+        std::sync::atomic::AtomicU32::new(SYNTHETIC_CLASS_ID_BASE);
+}
+
+/// The `[[Prototype]]` object recorded for a SYNTHETIC class id — one of the
+/// ids `Object.create(proto)` (#809) and `F.prototype = obj` (#711) allocate
+/// from [`NEXT_SYNTHETIC_CLASS_ID`]. That link is the authoritative prototype
+/// of every instance stamped with the id.
+///
+/// Unlike [`class_prototype_object`], this refuses a DECLARED class id, whose
+/// entry in the same table is the parent CLASS OBJECT of a class-expression
+/// subclass (#1788/#6552) rather than a prototype.
+pub(crate) fn synthetic_class_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    if class_id < SYNTHETIC_CLASS_ID_BASE
+        || class_id >= NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return std::ptr::null_mut();
+    }
+    class_prototype_object(class_id)
 }
 
 /// Perform ordinary `.prototype` assignment, then synchronize the synthetic

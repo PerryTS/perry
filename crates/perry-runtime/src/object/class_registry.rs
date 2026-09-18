@@ -107,6 +107,7 @@ pub(crate) use prototype_objects::{
     class_prototype_object, ensure_function_prototype_object, function_class_id,
     function_value_for_class_id, resolve_proto_chain_field,
     resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
+    synthetic_class_prototype_object,
 };
 pub use prototype_objects::{
     js_set_function_prototype, js_set_prototype_property, NEXT_SYNTHETIC_CLASS_ID,
