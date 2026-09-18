@@ -562,8 +562,14 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // identifiers, so test assertions like `typeof x === "number"`
         // hold). Gate on the timer registry so unrelated small handles
         // (UI widgets, drizzle, etc.) still fall through to toPrimitive.
+        // #10542: only a Timeout (setTimeout/setInterval) converts to its
+        // id this way -- an Immediate (setImmediate) has no numeric
+        // conversion in Node and must fall through to the generic
+        // toPrimitive/toString path below (which yields NaN, matching
+        // `+setImmediate(...)`).
         if crate::value::addr_class::is_small_handle(id as usize)
             && crate::timer::is_known_timer_id(id)
+            && !crate::timer::is_immediate_timer_id(id)
         {
             return id as f64;
         }
