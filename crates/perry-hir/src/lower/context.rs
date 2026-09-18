@@ -88,6 +88,7 @@ impl LoweringContext {
             class_statics: Vec::new(),
             class_field_names: HashMap::new(),
             class_accessor_names: HashMap::new(),
+            class_method_names: HashMap::new(),
             class_native_extends: Vec::new(),
             class_field_types: HashMap::new(),
             enums: Vec::new(),
@@ -591,10 +592,9 @@ impl LoweringContext {
         self.class_accessor_names.insert(class_name, accessor_names);
     }
 
-    /// Look up the accessor property names registered for a
-    /// class. The stored list includes inherited accessors (mirroring how
-    /// `class_field_names` stores the own+inherited union), so callers do
-    /// not need to walk the parent chain themselves.
+    /// Look up the accessor property names for a class. Includes inherited
+    /// accessors (mirroring `class_field_names`'s own+inherited union), so
+    /// callers do not need to walk the parent chain themselves.
     pub(crate) fn lookup_class_accessor_names(
         &self,
         class_name: &str,
