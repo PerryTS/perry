@@ -1874,13 +1874,21 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // above); inline closures only have a `perry_closure_*` global when
     // materialized, so gate those on `materialized_closure_ids` to avoid
     // referencing an undefined global (the #318/#343 clang-failure class).
+    // #10574: resolve closure params/kind for functions that are not
+    // `hir.functions` entries, so header mode keeps their names and parameters.
+    let closure_headers = super::function_source_header::ClosureHeaders::new(closures);
     let mut user_fn_source: Vec<(String, String, bool)> = Vec::new();
     for f in &hir.functions {
         if let Some(src) = hir.closure_source_text.get(&f.id) {
             if let Some(sym) = func_names.get(&f.id) {
                 user_fn_source.push((
                     format!("__perry_wrap_{}", sym),
-                    super::function_source_header::retained_function_text(hir, f.id, &src.text),
+                    super::function_source_header::retained_function_text(
+                        hir,
+                        &closure_headers,
+                        f.id,
+                        &src.text,
+                    ),
                     src.is_non_strict_ordinary,
                 ));
             }
@@ -1909,7 +1917,12 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
         user_fn_source.push((
             sym,
-            super::function_source_header::retained_function_text(hir, *func_id, &src.text),
+            super::function_source_header::retained_function_text(
+                hir,
+                &closure_headers,
+                *func_id,
+                &src.text,
+            ),
             src.is_non_strict_ordinary,
         ));
     }
@@ -1919,6 +1932,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // module actually emitted; the helper also preserves the file-size gate.
     super::artifact_source_text::extend_class_method_source_text(
         hir,
+        &closure_headers,
         module_prefix,
         llmod,
         &mut user_fn_source,

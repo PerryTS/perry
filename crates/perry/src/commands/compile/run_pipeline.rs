@@ -622,8 +622,25 @@ pub fn run_with_parse_cache(
     // the object-cache key and the string-pool emitter observe one knob.
     // Only set (never unset): an already-exported env value wins, matching
     // `--debug-symbols` / `PERRY_DEBUG_SYMBOLS`.
-    if args.function_source == "header" && std::env::var_os("PERRY_FUNCTION_SOURCE").is_none() {
-        std::env::set_var("PERRY_FUNCTION_SOURCE", "header");
+    // Precedence is CLI flag > env, matching `--cache-dir`/`PERRY_CACHE_DIR`
+    // and the rest of the CLI. An explicit `--function-source` always wins;
+    // only an omitted flag defers to an exported `PERRY_FUNCTION_SOURCE`.
+    match args.function_source.as_deref() {
+        Some(value) => std::env::set_var("PERRY_FUNCTION_SOURCE", value),
+        None => {
+            // An unknown exported value used to silently select full source, so
+            // a typo (`headeer`) quietly produced a binary with every function
+            // body retained and no diagnostic. `--function-source` is validated
+            // by clap; the env var has to be validated here.
+            if let Some(value) = std::env::var_os("PERRY_FUNCTION_SOURCE") {
+                let value = value.to_string_lossy().trim().to_string();
+                if !matches!(value.as_str(), "full" | "header" | "elide") {
+                    anyhow::bail!(
+                        "PERRY_FUNCTION_SOURCE must be `full` or `header` (got `{value}`)"
+                    );
+                }
+            }
+        }
     }
 
     // `--report-size` needs a symbol table to attribute size by crate, but not

@@ -283,8 +283,8 @@ pub struct CompileArgs {
     /// source (~6 MB on a tsc-sized bundle). Also `PERRY_FUNCTION_SOURCE`.
     /// Programs that parse function *bodies* (`new Function(fn.toString())`,
     /// `perry-threads` worker serialization) need `full`.
-    #[arg(long, default_value = "full", value_parser = ["full", "header"])]
-    pub function_source: String,
+    #[arg(long, value_parser = ["full", "header"])]
+    pub function_source: Option<String>,
 
     /// Disable the per-module object cache.
     /// By default Perry caches each module's object bytes keyed by a

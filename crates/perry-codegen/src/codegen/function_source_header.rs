@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use perry_hir::types::FuncId;
-use perry_hir::{Function, Module as HirModule, Param};
+use perry_hir::{Expr, Function, Module as HirModule, Param};
 
 thread_local! {
     static HEADER_MODE_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
@@ -49,14 +49,78 @@ pub(super) fn override_function_source_header_mode(on: bool) -> FunctionSourceHe
     FunctionSourceHeaderGuard(HEADER_MODE_OVERRIDE.with(|cell| cell.replace(Some(on))))
 }
 
+/// Parameter/kind lookup for functions that are **not** `hir.functions`
+/// entries. Arrow functions, function expressions and nested function
+/// declarations all lower to an `Expr::Closure` nested inside an expression
+/// tree, so `function_by_id` cannot see them — it searches only `hir.functions`
+/// and class members. Before this existed, every one of them fell back to
+/// `function () { ... }`, dropping the name *and* the parameters that the
+/// documented Angular/Vue-style DI contract depends on. On `typescript@5.9.3`
+/// that was ~9,600 of 9,644 functions, all interned onto one shared string.
+///
+/// Built from the same `closures` slice `emit_module_artifacts` already holds,
+/// so this adds a map build, not a traversal.
+pub(super) struct ClosureHeaders<'a> {
+    by_id: HashMap<FuncId, (&'a [Param], bool)>,
+}
+
+impl<'a> ClosureHeaders<'a> {
+    pub(super) fn new(closures: &'a [(FuncId, Expr)]) -> Self {
+        let mut by_id = HashMap::new();
+        for (func_id, expr) in closures {
+            if let Expr::Closure {
+                params, is_arrow, ..
+            } = expr
+            {
+                by_id.insert(*func_id, (params.as_slice(), *is_arrow));
+            }
+        }
+        Self { by_id }
+    }
+
+    #[cfg(test)]
+    pub(super) fn empty() -> Self {
+        Self {
+            by_id: HashMap::new(),
+        }
+    }
+
+    fn get(&self, id: FuncId) -> Option<(&'a [Param], bool)> {
+        self.by_id.get(&id).copied()
+    }
+}
+
 /// Original source, or the synthesized header when header mode is on.
-pub(super) fn retained_function_text(hir: &HirModule, func_id: FuncId, original: &str) -> String {
+pub(super) fn retained_function_text(
+    hir: &HirModule,
+    closures: &ClosureHeaders<'_>,
+    func_id: FuncId,
+    original: &str,
+) -> String {
     if !function_source_header_mode() {
         return original.to_string();
     }
-    match function_by_id(hir, func_id) {
-        Some(func) => synthesize_function_header(&header_name(hir, func), func.params.as_slice()),
-        None => synthesize_function_header("", &[]),
+    if let Some(func) = function_by_id(hir, func_id) {
+        return synthesize_function_header(&header_name(hir, func), func.params.as_slice());
+    }
+    if let Some((params, is_arrow)) = closures.get(func_id) {
+        // An arrow has no name in source and `toString()` must not claim one,
+        // nor call itself `function` - that misreports the function kind on
+        // top of eliding the body.
+        if is_arrow {
+            return synthesize_arrow_header(params);
+        }
+        return synthesize_function_header(&closure_header_name(hir, func_id), params);
+    }
+    synthesize_function_header("", &[])
+}
+
+/// Display name for a closure that has no `hir.functions` entry — a function
+/// expression or nested declaration keeps its source name here.
+fn closure_header_name(hir: &HirModule, func_id: FuncId) -> String {
+    match hir.closure_display_names.get(&func_id) {
+        Some(display) if is_user_visible_name(display) => display.clone(),
+        _ => String::new(),
     }
 }
 
@@ -106,6 +170,15 @@ fn synthesize_function_header(name: &str, params: &[Param]) -> String {
     } else {
         format!("function {name}({params_src}) {{ /* source elided */ }}")
     }
+}
+
+fn synthesize_arrow_header(params: &[Param]) -> String {
+    let params_src = params
+        .iter()
+        .filter_map(header_param)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("({params_src}) => {{ /* source elided */ }}")
 }
 
 fn header_param(param: &Param) -> Option<String> {
@@ -178,6 +251,7 @@ mod tests {
     use perry_hir::types::Type;
     use perry_hir::Param;
 
+
     fn param(name: &str, rest: bool) -> Param {
         Param {
             id: 1,
@@ -204,6 +278,81 @@ mod tests {
             synthesize_function_header("", &[param("x", false), param("rest", true)]),
             "function (x, ...rest) { /* source elided */ }"
         );
+    }
+
+    fn closure_expr(func_id: u32, params: Vec<Param>, is_arrow: bool) -> (FuncId, Expr) {
+        (
+            func_id,
+            Expr::Closure {
+                func_id,
+                params,
+                return_type: Type::Any,
+                body: Vec::new(),
+                captures: Vec::new(),
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+            },
+        )
+    }
+
+    /// #10574: the regression that shipped in the first cut of header mode.
+    /// A closure is not a `hir.functions` entry, so `function_by_id` misses it
+    /// and the fallback produced `function () { ... }` for ~9,600 of tsc's
+    /// 9,644 functions — losing the names and parameters the DI contract
+    /// promises. Without `ClosureHeaders` these two assertions fail.
+    #[test]
+    fn closures_keep_their_names_and_parameters() {
+        let hir = HirModule::new("t");
+        let closures = vec![closure_expr(7, vec![param("epsilon", false)], false)];
+        let headers = ClosureHeaders::new(&closures);
+        let _guard = override_function_source_header_mode(true);
+        assert_eq!(
+            retained_function_text(&hir, &headers, 7, "function named2(epsilon) { return 1; }"),
+            "function (epsilon) { /* source elided */ }"
+        );
+        assert!(!retained_function_text(&hir, &headers, 7, "x").contains("return"));
+    }
+
+    /// An arrow must not be reported as `function (...)`: that misstates the
+    /// function *kind* on top of eliding the body.
+    #[test]
+    fn arrow_closures_keep_arrow_syntax() {
+        let hir = HirModule::new("t");
+        let closures = vec![closure_expr(9, vec![param("g", false), param("d", false)], true)];
+        let headers = ClosureHeaders::new(&closures);
+        let _guard = override_function_source_header_mode(true);
+        assert_eq!(
+            retained_function_text(&hir, &headers, 9, "(g, d) => g + d"),
+            "(g, d) => { /* source elided */ }"
+        );
+    }
+
+    /// An unknown id still degrades safely rather than panicking.
+    #[test]
+    fn unknown_ids_fall_back_to_an_anonymous_header() {
+        let hir = HirModule::new("t");
+        let headers = ClosureHeaders::empty();
+        let _guard = override_function_source_header_mode(true);
+        assert_eq!(
+            retained_function_text(&hir, &headers, 404, "whatever"),
+            "function () { /* source elided */ }"
+        );
+    }
+
+    /// Default mode must stay byte-identical to the original source.
+    #[test]
+    fn full_mode_is_byte_identical() {
+        let hir = HirModule::new("t");
+        let headers = ClosureHeaders::empty();
+        let _guard = override_function_source_header_mode(false);
+        let src = "function keepMe(a, b) { return a + b; }";
+        assert_eq!(retained_function_text(&hir, &headers, 1, src), src);
     }
 
     #[test]
