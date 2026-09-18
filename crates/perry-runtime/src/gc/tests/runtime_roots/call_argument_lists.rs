@@ -328,3 +328,79 @@ fn rest_bundling_roots_the_rest_array_across_the_arguments_array() {
          arrays, holding the post-collection argument values"
     );
 }
+
+/// #10532 review (round 2): a raw, untagged heap-pointer bit pattern (the
+/// Promise executor's resolve/reject shape, `top16 == 0`) stored as an
+/// array-like element is exactly as movable as a NaN-boxed pointer, but
+/// `JSValue::is_pointer()` does not recognize it, and `root_nanbox_f64`'s
+/// `Nanbox` scanner only rewrites POINTER_TAG/STRING_TAG/BIGINT_TAG bit
+/// patterns -- it would silently do nothing for a raw one.
+#[test]
+fn array_like_argument_lists_root_raw_untagged_heap_pointer_elements() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuate = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let callee = tenured_closure(record_two_args as *const u8, 0);
+    let scope = RuntimeHandleScope::new();
+    let callee_handle = scope.root_nanbox_f64(f64::from_bits(ptr_bits(callee as usize)));
+
+    // A closure left in the nursery, referenced ONLY by its raw (unboxed)
+    // address -- the exact shape `js_promise_new_with_executor` hands a
+    // user's executor for `resolve`/`reject` (see proxy.rs's
+    // `ValueMoveKind::RawHeapWord` doc comment).
+    let raw_closure = crate::closure::js_closure_alloc(record_two_args as *const u8, 0);
+    let observer = scope.root_raw_mut_ptr(raw_closure);
+    let raw_bits_before = raw_closure as usize as u64;
+
+    // Exactly 2 elements to match `record_two_args`'s declared arity -- an
+    // under-applied raw extern "C" test body has no registered arity to pad
+    // against, so this keeps the call itself unremarkable and isolates the
+    // one thing under test: whether element 0 survives as a raw heap word.
+    let source = crate::object::js_object_alloc(0, 3);
+    let source_value = scope.root_nanbox_f64(f64::from_bits(ptr_bits(source as usize)));
+    for (name, value) in [
+        (&b"length"[..], 2.0),
+        (&b"0"[..], f64::from_bits(raw_bits_before)),
+        (&b"1"[..], 7.0),
+    ] {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let obj = (source_value.get_nanbox_f64().to_bits() & POINTER_MASK) as *mut ObjectHeader;
+        crate::object::js_object_set_field_by_name(obj, key, value);
+    }
+
+    // Fire the forced collection on the SECOND loop iteration (reading
+    // element "1"), not the first: element "0"'s raw pointer is read on the
+    // first iteration and, without this fix, copied bare into `out[0]` with
+    // nothing rooting it. Firing the collection a step later is what puts
+    // that already-read copy at risk, instead of the collection landing
+    // before element "0" is ever read (which every read would trivially
+    // survive, fix or no fix).
+    crate::gc::arm_collection_point_after("reflect.list_from_array_like.index_key", 1);
+    let before = crate::gc::copying_minor_cycles();
+    crate::proxy::js_reflect_apply(
+        callee_handle.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        source_value.get_nanbox_f64(),
+    );
+
+    assert!(
+        crate::gc::copying_minor_cycles() > before,
+        "premise: the armed collection point ran a copying minor"
+    );
+    // #7341: nothing allocates after this read; `with_mut_ptr` keeps it out
+    // of the raw-handle debt count (see `tenured_closure` above).
+    let raw_bits_after =
+        observer.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| ptr as usize as u64);
+    assert_ne!(
+        raw_bits_after, raw_bits_before,
+        "premise: the raw-bit closure moved"
+    );
+    assert_eq!(
+        seen(),
+        vec![raw_bits_after, 7.0_f64.to_bits()],
+        "element \"0\" must be the post-collection raw address, not the \
+         pre-collection one read before the later collection at element \"1\""
+    );
+}
