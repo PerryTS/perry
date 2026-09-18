@@ -382,6 +382,16 @@ pub(crate) extern "C" fn cryptokey_usages_getter_thunk(
     cryptokey_property_getter(b"usages")
 }
 
+/// #10427: `globalThis.crypto.<method>` is a property READ, resolved fresh
+/// on every access through `vt_get_own_field` (there is no real `ObjectHeader`
+/// backing `globalThis.crypto` for the read to land an own slot on — see
+/// `crypto.webcrypto`'s NATIVE_MODULE_CLASS_ID namespace). Plain
+/// `js_closure_alloc` mints a brand-new `ClosureHeader` on every call, so
+/// `crypto.randomUUID === crypto.randomUUID` was `false` and every read
+/// allocated. `js_closure_alloc_singleton` (the same func-ptr-keyed cache PR
+/// #10630 traced the closure-identity contract back to) returns the SAME
+/// closure for the same `func_ptr` every time — the func_ptr IS the method
+/// identity here since these thunks take no captures.
 pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
     let (func_ptr, arity) = match property_name {
         "getRandomValues" => (webcrypto_get_random_values_thunk as *const u8, 1),
@@ -389,7 +399,7 @@ pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
         _ => return None,
     };
     crate::closure::js_register_closure_arity(func_ptr, arity);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
     if closure.is_null() {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
@@ -408,10 +418,14 @@ fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
     }
 }
 
+/// Same per-read allocation defect as `webcrypto_method_value` above, for
+/// `crypto.subtle`'s KEM methods (`encapsulateBits` and friends — the rest of
+/// SubtleCrypto's surface is already cached via `bound_native_callable_export_value`,
+/// see #10427's PR body for which paths were and weren't affected).
 pub(crate) fn subtle_crypto_method_value(property_name: &str) -> Option<f64> {
     let (func_ptr, length) = subtle_crypto_method_spec(property_name)?;
     crate::closure::js_register_closure_rest(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
     if closure.is_null() {
         return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
