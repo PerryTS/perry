@@ -381,9 +381,16 @@ pub(crate) fn emit_module_globals(
         }
     }
     let logical_entry = super::entry_outline::logical_entry_stmts(hir);
+    // #10575: a CommonJS module's real top level is the `__perry_cjs_factory`
+    // function body, not `hir.init`. When that body was outlined (see
+    // `entry_outline::outline_cjs_factory_module`), its cross-chunk `var`s
+    // need exactly the same global promotion `hir.init`'s cross-chunk `let`s
+    // get. Empty when nothing was outlined from a function body, so this is a
+    // no-op for every module that isn't a large CJS bundle.
+    let logical_outlined_functions = super::entry_outline::logical_outlined_function_stmts(hir);
     let outlined_entry_globals = super::entry_outline::outlined_entry_global_let_ids(hir);
     let mut init_lets: Vec<&perry_hir::Stmt> = Vec::new();
-    for stmt in logical_entry {
+    for stmt in logical_entry.into_iter().chain(logical_outlined_functions) {
         collect_init_lets(std::slice::from_ref(stmt), &mut init_lets);
     }
     // `Expr::New { class_name }` does not retain whether an unqualified name
