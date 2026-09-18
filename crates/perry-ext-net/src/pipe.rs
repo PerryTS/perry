@@ -150,8 +150,7 @@ struct PipeRoute {
 
 impl PipeRoute {
     fn matches_dest(&self, dest_bits: u64) -> bool {
-        let live_dest =
-            unsafe { closure_capture_f64(self.data_cb as *const RawClosureHeader, 0) };
+        let live_dest = unsafe { closure_capture_f64(self.data_cb as *const RawClosureHeader, 0) };
         live_dest.to_bits() == dest_bits
     }
 }
