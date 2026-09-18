@@ -815,6 +815,8 @@ fn mock_timers_advance_to(target_ms: f64) {
             };
             state.current_ms = due_ms;
             if is_interval {
+                // The interval entry stays in the queue (it re-fires), so its
+                // `_scheduled` pin is untouched here — nothing to carry.
                 let timer = &mut state.intervals[idx];
                 timer.next_ms = due_ms + timer.interval_ms.max(1) as f64;
                 Some((
@@ -822,14 +824,32 @@ fn mock_timers_advance_to(target_ms: f64) {
                     timer.callback,
                     timer.args.clone(),
                     timer.context.clone(),
+                    None,
                 ))
             } else {
+                // #10447 follow-up: `remove` takes the WHOLE entry, including
+                // its `_scheduled` pin. Move that pin into the action too and
+                // hand it back below, instead of leaving it behind on `timer`
+                // to drop (and retire the id) right here — before
+                // `call_timer_callback` has even run, let alone finished. A
+                // one-shot mock timer otherwise loses its own registry entry
+                // if its callback churns more than the eviction cap's worth of
+                // other timers while it is still dispatching.
                 let timer = state.callbacks.remove(idx);
-                Some((timer.id, timer.callback, timer.args, timer.context))
+                Some((
+                    timer.id,
+                    timer.callback,
+                    timer.args,
+                    timer.context,
+                    Some(timer._scheduled),
+                ))
             }
         };
-        if let Some((id, callback, args, context)) = action {
+        if let Some((id, callback, args, context, _pin)) = action {
             call_timer_callback(id, callback, &args, &context);
+            // `_pin` (the one-shot case's `ScheduledTimerId`, moved out of the
+            // popped queue entry above) stays alive across that call and only
+            // retires the id here, after the callback has returned.
         }
     }
 }

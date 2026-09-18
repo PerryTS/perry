@@ -244,3 +244,73 @@ mod expired_batch_order_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod mock_dispatch_own_pin_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
+    static SELF_ID: AtomicI64 = AtomicI64::new(0);
+    static SAW_KNOWN: AtomicBool = AtomicBool::new(false);
+    static SAW_HAS_REF: AtomicBool = AtomicBool::new(false);
+    static RAN: AtomicBool = AtomicBool::new(false);
+
+    /// A one-shot mock timer's own callback: churns more real one-shot timers
+    /// than the registry's eviction cap, then checks its OWN id. If this
+    /// timer's `_scheduled` pin already retired the moment it was popped off
+    /// the mock queue for dispatch (the bug), it is the OLDEST retired id in
+    /// the shared registry when the churn starts, so it is the very first one
+    /// evicted once the churn passes the cap — and this callback observes its
+    /// own eviction while it is still running.
+    extern "C" fn churn_then_check_self(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        let id = SELF_ID.load(Ordering::SeqCst);
+        for _ in 0..(ref_states::TIMER_REF_STATES_CAP + 2_000) {
+            clearTimeout(js_set_timeout_callback(0, 1_000.0));
+        }
+        SAW_KNOWN.store(is_known_timer_id(id), Ordering::SeqCst);
+        SAW_HAS_REF.store(js_timer_has_ref(id) != 0, Ordering::SeqCst);
+        RAN.store(true, Ordering::SeqCst);
+        0.0
+    }
+
+    /// #10447 follow-up: `mock_timers_advance_to` used to pop a one-shot mock
+    /// timer off the queue with `state.callbacks.remove(idx)` and destructure
+    /// out `(id, callback, args, context)` — leaving the popped entry's
+    /// `_scheduled: ScheduledTimerId` behind to drop, and retire the id, right
+    /// there, before `call_timer_callback` had even run, let alone finished.
+    /// A callback that then churned more timers than the eviction cap evicted
+    /// its OWN handle mid-dispatch. The fix carries the pin into the dispatch
+    /// action and drops it only after the callback returns.
+    #[test]
+    fn a_one_shot_mock_timers_own_pin_survives_its_own_dispatch() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        SAW_KNOWN.store(false, Ordering::SeqCst);
+        SAW_HAS_REF.store(false, Ordering::SeqCst);
+        RAN.store(false, Ordering::SeqCst);
+        js_mock_timers_reset();
+        js_mock_timers_enable(MOCK_TIMERS_API_SET_TIMEOUT, 0.0);
+
+        let closure = crate::closure::js_closure_alloc(churn_then_check_self as *const u8, 0);
+        let id = schedule_mock_callback_timer(
+            closure as i64,
+            10.0,
+            Vec::new(),
+            CallbackTimerKind::Timeout,
+        )
+        .expect("mock setTimeout must be enabled for this API set");
+        SELF_ID.store(id, Ordering::SeqCst);
+
+        js_mock_timers_tick(10.0);
+
+        assert!(RAN.load(Ordering::SeqCst), "the mock timer never fired");
+        assert!(
+            SAW_KNOWN.load(Ordering::SeqCst),
+            "timer {id} was evicted from the registry by its own callback's churn"
+        );
+        assert!(
+            SAW_HAS_REF.load(Ordering::SeqCst),
+            "timer {id}'s ref state was lost to its own callback's churn"
+        );
+        js_mock_timers_reset();
+    }
+}
