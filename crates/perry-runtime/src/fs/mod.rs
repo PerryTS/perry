@@ -526,12 +526,11 @@ fn read_file_bytes_with_options(
                     .map(|file| file.read_to_end(&mut bytes))
             });
             // `validate_path_or_fd` already threw EBADF for an unknown fd.
-            let read = read.unwrap_or_else(|| Err(std::io::Error::from_raw_os_error(libc::EBADF)));
+            let read = read.unwrap_or_else(|| Err(ebadf_os_error()));
             return read.map(|_| bytes).map_err(FsReadFailure::read);
         }
         let Some(path_str) = decode_path_value(path_value) else {
-            let err = std::io::Error::from_raw_os_error(libc::ENOENT);
-            return Err(FsReadFailure::open(err, ""));
+            return Err(FsReadFailure::open(enoent_os_error(), ""));
         };
         // #5731 — virtual filesystem: a `$perryfs/...` path (or a bare key that
         // matches an embedded asset) is served from the in-binary registry
@@ -543,8 +542,7 @@ fn read_file_bytes_with_options(
             return Ok(bytes.to_vec());
         }
         if crate::embedded::is_virtual_path(&path_str) {
-            let err = std::io::Error::from_raw_os_error(libc::ENOENT);
-            return Err(FsReadFailure::open(err, &path_str));
+            return Err(FsReadFailure::open(enoent_os_error(), &path_str));
         }
         let flag = read_file_flag(options_value);
         let mut file = match open_file_for_read_flag(&path_str, &flag) {
