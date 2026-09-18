@@ -42,8 +42,9 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     if matches!(format, OutputFormat::Text) && verbose > 0 {
         eprintln!("  auto-optimize: skipped; using prebuilt target/release/libperry_*.a");
     }
+    let iteration_set = well_known_iteration_set(ctx);
     let well_known_libs = if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none() {
-        resolve_prebuilt_ext_libs(&well_known_iteration_set(ctx), target, format, verbose)
+        resolve_prebuilt_ext_libs(&iteration_set, target, format, verbose)
     } else {
         Vec::new()
     };
@@ -61,6 +62,34 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     } else {
         (None, None)
     };
+    // #10466 — the prebuilt `libperry_stdlib.a` is built with the default
+    // `full` feature set, which deliberately excludes
+    // `external-http-client-pump` (adding it to `full` would force every
+    // no-auto program, HTTP client or not, to link `libperry_ext_http.a` —
+    // see the Cargo.toml comment on `full`, #5983/#8587). Without that
+    // feature, perry-stdlib's dynamic-dispatch fallbacks for the
+    // `node:http`/`node:https` CLIENT surface (`res.headers`, `res.req`,
+    // `res.pipe()`, `req.setHeader()`, `req.setTimeout()`, …) don't exist in
+    // the linked archive at all — they read `undefined` with no compile-time
+    // warning. When the program imports `http`/`https`, rebuild just
+    // perry-stdlib-static with that feature added on top of `full`, the same
+    // on-demand-rebuild shape `build_optional_runtime` uses for `wasm-host`.
+    // A prior wasm/native-addon rebuild above already producing a stdlib
+    // archive (Windows) takes precedence; this only fills the common case
+    // where `stdlib` is still `None`.
+    let stdlib = stdlib.or_else(|| {
+        let imports_http_client = iteration_set.iter().any(|m| {
+            matches!(
+                m.strip_prefix("node:").unwrap_or(m.as_str()),
+                "http" | "https"
+            )
+        });
+        if imports_http_client {
+            build_http_client_pump_stdlib(target, format, verbose)
+        } else {
+            None
+        }
+    });
     OptimizedLibs {
         runtime,
         stdlib,
@@ -68,6 +97,128 @@ pub(crate) fn resolve_no_auto_optimized_libs(
         well_known_libs,
         ..OptimizedLibs::empty()
     }
+}
+
+/// #10466 — on-demand rebuild of `perry-stdlib-static` alone (default `full`
+/// features plus `external-http-client-pump`) into a dedicated target dir,
+/// so the no-auto path's client-side `node:http`/`node:https` dynamic
+/// dispatch (`res.headers`/`res.req`/`res.pipe()`/`req.setHeader()`/…) has
+/// somewhere to link against without forcing every other no-auto program to
+/// carry `libperry_ext_http.a`. Mirrors `build_optional_runtime`'s
+/// `wasm-host` rebuild; returns `None` on any failure (no source on disk, no
+/// cargo, build error) so the caller falls back to the prebuilt full stdlib
+/// (same #10466 gap, not a new failure mode).
+fn build_http_client_pump_stdlib(
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> Option<PathBuf> {
+    let workspace_root = cargo_target_dir_path(find_perry_workspace_root()?);
+    let crate_dir = workspace_root.join("crates").join("perry-stdlib-static");
+    if !crate_dir.is_dir() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  http-client-pump (no-auto): skipping stdlib rebuild — crate source not found at {}",
+                crate_dir.display()
+            );
+        }
+        return None;
+    }
+
+    if matches!(format, OutputFormat::Text) {
+        println!(
+            "  http-client-pump (no-auto): rebuilding stdlib with external-http-client-pump feature"
+        );
+    }
+
+    // Dedicated target dir so the prebuilt libperry_stdlib.a in
+    // target/release is not overwritten. Cargo's incremental cache makes
+    // repeat builds a no-op.
+    let relative_target_dir = PathBuf::from("target").join("perry-no-auto-http-pump");
+    let pump_target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
+    let cargo_target_dir = if cfg!(windows) {
+        relative_target_dir
+    } else {
+        pump_target_dir.clone()
+    };
+
+    let mut cargo_cmd = Command::new("cargo");
+    cargo_cmd
+        .current_dir(&workspace_root)
+        .env("CARGO_TARGET_DIR", &cargo_target_dir)
+        .arg("build")
+        .arg("--release")
+        .arg("-p")
+        .arg("perry-stdlib-static")
+        .arg("--features")
+        .arg("perry-stdlib/external-http-client-pump");
+    if let Some(triple) = rust_target_triple(target) {
+        cargo_cmd.arg("--target").arg(triple);
+    }
+    if is_android_target(target) {
+        if let Some(ndk) = std::env::var_os("ANDROID_NDK_HOME") {
+            for (k, v) in android_cross_env(std::path::Path::new(&ndk), target) {
+                cargo_cmd.env(k, v);
+            }
+        }
+    }
+    if matches!(target, Some("harmonyos") | Some("harmonyos-simulator")) {
+        match find_harmonyos_sdk() {
+            Some(sdk) => {
+                for (k, v) in harmonyos_cross_env(&sdk, target) {
+                    cargo_cmd.env(k, v);
+                }
+            }
+            None => {
+                if matches!(format, OutputFormat::Text) && verbose > 0 {
+                    eprintln!(
+                        "  http-client-pump (no-auto): skipping stdlib rebuild — OHOS SDK not found (set OHOS_SDK_HOME)"
+                    );
+                }
+                return None;
+            }
+        }
+    }
+
+    match super::super::tool_output::run_internal_tool(&mut cargo_cmd, verbose) {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            if matches!(format, OutputFormat::Text) {
+                eprintln!(
+                    "  http-client-pump (no-auto): cargo build for http-client-pump stdlib failed ({status})"
+                );
+            }
+            return None;
+        }
+        Err(err) => {
+            if matches!(format, OutputFormat::Text) {
+                eprintln!("  http-client-pump (no-auto): failed to spawn cargo ({err})");
+            }
+            return None;
+        }
+    }
+
+    let lib_name = if is_windows_target(target) {
+        "perry_stdlib.lib"
+    } else {
+        "libperry_stdlib.a"
+    };
+    let mut release_dir = pump_target_dir;
+    if let Some(triple) = rust_target_triple(target) {
+        release_dir = release_dir.join(triple);
+    }
+    let release_dir = release_dir.join("release");
+    let stdlib = release_dir.join(lib_name);
+    if !stdlib.exists() {
+        if matches!(format, OutputFormat::Text) && verbose > 0 {
+            eprintln!(
+                "  http-client-pump (no-auto): cargo finished but {lib_name} was not produced at {}",
+                stdlib.display()
+            );
+        }
+        return None;
+    }
+    Some(stdlib)
 }
 
 /// Build `perry-runtime-static` with default features + `perry-runtime/wasm-host`
