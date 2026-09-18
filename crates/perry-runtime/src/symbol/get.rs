@@ -569,6 +569,34 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
     Some(f64::from_bits(TAG_UNDEFINED))
 }
 
+/// `Symbol.toStringTag` for Perry's Web/runtime built-ins that have no
+/// registered prototype-chain or class-id hook reachable from the generic
+/// resolvers below (#10555) -- see `web_builtin_to_string_tag`'s doc comment
+/// for the full inventory and why each kind needs this. An own override
+/// (`Object.defineProperty(x, Symbol.toStringTag, …)`) still wins: the
+/// side-table read is a pointer-KEYED lookup, safe even for the
+/// handle-backed kinds since it never dereferences `obj_f64` as a pointer.
+unsafe fn web_builtin_to_string_tag_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    let sym_key = sym_key_from_f64(sym_f64);
+    if sym_key == 0 {
+        return None;
+    }
+    let to_string_tag = well_known_symbol("toStringTag");
+    if to_string_tag.is_null() {
+        return None;
+    }
+    let ts_f64 = f64::from_bits(crate::value::JSValue::pointer(to_string_tag as *const u8).bits());
+    if sym_key != sym_key_from_f64(ts_f64) {
+        return None;
+    }
+    if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+        return Some(v);
+    }
+    let tag = crate::object::web_builtin_to_string_tag(obj_f64)?;
+    let str_ptr = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
     js_object_get_symbol_property_with_receiver(obj_f64, sym_f64, obj_f64)
@@ -739,6 +767,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // async-iterable only; none of the Web Stream handles expose
     // `Symbol.iterator`.
     if let Some(v) = web_stream_symbol_property(obj_f64, sym_f64) {
+        return v;
+    }
+    if let Some(v) = web_builtin_to_string_tag_symbol_property(obj_f64, sym_f64) {
         return v;
     }
     // #1213: Timeout/Immediate handles expose `Symbol.dispose` so

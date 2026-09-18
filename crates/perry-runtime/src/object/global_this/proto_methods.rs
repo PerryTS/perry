@@ -4,6 +4,45 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
+/// Install a FIXED-string `Symbol.toStringTag` data property (`{ value: tag,
+/// writable: false, enumerable: false, configurable: true }`, ES2019
+/// WebIDL/`get %TypedArray%.prototype [ @@toStringTag ]` sibling shape but a
+/// plain data property rather than a getter -- these Web API interfaces
+/// each own a single fixed tag, unlike the shared TypedArray prototype) on
+/// `proto_obj`. #10555: `Object.prototype.toString.call(x)` and
+/// `x[Symbol.toStringTag]` for these types are ALSO answered directly by
+/// `crate::object::web_builtin_to_string_tag` (`object/to_string_tag.rs`)
+/// for every instance shape that reaches it -- most of these types' own
+/// instances never link `[[Prototype]]` back to this very `proto_obj` (see
+/// that function's doc comment), so that synthesized answer is load-bearing
+/// for `x[Symbol.toStringTag]`/`toString.call(x)` on an INSTANCE. This
+/// installs the matching descriptor on the constructor's `.prototype`
+/// object itself so `Object.getOwnPropertyDescriptor(Ctor.prototype,
+/// Symbol.toStringTag)` also reflects a real, correctly-shaped descriptor
+/// (test262-style reflection, and libraries that copy descriptors off the
+/// prototype rather than reading the instance).
+unsafe fn install_web_builtin_to_string_tag(proto_obj: *mut ObjectHeader, tag: &str) {
+    if proto_obj.is_null() {
+        return;
+    }
+    let symbol = crate::symbol::well_known_symbol("toStringTag");
+    if symbol.is_null() {
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    let value = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+    crate::symbol::js_object_set_symbol_property(
+        crate::value::js_nanbox_pointer(proto_obj as i64),
+        crate::value::js_nanbox_pointer(symbol as i64),
+        value,
+    );
+    crate::symbol::set_symbol_property_attrs(
+        proto_obj as usize,
+        symbol as usize,
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
+}
+
 /// Universal `Object.prototype` methods inherited by every receiver in
 /// JS. Installed on every built-in constructor's prototype since Perry's
 /// prototype chain on these built-ins doesn't walk back up to a shared
@@ -685,11 +724,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         "TextEncoder" => {
             install_noop_proto_methods(proto_obj, &[("encode", 1), ("encodeInto", 2)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
         #[cfg(feature = "global-text")]
         "TextDecoder" => {
             install_noop_proto_methods(proto_obj, &[("decode", 1)]);
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }
         #[cfg(feature = "global-webfetch")]
         "Headers" => {
@@ -709,6 +750,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
         #[cfg(feature = "global-webfetch")]
         "Request" | "Response" => {
@@ -781,6 +823,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 }
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         #[cfg(feature = "global-webfetch")]
         "Blob" | "File" => {
@@ -795,6 +838,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         #[cfg(feature = "global-webfetch")]
         "FormData" => {
@@ -814,6 +858,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
         #[cfg(feature = "global-websocket")]
         "WebSocket" => {
@@ -935,6 +980,22 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // is wired alongside the `OBJ_FLAG_TYPED_ARRAY_PROTO` flag so the
             // generic property-get chain walk resolves the inherited methods.
         }
+        // #10555: these Web API types install NO methods here (their surface
+        // is either type-directed static dispatch or the small-int/handle
+        // dispatch tables), but each still needs its `.prototype`'s own
+        // `Symbol.toStringTag` descriptor for reflection -- see
+        // `install_web_builtin_to_string_tag`'s doc comment.
+        "URL" => unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") },
+        "URLSearchParams" => unsafe {
+            install_web_builtin_to_string_tag(proto_obj, "URLSearchParams")
+        },
+        "AbortController" => unsafe {
+            install_web_builtin_to_string_tag(proto_obj, "AbortController")
+        },
+        "AbortSignal" => unsafe { install_web_builtin_to_string_tag(proto_obj, "AbortSignal") },
+        "EventTarget" => unsafe { install_web_builtin_to_string_tag(proto_obj, "EventTarget") },
+        "Event" => unsafe { install_web_builtin_to_string_tag(proto_obj, "Event") },
+        "CustomEvent" => unsafe { install_web_builtin_to_string_tag(proto_obj, "CustomEvent") },
         _ => {}
     }
 }

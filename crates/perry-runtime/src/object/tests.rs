@@ -1309,12 +1309,11 @@ fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
 
 /// `js_object_to_string` must NOT dereference a handle-band value (a Web Fetch
 /// `Headers`/`Request`/`Response`/`Blob` registry id, or any other small native
-/// handle) as a heap pointer. Such ids are NaN-boxed as `POINTER_TAG` values but
-/// are not `GcHeader`-prefixed objects; reading the GC type byte at `id - 8` (or
-/// `(*ObjectHeader).class_id` at `id`) faults on unmapped low memory. This is
-/// the `claude -p` SIGSEGV (`EXC_BAD_ACCESS` at `0x3FFFB` == `0x40003 - 8`),
-/// where the SDK coerced a `Headers` handle to a string while building a
-/// request. The brand must fall through to the generic `[object Object]` tag.
+/// handle) as a heap pointer -- `id - 8` / `id` faults on unmapped low memory.
+/// This is the `claude -p` SIGSEGV (`EXC_BAD_ACCESS` at `0x3FFFB` ==
+/// `0x40003 - 8`). Every id here is unclaimed in a bare unit-test process
+/// (not `TEXT_ENCODER_SENTINEL_ID` either -- see the sibling test below), so
+/// the brand must fall through to the generic `[object Object]` tag.
 #[test]
 fn object_to_string_rejects_handle_band_ids() {
     use crate::value::addr_class;
@@ -1322,9 +1321,14 @@ fn object_to_string_rejects_handle_band_ids() {
         addr_class::FETCH_HANDLE_BAND_START,     // 0x40000
         addr_class::FETCH_HANDLE_BAND_START + 3, // the 0x40003 from the crash
         addr_class::HANDLE_BAND_MAX - 1,         // 0xFFFFF
-        1usize,                                  // common native handle
+        3usize,                                  // common native handle, unclaimed
     ] {
         assert!(addr_class::is_handle_band(id));
+        assert_ne!(
+            id,
+            crate::text::TEXT_ENCODER_SENTINEL_ID as usize,
+            "must not pick an id #10555 gives real meaning to"
+        );
         let handle = crate::value::js_nanbox_pointer(id as i64);
         // Must return a string brand without dereferencing the bogus pointer.
         let result = unsafe { js_object_to_string(handle) };
@@ -1334,6 +1338,17 @@ fn object_to_string_rejects_handle_band_ids() {
             "handle-band id {id:#x} must brand as [object Object], got {s:?}"
         );
     }
+}
+
+/// #10555: `TEXT_ENCODER_SENTINEL_ID` is the id every `TextEncoder` shares --
+/// unlike the ids above, `js_object_to_string` must brand it `TextEncoder`
+/// unconditionally, matching the runtime's own treatment of that id.
+#[test]
+fn object_to_string_brands_the_text_encoder_sentinel() {
+    let handle = crate::value::js_nanbox_pointer(crate::text::TEXT_ENCODER_SENTINEL_ID);
+    let result = unsafe { js_object_to_string(handle) };
+    let s = js_string_to_rust(JSValue::from_bits(result.to_bits()));
+    assert_eq!(s, "[object TextEncoder]");
 }
 
 /// #5437 — captured-`undefined` tag-loss on Next.js dynamic/API routes.
