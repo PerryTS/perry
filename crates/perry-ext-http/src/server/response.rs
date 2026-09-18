@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 
 use bytes::Bytes;
+use http::header::{HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
-use http::header::{HeaderName, HeaderValue};
 use hyper::{HeaderMap, Response, StatusCode};
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,

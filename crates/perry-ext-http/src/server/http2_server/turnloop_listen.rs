@@ -17,21 +17,26 @@ const DEFAULT_MAX_SESSION_MEMORY_MB: usize = 10;
 /// one. Returns the listener id and the bound port, or `None` when the caller
 /// must keep the hyper path.
 ///
-/// The three reasons to decline are P5's, for P5's reasons: a `worker_threads`
-/// agent has no loop, a cluster worker needs the `std::net::TcpListener` the
-/// hyper path builds for its `SO_REUSEPORT` / fd-passing bind, and a
-/// `createSecureServer` with no usable TLS material has nothing to install.
+/// Two reasons to decline are left: a thread acting for an agent another thread
+/// already owns has no loop, and a `createSecureServer` with no usable TLS
+/// material has nothing to install.
+///
+/// The cluster worker was a third and is not any more. It declined because it
+/// needed the `SO_REUSEPORT` bind only the hyper path's
+/// `std::net::TcpListener` could do; turnloop 0.1.0-alpha.6's
+/// `ReusePort::Share` is that same bind, so the worker takes this path now.
+/// `http2.createServer` has no SCHED_RR fd-inject loop at all (only
+/// `http.createServer` does), so the fd-passing half that is still open for
+/// plain HTTP never arises here.
 pub(super) fn try_listen_on_turnloop(
     server_handle: i64,
     host: &str,
     port: u16,
 ) -> Option<(i64, u16, String)> {
-    if crate::server::cluster_bind::is_cluster_worker() {
-        return None;
-    }
     if !crate::server::turnloop_h2::enabled() {
         return None;
     }
+    let reuse_port = crate::server::cluster_bind::is_cluster_worker();
     // `noDelay` is read here, under the same handle borrow as the TLS config
     // and the settings, because the turnloop listener applies it once at bind
     // time rather than per accepted socket. The hyper HTTP/2 path reads the
@@ -62,6 +67,7 @@ pub(super) fn try_listen_on_turnloop(
         allow_http1,
         settings,
         DEFAULT_MAX_SESSION_MEMORY_MB * 1024 * 1024,
+        reuse_port,
         no_delay,
     ) {
         Ok((id, bound_port, bound_host)) => {

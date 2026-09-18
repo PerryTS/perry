@@ -64,33 +64,58 @@ pub(crate) fn turnloop_connection_closed(_conn_id: i64) {}
 /// (P5). Returns the listener id, or `None` when the caller must keep the
 /// hyper path.
 ///
-/// Two reasons to decline, each a real hole rather than a preference:
+/// **One reason to decline is left**, and it is the P1 coexistence rule rather
+/// than a hole:
 ///
 /// * **No loop.** A thread acting for an agent another thread already owns has
 ///   none, exactly as P1's net transport declines there. This is why the hyper
 ///   accept loop is narrowed rather than deleted.
-/// * **A cluster worker.** SCHED_RR fd passing and the SO_REUSEPORT bind both
-///   need the `std::net::TcpListener` the hyper path builds; turnloop's
-///   `ListenOpts` exposes no `reuse_port` through Perry's binding yet.
 ///
-/// An attached `WebSocketServer` used to be a third: its handshake was
-/// completed by `tokio_tungstenite` over an owned stream, which a turnloop
-/// connection cannot produce. It no longer is — the handshake and the framing
-/// are `turnloop_websocket`'s sans-I/O core now, driven over the connection
-/// this crate keeps (`turnloop_serve::conn::on_websocket`), so no stream and no
-/// descriptor has to exist for it.
+/// Two former reasons are closed, and neither is closed by relaxing anything:
+///
+/// * **A cluster worker.** The SO_REUSEPORT half is gone. turnloop
+///   0.1.0-alpha.6 split `ListenOpts::reuse_port` into `ReusePort::{No, Share,
+///   Distribute}` and `perry-runtime`'s `listen_opts` maps Perry's `true` to
+///   `Share`, which is precisely what `cluster_bind::bind_listener` does by
+///   hand (`socket.set_reuse_port(true)`) — so a SCHED_NONE worker, and a
+///   SCHED_RR worker whose primary did not answer, bind the same way they
+///   always did and now do it on the loop. **`Distribute` is deliberately not
+///   used**: it is the kernel-balanced variant, it is `Unsupported` on macOS
+///   and on every BSD but FreeBSD, and Perry's cluster has never had it, so
+///   asking for it would be a behaviour change on the platforms that can do it
+///   and a bind failure on the ones that cannot.
+///
+///   The SCHED_RR **fd-passing** half is NOT closed and is not reached here:
+///   the caller takes `spawn_rr_inject_loop` before it ever calls this, because
+///   the primary owns that socket and passes accepted descriptors over the
+///   cluster IPC channel. turnloop's `Driver` binds a `SocketAddr` and has no
+///   API that adopts a foreign fd (`tcp_listen`/`pipe_listen` take an address
+///   or a name; `attach` takes turnloop's own `Detached`), so that worker keeps
+///   the hyper path until turnloop grows one.
+/// * **An attached `WebSocketServer`.** Its handshake was completed by
+///   `tokio_tungstenite` over an owned stream, which a turnloop connection
+///   cannot produce. The handshake and the framing are `turnloop_websocket`'s
+///   sans-I/O core now, driven over the connection this crate keeps
+///   (`turnloop_serve::conn::on_websocket`), so no stream and no descriptor has
+///   to exist for it.
+///
+/// `resolved` is the port the cluster primary handed back for a shared
+/// `listen(0)`; it is bound in place of the requested one, exactly as the hyper
+/// path binds it.
 pub(super) fn try_listen_on_turnloop(
     server_handle: i64,
     host: &str,
     port: u16,
     resolved: Option<u16>,
 ) -> Option<i64> {
-    if resolved.is_some() || crate::server::cluster_bind::is_cluster_worker() {
-        return None;
-    }
     if !crate::server::turnloop_serve::enabled() {
         return None;
     }
+    let (reuse_port, bind_port) = listen_plan(
+        crate::server::cluster_bind::is_cluster_worker(),
+        resolved,
+        port,
+    );
     let (no_delay, idle_close_ms) = {
         let server = get_handle::<HttpServer>(server_handle)?;
         (server.no_delay, idle_close_ms(server))
@@ -98,9 +123,10 @@ pub(super) fn try_listen_on_turnloop(
     match crate::server::turnloop_serve::listen(
         server_handle,
         host,
-        port,
+        bind_port,
         511,
         None,
+        reuse_port,
         no_delay,
         idle_close_ms,
     ) {
@@ -122,7 +148,7 @@ pub(super) fn try_listen_on_turnloop(
             super::queue_listen_error_parts(
                 server_handle,
                 host,
-                port,
+                bind_port,
                 &err.code,
                 err.errno,
                 &err.syscall,
@@ -133,6 +159,30 @@ pub(super) fn try_listen_on_turnloop(
             Some(0)
         }
     }
+}
+
+/// Whether this listener shares its port, and which port it binds.
+///
+/// A pure function of the three things the caller knows, for the reason
+/// `perry-runtime`'s `listen_opts` is one: the mapping from an input to a
+/// listener option is exactly what went wrong the last time this argument moved
+/// (`no_delay` landed in the `reuse_port` position and every HTTP listener
+/// silently shared its port), and nothing between the caller and the kernel
+/// could observe it. Here it is observable without a loop.
+///
+/// * **`reuse_port` is keyed on being a cluster worker, not on `resolved`.** A
+///   worker whose `worker_query_listen` timed out has `resolved == None` and
+///   still has to bind with `SO_REUSEPORT` — which is what the hyper path's
+///   `cluster_bind::bind_listener` does for it, and what this path must keep
+///   doing now that it takes the bind.
+/// * **`resolved` wins the port** when the primary handed one back, which is
+///   how N workers share one ephemeral port for `listen(0)` (#4962).
+pub(super) fn listen_plan(
+    is_cluster_worker: bool,
+    resolved: Option<u16>,
+    port: u16,
+) -> (bool, u16) {
+    (is_cluster_worker, resolved.unwrap_or(port))
 }
 
 /// Node's idle close for a keep-alive connection: `keepAliveTimeout +
@@ -152,4 +202,40 @@ pub(crate) fn idle_close_ms(server: &HttpServer) -> u64 {
         0.0
     };
     (server.keep_alive_timeout + buffer).max(0.0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::listen_plan;
+
+    /// An ordinary server must never share its port: a second `listen()` on it
+    /// is Node's `EADDRINUSE`, and the last time this argument drifted every
+    /// HTTP and HTTPS listener bound with `SO_REUSEPORT` and the second one
+    /// quietly succeeded.
+    #[test]
+    fn an_ordinary_server_binds_its_own_port_exclusively() {
+        assert_eq!(listen_plan(false, None, 8080), (false, 8080));
+    }
+
+    /// A cluster worker shares, and this is the half of the recorded blocker
+    /// that read "SO_REUSEPORT is what the cluster worker still waits on".
+    #[test]
+    fn a_cluster_worker_shares_the_port_the_primary_resolved() {
+        assert_eq!(listen_plan(true, Some(54321), 0), (true, 54321));
+    }
+
+    /// The decline this replaces was keyed on `resolved.is_some()`, which would
+    /// send a worker whose primary did not answer down the exclusive-bind path
+    /// — an `EADDRINUSE` against its sibling workers rather than a shared port.
+    #[test]
+    fn a_worker_whose_primary_did_not_answer_still_shares() {
+        assert_eq!(listen_plan(true, None, 8080), (true, 8080));
+    }
+
+    /// A non-worker never acquires a resolved port, but if one ever reached
+    /// here it must not silently turn an exclusive bind into a shared one.
+    #[test]
+    fn a_resolved_port_does_not_by_itself_enable_sharing() {
+        assert_eq!(listen_plan(false, Some(54321), 0), (false, 54321));
+    }
 }

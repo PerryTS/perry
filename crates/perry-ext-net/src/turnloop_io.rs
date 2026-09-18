@@ -16,13 +16,23 @@
 //!
 //! # Which sockets come here
 //!
-//! [`enabled`] is false on a `worker_threads` agent (no loop until P3/P4) and
-//! in the `tokio-wait-driver` A/B arm, so those keep the tokio path. TLS also
-//! keeps it: `socket.upgradeToTLS` moves a live `TcpStream` into
-//! `tokio_rustls`, and turnloop owns its descriptor without exposing it, so a
-//! socket that may be upgraded is created on tokio and stays there for its
-//! whole life. There is no handover in either direction — a socket belongs to
-//! one transport from creation to close.
+//! [`enabled`] is false in the `tokio-wait-driver` A/B arm and on a second
+//! thread acting for an agent another thread already owns — turnloop P9 gave
+//! every JS agent a loop, so a `worker_threads` Worker is no longer one of
+//! these, and the route is claimed once per thread by the first to ask
+//! (`event_pump::agent_loop::claim_route`). Those keep the tokio path.
+//!
+//! **TLS no longer does.** This paragraph used to say a socket that might be
+//! upgraded was created on tokio and stayed there for life, because
+//! `socket.upgradeToTLS` moved a live `TcpStream` into `tokio_rustls` and
+//! turnloop owns its descriptor without exposing it. P5 removed the premise
+//! rather than the restriction: the rustls session runs *above* the turnloop
+//! handle (`turnloop_tls_io`), so the upgrade needs no descriptor, and both
+//! `tls.connect` and `socket.upgradeToTLS` come here. `lib.rs`'s connect sites
+//! have said so since P5; this header did not.
+//!
+//! There is no handover in either direction — a socket belongs to one transport
+//! from creation to close.
 //!
 //! # Threading and the GC
 //!

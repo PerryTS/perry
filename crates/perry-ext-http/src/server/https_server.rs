@@ -846,10 +846,18 @@ fn turnloop_https_listen(
     // An attached `WebSocketServer` no longer declines: its handshake runs over
     // the connection rather than over an owned stream, and the 101 and every
     // frame go out through the same TLS layer the HTTP responses did.
-    if crate::server::cluster_bind::is_cluster_worker() || !crate::server::turnloop_serve::enabled()
-    {
+    //
+    // A cluster worker no longer declines either. turnloop 0.1.0-alpha.6's
+    // `ReusePort::Share` is what `cluster_bind::bind_listener` does by hand, so
+    // the worker binds the port it already bound above, the same way, on the
+    // loop. See `server::turnloop_listen::try_listen_on_turnloop` for why it is
+    // `Share` and not `Distribute`, and for the SCHED_RR fd-passing half that
+    // is still open — `https.createServer` has no rr-inject path at all, so a
+    // SCHED_RR worker here reaches this with the reuseport bind either way.
+    if !crate::server::turnloop_serve::enabled() {
         return false;
     }
+    let reuse_port = crate::server::cluster_bind::is_cluster_worker();
     let idle_close_ms = match get_handle::<HttpsServer>(server_handle) {
         Some(server) => crate::server::server::idle_close_ms(&server.base),
         None => return false,
@@ -861,6 +869,7 @@ fn turnloop_https_listen(
         port,
         511,
         Some(tls_config),
+        reuse_port,
         no_delay,
         idle_close_ms,
     ) {

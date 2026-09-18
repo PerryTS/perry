@@ -186,3 +186,76 @@ fn listener_registration_round_trip() {
     assert_eq!(cbs[0], 0xDEADBEEF_i64);
     assert_eq!(cbs[1], 0xCAFEBABE_i64);
 }
+
+/// `undefined` as the codegen hands it to a native method: the two trailing
+/// arguments of `socket.connect(port)`.
+const UNDEFINED: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
+
+/// `new net.Socket()` then `socket.connect(port)` — issue #422's deferred
+/// connect, which is also what `Bun.connect` and `net.Socket.prototype.connect`
+/// lower to — must take turnloop exactly when turnloop is available.
+///
+/// It could not. `js_net_socket_method_connect` had no `turnloop_io::enabled()`
+/// check at all, so it spawned a tokio socket task even with the loop fully
+/// available, while `net.connect()` (the other entry point, through
+/// `spawn_socket_task_initialized`) took turnloop. The inventory recorded this
+/// crate's tokio edge as reached only by "a thread that could not get a loop of
+/// its own"; for this shape that was never true.
+///
+/// **The assertion is an equivalence, not `assert!(turnloop)`**, because an
+/// agent's route is claimed once per thread by the first thread to ask
+/// (`event_pump::agent_loop::claim_route`) and every other thread acting for
+/// that agent is declined for life — so which harness thread this lands on
+/// decides whether a loop is available at all. A bare `assert!(turnloop)` would
+/// be a lottery: `perry-ext-http`'s first draft of the same coverage failed two
+/// of three such assertions in one run while a sibling assertion on another
+/// thread passed. Neither arm here is a skip — with a loop the socket must be
+/// on turnloop, without one the tokio fallback is correct and must be taken.
+///
+/// Two quantities are checked, not one. `socket.turnloop` is the field every
+/// per-socket branch in this crate reads to pick a transport (`SocketState`
+/// initialises it to `false`, which the fixture asserts) — but it is only a
+/// bool this function sets, so alone it would pass for a gate that set the flag
+/// and submitted nothing. `turnloop_net::live_handles` is the independent
+/// witness: it counts the handles this thread's turnloop loop actually holds,
+/// so it moves only if the connect really reached the driver.
+#[test]
+fn deferred_connect_agrees_with_turnloop_availability() {
+    let _lock = GC_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let available = turnloop_io::enabled();
+    let handles_before = perry_ffi::turnloop_net::live_handles();
+
+    let h = unsafe { js_net_socket_alloc() };
+    let _cleanup = NetHandleCleanup::new(vec![h]);
+    assert!(
+        !statics::sockets().lock().unwrap()[&h].turnloop,
+        "fixture must start on the tokio transport, or the verdict below is vacuous"
+    );
+
+    // Port 1 on loopback: the submission is what is under test, not the
+    // connect's outcome. turnloop resolves and connects asynchronously, so a
+    // refused peer arrives as a later completion and cannot make this pass.
+    unsafe {
+        js_net_socket_method_connect(h, 1.0, UNDEFINED, UNDEFINED);
+    }
+
+    let took_turnloop = statics::sockets().lock().unwrap()[&h].turnloop;
+    let handles_after = perry_ffi::turnloop_net::live_handles();
+    // Leave no in-flight connect behind for a sibling test's pump to drain.
+    crate::lifecycle::js_ext_net_destroy_socket(h);
+    let _ = unsafe { js_net_process_pending() };
+
+    assert_eq!(
+        took_turnloop, available,
+        "socket.connect() must take turnloop exactly when turnloop is available; \
+         with a loop present it still built a tokio socket task"
+    );
+    assert_eq!(
+        handles_after,
+        handles_before + usize::from(available),
+        "the transport flag and the driver disagree: a turnloop socket must have \
+         registered exactly one live handle, and a tokio one none"
+    );
+}

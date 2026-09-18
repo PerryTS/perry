@@ -147,14 +147,21 @@ pub(crate) fn listen(
     allow_http1: bool,
     settings: crate::server::http2_session_settings::Http2SettingsState,
     max_session_memory: usize,
+    reuse_port: bool,
     no_delay: bool,
 ) -> Result<(i64, u16, String), tl::NetError> {
     let id = next_id();
     if id == perry_ffi::INVALID_HANDLE {
         return Err(tl::error_from_os(None, "listen"));
     }
-    // `reuse_port` is false: two `http2.createServer().listen(p)` calls must
-    // race to `EADDRINUSE` the way Node's do, not both succeed.
+    // `reuse_port` is false for every ordinary server: two
+    // `http2.createServer().listen(p)` calls must race to `EADDRINUSE` the way
+    // Node's do, not both succeed. It is true for exactly one caller, the
+    // cluster worker, which shares the port on purpose — turnloop
+    // 0.1.0-alpha.6's `ReusePort::Share`, which is what
+    // `cluster_bind::bind_listener` did by hand and is why that worker had to
+    // decline this path. See `server::turnloop_listen::try_listen_on_turnloop`
+    // for why `Share` and not `Distribute`.
     //
     // `no_delay` is the server's own `noDelay` (Node defaults it to true), and
     // it reaches the listener rather than being applied per accepted socket:
@@ -162,7 +169,7 @@ pub(crate) fn listen(
     // connection before the completion reaches the binding. The hyper HTTP/2
     // path does the same thing by hand in `http2_server.rs`
     // (`apply_accept_no_delay`) — this is that behaviour on the turnloop path.
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, no_delay)?;
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, reuse_port, no_delay)?;
     tl::accept_start(id)?;
     let bound = tl::local_address(id);
     let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);

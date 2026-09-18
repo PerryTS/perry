@@ -78,15 +78,24 @@ pub(crate) fn next_id() -> i64 {
     perry_ffi::reserve_handle_id_in_domain(registry_domain())
 }
 
-static REGISTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 /// Whether a server created *now, on this thread* should live on turnloop.
 ///
 /// Deliberately not cached: availability is a property of the calling agent.
-/// A `worker_threads` Worker has no loop before P3/P4 and must keep the hyper
-/// path; caching its "no" would strand the primary agent too.
+/// A thread acting for an agent another thread already owns has no loop and
+/// must keep the hyper path; caching its "no" would strand the owner too.
+///
+/// The one-shot registration is a `Once` rather than an `AtomicBool::swap`,
+/// which is what `perry-ext-ws` uses and what this was not. `swap` publishes
+/// "registered" on entry, so a second thread arriving mid-registration skipped
+/// it and went straight to `available()` — which asks
+/// `turnloop_net::sink_installed` and, with the sink not yet in place, answered
+/// no. The caller then took the hyper path for a loop it actually had. `Once`
+/// makes that thread wait for the registration instead of racing past it.
+/// (Found by a multi-threaded `cargo test`: two `enabled()` assertions on
+/// different test threads, one green and one red in the same run.)
 pub(crate) fn enabled() -> bool {
-    if !REGISTERED.swap(true, std::sync::atomic::Ordering::AcqRel) {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
         // Registration is refused if the runtime's completion layout does not
         // match this crate's, which leaves `available` false and keeps every
         // server on hyper rather than submitting work nothing can deliver.
@@ -94,7 +103,7 @@ pub(crate) fn enabled() -> bool {
         // An attached `WebSocketServer` runs on this connection, so give
         // perry-ext-ws the writer it needs to reach it (see `conn::on_websocket`).
         conn::register_ws_transport();
-    }
+    });
     tl::available(SUBSYSTEM)
 }
 
@@ -141,6 +150,7 @@ pub(crate) fn listen(
     port: u16,
     backlog: u32,
     tls: Option<std::sync::Arc<rustls::ServerConfig>>,
+    reuse_port: bool,
     no_delay: bool,
     idle_close_ms: u64,
 ) -> Result<(i64, u16, String), tl::NetError> {
@@ -148,21 +158,31 @@ pub(crate) fn listen(
     if id == perry_ffi::INVALID_HANDLE {
         return Err(tl::error_from_os(None, "listen"));
     }
-    // `reuse_port` is FALSE. It used to receive `no_delay`, which defaults to
-    // true (`http.createServer`'s Node default), so every turnloop HTTP and
-    // HTTPS listener bound with `SO_REUSEPORT` and a second `listen()` on the
-    // same port quietly succeeded where Node answers EADDRINUSE. `perry-ext-net`'s
-    // own `tcp_listen` call always passed `false` here; only this one drifted.
+    // `reuse_port` is now an argument, and it is FALSE for every ordinary
+    // server. It used to be hard-wired false for a reason that has since
+    // changed, and before that it accidentally received `no_delay` — which
+    // defaults to true (`http.createServer`'s Node default), so every turnloop
+    // HTTP and HTTPS listener bound with `SO_REUSEPORT` and a second `listen()`
+    // on the same port quietly succeeded where Node answers EADDRINUSE. That
+    // must not come back: a plain server passes `false` and an `EADDRINUSE`
+    // stays an `EADDRINUSE`.
     //
-    // Nothing on this path wants `SO_REUSEPORT`: the cluster worker that does
-    // declines the turnloop path in `turnloop_listen::try_listen_on_turnloop`
-    // and binds a `std::net::TcpListener`, which is one of the two reasons that
-    // decline exists.
-    // `no_delay` now reaches the option it names. Node's `http.createServer`
+    // What changed is the cluster worker. It is the one caller that *wants*
+    // `SO_REUSEPORT`, and the hard-wired `false` is why it had to decline the
+    // turnloop path and bind a `std::net::TcpListener` by hand
+    // (`cluster_bind::bind_listener`, `socket.set_reuse_port(true)`). turnloop
+    // 0.1.0-alpha.6 split its own `bool` into `ReusePort::{No, Share,
+    // Distribute}`, and `perry-runtime`'s `listen_opts` maps this `true` to
+    // `Share` — which is exactly what `bind_listener` does by hand, on every
+    // platform Perry ships. NOT `Distribute`: that is the kernel-balanced
+    // variant, it is `Unsupported` on macOS and the non-FreeBSD BSDs, and
+    // Perry's cluster has never had it.
+    //
+    // `no_delay` reaches the option it names. Node's `http.createServer`
     // defaults it to true and applies it to every accepted connection; the
     // hyper path did that by hand and the turnloop path did not do it at all,
     // because this argument was landing in `reuse_port` instead.
-    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, false, no_delay)?;
+    tl::tcp_listen(id, SUBSYSTEM, host, port, backlog, reuse_port, no_delay)?;
     tl::accept_start(id)?;
     let bound = tl::local_address(id);
     let bound_port = bound.as_ref().map(|e| e.port).unwrap_or(port);
