@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2093 entries across 136 modules
+// Coverage: 2089 entries across 135 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3448,17 +3448,6 @@ declare module "perry/yoga" {
   export function setNumber(...args: any[]): any;
   /** stdlib */
   export function unsetMeasureFunc(...args: any[]): any;
-}
-
-declare module "pg" {
-  /** stdlib */
-  export class Client { [key: string]: any; }
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function Pool(p0: any): any;
-  /** stdlib */
-  export function connect(p0: any): any;
 }
 
 declare module "process" {
