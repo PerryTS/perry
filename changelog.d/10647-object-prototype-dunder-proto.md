@@ -1,0 +1,4 @@
+### Fixed
+
+- `Object.prototype` now has a real, spec-shaped `__proto__` accessor (`{ get, set, enumerable: false, configurable: true }`), so `hasOwnProperty`, `Object.hasOwn`, `Object.getOwnPropertyNames`, `Object.getOwnPropertyDescriptor`, `Reflect.ownKeys`, and `"__proto__" in obj` all agree with Node about it — closing a prototype-pollution guard bypass in libraries (e.g. `qs`) that use `hasOwnProperty.call(Object.prototype, key)` to reject `"__proto__"` as a key.
+- Fixed a related bug the new accessor exposed: reading `.__proto__` on a `Number`/`String` primitive via a dynamic property access (`(5).__proto__`) could invoke an accessor inherited from `Object.prototype` with `this` bound to the intermediate builtin prototype (`Number.prototype`) instead of the original primitive, answering `Object.prototype` instead of `Number.prototype`.
