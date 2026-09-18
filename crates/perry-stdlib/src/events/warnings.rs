@@ -61,9 +61,9 @@ unsafe fn emit_warning(warning: f64) {
             let callback_h = scope.root_nanbox_f64(emit_warning);
             let process_h = scope.root_nanbox_f64(process);
             let arg_handles = scope.root_nanbox_f64_slice(&[warning]);
-            let previous_this = scope.root_nanbox_f64(
-                perry_runtime::object::js_implicit_this_set(process_h.get_nanbox_f64()),
-            );
+            let previous_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(
+                process_h.get_nanbox_f64(),
+            ));
             let live_args =
                 perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             perry_runtime::closure::js_native_call_value(
