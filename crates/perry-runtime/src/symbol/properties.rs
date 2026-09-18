@@ -385,6 +385,33 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     crate::array::note_array_proto_iterator_write(obj_key, sym_key);
     crate::object::map_set_subclass::note_iterator_symbol_write(obj_key, sym_key);
     let has_own_data = object_symbol_data_property_exists(obj_key, sym_key);
+    // #10481: an INHERITED symbol accessor's setter runs even on a
+    // non-extensible receiver — [[Set]] through an inherited accessor never
+    // creates a new own property, so OBJ_FLAG_NO_EXTEND (checked below) must
+    // not block it. Checked first, ahead of the extensibility gate, using
+    // the same pointer-object condition the class-setter/accessor fallback
+    // below uses.
+    if !has_own_data && !native_async_resource {
+        let bits = obj_f64.to_bits();
+        if (bits >> 48) != 0x7FFE {
+            let jsval = crate::value::JSValue::from_bits(bits);
+            if jsval.is_pointer() {
+                let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
+                if !ptr.is_null()
+                    && crate::object::is_valid_obj_ptr(ptr as *const u8)
+                    && accessors::symbol_may_have_accessor(sym_key)
+                {
+                    if let Some((_, set_bits)) =
+                        super::get::inherited_symbol_accessor(obj_f64, sym_f64)
+                    {
+                        return accessors::invoke_symbol_accessor_setter(
+                            set_bits, obj_f64, value_f64,
+                        );
+                    }
+                }
+            }
+        }
+    }
     // Frozen / sealed / non-extensible receivers reject symbol-keyed writes
     // like string-keyed ones: an existing prop is non-writable when frozen
     // (or its per-symbol attrs say so), a new prop is forbidden when
@@ -430,22 +457,11 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
                     {
                         return value_f64;
                     }
-                    // #10481: an INHERITED symbol accessor — installed by
+                    // #10481: an inherited accessor (installed by
                     // `Object.defineProperty(Fn.prototype, sym, …)`, an object
-                    // literal `set [sym](v)` reached through `Object.create`,
-                    // or on a declared class prototype — intercepts the write:
-                    // its setter runs with the receiver, and a getter-only
-                    // accessor leaves the receiver untouched. The write used
-                    // to shadow it with a new own data property instead.
-                    if accessors::symbol_may_have_accessor(sym_key) {
-                        if let Some((_, set_bits)) =
-                            super::get::inherited_symbol_accessor(obj_f64, sym_f64)
-                        {
-                            return accessors::invoke_symbol_accessor_setter(
-                                set_bits, obj_f64, value_f64,
-                            );
-                        }
-                    }
+                    // literal `set [sym](v)` reached through `Object.create`, or a
+                    // declared class prototype) is checked ABOVE, before the
+                    // extensibility gate, so it is never reached from here.
                 }
             }
         }

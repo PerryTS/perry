@@ -722,7 +722,11 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         if let Some(closure_ptr) = crate::object::parent_closure_in_chain(class_id) {
             let closure_f64 =
                 f64::from_bits(crate::value::js_nanbox_pointer(closure_ptr as i64).to_bits());
-            let v = js_object_get_symbol_property(closure_f64, sym_f64);
+            // #10481: preserve the caller's receiver here too — without it, an
+            // accessor reached through the parent closure's own symbol walk
+            // would see the closure as `this` instead of the original
+            // receiver (e.g. `Reflect.get(Child, sym, other)`).
+            let v = js_object_get_symbol_property_with_receiver(closure_f64, sym_f64, receiver_f64);
             if v.to_bits() != TAG_UNDEFINED {
                 return v;
             }
