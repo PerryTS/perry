@@ -720,6 +720,12 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         if (*obj).class_id != 0 && super::super::field_get_set::is_internal_runtime_key(key_name) {
             return f64::from_bits(TAG_FALSE);
         }
+        // #10480: a ClassBody accessor is an own property of the prototype with
+        // no physical key; a generic `defineProperty` can make it enumerable.
+        if super::super::class_registry::class_prototype_enumerable_accessor(obj as usize, key_name)
+        {
+            return f64::from_bits(TAG_TRUE);
+        }
         if !own_key_present(obj, key_str) {
             return f64::from_bits(TAG_FALSE);
         }

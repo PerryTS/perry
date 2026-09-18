@@ -10,6 +10,7 @@
 use super::*;
 
 mod accessors;
+mod define_class_accessor;
 mod define_get_accessor;
 mod define_properties;
 mod define_property;

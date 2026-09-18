@@ -70,6 +70,12 @@ pub extern "C" fn js_object_delete_field(
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 let class_id = obj as usize as u32;
                 if super::class_registry::class_name_for_id(class_id).is_some() {
+                    if super::class_registry::class_declared_accessor_ptrs(class_id, true, name)
+                        .is_some()
+                        && !super::class_registry::class_accessor_attrs(class_id, true, name).1
+                    {
+                        return 0;
+                    }
                     super::class_registry::class_delete_own_dynamic_prop(class_id, name);
                     super::class_registry::class_mark_key_deleted(class_id, name);
                     super::class_registry::invalidate_class_string_member_order(
@@ -294,6 +300,13 @@ pub extern "C" fn js_object_delete_field(
                 super::class_registry::class_id_for_decl_prototype_object(obj as usize)
             {
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                    // #10480: a ClassBody accessor redefined non-configurable.
+                    if super::class_registry::class_declared_accessor_ptrs(cid, false, name)
+                        .is_some()
+                        && !super::class_registry::class_accessor_attrs(cid, false, name).1
+                    {
+                        return 0;
+                    }
                     if name != "constructor"
                         && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
                             || super::native_module::class_has_own_method(cid, name)
@@ -725,6 +738,11 @@ fn delete_receiver_is_pointer(obj_value: f64) -> bool {
 }
 
 fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
+    if super::class_registry::class_declared_accessor_ptrs(class_id, false, name).is_some()
+        && !super::class_registry::class_accessor_attrs(class_id, false, name).1
+    {
+        return 0;
+    }
     let has_own = name == "constructor"
         || super::native_module::class_has_own_method(class_id, name)
         || super::class_registry::class_own_accessor_ptrs(class_id, name).is_some()
