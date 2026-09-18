@@ -521,7 +521,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                      \"Cannot find module '{spec}'\"); {required_value} }}"
                 )
             } else {
-                if needs_runtime_record {
+                if needs_runtime_record && runtime_require.is_some() {
                     // A repeat require must not re-enter the path registry.
                     // The registry call exists so a DEFERRED target initializes
                     // even with no default-export getter, but it is only needed
@@ -555,7 +555,13 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     let lazy_cache_decls = require_specs
         .iter()
         .zip(import_local_names.iter())
-        .filter(|(spec, _)| lazy_specs.contains(*spec))
+        .filter(|(spec, _)| {
+            // Only the specs that get the runtime-record arm ever assign a
+            // slot; an unresolvable target keeps the plain binding return and
+            // would otherwise carry a check nothing can ever satisfy.
+            lazy_specs.contains(*spec)
+                && super::super::resolve::resolve_relative_import_path(spec, source_path).is_some()
+        })
         .map(|(_, local)| format!("    let {local}__rec;"))
         .collect::<Vec<_>>()
         .join("\n");
