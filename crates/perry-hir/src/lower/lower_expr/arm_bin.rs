@@ -148,9 +148,18 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                 // route through `js_instanceof_dynamic`, which derives the same
                 // `synthetic_class_id_for_function` that `new Foo()` stamps onto
                 // the instance (see js_new_function_construct).
+                //
+                // #10477: an IMPORTED binding is a runtime value too. It has
+                // no class entry in this module unless it is an imported
+                // class, so without its value an imported function
+                // constructor (`import F from "./f.js"`, CJS
+                // `module.exports = F`, decimal.js's `Decimal`) folded to
+                // class_id 0 and `x instanceof F` was always false. Codegen
+                // keeps the static class-id check for imported classes.
                 if ctx.lookup_local(name).is_some()
                     || ctx.lookup_func(name).is_some()
                     || ctx.lookup_native_module(name).is_some()
+                    || ctx.lookup_imported_func(name).is_some()
                 {
                     match lower_expr(ctx, &bin.right) {
                         Ok(e) => Some(Box::new(e)),

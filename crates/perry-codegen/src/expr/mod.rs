@@ -170,6 +170,8 @@ mod entry_block_alloca_tests;
 mod hit_path_access_tests;
 #[cfg(test)]
 mod index_set_barrier_tests;
+#[cfg(test)]
+mod instanceof_imported_rhs_tests;
 mod record_value;
 mod repsel_gates;
 mod scalar_slot_root;
