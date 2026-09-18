@@ -53,7 +53,8 @@ pub mod decl_prototype_table;
 mod dispatch;
 pub(crate) mod evaluation_heritage;
 pub(crate) use evaluation_heritage::{
-    active_class_evaluation_parent, is_self_heritage_value, push_active_class_evaluation,
+    active_class_evaluation_parent, instance_pinned_constructing_class, is_self_heritage_value,
+    pin_instance_constructing_class, push_active_class_evaluation,
 };
 mod function_prototype;
 mod gc_roots;
@@ -217,8 +218,8 @@ pub(crate) use parent_static::{
     class_own_symbol_method, class_private_instance_getter_value,
     class_private_instance_setter_apply, class_static_accessor_getter_value,
     class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
-    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    register_class, register_class_dynamic_static_accessor,
+    dynamic_value_class_id, get_parent_class_id, lookup_class_symbol_method_in_chain,
+    lookup_static_method_in_chain, register_class, register_class_dynamic_static_accessor,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

@@ -66,6 +66,57 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
     }
 }
 
+/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: an INT32
+/// `ClassRef` (the payload IS the class_id, verified registered) or a
+/// POINTER-tagged object (its `ObjectHeader.class_id`, falling back to the
+/// synthetic class id a plain closure's reassigned `.prototype` was given).
+/// `0` for anything else (primitives, an unregistered closure, `undefined`,
+/// `null`) — "no answer", never a wrong one.
+///
+/// Shared by `js_register_class_parent_dynamic` (deriving the class_id to
+/// register a NEW parent edge) and `object/instanceof.rs`'s
+/// `class_chain_reaches_dynamic` (#10624, walking an EXISTING
+/// per-evaluation pin chain) — both need the identical "what class_id does
+/// this value denote" answer.
+pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
+    let bits = value.to_bits();
+    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    let tag = bits & 0xFFFF_0000_0000_0000;
+    if tag == INT32_TAG {
+        // ClassRef: lower 32 bits are the class id. Verify it's
+        // actually a registered class id before trusting it.
+        let payload = bits as u32;
+        if payload == 0 {
+            0
+        } else {
+            let guard = REGISTERED_CLASS_IDS.read().unwrap();
+            match guard.as_ref() {
+                Some(set) if set.contains(&payload) => payload,
+                _ => 0,
+            }
+        }
+    } else if tag == POINTER_TAG {
+        // Object instance: read class_id from the ObjectHeader.
+        let ptr = crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader;
+        let from_obj = js_object_get_class_id(ptr);
+        if from_obj != 0 {
+            from_obj
+        } else {
+            // Issue #711 part 2: the value might be a closure whose
+            // `.prototype` was assigned to an object via the
+            // `function Base() {}; Base.prototype = X` pattern. Look
+            // up the synthetic class id assigned at
+            // `js_set_function_prototype` time. Returns 0 if the
+            // closure has no registered prototype object — falls
+            // through to the parentless baseline.
+            function_class_id(value)
+        }
+    } else {
+        0
+    }
+}
+
 /// Issue #711: dynamic parent-class registration for
 /// `class X extends fn(...)` shapes where the parent class_id is only
 /// known at runtime. Called from codegen-emitted module-init code at
@@ -239,41 +290,9 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
 
     let bits = parent_value.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 
-    let parent_cid: u32 = if tag == INT32_TAG {
-        // ClassRef: lower 32 bits are the class id. Verify it's
-        // actually a registered class id before trusting it.
-        let payload = bits as u32;
-        if payload == 0 {
-            0
-        } else {
-            let guard = REGISTERED_CLASS_IDS.read().unwrap();
-            match guard.as_ref() {
-                Some(set) if set.contains(&payload) => payload,
-                _ => 0,
-            }
-        }
-    } else if tag == POINTER_TAG {
-        // Object instance: read class_id from the ObjectHeader.
-        let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *const ObjectHeader;
-        let from_obj = js_object_get_class_id(ptr);
-        if from_obj != 0 {
-            from_obj
-        } else {
-            // Issue #711 part 2: the value might be a closure whose
-            // `.prototype` was assigned to an object via the
-            // `function Base() {}; Base.prototype = X` pattern. Look
-            // up the synthetic class id assigned at
-            // `js_set_function_prototype` time. Returns 0 if the
-            // closure has no registered prototype object — falls
-            // through to the parentless baseline.
-            function_class_id(parent_value)
-        }
-    } else {
-        0
-    };
+    let parent_cid: u32 = dynamic_value_class_id(parent_value);
 
     if parent_cid != 0 && parent_cid != class_id {
         register_class(class_id, parent_cid);
@@ -355,6 +374,12 @@ pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
     if parent.to_bits() == TAG_UNDEFINED {
         return;
     }
+    // #10624: arm BEFORE the write it advertises (the ordering rule in
+    // `registry_latch.rs`) — everything the latch gates (this own-property
+    // write, and `pin_instance_constructing_class`'s later instance pin,
+    // which never fires without this one already having happened) follows
+    // in this thread's program order.
+    super::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
     let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
     let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
     crate::object::js_object_set_field_by_name(

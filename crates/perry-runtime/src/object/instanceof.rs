@@ -1036,6 +1036,135 @@ fn class_chain_reaches_parents_only(start: u32, want: u32, depth0: usize) -> boo
     false
 }
 
+/// #10624: `subclass_of_builtin_reaches`'s armed-latch arm.
+fn class_chain_reaches_dynamic_armed(cur: u32, obj: *const ObjectHeader, want: u32) -> bool {
+    let pin = super::class_registry::instance_pinned_constructing_class(obj);
+    class_chain_reaches_dynamic(cur, pin, want)
+}
+
+/// Does the ancestry chain from `start_cid` reach `want`, walking by VALUE
+/// while precision is available? `class_chain_reaches` walks purely by
+/// class_id through the shared, last-write-wins `CLASS_REGISTRY` —
+/// ambiguous once the SAME `ClassExprFresh` template has been evaluated more
+/// than once. Each hop here instead prefers, in order: (1) `start_pin`/a
+/// pinned VALUE on the current node (`class_object_pinned_parent`, the same
+/// per-evaluation edge `super()`/captures already consult), (2)
+/// `template_dynamic_parent_value`, the actual parent VALUE for any class_id
+/// registered dynamically. Exhausting both degrades to exactly
+/// `class_chain_reaches`'s answer — so an instance from an EARLIER
+/// evaluation stays correct even after a LATER one overwrote the table.
+fn class_chain_reaches_dynamic(start_cid: u32, start_pin: Option<f64>, want: u32) -> bool {
+    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    if start_cid == 0 || want == 0 {
+        return false;
+    }
+    let mut cur = start_cid;
+    let mut cur_value = start_pin;
+    let mut depth = 0usize;
+    loop {
+        if cur == want {
+            return true;
+        }
+        if depth > 64 {
+            return false;
+        }
+        if let Some(gid) = crate::object::class_generic_origin(cur) {
+            if gid == want || class_chain_reaches_parents_only(gid, want, depth + 1) {
+                return true;
+            }
+        }
+        let pinned = cur_value
+            .filter(|v| is_class_object_value(*v))
+            .and_then(|v| {
+                class_object_pinned_parent(
+                    crate::value::js_nanbox_get_pointer(v) as *const ObjectHeader
+                )
+            });
+        let next_value = pinned.unwrap_or_else(|| {
+            super::class_registry::parent_static::template_dynamic_parent_value(cur)
+        });
+        if next_value.to_bits() == TAG_UNDEFINED {
+            return false;
+        }
+        let next_cid = dynamic_value_class_id(next_value);
+        if next_cid == 0 || next_cid == cur {
+            return false;
+        }
+        cur = next_cid;
+        cur_value = Some(next_value);
+        depth += 1;
+    }
+}
+
+/// `class S extends Array {}` produces a real `ObjectHeader` instance whose
+/// class-id chain reaches the built-in's reserved class id (a parent edge
+/// registered at module init). The per-built-in probes in `js_instanceof`
+/// short-circuit to `false` for such an instance (it isn't a *real*
+/// Array/Map/Error/…), so walk the object's own class chain up front. Only
+/// genuine `GC_TYPE_OBJECT` instances carry a `class_id` field. Refs
+/// class/subclass-builtins/* and class/subclass/builtin-objects/*.
+///
+/// Split out of `js_instanceof` (#10624) so that function's own size, and
+/// thus how well its unrelated, far more common paths optimize, does not
+/// depend on this ladder's own latch-gated logic.
+fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
+    let jv = crate::JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>();
+    if !crate::value::addr_class::is_above_handle_band(obj as usize) {
+        return false;
+    }
+    let gc_header =
+        unsafe { (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    if unsafe { (*gc_header).obj_type } != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    let cur = unsafe { (*obj).class_id };
+    // #10624: only pay for the value-aware walk once something has pinned
+    // per-evaluation heritage.
+    let reaches =
+        if super::class_registry::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.is_idle() {
+            class_chain_reaches(cur, class_id)
+        } else {
+            class_chain_reaches_dynamic_armed(cur, obj, class_id)
+        };
+    if reaches {
+        return true;
+    }
+
+    // #9362: util.inherits(DerivedClass, BaseClass) links DerivedClass.prototype
+    // to BaseClass.prototype at runtime; it does not (and must not) create an
+    // extends edge between the constructor objects. The class-id fast path
+    // above therefore misses even though the observable prototype chain
+    // contains BaseClass.prototype. Only pay for the spec prototype walk when
+    // the candidate class's declaration prototype has a user-selected parent.
+    // The two `class_decl_prototype_object` probes are class registry reads
+    // (TLS + RwLock + map, ~130 instructions each) and they ran EAGERLY on
+    // every call that got this far — which is every MISS, the path this whole
+    // ladder exists to answer `false` on. They exist only to ask a question
+    // whose answer is `false` for every receiver in a process that never
+    // re-points an object's prototype, and the latch answers that for the
+    // whole process in one load. Set, never cleared, and published before the
+    // flag it guards, so it can only ever be conservatively true.
+    if super::prototype_chain::any_user_prototype_override() {
+        let candidate_proto = super::class_registry::class_decl_prototype_object(cur);
+        let target_proto = super::class_registry::class_decl_prototype_object(class_id);
+        if !candidate_proto.is_null()
+            && !target_proto.is_null()
+            && super::prototype_chain::object_has_user_prototype_override(candidate_proto as usize)
+            && ordinary_has_instance_prototype_walk(
+                value,
+                super::class_constructor_ref_value(class_id),
+            )
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if a value is an instance of a class with the given class_id
 /// Walks the inheritance chain to check parent classes
 /// Returns NaN-boxed TAG_TRUE / TAG_FALSE so the result identifies as a boolean.
@@ -1112,68 +1241,9 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
     }
 
-    // Subclass-of-built-in: `class S extends Array {}` produces a real
-    // ObjectHeader instance whose class-id chain reaches the built-in's
-    // reserved class id (a parent edge registered at module init). The
-    // per-built-in probes below short-circuit to `false` for such an
-    // instance (it isn't a *real* Array/Map/Error/…), so walk the object's
-    // own class chain up front. Only genuine `GC_TYPE_OBJECT` instances carry
-    // a `class_id` field — real Arrays/Maps/Errors have other GC types and
-    // fall through to their dedicated probes unchanged. Refs
-    // class/subclass-builtins/* and class/subclass/builtin-objects/*.
-    {
-        let jv = crate::JSValue::from_bits(value.to_bits());
-        if jv.is_pointer() {
-            let obj = jv.as_pointer::<ObjectHeader>();
-            if crate::value::addr_class::is_above_handle_band(obj as usize) {
-                let gc_header = unsafe {
-                    (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
-                };
-                if unsafe { (*gc_header).obj_type } == crate::gc::GC_TYPE_OBJECT {
-                    let cur = unsafe { (*obj).class_id };
-                    if class_chain_reaches(cur, class_id) {
-                        return true_val;
-                    }
-
-                    // #9362: util.inherits(DerivedClass, BaseClass) links
-                    // DerivedClass.prototype to BaseClass.prototype at
-                    // runtime; it does not (and must not) create an extends
-                    // edge between the constructor objects. The class-id fast
-                    // path above therefore misses even though the observable
-                    // prototype chain contains BaseClass.prototype. Only pay
-                    // for the spec prototype walk when the candidate class's
-                    // declaration prototype has a user-selected parent.
-                    // The two `class_decl_prototype_object` probes are class
-                    // registry reads (TLS + RwLock + map, ~130 instructions
-                    // each) and they ran EAGERLY on every call that got this
-                    // far — which is every MISS, the path this whole ladder
-                    // exists to answer `false` on. They exist only to ask a
-                    // question whose answer is `false` for every receiver in a
-                    // process that never re-points an object's prototype, and
-                    // the latch answers that for the whole process in one
-                    // load. Set, never cleared, and published before the flag
-                    // it guards, so it can only ever be conservatively true.
-                    if super::prototype_chain::any_user_prototype_override() {
-                        let candidate_proto =
-                            super::class_registry::class_decl_prototype_object(cur);
-                        let target_proto =
-                            super::class_registry::class_decl_prototype_object(class_id);
-                        if !candidate_proto.is_null()
-                            && !target_proto.is_null()
-                            && super::prototype_chain::object_has_user_prototype_override(
-                                candidate_proto as usize,
-                            )
-                            && ordinary_has_instance_prototype_walk(
-                                value,
-                                super::class_constructor_ref_value(class_id),
-                            )
-                        {
-                            return true_val;
-                        }
-                    }
-                }
-            }
-        }
+    // Subclass-of-built-in: see `subclass_of_builtin_reaches`.
+    if subclass_of_builtin_reaches(value, class_id) {
+        return true_val;
     }
     // Temporal reference types (`d instanceof Temporal.Duration`, …). A Temporal
     // value is a NaN-boxed pointer to a brand-tagged cell, not an ObjectHeader

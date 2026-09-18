@@ -1651,6 +1651,8 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
     b == crate::object::map_set_subclass::BACKING_KEY
         || b == crate::weakref::WEAK_ENTRIES_KEY
         || b == crate::object::parent_static::CLASS_OBJECT_PARENT_KEY.as_bytes()
+        || b == crate::object::class_registry::evaluation_heritage::INSTANCE_CONSTRUCTING_CLASS_KEY
+            .as_bytes()
         || b == b"__perry_ctor_caps"
         || is_class_capture_key(b)
         || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
