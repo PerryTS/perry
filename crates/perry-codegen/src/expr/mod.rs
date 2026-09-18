@@ -3048,7 +3048,7 @@ mod math_simple;
 mod misc_methods;
 mod new_dynamic;
 mod objects_arrays_lit;
-mod os_uri_dates;
+pub(crate) mod os_uri_dates;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) mod proxy_reflect;

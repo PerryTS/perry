@@ -1054,14 +1054,16 @@ fn lower_string_method_dispatch(
         "startsWith" | "endsWith" => {
             // Spec allows the 2-arg form: startsWith(searchString, position)
             // and endsWith(searchString, endPosition). Closes #315.
-            if args.is_empty() {
-                bail!(
-                    "perry-codegen: String.{} expects 1 or 2 args, got {}",
-                    property,
-                    args.len()
-                );
-            }
-            let other_box = lower_expr(ctx, &args[0])?;
+            // #10476: an omitted searchString is `undefined`, which ToString
+            // turns into "undefined" (`"xundefined".endsWith()` is true). A
+            // compile-time arity error here also rejected the string arm of
+            // the tag guard for a user `endsWith()` on an `any` receiver.
+            let other_box = if args.is_empty() {
+                ctx.block()
+                    .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             let pos_d = if args.len() >= 2 {
                 Some(lower_expr(ctx, &args[1])?)
             } else {
@@ -1117,13 +1119,13 @@ fn lower_string_method_dispatch(
             // honored (search starts there), matching the dynamic dispatch
             // path. Negative/NaN clamp to 0 and Infinity saturates past the
             // end inside js_string_index_of_from.
-            if args.is_empty() {
-                bail!(
-                    "perry-codegen: String.includes expects 1 or 2 args, got {}",
-                    args.len()
-                );
-            }
-            let needle_box = lower_expr(ctx, &args[0])?;
+            // #10476: an omitted searchString is `undefined` (see above).
+            let needle_box = if args.is_empty() {
+                ctx.block()
+                    .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+            } else {
+                lower_expr(ctx, &args[0])?
+            };
             // Preserve evaluation of the second argument for side effects and
             // use it as the start index when present.
             let pos_d = if args.len() >= 2 {

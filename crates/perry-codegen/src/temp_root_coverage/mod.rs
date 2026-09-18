@@ -106,7 +106,7 @@ pub(crate) fn entry_opts() -> CompileOptions {
     }
 }
 
-fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
+pub(crate) fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
     Module {
         name: name.to_string(),
         imports: Vec::new(),
