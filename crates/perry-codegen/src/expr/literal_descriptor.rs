@@ -131,6 +131,23 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
     if !matches!(expr, Expr::Array(_) | Expr::New { .. }) {
         return None;
     }
+    // #10399: the `@<name>_shapes` table emitted below is a link-time
+    // `constant` whose entries hold the ADDRESS of each class's
+    // `perry_class_keys_*` / `perry_class_shape_id_*` globals. When the
+    // program constructs a Worker those globals are thread-local so that each
+    // thread builds its own module state — and the address of a thread-local
+    // is not a link-time constant. LLVM emits the reference anyway and `ld -r`
+    // rejects the object:
+    //
+    //   ld: perry_class_keys_<mod>____AnonShape_<hash>: TLS definition in
+    //       unit2.o section .tbss mismatches non-TLS reference in unit7.o
+    //
+    // which is how three of prettier's plugins stopped linking. Fall back to
+    // ordinary evaluation for worker-bearing programs; every other program
+    // keeps this fast path untouched.
+    if crate::codegen::program_has_worker() {
+        return None;
+    }
     let mut descriptor = Descriptor::default();
     descriptor.value(ctx, expr, 0)?;
     if descriptor.nodes < MIN_NODES || descriptor.shapes.is_empty() {
