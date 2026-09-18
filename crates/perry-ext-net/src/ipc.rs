@@ -45,6 +45,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
             raw: None,
             destroyed: false,
             connecting: true,
+            has_opened: false,
             writable_ended: false,
             readable_ended: false,
             bytes_read: 0,
@@ -120,6 +121,7 @@ pub(crate) fn register_accepted_transport(
             raw: None,
             destroyed: false,
             connecting: false,
+            has_opened: true,
             writable_ended: false,
             readable_ended: false,
             bytes_read: 0,
@@ -198,6 +200,7 @@ fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCo
             let raw_fd = transport.raw_fd();
             if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
                 socket.is_open = true;
+                socket.has_opened = true;
                 socket.connecting = false;
                 socket.raw_fd = raw_fd;
             }

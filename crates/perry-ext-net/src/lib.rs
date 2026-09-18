@@ -280,6 +280,23 @@ pub(crate) struct SocketState {
     /// Node's `socket.connecting`, which Perry previously hardcoded to
     /// `false` unconditionally.
     pub(crate) connecting: bool,
+    /// #10465 — true from the moment the socket FIRST became open (set
+    /// alongside every `is_open = true` transition, and at construction for
+    /// a socket that starts already open, e.g. a server-accepted
+    /// connection), never reset back to `false`. `socket.pending`'s real
+    /// Node formula is "no live handle", which — once a socket has ever
+    /// connected — reduces to `destroyed`, NOT `!is_open`: `is_open` itself
+    /// flips false earlier than `destroyed` does (via
+    /// `server_state::mark_socket_closed`, called from `mark_closed` on the
+    /// tokio task thread as soon as teardown starts, well before the main
+    /// thread has processed the `'end'`/`'close'` events those pushed). A
+    /// `pending` getter keyed on `is_open` directly read `true` from inside
+    /// the `'end'` listener, where Node still reports `false`. `destroyed`
+    /// doesn't have that problem — see `socket_events.rs`'s `Close` arm —
+    /// so `has_opened` lets the getter pick the RIGHT signal for each phase:
+    /// `!has_opened` (never connected / still connecting) or `destroyed`
+    /// (has connected at least once).
+    pub(crate) has_opened: bool,
     /// #10465 — true as soon as `.end()`/`.destroy()` is called, independent
     /// of whether the FIN has actually flushed. Drives `socket.writable` and
     /// `socket.writableEnded`.
@@ -317,6 +334,7 @@ impl SocketState {
             raw: None,
             destroyed: false,
             connecting: false,
+            has_opened: true,
             writable_ended: false,
             readable_ended: false,
             bytes_read: 0,
@@ -443,18 +461,18 @@ fn push_event(ev: PendingNetEvent) {
 fn mark_closed(id: i64) {
     if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
         socket.raw_fd = None;
-        // #10465 — this is the common teardown funnel for EVERY terminal
-        // transition (connect failure, peer EOF + local end, explicit
-        // destroy, TLS handshake failure): mark the socket destroyed here
-        // unconditionally rather than only in the explicit `.destroy()`
-        // path. Pre-fix, a peer-initiated close left `destroyed` (and
-        // `readyState`/`connecting`) reporting the socket as still live
-        // after its `'close'` event had already fired.
-        socket.destroyed = true;
-        socket.is_open = false;
-        socket.connecting = false;
     }
     server_state::mark_socket_closed(id);
+    // #10465 — `destroyed`/`is_open`/`connecting` are NOT flipped here on
+    // purpose. `mark_closed` runs on the tokio task thread immediately after
+    // queuing the `Close` (and, on this path, `End`) pending events — well
+    // before the main thread's `js_ext_net_drain_pending` has processed
+    // either. Flipping the fields here (an earlier version of this fix did)
+    // made them ALREADY read "destroyed" from inside the `'end'` listener,
+    // which fires first and, in real Node, still observes `destroyed:
+    // false`. `socket_events::js_ext_net_drain_pending`'s `Close` arm sets
+    // them instead, synchronously with firing `'close'` — the one point
+    // where Node's own timing and this runtime's actually agree.
 }
 
 // ─── FFI: net.createConnection / net.connect ─────────────────────────────────
@@ -584,6 +602,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             raw: None,
             destroyed: false,
             connecting: false,
+            has_opened: false,
             writable_ended: false,
             readable_ended: false,
             bytes_read: 0,
@@ -1057,6 +1076,7 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
             let remote = tcp.peer_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
+                s.has_opened = true;
                 s.connecting = false;
                 s.local_addr = local;
                 s.remote_addr = remote;
@@ -1123,6 +1143,7 @@ where
             raw: None,
             destroyed: false,
             connecting: true,
+            has_opened: false,
             writable_ended: false,
             readable_ended: false,
             bytes_read: 0,
@@ -1186,6 +1207,7 @@ where
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
+                s.has_opened = true;
                 s.connecting = false;
                 s.local_addr = local;
                 s.raw_fd = raw_fd;
