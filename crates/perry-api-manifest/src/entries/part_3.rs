@@ -534,8 +534,6 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     class("net", "BlockList"),
     class("net", "SocketAddress"),
     class("ioredis", "Redis"),
-    class("mysql2/promise", "Pool"),
-    class("mysql2", "Pool"),
     class("pg", "Pool"),
     class("pg", "Client"),
     class("url", "URL"),

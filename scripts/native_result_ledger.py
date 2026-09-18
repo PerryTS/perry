@@ -22,9 +22,11 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # The campaign's textual census reported 372 `ret: NR_PTR` hits. Two were
 # prose comments in fastify.rs, while one real row uses the positional `cr(...)`
 # helper, leaving 371 executable declarations. The scanner parses declarations,
-# not comments, and includes that helper row.
-EXPECTED_ROWS = 371
-EXPECTED_PROVIDERS = 322
+# not comments, and includes that helper row. mysql2's native binding removal
+# dropped the MySQL2 NativeModSig section from native_table/databases.rs
+# (28 declarations), leaving 343.
+EXPECTED_ROWS = 343
+EXPECTED_PROVIDERS = 308
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
