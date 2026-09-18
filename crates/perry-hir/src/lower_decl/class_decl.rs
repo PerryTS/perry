@@ -414,6 +414,61 @@ pub fn lower_class_decl(
         (None, None, None, None)
     };
 
+    // Issue #10486: the branches above deliberately leave `extends_name`
+    // None when the heritage identifier resolves to a lexically-scoped
+    // local (`locally_shadowed`) or a fully dynamic expression, to avoid
+    // corrupting the static class-registry walks (instanceof / method
+    // dispatch / field layout — see the `locally_shadowed` comment above,
+    // #5437's PQueue regression). Capture forwarding is narrower and
+    // already tolerates a wrong/missing match (`lookup_class_captures`
+    // returns `None` and `synthesize_class_captures` is then a no-op for
+    // that source), so resolve the heritage identifier through
+    // `resolve_class_alias` — the SAME table `Expr::New`'s own capture
+    // lookup already uses (`expr_new.rs`) for `let X = class {...}; new
+    // X()`, populated when `const X = class {...}`/`let X = Y` is lowered
+    // (`register_let_class_alias`) — rather than a raw name match: a class
+    // extending a capture-bearing class EXPRESSION held in a local
+    // (`const Base = class { m() { return cap; } }; class Sub extends
+    // Base {}`) still finds and forwards `Base`'s captures at
+    // construction. Without this, every inherited method read `undefined`
+    // for the base's captures because the synthesized subclass
+    // constructor never received them as params. A raw-text match (or
+    // `resolve_class_name`, which only disambiguates same-named class
+    // DECLARATIONS) would reintroduce exactly the #5437 same-named-local
+    // collision for a minified bundle where two unrelated functions each
+    // declare their own `const Base = class {...}`.
+    // Only fall back for a subclass with NO explicit constructor of its
+    // own: an explicit constructor's own `super(...)` call already forwards
+    // whatever the parent needs via a SEPARATE, already-correct mechanism
+    // (the issue's own "Works" list: "an explicit `constructor() {
+    // super(); }` in the subclass" — confirmed by probing that case against
+    // a build without this fallback). Widening the union unconditionally
+    // regressed it: the parent capture then also lands in THIS class's own
+    // `captures_vec`, and the auto-stash machinery below expects to own
+    // forwarding an inherited cap into `super(...)` only for the
+    // SYNTHESIZED default constructor shape, not a user-written one.
+    let has_own_constructor = class_decl
+        .class
+        .body
+        .iter()
+        .any(|m| matches!(m, ast::ClassMember::Constructor(_)));
+    let capture_parent_name: Option<String> = extends_name.clone().or_else(|| {
+        if has_own_constructor {
+            return None;
+        }
+        class_decl
+            .class
+            .super_class
+            .as_deref()
+            .and_then(|sc| match sc {
+                ast::Expr::Ident(ident) => {
+                    let raw = ident.sym.to_string();
+                    Some(ctx.resolve_class_alias(&raw).unwrap_or(raw))
+                }
+                _ => None,
+            })
+    });
+
     // First pass: collect static field/method names for early registration
     // This allows static method bodies to reference static fields
     let mut static_field_names = Vec::new();
@@ -1140,7 +1195,7 @@ pub fn lower_class_decl(
     synthesize_class_captures(
         ctx,
         &name,
-        extends_name.as_deref(),
+        capture_parent_name.as_deref(),
         extends.is_some()
             || extends_name.is_some()
             || native_extends.is_some()
@@ -1454,6 +1509,33 @@ pub fn lower_class_from_ast(
     } else {
         (None, None, None, None)
     };
+
+    // Issue #10486: mirrors the capture-forwarding fallback in
+    // `lower_class_decl` above (see its comment for the full rationale) —
+    // a class EXPRESSION extending a lexically-local capture-bearing class
+    // EXPRESSION (`const Base = class {…}; const Sub = class extends Base
+    // {…}`) needs the alias-resolved heritage identifier for capture
+    // lookup even when `extends_name` was deliberately left None for
+    // class-registry resolution.
+    // See the matching guard in `lower_class_decl` above: skip the
+    // fallback when this class expression has its own explicit
+    // constructor (its `super(...)` already forwards correctly).
+    let has_own_constructor = class
+        .body
+        .iter()
+        .any(|m| matches!(m, ast::ClassMember::Constructor(_)));
+    let capture_parent_name: Option<String> = extends_name.clone().or_else(|| {
+        if has_own_constructor {
+            return None;
+        }
+        class.super_class.as_deref().and_then(|sc| match sc {
+            ast::Expr::Ident(ident) => {
+                let raw = ident.sym.to_string();
+                Some(ctx.resolve_class_alias(&raw).unwrap_or(raw))
+            }
+            _ => None,
+        })
+    });
 
     let mut static_field_names = Vec::new();
     let mut static_method_names = Vec::new();
@@ -1849,7 +1931,7 @@ pub fn lower_class_from_ast(
     synthesize_class_captures(
         ctx,
         name,
-        extends_name.as_deref(),
+        capture_parent_name.as_deref(),
         extends.is_some()
             || extends_name.is_some()
             || native_extends.is_some()
