@@ -1064,8 +1064,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         // so reading through the shared template's `StaticFieldGet` loses both
         // its value and its property-presence semantics. This mirrors the
         // static-call guard in `expr_call/static_and_instance.rs`.
-        let local_shadows_class = ctx.lookup_local(source_name).is_some()
-            && !ctx.inferred_class_bindings.contains(source_name);
+        let local_shadows_class = ctx.lookup_local(source_name).is_some_and(|local| {
+            ctx.inferred_class_bindings
+                .class_key_for(local, source_name)
+                != Some(source_name)
+        });
         let obj_name = ctx.resolve_class_name(source_name);
         if !local_shadows_class && ctx.lookup_class(&obj_name).is_some() {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {

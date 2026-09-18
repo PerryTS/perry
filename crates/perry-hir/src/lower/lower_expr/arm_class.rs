@@ -92,6 +92,7 @@ pub(crate) fn lower_class_expr(
                     // for this same expression. Record the BINDING name so
                     // `new <name>()` keeps the static construct path.
                     ctx.inferred_class_bindings.insert(name.clone());
+                    ctx.inferred_class_bindings.mark_contested(&name);
                     display_override = Some(name.clone());
                     format!("{}__anon_dup_{}", name, ctx.fresh_class())
                 }

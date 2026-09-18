@@ -12,6 +12,61 @@ use std::collections::{HashMap, HashSet};
 use crate::ir::*;
 use crate::ClassAccessorNames;
 
+/// Binding names whose class registration was created by the binding's own
+/// class-expression initializer (see `LoweringContext::inferred_class_bindings`).
+///
+/// The name set alone cannot tell two same-named bindings apart. When a second
+/// class expression infers an already-claimed name (the #5592 `__anon_dup_`
+/// arm: `function a() { const K = class {…} }` next to `function b() { const
+/// K = class {…} }`), `new K()` inside `b` resolved `K` to `a`'s class and
+/// appended `a`'s capture ids, so `b`'s constructor ran against another
+/// function's locals (#10489). Such CONTESTED names resolve per binding local:
+/// a declaration records which class its local holds, and an unrecorded local
+/// constructs its runtime value.
+#[derive(Debug, Default)]
+pub(crate) struct InferredClassBindings {
+    names: HashSet<String>,
+    contested: HashSet<String>,
+    by_local: HashMap<LocalId, String>,
+}
+
+impl InferredClassBindings {
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    pub(crate) fn insert(&mut self, name: String) -> bool {
+        self.names.insert(name)
+    }
+
+    pub(crate) fn remove(&mut self, name: &str) -> bool {
+        self.names.remove(name)
+    }
+
+    /// A second class expression claimed `name` under a disambiguated key.
+    pub(crate) fn mark_contested(&mut self, name: &str) {
+        self.contested.insert(name.to_string());
+    }
+
+    /// The declaration of binding `local` evaluated the class registered as
+    /// `class_key`.
+    pub(crate) fn record_binding(&mut self, local: LocalId, class_key: String) {
+        self.by_local.insert(local, class_key);
+    }
+
+    /// The registration key of the class the in-scope local `local` (a binding
+    /// named `name`) provably holds, or `None` when it must be treated as an
+    /// arbitrary runtime value.
+    pub(crate) fn class_key_for(&self, local: LocalId, name: &str) -> Option<&str> {
+        if let Some(key) = self.by_local.get(&local) {
+            return Some(key.as_str());
+        }
+        (self.names.contains(name) && !self.contested.contains(name))
+            .then(|| self.names.get(name).map(String::as_str))
+            .flatten()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WithEnvFrame {
     pub(crate) local_id: LocalId,
@@ -361,8 +416,10 @@ pub struct LoweringContext {
     /// bind name too). At a `new <name>()` site, such a name's local provably
     /// holds that same class, so the static construct path (with its exact
     /// builtin-parent handling) is correct; any OTHER in-scope local shadows
-    /// whatever same-named class exists and must construct dynamically.
-    pub(crate) inferred_class_bindings: std::collections::HashSet<String>,
+    /// whatever same-named class exists and must construct dynamically. Names
+    /// claimed by more than one class expression resolve by binding identity
+    /// instead (see [`InferredClassBindings::class_key_for`]).
+    pub(crate) inferred_class_bindings: InferredClassBindings,
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
