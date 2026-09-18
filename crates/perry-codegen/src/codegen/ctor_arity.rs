@@ -199,7 +199,10 @@ pub(super) fn constructor_layout_params<'a>(
         }
         if let Some(ctor) = ancestor.constructor.as_ref() {
             let positional = ctor.params.len() == emitted_param_count as usize
-                && !ctor.params.iter().any(|p| p.name.starts_with("__perry_cap_"));
+                && !ctor
+                    .params
+                    .iter()
+                    .any(|p| p.name.starts_with("__perry_cap_"));
             return positional.then_some(ctor.params.as_slice());
         }
         if ancestor.extends_expr.is_some() {

@@ -959,7 +959,8 @@ pub(super) fn emit_string_pool(
         let shape_params = constructor_layout_params(class, classes, ctor_params);
         // #wall3: record the rest-param position (in USER params) so the runtime
         // bundles trailing args at the dynamic member-new dispatch path.
-        if let Some(rest_idx) = shape_params.and_then(|params| params.iter().position(|p| p.is_rest))
+        if let Some(rest_idx) =
+            shape_params.and_then(|params| params.iter().position(|p| p.is_rest))
         {
             ctor_rest_regs.push((ctor_symbol.clone(), rest_idx));
         }
