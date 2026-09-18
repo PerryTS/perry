@@ -234,8 +234,7 @@ pub const NODE_SUBMODULES: &[&str] = &[
 /// removed bare-name `"fetch"` alias for the `node-fetch` npm package that
 /// used to double as its NATIVE_MODULES entry (see well_known_bindings.toml).
 #[cfg(test)]
-pub(crate) const INTERNAL_MODULE_KEYS: &[&str] =
-    &["inspector.Network", "punycode.ucs2", "fetch"];
+pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycode.ucs2", "fetch"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from
