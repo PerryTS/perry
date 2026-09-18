@@ -462,9 +462,10 @@ pub(crate) unsafe fn handle_upgrade_event(
     } else {
         f64::from_bits(POINTER_TAG | (socket_handle as u64 & PTR_MASK))
     };
-    let head_arg = if head.is_empty() {
-        f64::from_bits(TAG_UNDEFINED)
-    } else {
+    // Node always hands the listener a Buffer here, even when the peer sent
+    // no bytes past the header block (`Buffer.isBuffer(head) === true` for a
+    // zero-length upgrade head) — never `undefined`.
+    let head_arg = {
         let buf = perry_ffi::alloc_buffer(&head);
         f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
     };
