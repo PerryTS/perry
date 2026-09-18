@@ -1,7 +1,6 @@
 //! Higher-order array methods.
 use super::*;
 use crate::closure::ClosureHeader;
-use std::ptr;
 
 /// NaN-box an array header pointer as the JS `array` receiver value passed as
 /// the 3rd/4th callback argument (`(element, index, array)` /
@@ -138,7 +137,7 @@ mod rooted_iter_array_tests {
             let rooted = RootedIterArray::new(&scope, arr);
             let mut live_arr = js_array_grow(arr, (*arr).capacity + 1);
             assert_ne!(live_arr, arr);
-            let _removed = js_array_splice(live_arr, 1, 1, ptr::null(), 0, &mut live_arr);
+            let _removed = js_array_splice(live_arr, 1, 1, std::ptr::null(), 0, &mut live_arr);
 
             assert_eq!((*live_arr).length, 2);
             assert_eq!(rooted.arr(), clean_arr_ptr(live_arr));
@@ -397,19 +396,15 @@ pub extern "C" fn js_array_map(
             let mapped = cb_site.call(callback, element, i as f64, rooted.receiver());
             if is_plain {
                 let result = result_arr(&result_rooted);
-                let result_elements =
-                    crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
-                // GC_STORE_AUDIT(INIT): plain result is unpublished; slot layout noted below.
-                ptr::write(result_elements.add(i), mapped);
-                let mapped_bits = mapped.to_bits();
-                if length <= 64 {
-                    // The head was just re-derived from `result_rooted`, so the
-                    // per-element helpers' repeated ownership/forwarding proofs
-                    // are redundant: resolve the header once.
-                    super::header_gc_slots::fill_resolved_array_slot(result, i, mapped_bits);
-                } else {
-                    note_array_slot(result, i, mapped_bits);
-                }
+                // The head was just re-derived from `result_rooted` (a GC
+                // root), with no intervening allocation or safepoint since —
+                // `fill_resolved_array_slot` satisfies exactly this contract
+                // regardless of the result's length, so it applies to every
+                // plain result, not only ones at or under some fixed size.
+                // It performs the element's ONLY store itself (canonicalizing
+                // under the array's already-known layout first), so no
+                // separate publish write is needed here.
+                super::header_gc_slots::fill_resolved_array_slot(result, i, mapped.to_bits());
             } else {
                 // Custom species container: CreateDataPropertyOrThrow via [[Set]].
                 crate::array::species::species_result_set(
