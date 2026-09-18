@@ -2541,6 +2541,12 @@
       "name": "ARMED_SITE",
       "verdict": "test_only",
       "why": "Cell<Option<&'static str>>: a static string-literal site NAME an armed rooting-regression test compares against, never a GC heap pointer. Declared under #[cfg(test)] only (collection_points.rs:15); the whole module compiles to an empty inline no-op outside cfg(test), so this storage never exists in a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer/tests_inline.rs",
+      "name": "SELF_ID",
+      "verdict": "test_only",
+      "why": "AtomicI64 holding a scheduled mock timer's id (an i64 returned by schedule_mock_callback_timer, never a GC heap pointer) so the timer's own extern \"C\" callback can look itself up in the ref-state registry mid-dispatch. Declared under #[cfg(test)] only (tests_inline.rs, mock_dispatch_own_pin_tests), never live in a shipped binary."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
