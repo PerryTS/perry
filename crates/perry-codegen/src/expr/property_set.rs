@@ -1261,11 +1261,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                                 &obj_bits,
                                 &obj_handle,
                                 &expected_class_id_str,
-                                &expected_shape_id,
                                 requires_raw_f64,
                                 Some(&val_bits),
                                 &fast_label,
                                 &subclass_arms,
+                                &keys_global_name,
                             );
                                 let guard_ok = ctx.block().call(
                                     I32,

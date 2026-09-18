@@ -158,8 +158,6 @@ pub(crate) fn try_lower_sloppy_class_field_store(
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
         let field_idx_str = field_index.to_string();
         let expected_class_id_str = expected_class_id.to_string();
-        let expected_shape_id =
-            crate::typed_shape::load_class_shape_id(ctx, &class_name, &keys_global_name);
 
         let (obj_bits, obj_handle, key_box, val_bits) = {
             let blk = ctx.block();
@@ -189,11 +187,11 @@ pub(crate) fn try_lower_sloppy_class_field_store(
             &obj_bits,
             &obj_handle,
             &expected_class_id_str,
-            &expected_shape_id,
             true,
             Some(&val_bits),
             &fast_label,
             &subclass_arms,
+            &keys_global_name,
         );
 
         // Miss: the strict-aware runtime with `strict = 0`, so a rejected write
@@ -291,8 +289,6 @@ fn try_lower_sloppy_class_field_boxed_store(
         let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
         let field_idx_str = field_index.to_string();
         let expected_class_id_str = expected_class_id.to_string();
-        let expected_shape_id =
-            crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global_name);
 
         let (obj_bits, obj_handle, key_box, val_bits) = {
             let blk = ctx.block();
@@ -322,11 +318,11 @@ fn try_lower_sloppy_class_field_boxed_store(
             &obj_bits,
             &obj_handle,
             &expected_class_id_str,
-            &expected_shape_id,
             false,
             Some(&val_bits),
             &fast_label,
             &subclass_arms,
+            &keys_global_name,
         );
 
         {

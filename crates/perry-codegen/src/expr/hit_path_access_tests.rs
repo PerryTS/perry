@@ -272,6 +272,16 @@ fn point_class() -> Class {
 /// `probe(p: Point) { return p.x }` — the inline class-field guard tests the
 /// GcHeader with one masked 32-bit compare and the class/shape identity with
 /// one 64-bit compare, instead of five separate header loads.
+///
+/// Three loads now, not two: the third is the poisonable
+/// `@perry_class_guard_shape_*` expectation, which carries the authority the
+/// `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch used to. That is a
+/// REDUCTION, not an addition — the latch it displaced was an `external
+/// global`, so reading it cost a GOT load plus a dependent `ldrb` through it
+/// plus a compare, in the gate block, on every access. Net per access: one
+/// fewer machine instruction pair and one fewer dependent load. The assertions
+/// below pin both halves, because "three loads" alone would also be satisfied
+/// by a lowering that kept the latch and added the expectation.
 #[test]
 fn class_field_inline_guard_uses_two_fused_loads() {
     let mut m = module(
@@ -290,8 +300,20 @@ fn class_field_inline_guard_uses_two_fused_loads() {
     let loads: Vec<&str> = deref.lines().filter(|l| l.contains(" = load ")).collect();
     assert_eq!(
         loads.len(),
-        2,
-        "the guard must load the header word and the identity word only:\n{deref}"
+        3,
+        "the guard must load the header word, the identity word and the live \
+         expectation, and nothing else:\n{deref}"
+    );
+    assert!(
+        !ir.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"),
+        "the per-access latch must be GONE from the class-field guard — its \
+         authority moved onto the expectation this guard already loads:\n{ir}"
+    );
+    assert!(
+        deref.contains("load volatile i32, ptr @perry_class_guard_shape_"),
+        "the expectation must be read VOLATILE per access: the runtime poisons \
+         it mid-execution and a cached copy would reopen a closed fast \
+         path:\n{deref}"
     );
     assert!(
         loads.iter().any(|l| l.contains("load i32"))
