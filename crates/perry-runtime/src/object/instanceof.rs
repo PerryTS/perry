@@ -175,7 +175,6 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
     Some(class_id)
 }
 
-
 /// Runtime class id for a globalThis built-in constructor *name*.
 ///
 /// Reference-type global constructors used as runtime values (e.g.
