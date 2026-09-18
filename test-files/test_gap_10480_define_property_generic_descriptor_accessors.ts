@@ -188,6 +188,11 @@ class Statics {
 }
 Object.defineProperty(Statics, "sv", { enumerable: true });
 console.log("static-desc", describe(Statics, "sv"));
+console.log(
+  "static-enumerable",
+  Statics.propertyIsEnumerable("sv"),
+  Object.prototype.propertyIsEnumerable.call(Statics, "sv"),
+);
 Statics.sv = 2;
 console.log("static-read", Statics.sv, Object.keys(Statics).join(","), forIn(Statics));
 
