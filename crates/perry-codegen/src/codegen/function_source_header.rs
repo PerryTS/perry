@@ -251,7 +251,6 @@ mod tests {
     use perry_hir::types::Type;
     use perry_hir::Param;
 
-
     fn param(name: &str, rest: bool) -> Param {
         Param {
             id: 1,
@@ -324,7 +323,11 @@ mod tests {
     #[test]
     fn arrow_closures_keep_arrow_syntax() {
         let hir = HirModule::new("t");
-        let closures = vec![closure_expr(9, vec![param("g", false), param("d", false)], true)];
+        let closures = vec![closure_expr(
+            9,
+            vec![param("g", false), param("d", false)],
+            true,
+        )];
         let headers = ClosureHeaders::new(&closures);
         let _guard = override_function_source_header_mode(true);
         assert_eq!(
