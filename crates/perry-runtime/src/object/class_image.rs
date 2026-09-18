@@ -73,7 +73,7 @@
 use crate::fast_hash::{PtrHashMap, PtrHashSet};
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::ThreadId;
 
@@ -150,6 +150,16 @@ pub struct ClassImageTables {
     pub(crate) names: RwLock<Option<PtrHashMap<u32, String>>>,
     pub(crate) lengths: RwLock<Option<PtrHashMap<u32, u32>>>,
     pub(crate) anon_shape_class_ids: RwLock<Option<PtrHashSet<u32>>>,
+    /// Lock-free read mirror of `anon_shape_class_ids`, open-addressed.
+    /// `0` is an empty slot; `js_register_anon_shape_class_id` rejects id 0,
+    /// so the sentinel is unambiguous. Per IMAGE, like `parent_dense` — a
+    /// process-global mirror would answer one image's question out of
+    /// another's registrations, since `ImageTable` resolves every access
+    /// through `current()`.
+    pub(crate) anon_shape_fast: OnceLock<Box<[AtomicU32]>>,
+    /// Set when an insert exhausted its probe run: from then on an empty slot
+    /// no longer proves absence, so a miss must consult the locked set.
+    pub(crate) anon_shape_fast_overflow: AtomicBool,
 }
 
 impl ClassImageTables {
@@ -176,6 +186,8 @@ impl ClassImageTables {
             names: RwLock::new(None),
             lengths: RwLock::new(None),
             anon_shape_class_ids: RwLock::new(None),
+            anon_shape_fast: OnceLock::new(),
+            anon_shape_fast_overflow: AtomicBool::new(false),
         }
     }
 }
@@ -333,6 +345,77 @@ pub(crate) fn parent_dense_store(idx: usize, biased_parent: u32) {
         .parent_dense
         .get_or_init(|| (0..PARENT_DENSE_CAP).map(|_| AtomicU32::new(0)).collect())[idx]
         .store(biased_parent, Ordering::Release);
+}
+
+/// Slot count of the per-image anon-shape mirror. Power of two.
+pub(crate) const ANON_FAST_SLOTS: usize = 4096;
+const ANON_FAST_MASK: usize = ANON_FAST_SLOTS - 1;
+const ANON_FAST_MAX_PROBE: usize = 8;
+
+#[inline]
+fn anon_fast_index(class_id: u32) -> usize {
+    // splitmix32 finaliser: anon ids come from a counter, so the low bits
+    // alone would cluster one module's ids into a single probe run.
+    let mut z = class_id ^ 0x9E37_79B9;
+    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
+    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
+    ((z ^ (z >> 16)) as usize) & ANON_FAST_MASK
+}
+
+#[inline]
+fn anon_fast_table() -> &'static [AtomicU32] {
+    current()
+        .anon_shape_fast
+        .get_or_init(|| (0..ANON_FAST_SLOTS).map(|_| AtomicU32::new(0)).collect())
+}
+
+/// `Some(verdict)` when the calling image's mirror can answer; `None` when the
+/// caller must fall back to the locked set.
+#[inline]
+pub(crate) fn anon_fast_lookup(class_id: u32) -> Option<bool> {
+    let table = anon_fast_table();
+    let mut i = anon_fast_index(class_id);
+    for _ in 0..ANON_FAST_MAX_PROBE {
+        let v = table[i].load(Ordering::Acquire);
+        if v == class_id {
+            return Some(true);
+        }
+        if v == 0 {
+            return if current().anon_shape_fast_overflow.load(Ordering::Acquire) {
+                None
+            } else {
+                Some(false)
+            };
+        }
+        i = (i + 1) & ANON_FAST_MASK;
+    }
+    None
+}
+
+/// Publish `class_id` into the calling image's mirror. Idempotent.
+pub(crate) fn anon_fast_insert(class_id: u32) {
+    let table = anon_fast_table();
+    let mut i = anon_fast_index(class_id);
+    for _ in 0..ANON_FAST_MAX_PROBE {
+        let v = table[i].load(Ordering::Acquire);
+        if v == class_id {
+            return;
+        }
+        if v == 0
+            && table[i]
+                .compare_exchange(0, class_id, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            return;
+        }
+        if table[i].load(Ordering::Acquire) == class_id {
+            return;
+        }
+        i = (i + 1) & ANON_FAST_MASK;
+    }
+    current()
+        .anon_shape_fast_overflow
+        .store(true, Ordering::Release);
 }
 
 #[cfg(test)]

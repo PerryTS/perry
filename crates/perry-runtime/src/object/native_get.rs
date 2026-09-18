@@ -108,7 +108,15 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
             let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
                 if let Some(slot) =
-                    super::keys_find_slot_by_bytes(keys, descriptor.logical_key_count, key)
+                    // `keys` came straight out of `descriptor` above with no
+                    // allocation in between, and the collector maintains that
+                    // field — so the resolved entry skips a `clean_arr_ptr`
+                    // that re-derives it.
+                    super::keys_find_slot_by_bytes_resolved(
+                        keys,
+                        descriptor.logical_key_count,
+                        key,
+                    )
                 {
                     let value = super::field_get_set::object_field_at_with_live(
                         object,
