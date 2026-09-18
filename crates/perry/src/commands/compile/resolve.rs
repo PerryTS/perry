@@ -767,13 +767,29 @@ fn original_source_via_map(entry: &Path) -> Option<PathBuf> {
     original_source_from_map_file(&append_map_extension(entry))
 }
 
-/// A published CommonJS package can ship the TypeScript input to its CJS emit.
-/// Some such inputs are intentionally hybrid: normal ESM declarations for
-/// TypeScript plus a top-level `module.exports = ...` interop epilogue. The
-/// source is not a directly executable module in Perry: ESM classification
-/// leaves `module` unbound, while CJS wrapping would move its `export`
-/// declarations inside an IIFE. Node loads the emitted JS entry, so keep that
-/// entry instead of following its source map for this narrow shape (#6586).
+/// A published CommonJS package can ship a TypeScript input that is not
+/// directly executable as a Perry module, in which case Perry should keep
+/// the package on its compiled JS emit instead of the raw source (matching
+/// what Node actually runs) rather than following a source map / `src/`
+/// convention to that source. Two known shapes trigger this, both narrow and
+/// evidence-driven rather than a general "prefer JS" default:
+///
+/// - **ESM-plus-CJS-epilogue hybrid** (#6586): normal ESM declarations for
+///   TypeScript plus a top-level `module.exports = ...` interop epilogue.
+///   ESM classification leaves `module` unbound, while CJS wrapping would
+///   move its `export` declarations inside an IIFE — neither executes.
+/// - **Namespace/function declaration merging via `export =`** (#10662):
+///   `namespace X { export class Y extends Z {} }` merged onto a same-named
+///   `function X() {}` and exported with `export = X` — the shape
+///   `agent-base` (an `axios` → `https-proxy-agent` transitive dependency)
+///   uses. Perry's HIR lowers the namespace's exported members as static
+///   fields against a synthetic class entity that is not the SAME runtime
+///   value `export =` ends up exporting, so e.g. `pkg.Agent` reads back as
+///   `undefined` and a downstream `class X extends pkg.Agent` throws "Class
+///   extends value is not a constructor". Node can't run this non-erasable
+///   TS syntax directly either (`--experimental-strip-types` rejects
+///   `namespace`/`export =`), so such a package is never executed from its
+///   raw `.ts` source in practice — only via its compiled emit.
 fn is_hybrid_cjs_emit_input(path: &Path) -> bool {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
 
@@ -789,8 +805,10 @@ fn is_hybrid_cjs_emit_input(path: &Path) -> bool {
         return false;
     };
     let stripped = super::cjs_wrap::detect::strip_comments_and_strings(&source);
-    let hybrid = super::cjs_wrap::detect::has_top_level_esm(&stripped)
-        && super::cjs_wrap::detect::has_top_level_module_exports_assignment(&stripped);
+    let hybrid = (super::cjs_wrap::detect::has_top_level_esm(&stripped)
+        && super::cjs_wrap::detect::has_top_level_module_exports_assignment(&stripped))
+        || (super::cjs_wrap::detect::has_top_level_namespace_or_module_block(&stripped)
+            && super::cjs_wrap::detect::has_top_level_export_equals(&stripped));
     cache
         .lock()
         .expect("hybrid source cache")
