@@ -893,7 +893,8 @@ pub(super) fn get_field_ic_miss_impl(
             let key_count = shape.logical_key_count as usize;
             let keys_data = (keys as *const u8).add(8) as *const f64;
             let alloc_limit = shape.live_inline_slot_count as usize;
-            for i in 0..key_count {
+            for i in (0..key_count).rev() {
+                // #10595: back-to-front so a shadowed field's most-derived slot wins; see keys_lookup.rs.
                 let k_bits = (*keys_data.add(i)).to_bits();
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
                 if !k_ptr.is_null() && crate::string::js_string_equals(k_ptr, key) != 0 {
