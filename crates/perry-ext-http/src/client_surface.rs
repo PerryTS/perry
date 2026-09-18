@@ -240,43 +240,75 @@ pub extern "C" fn js_http_response_raw_headers(handle: Handle) -> f64 {
     out
 }
 
-/// `res.httpVersion` — `"{major}.{minor}"` (#10467).
+/// `res.httpVersion` — `"{major}.{minor}"` (#10467). The codegen native
+/// table routes both client responses and server `IncomingMessage`s
+/// through this entry (shared `class_filter`), so a registry miss here
+/// falls back to the server accessor rather than defaulting blindly —
+/// otherwise every server-side `req.httpVersion` would read back "1.1"
+/// regardless of the real negotiated version.
 #[no_mangle]
 pub extern "C" fn js_http_response_http_version(handle: Handle) -> *mut StringHeader {
     let mut out: Option<String> = None;
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         out = Some(format!("{}.{}", res.http_version.0, res.http_version.1));
     });
-    alloc_string(&out.unwrap_or_else(|| "1.1".to_string())).as_raw()
+    if let Some(s) = out {
+        return alloc_string(&s).as_raw();
+    }
+    if let Some(server_out) = server_incoming_property(handle, "httpVersion") {
+        let bits = server_out.to_bits();
+        if bits >> 48 == 0x7FFF || bits >> 48 == 0x7FFD {
+            return (bits & PTR_MASK) as *mut StringHeader;
+        }
+    }
+    alloc_string("1.1").as_raw()
 }
 
-/// `res.httpVersionMajor` (#10467).
+/// `res.httpVersionMajor` (#10467). Same shared-`class_filter` fallback as
+/// `js_http_response_http_version` — a server `req.httpVersionMajor` must
+/// still resolve through the server accessor.
 #[no_mangle]
 pub extern "C" fn js_http_response_http_version_major(handle: Handle) -> f64 {
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.0 as f64)
-        .unwrap_or(1.0)
+    if let Some(v) =
+        with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.0 as f64)
+    {
+        return v;
+    }
+    server_incoming_property(handle, "httpVersionMajor").unwrap_or(1.0)
 }
 
-/// `res.httpVersionMinor` (#10467).
+/// `res.httpVersionMinor` (#10467). Same shared-`class_filter` fallback as
+/// `js_http_response_http_version`.
 #[no_mangle]
 pub extern "C" fn js_http_response_http_version_minor(handle: Handle) -> f64 {
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.1 as f64)
-        .unwrap_or(1.0)
+    if let Some(v) =
+        with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.1 as f64)
+    {
+        return v;
+    }
+    server_incoming_property(handle, "httpVersionMinor").unwrap_or(1.0)
 }
 
 /// `res.complete` (#10467) — `true` once the body has been fully received
-/// (Node's aborted-download check).
+/// (Node's aborted-download check). Same shared-`class_filter` fallback as
+/// `js_http_response_http_version` — a server `req.complete` must still
+/// resolve through the server accessor (`js_node_http_im_complete`, via
+/// the dynamic dispatcher, which already returns a boxed JS boolean here).
 #[no_mangle]
 pub extern "C" fn js_http_response_complete(handle: Handle) -> f64 {
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+    if let Some(v) = with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         if res.complete {
             TAG_TRUE
         } else {
             TAG_FALSE
         }
-    })
-    .map(f64::from_bits)
-    .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+    }) {
+        return f64::from_bits(v);
+    }
+    if let Some(server_out) = server_incoming_property(handle, "complete") {
+        return server_out;
+    }
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 /// `res.req` — the ClientRequest paired with a client IncomingMessage.
