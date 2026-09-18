@@ -323,14 +323,8 @@ fn next_request_meta_sym_key() -> usize {
 
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
-        if acc.set != 0 {
-            let closure =
-                (acc.set & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-            if !closure.is_null() {
-                crate::closure::js_closure_call1(closure, value_f64);
-            }
-        }
-        return value_f64;
+        // #10481: the setter runs with the object written to as `this`.
+        return accessors::invoke_symbol_accessor_setter(acc.set, obj_f64, value_f64);
     }
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
@@ -435,6 +429,22 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
                         )
                     {
                         return value_f64;
+                    }
+                    // #10481: an INHERITED symbol accessor — installed by
+                    // `Object.defineProperty(Fn.prototype, sym, …)`, an object
+                    // literal `set [sym](v)` reached through `Object.create`,
+                    // or on a declared class prototype — intercepts the write:
+                    // its setter runs with the receiver, and a getter-only
+                    // accessor leaves the receiver untouched. The write used
+                    // to shadow it with a new own data property instead.
+                    if accessors::symbol_may_have_accessor(sym_key) {
+                        if let Some((_, set_bits)) =
+                            super::get::inherited_symbol_accessor(obj_f64, sym_f64)
+                        {
+                            return accessors::invoke_symbol_accessor_setter(
+                                set_bits, obj_f64, value_f64,
+                            );
+                        }
                     }
                 }
             }
