@@ -44,7 +44,9 @@ pub(crate) use exact_receivers::{
     collect_module_prototype_facts, intersect_exact_receiver_facts,
     invalidate_exact_receivers_for_expr, kill_referenced_exact_receivers,
 };
-pub(crate) use factory_specialize::specialize_captured_class_factories;
+pub(crate) use factory_specialize::{
+    fresh_export_dynamic_heritage_factories, specialize_captured_class_factories,
+};
 pub(crate) use imul::{detect_math_imul_polyfill, rewrite_imul_calls_in_stmts};
 pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
@@ -496,6 +498,14 @@ fn inline_functions_inner(
     // above the Let's init is no longer a Call, so the regular path is a
     // no-op for the rewritten sites.
     specialize_captured_class_factories(module);
+
+    // #10455: same-module call sites above are cloned per call site;
+    // an EXPORTED factory also needs real per-evaluation identity for
+    // callers outside this module, which no per-module call-site pass
+    // can see. See `fresh_export_dynamic_heritage_factories`'s own doc
+    // comment for the exact shape and why it's safe to run after the
+    // pass above.
+    fresh_export_dynamic_heritage_factories(module);
 
     // Phases 0 + 1 fused (Tier 4.1, v0.5.335): single iteration over
     // module.functions collects both Math.imul polyfill ids AND
