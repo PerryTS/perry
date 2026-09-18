@@ -54,7 +54,7 @@ use std::collections::HashMap;
 
 use perry_ffi::turnloop_net as tl;
 use turnloop_http::http1::Header;
-use turnloop_http::http2::Role;
+use turnloop_http::http2::{HeadersKind, Role};
 
 use super::conn::{flush, H2Conn};
 use crate::server::response::{HyperResponseShape, ShapeBody};
@@ -170,7 +170,19 @@ pub(crate) fn on_peer_settings(conn: &mut H2Conn) {
     crate::server::http2_server::queue_turnloop_remote_settings(session, settings);
 }
 
-pub(crate) fn on_headers(conn: &mut H2Conn, h2_id: u32, headers: Vec<Header>, end_stream: bool) {
+/// `kind` comes from the protocol core, which enforces the distinction between
+/// the three header blocks. This used to be re-derived here — 1xx by sniffing
+/// `:status` for a leading `1`, trailers from a `head_received` flag this
+/// module kept itself — and both were duplicated state that could drift from
+/// the connection's. turnloop-http 0.1.0-alpha.6 reports it directly, so the
+/// core is now the single source of truth for which block this is.
+pub(crate) fn on_headers(
+    conn: &mut H2Conn,
+    h2_id: u32,
+    headers: Vec<Header>,
+    end_stream: bool,
+    kind: HeadersKind,
+) {
     let i = match index_of(conn, h2_id) {
         Some(i) => i,
         None => {
@@ -178,18 +190,15 @@ pub(crate) fn on_headers(conn: &mut H2Conn, h2_id: u32, headers: Vec<Header>, en
             conn.streams.len() - 1
         }
     };
-    let informational = headers
-        .iter()
-        .any(|h| h.name == ":status" && h.value.starts_with(b"1"));
-    if informational {
+    if kind == HeadersKind::Informational {
         // A 1xx does not open the message; Node surfaces it separately and
         // Perry has no surface for it yet, so it is dropped rather than
         // mistaken for the real head.
         return;
     }
-    if conn.streams[i].head_received {
-        // A second HEADERS block on an open stream is the trailer section; the
-        // core has already enforced that it carries END_STREAM.
+    if kind == HeadersKind::Trailers {
+        // The core has already enforced that a trailer block carries
+        // END_STREAM and follows a head.
         for h in &headers {
             conn.streams[i].trailers.push((
                 h.name.clone(),

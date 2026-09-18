@@ -59,7 +59,7 @@ use std::time::{Duration, Instant};
 
 use perry_ffi::turnloop_net as tl;
 use turnloop_http::http1::Header;
-use turnloop_http::http2::{self, Event, Role};
+use turnloop_http::http2::{self, Event, HeadersKind, Role};
 
 use crate::server::http2_session_settings::Http2SettingsState;
 
@@ -84,6 +84,9 @@ pub(crate) enum Owned {
         stream: u32,
         headers: Vec<Header>,
         end_stream: bool,
+        /// Which of the three header blocks this is. The core enforces the
+        /// distinction, so this is carried rather than re-derived here.
+        kind: HeadersKind,
     },
     Data {
         stream: u32,
@@ -102,6 +105,10 @@ pub(crate) enum Owned {
         ack: bool,
         data: [u8; 8],
     },
+    /// A stream not processed after a graceful GOAWAY. Carried so the match is
+    /// exhaustive and the decision is visible; answering it would diverge from
+    /// Node, which sends nothing.
+    Unprocessed,
     WindowUpdate,
 }
 
@@ -112,10 +119,12 @@ fn own_event(event: Event<'_>) -> Owned {
             stream,
             headers,
             end_stream,
+            kind,
         } => Owned::Headers {
             stream,
             headers,
             end_stream,
+            kind,
         },
         Event::Data {
             stream,
@@ -126,6 +135,22 @@ fn own_event(event: Event<'_>) -> Owned {
             bytes: bytes.to_vec(),
             end_stream,
         },
+        // A stream the peer opened after our graceful GOAWAY, above the last
+        // id that GOAWAY named, with nothing sent for it. RFC 9113 §6.8 calls
+        // such a stream "not processed" and expects the peer to retry it on a
+        // new connection.
+        //
+        // Node emits NO FRAME AT ALL here — measured against Node 26.5.1 with
+        // a raw peer: no RST_STREAM, no GOAWAY, the session stays alive and the
+        // request never reaches the application. turnloop-http deliberately
+        // does not answer for us, because a frame it emitted could not be
+        // un-emitted. So matching Node means doing nothing, and the event is
+        // dropped rather than turned into a reset.
+        //
+        // This is worth stating because the opposite was believed here first:
+        // a REFUSED_STREAM reset was proposed on the assumption Node sends one,
+        // and measurement against a raw peer showed it does not.
+        Event::Unprocessed { .. } => Owned::Unprocessed,
         Event::Reset { stream, code } => Owned::Reset { stream, code },
         Event::Goaway { last_stream, code } => Owned::Goaway { last_stream, code },
         Event::Ping { ack, data } => Owned::Ping { ack, data },
@@ -999,7 +1024,8 @@ fn apply(conn: &mut H2Conn, event: Owned) {
             stream: id,
             headers,
             end_stream,
-        } => stream::on_headers(conn, id, headers, end_stream),
+            kind,
+        } => stream::on_headers(conn, id, headers, end_stream, kind),
         Owned::Data {
             stream: id,
             bytes,
@@ -1012,6 +1038,9 @@ fn apply(conn: &mut H2Conn, event: Owned) {
             stream::on_goaway(conn, last_stream, code, opaque);
         }
         Owned::Ping { ack, data } => stream::on_ping(conn, ack, data),
+        // Deliberately nothing: see `Event::Unprocessed` above. Node sends no
+        // frame and never surfaces the request, and so do we.
+        Owned::Unprocessed => {}
         // A peer window opened: retry whatever stalled. Which window — the
         // connection's or one stream's — does not matter, because
         // `pump_outbox` walks every stream and `send_data` answers zero for
