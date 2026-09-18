@@ -127,7 +127,7 @@ impl LoweringContext {
             class_display_names: HashMap::new(),
             gen_param_prologue_len: HashMap::new(),
             assignment_inferred_name: None,
-            inferred_class_bindings: std::collections::HashSet::new(),
+            inferred_class_bindings: Default::default(),
             closure_source_text: HashMap::new(),
             class_source_text: HashMap::new(),
             func_return_native_instances: Vec::new(),

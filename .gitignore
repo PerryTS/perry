@@ -247,3 +247,7 @@ test-files/.perry-cache/
 /examples/wasm_ui_demo.html
 android-build/app/src/main/jniLibs/
 /res/
+build.log
+npm-ci.log
+setup.log
+target/
