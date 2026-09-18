@@ -1165,10 +1165,17 @@ fn class_expression_static_method_and_string_numeric_keys() {
     let made = super::bridge::call_method(root_get(ctor_idx), "make", &[]);
     let made_idx = root_push(made);
     assert_eq!(
-        as_str(super::bridge::call_method(root_get(made_idx), "str-key", &[])),
+        as_str(super::bridge::call_method(
+            root_get(made_idx),
+            "str-key",
+            &[]
+        )),
         "s"
     );
-    assert_eq!(as_str(super::bridge::call_method(root_get(made_idx), "0", &[])), "n");
+    assert_eq!(
+        as_str(super::bridge::call_method(root_get(made_idx), "0", &[])),
+        "n"
+    );
     roots_truncate(ctor_idx);
 }
 

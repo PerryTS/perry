@@ -1163,9 +1163,9 @@ pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: u
             for p in &c.params {
                 match p {
                     ast::ParamOrTsParamProp::Param(p) => params.push(p.pat.clone()),
-                    ast::ParamOrTsParamProp::TsParamProp(_) => throw_unsupported(
-                        "TypeScript parameter property in class constructor",
-                    ),
+                    ast::ParamOrTsParamProp::TsParamProp(_) => {
+                        throw_unsupported("TypeScript parameter property in class constructor")
+                    }
                 }
             }
             let body =
