@@ -65,6 +65,9 @@ mod dispatch;
 mod dispatch_custody;
 mod gc_roots;
 mod ipc;
+// #10444 — `net.Socket.prototype.pipe()`/`.unpipe()` (split out; see the
+// module doc for why it doesn't reuse node:stream's own pipe machinery).
+mod pipe;
 pub(crate) use gc_roots::ensure_gc_scanner_registered;
 mod socket_emit;
 pub use socket_emit::{
@@ -271,6 +274,20 @@ pub(crate) struct SocketState {
     /// `socket.bytesRead`/`socket.bytesWritten`. `timeout` holds the value set
     /// via `setTimeout(ms)` (Node reports `undefined` until one is set).
     pub(crate) destroyed: bool,
+    /// #10465 — true from `net.connect()`/`socket.connect()` until the
+    /// attempt resolves (open, error, or destroy). `false` both before any
+    /// connect attempt (`new net.Socket()`) and once resolved — matches
+    /// Node's `socket.connecting`, which Perry previously hardcoded to
+    /// `false` unconditionally.
+    pub(crate) connecting: bool,
+    /// #10465 — true as soon as `.end()`/`.destroy()` is called, independent
+    /// of whether the FIN has actually flushed. Drives `socket.writable` and
+    /// `socket.writableEnded`.
+    pub(crate) writable_ended: bool,
+    /// #10465 — true once the readable side has seen EOF (peer FIN) and the
+    /// `'end'` event has fired. Drives `socket.readable` and
+    /// `socket.readableEnded`.
+    pub(crate) readable_ended: bool,
     pub(crate) bytes_read: u64,
     pub(crate) bytes_written: u64,
     pub(crate) bytes_queued: u64,
@@ -299,6 +316,9 @@ impl SocketState {
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: false,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -423,6 +443,16 @@ fn push_event(ev: PendingNetEvent) {
 fn mark_closed(id: i64) {
     if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
         socket.raw_fd = None;
+        // #10465 — this is the common teardown funnel for EVERY terminal
+        // transition (connect failure, peer EOF + local end, explicit
+        // destroy, TLS handshake failure): mark the socket destroyed here
+        // unconditionally rather than only in the explicit `.destroy()`
+        // path. Pre-fix, a peer-initiated close left `destroyed` (and
+        // `readyState`/`connecting`) reporting the socket as still live
+        // after its `'close'` event had already fired.
+        socket.destroyed = true;
+        socket.is_open = false;
+        socket.connecting = false;
     }
     server_state::mark_socket_closed(id);
 }
@@ -553,6 +583,9 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: false,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -995,6 +1028,10 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     let connect_async_id = init_provider_with_trigger(b"TCPCONNECTWRAP", tcp_async_id);
     if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
         socket.connect_async_id = connect_async_id;
+        // #10465 — `socket.connect(...)` on a `new net.Socket()` starts
+        // connecting synchronously from the caller's point of view, same as
+        // the eager `net.connect()` factory.
+        socket.connecting = true;
     }
 
     let local_server = server_state::begin_local_connect(&host, port);
@@ -1020,6 +1057,7 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
             let remote = tcp.peer_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
+                s.connecting = false;
                 s.local_addr = local;
                 s.remote_addr = remote;
             }
@@ -1084,6 +1122,9 @@ where
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: true,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -1145,6 +1186,7 @@ where
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
+                s.connecting = false;
                 s.local_addr = local;
                 s.raw_fd = raw_fd;
                 s.remote_addr = remote;

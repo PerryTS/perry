@@ -220,6 +220,11 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "error");
             }
             PendingNetEvent::End(id) => {
+                // #10465 — `readableEnded` (and `readable`) flip as part of
+                // emitting `'end'`, before any listener runs, matching Node.
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
+                    socket.readable_ended = true;
+                }
                 // Issue #1852 — readable side ended (peer FIN). Fire the
                 // `'end'` listeners; the trailing `Close` event (pushed
                 // right after `End` in `run_socket_task`) does the actual
@@ -261,6 +266,11 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 statics::http_agent_phases().lock().unwrap().remove(&id);
                 statics::max_listeners().lock().unwrap().remove(&id);
                 server_state::discard_pending_server_data(id);
+                // #10444 — the listener-map entry above just went away, so
+                // any pipe route's tracked callback pointers are dangling;
+                // drop the tracking table entry too (nothing left to
+                // uninstall from).
+                crate::pipe::drop_routes(id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/
