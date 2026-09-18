@@ -774,17 +774,42 @@ pub(crate) fn flatten_string_add_chain<'a>(
 /// call in `js_number_to_string` -> `js_string_from_bytes_with_capacity` ->
 /// `string_storage_alloc` doing exactly that.
 ///
-/// The non-pointer proof is what keeps an object out: `String(obj)` and the
-/// helper's slow path can disagree on a value with both `valueOf` and
-/// `toString`, so an object-valued part — including one a lying annotation
-/// claims is a number — keeps its wrapper.
+/// The non-pointer-by-construction arm covers a value the codegen dataflow
+/// itself proved numeric (an integer-range local, a raw i32 counter slot).
+/// [`crate::type_analysis::is_declared_number_expr`] widens this to a
+/// DECLARED-only `number` local too — a plain `n: number` parameter that
+/// codegen has no runtime or dataflow proof for, only the erased annotation
+/// (#8105-shaped: the overwhelmingly common template-substitution shape, and
+/// the one `stable_local_type_proof` never covers for an ordinary
+/// unspecialized function body, since that map starts empty precisely so a
+/// lying annotation can't be mistaken for a proof). Trusting it here is sound
+/// for the SAME reason `is_declared_string_expr` already trusts a declared
+/// `string` a few call sites up the stack (`expr/binary.rs`): the receiving
+/// helper does its own tag dispatch, not `js_string_concat_chain`'s directly.
+/// Every one of `js_string_coerce`'s non-plain-number arms — pointer,
+/// short-string, BigInt, int32 class-ref — either returns a literal
+/// ("undefined"/"null"/"true"/"false") that `js_string_concat_chain`'s
+/// classify loop's fallback ALSO returns, or forwards to the exact same
+/// `js_jsvalue_to_string`/`js_string_materialize_to_heap` that classify loop
+/// fallback calls too. So for a lying `number` annotation whose runtime value
+/// is anything else, `js_string_concat_chain` reproduces `js_string_coerce`'s
+/// output byte-for-byte via that shared fallback — only a genuine number (the
+/// overwhelmingly common case) additionally gets the fast, allocation-free
+/// `format_number_into` path instead of a throwaway heap string. Only an
+/// object with `valueOf`/`toString` needs its own live-dataflow proof rather
+/// than the declared check, because `String(obj)` and `+`'s ToPrimitive can
+/// disagree — but `js_string_coerce`'s object arm ITSELF forwards to
+/// `js_jsvalue_to_string`, matching classify loop's fallback exactly, so even
+/// that case stays correct; declared-number trust only ever changes which
+/// code path produces the (identical) answer, never the answer.
 fn chain_part_without_redundant_coerce<'a>(ctx: &FnCtx<'_>, part: &'a Expr) -> &'a Expr {
     let Expr::StringCoerce(inner) = part else {
         return part;
     };
     let is_string = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, inner);
-    let is_plain_number = crate::type_analysis::is_numeric_expr(ctx, inner)
-        && crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, inner);
+    let is_plain_number = (crate::type_analysis::is_numeric_expr(ctx, inner)
+        && crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, inner))
+        || crate::type_analysis::is_declared_number_expr(ctx, inner);
     if is_string || is_plain_number {
         inner
     } else {
