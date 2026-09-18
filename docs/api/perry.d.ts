@@ -257,44 +257,6 @@ declare module "async_hooks" {
   export function triggerAsyncId(...args: any[]): any;
 }
 
-declare module "axios" {
-  /** stdlib */
-  export function all(...args: any[]): any;
-  /** stdlib */
-  export function create(...args: any[]): any;
-  /** stdlib */
-  function _delete(...args: any[]): any;
-  export { _delete as delete };
-  /** stdlib */
-  export function get(...args: any[]): any;
-  /** stdlib */
-  export function head(...args: any[]): any;
-  /** stdlib */
-  export function options(...args: any[]): any;
-  /** stdlib */
-  export function patch(...args: any[]): any;
-  /** stdlib */
-  export function post(...args: any[]): any;
-  /** stdlib */
-  export function put(...args: any[]): any;
-  /** stdlib */
-  export function request(...args: any[]): any;
-  /** stdlib */
-  const _default: ((...args: any[]) => any) & {
-    all: typeof all;
-    create: typeof create;
-    delete: typeof _delete;
-    get: typeof get;
-    head: typeof head;
-    options: typeof options;
-    patch: typeof patch;
-    post: typeof post;
-    put: typeof put;
-    request: typeof request;
-  };
-  export default _default;
-}
-
 declare module "bcrypt" {
   /** stdlib */
   export function compare(plaintext: string, hash: string): any;

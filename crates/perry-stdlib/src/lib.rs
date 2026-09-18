@@ -6,7 +6,7 @@
 //! # Features
 //! - `core` - Minimal runtime (always included)
 //! - `http-server` - Native HTTP server (hyper-based)
-//! - `http-client` - Web Fetch and Axios compatibility surface
+//! - `http-client` - Web Fetch compatibility surface
 //! - `database` - All databases (postgres, mysql, sqlite, redis, mongodb)
 //! - `crypto` - Cryptographic functions
 //! - `compression` - zlib compression
@@ -182,12 +182,6 @@ pub use fetch::*;
 pub mod fetch_blob;
 #[cfg(feature = "web-fetch")]
 pub use fetch_blob::*;
-
-// === Axios compatibility surface ===
-#[cfg(feature = "http-client")]
-pub mod axios;
-#[cfg(feature = "http-client")]
-pub use axios::*;
 
 // === Web Streams API (issue #237) ===
 // Per-binding gate (v0.5.572): `bundled-streams` is the only flag

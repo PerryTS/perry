@@ -76,18 +76,17 @@ bundled-commander = []
 # perry-stdlib's per-tick bridge into it lives behind `external-fastify-pump`.
 http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
 
-# Web Fetch and Axios compatibility surface. The well-known flip can
-# strip this when the external binding owns the imported surface.
+# Web Fetch compatibility surface. The well-known flip can strip this
+# when the external binding owns the imported surface.
 # `bundled-streams` rides under the umbrella for backwards-compat
 # with v0.5.571's `--features http-client` callers (which got
 # `pub mod streams` transitively). The well-known flip strips
 # `bundled-streams` directly, and also strips `http-client` when
-# axios / node-fetch / http / https is imported through the
-# well-known table — both ends move in lockstep.
+# node-fetch / http / https is imported through the well-known
+# table — both ends move in lockstep.
 #
-# #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API)
-# plus the Axios compatibility module. Node HTTP is provided only by
-# perry-ext-http.
+# #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API).
+# Node HTTP is provided only by perry-ext-http.
 web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams"]
 http-client = ["web-fetch"]
 

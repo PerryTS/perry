@@ -203,8 +203,6 @@ pub fn emit_dts(_perry_version: &str) -> String {
         // Followup under #466 will tighten this when signature data lands.
         let mut emitted_fn_names: std::collections::HashSet<&str> =
             std::collections::HashSet::new();
-        let mut emitted_static_methods = Vec::new();
-        let mut callable_default = None;
         for e in entries.iter().filter(|e| {
             matches!(
                 e.kind,
@@ -221,58 +219,24 @@ pub fn emit_dts(_perry_version: &str) -> String {
                 continue;
             }
             if e.name == "default" {
-                if *module == "axios" {
-                    callable_default = Some(*e);
-                } else {
-                    let _ = writeln!(out, "  /** {}{} */", source_dts_tag(e), stub_dts_suffix(e));
-                    let _ = writeln!(out, "  export default function {};", render_signature(e));
-                }
+                let _ = writeln!(out, "  /** {}{} */", source_dts_tag(e), stub_dts_suffix(e));
+                let _ = writeln!(out, "  export default function {};", render_signature(e));
                 continue;
             }
-            emitted_static_methods.push(*e);
             let _ = writeln!(out, "  /** {}{} */", source_dts_tag(e), stub_dts_suffix(e));
             let signature = render_signature(e);
             if is_ts_reserved_word(e.name) {
-                // Reserved words (e.g. `axios.delete`) can't appear as
-                // a function declaration's name — `tsc` rejects
-                // `export function delete(...)` with TS1359 (#526).
-                // Declare under an underscored alias and re-export with
-                // the original name; the `as <reserved>` rename slot
-                // accepts arbitrary identifiers.
+                // Reserved words (e.g. a method literally named `delete`)
+                // can't appear as a function declaration's name — `tsc`
+                // rejects `export function delete(...)` with TS1359
+                // (#526). Declare under an underscored alias and
+                // re-export with the original name; the `as <reserved>`
+                // rename slot accepts arbitrary identifiers.
                 let alias = format!("_{}", e.name);
                 let _ = writeln!(out, "  function {}{};", alias, signature);
                 let _ = writeln!(out, "  export {{ {} as {} }};", alias, e.name);
             } else {
                 let _ = writeln!(out, "  export function {}{};", ts_ident(e.name), signature);
-            }
-        }
-
-        if let Some(default) = callable_default {
-            let _ = writeln!(
-                out,
-                "  /** {}{} */",
-                source_dts_tag(default),
-                stub_dts_suffix(default)
-            );
-            if emitted_static_methods.is_empty() {
-                let _ = writeln!(
-                    out,
-                    "  export default function {};",
-                    render_signature(default)
-                );
-            } else {
-                let signature = render_signature(default).replacen("): ", ") => ", 1);
-                let _ = writeln!(out, "  const _default: ({}) & {{", signature);
-                for method in emitted_static_methods {
-                    let target = if is_ts_reserved_word(method.name) {
-                        format!("_{}", method.name)
-                    } else {
-                        ts_ident(method.name)
-                    };
-                    let _ = writeln!(out, "    {}: typeof {};", ts_ident(method.name), target);
-                }
-                let _ = writeln!(out, "  }};");
-                let _ = writeln!(out, "  export default _default;");
             }
         }
 
@@ -802,47 +766,6 @@ mod tests {
         assert!(
             !block.contains("export function hash(...args: any[]): any"),
             "bcrypt.hash regressed to loose any signature\nblock: {}",
-            block
-        );
-    }
-
-    /// #526 acceptance: a method named after a TS reserved word must
-    /// not surface as `export function <reserved>(...)` — `tsc` errors
-    /// out with TS1359. The emitter routes through the
-    /// `function _delete; export { _delete as delete }` alias pattern
-    /// so a fresh `perry init` project's `tsc -p .` succeeds.
-    #[test]
-    fn dts_axios_delete_does_not_use_reserved_word_as_fn_name() {
-        let dts = emit_dts("test");
-        let block_start = dts.find("declare module \"axios\"").expect("axios block");
-        let after = &dts[block_start..];
-        let block_end = after.find("\n}\n").expect("block end");
-        let block = &after[..block_end];
-        assert!(
-            !block.contains("export function delete("),
-            "axios.delete must not be emitted as `export function delete(` (TS1359)\nblock: {}",
-            block
-        );
-        assert!(
-            block.contains("function _delete(") && block.contains("_delete as delete"),
-            "axios.delete should use the `function _delete; export {{ _delete as delete }}` \
-             alias pattern\nblock: {}",
-            block
-        );
-    }
-
-    #[test]
-    fn dts_axios_default_export_exposes_static_methods() {
-        let dts = emit_dts("test");
-        let block_start = dts.find("declare module \"axios\"").expect("axios block");
-        let after = &dts[block_start..];
-        let block_end = after.find("\n}\n").expect("block end");
-        let block = &after[..block_end];
-        assert!(
-            block.contains("get: typeof get;")
-                && block.contains("delete: typeof _delete;")
-                && block.contains("export default _default;"),
-            "the callable axios default must expose its static methods\nblock: {}",
             block
         );
     }

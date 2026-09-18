@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 347 unique FFI names, 348 declarations.
+// Inventory entries: 345 unique FFI names, 346 declarations.
 
 const testFfiSurfaceRuntimeCoreVersion = 1;
 if (testFfiSurfaceRuntimeCoreVersion !== 1) {
@@ -101,8 +101,6 @@ crates/perry-runtime/src/child_process.rs:
 crates/perry-runtime/src/closure.rs:
   - js_argon2_hash_options
   - js_await_js_promise
-  - js_axios_create
-  - js_axios_request
   - js_closure_call10
   - js_closure_call11
   - js_closure_call12

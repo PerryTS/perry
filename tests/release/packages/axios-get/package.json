@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Tier-3 fixture: GET round-trip via Perry's native axios module against an in-process node:http server.",
+  "description": "Tier-3 fixture: GET round-trip via real-source-compiled axios (no perry.compilePackages entry needed) against an in-process node:http server.",
   "dependencies": {
     "axios": "^1.18.0"
   }

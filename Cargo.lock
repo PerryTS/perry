@@ -5857,15 +5857,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-axios"
-version = "0.5.1602"
-dependencies = [
- "perry-ffi",
- "reqwest",
- "tokio",
-]
-
-[[package]]
 name = "perry-ext-bcrypt"
 version = "0.5.1602"
 dependencies = [

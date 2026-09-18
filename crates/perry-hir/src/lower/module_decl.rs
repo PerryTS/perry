@@ -1007,11 +1007,6 @@ pub(crate) fn lower_module_decl(
                                                                 "http" | "https",
                                                                 "request" | "get",
                                                             ) => Some("ClientRequest"),
-                                                            (
-                                                                "axios",
-                                                                "get" | "post" | "put" | "delete"
-                                                                | "patch" | "request",
-                                                            ) => Some("Response"),
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = class_name {

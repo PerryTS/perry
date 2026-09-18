@@ -22,7 +22,6 @@ Total: 3027 entries across 136 modules.
 - [`assert`](#assert)
 - [`assert/strict`](#assertstrict)
 - [`async_hooks`](#async_hooks)
-- [`axios`](#axios)
 - [`bcrypt`](#bcrypt)
 - [`better-sqlite3`](#better-sqlite3)
 - [`bignumber.js`](#bignumberjs)
@@ -342,22 +341,6 @@ Total: 3027 entries across 136 modules.
 
 - `asyncWrapProviders`
 - `default`
-
-## `axios`
-
-### Methods
-
-- `all` — module
-- `create` — module
-- `default` — module
-- `delete` — module
-- `get` — module
-- `head` — module
-- `options` — module
-- `patch` — module
-- `post` — module
-- `put` — module
-- `request` — module
 
 ## `bcrypt`
 

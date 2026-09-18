@@ -424,10 +424,9 @@ perry native list
 Output:
 
 ```text
-30 bindings ship with this Perry build:
+29 bindings ship with this Perry build:
 
   argon2                        → perry-ext-argon2                  (#466)
-  axios                         → perry-ext-axios                   (#466)
   bcrypt                        → perry-ext-bcrypt                  (#466)
   better-sqlite3                → perry-ext-better-sqlite3          (#466)
   …

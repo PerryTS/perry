@@ -218,18 +218,6 @@ repo = "https://github.com/coveooss/exponential-backoff"
 ref = "5622170828bd91dc149585bfa3d82c8972a75ac5"
 ported-at = "3.1.3"
 date = "2026-07-30"
-[bindings.axios]
-crate = "perry-ext-axios"
-lib = "perry_ext_axios"
-tracking = "#466"
-
-[bindings.axios.upstream]
-version = "1.19.0"
-sha256 = "a511049fdaec40a320368b3ee965079b3e14481f82d052584f746bbdc3f01ede"
-repo = "https://github.com/axios/axios"
-ref = "311fcc5c8d989b7248f05d390bb83bfbfb009977"
-ported-at = "1.19.0"
-date = "2026-07-30"
 [bindings.events]
 crate = "perry-ext-events"
 lib = "perry_ext_events"

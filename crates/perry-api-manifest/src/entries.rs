@@ -40,7 +40,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     // iovalkey: the Valkey fork of ioredis (valkey-io/iovalkey), served by the
     // same perry-ext-ioredis surface — see well_known_bindings.toml.
     "iovalkey",
-    "axios",          // HTTP client (routes onto the native fetch/http stack)
     "node-fetch",     // WHATWG fetch client
     "ws",             // WebSocket client/server
     "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
