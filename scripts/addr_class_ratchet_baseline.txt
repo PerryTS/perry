@@ -125,7 +125,8 @@ handle-floor | crates/perry-runtime/src/object/field_set_by_name/write_helpers.r
 handle-floor | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/ctor_thunks.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/typed_array.rs | 4
-handle-floor | crates/perry-runtime/src/object/instanceof.rs | 6
+handle-floor | crates/perry-runtime/src/object/instanceof.rs | 2
+handle-floor | crates/perry-runtime/src/object/instanceof/static_dispatch.rs | 4
 handle-floor | crates/perry-runtime/src/object/mod.rs | 1
 handle-floor | crates/perry-runtime/src/object/native_call_method.rs | 3
 handle-floor | crates/perry-runtime/src/object/native_call_method/collection_methods.rs | 2
