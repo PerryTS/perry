@@ -277,20 +277,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // method surface; only the constructor's default protocol differs.
     class("https", "Agent"),
     method("https", "Agent", false, None),
-    // --- axios (perry-ext-axios) — the npm `axios` HTTP client surface.
-    //     The default export is callable (`axios(config)`); both flow
-    //     through perry-ext-axios's `js_axios_*` symbols. ---
-    method("axios", "default", false, None),
-    method("axios", "get", false, None),
-    method("axios", "post", false, None),
-    method("axios", "put", false, None),
-    method("axios", "delete", false, None),
-    method("axios", "patch", false, None),
-    method("axios", "head", false, None),
-    method("axios", "options", false, None),
-    method("axios", "request", false, None),
-    method("axios", "create", false, None),
-    method("axios", "all", false, None),
     // --- node-fetch (perry-ext-fetch) — also exposes the Web Fetch
     //     API classes (Headers, Request, Response, Blob, FormData). ---
     method("node-fetch", "default", false, None),

@@ -20,7 +20,6 @@ members = [
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
     "crates/perry-ext-exponential-backoff",
-    "crates/perry-ext-axios",
     "crates/perry-ext-events",
     "crates/perry-ext-decimal",
     "crates/perry-ext-dayjs",
@@ -482,7 +481,6 @@ perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }
-perry-ext-axios = { path = "crates/perry-ext-axios" }
 perry-ext-events = { path = "crates/perry-ext-events" }
 perry-ext-decimal = { path = "crates/perry-ext-decimal" }
 perry-ext-dayjs = { path = "crates/perry-ext-dayjs" }

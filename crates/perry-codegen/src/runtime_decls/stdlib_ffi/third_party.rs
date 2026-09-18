@@ -1,5 +1,5 @@
 //! Third-party package stdlib FFI declarations (extracted from stdlib_ffi.rs):
-//! bcrypt/argon2, perry/ads, perry/thread, jsonwebtoken, axios, sharp, cron,
+//! bcrypt/argon2, perry/ads, perry/thread, jsonwebtoken, sharp, cron,
 //! async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer, child_process,
 //! cheerio.
 
@@ -63,30 +63,13 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_perry_native_f32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perry_native_f64", DOUBLE, &[DOUBLE]);
 
-    // ========== axios / node-fetch ==========
-    module.declare_function("js_axios_create", DOUBLE, &[I64]);
-    module.declare_function("js_axios_delete", I64, &[I64]);
-    module.declare_function("js_axios_get", I64, &[I64]);
-    module.declare_function("js_axios_head", I64, &[I64]);
-    module.declare_function("js_axios_options", I64, &[I64]);
+    // ========== node-fetch ==========
     // #598: body arg is a NaN-boxed f64 (DOUBLE) so the runtime can
     // distinguish strings from objects via the tag and JSON.stringify
     // non-string bodies. Pre-fix this was I64 (raw unboxed pointer)
-    // which had no way to tell `axios.post(url, "raw json")` from
-    // `axios.post(url, {a: 1})`.
-    module.declare_function("js_axios_post", I64, &[I64, DOUBLE]);
-    module.declare_function("js_axios_put", I64, &[I64, DOUBLE]);
-    module.declare_function("js_axios_patch", I64, &[I64, DOUBLE]);
-    module.declare_function("js_axios_request", I64, &[I64]);
-    module.declare_function("js_axios_response_status", DOUBLE, &[I64]);
-    module.declare_function("js_axios_response_status_text", I64, &[I64]);
-    module.declare_function("js_axios_response_data", I64, &[I64]);
     // Issue #604 followup — JSON-auto-parsing variant of `.data`. Returns
     // a NaN-boxed JSValue (parsed object/array/number/bool/null when the
     // response body is JSON, raw string otherwise) so `r.data.ok` works
-    // the same way as npm `axios` does for `application/json` responses.
-    module.declare_function("js_axios_response_data_parsed", DOUBLE, &[I64]);
-
     // ========== sharp / image ==========
     module.declare_function("js_sharp_auto_orient", I64, &[I64]);
     module.declare_function("js_sharp_avif", I64, &[I64, DOUBLE]);

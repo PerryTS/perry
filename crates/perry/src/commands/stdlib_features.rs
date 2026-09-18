@@ -33,11 +33,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // spellings need the same feature for auto-optimized stdlib builds.
         "streams" | "stream/web" | "stream_web" | "fs/promises" => &["bundled-streams"],
 
-        // ── Web Fetch and Axios compatibility surface ────────────────
+        // ── Web Fetch compatibility surface ───────────────────────────
         // Node HTTP/HTTPS/HTTP2 are provided by perry-ext-http and need
-        // no perry-stdlib feature. Axios and node-fetch still use the
-        // legacy umbrella for compatibility.
-        "axios" | "node-fetch" => &["http-client"],
+        // no perry-stdlib feature. node-fetch still uses the legacy
+        // umbrella for compatibility.
+        "node-fetch" => &["http-client"],
 
         // `undici` (#466) has no perry-stdlib copy to strip — the wrapper
         // crate (perry-ext-undici) is thin glue over the native Web Fetch
@@ -317,7 +317,7 @@ mod tests {
         assert!(module_to_features("http").is_empty());
         assert!(module_to_features("node:https").is_empty());
         assert!(module_to_features("http2").is_empty());
-        assert_eq!(module_to_features("axios"), &["http-client"]);
+        assert_eq!(module_to_features("node-fetch"), &["http-client"]);
     }
 
     #[test]
