@@ -385,6 +385,15 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
         // Both views are acquired once for the quantum that decides nearly
         // every per-call search; a `Search` is built and moved only if this
         // one pauses or asks for more scratch.
+        // On an error that is not a capacity request -- WorkLimit,
+        // InvalidProgram, ChangedResources, Cancelled -- `run` returns Err and
+        // drops the scratch and the remaining budget, where `new` + `advance`
+        // left a Search to read `remaining_work()` from. So `*budget` keeps its
+        // entry value and under-counts what the failed call spent. WORK is
+        // usize::MAX on every path here, so nothing observes it today; if a
+        // finite execution budget is ever reintroduced (see #10164/#10165),
+        // this stops being free and wants the engine's failure arm to report
+        // remaining work.
         let mut search = match Search::run(resources, start, near, scratch, *budget, quantum)
             .map_err(search_error)?
         {
@@ -508,6 +517,15 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
 
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
+    // On an error that is not a capacity request -- WorkLimit,
+    // InvalidProgram, ChangedResources, Cancelled -- `run` returns Err and
+    // drops the scratch and the remaining budget, where `new` + `advance`
+    // left a Search to read `remaining_work()` from. So `*budget` keeps its
+    // entry value and under-counts what the failed call spent. WORK is
+    // usize::MAX on every path here, so nothing observes it today; if a
+    // finite execution budget is ever reintroduced (see #10164/#10165),
+    // this stops being free and wants the engine's failure arm to report
+    // remaining work.
     let mut search = match Search::run(&resources, start, near, buffers, *budget, quantum)
         .map_err(search_error)?
     {
