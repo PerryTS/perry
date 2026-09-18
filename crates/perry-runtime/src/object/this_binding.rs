@@ -301,6 +301,41 @@ pub extern "C" fn js_new_target_set(value: f64) -> f64 {
     NEW_TARGET.with(|c| f64::from_bits(c.replace(value.to_bits())))
 }
 
+/// `catch_savepoints!` capture/restore for `IMPLICIT_THIS` (PR #10564 review
+/// finding). Several runtime guards displace `IMPLICIT_THIS` around a call
+/// they don't control — a `super()` bridge, a prototype-walk accessor
+/// dispatch, a stdlib listener/getter dispatcher — with a bare
+/// save/call/restore statement sequence, not `ImplicitThisScope`. Neither a
+/// `longjmp` nor a system unwind runs the restore statement that follows the
+/// call, so a throw crossing one of those sites leaves the callee's receiver
+/// installed for every later implicit-`this` read. This closes that gap the
+/// same way `runtime_handles`/`call_method` already do: captured at every `try`,
+/// replayed by `js_throw` before the exception transports, regardless of
+/// transport. It is an unconditional `set`, so it composes safely with a
+/// `ImplicitThisScope::drop` that also fires on the unwind path: whichever
+/// runs last for a given frame reproduces the same locally-correct value.
+#[inline]
+pub(crate) fn implicit_this_trap_savepoint() -> u64 {
+    implicit_this_cell().get()
+}
+
+pub(crate) fn implicit_this_trap_restore(bits: u64) {
+    implicit_this_cell().set(bits);
+}
+
+/// `catch_savepoints!` capture/restore for `NEW_TARGET`. Same rationale as
+/// [`implicit_this_trap_savepoint`]: the Temporal/Intl subclass `super()`
+/// bridges (`fetch_globals.rs`, `intl/subclass.rs`) save/restore `new.target`
+/// with a bare statement pair around the parent constructor call.
+#[inline]
+pub(crate) fn new_target_trap_savepoint() -> u64 {
+    NEW_TARGET.with(|c| c.get())
+}
+
+pub(crate) fn new_target_trap_restore(bits: u64) {
+    NEW_TARGET.with(|c| c.set(bits));
+}
+
 /// GC mutable-root scanner for the implicit-`this` cell (issue #1813).
 ///
 /// `IMPLICIT_THIS` holds the NaN-boxed receiver for the duration of a
