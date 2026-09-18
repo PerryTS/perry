@@ -145,12 +145,6 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
     // which is how three of prettier's plugins stopped linking. Fall back to
     // ordinary evaluation for worker-bearing programs; every other program
     // keeps this fast path untouched.
-    if std::env::var_os("PERRY_DEBUG_TLS_DECLS").is_some() {
-        eprintln!(
-            "[tlsdbg] literal_descriptor try_lower: program_has_worker={}",
-            crate::codegen::program_has_worker()
-        );
-    }
     if crate::codegen::program_has_worker() {
         return None;
     }

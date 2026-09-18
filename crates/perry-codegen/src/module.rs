@@ -1075,33 +1075,6 @@ impl LlModule {
             }
             pre.push('\n');
 
-            // #10399 diagnostic: dump every line in this unit that mentions a
-            // global the module defines thread-local, so a TLS/non-TLS
-            // mismatch names the exact emitting line. Off unless asked.
-            if std::env::var_os("PERRY_DEBUG_TLS_DECLS").is_some() {
-                let tls_names: Vec<String> = shared_globals
-                    .iter()
-                    .filter(|g| g.contains(" thread_local "))
-                    .filter_map(|g| {
-                        global_symbol_name(g).map(|s| s.trim_start_matches('@').to_string())
-                    })
-                    .collect();
-                for nm in &tls_names {
-                    for line in pre.lines() {
-                        if line.contains(nm.as_str()) {
-                            eprintln!("[tlsdbg] unit {bi} PRE: {line}");
-                        }
-                    }
-                    for f in &bucket {
-                        for line in f.render().lines() {
-                            if line.contains(nm.as_str()) {
-                                eprintln!("[tlsdbg] unit {bi} FN {}: {}", f.name, line.trim());
-                            }
-                        }
-                    }
-                }
-            }
-
             parts.push(CodegenUnitPart {
                 pre,
                 post: unit_posts[bi].clone(),
