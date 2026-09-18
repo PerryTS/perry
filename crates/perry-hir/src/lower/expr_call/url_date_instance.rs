@@ -132,36 +132,20 @@ pub(super) fn try_url_date_weakref_instance(
             }
         }
 
-        // Issue #650: gate the AMBIGUOUS Date instance method arms
-        // on a receiver-type check. Methods like `toJSON` /
-        // `toString` / `toLocaleString` / `valueOf` exist on every
-        // JS object — pre-fix the arms below fired unconditionally,
-        // so calling any of them on a URL / class instance / array
-        // got silently rewritten as a Date method, returning a Date
-        // string for the URL.toJSON() case the issue tracks.
+        // Issue #650 / #10476: a Date method NAME is not proof that the
+        // receiver is a Date. Userland objects own `getTime`, `setHours`,
+        // `toISOString`, … (dayjs, moment and every timer/clock type), so
+        // the Date intrinsics below require a statically proven Date
+        // receiver. Every other receiver stays a generic method call; codegen
+        // keeps a fast path for one that is a Date at runtime by checking the
+        // evaluated receiver's kind before taking it
+        // (`property_get/builtin_kind_guard.rs`).
         let recv_class = if let ast::MemberProp::Ident(_) = &member.prop {
             static_receiver_class(ctx, member.obj.as_ref())
         } else {
             None
         };
-        // #809: `Some("Object")` (object literal / `Object.create`)
-        // joins URL as a "definitely not a Date" receiver.
-        let receiver_may_be_date = !matches!(
-            recv_class,
-            Some("URL")
-                | Some("Object")
-                | Some("Buffer")
-                | Some("BlockList")
-                | Some("SocketAddress")
-                | Some("Uint8Array")
-                | Some("Uint8ClampedArray")
-                | Some("Array")
-        );
-        // Most ambiguous Date methods retain the historical "unknown may be
-        // Date" behavior. Direct `.toJSON()` is different: userland classes
-        // commonly expose it as a plain method, and bracket/computed forms
-        // already dispatch generically, so only statically-known Date
-        // receivers should use the Date intrinsic.
+        let receiver_is_date = recv_class == Some("Date");
 
         // Check for Date instance method calls (date.getTime(), etc.)
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
@@ -196,36 +180,18 @@ pub(super) fn try_url_date_weakref_instance(
                 }
                 cached_recv = Some(recv_expr);
             }
-            let ambiguous = matches!(
-                method_name,
-                "toJSON"
-                    | "toString"
-                    | "toLocaleString"
-                    | "toDateString"
-                    | "toTimeString"
-                    | "toUTCString"
-                    | "toGMTString"
-                    | "toLocaleDateString"
-                    | "toLocaleTimeString"
-                    | "toISOString"
-                    | "valueOf"
-            );
-            let allow_date_method = if method_name == "toJSON" {
-                recv_class == Some("Date")
-            } else {
-                receiver_may_be_date
-            };
-            if method_name == "setTime"
-                && is_node_test_mock_timers_receiver(ctx, member.obj.as_ref())
-            {
-                // `node:test` exposes `mock.timers.setTime(ms)`. The broad
-                // Date setter fallback below also matches `.setTime(...)` on
-                // unknown receivers, so keep this known non-Date receiver on
-                // the generic method-call path.
-            } else if ambiguous && !allow_date_method {
-                // Receiver is statically a non-Date class (e.g. URL), or this
-                // is `.toJSON()` on an unknown/userland receiver.
-                // Skip the Date arms below — fall through to generic.
+            // `(12345).toLocaleString()` shares the misnamed
+            // `DateToLocaleString` node: its codegen arm routes a numeric
+            // receiver to the Number formatter and anything else through the
+            // runtime's tag dispatch.
+            let number_to_locale_string = method_name == "toLocaleString"
+                && matches!(
+                    crate::lower_types::infer_type_from_expr(&member.obj, ctx),
+                    Type::Number | Type::Int32
+                );
+            if !receiver_is_date && !number_to_locale_string {
+                // Not a proven Date (including `node:test`'s
+                // `mock.timers.setTime(ms)`): generic method call.
             } else {
                 match method_name {
                     "getTime" => {
@@ -454,7 +420,7 @@ pub(super) fn try_url_date_weakref_instance(
                     }
                     _ => {} // Fall through to other handling
                 }
-            } // close `else` of `if ambiguous && !allow_ambiguous_date`
+            } // close `else` of `if !receiver_is_date && !number_to_locale_string`
         }
 
         // Check for WeakRef.deref() / FinalizationRegistry.register() / .unregister()
@@ -578,17 +544,4 @@ pub(super) fn try_url_date_weakref_instance(
         }
     }
     Ok(Err(args))
-}
-
-fn is_node_test_mock_timers_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
-    let ast::Expr::Member(inner) = expr else {
-        return false;
-    };
-    if !matches!(&inner.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "timers") {
-        return false;
-    }
-    let ast::Expr::Ident(root) = inner.obj.as_ref() else {
-        return false;
-    };
-    ctx.lookup_imported_func(root.sym.as_ref()) == Some("mock")
 }
