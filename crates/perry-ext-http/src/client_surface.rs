@@ -224,6 +224,61 @@ pub extern "C" fn js_http_incoming_message_socket(handle: Handle) -> f64 {
     .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
 }
 
+/// `res.rawHeaders` (#10467) — see `build_raw_headers_array` for the
+/// header-casing caveat on the pooled reqwest path.
+#[no_mangle]
+pub extern "C" fn js_http_response_raw_headers(handle: Handle) -> f64 {
+    let mut out = f64::from_bits(TAG_UNDEFINED);
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        out = crate::response_headers::build_raw_headers_array(&res.headers);
+    });
+    if out.to_bits() == TAG_UNDEFINED {
+        if let Some(server_out) = server_incoming_property(handle, "rawHeaders") {
+            return server_out;
+        }
+    }
+    out
+}
+
+/// `res.httpVersion` — `"{major}.{minor}"` (#10467).
+#[no_mangle]
+pub extern "C" fn js_http_response_http_version(handle: Handle) -> *mut StringHeader {
+    let mut out: Option<String> = None;
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        out = Some(format!("{}.{}", res.http_version.0, res.http_version.1));
+    });
+    alloc_string(&out.unwrap_or_else(|| "1.1".to_string())).as_raw()
+}
+
+/// `res.httpVersionMajor` (#10467).
+#[no_mangle]
+pub extern "C" fn js_http_response_http_version_major(handle: Handle) -> f64 {
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.0 as f64)
+        .unwrap_or(1.0)
+}
+
+/// `res.httpVersionMinor` (#10467).
+#[no_mangle]
+pub extern "C" fn js_http_response_http_version_minor(handle: Handle) -> f64 {
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| res.http_version.1 as f64)
+        .unwrap_or(1.0)
+}
+
+/// `res.complete` (#10467) — `true` once the body has been fully received
+/// (Node's aborted-download check).
+#[no_mangle]
+pub extern "C" fn js_http_response_complete(handle: Handle) -> f64 {
+    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
+        if res.complete {
+            TAG_TRUE
+        } else {
+            TAG_FALSE
+        }
+    })
+    .map(f64::from_bits)
+    .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
+}
+
 /// `res.req` — the ClientRequest paired with a client IncomingMessage.
 #[no_mangle]
 pub extern "C" fn js_http_incoming_message_req(handle: Handle) -> f64 {

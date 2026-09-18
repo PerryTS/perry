@@ -40,6 +40,39 @@ fn is_single_value_header(name: &str) -> bool {
     )
 }
 
+/// Build `res.rawHeaders` (#10467) — the flattened `[name, value, name,
+/// value, ...]` array in wire arrival order, duplicates preserved (unlike
+/// the combined `headers` view above, which merges/collapses per
+/// `matchKnownFields`).
+///
+/// Caveat: header name casing here is whatever the transport captured. The
+/// pooled reqwest path normalizes names to lower case before Perry ever
+/// sees them (`http::HeaderName` only stores lower case), so this does not
+/// reproduce Node's original wire casing on that path — only the raw-socket
+/// paths (`plain_client`/`agent.createConnection`) could preserve it, and
+/// today they lower-case on parse too. Tracked as a known gap, not silently
+/// papered over.
+pub(crate) fn build_raw_headers_array(raw: &[(String, String)]) -> f64 {
+    let mut out = f64::from_bits(TAG_UNDEFINED);
+    let mut arr = unsafe { perry_ffi::js_array_alloc((raw.len() * 2) as u32) };
+    if arr.is_null() {
+        return out;
+    }
+    for (name, value) in raw {
+        let name_s = alloc_string(name);
+        arr = unsafe {
+            perry_ffi::js_array_push(arr, perry_ffi::JsValue::from_string_ptr(name_s.as_raw()))
+        };
+        let value_s = alloc_string(value);
+        arr = unsafe {
+            perry_ffi::js_array_push(arr, perry_ffi::JsValue::from_string_ptr(value_s.as_raw()))
+        };
+    }
+    let v = perry_ffi::JsValue::from_object_ptr(arr as *mut u8);
+    out = f64::from_bits(v.bits());
+    out
+}
+
 /// Build the combined `IncomingMessage.headers` object from the raw
 /// `(name, value)` pairs, applying Node's `matchKnownFields` rules
 /// (#5079):

@@ -224,6 +224,12 @@ pub(super) unsafe fn dispatch_client_incoming_property(
             | "socket"
             | "connection"
             | "req"
+            // #10467 — rawHeaders / httpVersion* / complete.
+            | "rawHeaders"
+            | "httpVersion"
+            | "httpVersionMajor"
+            | "httpVersionMinor"
+            | "complete"
     ) {
         return None;
     }
@@ -241,6 +247,11 @@ pub(super) unsafe fn dispatch_client_incoming_property(
         fn js_http_response_trailers(handle: i64) -> f64;
         fn js_http_incoming_message_socket(handle: i64) -> f64;
         fn js_http_incoming_message_req(handle: i64) -> f64;
+        fn js_http_response_raw_headers(handle: i64) -> f64;
+        fn js_http_response_http_version(handle: i64) -> *mut perry_runtime::StringHeader;
+        fn js_http_response_http_version_major(handle: i64) -> f64;
+        fn js_http_response_http_version_minor(handle: i64) -> f64;
+        fn js_http_response_complete(handle: i64) -> f64;
     }
 
     if unsafe { js_http_is_incoming_message(handle) } == 0 {
@@ -267,6 +278,18 @@ pub(super) unsafe fn dispatch_client_incoming_property(
         "trailers" => unsafe { js_http_response_trailers(handle) },
         "socket" | "connection" => unsafe { js_http_incoming_message_socket(handle) },
         "req" => unsafe { js_http_incoming_message_req(handle) },
+        "rawHeaders" => unsafe { js_http_response_raw_headers(handle) },
+        "httpVersion" => {
+            let ptr = unsafe { js_http_response_http_version(handle) };
+            if ptr.is_null() {
+                f64::from_bits(0x7FFC_0000_0000_0001)
+            } else {
+                f64::from_bits(JSValue::string_ptr(ptr).bits())
+            }
+        }
+        "httpVersionMajor" => unsafe { js_http_response_http_version_major(handle) },
+        "httpVersionMinor" => unsafe { js_http_response_http_version_minor(handle) },
+        "complete" => unsafe { js_http_response_complete(handle) },
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     };
     Some(value)

@@ -273,6 +273,7 @@ async fn run_exchange(
         status: parsed.status,
         status_message: parsed.status_message,
         headers: parsed.headers,
+        http_version: parsed.http_version,
     });
     if !parsed.body.is_empty() {
         push_event(PendingHttpEvent::ResponseChunk {
