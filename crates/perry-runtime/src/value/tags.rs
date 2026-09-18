@@ -218,3 +218,19 @@ pub static JS_NATIVE_EVENTS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 // (method_name_ptr, method_name_len, args_ptr, args_len), returns the NaN-boxed
 // instance. Next.js standalone server startup blocker.
 pub static JS_NATIVE_ASYNC_HOOKS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+// Subclass-init hook for `class X extends <bound async_hooks.AsyncLocalStorage
+// export>` reached through anything OTHER than the canonical bare
+// `import { AsyncLocalStorage } from "node:async_hooks"` binding (a local
+// alias, a namespace member, or a CJS destructured `require()`). Codegen
+// already routes the canonical shape statically, straight to perry-stdlib's
+// `js_async_local_storage_subclass_init` (declared as an extern symbol by
+// codegen, which has no crate-dependency constraint); every other shape only
+// resolves at runtime, inside `js_fetch_or_value_super` in THIS crate, which
+// cannot depend on perry-stdlib (where the helper — and the `Handle` registry
+// it needs — live). Registered by perry-stdlib at startup; stays null when
+// stdlib isn't linked. Takes/returns the subclass instance (this_value) as a
+// NaN-boxed f64, matching `js_async_local_storage_subclass_init`'s own
+// signature. (#10625)
+pub(crate) type JsNativeAsyncLocalStorageSubclassInitFn = unsafe extern "C" fn(f64) -> f64;
+pub static JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT: AtomicPtr<()> =
+    AtomicPtr::new(std::ptr::null_mut());
