@@ -944,7 +944,9 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 } else if let Some((g, s)) =
                     super::class_registry::class_own_accessor_ptrs(cid, name)
                 {
-                    return super::class_registry::class_accessor_descriptor(cid, false, name, g, s);
+                    return super::class_registry::class_accessor_descriptor(
+                        cid, false, name, g, s,
+                    );
                 }
             }
         }
