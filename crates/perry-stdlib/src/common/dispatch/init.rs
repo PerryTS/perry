@@ -430,6 +430,18 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         }
     }
     perry_runtime::js_set_native_async_hooks_construct(async_hooks_native_construct);
+    // #10625: register the AsyncLocalStorage subclass-init dispatcher so
+    // `class X extends <bound async_hooks.AsyncLocalStorage export>` reached
+    // through a local alias, namespace member, or CJS destructured `require()`
+    // reaches the real handle at `super()` time — not just the canonical bare
+    // import shape codegen already routes statically. See
+    // `js_fetch_or_value_super` in perry-runtime for why this indirection
+    // exists (perry-runtime cannot depend on perry-stdlib, where
+    // `js_async_local_storage_subclass_init` and the `Handle` registry it uses
+    // live).
+    perry_runtime::js_set_native_async_local_storage_subclass_init(
+        crate::async_local_storage::js_async_local_storage_subclass_init,
+    );
     super::super::net_socket_bridge::register_net_socket_handle_probe();
     #[cfg(feature = "external-http-client-pump")]
     {

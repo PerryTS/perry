@@ -148,6 +148,17 @@ pub extern "C" fn js_set_native_async_hooks_construct(func: JsNativeEventsConstr
     JS_NATIVE_ASYNC_HOOKS_CONSTRUCT.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Register the AsyncLocalStorage subclass-init dispatcher. See
+/// `JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT` for why perry-runtime needs
+/// this indirection instead of calling perry-stdlib's
+/// `js_async_local_storage_subclass_init` directly. (#10625)
+#[no_mangle]
+pub extern "C" fn js_set_native_async_local_storage_subclass_init(
+    func: JsNativeAsyncLocalStorageSubclassInitFn,
+) {
+    JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the native module JS property loader (called by perry-jsruntime)
 /// This callback loads a native module via V8 and gets a property from it.
 #[no_mangle]

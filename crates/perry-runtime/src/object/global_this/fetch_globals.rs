@@ -724,6 +724,37 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
+    // #10625: `class X extends AsyncLocalStorage` reached indirectly (local
+    // alias, namespace member, CJS destructured `require()`) hits the same gap
+    // #10453/#10621 fixed for AsyncResource: only the canonical bare
+    // `import { AsyncLocalStorage } from "node:async_hooks"` binding is
+    // recognized statically at HIR-lowering time
+    // (`crates/perry-hir/src/lower_decl/class_decl.rs`), which routes to
+    // perry-stdlib's `js_async_local_storage_subclass_init` via a
+    // codegen-declared extern symbol
+    // (`crates/perry-codegen/src/expr/this_super_call.rs`). Every other
+    // heritage shape resolves `parent_val` to the identical bound native
+    // export here, but this crate cannot call that stdlib helper directly —
+    // perry-runtime cannot depend on perry-stdlib, where the helper (and the
+    // `Handle` registry backing it) live — so route through the registration
+    // hook perry-stdlib installs at startup instead, exactly like the WASI arm
+    // above.
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str())
+                == "async_hooks"
+                && method.as_str() == "AsyncLocalStorage"
+        })
+    {
+        let ptr = crate::value::JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeAsyncLocalStorageSubclassInitFn =
+                std::mem::transmute(ptr);
+            return dispatch(this_box);
+        }
+    }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
     // constructor returns a fresh NaN-boxed cell and does NOT mutate the
     // implicit `this`, so the ordinary dispatch below would drop that cell and
