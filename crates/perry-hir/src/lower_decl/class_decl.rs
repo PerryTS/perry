@@ -253,8 +253,31 @@ pub fn lower_class_decl(
             // path, not the native `events` parent. ESM imports are not in
             // `ctx.locals`, so genuine native subclassing is unchanged. Mirrors
             // the class-expression arm below.
+            //
+            // #10623: a CJS-wrapped module is the odd one out — EVERY
+            // top-level `const` there is a genuine local (the whole module
+            // body runs inside the wrap's IIFE), so `const { AsyncResource } =
+            // require("node:async_hooks")` looks identical to true user
+            // shadowing under the check above. Distinguish them by
+            // PROVENANCE, not by re-deriving the name: `parent_name` shadows
+            // only if it was NOT also destructured from a require() of a real
+            // native module with this same export key
+            // (`require_destructured_native_locals`, populated unconditionally
+            // in `var_decl_sources.rs` regardless of the #8342 CJS-wrapper
+            // gate that skips the FULL native-module-alias registration for
+            // the same binding). A class expression / indirect subclass never
+            // reaches this check with anything but the immediate `extends`
+            // identifier, so this does not change the "keyed on the literal
+            // extends name" failure mode described in CLAUDE.md — it only
+            // widens what counts as "not actually shadowed" for that one
+            // identifier.
+            let require_native_reexport = ctx
+                .require_destructured_native_locals
+                .get(&parent_name)
+                .is_some_and(|key| *key == canonical_parent_name);
             let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
-                && ctx.locals.lookup(&parent_name).is_some();
+                && ctx.locals.lookup(&parent_name).is_some()
+                && !require_native_reexport;
             if native_parent.is_some() && !locally_shadowed {
                 // Keep `extends_name` populated alongside `native_extends`
                 // so SuperCall codegen + downstream chain walks still
@@ -1394,8 +1417,16 @@ pub fn lower_class_from_ast(
             // `extends_expr` path (the local) instead of recording the native
             // `events` parent. ESM imports are NOT in `ctx.locals`, so genuine
             // `extends EventEmitter` (imported) still takes the native path.
+            //
+            // #10623: same CJS-wrapper carve-out as the class-declaration arm
+            // above — see its comment for the full rationale.
+            let require_native_reexport = ctx
+                .require_destructured_native_locals
+                .get(&parent_name)
+                .is_some_and(|key| *key == canonical_parent_name);
             let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
-                && ctx.locals.lookup(&parent_name).is_some();
+                && ctx.locals.lookup(&parent_name).is_some()
+                && !require_native_reexport;
             if native_parent.is_some() && !locally_shadowed {
                 (None, Some(canonical_parent_name), native_parent, None)
             } else if locally_shadowed {

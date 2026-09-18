@@ -1998,3 +1998,5 @@ mod class_expr_subclass_captures;
 mod nullish_over_optional_chain;
 mod subclass_ctor_inherited_method;
 mod ui_widget_add_child;
+
+mod issue_10623_require_destructured_native_super;
