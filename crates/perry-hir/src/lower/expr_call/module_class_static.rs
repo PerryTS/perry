@@ -178,6 +178,38 @@ pub(super) fn try_module_class_static(
                                         byte_offset: 0,
                                     }));
                                 }
+                                // #10454: `http.ServerResponse.call(this, req)`
+                                // — light-my-request's exact shape
+                                // (`lib/response.js`). Same #4973 gap:
+                                // ServerResponse is a handle factory, not an
+                                // initializer of `this`, so the generic
+                                // NativeMethodCall arm below would lose `this`
+                                // the same way it did for `Server`. `https`
+                                // has no distinct `ServerResponse` export in
+                                // Node, so only `http` is recognized here.
+                                if normalized == "http"
+                                    && class_name == "ServerResponse"
+                                    && method_name == "call"
+                                    && !args.is_empty()
+                                {
+                                    let mut it = args.into_iter();
+                                    let this_arg = it.next().unwrap();
+                                    let mut rest: Vec<Expr> = it.collect();
+                                    rest.resize(1, Expr::Undefined);
+                                    let mut call_args = vec![this_arg];
+                                    call_args.extend(rest);
+                                    return Ok(Ok(Expr::Call {
+                                        callee: Box::new(Expr::ExternFuncRef {
+                                            name: "js_http_server_response_construct_with_this"
+                                                .to_string(),
+                                            param_types: Vec::new(),
+                                            return_type: Type::Any,
+                                        }),
+                                        args: call_args,
+                                        type_args: Vec::new(),
+                                        byte_offset: 0,
+                                    }));
+                                }
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: module_name.to_string(),
                                     class_name: Some(class_name),

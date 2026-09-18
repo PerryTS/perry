@@ -579,6 +579,26 @@ pub(super) unsafe fn dispatch_common(
                     std::ptr::null()
                 };
                 let rest_len = args_len.saturating_sub(1);
+                // #10454: `Readable.call(this, opts)` (util.inherits' classic
+                // explicit-this construction) must mutate `this` in place via
+                // the same subclass-init shim `super()` uses, not run the
+                // ordinary call below — see
+                // `maybe_run_stream_subclass_init_via_this`'s doc comment.
+                if let Some(result) =
+                    super::native_this_alias::maybe_run_stream_subclass_init_via_this(
+                        object, this_arg, rest_ptr, rest_len,
+                    )
+                {
+                    return Some(result);
+                }
+                // #10454: `http.ServerResponse.call(this, req)` reached
+                // through an aliased heritage — see
+                // `maybe_construct_http_class_with_this`'s doc comment.
+                if let Some(result) = super::native_this_alias::maybe_construct_http_class_with_this(
+                    object, this_arg, rest_ptr, rest_len,
+                ) {
+                    return Some(result);
+                }
                 // The callee, the explicit `this`, and the saved previous
                 // implicit-`this` all cross the invocation — a moving
                 // collection inside the callee relocates them (#8082: the
@@ -732,6 +752,28 @@ pub(super) unsafe fn dispatch_common(
                 } else {
                     (buf.as_ptr(), buf.len())
                 };
+                // #10454: `Readable.apply(this, [opts])` twin of the `call`
+                // arm's stream-subclass-init hook above.
+                if let Some(result) =
+                    super::native_this_alias::maybe_run_stream_subclass_init_via_this(
+                        object,
+                        this_arg,
+                        call_args_ptr,
+                        call_args_len,
+                    )
+                {
+                    return Some(result);
+                }
+                // #10454: `http.ServerResponse.apply(this, [req])` twin of
+                // the `call` arm's hook above.
+                if let Some(result) = super::native_this_alias::maybe_construct_http_class_with_this(
+                    object,
+                    this_arg,
+                    call_args_ptr,
+                    call_args_len,
+                ) {
+                    return Some(result);
+                }
                 // Same rooting discipline as the `call` arm (#8082): callee,
                 // explicit `this`, and the saved implicit-`this` cross the
                 // invocation and must survive a moving collection inside it.

@@ -666,6 +666,14 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         server_ctor_args,
     );
+    // #10454: same util.inherits-era pattern, `http.ServerResponse.call(this,
+    // req)` — light-my-request's exact shape. Only `this`/`req` (no options
+    // arg like Server has).
+    module.declare_function(
+        "js_http_server_response_construct_with_this",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_net_socket_set_encoding", I64, &[I64, I64]);
 
     declare_stdlib_ffi(module);

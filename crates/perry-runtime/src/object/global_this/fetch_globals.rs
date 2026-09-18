@@ -655,7 +655,13 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             b"Super constructor null is not a constructor",
         );
     }
-    let wasi_parent = super::super::native_module::bound_native_callable_module_and_method(
+    // Resolve the parent to a bound native-module export VALUE, independent
+    // of how the heritage expression reached it: a bare import, a local
+    // alias, a namespace member, and a CJS destructured `require()` all
+    // produce the identical bound-closure representation (see
+    // `bound_native_callable_module_and_method`), even though only some
+    // shapes are recognized statically at HIR-lowering time.
+    let bound_native_parent = super::super::native_module::bound_native_callable_module_and_method(
         parent_val,
     )
     .or_else(|| {
@@ -665,10 +671,13 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             crate::object::class_registry::js_get_dynamic_parent_value(cid),
         )
     });
-    if wasi_parent.is_some_and(|(module, method)| {
-        super::super::native_module::normalize_native_module_alias(&module) == "wasi"
-            && method == "WASI"
-    }) {
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str()) == "wasi"
+                && method.as_str() == "WASI"
+        })
+    {
         let arg0 = if args_len >= 1 && !args_ptr.is_null() {
             *args_ptr
         } else {
@@ -676,6 +685,40 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         };
         crate::wasi::js_wasi_init_subclass(this_box, arg0);
         return undef;
+    }
+    // #10454: `class X extends http.ServerResponse` never got a real
+    // `setHeader`/`writeHead`/`end` surface for ANY heritage shape — `http`
+    // classes are never recognized at HIR-lowering time at all
+    // (`canonical_native_parent_name`,
+    // `crates/perry-hir/src/lower_decl/class_decl.rs`, only knows
+    // stream/events/async_hooks/ws/stream-web), so `super()` always took
+    // this dynamic path, which — before this arm — fell through to the
+    // ordinary value-super dispatch below: a plain call of the bound
+    // `ServerResponse` export that builds a fresh native handle and drops
+    // it, since `ServerResponse` is a handle factory, not an initializer of
+    // `this` (the same problem #4973 already solved for
+    // `http.Server.call(this, …)`). `parent_val` can arrive stale for an
+    // aliased heritage the same way the Temporal/Intl arms above do; recover
+    // the decl-time parent the same way before resolving identity.
+    let http_response_parent = if bound_native_parent.as_ref().is_some_and(|(m, meth)| {
+        super::super::native_module::normalize_native_module_alias(m.as_str()) == "http"
+            && meth.as_str() == "ServerResponse"
+    }) {
+        Some(parent_val)
+    } else if let Some(obj) = subclass_this_object_ptr(this_box) {
+        let cid = crate::object::js_object_get_class_id(obj);
+        Some(crate::object::class_registry::js_get_dynamic_parent_value(
+            cid,
+        ))
+    } else {
+        None
+    };
+    if let Some(resolved) = http_response_parent {
+        if let Some(result) = crate::object::native_this_alias::maybe_alias_super_construction(
+            resolved, this_box, args_ptr, args_len,
+        ) {
+            return result;
+        }
     }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
     // constructor returns a fresh NaN-boxed cell and does NOT mutate the
