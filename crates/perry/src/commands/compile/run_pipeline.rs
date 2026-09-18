@@ -617,6 +617,15 @@ pub fn run_with_parse_cache(
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
     }
 
+    // #10574: `--function-source=header` elides function bodies from the
+    // image. Promote to `PERRY_FUNCTION_SOURCE` before rayon codegen so
+    // the object-cache key and the string-pool emitter observe one knob.
+    // Only set (never unset): an already-exported env value wins, matching
+    // `--debug-symbols` / `PERRY_DEBUG_SYMBOLS`.
+    if args.function_source == "header" && std::env::var_os("PERRY_FUNCTION_SOURCE").is_none() {
+        std::env::set_var("PERRY_FUNCTION_SOURCE", "header");
+    }
+
     // `--report-size` needs a symbol table to attribute size by crate, but not
     // full DWARF — reuse the lighter `PERRY_KEEP_SYMBOLS` strip-skip knob
     // rather than `PERRY_DEBUG_SYMBOLS`, so asking for a size report doesn't

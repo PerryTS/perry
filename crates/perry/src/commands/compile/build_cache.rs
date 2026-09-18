@@ -32,6 +32,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "HARMONYOS_SDK_HOME",
     "PERRY_DEBUG_INIT",
     "PERRY_DEBUG_SYMBOLS",
+    "PERRY_FUNCTION_SOURCE",
     "PERRY_LLVM_CLANG",
     // exp/llvm-inprocess: selects the in-process LLVM backend for .ll -> .o;
     // a different backend means different object bytes.

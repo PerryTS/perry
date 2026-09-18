@@ -220,6 +220,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         no_auto_optimize: false,
         debug_symbols: false,
         report_size: false,
+        function_source: "full".to_string(),
         no_cache: false,
         // `perry run` has no `--cache-dir` flag; the resolver still honors
         // `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` / package.json

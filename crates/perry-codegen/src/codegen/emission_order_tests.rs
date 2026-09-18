@@ -611,3 +611,75 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
         );
     }
 }
+
+/// #10574 Part 2: `--function-source=header` must drop the body and keep the
+/// name plus parameter names, which is what name-extraction and DI consume.
+#[test]
+fn header_mode_replaces_bodies_with_a_di_header() {
+    let _guard = super::function_source_header::override_function_source_header_mode(true);
+    let mut module = empty_module("function_source_header.ts");
+    let mut foo = method_fn(100, "foo");
+    foo.params = vec![
+        Param {
+            id: 1,
+            name: "a".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        },
+        Param {
+            id: 2,
+            name: "b".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        },
+    ];
+    module.functions.push(foo);
+    module.closure_source_text.insert(
+        100,
+        perry_hir::FunctionSourceMetadata {
+            text: "function foo(a, b) {\n  return 'DISTINCTIVE_BODY_10574';\n}".to_string(),
+            is_non_strict_ordinary: true,
+        },
+    );
+    module
+        .classes
+        .push(plain_class(3, "Envelope", method_fn(200, "m")));
+    module.closure_source_text.insert(
+        200,
+        perry_hir::FunctionSourceMetadata {
+            text: "m() { return 'METHOD_BODY_10574'; }".to_string(),
+            is_non_strict_ordinary: false,
+        },
+    );
+    module.class_source_text.insert(
+        3,
+        "class Envelope { m() { return 'METHOD_BODY_10574'; } }".to_string(),
+    );
+    let emitted = ir(&module);
+    assert!(
+        !emitted.contains("DISTINCTIVE_BODY_10574"),
+        "header mode must not retain the function body"
+    );
+    assert!(
+        !emitted.contains("METHOD_BODY_10574"),
+        "header mode must not retain method or class bodies"
+    );
+    assert!(
+        emitted.contains("source elided"),
+        "header mode must emit the elided-source stand-in"
+    );
+    assert!(
+        emitted.contains("function foo(a, b)"),
+        "header must keep the name and parameter names"
+    );
+    assert!(
+        emitted.contains("class Envelope"),
+        "class toString header must keep the class name"
+    );
+}

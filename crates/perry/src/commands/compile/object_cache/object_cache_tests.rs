@@ -737,6 +737,7 @@ fn key_changes_with_codegen_env_vars() {
     let opts = empty_opts();
     for var in [
         "PERRY_DEBUG_SYMBOLS",
+        "PERRY_FUNCTION_SOURCE",
         "PERRY_LLVM_CLANG",
         "PERRY_LLVM_INPROCESS",
         "PERRY_WRITE_BARRIERS",

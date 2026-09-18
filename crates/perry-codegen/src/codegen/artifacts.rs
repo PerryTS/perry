@@ -1880,7 +1880,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             if let Some(sym) = func_names.get(&f.id) {
                 user_fn_source.push((
                     format!("__perry_wrap_{}", sym),
-                    src.text.clone(),
+                    super::function_source_header::retained_function_text(hir, f.id, &src.text),
                     src.is_non_strict_ordinary,
                 ));
             }
@@ -1907,7 +1907,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
     for (func_id, src) in materialized_closure_sources {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
-        user_fn_source.push((sym, src.text.clone(), src.is_non_strict_ordinary));
+        user_fn_source.push((
+            sym,
+            super::function_source_header::retained_function_text(hir, *func_id, &src.text),
+            src.is_non_strict_ordinary,
+        ));
     }
 
     // #9468: method/accessor bodies are raw symbols rather than closure
@@ -1943,6 +1947,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
 
     progress.checkpoint("runtime registration metadata");
 
+    let class_source_elided = super::function_source_header::elide_class_sources(hir);
+    let class_source_text = class_source_elided
+        .as_ref()
+        .unwrap_or(&hir.class_source_text);
     emit_string_pool(
         llmod,
         strings,
@@ -1954,7 +1962,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         class_table,
         imported_class_stubs,
         &hir.class_display_names,
-        &hir.class_source_text,
+        &class_source_text,
         &ctor_arity_overrides,
         closure_rest_params,
         closure_arities,
