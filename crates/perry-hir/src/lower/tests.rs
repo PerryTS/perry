@@ -15,6 +15,7 @@ fn make_ctx() -> LoweringContext {
     LoweringContext::new("test.ts")
 }
 
+mod instanceof_rhs;
 mod literal_shape;
 
 #[test]
