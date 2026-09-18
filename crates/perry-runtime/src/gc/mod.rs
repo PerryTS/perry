@@ -49,6 +49,10 @@ pub(crate) use policy::young_generation_holds_a_nursery;
 pub use policy::*;
 mod progress;
 pub use progress::*;
+mod collection_points;
+#[cfg(test)]
+pub(crate) use collection_points::arm_collection_point;
+pub(crate) use collection_points::collection_point;
 mod heap_budget;
 pub(crate) use heap_budget::*;
 mod pressure;

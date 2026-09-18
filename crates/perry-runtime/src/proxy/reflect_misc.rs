@@ -106,8 +106,13 @@ pub extern "C" fn js_reflect_apply(f: f64, this_arg: f64, args_array: f64) -> f6
     if !is_callable(f) {
         return throw_type_error("Reflect.apply target is not a function");
     }
+    // Building the list allocates (index keys) and can run user getters, so the
+    // callee and the receiver are rooted across it (#10532 review).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee = scope.root_nanbox_f64(f);
+    let receiver = scope.root_nanbox_f64(this_arg);
     let args = create_list_from_array_like(args_array);
-    call_with_this_and_args(f, this_arg, &args)
+    call_with_this_and_args(callee.get_nanbox_f64(), receiver.get_nanbox_f64(), &args)
 }
 
 /// `Reflect.defineProperty(obj, key, descriptor)` — returns `false` when the
