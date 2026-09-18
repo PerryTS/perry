@@ -33,6 +33,8 @@ mod let_buffer_views;
 mod let_object_facts;
 mod let_stmt;
 mod let_stmt_facts;
+#[cfg(test)]
+mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
 #[cfg(test)]
