@@ -1247,7 +1247,12 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     // shares the parent's class tables instead of building a second copy. Its
     // entry's `js_gc_init` then finds an image already installed and keeps it.
     let class_image = perry_runtime::object::class_image::current_image_handle();
-    std::thread::spawn(move || {
+    // #10399: a worker runs the module graph, so it needs the same stack
+    // headroom as the blocking pool — the program's static TLS block is
+    // carved from this same mapping (see `async_bridge::RUNTIME`).
+    let spawned = std::thread::Builder::new()
+        .stack_size(crate::common::async_bridge::blocking_thread_stack_size())
+        .spawn(move || {
         perry_runtime::object::class_image::adopt_image(class_image);
         let previous_env = apply_worker_env(&thread_options.env);
         CURRENT_WORKER_ID.with(|id| id.set(worker_id));
@@ -1320,6 +1325,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         };
         push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
     });
+    if spawned.is_err() {
+        push_parent_event(WorkerEvent::Error(worker_id));
+        push_parent_event(WorkerEvent::Exit(worker_id, 1));
+    }
 
     object_value(worker_obj)
 }
