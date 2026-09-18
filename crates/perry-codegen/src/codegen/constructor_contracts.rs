@@ -4,14 +4,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use super::ctor_arity::{context_free_ctor_param_count, UNRESOLVED_PARENT_FWD_ARITY};
+use super::ctor_arity::{context_free_ctor_abi, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY};
 use super::opts::{CompileOptions, ImportedClass};
 
 type Symbol = (String, String);
 
 enum Contract {
-    Params(usize),
-    Parent(Symbol, usize),
+    Params(CtorAbi),
+    Parent(Symbol, CtorAbi),
 }
 
 /// A compact graph of constructor edges in each defining module's scope.
@@ -23,7 +23,7 @@ pub struct ConstructorContracts {
 
 /// The only graph-wide constructor data needed during parallel codegen.
 pub struct ResolvedConstructorContracts {
-    arities: BTreeMap<Symbol, usize>,
+    abis: BTreeMap<Symbol, CtorAbi>,
 }
 
 impl ConstructorContracts {
@@ -51,26 +51,30 @@ impl ConstructorContracts {
             imports.entry(imported.effective_name()).or_insert(imported);
         }
         for class in &module.classes {
-            let contract = if let Some(count) = context_free_ctor_param_count(class) {
-                Contract::Params(count)
+            let contract = if let Some(abi) = context_free_ctor_abi(class) {
+                Contract::Params(abi)
             } else {
                 let mut parent = class.extends_name.as_deref();
                 let mut visited = BTreeSet::new();
-                let mut contract = Contract::Params(UNRESOLVED_PARENT_FWD_ARITY);
+                let mut contract =
+                    Contract::Params(CtorAbi::positional(UNRESOLVED_PARENT_FWD_ARITY));
                 while let Some(name) = parent {
                     if !visited.insert(name) {
                         break;
                     }
                     if let Some(local) = locals.get(name) {
                         if let Some(ctor) = &local.constructor {
-                            contract = Contract::Params(ctor.params.len());
+                            // The forwarder hands every slot to this ctor's
+                            // symbol untouched, so it inherits its ABI — packed
+                            // trailing arrays included (#10484).
+                            contract = Contract::Params(CtorAbi::from_params(&ctor.params));
                             break;
                         }
                         parent = local.extends_name.as_deref();
                     } else if let Some(imported) = imports.get(name) {
                         contract = Contract::Parent(
                             (imported.source_prefix.clone(), imported.name.clone()),
-                            imported.constructor_param_count,
+                            imported.ctor_abi(),
                         );
                         break;
                     } else {
@@ -90,26 +94,26 @@ impl ConstructorContracts {
         for symbol in self.contracts.keys() {
             resolve(symbol, &self.contracts, &mut resolved, &mut BTreeSet::new());
         }
-        ResolvedConstructorContracts { arities: resolved }
+        ResolvedConstructorContracts { abis: resolved }
     }
 }
 
 fn resolve(
     symbol: &Symbol,
     contracts: &BTreeMap<Symbol, Contract>,
-    resolved: &mut BTreeMap<Symbol, usize>,
+    resolved: &mut BTreeMap<Symbol, CtorAbi>,
     visiting: &mut BTreeSet<Symbol>,
-) -> usize {
-    if let Some(count) = resolved.get(symbol) {
-        return *count;
+) -> CtorAbi {
+    if let Some(abi) = resolved.get(symbol) {
+        return *abi;
     }
     if !visiting.insert(symbol.clone()) {
         // Cyclic heritage has no constructor-bearing ancestor. Keep the
         // standalone fallback and, crucially, the same ABI on every edge.
-        return UNRESOLVED_PARENT_FWD_ARITY;
+        return CtorAbi::positional(UNRESOLVED_PARENT_FWD_ARITY);
     }
-    let count = match &contracts[symbol] {
-        Contract::Params(count) => *count,
+    let abi = match &contracts[symbol] {
+        Contract::Params(abi) => *abi,
         Contract::Parent(parent, fallback) => {
             if contracts.contains_key(parent) {
                 resolve(parent, contracts, resolved, visiting)
@@ -121,8 +125,8 @@ fn resolve(
         }
     };
     visiting.remove(symbol);
-    resolved.insert(symbol.clone(), count);
-    count
+    resolved.insert(symbol.clone(), abi);
+    abi
 }
 
 impl ResolvedConstructorContracts {
@@ -132,16 +136,22 @@ impl ResolvedConstructorContracts {
             .classes
             .iter()
             .map(|class| {
-                let count = self.arities[&(prefix.to_owned(), class.name.clone())];
-                (class.name.clone(), count)
+                let abi = self.abis[&(prefix.to_owned(), class.name.clone())];
+                (class.name.clone(), abi.param_count)
             })
             .collect();
         for imported in &mut opts.imported_classes {
-            if let Some(count) = self
-                .arities
+            if let Some(abi) = self
+                .abis
                 .get(&(imported.source_prefix.clone(), imported.name.clone()))
             {
-                imported.constructor_param_count = *count;
+                imported.constructor_param_count = abi.param_count;
+                // #10484: a no-own-ctor class emits a positional forwarder into
+                // its ancestor's symbol, so the `new` site here must pack the
+                // trailing arrays the ANCESTOR declares, not the (empty) set the
+                // forwarder's own class HIR shows.
+                imported.constructor_has_rest = abi.has_rest;
+                imported.constructor_has_synthetic_arguments = abi.has_synthetic_arguments;
             }
         }
     }

@@ -651,6 +651,14 @@ fn compute_object_cache_key_with_env(
                 buf.push_str(namespace);
                 buf.push('|');
             }
+            // #10484: the constructor's trailing-array layout decides how a
+            // `new` site packs its arguments. Only constructors reading
+            // `arguments` add a component, so other keys stay byte-identical.
+            if c.constructor_has_synthetic_arguments {
+                buf.push_str(":ctor_arguments=1:ctor_rest=");
+                buf.push_str(if c.constructor_has_rest { "1" } else { "0" });
+                buf.push('|');
+            }
             buf.push_str("method_rest=");
             buf.push_str(
                 &c.method_has_rest

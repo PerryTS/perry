@@ -190,7 +190,9 @@ mod closure_collect;
 mod constructor_contracts;
 pub use constructor_contracts::{ConstructorContracts, ResolvedConstructorContracts};
 mod ctor_arity;
-pub use ctor_arity::{context_free_ctor_param_count, UNRESOLVED_PARENT_FWD_ARITY};
+pub use ctor_arity::{
+    context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
+};
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -2476,6 +2478,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         has_own_constructor: ic.has_own_constructor,
                         has_instance_fields: ic.has_instance_fields,
                         has_rest: ic.constructor_has_rest,
+                        has_synthetic_arguments: ic.constructor_has_synthetic_arguments,
                     },
                 )
             })

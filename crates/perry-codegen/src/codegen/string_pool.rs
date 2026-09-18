@@ -7,6 +7,7 @@ use crate::module::LlModule;
 use crate::strings::StringPool;
 use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 
+use super::ctor_arity::constructor_layout_params;
 use super::helpers::{sanitize, sanitize_member, scoped_static_method_name};
 use super::retained_source_pool::{SourcePool, SourceRange};
 use super::spec_function_length;
@@ -950,12 +951,15 @@ pub(super) fn emit_string_pool(
                     .unwrap_or(0)
             });
         let ctor_symbol = format!("{}__{}_constructor", module_prefix, class_name);
+        // The trailing-array layout of the emitted standalone ctor. A class with
+        // no own ctor emits the `super(...args)` forwarder, which adopts the
+        // nearest local ancestor ctor's params positionally and hands every slot
+        // to that ctor unchanged, so it takes the same layout (#10484: a dynamic
+        // `new Sub(x)` must put all args in the ancestor's `arguments` slot).
+        let shape_params = constructor_layout_params(class, classes, ctor_params);
         // #wall3: record the rest-param position (in USER params) so the runtime
         // bundles trailing args at the dynamic member-new dispatch path.
-        if let Some(rest_idx) = class
-            .constructor
-            .as_ref()
-            .and_then(|c| c.params.iter().position(|p| p.is_rest))
+        if let Some(rest_idx) = shape_params.and_then(|params| params.iter().position(|p| p.is_rest))
         {
             ctor_rest_regs.push((ctor_symbol.clone(), rest_idx));
         }
@@ -964,13 +968,17 @@ pub(super) fn emit_string_pool(
         // a synthesized `arguments` slot receives ALL args (from index 0), a
         // user rest param only the args from the rest position onward.
         {
-            let last = class.constructor.as_ref().and_then(|c| c.params.last());
-            let ctor_has_synth = last.map(|p| p.arguments_object.is_some()).unwrap_or(false);
-            let ctor_has_rest = class
-                .constructor
-                .as_ref()
-                .map(|c| {
-                    c.params
+            // `any`, not `last`: a class declared inside a function carries
+            // synthesized `__perry_cap_*` params AFTER the `arguments` slot, so
+            // reading only the final param missed every capturing class —
+            // including every class in a compiled CommonJS module, whose
+            // wrapper function is what they capture from (#10484).
+            let ctor_has_synth = shape_params
+                .map(|params| params.iter().any(|p| p.arguments_object.is_some()))
+                .unwrap_or(false);
+            let ctor_has_rest = shape_params
+                .map(|params| {
+                    params
                         .iter()
                         .any(|p| p.is_rest && p.arguments_object.is_none())
                 })
