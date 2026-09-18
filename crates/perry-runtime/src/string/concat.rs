@@ -104,15 +104,18 @@ pub(crate) fn canonicalize_surrogate_pairs(ptr: *mut StringHeader) -> *mut Strin
 
 /// True when the `len` bytes at `data` are all ASCII (`< 0x80`), or the slice
 /// is empty/null. Used to decide whether a concat result may be stored inline
-/// through the concat helpers' ASCII SSO fast path.
+/// through the concat helpers' ASCII SSO fast path. `<[u8]>::is_ascii`
+/// inspects the bytes word-at-a-time and is total over arbitrary byte
+/// strings — the only sound way to answer this for a Perry heap-string
+/// payload, which is not guaranteed valid UTF-8 (see
+/// [`str_bytes_ascii_from_jsvalue`](super::str_bytes_ascii_from_jsvalue)'s
+/// doc for why the header's `utf16_len == byte_len` cannot stand in for it).
 #[inline]
 fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
     if data.is_null() || len == 0 {
         return true;
     }
-    unsafe { std::slice::from_raw_parts(data, len as usize) }
-        .iter()
-        .all(|&b| b < 0x80)
+    unsafe { std::slice::from_raw_parts(data, len as usize) }.is_ascii()
 }
 
 /// `ptr::copy_nonoverlapping` with a byte loop for short payloads: the libc
@@ -194,21 +197,24 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     // NaN-boxed — keeps the dynamic arm. One side must still be a REAL
     // string, so the annotation-lie semantics of the dynamic arm are
     // unchanged for number+number.
+    // Digits from `fast_itoa_u32` are always ASCII (`'0'..='9'`, no sign — the
+    // admission range below is non-negative), so this arm's third tuple
+    // element is a constant `true`, never a scan.
     #[inline]
-    fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<(*const u8, u32)> {
+    fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<(*const u8, u32, bool)> {
         let bits = bits_value.to_bits();
         let tag = bits >> 48;
         let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
         if is_plain_f64 && bits_value.fract() == 0.0 && (0.0..=999_999_999.0).contains(&bits_value)
         {
             let len = fast_itoa_u32(bits_value as u32, buf);
-            Some((buf.as_ptr(), len as u32))
+            Some((buf.as_ptr(), len as u32, true))
         } else {
             None
         }
     }
-    let l_str = str_bytes_from_jsvalue(l_value, &mut scratch_l);
-    let r_str = str_bytes_from_jsvalue(r_value, &mut scratch_r);
+    let l_str = str_bytes_ascii_from_jsvalue(l_value, &mut scratch_l);
+    let r_str = str_bytes_ascii_from_jsvalue(r_value, &mut scratch_r);
     if let (Some(l), Some(r)) = (l_str, r_str) {
         // Two real strings: straight to assembly, no number buffer touched
         // (the itoa scratch below would cost this path a 32-byte memset).
@@ -231,9 +237,9 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
         }
         _ => {}
     }
-    // `str_bytes_from_jsvalue` returns `None` for exactly the non-string
-    // values, so every remaining pair — number+number included — is the
-    // annotation-lie arm and nothing else.
+    // `str_bytes_ascii_from_jsvalue` returns `None` for exactly the
+    // non-string values, so every remaining pair — number+number included —
+    // is the annotation-lie arm and nothing else.
     unsafe { crate::value::js_dynamic_string_or_number_add(l_value, r_value) }
 }
 
@@ -266,8 +272,34 @@ const CONCAT_MEMO_MAX_BYTES: u32 = 12;
 
 // Candidates per governor window.
 const MEMO_WINDOW: u32 = 4096;
-// Earn the probe: at least a quarter of a window's candidates must hit.
-const MEMO_MIN_HIT_SHIFT: u32 = 2;
+// Earn the probe: at least half a window's candidates must hit.
+//
+// This was `2` (a 25% floor) — chosen as a plausible fraction, never measured
+// against the probe's own cost. A differential instruction-count probe
+// (`"abcdefgN" + "xJJ"`, N ∈ 8, JJ ∈ 0..79 — 640 distinct 11-byte results
+// against the memo's 512 slots, vs an 8-distinct 10-byte set that hits
+// ~100%) against the SAME binary with the governor's decision forced ON/OFF
+// via a temporary env knob (since removed) put the break-even — the hit rate
+// at which the memo's probe cost equals its allocation savings — at:
+//
+//   before F0/F1/F2 (double ASCII scan + stack-buffer memo probe): ~69-72%
+//   after F0/F1 + F2's UNSOUND positive header-ASCII path (since reverted,
+//     see `str_bytes_ascii_from_jsvalue`'s doc):                   ~54%
+//   after F0/F1 + F2 corrected to a sound header-negative-filter
+//     -then-scan (current code):                                  ~50.6%
+//
+// (`cost / (cost + save)`, reading `cost` off the low-hit-rate workload and
+// `save` off the ~100%-hit one — both relative to the same memo-off
+// baseline, which the `long73` memo-ineligible control confirmed was flat
+// across the forced on/off runs, so the two workloads' allocation-path costs
+// are comparable). The break-even barely moved between the unsound and
+// sound versions of F2, because this governor times the MEMO PROBE itself
+// (hash/lookup/admit, F1's concern) — not the ASCII determination that
+// gates whether `concat_byte_parts` reaches the probe at all, which F2
+// changed. `1` (a 50% floor) was already the closest power-of-two to the
+// unsound path's ~54%, and it is still the closest power-of-two to the
+// sound path's ~50.6% — no change from the F2 fix.
+const MEMO_MIN_HIT_SHIFT: u32 = 1;
 // A hostile workload ends up probing one window in 2^8 rather than one in two.
 const MEMO_MAX_BACKOFF: u32 = 8;
 
@@ -393,11 +425,33 @@ crate::perry_thread_local! {
         const { std::cell::UnsafeCell::new([std::ptr::null_mut(); CONCAT_MEMO_SIZE]) };
 }
 
-/// Slot and admission tag from one hash walk. The tag is a different slice of
-/// the same digest, so two keys sharing a slot rarely share a tag.
+/// FNV-1a over concatenated content `a ++ b`, without materialising the
+/// concatenation. FNV-1a is a streaming hash — folding in `a`'s bytes then
+/// `b`'s bytes is bit-identical to folding in `(a ++ b)`'s bytes — so a
+/// two-operand walk needs no scratch buffer at all. This is the memo's
+/// analogue of the intern table's `fnv1a_concat`, over raw byte slices
+/// instead of `StringHeader` pointers (the memo's operands may be an SSO
+/// scratch view, not a heap header).
 #[inline]
-fn concat_memo_slot_and_tag(bytes: &[u8]) -> (usize, u8) {
-    let h = concat_memo_hash(bytes);
+fn concat_memo_hash_parts(a: &[u8], b: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &byte in a {
+        h ^= byte as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    for &byte in b {
+        h ^= byte as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// Slot and admission tag from one hash walk over `a ++ b`. The tag is a
+/// different slice of the same digest, so two keys sharing a slot rarely
+/// share a tag.
+#[inline]
+fn concat_memo_slot_and_tag_parts(a: &[u8], b: &[u8]) -> (usize, u8) {
+    let h = concat_memo_hash_parts(a, b);
     // FNV-1a avalanches poorly in its high bits, so slicing a tag straight out
     // of `h >> 32` gave two distinct keys the same tag about half the time —
     // measured 256,516 admissions in 501,000 probes where ~1/128 was intended,
@@ -413,36 +467,43 @@ fn concat_memo_slot_and_tag(bytes: &[u8]) -> (usize, u8) {
     )
 }
 
+/// A cached string whose content is exactly `a ++ b`, or null. The compare is
+/// done in the same two parts, against the cached entry's payload — no
+/// scratch buffer, and a hash collision is a miss, never a wrong answer.
 #[inline]
-fn concat_memo_hash(bytes: &[u8]) -> u64 {
-    // FNV-1a over the result bytes. Content-addressed, so two different
-    // operand splits that produce the same string share one entry.
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h
-}
-
-/// A cached string with exactly these bytes, or null. The byte compare makes
-/// a hash collision a miss, never a wrong answer.
-#[inline]
-fn concat_memo_lookup(slot: usize, bytes: &[u8]) -> *mut StringHeader {
+fn concat_memo_lookup_parts(slot: usize, a: &[u8], b: &[u8]) -> *mut StringHeader {
     let cached = CONCAT_MEMO.with(|c| unsafe { (*c.get())[slot] });
     if cached.is_null() {
         return std::ptr::null_mut();
     }
     unsafe {
-        if (*cached).byte_len as usize != bytes.len() {
+        if (*cached).byte_len as usize != a.len() + b.len() {
             return std::ptr::null_mut();
         }
         let data = crate::string::string_data(cached);
-        if std::slice::from_raw_parts(data, bytes.len()) != bytes {
+        if !a.is_empty() && std::slice::from_raw_parts(data, a.len()) != a {
+            return std::ptr::null_mut();
+        }
+        if !b.is_empty() && std::slice::from_raw_parts(data.add(a.len()), b.len()) != b {
             return std::ptr::null_mut();
         }
     }
     cached
+}
+
+/// Single-slice callers (the `"prefix" + i` arm in
+/// [`js_string_concat_value`], which already has its two pieces contiguous
+/// in a scratch buffer by the time it probes) go through the two-slice
+/// primitives with an empty second operand — one hash/lookup definition,
+/// not two.
+#[inline]
+fn concat_memo_slot_and_tag(bytes: &[u8]) -> (usize, u8) {
+    concat_memo_slot_and_tag_parts(bytes, &[])
+}
+
+#[inline]
+fn concat_memo_lookup(slot: usize, bytes: &[u8]) -> *mut StringHeader {
+    concat_memo_lookup_parts(slot, bytes, &[])
 }
 
 #[inline]
@@ -482,16 +543,39 @@ pub(crate) fn test_clear_concat_memo() {
     });
 }
 
+/// Byte view over a `(ptr, len)` operand, empty for a null/zero-length one.
+/// `slice::from_raw_parts` requires a non-null, aligned pointer even at
+/// length 0, so the null check must come first.
+///
+/// # Safety
+/// `ptr` must be valid for `len` bytes when non-null.
+#[inline(always)]
+unsafe fn operand_byte_slice<'a>(ptr: *const u8, len: u32) -> &'a [u8] {
+    if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len as usize)
+    }
+}
+
 /// Shared tail of [`js_string_concat_box`]: assemble two raw byte slices
 /// (each a real string's payload or an itoa'd integer) into an SSO immediate
 /// when the total fits five ASCII bytes, a heap `StringHeader` otherwise.
+///
+/// The third tuple element is whether that operand is pure ASCII, computed
+/// once by the caller — see
+/// [`str_bytes_ascii_from_jsvalue`](super::str_bytes_ascii_from_jsvalue) for
+/// how (a sound header-filter-then-scan for a heap string, a plain scan for
+/// an SSO one, or a constant `true` for an itoa'd operand). Taking it as a
+/// precomputed bit here, instead of re-deriving it with a fresh byte scan, is
+/// F0: this function used to scan both operands for ASCII-ness twice (once
+/// via `bytes_all_ascii` up front, again via `l_slice.is_ascii() &&
+/// r_slice.is_ascii()` on the heap path below with `both_ascii` sitting
+/// unused in scope) — one real scan per operand now, not two.
 #[inline(always)]
-fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
+fn concat_byte_parts(l: (*const u8, u32, bool), r: (*const u8, u32, bool)) -> f64 {
     let total_blen = l.1 + r.1;
-
-    // Keep the existing ASCII-only concat fast path. Non-ASCII results use
-    // the heap path, which also handles WTF-8 surrogate-pair boundaries.
-    let both_ascii = bytes_all_ascii(l.0, l.1) && bytes_all_ascii(r.0, r.1);
+    let both_ascii = l.2 && r.2;
 
     // SSO fast path — assemble the result inline when it fits (≤ 5
     // bytes). Pure bit arithmetic, no heap touch.
@@ -509,33 +593,28 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
         }
     }
 
-    // Memo probe, ahead of the allocation: assemble the result into a stack
-    // buffer and look it up by content. Restricted to short ASCII results, so
-    // `flags`/`utf16_len` are trivially `0`/`total_blen` and the surrogate
-    // canonicalization below is a no-op — the cached string is bit-identical
-    // to what the heap path would have built.
+    // Byte views over both operands — used by the memo probe below and by
+    // the heap path's copy (and, on the non-ASCII arm only, its UTF-16/flags
+    // walk). Built once and shared, rather than re-derived per use.
+    let l_slice: &[u8] = unsafe { operand_byte_slice(l.0, l.1) };
+    let r_slice: &[u8] = unsafe { operand_byte_slice(r.0, r.1) };
+
+    // Memo probe, ahead of the allocation: hash and look up `l_slice ++
+    // r_slice` directly (F1 — no stack buffer to materialise the
+    // concatenation just to ask about it; FNV-1a is a streaming hash and the
+    // compare runs in the same two parts against the cached entry). Restricted
+    // to short ASCII results, so `flags`/`utf16_len` are trivially
+    // `0`/`total_blen` and the surrogate canonicalization below is a no-op —
+    // the cached string is bit-identical to what the heap path would have
+    // built.
     let memoizable =
         both_ascii && total_blen <= CONCAT_MEMO_MAX_BYTES && concat_memo_should_probe();
-    let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
     let mut memo_slot = 0usize;
     let mut memo_admitted = false;
     if memoizable {
-        unsafe {
-            if l.1 > 0 {
-                std::ptr::copy_nonoverlapping(l.0, memo_buf.as_mut_ptr(), l.1 as usize);
-            }
-            if r.1 > 0 {
-                std::ptr::copy_nonoverlapping(
-                    r.0,
-                    memo_buf.as_mut_ptr().add(l.1 as usize),
-                    r.1 as usize,
-                );
-            }
-        }
-        let bytes = &memo_buf[..total_blen as usize];
-        let (slot, tag) = concat_memo_slot_and_tag(bytes);
+        let (slot, tag) = concat_memo_slot_and_tag_parts(l_slice, r_slice);
         memo_slot = slot;
-        let hit = concat_memo_lookup(memo_slot, bytes);
+        let hit = concat_memo_lookup_parts(memo_slot, l_slice, r_slice);
         if !hit.is_null() {
             concat_memo_note_hit();
             return f64::from_bits(crate::value::JSValue::string_ptr(hit).bits());
@@ -546,26 +625,11 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
     }
 
     // Heap path — allocate a StringHeader and memcpy. Decode both
-    // operands' byte slices via `str_bytes_from_jsvalue` (already done
+    // operands' byte slices via `str_bytes_ascii_from_jsvalue` (already done
     // above) and write directly into the new header's payload region.
     let (ptr, data_ptr) = string_storage_alloc(total_blen);
     unsafe {
-        // ASCII-fast utf16 length: count bytes < 0x80 in both slices in
-        // one pass. Most concat results are pure ASCII (number formatting,
-        // ID building, slug construction, etc.); falling back to the
-        // full Grisu-style codepoint walk for non-ASCII keeps spec
-        // compliance for the edge case.
-        let l_slice = if !l.0.is_null() {
-            std::slice::from_raw_parts(l.0, l.1 as usize)
-        } else {
-            &[]
-        };
-        let r_slice = if !r.0.is_null() {
-            std::slice::from_raw_parts(r.0, r.1 as usize)
-        } else {
-            &[]
-        };
-        let (utf16_len, flags) = if l_slice.is_ascii() && r_slice.is_ascii() {
+        let (utf16_len, flags) = if both_ascii {
             (total_blen, 0)
         } else {
             // Sum each operand's UTF-16 length independently (concatenating two
@@ -794,6 +858,17 @@ pub extern "C" fn js_string_concat_value(
         // and heap-allocates. Restricted to a plain ASCII prefix so the cached
         // string is bit-identical to what the block below would build
         // (flags == 0, utf16_len == byte_len).
+        //
+        // `prefix_u16 == prefix_blen` is NOT the runtime's ASCII predicate —
+        // it is necessary but not sufficient: a truncated multi-byte lead
+        // byte can make a non-ASCII `prefix` coincide on `utf16_len ==
+        // byte_len` too (see `str_bytes_ascii_from_jsvalue`'s doc in
+        // `string/mod.rs`, and `string/compare.rs`'s `utf16_cmp_bytes` doc,
+        // for the exact mechanism and a concrete payload). It DOES soundly
+        // rule out non-ASCII when the lengths differ, so it stays first in
+        // the chain as a free short-circuit — but when it's true, the
+        // `bytes_all_ascii` scan below is still required, not redundant
+        // with it.
         let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
             && is_valid_string_ptr(prefix)
             && prefix_u16 == prefix_blen

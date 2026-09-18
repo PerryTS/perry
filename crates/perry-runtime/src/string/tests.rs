@@ -1197,6 +1197,137 @@ fn concat_memo_declines_non_ascii_prefixes() {
     }
 }
 
+// ── #6085-class regression: a header that LIES about being ASCII ──────────
+//
+// Perry heap-string payloads are not guaranteed valid UTF-8 (WTF-8 lone
+// surrogates, `Buffer.toString` of arbitrary bytes, FFI blobs — #6085). The
+// header's `utf16_len == byte_len` predicate is sound as a NEGATIVE filter
+// (unequal ⟹ definitely not ASCII) but not as a positive one: a payload
+// ending in a truncated multi-byte lead byte can coincide on equal lengths
+// without being ASCII — `compute_utf16_len_wtf8` charges a truncated lead
+// its full nominal unit count while the payload holds fewer bytes than that
+// sequence declares. `[0xC3]` (a lone 2-byte lead) and `[0xF0, 0x41]` (a
+// truncated 4-byte lead followed by an unrelated byte) both report
+// `utf16_len == byte_len` while being non-ASCII — the exact pair
+// `string/compare.rs`'s `cached_utf16_len_predicate_would_misclassify_these`
+// pins for the same reason. (`[0x80]`, a bare continuation byte, is NOT in
+// this class: `compute_utf16_len_wtf8` skips it as "continuation byte in
+// lead position" without counting a unit, so it reports `utf16_len == 0 !=
+// byte_len == 1` — the negative filter already catches it correctly, no
+// scan needed.)
+//
+// I could not find a TypeScript-reachable path that constructs such a
+// payload today: every raw-bytes-to-string channel that could plausibly
+// carry attacker/arbitrary bytes — `Buffer.toString` (all seven encodings,
+// `buffer/encode.rs`), `TextDecoder.decode` (`text.rs::decode_bytes`), and
+// every `bun:ffi` string-returning path (`read_cstring_value`,
+// `dlopen.rs`'s `CString`/`cstring` conversions) — validates via
+// `str::from_utf8`/`from_utf8_lossy` (or is fed a Rust `&str`, valid by
+// construction) before ever calling `js_string_from_bytes`; `#609` closed
+// the same construction sites for a related UB hazard and the fix happens
+// to guarantee well-formed output too. So these are Rust-level regression
+// tests against `js_string_from_bytes` directly (the same technique
+// `string/compare.rs`'s own corpus and `tests_guard_page.rs` use) rather
+// than a gap test: `js_string_from_bytes` is a `pub extern "C"` entry point
+// whose own contract must hold for any bytes, whether or not today's call
+// graph happens to always validate first.
+
+/// [`str_bytes_ascii_from_jsvalue`] must not trust the header's equal-lengths
+/// coincidence — it must fall back to a real (word-at-a-time, always sound)
+/// byte scan whenever the header is this ambiguous.
+#[test]
+fn ascii_probe_falls_back_to_a_scan_when_the_header_lies() {
+    for bytes in [&[0xC3u8][..], &[0xF0u8, 0x41][..]] {
+        let hdr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        unsafe {
+            assert_eq!(
+                (*hdr).utf16_len,
+                (*hdr).byte_len,
+                "{bytes:?}: header must (wrongly) report equal lengths, \
+                 or this test is not exercising the hazard"
+            );
+        }
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(hdr).bits());
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let (_ptr, len, ascii) = str_bytes_ascii_from_jsvalue(value, &mut scratch)
+            .expect("a real string operand must decode");
+        assert_eq!(len, bytes.len() as u32);
+        assert!(!ascii, "{bytes:?} is not ASCII");
+    }
+}
+
+/// The `"prefix" + i` memo probe ([`js_string_concat_value`]'s memoizable
+/// gate) must not memoize off a header-lying prefix either: `prefix_u16 ==
+/// prefix_blen` is a necessary pre-filter, not the ASCII predicate — the
+/// `bytes_all_ascii` scan after it is what actually decides.
+#[test]
+fn concat_memo_declines_a_prefix_whose_header_lies_about_being_ascii() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+    crate::string::concat::test_reset_memo_governor();
+
+    let malformed: &[u8] = &[0xC3];
+    let prefix = js_string_from_bytes(malformed.as_ptr(), malformed.len() as u32);
+    unsafe {
+        assert_eq!(
+            (*prefix).utf16_len,
+            (*prefix).byte_len,
+            "premise: header must (wrongly) report equal lengths"
+        );
+    }
+    // Same 3-call shape as `concat_memo_returns_one_object_for_equal_results`:
+    // the doorkeeper admits a result only on its SECOND sighting, so a
+    // 2-call probe cannot distinguish "declined outright" from "memoizable,
+    // just not admitted yet" — the second and third calls are the pair that
+    // would share identity if this prefix were (wrongly) memoized.
+    let _first = crate::string::js_string_concat_value(prefix, 1.0);
+    let second = crate::string::js_string_concat_value(prefix, 1.0);
+    let third = crate::string::js_string_concat_value(prefix, 1.0);
+    assert_ne!(
+        second as usize, third as usize,
+        "a header-lying malformed prefix must not be memoized"
+    );
+}
+
+/// The observable divergence the (now-fixed) header-trick bug produced:
+/// concatenating a malformed operand with an ordinary ASCII string, on
+/// either side, must come out `isWellFormed() === false` — the same answer
+/// [`js_string_concat`] (the general, always-scanning path) gives — instead
+/// of silently taking the ASCII fast path and reporting well-formed.
+#[test]
+fn concat_box_reports_not_well_formed_for_a_malformed_operand_either_side() {
+    let heap_bytes = |b: &[u8]| {
+        let p = js_string_from_bytes(b.as_ptr(), b.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(p).bits())
+    };
+    let heap_str = |s: &str| heap_bytes(s.as_bytes());
+
+    for malformed in [&[0xC3u8][..], &[0xF0u8, 0x41][..]] {
+        for (l, r, order) in [
+            (heap_bytes(malformed), heap_str("hello"), "malformed+ascii"),
+            (heap_str("hello"), heap_bytes(malformed), "ascii+malformed"),
+        ] {
+            let result = js_string_concat_box(l, r);
+            let jsval = crate::value::JSValue::from_bits(result.to_bits());
+            assert!(
+                jsval.is_string(),
+                "{malformed:?} {order}: both operands are real strings, \
+                 concat must not fall through to the dynamic-add arm"
+            );
+            let ptr = jsval.as_string_ptr();
+            assert!(
+                !ptr.is_null(),
+                "{malformed:?} {order}: empty-string sentinel unexpected here"
+            );
+            let well_formed = crate::value::js_is_truthy(js_string_is_well_formed(ptr));
+            assert_eq!(
+                well_formed, 0,
+                "{malformed:?} {order}: concat result must report isWellFormed() === false"
+            );
+        }
+    }
+}
+
 /// #9391: the memo must stop PROBING when it stops paying.
 ///
 /// `bench_gc_pressure` builds half a million distinct `"item_" + i` strings.

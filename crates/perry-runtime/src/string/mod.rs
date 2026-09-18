@@ -926,6 +926,70 @@ pub fn str_bytes_from_jsvalue(
     None
 }
 
+/// Sibling of [`str_bytes_from_jsvalue`] that additionally reports whether the
+/// operand is pure ASCII.
+///
+/// - Heap `STRING_TAG`: Perry heap-string payloads are **not guaranteed valid
+///   UTF-8** (WTF-8 lone surrogates, `Buffer.toString` of arbitrary bytes, FFI
+///   blobs — #6085), so the header's `utf16_len == byte_len` can only be used
+///   as a one-directional filter, never as the answer:
+///   - `utf16_len != byte_len` ⟹ **definitely not ASCII**, no scan needed.
+///     This direction is unconditional, not a well-formedness assumption:
+///     [`compute_utf16_len_wtf8`] advances exactly one byte and adds exactly
+///     one unit per iteration whenever it sees a byte `< 0x80`, so a payload
+///     of nothing but such bytes always produces `utf16_len == byte_len`
+///     exactly — the contrapositive holds for *any* byte content, valid or
+///     not.
+///   - `utf16_len == byte_len` does **not** imply ASCII: a truncated
+///     multi-byte lead byte is charged its full nominal unit count by
+///     [`compute_utf16_len_wtf8`] while the payload holds fewer bytes than
+///     that sequence would need, so a short malformed payload can coincide —
+///     `[0xC3]` (a lone 2-byte lead) records `utf16_len == 1 == byte_len`,
+///     and `[0xF0, 0x41]` (a truncated 4-byte lead followed by an unrelated
+///     byte) records `utf16_len == 2 == byte_len` — both non-ASCII. See
+///     `string/compare.rs`'s `utf16_cmp_bytes` doc, which documents the same
+///     hazard for the same reason. When the header is this ambiguous, fall
+///     back to an actual byte scan (`<[u8]>::is_ascii`, word-at-a-time, total
+///     over arbitrary bytes — no validity precondition at all).
+/// - Inline `SHORT_STRING_TAG`: [`JSValue::try_short_string`] stores whatever
+///   bytes it's given verbatim, with no ASCII requirement, and there is no
+///   header standing in for the scan — always run `is_ascii()` on the
+///   already-materialised ≤5-byte scratch, which is trivial at that size.
+///
+/// Left as a separate function (not a shared implementation with
+/// `str_bytes_from_jsvalue`) so the latter's ~50 other call sites pay no new
+/// cost for a bit they don't use.
+#[inline]
+pub fn str_bytes_ascii_from_jsvalue(
+    value: f64,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<(*const u8, u32, bool)> {
+    let bits = value.to_bits();
+    let jsval = crate::value::JSValue::from_bits(bits);
+    unsafe {
+        if jsval.is_short_string() {
+            let n = jsval.short_string_to_buf(scratch);
+            let ascii = scratch[..n].is_ascii();
+            return Some((scratch.as_ptr(), n as u32, ascii));
+        }
+        if jsval.is_string() {
+            let hdr = jsval.as_string_ptr();
+            if hdr.is_null() {
+                return Some((std::ptr::null(), 0, true));
+            }
+            let data = string_data(hdr);
+            let byte_len = (*hdr).byte_len;
+            // `!=` proves non-ASCII outright (see doc above); `==` is
+            // ambiguous — a truncated/malformed lead byte can coincidentally
+            // match — so only THAT arm pays for the real scan.
+            let ascii = (*hdr).utf16_len == byte_len
+                && std::slice::from_raw_parts(data, byte_len as usize).is_ascii();
+            return Some((data, byte_len, ascii));
+        }
+    }
+    None
+}
+
 /// Fast path: create a string from bytes known to be pure ASCII.
 /// Skips the `compute_utf16_len` byte scan — sets utf16_len = byte_len directly.
 #[inline]
