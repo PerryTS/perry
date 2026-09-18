@@ -892,7 +892,7 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_nanbox_f64(value);
     let mut out = Vec::with_capacity(len);
-    let mut moved: Vec<(usize, crate::gc::RuntimeHandle<'_>)> = Vec::new();
+    let mut moved: Vec<(usize, MovedElement<'_>)> = Vec::new();
     for i in 0..len {
         let idx_str = i.to_string();
         crate::gc::collection_point("reflect.list_from_array_like.index_key");
@@ -900,15 +900,44 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
         let obj_ptr =
             extract_pointer(source.get_nanbox_f64().to_bits()) as *const crate::ObjectHeader;
         let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
-        if value_can_move(v) {
-            moved.push((i, scope.root_nanbox_f64(v)));
+        match value_move_kind(v) {
+            ValueMoveKind::Tagged => {
+                moved.push((i, MovedElement::Tagged(scope.root_nanbox_f64(v))))
+            }
+            ValueMoveKind::RawHeapWord => moved.push((
+                i,
+                MovedElement::RawHeapWord(scope.root_heap_word_u64(v.to_bits())),
+            )),
+            ValueMoveKind::Immediate => {}
         }
         out.push(v);
     }
     for (index, handle) in moved {
-        out[index] = handle.get_nanbox_f64();
+        out[index] = match handle {
+            MovedElement::Tagged(h) => h.get_nanbox_f64(),
+            MovedElement::RawHeapWord(h) => f64::from_bits(h.get_heap_word_u64()),
+        };
     }
     out
+}
+
+/// Which rooting a `create_list_from_array_like` element needs, if any.
+enum ValueMoveKind {
+    /// No handle needed: an immediate value no collection can touch.
+    Immediate,
+    /// A NaN-boxed pointer/string/BigInt -- `root_nanbox_f64`'s `Nanbox` slot
+    /// rewrites these.
+    Tagged,
+    /// A raw, untagged heap-pointer bit pattern (`top16 == 0`) -- e.g. the
+    /// Promise executor's resolve/reject closures from
+    /// `js_promise_new_with_executor`, or a TypedArray/Buffer pointer handed
+    /// through as `bitcast i64 → double` on some platforms (see
+    /// `object/native_call_method.rs` and `value/dynamic_object.rs` for the
+    /// same representation). `root_nanbox_f64`'s scanner only rewrites
+    /// POINTER_TAG/STRING_TAG/BIGINT_TAG bit patterns and would silently do
+    /// nothing for one of these, so it needs the raw-aware `HeapWord` slot
+    /// instead (#10532 review).
+    RawHeapWord,
 }
 
 /// A value a moving collection can relocate, and therefore the only kind that
@@ -916,9 +945,20 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
 /// booleans, `undefined`/`null`, int32s, short strings and class refs are
 /// immediate values that no collection can touch.
 #[inline]
-fn value_can_move(value: f64) -> bool {
+fn value_move_kind(value: f64) -> ValueMoveKind {
     let jsvalue = crate::value::JSValue::from_bits(value.to_bits());
-    jsvalue.is_pointer() || jsvalue.is_string() || jsvalue.is_bigint()
+    if jsvalue.is_pointer() || jsvalue.is_string() || jsvalue.is_bigint() {
+        return ValueMoveKind::Tagged;
+    }
+    if crate::value::addr_class::is_plausible_heap_addr(value.to_bits() as usize) {
+        return ValueMoveKind::RawHeapWord;
+    }
+    ValueMoveKind::Immediate
+}
+
+enum MovedElement<'a> {
+    Tagged(crate::gc::RuntimeHandle<'a>),
+    RawHeapWord(crate::gc::RuntimeHandle<'a>),
 }
 
 /// Invoke a callable `f64` value with the supplied positional args and an
