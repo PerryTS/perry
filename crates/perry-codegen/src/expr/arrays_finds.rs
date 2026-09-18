@@ -563,8 +563,8 @@ pub(crate) fn lower(
         // -------- Map.clear --------
         Expr::MapClear(map) => {
             let m_box = lower_expr(ctx, map)?;
+            let m_handle = super::unbox_collection_receiver(ctx, &m_box, "clear");
             let blk = ctx.block();
-            let m_handle = unbox_to_i64(blk, &m_box);
             blk.call_void("js_map_clear", &[(I64, &m_handle)]);
             // Map.prototype.clear() returns undefined, not 0.
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))

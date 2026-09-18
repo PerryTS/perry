@@ -20,7 +20,7 @@ use super::{
     nanbox_pointer_inline, record_collection_number_key_fallback,
     record_collection_number_key_selected, record_collection_string_key_fallback,
     record_collection_string_key_selected, record_collection_typed_value_fallback,
-    record_collection_typed_value_selected, unbox_to_i64, FnCtx,
+    record_collection_typed_value_selected, unbox_collection_receiver, unbox_to_i64, FnCtx,
 };
 
 fn number_coerce_operand_is_already_primitive_number(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
@@ -153,13 +153,16 @@ fn guarded_set_number_add(ctx: &mut FnCtx<'_>, set_handle: &str, value_box: &str
 /// is exactly what it was before this change. On the protected path the
 /// handle has to come from the *re-read* box, below the value's lowering, so
 /// it is derived in [`reread_set_receiver`] instead.
-fn eager_set_handle(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>) -> Result<Option<String>> {
+fn eager_set_handle(
+    ctx: &mut FnCtx<'_>,
+    group: &RootedGroup<'_>,
+    method: &str,
+) -> Result<Option<String>> {
     if group.is_rooted() {
         return Ok(None);
     }
     let s_box = group.reread(ctx, 0)?;
-    let blk = ctx.block();
-    Ok(Some(unbox_to_i64(blk, &s_box)))
+    Ok(Some(unbox_collection_receiver(ctx, &s_box, method)))
 }
 
 /// Re-derive the `Set` receiver handle AFTER `value` has been lowered (#9523).
@@ -174,13 +177,13 @@ fn reread_set_receiver(
     ctx: &mut FnCtx<'_>,
     group: &RootedGroup<'_>,
     s_handle_unrooted: &Option<String>,
+    method: &str,
 ) -> Result<String> {
     if let Some(handle) = s_handle_unrooted {
         return Ok(handle.clone());
     }
     let s_box = group.reread(ctx, 0)?;
-    let blk = ctx.block();
-    Ok(unbox_to_i64(blk, &s_box))
+    Ok(unbox_collection_receiver(ctx, &s_box, method))
 }
 
 fn guarded_set_number_has(ctx: &mut FnCtx<'_>, set_handle: &str, value_box: &str) -> String {
@@ -648,10 +651,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let value_i32 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
                 let set_box = lower_expr(ctx, &set_expr)?;
-                let set_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &set_box)
-                };
+                let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
                 let new_handle = {
                     let blk = ctx.block();
                     blk.call(
@@ -675,10 +675,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let value_u32 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
                 let set_box = lower_expr(ctx, &set_expr)?;
-                let set_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &set_box)
-                };
+                let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
                 let new_handle = {
                     let blk = ctx.block();
                     blk.call(
@@ -702,10 +699,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let value_f32 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
                 let set_box = lower_expr(ctx, &set_expr)?;
-                let set_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &set_box)
-                };
+                let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
                 let new_handle = {
                     let blk = ctx.block();
                     blk.call(
@@ -729,10 +723,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let value_i1 =
                     lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
                 let set_box = lower_expr(ctx, &set_expr)?;
-                let set_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &set_box)
-                };
+                let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
                 let new_handle = {
                     let blk = ctx.block();
                     let value_i32 = blk.zext(I1, &value_i1.value, I32);
@@ -756,17 +747,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else if use_number_set {
                 let v = lower_expr(ctx, value)?;
                 let set_box = lower_expr(ctx, &set_expr)?;
-                let set_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &set_box)
-                };
+                let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
                 guarded_set_number_add(ctx, &set_handle, &v)
             } else {
                 let set_box = lower_expr(ctx, &set_expr)?;
-                let set_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &set_box)
-                };
+                let set_handle = unbox_collection_receiver(ctx, &set_box, "add");
                 if use_string_set {
                     let value_ref = lower_expr_native(
                         ctx,
@@ -931,11 +916,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let value_collects = operand_may_collect(ctx, value);
             let i32_v = with_rooted_group(ctx, 1, |ctx, group| {
                 group.lower(ctx, set, value_collects)?;
-                let s_handle_unrooted = eager_set_handle(ctx, group)?;
+                let s_handle_unrooted = eager_set_handle(ctx, group, "has")?;
                 let i32_v = if use_i32_set {
                     let value_i32 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(
@@ -958,7 +943,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_u32_set {
                     let value_u32 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(
@@ -981,7 +966,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_f32_set {
                     let value_f32 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(
@@ -1004,7 +989,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_boolean_set {
                     let value_i1 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                     let i32_v = {
                         let blk = ctx.block();
                         let value_i32 = blk.zext(I1, &value_i1.value, I32);
@@ -1027,7 +1012,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     i32_v
                 } else if use_number_set {
                     let v_box = lower_expr(ctx, value)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                     guarded_set_number_has(ctx, &s_handle, &v_box)
                 } else {
                     if use_string_set {
@@ -1036,7 +1021,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             value,
                             crate::native_value::ExpectedNativeRep::StringRef,
                         )?;
-                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                         let i32_v = {
                             let blk = ctx.block();
                             let i32_v = blk.call(
@@ -1067,7 +1052,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         i32_v
                     } else {
                         let v_box = lower_expr(ctx, value)?;
-                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "has")?;
                         let i32_v = {
                             let blk = ctx.block();
                             blk.call(I32, "js_set_has", &[(I64, &s_handle), (DOUBLE, &v_box)])
@@ -1187,11 +1172,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let value_collects = operand_may_collect(ctx, value);
             let i32_v = with_rooted_group(ctx, 1, |ctx, group| {
                 group.lower(ctx, set, value_collects)?;
-                let s_handle_unrooted = eager_set_handle(ctx, group)?;
+                let s_handle_unrooted = eager_set_handle(ctx, group, "delete")?;
                 let i32_v = if use_i32_set {
                     let value_i32 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(
@@ -1214,7 +1199,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_u32_set {
                     let value_u32 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(
@@ -1237,7 +1222,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_f32_set {
                     let value_f32 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                     let i32_v = {
                         let blk = ctx.block();
                         blk.call(
@@ -1260,7 +1245,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else if use_boolean_set {
                     let value_i1 =
                         lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                     let i32_v = {
                         let blk = ctx.block();
                         let value_i32 = blk.zext(I1, &value_i1.value, I32);
@@ -1283,7 +1268,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     i32_v
                 } else if use_number_set {
                     let v_box = lower_expr(ctx, value)?;
-                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                     guarded_set_number_delete(ctx, &s_handle, &v_box)
                 } else {
                     if use_string_set {
@@ -1292,7 +1277,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             value,
                             crate::native_value::ExpectedNativeRep::StringRef,
                         )?;
-                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                         let i32_v = {
                             let blk = ctx.block();
                             let i32_v = blk.call(
@@ -1323,7 +1308,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         i32_v
                     } else {
                         let v_box = lower_expr(ctx, value)?;
-                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted, "delete")?;
                         let i32_v = {
                             let blk = ctx.block();
                             blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)])
@@ -1415,8 +1400,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- set.size -> number --------
         Expr::SetSize(set) => {
             let s_box = lower_expr(ctx, set)?;
+            let s_handle = unbox_collection_receiver(ctx, &s_box, "size");
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
             let i32_v = blk.call(I32, "js_set_size", &[(I64, &s_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }

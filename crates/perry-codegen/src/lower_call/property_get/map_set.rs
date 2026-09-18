@@ -26,7 +26,9 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{
+    lower_expr, nanbox_pointer_inline, unbox_collection_receiver, unbox_to_i64, FnCtx,
+};
 use crate::nanbox::double_literal;
 use crate::rooting;
 use crate::type_analysis::{
@@ -86,8 +88,8 @@ pub(crate) fn try_lower_map_set_methods(
                     |ctx, vals| {
                         let (m_box, k_box, v_box) =
                             (vals[0].clone(), vals[1].clone(), vals[2].clone());
+                        let m_handle = unbox_collection_receiver(ctx, &m_box, "set");
                         let blk = ctx.block();
-                        let m_handle = unbox_to_i64(blk, &m_box);
                         // #9523: `js_map_set` returns the RECEIVER as it stands
                         // after the insert. For a `class X extends Map` instance
                         // that receiver is a movable `ObjectHeader` the runtime
@@ -113,8 +115,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
+                    let m_handle = unbox_collection_receiver(ctx, &m_box, "get");
                     let blk = ctx.block();
-                    let m_handle = unbox_to_i64(blk, &m_box);
                     Ok(Some(blk.call(
                         DOUBLE,
                         "js_map_get",
@@ -127,8 +129,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
+                    let m_handle = unbox_collection_receiver(ctx, &m_box, "has");
                     let blk = ctx.block();
-                    let m_handle = unbox_to_i64(blk, &m_box);
                     let i32_v = blk.call(
                         crate::types::I32,
                         "js_map_has",
@@ -142,8 +144,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
+                    let m_handle = unbox_collection_receiver(ctx, &m_box, "delete");
                     let blk = ctx.block();
-                    let m_handle = unbox_to_i64(blk, &m_box);
                     let i32_v = blk.call(
                         crate::types::I32,
                         "js_map_delete",
@@ -154,8 +156,8 @@ pub(crate) fn try_lower_map_set_methods(
             }
             "clear" if args.is_empty() => {
                 let m_box = lower_expr(ctx, object)?;
+                let m_handle = unbox_collection_receiver(ctx, &m_box, "clear");
                 let blk = ctx.block();
-                let m_handle = unbox_to_i64(blk, &m_box);
                 blk.call_void("js_map_clear", &[(I64, &m_handle)]);
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
@@ -179,8 +181,8 @@ pub(crate) fn try_lower_map_set_methods(
             // `Expr::MapEntries`/etc HIR variants.
             "entries" | "keys" | "values" if args.is_empty() => {
                 let m_box = lower_expr(ctx, object)?;
+                let m_handle = unbox_collection_receiver(ctx, &m_box, property);
                 let blk = ctx.block();
-                let m_handle = unbox_to_i64(blk, &m_box);
                 let runtime_fn = match property {
                     "entries" => "js_map_entries_iter_obj",
                     "keys" => "js_map_keys_iter_obj",
@@ -200,8 +202,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (s_box, v_box) = (vals[0].clone(), vals[1].clone());
+                    let s_handle = unbox_collection_receiver(ctx, &s_box, "add");
                     let blk = ctx.block();
-                    let s_handle = unbox_to_i64(blk, &s_box);
                     blk.call_void("js_set_add", &[(I64, &s_handle), (DOUBLE, &v_box)]);
                     Ok(Some(s_box))
                 });
@@ -211,8 +213,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (s_box, v_box) = (vals[0].clone(), vals[1].clone());
+                    let s_handle = unbox_collection_receiver(ctx, &s_box, "has");
                     let blk = ctx.block();
-                    let s_handle = unbox_to_i64(blk, &s_box);
                     let i32_v = blk.call(
                         crate::types::I32,
                         "js_set_has",
@@ -226,8 +228,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (s_box, v_box) = (vals[0].clone(), vals[1].clone());
+                    let s_handle = unbox_collection_receiver(ctx, &s_box, "delete");
                     let blk = ctx.block();
-                    let s_handle = unbox_to_i64(blk, &s_box);
                     let i32_v = blk.call(
                         crate::types::I32,
                         "js_set_delete",
@@ -238,8 +240,8 @@ pub(crate) fn try_lower_map_set_methods(
             }
             "clear" if args.is_empty() => {
                 let s_box = lower_expr(ctx, object)?;
+                let s_handle = unbox_collection_receiver(ctx, &s_box, "clear");
                 let blk = ctx.block();
-                let s_handle = unbox_to_i64(blk, &s_box);
                 blk.call_void("js_set_clear", &[(I64, &s_handle)]);
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,
@@ -260,8 +262,8 @@ pub(crate) fn try_lower_map_set_methods(
             // typed-Set HIR path; for Sets `entries` yields `[v, v]` pairs.
             "values" | "keys" | "entries" if args.is_empty() => {
                 let s_box = lower_expr(ctx, object)?;
+                let s_handle = unbox_collection_receiver(ctx, &s_box, property);
                 let blk = ctx.block();
-                let s_handle = unbox_to_i64(blk, &s_box);
                 let runtime_fn = match property {
                     "values" => "js_set_values_iter_obj",
                     "keys" => "js_set_keys_iter_obj",
@@ -281,8 +283,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (s_box, other_box) = (vals[0].clone(), vals[1].clone());
+                    let s_handle = unbox_collection_receiver(ctx, &s_box, property);
                     let blk = ctx.block();
-                    let s_handle = unbox_to_i64(blk, &s_box);
                     let runtime_fn = match property {
                         "union" => "js_set_union",
                         "intersection" => "js_set_intersection",
@@ -300,8 +302,8 @@ pub(crate) fn try_lower_map_set_methods(
                 // receiver is live only in an SSA register.
                 return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
                     let (s_box, other_box) = (vals[0].clone(), vals[1].clone());
+                    let s_handle = unbox_collection_receiver(ctx, &s_box, property);
                     let blk = ctx.block();
-                    let s_handle = unbox_to_i64(blk, &s_box);
                     let runtime_fn = match property {
                         "isSubsetOf" => "js_set_is_subset_of",
                         "isSupersetOf" => "js_set_is_superset_of",
@@ -352,8 +354,8 @@ pub(crate) fn try_lower_collection_foreach(
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 });
                 {
+                    let m_handle = unbox_collection_receiver(ctx, &m_box, "forEach");
                     let blk = ctx.block();
-                    let m_handle = unbox_to_i64(blk, &m_box);
                     blk.call_void(
                         "js_map_foreach",
                         &[(I64, &m_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],
@@ -379,8 +381,8 @@ pub(crate) fn try_lower_collection_foreach(
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 });
                 {
+                    let s_handle = unbox_collection_receiver(ctx, &s_box, "forEach");
                     let blk = ctx.block();
-                    let s_handle = unbox_to_i64(blk, &s_box);
                     blk.call_void(
                         "js_set_foreach",
                         &[(I64, &s_handle), (DOUBLE, &cb_box), (DOUBLE, &this_arg)],

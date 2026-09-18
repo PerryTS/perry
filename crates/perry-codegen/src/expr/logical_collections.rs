@@ -903,10 +903,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // #7615 slice 2: the map is live across the key's lowering.
             rooting::with_operands_rooted(ctx, &[map, key], |ctx, vals| {
                 let (m_box, k_box) = (vals[0].clone(), vals[1].clone());
-                let m_handle = {
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &m_box)
-                };
+                let m_handle = super::unbox_collection_receiver(ctx, &m_box, "delete");
                 let i32_v = if use_string_key_map {
                     let (k_handle, i32_v) = {
                         let blk = ctx.block();

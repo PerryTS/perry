@@ -590,8 +590,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object, property, ..
         } if property == "size" && is_set_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
+            let recv_handle = super::unbox_collection_receiver(ctx, &recv_box, "size");
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_set_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
@@ -599,8 +599,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object, property, ..
         } if property == "size" && is_map_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
+            let recv_handle = super::unbox_collection_receiver(ctx, &recv_box, "size");
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_map_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
