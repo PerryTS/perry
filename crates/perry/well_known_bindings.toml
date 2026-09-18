@@ -511,14 +511,6 @@ repo = "https://github.com/node-fetch/node-fetch"
 ref = "8b3320d2a7c07bce4afc6b2bf6c3bbddda85b01f"
 ported-at = "3.3.2"
 date = "2026-07-30"
-[bindings.fetch]
-crate = "perry-ext-fetch"
-lib = "perry_ext_fetch"
-tracking = "#466"
-# Bare `fetch` is an alias for the node-fetch surface (same wrapper crate); it
-# is not itself an npm package, so it inherits node-fetch's provenance.
-alias-of = "node-fetch"
-
 [bindings.ws]
 crate = "perry-ext-ws"
 lib = "perry_ext_ws"

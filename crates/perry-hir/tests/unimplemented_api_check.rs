@@ -364,20 +364,11 @@ fn perry_native_namespace_rejects_unknown_call_in_strict_mode() {
 ///
 /// Side-effect-only sub-paths (`dotenv/config`) are skipped — they have
 /// no value binding to read properties off, so the gate doesn't apply.
-/// `tursodb` and `iroh` are external bindings (live in standalone
-/// `@perryts/*` repos as of v0.5.557) — their manifest entries exist
-/// but the in-tree resolver doesn't recognise them as a `NativeModuleRef`
-/// without `node_modules/<pkg>/package.json` declaring `perry.nativeLibrary`,
-/// so the gate's prerequisite shape never triggers in this isolated
-/// HIR test.
 #[test]
 fn every_supported_module_rejects_bogus_member() {
     const SKIP: &[&str] = &[
         // Side-effect-only — no value binding to access.
         "dotenv/config",
-        // External (non-bundled) bindings — out-of-tree as of v0.5.557.
-        "tursodb",
-        "iroh",
     ];
 
     let mut failures: Vec<String> = Vec::new();
@@ -455,9 +446,6 @@ fn every_supported_module_rejects_bogus_call() {
     const SKIP: &[&str] = &[
         // Side-effect-only — no value binding to access.
         "dotenv/config",
-        // External (non-bundled) bindings — out-of-tree as of v0.5.557.
-        "tursodb",
-        "iroh",
     ];
 
     let mut failures: Vec<String> = Vec::new();

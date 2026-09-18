@@ -81,16 +81,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // `database-sqlite` feature with better-sqlite3 — DatabaseSync /
         // StatementSync route to the same `js_sqlite_*` runtime.
         "sqlite" | "bun:sqlite" => &["database-sqlite"],
-        // tursodb (#424) lives in the external
-        // `PerryTS/tursodb-bindings` repo (`bun add @perryts/tursodb`)
-        // since v0.5.557 — perry's package.json `perry.nativeLibrary`
-        // resolution path picks it up from `node_modules/`. No
-        // perry-stdlib feature gate to manage.
-        "tursodb" => &[],
-        // iroh (#425) lives in the external `PerryTS/iroh-bindings`
-        // repo (`bun add @perryts/iroh`) since v0.5.557 — same model
-        // as tursodb above.
-        "iroh" => &[],
         // Redis is detected via the ioredis class name in collect_modules,
         // but if it shows up as an explicit import we still need the feature.
         // `database-redis` umbrella retained for backwards-compat;
