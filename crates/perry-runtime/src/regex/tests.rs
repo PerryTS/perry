@@ -89,6 +89,53 @@ fn js_replacement_expands_special_patterns() {
     }
 }
 
+/// A replacer's argument buffer is reused across matches, so it must not carry
+/// one match's capture into the next. `(a)|(b)` over "aba" participates in
+/// capture 1, then capture 2, then capture 1 again, so each match has an unset
+/// capture that the previous match set.
+///
+/// This is a regression test with a measured reason to exist: with the reset in
+/// `call_native` removed, the whole 3,984-test lib suite still passed, and this
+/// case returns `<a,undefined><a,b><a,b>` instead of the correct answer.
+#[test]
+fn direct_replace_callback_does_not_carry_a_capture_between_matches() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("(a)|(b)"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = scope.root_raw_mut_ptr(
+        pattern.with_const_ptr(|p| flags.with_const_ptr(|f| js_regexp_new(p, f))),
+    );
+    let subject = scope.root_string_ptr(make_string("aba"));
+    let replacer = scope.root_nanbox_f64(crate::dyn_eval::dyn_function_from_strings(&[
+        "m".to_string(),
+        "p1".to_string(),
+        "p2".to_string(),
+        "return '<' + String(p1) + ',' + String(p2) + '>';".to_string(),
+    ]));
+    let before = super::perex_replace_direct::direct_replaces();
+    let out = subject.with_const_ptr::<StringHeader, _>(|s| {
+        re.with_const_ptr::<RegExpHeader, _>(|r| {
+            super::perex_replace::js_string_replace_js(
+                crate::value::js_nanbox_string(s as i64),
+                crate::value::js_nanbox_pointer(r as i64),
+                replacer.get_nanbox_f64(),
+            )
+        })
+    });
+    // Without this the test would pass just as well against the exec-object
+    // fallback, which has no shared buffer and so cannot show the bug.
+    assert!(
+        super::perex_replace_direct::direct_replaces() > before,
+        "did not reach the direct replace path, so this test proves nothing"
+    );
+    let out = crate::value::js_nanbox_get_pointer(out) as *const StringHeader;
+    assert_eq!(
+        string_as_str(out),
+        "<a,undefined><undefined,b><a,undefined>"
+    );
+}
+
 fn replace_case(pattern: &str, subject: &str, replacement: &str) -> String {
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string(pattern));
