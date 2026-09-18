@@ -1198,6 +1198,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             I32,
             "0",
         );
+        // The poisonable twin of the ShapeId global: same value, same linkage,
+        // but only ever COMPARED against — see
+        // `typed_shape::guard_shape_global_name_from_keys_global`.
+        llmod.add_global(
+            &crate::typed_shape::guard_shape_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
         llmod.add_internal_global(
@@ -1388,6 +1396,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         llmod.add_internal_global(&global_name, I64, "0");
         llmod.add_internal_global(
             &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
+        llmod.add_internal_global(
+            &crate::typed_shape::guard_shape_global_name_from_keys_global(&global_name),
             I32,
             "0",
         );

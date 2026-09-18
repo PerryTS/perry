@@ -380,6 +380,23 @@ pub(crate) fn raw_f64_mask_global_name_from_keys_global(keys_global_name: &str) 
 /// minted once, immediately after `js_build_class_keys_array`, and loaded by
 /// every compiled construction path so class instances arrive birth-stamped
 /// instead of waiting for their first by-name lookup (#6759 C3 rung 2).
+/// The per-class GUARD EXPECTATION paired with one canonical class keys array.
+///
+/// Seeded at module init with the same ShapeId as
+/// [`shape_id_global_name_from_keys_global`], and registered with the runtime
+/// so `disable_class_field_inline_guard` can poison it. It exists as a SEPARATE
+/// global for one reason: `js_object_alloc_class_inline_keys_stamped` stamps
+/// every newly allocated instance with the value read out of the ShapeId
+/// global (`lower_call/new_alloc.rs`), so poisoning that one would brand live
+/// objects with a bogus ShapeId. The expectation is only ever compared against,
+/// never stamped, so it is safe to poison.
+pub(crate) fn guard_shape_global_name_from_keys_global(keys_global_name: &str) -> String {
+    keys_global_name
+        .strip_prefix("perry_class_keys_")
+        .map(|suffix| format!("perry_class_guard_shape_{}", suffix))
+        .unwrap_or_else(|| format!("perry_class_guard_shape_{}", keys_global_name))
+}
+
 pub(crate) fn shape_id_global_name_from_keys_global(keys_global_name: &str) -> String {
     keys_global_name
         .strip_prefix("perry_class_keys_")
