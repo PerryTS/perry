@@ -96,8 +96,28 @@ pub(super) fn lower_candidates(
             let next_label = ctx.block_label(next);
             ctx.block().cond_br(&matches, &matched_label, &next_label);
             ctx.current_block = matched;
-            // Every worker executes the unguarded body in its own thread.
-            let init = format!("{target}__init_body");
+            // #10399: the SECOND worker-entry emitter (the multi-path
+            // `new Worker(<resolved specifier>)` form; the single-path one
+            // lives in `dyn_extern_i18n.rs`). Both must agree.
+            //
+            // `<target>__init` is the guarded wrapper: it initializes the
+            // module's DEPENDENCIES and then runs the body. With a Worker in
+            // the program the `__perry_init_done_*` guard is thread-local, so
+            // the wrapper runs once per thread and is the only thing that
+            // initializes the worker entry's imports. Entering the bare body
+            // left every imported module uninitialized on that thread — in
+            // OpenCode's TUI worker, `cli/heap.ts`'s string pool was still
+            // empty, so `Flag.OPENCODE_AUTO_HEAP_SNAPSHOT` read a property
+            // whose NAME was the empty string and threw
+            // "Cannot read properties of undefined (reading '')".
+            let init = if crate::codegen::program_has_worker() {
+                format!("{target}__init")
+            } else {
+                // Process-wide guard: the wrapper would no-op after the first
+                // worker, so the bare body is still the only way each worker
+                // runs its own entry.
+                format!("{target}__init_body")
+            };
             ctx.pending_declares.push((init.clone(), VOID, vec![]));
             let entry = ctx.block().ptrtoint(&format!("@{init}"), I64);
             let options = roots.reread(ctx, opts)?;
