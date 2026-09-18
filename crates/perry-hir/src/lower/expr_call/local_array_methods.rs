@@ -216,6 +216,17 @@ pub(super) fn try_local_array_methods(
                         | "pop"
                         | "shift"
                         | "unshift"
+                        // #10476: the ES2019+/ES2023 copy and flatten names are
+                        // just as often user methods (a vector type's
+                        // `toSorted`, a tree's `flat`). An unproven receiver
+                        // reaches them through dynamic dispatch, which still
+                        // runs the Array helper for a real array.
+                        | "flat"
+                        | "flatMap"
+                        | "toReversed"
+                        | "toSorted"
+                        | "toSpliced"
+                        | "copyWithin"
                 );
                 let is_unknown_recv =
                     matches!(type_info, None | Some(Type::Any) | Some(Type::Unknown));

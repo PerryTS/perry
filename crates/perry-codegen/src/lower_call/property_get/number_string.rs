@@ -9,8 +9,8 @@ use perry_hir::Expr;
 use crate::expr::{lower_expr, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::{
-    is_array_expr, is_native_module_dynamic_index, is_string_expr,
-    is_url_search_params_subclass_expr, receiver_class_name,
+    is_array_expr, is_numeric_expr, is_string_expr, is_url_search_params_subclass_expr,
+    receiver_class_name,
 };
 use crate::types::{DOUBLE, I32, I64};
 
@@ -25,13 +25,10 @@ pub(crate) fn try_lower_number_string_methods(
     args: &[Expr],
 ) -> Result<Option<String>> {
     // Number.prototype.toFixed(decimals) — call js_number_to_fixed.
-    // Receiver is any number-typed value; we don't gate on
-    // is_numeric_expr because tests often call it on Any locals.
-    if property == "toFixed"
-        && !is_string_expr(ctx, object)
-        && !is_array_expr(ctx, object)
-        && !is_native_module_dynamic_index(object)
-    {
+    // #10476: only for a proven number. decimal.js / bignumber.js and any
+    // class own `toFixed` / `toPrecision` / `toExponential`; an unproven
+    // receiver checks its runtime kind in `builtin_kind_guard.rs`.
+    if property == "toFixed" && is_numeric_expr(ctx, object) {
         let v = lower_expr(ctx, object)?;
         let dec = if let Some(arg) = args.first() {
             lower_expr(ctx, arg)?
@@ -43,11 +40,7 @@ pub(crate) fn try_lower_number_string_methods(
         return Ok(Some(nanbox_string_inline(blk, &handle)));
     }
     // Number.prototype.toPrecision(digits)
-    if property == "toPrecision"
-        && !is_string_expr(ctx, object)
-        && !is_array_expr(ctx, object)
-        && !is_native_module_dynamic_index(object)
-    {
+    if property == "toPrecision" && is_numeric_expr(ctx, object) {
         let v = lower_expr(ctx, object)?;
         let prec = if let Some(arg) = args.first() {
             lower_expr(ctx, arg)?
@@ -63,11 +56,7 @@ pub(crate) fn try_lower_number_string_methods(
         return Ok(Some(nanbox_string_inline(blk, &handle)));
     }
     // Number.prototype.toExponential(decimals)
-    if property == "toExponential"
-        && !is_string_expr(ctx, object)
-        && !is_array_expr(ctx, object)
-        && !is_native_module_dynamic_index(object)
-    {
+    if property == "toExponential" && is_numeric_expr(ctx, object) {
         let v = lower_expr(ctx, object)?;
         let dec = if let Some(arg) = args.first() {
             lower_expr(ctx, arg)?
