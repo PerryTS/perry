@@ -655,7 +655,13 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             b"Super constructor null is not a constructor",
         );
     }
-    let wasi_parent = super::super::native_module::bound_native_callable_module_and_method(
+    // Resolve the parent to a bound native-module export VALUE, independent
+    // of how the heritage expression reached it: a bare import, a local
+    // alias, a namespace member, and a CJS destructured `require()` all
+    // produce the identical bound-closure representation (see
+    // `bound_native_callable_module_and_method`), even though only the bare
+    // import shape is recognized statically at HIR-lowering time.
+    let bound_native_parent = super::super::native_module::bound_native_callable_module_and_method(
         parent_val,
     )
     .or_else(|| {
@@ -665,16 +671,57 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             crate::object::class_registry::js_get_dynamic_parent_value(cid),
         )
     });
-    if wasi_parent.is_some_and(|(module, method)| {
-        super::super::native_module::normalize_native_module_alias(&module) == "wasi"
-            && method == "WASI"
-    }) {
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str()) == "wasi"
+                && method.as_str() == "WASI"
+        })
+    {
         let arg0 = if args_len >= 1 && !args_ptr.is_null() {
             *args_ptr
         } else {
             undef
         };
         crate::wasi::js_wasi_init_subclass(this_box, arg0);
+        return undef;
+    }
+    // #10453: `class X extends AsyncResource` threw "Class constructor
+    // AsyncResource cannot be invoked without 'new'" for every heritage
+    // shape EXCEPT a bare `import { AsyncResource } from "node:async_hooks"`
+    // — the only shape `canonical_native_parent_name` recognizes statically
+    // (`crates/perry-hir/src/lower_decl/class_decl.rs`), which routes to the
+    // dedicated `js_async_resource_subclass_init` codegen
+    // (`crates/perry-codegen/src/expr/this_super_call.rs`). A local alias
+    // (`const Alias = AsyncResource`), a namespace member
+    // (`ah.AsyncResource`), and a CJS destructured
+    // `require('node:async_hooks')` all resolve `parent_val` to the exact
+    // same bound-native-export value the canonical import does, but HIR
+    // lowering can't see that statically for those shapes, so `super()` fell
+    // through to the ordinary value-super dispatch below — a plain CALL of
+    // the bound export, which `AsyncResource` throws on by design when
+    // invoked without `new` (`nm_dispatch_async_hooks`). Recognize the value
+    // here instead, exactly as the WASI arm above does, and run the same
+    // native-backing init the canonical path uses.
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str())
+                == "async_hooks"
+                && method.as_str() == "AsyncResource"
+        })
+    {
+        let type_value = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            undef
+        };
+        let options = if args_len >= 2 && !args_ptr.is_null() {
+            *args_ptr.add(1)
+        } else {
+            undef
+        };
+        crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
