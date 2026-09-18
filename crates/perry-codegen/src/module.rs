@@ -438,10 +438,13 @@ impl LlModule {
     /// "TLS definition ... mismatches non-TLS reference".
     pub fn add_external_module_state_global(&mut self, name: &str, ty: LlvmType) {
         if crate::codegen::program_has_worker() {
-            self.declarations.push((
-                name.to_string(),
-                format!("@{} = external thread_local global {}", name, ty),
-            ));
+            // Same collection as `add_external_global`. Pushing to
+            // `declarations` instead put the line outside the owner/dedup
+            // bookkeeping that `globals` gets, and `freeze_unit` then copied
+            // it into every codegen unit on top of whatever the globals path
+            // already emitted — "error: redefinition of global".
+            self.globals
+                .push(format!("@{} = external thread_local global {}", name, ty));
         } else {
             self.add_external_global(name, ty);
         }
