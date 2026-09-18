@@ -953,6 +953,45 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
     (unsafe { crate::symbol::js_is_symbol(value) } == 0).then_some(bits)
 }
 
+/// #10599: resolve the real `.prototype` object for a RESERVED native-builtin
+/// parent class id -- one `builtin_parent_reserved_class_id` (perry-codegen)
+/// wires as a class-registry parent edge for a native base that has no
+/// declared-class registration of its own (`class Sub extends EventEmitter
+/// {}` has no `js_register_class_name` call for `EventEmitter`). Without this,
+/// `class_decl_prototype_value` bails immediately for such an id
+/// (`class_name_for_id` returns `None`), so `Sub.prototype`'s `[[Prototype]]`
+/// silently fell through to `Object.prototype` instead of
+/// `EventEmitter.prototype` -- `Object.getPrototypeOf(Sub.prototype) !==
+/// EventEmitter.prototype`, even though `new Sub() instanceof EventEmitter`
+/// (a different mechanism -- the class-chain walk in `js_instanceof`) already
+/// worked.
+///
+/// Scoped to the ids whose only registered subclassing surface is this
+/// generic declared-class-prototype path: EventEmitter and its
+/// AsyncResource variant, both bound as ordinary native-module callable
+/// exports (`bound_native_callable_export_value`) whose own `.prototype` is
+/// the same lazily-materialized, closure-identity-keyed object any bound
+/// function's `.prototype` read produces
+/// (`js_function_prototype_value_for_read`). Resolving through that exact
+/// helper -- the same one the dynamic-parent branch below already uses for a
+/// runtime function-valued superclass -- is what makes
+/// `Object.getPrototypeOf(Sub.prototype) === EventEmitter.prototype` hold by
+/// identity, not merely by shape. Array/Map/Set/Error/typed-array subclasses
+/// have their own dedicated instance/prototype modeling and don't reach this
+/// fallback the same way.
+fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
+    const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+    const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
+    let (module, symbol) = match parent_id {
+        CLASS_ID_EVENT_EMITTER => ("events", "EventEmitter"),
+        CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
+        _ => return None,
+    };
+    let func_value = super::super::native_module::bound_native_callable_export_value(module, symbol);
+    let parent_proto = super::function_prototype::js_function_prototype_value_for_read(func_value);
+    class_parent_prototype_bits(parent_proto)
+}
+
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // #7757: a specialization answers with its generic's prototype.
     let class_id = decl_prototype_identity_id(class_id);
@@ -1046,7 +1085,22 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
             .and_then(|parent_id| {
                 let parent_proto = class_decl_prototype_value(parent_id);
                 let parent_bits = parent_proto.to_bits();
-                ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
+                if (parent_bits >> 48) == 0x7FFD {
+                    return Some(parent_bits);
+                }
+                // #10599: `parent_id` may be a RESERVED native-builtin class id
+                // rather than a declared class -- `builtin_parent_reserved_class_id`
+                // in perry-codegen wires this edge for `class Sub extends
+                // EventEmitter {}`, which has no `js_register_class_name`
+                // registration of its own. `class_decl_prototype_value` bails
+                // immediately for such an id (`class_name_for_id` is `None`), so
+                // without this fallback the lookup above always misses and
+                // execution falls through to the runtime-function-valued branch
+                // below, which also misses (there is no dynamic-parent VALUE for
+                // a statically-resolved reserved id) -- landing `Sub.prototype`'s
+                // `[[Prototype]]` on `Object.prototype` instead of
+                // `EventEmitter.prototype`.
+                reserved_native_parent_prototype_bits(parent_id)
             });
         if registered_parent_proto.is_some() {
             registered_parent_proto
