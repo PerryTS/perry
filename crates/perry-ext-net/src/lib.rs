@@ -1178,6 +1178,53 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     }
 
     let local_server = server_state::begin_local_connect(&host, port);
+
+    // The deferred-connect shape (`new net.Socket()` then `socket.connect()`,
+    // which is also what `Bun.connect` and `net.Socket.prototype.connect`
+    // lower to) takes the same turnloop route `net.connect()` has taken since
+    // P5. It did NOT before: this entry point had no `turnloop_io::enabled()`
+    // check at all, so it spawned a tokio socket task even on the primary
+    // agent with the loop fully available — while the inventory recorded this
+    // crate's tokio edge as reached only by "a thread that could not get a
+    // loop of its own". The gate was missing, not declined.
+    //
+    // `rx` is dropped on this arm exactly as `spawn_socket_task_initialized`
+    // drops its own: a turnloop socket is driven by submissions made where the
+    // FFI call happens, so nothing reads the command channel. Taking it out of
+    // `pending_rx` above still matters — it is what makes a second
+    // `socket.connect()` report "already connected" on either transport.
+    if turnloop_io::enabled() {
+        match turnloop_io::connect_tcp(handle, &host, port, true) {
+            Ok(()) => {
+                if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
+                    s.turnloop = true;
+                }
+                turnloop_io::note_local_connect(handle, local_server);
+                drop(rx);
+                return;
+            }
+            Err(err) if !err.no_loop => {
+                server_state::cancel_local_connect(local_server);
+                // libuv's shape, which is Node's `err.message` and the only
+                // place `err.code` / `errno` / `syscall` come from. The tokio
+                // arm below still reports the raw `std::io::Error` Display
+                // ("Connection refused (os error 111)"), which carries none of
+                // it — that difference is pre-existing and is not this change's
+                // to fix, but a turnloop connect must not inherit it.
+                push_event(PendingNetEvent::Error(
+                    handle,
+                    format!("connect {} {}:{}", err.code, host, port),
+                ));
+                push_event(PendingNetEvent::Close(handle));
+                mark_closed(handle);
+                return;
+            }
+            // `no_loop` means this thread lost its loop between the
+            // `enabled()` check and the submission: fall through to tokio.
+            Err(_) => {}
+        }
+    }
+
     spawn_socket_runner(move || {
         Box::pin(async move {
             let mut rx = rx;

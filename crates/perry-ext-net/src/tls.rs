@@ -5,11 +5,15 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use perry_ffi::{js_array_get, js_array_length, ArrayHeader, JsValue};
+// `rustls` is named through this crate's own direct dependency rather than
+// through `tokio_rustls`'s re-export. Both resolve to the same rustls 0.23 —
+// `turnloop-tls` re-exports it too, which is why the config types unify — but
+// spelling it through `tokio_rustls` made `build_client_config`, the one piece
+// of this file BOTH transports share, read as if it belonged to the tokio one.
+// It does not: `turnloop_tls_io` takes the same `Arc<rustls::ClientConfig>`.
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use tokio::net::TcpStream;
-use tokio_rustls::rustls::client::danger::{
-    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-};
-use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
+use tokio_rustls::{client::TlsStream, TlsConnector};
 
 #[derive(Clone, Default)]
 pub(crate) struct TlsClientConfigData {

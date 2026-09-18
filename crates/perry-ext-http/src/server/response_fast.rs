@@ -25,7 +25,7 @@
 //! bytes on the wire are unchanged. The fast path is a shortcut for the
 //! common case, never a replacement for the general one.
 
-use hyper::StatusCode;
+use http::StatusCode;
 
 /// The HTTP status codes a typical server emits often enough to be worth
 /// a const shortcut. Anything outside this set takes the `from_u16` path.
