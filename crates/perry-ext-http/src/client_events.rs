@@ -396,14 +396,6 @@ pub(crate) unsafe fn handle_response_event(
     fire_request_close_once(request_handle);
 }
 
-/// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
-/// build the IncomingMessage handle with an empty body, remember it on the
-/// request, and fire the factory callback + `'response'` listeners. Body
-/// chunks and the end edge arrive as separate events.
-///
-/// # Safety
-///
-/// Same listener-liveness contract as [`fire_request_event_listeners`].
 /// Drain handler for `PendingHttpEvent::Upgrade` (#10468): build a
 /// lightweight client `IncomingMessage` (statusCode/headers only — the body
 /// is the upgraded protocol now, delivered over the adopted socket instead)
@@ -493,6 +485,14 @@ pub(crate) unsafe fn handle_upgrade_event(
     fire_request_close_once(request_handle);
 }
 
+/// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
+/// build the IncomingMessage handle with an empty body, remember it on the
+/// request, and fire the factory callback + `'response'` listeners. Body
+/// chunks and the end edge arrive as separate events.
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
 pub(crate) unsafe fn handle_response_head_event(
     request_handle: Handle,
     status: u16,
