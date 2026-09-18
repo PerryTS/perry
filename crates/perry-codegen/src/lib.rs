@@ -80,9 +80,9 @@ pub use codegen::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
     resolve_target_triple, short_spread_method_capabilities, user_function_symbol, AppMetadata,
     CompileOptions, ConstructorContracts, CtorAbi, ExportedObjectLiteralCapability, FpContractMode,
-    ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ResolvedConstructorContracts, ShortSpreadMethodCandidate,
+    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry,
+    NamespaceEntryKind, ObjectLiteralMethodCandidate, ResolvedConstructorContracts,
+    ShortSpreadMethodCandidate,
 };
 pub use collectors::CjsPreambleCensus;
 // #9843: the segment-view for-of matcher's counter. Exported so the

@@ -1465,8 +1465,7 @@ mod constructor_arg_slot_tests {
         crate::closure::js_register_closure_rest(ptr as *const u8, 2);
 
         let args = [11.0, 22.0, 33.0];
-        let slots =
-            unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
         assert_eq!(slots.len(), 3);
         assert_eq!(slots[0], 11.0);
         assert_eq!(slots[1], 22.0);
@@ -1502,8 +1501,7 @@ mod constructor_arg_slot_tests {
         crate::closure::js_register_closure_rest(ptr as *const u8, 1);
 
         let args = [11.0, 22.0, 33.0];
-        let slots =
-            unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
         assert_eq!(slots.len(), 3);
         assert_eq!(slots[0], 11.0);
         assert_eq!(array_of(slots[1]).1, 2, "rest holds the tail only");
@@ -1518,8 +1516,7 @@ mod constructor_arg_slot_tests {
         crate::closure::js_register_closure_rest(ptr as *const u8, 1);
 
         let args = [11.0, 22.0, 33.0];
-        let slots =
-            unsafe { constructor_user_arg_slots(ptr, cid, 2, args.as_ptr(), args.len()) };
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 2, args.as_ptr(), args.len()) };
         assert_eq!(slots.len(), 2);
         assert_eq!(slots[0], 11.0);
         assert_eq!(array_of(slots[1]).1, 2);
