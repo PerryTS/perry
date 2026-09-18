@@ -1447,13 +1447,13 @@ mod constructor_arg_slot_tests {
     fn array_of(value: f64) -> (usize, u32) {
         let arr = crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader;
         assert!(!arr.is_null(), "expected a packed array, got {value}");
-        let len = unsafe { crate::array::js_array_length(arr) };
+        let len = crate::array::js_array_length(arr);
         (arr as usize, len)
     }
 
     fn element(value: f64, index: u32) -> f64 {
         let arr = crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader;
-        unsafe { crate::array::js_array_get_f64(arr, index) }
+        crate::array::js_array_get_f64(arr, index)
     }
 
     #[test]
