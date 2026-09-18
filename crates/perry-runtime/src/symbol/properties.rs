@@ -397,8 +397,14 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
             let jsval = crate::value::JSValue::from_bits(bits);
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
+                // `is_valid_obj_ptr` is only a floor check and deliberately does
+                // NOT reject the fetch/zlib/proxy handle bands (see its own doc).
+                // Handles are pointer-tagged with small addresses, so a handle
+                // receiver would reach the deref below and segfault on Linux while
+                // macOS hides it (#1843/#4004/#4665/#4800/#6271). `is_above_handle_band`
+                // is the sanctioned predicate for "may be treated as a heap address".
                 if !ptr.is_null()
-                    && crate::object::is_valid_obj_ptr(ptr as *const u8)
+                    && crate::value::addr_class::is_above_handle_band(ptr as usize)
                     && accessors::symbol_may_have_accessor(sym_key)
                 {
                     if let Some((_, set_bits)) =
