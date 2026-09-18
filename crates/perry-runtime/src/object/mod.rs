@@ -302,8 +302,9 @@ pub(crate) use field_get_set::{
 pub(crate) use this_binding::js_derived_super_scope_push;
 pub(crate) use this_binding::{
     derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
-    scan_implicit_this_roots_mut, static_private_owner_current, static_private_owner_pop,
-    static_private_owner_push, static_private_owner_stack_restore,
+    implicit_this_trap_restore, implicit_this_trap_savepoint, new_target_trap_restore,
+    new_target_trap_savepoint, scan_implicit_this_roots_mut, static_private_owner_current,
+    static_private_owner_pop, static_private_owner_push, static_private_owner_stack_restore,
     static_private_owner_stack_savepoint, static_this_arm, static_this_arm_if_unarmed,
     static_this_disarm, IMPLICIT_THIS,
 };
