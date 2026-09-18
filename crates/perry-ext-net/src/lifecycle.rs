@@ -123,14 +123,30 @@ fn with_socket<T>(handle: i64, default: T, f: impl FnOnce(&crate::SocketState) -
 /// `handle` must be a registered socket id (raw, NOT NaN-boxed).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_pending(handle: i64) -> f64 {
-    // #10465 — Node's real getter is `!this._handle || this.connecting`: once
-    // there is no live handle (never connected, still connecting, OR fully
-    // closed/destroyed) `pending` reads `true` again — it is NOT simply the
-    // complement of `destroyed`. A handle already reaped from the registry
-    // (see the `'close'` teardown in `socket_events.rs`, which removes the
+    // #10465 — Node's real getter is `!this._handle`: once there is no live
+    // handle (never connected, still connecting, OR fully closed/destroyed)
+    // `pending` reads `true` again — it is NOT simply the complement of
+    // `destroyed`. A handle already reaped from the registry (see the
+    // `'close'` teardown in `socket_events.rs`, which removes the
     // `SocketState` entry once the `'close'` event has fired) falls through
     // to the `true` default below, which is what we want for that case too.
-    nanbox_bool(with_socket(handle, true, |s| !s.is_open))
+    //
+    // Deliberately keyed on `has_opened`/`destroyed`, NOT `is_open`:
+    // `is_open` flips false via `server_state::mark_socket_closed`, called
+    // from the tokio task thread as soon as teardown STARTS (before the main
+    // thread has processed the `'end'`/`'close'` events that same teardown
+    // just queued), while `destroyed` only flips at `'close'`-processing
+    // time — the one point that actually agrees with Node's own timing (see
+    // the `Close` arm in `socket_events.rs`). Once a socket has opened at
+    // least once, "does it have a live handle" reduces to "has it been
+    // destroyed yet", not to the (earlier-flipping) `is_open` flag.
+    nanbox_bool(with_socket(handle, true, |s| {
+        if s.has_opened {
+            s.destroyed
+        } else {
+            true
+        }
+    }))
 }
 
 /// `socket.connecting` — `true` from `net.connect()`/`socket.connect()`

@@ -250,6 +250,18 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     fn js_tls_client_record_closed(handle: i64);
                 }
                 js_tls_client_record_closed(id);
+                // #10465 — flip the terminal state fields synchronously with
+                // firing `'close'`, matching Node's own timing (its
+                // `'close'` listeners see `destroyed: true`; earlier events
+                // on the SAME socket do not). This is the common teardown
+                // point for every path that reaches `Close`: peer EOF +
+                // local end, explicit `.destroy()`, connect failure, TLS
+                // handshake failure.
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
+                    socket.destroyed = true;
+                    socket.is_open = false;
+                    socket.connecting = false;
+                }
                 let had_error = f64::from_bits(JsValue::from_bool(false).bits());
                 let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "close"));
                 for i in 0..frame.len() {

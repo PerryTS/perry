@@ -36,7 +36,7 @@ use std::sync::{Mutex, OnceLock};
 
 use perry_ffi::{
     alloc_closure, closure_capture_f64, register_closure_arity, set_closure_capture_f64,
-    RawClosureHeader,
+    GcRootVisitor, RawClosureHeader,
 };
 
 use crate::statics;
@@ -135,10 +135,25 @@ fn ensure_pipe_closure_arities_registered() {
 
 /// One socket -> destination pipe route, tracked so `unpipe` can remove
 /// exactly the listener closures a matching `pipe()` call installed.
+///
+/// Deliberately does NOT cache `dest`'s bits here: `dest` is a NaN-boxed
+/// value that can be a heap pointer, and a second, un-rooted copy of it
+/// would go stale the moment a GC cycle moves the object — the closure's
+/// OWN capture slot 0 (scanned automatically once `data_cb` is reachable
+/// via `statics::listeners()`, see `install_pipe_listeners`) is the only
+/// copy this module keeps, and `matches_dest` below reads it back live at
+/// comparison time instead of trusting a cache the collector cannot see.
 struct PipeRoute {
-    dest_bits: u64,
     data_cb: i64,
     end_cb: i64,
+}
+
+impl PipeRoute {
+    fn matches_dest(&self, dest_bits: u64) -> bool {
+        let live_dest =
+            unsafe { closure_capture_f64(self.data_cb as *const RawClosureHeader, 0) };
+        live_dest.to_bits() == dest_bits
+    }
 }
 
 fn pipe_routes() -> &'static Mutex<HashMap<i64, Vec<PipeRoute>>> {
@@ -217,11 +232,7 @@ pub(crate) fn socket_pipe(handle: i64, dest: f64, options: f64) -> f64 {
         .unwrap()
         .entry(handle)
         .or_default()
-        .push(PipeRoute {
-            dest_bits: dest.to_bits(),
-            data_cb,
-            end_cb,
-        });
+        .push(PipeRoute { data_cb, end_cb });
 
     dest
 }
@@ -238,7 +249,7 @@ pub(crate) fn socket_unpipe(handle: i64, dest: f64) {
         };
         let mut removed = Vec::new();
         list.retain(|route| {
-            let matches = filter_bits.is_none_or(|bits| bits == route.dest_bits);
+            let matches = filter_bits.is_none_or(|bits| route.matches_dest(bits));
             if matches {
                 removed.push((route.data_cb, route.end_cb));
             }
@@ -261,6 +272,28 @@ pub(crate) fn socket_unpipe(handle: i64, dest: f64) {
 /// individual callbacks there would be redundant.
 pub(crate) fn drop_routes(handle: i64) {
     pipe_routes().lock().unwrap().remove(&handle);
+}
+
+/// GC root scanner for `pipe_routes()` — called from
+/// `gc_roots::scan_net_roots` alongside the sibling `statics::listeners()`
+/// scan. `data_cb`/`end_cb` are a SECOND copy of pointers already rooted via
+/// `statics::listeners()` (`install_pipe_listeners` pushes the same values
+/// there), but a copying GC cycle only rewrites addresses IN PLACE at
+/// wherever the scanner visits them — the two copies are independent slots
+/// as far as the collector is concerned, so this copy needs its own visit or
+/// it keeps the pre-evacuation address after the `statics::listeners()` copy
+/// has already been updated (`matches_dest`'s capture-slot read would then
+/// dereference a stale/forwarded pointer — exactly the class of bug
+/// `scripts/gc_runtime_root_holders.py` exists to catch).
+pub(crate) fn scan_roots(visitor: &mut GcRootVisitor<'_>) {
+    if let Ok(mut routes) = pipe_routes().lock() {
+        for per_socket in routes.values_mut() {
+            for route in per_socket.iter_mut() {
+                visitor.visit_i64_slot(&mut route.data_cb);
+                visitor.visit_i64_slot(&mut route.end_cb);
+            }
+        }
+    }
 }
 
 // ─── FFI: typed `net.Socket.prototype.pipe`/`.unpipe` ────────────────────────

@@ -69,4 +69,8 @@ pub(crate) fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
     // #8259 — the pump's in-flight dispatch frames (snapshotted callbacks +
     // parked payloads), which the table walks above cannot see.
     dispatch_custody::scan(visitor);
+    // #10444 — `pipe()`'s own closure-pointer bookkeeping (see the doc on
+    // `pipe::scan_roots` for why it needs its own visit despite the SAME
+    // pointers already being visited via `statics::listeners()` above).
+    crate::pipe::scan_roots(visitor);
 }

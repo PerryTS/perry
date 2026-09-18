@@ -63,6 +63,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             raw: None,
             destroyed: false,
             connecting: false,
+            has_opened: true,
             writable_ended: false,
             readable_ended: false,
             bytes_read: 0,
