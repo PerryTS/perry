@@ -1777,15 +1777,19 @@ fn collect_module_one(
         }
     }
 
-    // Next.js lazy-require: the CJS→ESM wrap names a binding `_lazyreq_N` when
-    // every `require('S')` call site is inside a function body (lazy in Node).
-    // Tag the import so `classify_eager_modules` leaves the target Deferred —
-    // matching Node, which only loads such a module when the enclosing function
-    // runs (e.g. jsonwebtoken, required only inside Next.js's request handlers).
-    // The require shim triggers the target's `__init` on first `require()`, so
-    // an over-eager classification is self-correcting at runtime. Limited to
-    // Perry-compiled (`NativeCompiled`) targets — native stdlib / V8 modules
-    // have their own init paths.
+    // Deferred require (#10437, originally the Next.js lazy-require case): the
+    // CJS→ESM wrap names a binding `_lazyreq_N` when every `require('S')` call
+    // site is NOT guaranteed to run the moment the module loads — inside a
+    // function body (lazy in Node: jsonwebtoken, required only inside Next.js's
+    // request handlers), or inside a top-level control-flow block / braceless
+    // equivalent that may never run (`if (forceNative) { require('./native') }`,
+    // pg's optional native binding). Tag the import so `classify_eager_modules`
+    // leaves the target Deferred — matching Node, which only loads such a
+    // module when control flow actually reaches the call. The require shim
+    // triggers the target's `__init` at that same call site, so an over-eager
+    // classification is self-correcting at runtime (it just runs a bit early).
+    // Limited to Perry-compiled (`NativeCompiled`) targets — native stdlib /
+    // V8 modules have their own init paths.
     {
         for import in &mut hir_module.imports {
             if import.type_only
