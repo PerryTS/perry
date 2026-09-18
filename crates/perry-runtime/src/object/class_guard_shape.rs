@@ -63,6 +63,9 @@ pub unsafe extern "C" fn js_register_class_guard_shape(slot: *mut u32) {
         let seeded = unsafe { slot.read() };
         slots.push((slot as usize, seeded));
         if PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.load(Ordering::Relaxed) != 0 {
+            // GC_STORE_AUDIT(POINTER_FREE): a `u32` ShapeId in the program's own
+            // data segment, never a heap edge — the collector neither scans nor
+            // rewrites it.
             // SAFETY: caller contract above.
             unsafe { slot.write(CLASS_GUARD_SHAPE_POISON) };
         }
@@ -72,6 +75,8 @@ pub unsafe extern "C" fn js_register_class_guard_shape(slot: *mut u32) {
 pub(super) fn poison_class_guard_shapes() {
     if let Ok(slots) = CLASS_GUARD_SHAPE_SLOTS.lock() {
         for &(addr, _) in slots.iter() {
+            // GC_STORE_AUDIT(POINTER_FREE): a `u32` ShapeId in the program's own
+            // data segment, never a heap edge.
             // SAFETY: every entry was registered through
             // `js_register_class_guard_shape`, whose contract requires a valid
             // writable static `u32`.
@@ -88,6 +93,8 @@ pub(super) fn poison_class_guard_shapes() {
 pub(super) fn restore_class_guard_shapes_for_test() {
     if let Ok(slots) = CLASS_GUARD_SHAPE_SLOTS.lock() {
         for &(addr, seeded) in slots.iter() {
+            // GC_STORE_AUDIT(POINTER_FREE): a `u32` ShapeId in the program's own
+            // data segment, never a heap edge.
             // SAFETY: registered through `js_register_class_guard_shape`.
             unsafe { (addr as *mut u32).write(seeded) };
         }
