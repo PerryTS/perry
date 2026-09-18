@@ -39,6 +39,10 @@ mod builtin;
 mod builtin_table_gate;
 mod capture_writeback;
 mod closure_analysis;
+/// #10420: closure-value calls with more than 16 arguments compile and take
+/// the array path; function-value wrappers keep every declared param.
+#[cfg(test)]
+mod closure_call_arity_tests;
 mod console_promise;
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
@@ -153,6 +157,7 @@ pub(crate) use native::lower_native_method_call;
 // Re-export pub(crate) `new.rs` items consumed outside this module
 // (codegen.rs / expr.rs / stmt.rs) so `crate::lower_call::lower_new`
 // etc. keep resolving after the split.
+pub(crate) use builtin::lower_global_intrinsic_new;
 pub(crate) use field_init::{
     apply_field_initializers_recursive, defer_dynamic_derived_fields, FieldInitMode,
 };
@@ -256,6 +261,51 @@ pub(crate) fn emit_rooted_call(
     result
 }
 
+/// Widest call the per-arity `js_closure_call{N}` runtime entry points take.
+pub(crate) const MAX_FIXED_CLOSURE_CALL_ARGS: usize = 16;
+
+/// Dispatch an unboxed closure handle over already-lowered arguments through
+/// the closure-call ABI.
+///
+/// Up to [`MAX_FIXED_CLOSURE_CALL_ARGS`] arguments use the per-arity
+/// `js_closure_call{N}` register entry points — the fast path, unchanged.
+/// Wider calls marshal the arguments into an entry-block `[N x double]` buffer
+/// and dispatch through the variadic `js_closure_call_array(closure, args_ptr,
+/// argc)`, which owns arbitrary-arity dispatch including rest bundling (#3527).
+/// #10420: every closure-value call site used to either reject a 17th argument
+/// at compile time or truncate the list to 16; they all route here now.
+///
+/// The buffer is NOT a GC root, so callers pass values that are already valid
+/// below their last collection point; nothing emitted between the stores and
+/// the call can collect.
+pub(crate) fn emit_closure_handle_call(
+    ctx: &mut FnCtx<'_>,
+    closure_handle: &str,
+    args: &[String],
+) -> String {
+    use crate::types::{DOUBLE, I64, PTR};
+    if args.len() <= MAX_FIXED_CLOSURE_CALL_ARGS {
+        let runtime_fn = format!("js_closure_call{}", args.len());
+        let mut call_args: Vec<(crate::types::LlvmType, &str)> = Vec::with_capacity(args.len() + 1);
+        call_args.push((I64, closure_handle));
+        call_args.extend(args.iter().map(|value| (DOUBLE, value.as_str())));
+        return ctx.block().call(DOUBLE, &runtime_fn, &call_args);
+    }
+    let n = args.len();
+    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+    let blk = ctx.block();
+    for (i, value) in args.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+        blk.store(DOUBLE, value, &slot);
+    }
+    let argc = n.to_string();
+    blk.call(
+        DOUBLE,
+        "js_closure_call_array",
+        &[(I64, closure_handle), (PTR, &buf), (I64, &argc)],
+    )
+}
+
 /// One array a rest/`arguments` call has to materialize from its argument
 /// list: every argument from `from` onwards, optionally flagged as an
 /// `arguments` object.
@@ -342,7 +392,44 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
     // exactly as the push loop is for its elements.
     let mut accs: Vec<crate::rooting::AccArray> = Vec::with_capacity(bundles.len());
     for bundle in bundles {
-        let cap = (args.len().saturating_sub(bundle.from) as u32).to_string();
+        let count = args.len().saturating_sub(bundle.from);
+        // Build it the way an array literal of the same width is built: ONE
+        // inline bump allocation and N stores. `js_array_alloc` + one
+        // `js_array_push_f64` per element re-classified the receiver,
+        // re-noted the slot layout and re-checked the barrier on every push —
+        // 1,586 instructions for `f(a, b, c)` into a three-element rest.
+        // Rooting is unchanged: every element is re-read from the group's
+        // slots first (the allocator's slow arm collects), and the finished
+        // array is adopted into the same scope, so the next bundle's
+        // allocation cannot sweep it.
+        if count > 0 && count <= crate::expr::INLINE_ARRAY_MAX_ELEMENTS {
+            let rest_args = &args[bundle.from..];
+            let canonical_raw_f64: Vec<bool> = rest_args
+                .iter()
+                .map(|e| crate::type_analysis::expr_produces_canonical_raw_f64(ctx, e))
+                .collect();
+            let layout_notes_needed: Vec<bool> = rest_args
+                .iter()
+                .map(|e| !crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, e))
+                .collect();
+            let all_numeric = rest_args
+                .iter()
+                .all(|e| crate::type_analysis::is_numeric_expr(ctx, e));
+            let mut vals: Vec<String> = Vec::with_capacity(count);
+            for i in bundle.from..group.len() {
+                vals.push(group.reread(ctx, i)?);
+            }
+            let arr = crate::expr::emit_array_from_lowered_values(
+                ctx,
+                &vals,
+                &canonical_raw_f64,
+                &layout_notes_needed,
+                all_numeric,
+            )?;
+            accs.push(group.adopt_array(ctx, &arr));
+            continue;
+        }
+        let cap = (count as u32).to_string();
         let acc = group.begin_array(ctx, &cap);
         for i in bundle.from..group.len() {
             // Re-read per element: the previous push allocated, so the register

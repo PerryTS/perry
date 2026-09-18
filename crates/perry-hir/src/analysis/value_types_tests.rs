@@ -1837,3 +1837,58 @@ fn resolves_this_and_super_in_class_context() {
         Type::Number
     );
 }
+
+/// #10418: `&` `|` `^` `<<` `>>` compute a BigInt for two BigInt operands, so
+/// the result is a Number only when an operand provably is not a BigInt.
+/// Typing `a & b` over unknown operands as Number gave the binding an int32
+/// slot that read a BigInt result back as `0`.
+#[test]
+fn bitwise_result_is_number_only_with_a_non_bigint_operand() {
+    let env = empty_env();
+    let binary = |op, left, right| Expr::Binary {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let unknown = || Expr::LocalGet(1);
+    for op in [
+        BinaryOp::BitAnd,
+        BinaryOp::BitOr,
+        BinaryOp::BitXor,
+        BinaryOp::Shl,
+        BinaryOp::Shr,
+    ] {
+        assert_eq!(
+            infer_expr_type(&binary(op, unknown(), unknown()), &env),
+            Type::Any,
+            "{op:?} over unknown operands may be a BigInt"
+        );
+        assert_eq!(
+            infer_expr_type(&binary(op, unknown(), Expr::Integer(255)), &env),
+            Type::Number,
+            "{op:?} with a Number operand is a Number or throws"
+        );
+        assert_eq!(
+            infer_expr_type(&binary(op, Expr::Bool(true), unknown()), &env),
+            Type::Number,
+            "{op:?} with a Boolean operand is a Number or throws"
+        );
+        assert_eq!(
+            infer_expr_type(
+                &binary(
+                    op,
+                    Expr::BigInt("7".to_string()),
+                    Expr::BigInt("3".to_string())
+                ),
+                &env
+            ),
+            Type::BigInt,
+            "{op:?} over BigInt operands is a BigInt"
+        );
+    }
+    // `>>>` has no BigInt form.
+    assert_eq!(
+        infer_expr_type(&binary(BinaryOp::UShr, unknown(), unknown()), &env),
+        Type::Number
+    );
+}

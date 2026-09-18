@@ -948,6 +948,10 @@ pub fn lower_module_full_with_platform_globals(
     // literals, and counter vars (see `fn_ctor_env`).
     ctx.fn_ctor_env = super::fn_ctor_env::build_fn_ctor_env(ast_module);
 
+    // #10421: a `Function` constructor reached as a value (an alias,
+    // `ctx.Function`, `fn.constructor(...)`) needs the interpreter too.
+    pre_scan_function_ctor_reach(ast_module);
+
     // #8882: every class DECLARATION name at any depth, for `lower_new`'s
     // unresolved-constructor guard (see `pre_scan/class_decl_names.rs`).
     pre_scan_class_decl_names(ast_module, &mut ctx);
@@ -1163,6 +1167,14 @@ pub fn lower_module_full_with_platform_globals(
         };
         if let Some(var_decl) = var_decl {
             for decl in &var_decl.decls {
+                // #10363: an ambient declarator binds nothing. Pre-registering
+                // it would resolve every earlier reference to a local that is
+                // never written, and a `var` would also be reflected onto
+                // globalThis as a non-configurable property.
+                if super::ambient::declarator_binds_nothing(var_decl, decl) {
+                    super::ambient::note_ambient_globals(&mut ctx, decl);
+                    continue;
+                }
                 // #4461: `var X = class { ... }` is lowered as a class
                 // expression bound to the name `X` (see stmt.rs) — the class
                 // itself takes the role of the value referenced by name, and
@@ -1702,6 +1714,7 @@ pub fn lower_module_full_with_platform_globals(
         );
     }
 
+    module_decl::mark_exported_function_bodies(&mut module);
     module_decl::register_exported_local_variables(&ctx, &mut module);
 
     // Populate exported_native_instances by matching native_instances with exports

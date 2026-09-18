@@ -64,7 +64,7 @@ pub extern "C-unwind" fn js_closure_unbox_callee_checked_rebind(callee: f64, rec
 
 /// Keepalive: generated code is the only caller (#6475).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLOSURE_UNBOX_CALLEE_CHECKED_REBIND: extern "C-unwind" fn(f64, f64) -> i64 =
     js_closure_unbox_callee_checked_rebind;
 

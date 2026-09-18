@@ -138,16 +138,61 @@ pub(crate) struct ShapeDescriptor {
 /// lifted out of the table compares equal to the record it came from.
 impl ShapeDescriptor {
     /// The one `keys` word the collector rewrites for this shape, or `None`
-    /// for a descriptor value that was never lifted out of the table.
-    ///
-    /// `keys` is the first field of the `#[repr(C)]` slab record, so the
-    /// record address IS the slot address.
+    /// for a descriptor value that was never lifted out of the table. The
+    /// collector itself asks [`ShapeRecordRef::keys_slot`] (#10362).
+    #[cfg(test)]
     #[inline]
     pub(crate) fn keys_slot(&self) -> Option<*mut u64> {
-        if self.record == 0 {
-            return None;
-        }
-        Some(self.record as *mut u64)
+        self.record_ref().map(ShapeRecordRef::keys_slot)
+    }
+
+    /// The slab record this value was lifted from, or `None` for a descriptor
+    /// built outside the table.
+    #[inline]
+    pub(crate) fn record_ref(&self) -> Option<ShapeRecordRef> {
+        std::ptr::NonNull::new(self.record as *mut ShapeRecord).map(ShapeRecordRef)
+    }
+}
+
+/// One live slab record, borrowed in place rather than lifted (#10362).
+///
+/// The collector asks three things of a traced receiver's shape: the live
+/// inline-slot bound, the record's own `keys` word (the rewritable edge,
+/// #8112), and the record's liveness bits. All three live in the record, so it
+/// resolves this handle ONCE per receiver (#8122's one-probe rule) and threads
+/// it through every step instead of a lifted [`ShapeDescriptor`]. The lifted
+/// copy is 40 bytes and rode on the per-object `HeapChildSlotIterator`, which
+/// made that iterator too large to move without an out-of-line `memmove`.
+///
+/// Validity is exactly `ShapeDescriptor::record`'s, which the carrier notes
+/// already write through: record addresses never move (#9706), and a record's
+/// chunk is released only by `shrink_shape_tables` at the end of a major
+/// collection, after every enumeration of the cycle that resolved it.
+#[derive(Clone, Copy)]
+pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
+
+impl ShapeRecordRef {
+    /// The record's live inline-slot bound — the same fact a lifted
+    /// descriptor's `live_inline_slot_count` copies.
+    #[inline]
+    pub(crate) fn live_inline_slot_count(self) -> u32 {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).live_inline_slot_count }
+    }
+
+    /// The record's current `keys` word (0 for a keyless shape).
+    #[inline]
+    pub(crate) fn keys(self) -> u64 {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).keys }
+    }
+
+    /// The `keys` word's address: the slot the collector marks through and
+    /// rewrites in place. `keys` is the first field of the `#[repr(C)]` slab
+    /// record, so the record address IS the slot address.
+    #[inline]
+    pub(crate) fn keys_slot(self) -> *mut u64 {
+        self.0.as_ptr() as *mut u64
     }
 }
 
@@ -684,6 +729,14 @@ pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
     crate::state::state().shapes.slab().lift(shape_id)
 }
 
+/// The record named by `shape_id`, borrowed in place: the same slab probe as
+/// [`shape_descriptor_by_id`], without lifting a copy (#10362).
+#[inline]
+pub(crate) fn shape_record_by_id(shape_id: u32) -> Option<ShapeRecordRef> {
+    let record = crate::state::state().shapes.slab().record_ptr(shape_id)?;
+    std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
 /// Immutable ordinary-vs-class fact with a pointer-free, per-agent direct
 /// cache. The first observation remains the authoritative descriptor lookup_ways;
 /// subsequent observations avoid the hot ShapeId HashMap borrow.
@@ -699,7 +752,7 @@ pub(crate) fn shape_object_kind_by_id(shape_id: u32) -> Option<ShapeObjectKind> 
 
 /// Record that a shape is carried by an OLD-generation receiver.
 ///
-/// Called from the collector's slot visitor, which resolved the descriptor for
+/// Called from the collector's slot visitor, which resolved the record for
 /// this receiver already, so the note costs a generation range check and a
 /// byte store — no second shape-table probe (#8122's one-probe rule). The
 /// store goes straight through the boxed record's address rather than
@@ -708,25 +761,23 @@ pub(crate) fn shape_object_kind_by_id(shape_id: u32) -> Option<ShapeObjectKind> 
 ///
 /// # Safety
 ///
-/// `descriptor.record`, when non-zero, is the address of a live slab record
-/// owned by this agent's shape table. Records are retired only by the table's
+/// `record` is a live slab record owned by this agent's shape table (the
+/// contract on [`ShapeRecordRef`]). Records are retired only by the table's
 /// own retirement paths, and their chunk is released by
 /// `shrink_shape_tables` at the end of a major collection — after every
-/// enumeration of the cycle that produced this descriptor.
+/// enumeration of the cycle that resolved this record.
 #[inline]
-pub(crate) unsafe fn note_old_generation_carrier(descriptor: Option<ShapeDescriptor>) {
-    let Some(descriptor) = descriptor else {
+pub(crate) unsafe fn note_old_generation_carrier(record: Option<ShapeRecordRef>) {
+    let Some(record) = record else {
         return;
     };
-    if descriptor.record == 0 {
-        return;
-    }
-    let record = descriptor.record as *mut ShapeRecord;
+    let keys = record.keys();
+    let record = record.0.as_ptr();
     let first_note_this_epoch = !(*record).has(RECORD_FLAG_OLD_CARRIER_SEEN);
     // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping bits, never a heap reference.
     (*record).set(RECORD_FLAG_OLD_CARRIER | RECORD_FLAG_OLD_CARRIER_SEEN, true);
     if first_note_this_epoch {
-        note_shape_carrier_candidate(descriptor.keys);
+        note_shape_carrier_candidate(keys);
     }
 }
 
@@ -734,13 +785,11 @@ pub(crate) unsafe fn note_old_generation_carrier(descriptor: Option<ShapeDescrip
 /// Unlike the old-generation gate, this answers receiver liveness regardless
 /// of generation and is consumed by post-trace descriptor retirement.
 #[inline]
-pub(crate) unsafe fn note_full_trace_carrier(descriptor: Option<ShapeDescriptor>) {
-    let Some(descriptor) = descriptor else {
+pub(crate) unsafe fn note_full_trace_carrier(record: Option<ShapeRecordRef>) {
+    let Some(record) = record else {
         return;
     };
-    if descriptor.record != 0 {
-        (*(descriptor.record as *mut ShapeRecord)).set(RECORD_FLAG_CARRIED_SEEN, true);
-    }
+    (*record.0.as_ptr()).set(RECORD_FLAG_CARRIED_SEEN, true);
 }
 
 #[inline]
@@ -808,14 +857,14 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
 ) {
     (*obj).parent_class_id = id;
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        let descriptor = shape_descriptor_by_id(id);
-        note_old_generation_carrier(descriptor);
+        let record = shape_record_by_id(id);
+        note_old_generation_carrier(record);
         // This stamp is the structural-mutation publication funnel. Re-arm
         // even when the descriptor was already an old carrier: an owned
         // Longlived keys array may have just gained a nursery key at the same
         // address, and its carrier flag alone cannot express that transition.
-        if let Some(descriptor) = descriptor {
-            note_shape_carrier_candidate(descriptor.keys);
+        if let Some(record) = record {
+            note_shape_carrier_candidate(record.keys());
         }
     }
 }
@@ -940,7 +989,7 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 /// preheader), so the auto-optimize whole-program build would otherwise
 /// dead-strip it (see the FFI-symbol-link-break class).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SHAPE_ORDINARY_INLINE_SLOT_FOR_KEY: extern "C" fn(u32, u64) -> i32 =
     js_shape_ordinary_inline_slot_for_key;
 
@@ -1310,7 +1359,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
     }
     (*obj).parent_class_id = runtime_shape_id;
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        note_old_generation_carrier(Some(descriptor));
+        note_old_generation_carrier(descriptor.record_ref());
     }
     debug_assert_object_shape_parity(obj);
     true
@@ -1745,6 +1794,14 @@ pub(crate) unsafe fn object_shape_descriptor(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<ShapeDescriptor> {
     shape_descriptor_by_id(object_shape_stamp(obj))
+}
+
+/// [`object_shape_descriptor`]'s record, borrowed in place (#10362).
+#[inline]
+pub(crate) unsafe fn object_shape_record(
+    obj: *const crate::object::ObjectHeader,
+) -> Option<ShapeRecordRef> {
+    shape_record_by_id(object_shape_stamp(obj))
 }
 
 #[inline]

@@ -179,7 +179,7 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
 /// Keepalive anchor: emitted only from generated module-init code, so the
 /// whole-program auto-optimize bitcode pass would otherwise dead-strip it.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REGISTER_CLASS_GENERIC_ORIGIN: extern "C" fn(u32, u32) =
     js_register_class_generic_origin;
 
@@ -436,5 +436,56 @@ mod dense_parent_tests {
         if FETCH_PARENT_LATCH.is_idle() {
             assert_eq!(fetch_parent_kind(A), None);
         }
+    }
+
+    /// Re-registering an edge that is already published must be a no-op.
+    ///
+    /// Every allocation of an inheriting class calls `register_class`
+    /// (`object_alloc_class_inline_keys_impl`), so a bump here is a bump per
+    /// `new`, and `prop_plan_epoch_bump`'s own contract says its callers are
+    /// "rare, cold paths by construction" — an epoch bump throws away every
+    /// cached store plan in the program.
+    #[test]
+    fn re_registering_the_same_edge_flushes_nothing() {
+        const CHILD: u32 = 60_020;
+        const PARENT: u32 = 60_021;
+        crate::object::class_registry::register_class(CHILD, PARENT);
+
+        let epoch_after_first = crate::object::prop_plan::prop_plan_semantic_epoch();
+        for _ in 0..8 {
+            crate::object::class_registry::register_class(CHILD, PARENT);
+        }
+        assert_eq!(
+            crate::object::prop_plan::prop_plan_semantic_epoch(),
+            epoch_after_first,
+            "re-registering an unchanged edge must not invalidate cached store plans"
+        );
+        assert_eq!(get_parent_class_id(CHILD), Some(PARENT));
+    }
+
+    /// The other direction, which is what keeps the skip honest: a CHANGED
+    /// parent is a different chain, so it must publish and flush.
+    #[test]
+    fn re_parenting_still_publishes_and_flushes() {
+        const CHILD: u32 = 60_030;
+        const FIRST: u32 = 60_031;
+        const SECOND: u32 = 60_032;
+        crate::object::class_registry::register_class(CHILD, FIRST);
+        let before = crate::object::prop_plan::prop_plan_semantic_epoch();
+
+        crate::object::class_registry::register_class(CHILD, SECOND);
+
+        assert_ne!(
+            crate::object::prop_plan::prop_plan_semantic_epoch(),
+            before,
+            "a re-parent changes what the chain intercepts and must flush plans"
+        );
+        assert_eq!(get_parent_class_id(CHILD), Some(SECOND));
+        let map = CLASS_REGISTRY.read().unwrap();
+        assert_eq!(
+            map.as_ref().and_then(|m| m.get(&CHILD).copied()),
+            Some(SECOND),
+            "the authoritative map must carry the new edge too"
+        );
     }
 }

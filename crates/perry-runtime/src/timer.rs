@@ -40,10 +40,9 @@ use mock::{
     schedule_mock_interval_timer,
 };
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    LazyLock, Mutex,
+    Mutex,
 };
 use std::time::{Duration, Instant};
 use store::{Class, Entry};
@@ -387,11 +386,7 @@ pub(crate) mod test_shared_queues;
 pub use gc_scan::scan_timer_roots_mut;
 pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 pub use ref_states::is_known_timer_id;
-use ref_states::{TimerRefStates, TIMER_REF_STATES_CAP};
 
-static TIMER_REF_STATES: Mutex<Option<TimerRefStates>> = Mutex::new(None);
-static TIMER_HANDLE_KINDS: LazyLock<Mutex<HashMap<i64, CallbackTimerKind>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 
@@ -590,28 +585,26 @@ fn set_timer_ref_state(id: i64, has_ref: bool) {
 /// Record `id`'s ref state in the `hasRef()` registry only. For callers that
 /// hold a timer lock or have already set the queued entry's `refed` directly.
 fn record_timer_ref_state(id: i64, has_ref: bool) {
-    ref_states::TIMER_IDS_NONEMPTY.arm();
-    let mut slot = TIMER_REF_STATES.lock().unwrap();
-    slot.get_or_insert_with(TimerRefStates::default)
-        .insert_bounded(id, has_ref, TIMER_REF_STATES_CAP);
-}
-
-fn record_timer_handle_kind(id: i64, kind: CallbackTimerKind) {
-    let mut kinds = TIMER_HANDLE_KINDS.lock().unwrap();
-    if kinds.len() >= TIMER_REF_STATES_CAP && !kinds.contains_key(&id) {
-        if let Some(oldest) = kinds.keys().copied().min() {
-            kinds.remove(&oldest);
-        }
-    }
-    kinds.insert(id, kind);
+    // #10447: was `insert_bounded`, which evicted the oldest ids by insertion
+    // order whether or not they were still scheduled — so 65,536 later timers
+    // silently undid a live timer's `unref()` and dropped the id out of
+    // `is_known_timer_id`, which is what makes `.hasRef()`/`.ref()`/`.unref()`
+    // stop dispatching. `set_timer_ref_state` bounds the registry the same way
+    // but only ever evicts RETIRED ids; a scheduled id is pinned.
+    //
+    // The keep-alive half of #10447 never reached this branch — P3 reads
+    // `store::has_refed_timers()`, not this registry — but the handle-method
+    // half did, and this is the fix for it.
+    ref_states::set_timer_ref_state(id, has_ref);
 }
 
 /// Synthetic constructor object for `Timeout`/`Immediate` native handles.
-/// Timer ids outlive queue removal, so the kind table retains recent entries
-/// after clear/fire just as Node retains the wrapper's prototype. The bounded
-/// inventory avoids unbounded growth in long-running processes.
+/// Timer ids outlive queue removal, so the registry retains recent retired ids
+/// after clear/fire just as Node retains the wrapper's prototype — and since
+/// #10447 a still-SCHEDULED id is pinned and never evicted, which is what makes
+/// `.constructor` keep working on a live timer.
 pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
-    let kind = TIMER_HANDLE_KINDS.lock().unwrap().get(&id).copied()?;
+    let kind = ref_states::timer_handle_kind(id)?;
     let name = match kind {
         CallbackTimerKind::Timeout => b"Timeout".as_slice(),
         CallbackTimerKind::Immediate => b"Immediate".as_slice(),
@@ -644,12 +637,9 @@ pub extern "C" fn js_timer_has_ref(timer_id: i64) -> i32 {
     // Node's `Timeout.hasRef()` returns the current ref state, which is
     // `true` by default and stays `true` after `clearTimeout` unless the
     // user explicitly called `.unref()` on the handle.
-    TIMER_REF_STATES
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|s| s.states.get(&timer_id).copied())
-        .unwrap_or(true) as i32
+    // #10447: the registry's own accessor, which keeps Node's "an id we do not
+    // hold reads as ref'd" default in one place instead of restating it here.
+    ref_states::timer_has_ref_state(timer_id) as i32
 }
 
 #[no_mangle]
@@ -824,7 +814,12 @@ fn schedule_callback_timer(
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
-    record_timer_handle_kind(id, handle_kind);
+    // #10447: registering PINS this id in the handle registry — it records the
+    // kind and marks it scheduled, so it cannot be evicted while queued. The
+    // returned guard is handed to the queue entry below and retires the id when
+    // that entry is dropped. This replaces `record_timer_handle_kind`, whose
+    // own table had the same evicting cap plus an O(n) `min()` scan per insert.
+    let scheduled = ref_states::register_scheduled_timer(id, handle_kind);
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
@@ -852,6 +847,7 @@ fn schedule_callback_timer(
         context,
         ids.async_id,
         ids.trigger_async_id,
+        Some(scheduled),
     );
     store::with_current(|timers| {
         match class {
@@ -1102,7 +1098,12 @@ pub fn scan_timer_roots(mark: &mut dyn FnMut(f64)) {
 
 /// `PERRY_GC_CENSUS`: the agent timer store.
 pub(crate) fn timer_tables_census() -> Vec<crate::gc::census::SideTableRow> {
-    store::census_rows()
+    // The handle registry is a bounded side table in its own right (#10447):
+    // it outlives the queue entries, since a retired id stays queryable until
+    // evicted. Leaving it out would under-report what timers retain.
+    let mut rows = store::census_rows();
+    rows.push(ref_states::ref_states_census());
+    rows
 }
 
 #[path = "timer/tests_inline.rs"]

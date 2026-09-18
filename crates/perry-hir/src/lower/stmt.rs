@@ -454,6 +454,12 @@ pub(crate) fn lower_stmt(
                     let mutable = var_decl.kind != ast::VarDeclKind::Const;
                     let is_var = var_decl.kind == ast::VarDeclKind::Var;
                     for decl in &var_decl.decls {
+                        // #10363: `declare const/let/var` binds nothing, so
+                        // references reach the global it describes.
+                        if super::ambient::declarator_binds_nothing(var_decl, decl) {
+                            super::ambient::note_ambient_globals(ctx, decl);
+                            continue;
+                        }
                         // Check if this is a Widget({...}) call from perry/widget
                         if let Some(init) = &decl.init {
                             if let ast::Expr::Call(call_expr) = init.as_ref() {
@@ -988,7 +994,11 @@ pub(crate) fn lower_stmt(
                         // top-level path is reached for any `let X = T = class`
                         // not handled by the direct `class` fast path above.
                         record_chained_class_self_aliases(ctx, decl);
-                        let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                        let mut stmts =
+                            lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                        if super::ambient::declarator_is_compile_time_constant(var_decl, decl) {
+                            super::ambient::restore_compile_time_constant_shape(&mut stmts);
+                        }
                         // `var` is function-scoped: mark defined locals so
                         // `pop_block_scope` preserves them when leaving an inner block.
                         if is_var {

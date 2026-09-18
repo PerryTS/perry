@@ -1640,43 +1640,22 @@ fn lower_closure_call_rooted<'a>(
         lowered_args.push(group.reread(ctx, arg_base + i)?);
     }
 
-    let result = if lowered_args.len() <= 16 {
-        let runtime_fn = if receiverless_one_arg {
-            "js_closure_call1_receiverless".to_string()
-        } else {
-            format!("js_closure_call{}", lowered_args.len())
-        };
-        let blk = ctx.block();
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
-        for v in &lowered_args {
-            call_args.push((DOUBLE, v.as_str()));
-        }
-        blk.call(DOUBLE, &runtime_fn, &call_args)
+    let result = if receiverless_one_arg {
+        ctx.block().call(
+            DOUBLE,
+            "js_closure_call1_receiverless",
+            &[(I64, &closure_handle), (DOUBLE, &lowered_args[0])],
+        )
     } else {
-        // #3527: > 16 args — stack-allocate a `[N x double]` array (entry-block
-        // alloca, see #167), store each lowered arg, and dispatch through the
-        // variadic `js_closure_call_array(closure_i64, args_ptr, argc)`. This
-        // mirrors the `js_native_call_value` marshaling used elsewhere in
-        // lower_call. `args_ptr` is non-null here since argc > 16 > 0.
+        // #3527: > 16 args marshal into an entry-block `[N x double]` buffer and
+        // dispatch through the variadic `js_closure_call_array`.
         //
         // #7154: the stores happen below the unbox now. A stack buffer is not a
         // GC root, so filling it above an allocating rebind would freeze
         // pre-move addresses into it — the same staleness one indirection
         // further out. The stores have no observable effect, so moving them
         // below the throw-capable unbox changes nothing else.
-        let n = lowered_args.len();
-        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-        let blk = ctx.block();
-        for (i, v) in lowered_args.iter().enumerate() {
-            let slot = blk.gep(DOUBLE, &buf, &[(I64, &format!("{}", i))]);
-            blk.store(DOUBLE, v, &slot);
-        }
-        let argc = n.to_string();
-        blk.call(
-            DOUBLE,
-            "js_closure_call_array",
-            &[(I64, &closure_handle), (PTR, &buf), (I64, &argc)],
-        )
+        super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args)
     };
 
     // #7211: re-read the saved implicit `this` from its slot. Mandatory, not

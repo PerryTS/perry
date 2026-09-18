@@ -44,12 +44,19 @@ fn number_coerce_operand_is_already_primitive_number(ctx: &FnCtx<'_>, operand: &
                 number_coerce_operand_is_already_primitive_number(ctx, left)
                     && number_coerce_operand_is_already_primitive_number(ctx, right)
             }
+            // `>>>` has no BigInt form. The other bitwise operators compute a
+            // BigInt from two BigInt operands, so `Number(n & M)` may only be
+            // elided once an operand is proven non-BigInt (#10418 — eliding it
+            // returned the BigInt `n & M` unchanged).
+            BinaryOp::UShr => true,
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
             | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => true,
+            | BinaryOp::Shr => {
+                crate::type_analysis::is_provably_not_bigint(ctx, left)
+                    || crate::type_analysis::is_provably_not_bigint(ctx, right)
+            }
             BinaryOp::Pow => false,
         },
         _ => false,

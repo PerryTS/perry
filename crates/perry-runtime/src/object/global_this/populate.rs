@@ -181,6 +181,9 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
         }
         let func_ptr = match name {
             "Array" => global_this_array_thunk as *const u8,
+            // #10423: `F(p, body)` through a `Function` value creates a
+            // function, exactly like `new F(p, body)`.
+            "Function" => global_this_function_call_thunk as *const u8,
             "Object" => global_this_object_thunk as *const u8,
             "String" => global_this_string_thunk as *const u8,
             // #2889: call-form `Number(x)` / `Boolean(x)` through a rebound
@@ -233,7 +236,7 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             continue;
         }
         match name {
-            "Array" => {
+            "Array" | "Function" => {
                 crate::closure::js_register_closure_rest(func_ptr, 0);
             }
             "Date" => {

@@ -235,8 +235,8 @@ fn throw_raw_json_syntax_error() -> ! {
 // generated `.o`; the auto-optimize whole-program bitcode rebuild would
 // otherwise dead-strip them (see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_RAW_JSON: unsafe extern "C" fn(f64) -> f64 = js_json_raw_json;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_IS_RAW_JSON: unsafe extern "C" fn(f64) -> f64 = js_json_is_raw_json;

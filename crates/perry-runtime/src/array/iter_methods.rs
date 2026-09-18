@@ -406,7 +406,10 @@ pub extern "C" fn js_array_map(
                 ptr::write(result_elements.add(i), mapped);
                 let mapped_bits = mapped.to_bits();
                 if length <= 64 {
-                    note_array_slot_layout_only(result, i, mapped_bits);
+                    // The head was just re-derived from `result_rooted`, so the
+                    // per-element helpers' repeated ownership/forwarding proofs
+                    // are redundant: resolve the header once.
+                    super::header_gc_slots::fill_resolved_array_slot(result, i, mapped_bits);
                 } else {
                     note_array_slot(result, i, mapped_bits);
                 }
@@ -1387,7 +1390,7 @@ pub extern "C" fn js_array_to_locale_string(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_TO_LOCALE_STRING: extern "C" fn(
     *const ArrayHeader,
     f64,
@@ -1518,7 +1521,7 @@ pub extern "C" fn js_validate_array_callback(cb_boxed: f64) -> i64 {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_ARRAY_CALLBACK: extern "C" fn(f64) -> i64 = js_validate_array_callback;
 
 /// Validate a `map` callback (#4091). Identical to
@@ -1542,6 +1545,6 @@ pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_ARRAY_MAP_CALLBACK: extern "C" fn(i64, f64) -> i64 =
     js_validate_array_map_callback;

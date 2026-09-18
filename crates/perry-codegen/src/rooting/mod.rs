@@ -982,6 +982,15 @@ impl<'a> RootedGroup<'a> {
         AccArray(self.accs.len() - 1)
     }
 
+    /// Root an array this group did not allocate — the inline-constructed
+    /// rest bundle — so one release still drops operands and arrays together.
+    pub(crate) fn adopt_array(&mut self, ctx: &mut FnCtx<'_>, arr: &str) -> AccArray {
+        let slot = temp_root::rooted_array_adopt(ctx, arr);
+        self.note_slot(Some(slot.clone()));
+        self.accs.push(slot);
+        AccArray(self.accs.len() - 1)
+    }
+
     /// Push one element, re-reading the array from its slot and publishing the
     /// possibly-reallocated pointer back into it.
     pub(crate) fn push_array(&mut self, ctx: &mut FnCtx<'_>, acc: AccArray, value: &str) {

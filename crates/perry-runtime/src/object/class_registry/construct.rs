@@ -231,6 +231,37 @@ pub(crate) unsafe fn nm_ctor_stream(
             _ => unreachable!(),
         });
     }
+    // #10430: `new Stream()` (legacy `Stream`, i.e. `new (require('stream'))()`)
+    // is an ordinary instance of `Stream.prototype`, whose EventEmitter methods
+    // act on the receiver. Build it the way an ordinary function constructor's
+    // instance is built (the constructor's stable synthetic class id plus a
+    // class-default link to its `prototype`), not via `Object.create`, which
+    // mints a fresh synthetic class per call. Without this arm the instance
+    // had no `on`/`emit` and was not `instanceof Stream`.
+    if method == "Stream" {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "stream", "Stream",
+        ));
+        let cid = synthetic_class_id_for_function(ctor.get_nanbox_f64());
+        let instance = scope.root_raw_mut_ptr(js_object_alloc(cid, 0));
+        let proto = crate::closure::closure_get_dynamic_prop(
+            (ctor.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+            "prototype",
+        );
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+            instance.with_mut_ptr::<ObjectHeader, _>(|obj| {
+                super::super::prototype_chain::object_link_class_default_prototype(
+                    obj as usize,
+                    proto.to_bits(),
+                )
+            });
+        }
+        return Some(
+            instance
+                .with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64)),
+        );
+    }
     None
 }
 
@@ -474,6 +505,17 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             std::slice::from_raw_parts(args_ptr, args_len)
         };
         match name {
+            // Reflective construction of the intrinsic `Function` —
+            // `new F(p, body)` through a value, `Reflect.construct(Function, …)`,
+            // a spread `new Function(...parts)` — goes to the same from-strings
+            // entry the literal `new Function(...)` reaches from codegen
+            // (`lower_call/new.rs`). Identified by closure identity, so it holds
+            // when `globalThis.Function` is reassigned. Routed here, before the
+            // generic path allocates an instance: `args_ptr` is a plain copy of
+            // the arguments, not a GC root (#10424).
+            "Function" => {
+                return super::super::js_function_ctor_from_strings(args_ptr, args_len);
+            }
             #[cfg(feature = "global-webcrypto")]
             "Crypto" | "CryptoKey" | "SubtleCrypto" => {
                 return crate::object::js_webcrypto_illegal_constructor();
@@ -1129,25 +1171,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     // `js_native_call_value` dispatch on a verified closure pointer
     // here — otherwise `new <non-callable>()` would dereference an
     // arbitrary pointer as a `ClosureHeader` and crash.
-    //
-    // Reflective `Function.apply(self, scope, code)` (and `Reflect.construct`
-    // on Function) reach here with `func_value` = the reified Function
-    // constructor — a plain callable closure singleton, so
-    // `is_callable_function_value` below reports it callable and it would be
-    // CALLED as a value → "Function is not a function". The literal
-    // `new Function(...)` path routes to the Function-from-strings shim in
-    // codegen (`lower_call/new.rs`); route the reflective form to the SAME shim
-    // here. Identify the constructor by its intrinsic closure identity
-    // (`identify_global_builtin_constructor`, keyed on the builtin `func_ptr`) —
-    // robust to `globalThis.Function` reassignment, unlike reading the mutable
-    // global property. (User classes / other builtins / proxies were handled
-    // above and don't match.)
-    if matches!(
-        identify_global_builtin_constructor(func_value),
-        Some("Function")
-    ) {
-        return super::super::js_function_ctor_from_strings(args_ptr, args_len);
-    }
     if is_callable_function_value(func_value) {
         // Bind `this` to the new instance, dispatch the constructor,
         // then restore the previous IMPLICIT_THIS. The dispatch

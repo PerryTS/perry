@@ -375,3 +375,44 @@ pub(crate) fn is_global_object_expr(ctx: &LoweringContext, expr: &Expr) -> bool 
         _ => false,
     }
 }
+
+/// #10359: does a binding in this module share a global constructor's name?
+///
+/// A `globalThis.<name>` member callee names the global object's property,
+/// never a module binding — a class declaration, function, import, or local
+/// does not create a property on the global object. But the construct arms
+/// that lower such a callee by NAME (`Expr::New { class_name }`, and the
+/// bare-identifier arm's `FuncRef` / `LocalGet` reroutes) are resolved against
+/// the module's bindings, so a same-named binding captures them: with
+/// `import { Event } from "./ev"` in scope, `new globalThis.Event("ping")`
+/// built the imported class. Those arms consult this and, when it holds, build
+/// [`global_property_new_dynamic`] instead.
+///
+/// Covers every table a by-name construct resolves through: locals, functions,
+/// imports and classes in scope (`shadows_unqualified_global`), `let`/`const`
+/// class aliases, a sibling class declared later in the body, and a class
+/// declared at any depth (codegen's class table is module-wide).
+pub(crate) fn global_name_has_user_binding(ctx: &LoweringContext, name: &str) -> bool {
+    ctx.shadows_unqualified_global(name)
+        || ctx.resolve_class_alias(name).is_some()
+        || ctx.forward_class_names.contains(name)
+        || ctx.class_decl_names_any_depth.contains(name)
+}
+
+/// #10359: `new globalThis.<name>(args)` constructing the global, not a
+/// same-named binding. Codegen's `try_static_class_name` declines to fold this
+/// callee onto a module class, class alias or import of that name, and builds
+/// the intrinsic through its builtin table (`lower_global_intrinsic_new`) —
+/// the construct the unshadowed form reaches. A name the table does not own
+/// reads the property and constructs its runtime value.
+pub(crate) fn global_property_new_dynamic(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
+    Expr::NewDynamic {
+        callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::GlobalGet(0)),
+            property: name.to_string(),
+        }),
+        args,
+        byte_offset,
+    }
+}

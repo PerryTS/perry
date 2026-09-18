@@ -44,6 +44,10 @@ enum GuardNode {
         class_id: Option<u32>,
         fields: Vec<GuardField>,
     },
+    /// A class proved by identity + the per-object typed-layout-intact bit,
+    /// with no field walk. Only for a chain whose every field is declared
+    /// `number` — see `OP_CLASS_NOMINAL` in the runtime validator.
+    ClassNominal(u32),
     Union(Vec<u32>),
     RecursiveRef(u32),
     Map {
@@ -116,7 +120,7 @@ impl<'a> GuardGraphBuilder<'a> {
     /// Cycle-guarded like every other chain walk in this crate: same-named
     /// classes pulled across modules into one name-keyed table can form a
     /// parent cycle (`type_analysis_class_fields.rs` carries the same note).
-    fn class_chain_fields(&mut self, name: &str) -> Option<Vec<GuardField>> {
+    fn class_chain_fields(&mut self, name: &str) -> Option<(Vec<GuardField>, bool)> {
         let mut chain: Vec<&perry_hir::Class> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         let mut current = Some(name.to_string());
@@ -165,7 +169,16 @@ impl<'a> GuardGraphBuilder<'a> {
                 Some((field, ty, false))
             })
             .collect::<Option<Vec<_>>>()?;
-        self.build_fields(fields)
+        // A chain whose every field is a raw-f64 candidate needs no walk: the
+        // intact bit states the same value fact for all of them at once. An
+        // EMPTY chain is deliberately excluded — it has no value fact to carry,
+        // so requiring the intact bit there could only reject receivers the
+        // by-name walk accepts, buying nothing.
+        let nominal = !fields.is_empty()
+            && fields
+                .iter()
+                .all(|(_, ty, _)| crate::typed_shape::type_is_raw_f64_candidate(ty));
+        Some((self.build_fields(fields)?, nominal))
     }
 
     fn build_named(&mut self, name: &str) -> Option<u32> {
@@ -217,15 +230,33 @@ impl<'a> GuardGraphBuilder<'a> {
             // stale claim came from the doc comment on
             // `ObjectHeader::keys_array`, corrected alongside this.
             //
-            // Identity ALONE was measured and rejected: with `fields` empty the
-            // emitted clone comes out structurally identical to the `$generic`
-            // sibling it routes around — same line count, same call multiset,
-            // `js_typed_feedback_class_field_get_guard` already present in both
-            // — so a class-annotated receiver reaches the class-field guard
-            // path with no parameter evidence at all. It bought nothing and
-            // cost one guard call per invocation: -51% on `tree`, -30% on
-            // `tree_wide`. The field VALUE facts are the whole payload, which
-            // is why they are not optional here.
+            // Identity ALONE was measured and rejected on `tree`/`tree_wide`:
+            // the clone came out structurally identical to the `$generic`
+            // sibling it routed around, so the guard was pure cost — -51% and
+            // -30%. That verdict is REAL BUT LOCAL, and the conclusion once
+            // drawn from it here ("the field VALUE facts are the whole
+            // payload") was too broad. Two corrections:
+            //
+            // 1. Codegen never reads these field nodes. The clone is compiled
+            //    with `SpecParamGuard::proof`, which is `param.ty` — a NAME —
+            //    and looks the class's fields up from `ctx.classes`, which it
+            //    has from the annotation either way. Forcing `fields` empty
+            //    and recompiling leaves all 24 emitted specialized and
+            //    generic clone bodies across a 16-function probe set
+            //    unchanged. The
+            //    descriptor is the runtime ENFORCEMENT of the proof, not the
+            //    proof. `tree` is identical to its `$generic` because its
+            //    fields are reference-typed and both bodies route through
+            //    `js_typed_feedback_class_field_get_guard` — a property of
+            //    that class shape, not of identity-only descriptors.
+            // 2. That regression cannot recur regardless: wave 1's
+            //    `spec_clone_consumes_no_proof` (`codegen/function.rs`) now
+            //    detects a clone identical to its generic sibling and emits a
+            //    plain forwarder, dropping the guard.
+            //
+            // What the walk still buys is the VALUE half of the proof, and
+            // only for fields the intact bit cannot speak for — see the
+            // `nominal` branch below.
             //
             // Cost is bounded by #8094's existing rule rather than a new one:
             // a field-bearing descriptor claims heap CONTENTS, so a
@@ -233,10 +264,18 @@ impl<'a> GuardGraphBuilder<'a> {
             // that contains a call. A recursive class (`Tree.left: Tree`)
             // therefore cannot be guarded in the recursive walker that would
             // make its validation O(nodes x depth).
-            let fields = self.class_chain_fields(name)?;
-            GuardNode::Object {
-                class_id: Some(class_id),
-                fields,
+            let (fields, nominal) = self.class_chain_fields(name)?;
+            if nominal {
+                // Every declared field is `number`, so (class chain reaches C,
+                // typed-layout-intact) implies each one holds a plain double —
+                // the whole payload of the walk this replaces. Measured at
+                // ~326 instructions per field walked.
+                GuardNode::ClassNominal(class_id)
+            } else {
+                GuardNode::Object {
+                    class_id: Some(class_id),
+                    fields,
+                }
             }
         } else {
             self.building_named.remove(name);
@@ -548,6 +587,10 @@ fn encode_node(node: &GuardNode) -> Option<Vec<u8>> {
                 put_u32(&mut out, field.ty);
             }
         }
+        GuardNode::ClassNominal(class_id) => {
+            out.push(17);
+            put_u32(&mut out, *class_id);
+        }
         GuardNode::Union(variants) => {
             out.push(12);
             put_u32(&mut out, variants.len().try_into().ok()?);
@@ -677,54 +720,10 @@ fn descriptor_for_type(
         .map(|(descriptor, _)| descriptor)
 }
 
-/// A loop makes the body's own work potentially unbounded, so a collection or
-/// recursive graph walk can still be amortizable. With no loop, validating an
-/// unbounded input to enter a bounded body cannot win as the input grows.
-/// Nested closure bodies are not part of the enclosing function's work.
-fn body_contains_loop(stmts: &[perry_hir::Stmt]) -> bool {
-    use perry_hir::Stmt;
-    stmts.iter().any(|stmt| match stmt {
-        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
-        Stmt::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            body_contains_loop(then_branch)
-                || else_branch.as_deref().is_some_and(body_contains_loop)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            body_contains_loop(body)
-                || catch
-                    .as_ref()
-                    .is_some_and(|catch| body_contains_loop(&catch.body))
-                || finally.as_deref().is_some_and(body_contains_loop)
-        }
-        Stmt::Switch { cases, .. } => cases.iter().any(|case| body_contains_loop(&case.body)),
-        Stmt::Labeled { body, .. } => body_contains_loop(std::slice::from_ref(body.as_ref())),
-        Stmt::Expr(_)
-        | Stmt::Throw(_)
-        | Stmt::Return(_)
-        | Stmt::Let { .. }
-        | Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_)
-        | Stmt::ReleaseBoxes(_) => false,
-    })
-}
-
 pub(crate) fn declaration_guards(
     function_id: u32,
     module_prefix: &str,
     params: &[perry_hir::Param],
-    body: &[perry_hir::Stmt],
     demoted_params: &[bool],
     // (#8094) Guard-only ineligibility, kept SEPARATE from `demoted_params`
     // because that mask also drives raw representation selection: a reference
@@ -736,7 +735,6 @@ pub(crate) fn declaration_guards(
     classes: &HashMap<String, &perry_hir::Class>,
     class_ids: &HashMap<String, u32>,
 ) -> Vec<Option<SpecParamGuard>> {
-    let body_can_amortize_unbounded_walk = body_contains_loop(body);
     params
         .iter()
         .zip(demoted_params.iter())
@@ -758,10 +756,26 @@ pub(crate) fn declaration_guards(
             // graph to read one discriminant and one field. The validator was
             // 9.8-12% of those programs and the clone it licensed was worth
             // only 0.1-0.2%. Do not emit a guard whose work grows with the
-            // input when the guarded body itself is statically bounded. A
-            // loop leaves the decision unchanged: array reducers and similar
-            // consumers can amortize validation over their own traversal.
-            if !walk_is_bounded && !body_can_amortize_unbounded_walk {
+            // input.
+            //
+            // A loop in the body used to lift this, on the theory that array
+            // reducers amortize validation over their own traversal. Measured,
+            // they do not. The walk is a SECOND full pass over the same array,
+            // and the clone's saving per element is smaller than the walk's
+            // cost per element, so the guarded arm loses at every length —
+            // instructions per call against the same body taking an unproven
+            // parameter, both arms re-run in one window:
+            //
+            //   Pt[],      16 elements   11,635 vs  9,360   +24.3%
+            //   Pt[],    1600 elements  789,536 vs 550,881   +43.3%
+            //   string[],  16 elements   10,210 vs  9,818    +4.0%
+            //   string[], 1600 elements  603,351 vs 529,337  +14.0%
+            //
+            // Refusing is the win: the fallback is the generic body. Note the
+            // penalty GROWS with length, which is the opposite of what
+            // amortization would predict, and is why a longer array cannot be
+            // the case that rescues the rule.
+            if !walk_is_bounded {
                 return None;
             }
             Some(SpecParamGuard {
@@ -1361,11 +1375,7 @@ mod tests {
         assert_eq!(scalar_descriptor_rep(b"PGT1"), None);
     }
 
-    fn declaration_guard_for(
-        ty: Type,
-        body: &[perry_hir::Stmt],
-        aliases: &HashMap<String, Type>,
-    ) -> Option<SpecParamGuard> {
+    fn declaration_guard_for(ty: Type, aliases: &HashMap<String, Type>) -> Option<SpecParamGuard> {
         let params = [perry_hir::Param {
             id: 1,
             name: "value".to_string(),
@@ -1379,7 +1389,6 @@ mod tests {
             1,
             "walk_bound_test",
             &params,
-            body,
             &[false],
             &[false],
             aliases,
@@ -1401,21 +1410,21 @@ mod tests {
         let flat = object_alias("Flat", &[("value", Type::Number)]);
         let flat_aliases = HashMap::from([flat]);
         assert!(
-            declaration_guard_for(Type::Named("Flat".to_string()), &[], &flat_aliases).is_some(),
+            declaration_guard_for(Type::Named("Flat".to_string()), &flat_aliases).is_some(),
             "a fixed field walk remains eligible"
         );
 
         let array = Type::Array(Box::new(Type::Number));
-        assert!(declaration_guard_for(array.clone(), &[], &HashMap::new()).is_none());
+        assert!(declaration_guard_for(array.clone(), &HashMap::new()).is_none());
 
-        let loop_body = [perry_hir::Stmt::While {
-            condition: perry_hir::Expr::Bool(false),
-            body: Vec::new(),
-        }];
-        assert!(
-            declaration_guard_for(array, &loop_body, &HashMap::new()).is_some(),
-            "a loop consumer keeps the existing structural specialization"
-        );
+        // The refusal is now unconditional. A loop in the body used to lift
+        // it, on the theory that array reducers amortize validation over their
+        // own traversal; measurement contradicts that (the guarded arm loses
+        // 4-43%, by MORE the longer the array), so the body is no longer an
+        // input to this decision at all — `declaration_guards` does not take
+        // one. That makes the old behavior unexpressible rather than merely
+        // untested.
+        let _ = &array;
 
         let recursive_aliases = HashMap::from([object_alias(
             "Link",
@@ -1425,8 +1434,7 @@ mod tests {
             )],
         )]);
         assert!(
-            declaration_guard_for(Type::Named("Link".to_string()), &[], &recursive_aliases)
-                .is_none(),
+            declaration_guard_for(Type::Named("Link".to_string()), &recursive_aliases).is_none(),
             "a recursive value walk is runtime-sized too"
         );
     }
@@ -1705,6 +1713,134 @@ mod tests {
         assert!(
             descriptor.windows(5).any(|w| w == b"label"),
             "field names are validated by name against `keys_array`: {descriptor:?}"
+        );
+    }
+
+    /// A chain whose every field is declared `number` needs no walk: the
+    /// per-object typed-layout-intact bit states "this slot holds a plain
+    /// double" for all of them at once, which is exactly what walking them by
+    /// name would establish. Measured at ~326 instructions per field walked.
+    #[test]
+    fn an_all_number_class_is_proved_nominally_without_a_field_walk() {
+        let descriptor = class_descriptor(
+            "Vec3",
+            &[class(
+                21,
+                "Vec3",
+                None,
+                vec![
+                    ("x", Type::Number),
+                    ("y", Type::Number),
+                    ("z", Type::Number),
+                ],
+            )],
+        )
+        .expect("a plain numeric class is guardable");
+        let nominal = descriptor
+            .windows(5)
+            .find(|window| window[0] == 17)
+            .unwrap_or_else(|| panic!("an OP_CLASS_NOMINAL node: {descriptor:?}"));
+        assert_eq!(
+            u32::from_le_bytes(nominal[1..5].try_into().unwrap()),
+            21,
+            "the class id is the identity half of the proof: {descriptor:?}"
+        );
+        assert!(
+            !descriptor.windows(1).any(|window| window[0] == 11),
+            "a nominal class must not also emit the OP_OBJECT walk it \
+             replaces: {descriptor:?}"
+        );
+        assert!(
+            !descriptor.windows(1).any(|window| window[0] == b'x'),
+            "no field name should be serialized at all: {descriptor:?}"
+        );
+    }
+
+    /// The intact bit is a raw-f64 claim. It says a `string` field's slot is in
+    /// the POINTER mask, which is not "it holds a string" — and a clone that
+    /// inlines `s.length` trusts exactly that. One non-numeric field therefore
+    /// puts the whole chain back on the by-name walk.
+    #[test]
+    fn one_non_numeric_field_keeps_the_whole_chain_on_the_by_name_walk() {
+        for (label, ty) in [
+            ("string", Type::String),
+            ("boolean", Type::Boolean),
+            ("class-typed", Type::Named("Vec3".to_string())),
+        ] {
+            let descriptor = class_descriptor(
+                "Mixed",
+                &[
+                    class(22, "Vec3", None, vec![("x", Type::Number)]),
+                    class(
+                        23,
+                        "Mixed",
+                        None,
+                        vec![("n", Type::Number), ("other", ty.clone())],
+                    ),
+                ],
+            )
+            .unwrap_or_else(|| panic!("{label}: descriptor"));
+            assert!(
+                descriptor.windows(1).any(|window| window[0] == 11),
+                "{label}: a non-numeric field must keep OP_OBJECT: {descriptor:?}"
+            );
+            assert!(
+                !descriptor.windows(5).any(|window| window[0] == 17
+                    && window.len() == 5
+                    && u32::from_le_bytes(window[1..5].try_into().unwrap()) == 23),
+                "{label}: must not claim the chain nominally: {descriptor:?}"
+            );
+        }
+    }
+
+    /// Inherited fields are part of the instance, so the numeric verdict is a
+    /// property of the whole chain — a numeric leaf under a string parent is
+    /// NOT nominal.
+    #[test]
+    fn the_nominal_verdict_is_taken_over_the_whole_inheritance_chain() {
+        let all_numeric = class_descriptor(
+            "NumLeaf",
+            &[
+                class(24, "NumBase", None, vec![("b", Type::Number)]),
+                class(25, "NumLeaf", Some("NumBase"), vec![("l", Type::Number)]),
+            ],
+        )
+        .expect("descriptor");
+        assert!(
+            all_numeric.windows(1).any(|window| window[0] == 17),
+            "an all-numeric chain is nominal: {all_numeric:?}"
+        );
+        let string_parent = class_descriptor(
+            "StrLeaf",
+            &[
+                class(26, "StrBase", None, vec![("b", Type::String)]),
+                class(27, "StrLeaf", Some("StrBase"), vec![("l", Type::Number)]),
+            ],
+        )
+        .expect("descriptor");
+        assert!(
+            string_parent.windows(1).any(|window| window[0] == 11),
+            "a string field ANYWHERE on the chain keeps the walk: \
+             {string_parent:?}"
+        );
+    }
+
+    /// A fieldless class has no value fact to carry, so requiring the intact
+    /// bit could only reject receivers the by-name walk accepts. Excluded
+    /// deliberately — this asserts the exclusion rather than leaving it to
+    /// chance.
+    #[test]
+    fn a_fieldless_class_keeps_its_plain_identity_node() {
+        let descriptor = class_descriptor("Marker", &[class(28, "Marker", None, Vec::new())])
+            .expect("descriptor");
+        assert!(
+            descriptor.windows(1).any(|window| window[0] == 11),
+            "a fieldless class stays on OP_OBJECT: {descriptor:?}"
+        );
+        assert!(
+            !descriptor.windows(1).any(|window| window[0] == 17),
+            "and must not demand an intact bit it has no fields to justify: \
+             {descriptor:?}"
         );
     }
 

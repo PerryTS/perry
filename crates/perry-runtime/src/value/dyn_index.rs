@@ -856,17 +856,17 @@ pub extern "C" fn js_is_undefined_or_bare_nan(value: f64) -> i32 {
 // the anchors compile out there. Function-pointer types are `Sync`, so no
 // wrapper is needed.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_DYN_INDEX_GET: extern "C" fn(f64, f64) -> f64 = js_dyn_index_get;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_DYN_INDEX_SET: extern "C" fn(f64, f64, f64) -> f64 = js_dyn_index_set;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_DYN_INDEX_SET_STRICT: extern "C" fn(f64, f64, f64, i32) -> f64 =
     js_dyn_index_set_strict;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_IS_UNDEFINED_OR_BARE_NAN: extern "C" fn(f64) -> i32 = js_is_undefined_or_bare_nan;
 
 #[cfg(test)]

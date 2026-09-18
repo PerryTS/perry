@@ -105,7 +105,11 @@ pub(crate) extern "C" fn thunk_fs_promises_readFile(
     path: f64,
     encoding: f64,
 ) -> f64 {
-    promise_from_sync_value(|| crate::fs::js_fs_read_file_dispatch(path, encoding))
+    // #10452: the Buffer form used to resolve `undefined` for a missing file.
+    let as_string = crate::fs::read_file_encoding(encoding).is_some();
+    promise_from_result_value(|| unsafe {
+        crate::fs::read_file_value_result(path, encoding, as_string)
+    })
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_open(

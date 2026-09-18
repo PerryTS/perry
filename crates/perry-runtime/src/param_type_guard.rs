@@ -72,6 +72,21 @@ const OP_STRING_LITERAL: u8 = 13;
 const OP_RECURSIVE_REF: u8 = 14;
 const OP_MAP: u8 = 15;
 const OP_SET: u8 = 16;
+/// A class parameter proved NOMINALLY: exact class identity plus the
+/// per-object typed-layout-intact bit, with no field-by-name walk.
+///
+/// Emitted only when every field on the class's inheritance chain is declared
+/// `number`, i.e. every one is a raw-f64 candidate. For those fields the pair
+/// (class chain reaches C, intact bit set) already implies the value fact the
+/// walk would establish — "slot K holds a plain double" — so walking them by
+/// name re-derives what the header already states. Measured at ~326
+/// instructions per field walked, so a 3-field class pays ~1_000 per call for
+/// a fact two loads can settle.
+///
+/// A class with any non-`number` field keeps `OP_OBJECT`: the intact bit says
+/// a string field's slot is in the pointer mask, which is NOT "it holds a
+/// string", and a clone that inlines `s.length` trusts exactly that.
+const OP_CLASS_NOMINAL: u8 = 17;
 
 fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes(
@@ -640,6 +655,31 @@ impl GuardState<'_> {
                 }
                 valid && cursor == node.len()
             }
+            OP_CLASS_NOMINAL => {
+                let Some(class_id) = read_u32(node, 1) else {
+                    return false;
+                };
+                if node.len() != 5 || class_id == 0 {
+                    return false;
+                }
+                let Some((object, address, _)) = self.plain_object(value) else {
+                    return false;
+                };
+                if !crate::object::class_chain_reaches((*object).class_id, class_id) {
+                    return false;
+                }
+                // The value half. Without it this node would claim only
+                // identity, and `(p as any).x = "s"` on a real instance keeps
+                // the class id while retiring the raw-f64 layout.
+                //
+                // Read straight off the header rather than through a helper in
+                // `gc/layout.rs`: that file sits one line under the 2000-line
+                // cap, and `plain_object` has already proved this address
+                // carries a readable Gc header. Fails closed if it does not.
+                crate::value::addr_class::try_read_gc_header(address).is_some_and(|header| {
+                    header._reserved & crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT != 0
+                })
+            }
             OP_UNION => {
                 let Some(count) = read_u32(node, 1).map(|value| value as usize) else {
                     return false;
@@ -769,7 +809,7 @@ pub extern "C" fn js_param_type_guard(value: f64, descriptor: *const u8, length:
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PARAM_TYPE_GUARD: extern "C" fn(f64, *const u8, u32) -> i32 = js_param_type_guard;
 
 #[cfg(test)]
@@ -804,6 +844,59 @@ mod tests {
             descriptor.as_ptr(),
             descriptor.len() as u32,
         )
+    }
+
+    fn class_nominal_node(class_id: u32) -> Vec<u8> {
+        let mut body = vec![OP_CLASS_NOMINAL];
+        body.extend_from_slice(&class_id.to_le_bytes());
+        body
+    }
+
+    /// The nominal node trades the field walk for two header facts, so both
+    /// have to be load-bearing. A plain object carries class id 0 and reaches
+    /// no class, which is also the `Object.create(C.prototype)` and
+    /// same-shaped-literal case: the walk would have ACCEPTED a literal whose
+    /// fields all happen to be numbers, and the nominal node must not.
+    #[test]
+    fn a_nominal_class_node_rejects_everything_that_is_not_that_class() {
+        let node = class_nominal_node(4242);
+        let (_, literal) =
+            plain_object(&[(b"x", JSValue::number(1.0)), (b"y", JSValue::number(2.0))]);
+        assert_eq!(
+            guard(literal, &one_node(&node)),
+            0,
+            "a same-shaped plain object reaches no class id"
+        );
+        assert_eq!(guard(JSValue::number(1.0), &one_node(&node)), 0);
+        assert_eq!(guard(JSValue::undefined(), &one_node(&node)), 0);
+        assert_eq!(guard(JSValue::null(), &one_node(&node)), 0);
+        assert_eq!(guard(JSValue::bool(true), &one_node(&node)), 0);
+    }
+
+    /// Class id 0 means "structural" for `OP_OBJECT`, where it is a legal
+    /// wildcard. A nominal node has nothing BUT identity, so a 0 there would
+    /// be a node that accepts every object with an intact layout. Fail closed.
+    #[test]
+    fn a_nominal_node_without_a_class_id_fails_closed() {
+        let (_, literal) = plain_object(&[(b"x", JSValue::number(1.0))]);
+        assert_eq!(guard(literal, &one_node(&class_nominal_node(0))), 0);
+    }
+
+    /// Truncated or over-long bodies must not read past the node.
+    #[test]
+    fn a_malformed_nominal_node_fails_closed() {
+        let (_, literal) = plain_object(&[(b"x", JSValue::number(1.0))]);
+        for body in [vec![OP_CLASS_NOMINAL], vec![OP_CLASS_NOMINAL, 1, 0], {
+            let mut long = class_nominal_node(7);
+            long.push(0);
+            long
+        }] {
+            assert_eq!(
+                guard(literal, &one_node(&body)),
+                0,
+                "malformed nominal node accepted: {body:?}"
+            );
+        }
     }
 
     fn object_node(class_id: u32, fields: &[(bool, &[u8], u32)]) -> Vec<u8> {

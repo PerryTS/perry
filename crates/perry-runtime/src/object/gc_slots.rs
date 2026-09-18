@@ -3,10 +3,10 @@ use crate::ArrayHeader;
 
 /// The AUTHORITATIVE ordered-keys edge of a traced receiver (#8112).
 ///
-/// This is the descriptor's own `keys` word, not a copy of it: the record is
-/// boxed (`object::shapes::ShapeDescriptor`), so its address is fixed for the
+/// This is the shape record's own `keys` word, not a copy of it: the record is
+/// boxed (`object::shapes::ShapeRecordRef`), so its address is fixed for the
 /// record's lifetime and the collector can mark through it and rewrite it in
-/// place like any other child slot. The address rides along on the descriptor
+/// place like any other child slot. The address is the record handle
 /// `gc::layout::gc_child_slots` already resolved for this receiver, so the
 /// edge costs no extra shape-table probe (#8122's one-probe rule) and needs no
 /// post-visit write-back callback.
@@ -20,9 +20,7 @@ use crate::ArrayHeader;
 /// deliberate — the alternative loses a shape whose only carrier is promoted
 /// during the very drain that would have emitted it.
 #[inline]
-pub(crate) fn gc_shape_keys_edge_slot(
-    descriptor: Option<shapes::ShapeDescriptor>,
-) -> Option<*mut u64> {
+pub(crate) fn gc_shape_keys_edge_slot(record: Option<shapes::ShapeRecordRef>) -> Option<*mut u64> {
     #[cfg(test)]
     if shapes::test_keys_edge_suppressed() {
         // Sabotage arm: without this edge a keys array has no root and no
@@ -31,18 +29,18 @@ pub(crate) fn gc_shape_keys_edge_slot(
         // the detector works, not that nothing was tried.
         return None;
     }
-    let descriptor = descriptor?;
-    if descriptor.keys == 0 {
+    let record = record?;
+    if record.keys() == 0 {
         return None;
     }
-    descriptor.keys_slot()
+    Some(record.keys_slot())
 }
 
-/// The object's inline field-slot range, given the receiver's `ShapeDescriptor`
+/// The object's inline field-slot range, given the receiver's shape record
 /// resolved once by the collector.
 pub(crate) unsafe fn gc_field_slot_range(
     obj: *mut ObjectHeader,
-    descriptor: Option<shapes::ShapeDescriptor>,
+    record: Option<shapes::ShapeRecordRef>,
 ) -> Option<crate::gc::HeapSlotRange> {
     if obj.is_null() {
         return None;
@@ -56,8 +54,8 @@ pub(crate) unsafe fn gc_field_slot_range(
     // escapes (`object/alloc.rs`), and every bound change is mint-then-stamp
     // (`shapes::publish_object_live_slot_count`), so a live object is never
     // observed here without one.
-    let field_count = descriptor
-        .map(|descriptor| descriptor.live_inline_slot_count as usize)
+    let field_count = record
+        .map(|record| record.live_inline_slot_count() as usize)
         .unwrap_or(0);
     if field_count > 1_000_000 {
         return None;
@@ -86,6 +84,15 @@ pub(crate) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
     let len = (*arr).length as usize;
     let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
+    // The GC pointer bitmap is not the only per-array fact a direct slot write
+    // invalidates. Every caller here reached this function because it set
+    // `length` and `std::ptr::write`-d the element words itself, bypassing the
+    // noting store helpers — and `js_array_alloc` births the array carrying
+    // `GC_ARRAY_RAW_F64_LAYOUT` (vacuously true at length 0). Re-derive that
+    // flag from the same slots this rebuild just walked, or a NaN-boxed pointer
+    // sits in a slot the flag promises is a plain double. Clear-only, so an
+    // array that really is all-numbers keeps its fast path.
+    crate::array::reclassify_array_numeric_layout_from_slots(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         for i in 0..len {
             let slot = slots.add(i);

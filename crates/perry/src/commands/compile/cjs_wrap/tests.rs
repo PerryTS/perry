@@ -462,8 +462,11 @@ fn wrap_module_and_exports_are_reassignable_vars() {
     // exports back from a stable, body-untouchable `__cjs_module`.
     let src = "exports.foo = 42;";
     let wrapped = wrap_commonjs(src, &PathBuf::from("/tmp/test.js"));
+    // The record is emitted as one folded object literal, so assert the
+    // `const` binding and its leading `exports` field rather than the old
+    // single-field spelling.
     assert!(
-        wrapped.contains("const __cjs_module = { exports: {} };"),
+        wrapped.contains("const __cjs_module = {") && wrapped.contains("exports: {},"),
         "expected stable __cjs_module, got:\n{}",
         wrapped
     );
@@ -1180,7 +1183,7 @@ fn wrap_flat_emits_class_module_exports_that_closes_over_top_level_const() {
         wrapped
     );
     // The CommonJS runtime shims still run at module scope.
-    assert!(wrapped.contains("const __cjs_module = { exports: {} };"));
+    assert!(wrapped.contains("const __cjs_module = {") && wrapped.contains("exports: {},"));
     assert!(wrapped.contains("const _cjs = __cjs_module.exports;"));
     let ast = perry_parser::parse_typescript(&wrapped, "stack-utils.js")
         .expect("flat class wrap must parse");

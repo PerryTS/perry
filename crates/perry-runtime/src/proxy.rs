@@ -920,7 +920,14 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
         1 => js_closure_call1(closure, a(0)),
         2 => js_closure_call2(closure, a(0), a(1)),
         3 => js_closure_call3(closure, a(0), a(1), a(2)),
-        _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        4 => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
+        // #10425: this arm was `_ => js_closure_call4(…)`, so every argument
+        // after the fourth was dropped. The variadic entry point owns
+        // arbitrary-arity dispatch, rest bundling included. (`call_trap`
+        // above keeps its catch-all: a proxy trap receives at most four.)
+        n => unsafe {
+            crate::closure::js_closure_call_array(closure as i64, args.as_ptr(), n as i64)
+        },
     };
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
@@ -2375,7 +2382,7 @@ pub extern "C" fn js_proxy_revocable(target: f64, handler: f64) -> f64 {
 
 // #2846: retention anchor for `Proxy.revocable` (codegen-only callsite).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PROXY_REVOCABLE: extern "C" fn(f64, f64) -> f64 = js_proxy_revocable;
 
 // #2762: retention anchors for the Reflect-specific extensibility entry points.
@@ -2383,35 +2390,35 @@ static KEEP_PROXY_REVOCABLE: extern "C" fn(f64, f64) -> f64 = js_proxy_revocable
 // crate graph), so the auto-optimize whole-program LLVM bitcode rebuild would
 // otherwise internalize and dead-strip them. See node_stream_keepalive.rs.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_IS_EXTENSIBLE: extern "C" fn(f64) -> f64 = js_reflect_is_extensible;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_PREVENT_EXTENSIONS: extern "C" fn(f64) -> f64 = js_reflect_prevent_extensions;
 
 // #2761: retention anchor for `Reflect.setPrototypeOf` (codegen-only callsite).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_SET_PROTOTYPE_OF: extern "C" fn(f64, f64) -> f64 = js_reflect_set_prototype_of;
 
 // #2763/#2764/#2766/#2767: retention anchors for the Reflect entry points
 // whose only callsites are codegen-emitted. `js_reflect_get` gained a third
 // `receiver` arg (#2766) and must keep its new signature retained.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_GET: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_get;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_GET_OWN_PROPERTY_DESCRIPTOR: extern "C" fn(f64, f64) -> f64 =
     js_reflect_get_own_property_descriptor;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_HAS: extern "C" fn(f64, f64) -> f64 = js_reflect_has;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_OWN_KEYS: extern "C" fn(f64) -> f64 = js_reflect_own_keys;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_REFLECT_APPLY: extern "C" fn(f64, f64, f64) -> f64 = js_reflect_apply;
 
 /// #8194: death pruning for `REFLECT_METADATA`.

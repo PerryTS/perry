@@ -1355,18 +1355,12 @@ pub fn try_lower_extern_func_call(
         let blk = ctx.block();
         let closure_bits = blk.bitcast_double_to_i64(&closure_value);
         let closure_handle = blk.and(I64, &closure_bits, POINTER_MASK_I64);
-        let call_name = format!("js_closure_call{}", lowered_args.len().min(16));
-        let mut decl_types = vec![I64];
-        decl_types.extend(std::iter::repeat_n(DOUBLE, lowered_args.len().min(16)));
-        ctx.pending_declares
-            .push((call_name.clone(), DOUBLE, decl_types));
-        let mut call_args: Vec<(crate::types::LlvmType, String)> = vec![(I64, closure_handle)];
-        for arg in lowered_args.into_iter().take(16) {
-            call_args.push((DOUBLE, arg));
-        }
-        let arg_refs: Vec<(crate::types::LlvmType, &str)> =
-            call_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
-        return Ok(Some(ctx.block().call(DOUBLE, &call_name, &arg_refs)));
+        // #10420: no 16-argument truncation — wider calls take the array path.
+        return Ok(Some(super::emit_closure_handle_call(
+            ctx,
+            &closure_handle,
+            &lowered_args,
+        )));
     }
     // perry/system dispatch: map JS names (isDarkMode, getDeviceIdiom,
     // keychainSave, etc.) to their perry_system_* / perry_* C symbols.
@@ -1866,12 +1860,6 @@ pub fn try_lower_extern_func_call(
     // an arrow-bound exported value (hono's `mergePath` from utils/url.js,
     // any `export const foo = () => …` cross-module use).
     if ctx.imported_vars.contains(name) {
-        if args.len() > 16 {
-            anyhow::bail!(
-                "perry-codegen Phase D.1: closure call with {} args (max 16)",
-                args.len()
-            );
-        }
         ctx.pending_declares.push((fname.clone(), DOUBLE, vec![]));
         // Fetch the callee before evaluating arguments, as JavaScript requires,
         // but keep that closure rooted while argument expressions run. Next's
@@ -1895,16 +1883,14 @@ pub fn try_lower_extern_func_call(
             |ctx, closure_box| {
                 // Re-read and unbox only after every collecting argument and
                 // after the argument group's own re-reads have completed.
+                // #10420: more than 16 arguments dispatch through the array path.
                 let lowered = lowered_args.borrow();
-                let blk = ctx.block();
-                let closure_handle = unbox_to_i64(blk, closure_box);
-                let runtime_fn = format!("js_closure_call{}", lowered.len());
-                let mut call_args: Vec<(crate::types::LlvmType, &str)> =
-                    vec![(I64, &closure_handle)];
-                for value in lowered.iter() {
-                    call_args.push((DOUBLE, value.as_str()));
-                }
-                Ok(blk.call(DOUBLE, &runtime_fn, &call_args))
+                let closure_handle = unbox_to_i64(ctx.block(), closure_box);
+                Ok(super::emit_closure_handle_call(
+                    ctx,
+                    &closure_handle,
+                    &lowered,
+                ))
             },
         )?;
         return Ok(Some(result));

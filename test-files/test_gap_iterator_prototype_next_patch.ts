@@ -11,6 +11,28 @@ const mapProto: any = Object.getPrototypeOf(new Map().entries());
 const setProto: any = Object.getPrototypeOf(new Set().values());
 const stringProto: any = Object.getPrototypeOf(""[Symbol.iterator]());
 
+// Output is BUFFERED inside a patched window and flushed after the prototype is
+// restored. `console.log` is not safe to call while a built-in iterator
+// prototype is patched: node's formatter builds `SafeMap` out of
+// `internal/per_context/primordials` lazily, and the harness runs the oracle
+// with `FORCE_COLOR=0`, which is exactly the path that defers that
+// construction into the window. Node then dies with
+//
+//   node:internal/per_context/primordials:449
+//     class SafeMap extends Map {},
+//
+// on this fixture — the ORACLE crashes, not Perry, so the test could never
+// pass however the runtime behaved. Buffering keeps every value computed
+// inside the window (which is the subject) while moving the printing out.
+const pending: string[] = [];
+function log(...parts: unknown[]) {
+  pending.push(parts.map((p) => String(p)).join(" "));
+}
+function flush() {
+  for (const line of pending) console.log(line);
+  pending.length = 0;
+}
+
 function withPatched(proto: any, patch: (orig: any) => any, body: () => void) {
   const orig = proto.next;
   proto.next = patch(orig);
@@ -18,6 +40,7 @@ function withPatched(proto: any, patch: (orig: any) => any, body: () => void) {
     body();
   } finally {
     proto.next = orig;
+    flush();
   }
 }
 
@@ -33,11 +56,17 @@ withPatched(
   () => {
     const got: number[] = [];
     for (const v of [1, 2, 3]) got.push(v);
-    console.log("A-forof", got.join(","));
-    console.log("A-spread", [...[4, 5]].join(","));
-    console.log("A-from", Array.from([6].values()).join(","));
+    log("A-forof", got.join(","));
+    log("A-spread", [...[4, 5]].join(","));
+    log("A-from", Array.from([6].values()).join(","));
+    // `Array.from(array)` and the CALL / multi-operand spread forms reach
+    // different runtime entry points from `[...array]` — each one has its own
+    // element-copy fast arm, and each has to decline it here.
+    log("A-from-array", Array.from([11, 12]).join(","));
+    log("A-call-spread", ((...xs: number[]) => xs.join(","))(...[13, 14]));
+    log("A-multi-spread", [...[15], ...[16]].join(","));
     const it = [7, 8].values();
-    console.log("A-manual", it.next().value, it.next().value, it.next().done);
+    log("A-manual", it.next().value, it.next().value, it.next().done);
   },
 );
 
@@ -62,7 +91,7 @@ withPatched(
   () => {
     const got: number[] = [];
     for (const v of [1, 2]) got.push(v);
-    console.log("C-forof-empty", got.length);
+    log("C-forof-empty", got.length);
   },
 );
 console.log("C-restored", [...[9]].join(","));
@@ -79,7 +108,9 @@ withPatched(
   () => {
     const got: string[] = [];
     for (const [k, v] of new Map([["a", 1], ["b", 2]])) got.push(k + "=" + v);
-    console.log("D-map", got.join(","));
+    log("D-map", got.join(","));
+    log("D-map-spread", JSON.stringify([...new Map([["z", 5]])]));
+    log("D-map-from", JSON.stringify(Array.from(new Map([["y", 6]]))));
   },
 );
 console.log("D-map-restored", [...new Map([["a", 1]])].join(","));
@@ -92,7 +123,8 @@ withPatched(
       return r;
     },
   () => {
-    console.log("D-set", [...new Set([1, 2])].join(","));
+    log("D-set", [...new Set([1, 2])].join(","));
+    log("D-set-from", Array.from(new Set([3, 4])).join(","));
   },
 );
 console.log("D-set-restored", [...new Set([3])].join(","));
@@ -107,7 +139,8 @@ withPatched(
       return r;
     },
   () => {
-    console.log("E-string", [..."ab"].join(","));
+    log("E-string", [..."ab"].join(","));
+    log("E-string-from", Array.from("cd").join(","));
   },
 );
 console.log("E-string-restored", [..."cd"].join(","));
@@ -123,9 +156,10 @@ console.log("E-string-restored", [..."cd"].join(","));
   const other = [100, 200].values();
   arrayProto.next = orig.bind(other);
   try {
-    console.log("F-bound-copy", [...[1, 2]].join(","));
+    log("F-bound-copy", [...[1, 2]].join(","));
   } finally {
     arrayProto.next = orig;
+    flush();
   }
   console.log("F-restored", [...[3]].join(","));
 }
@@ -142,7 +176,7 @@ console.log("E-string-restored", [..."cd"].join(","));
     },
   });
   try {
-    console.log("G-accessor", [...[1, 2]].join(","), gets > 0);
+    log("G-accessor", [...[1, 2]].join(","), gets > 0);
   } finally {
     Object.defineProperty(arrayProto, "next", {
       value: orig,
@@ -150,6 +184,7 @@ console.log("E-string-restored", [..."cd"].join(","));
       enumerable: false,
       configurable: true,
     });
+    flush();
   }
   console.log("G-restored", [...[4]].join(","));
 }
@@ -163,11 +198,12 @@ console.log("E-string-restored", [..."cd"].join(","));
     for (const _v of [1]) {
       console.log("H-unexpected");
     }
-    console.log("H", "no-throw");
+    log("H", "no-throw");
   } catch (e: any) {
-    console.log("H", e instanceof TypeError);
+    log("H", e instanceof TypeError);
   } finally {
     arrayProto.next = orig;
+    flush();
   }
   console.log("H-restored", [...[5, 6]].join(","));
 }
@@ -182,11 +218,12 @@ for (const bad of [42, "not a function", undefined, null, {}]) {
     for (const _v of [1]) {
       console.log("I-unexpected");
     }
-    console.log("I", typeof bad, "no-throw");
+    log("I", typeof bad, "no-throw");
   } catch (e: any) {
-    console.log("I", typeof bad, e instanceof TypeError);
+    log("I", typeof bad, e instanceof TypeError);
   } finally {
     arrayProto.next = orig;
+    flush();
   }
 }
 console.log("I-restored", [...[7, 8]].join(","));

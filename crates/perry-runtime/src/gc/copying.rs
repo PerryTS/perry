@@ -1,3 +1,4 @@
+use super::copying_parent_facts::weak_holder_fact;
 use super::copying_phase::{
     finalize_dead_copied_minor_from_space_side_allocations, CopyingMinorPhase as Phase,
     CopyingMinorPhaseDiag as PhaseDiag,
@@ -116,12 +117,15 @@ impl CopyingNurseryPreflight {
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        let mut weak_holder: Option<bool> = None;
         visit_gc_rewrite_slots(header, |slot| unsafe {
             // Weak-only reachability imposes no copy constraint: the
             // collector never evacuates through a weak edge (a weak-only
             // young target dies in place and tombstones), so a pinned
             // target behind one must not force the fallback path.
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            if *weak_holder.get_or_insert_with(|| weak_holder_fact(header))
+                && crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+            {
                 return;
             }
             slot.record_layout_read();
@@ -309,19 +313,6 @@ impl CopyingNurseryCollector {
         }
     }
 
-    pub(super) fn visit_value_bits(&mut self, bits: u64) -> Option<u64> {
-        let (addr, is_nanbox, tag) = self.ptrs.decode_bits(bits)?;
-        let new_addr = self.mark_addr(addr)?;
-        if new_addr == addr {
-            return None;
-        }
-        Some(if is_nanbox {
-            tag | (new_addr as u64 & POINTER_MASK)
-        } else {
-            new_addr as u64
-        })
-    }
-
     pub(super) fn visit_raw_addr(&mut self, addr: usize) -> Option<usize> {
         let new_addr = self.mark_addr(addr)?;
         (new_addr != addr).then_some(new_addr)
@@ -426,6 +417,20 @@ impl CopyingNurseryCollector {
             return Some(self.memo_result);
         }
         let ptr = self.ptrs.classify(addr)?;
+        Some(self.mark_classified(addr, ptr))
+    }
+
+    /// [`mark_addr`](Self::mark_addr) for an address the caller has already
+    /// classified: the memo, then the mark, without classifying again.
+    #[inline]
+    pub(super) fn mark_classified_addr(&mut self, addr: usize, ptr: CopyingPointer) -> usize {
+        if addr == self.memo_addr {
+            return self.memo_result;
+        }
+        self.mark_classified(addr, ptr)
+    }
+
+    fn mark_classified(&mut self, addr: usize, ptr: CopyingPointer) -> usize {
         let result = match ptr.kind {
             CopyingPointerKind::Eden | CopyingPointerKind::FromSurvivor => unsafe {
                 self.move_young(ptr)
@@ -453,7 +458,7 @@ impl CopyingNurseryCollector {
         };
         self.memo_addr = addr;
         self.memo_result = result;
-        Some(result)
+        result
     }
 
     /// #7742: the object's block is being promoted whole, in place. It does not
@@ -650,55 +655,6 @@ impl CopyingNurseryCollector {
         new_user as usize
     }
 
-    pub(super) unsafe fn visit_slot_with_parent(
-        &mut self,
-        slot: *mut u64,
-        parent_header: *mut GcHeader,
-        external: bool,
-    ) {
-        if slot.is_null() {
-            return;
-        }
-        // Weak target edge (WeakRef referent / weak entry key / finreg
-        // record target): never evacuate through it — the mark/barrier
-        // paths skip these (`is_weak_target_trace_slot`), and copying
-        // through them strengthened the reference, so WeakMap entries
-        // never tombstoned and FinalizationRegistry never fired while
-        // copied-minor was the operative cycle. Repair an already-moved
-        // target's address now and queue the slot so `repair_weak_slots`
-        // fixes targets evacuated after this visit; the registry pass then
-        // tombstones dead ones.
-        // No remembered-set entry either — the write barrier skips weak
-        // slots the same way.
-        if !parent_header.is_null()
-            && crate::weakref::is_weak_target_trace_slot(parent_header, slot)
-        {
-            if let Some(new_bits) = self.rewrite_value_bits(*slot) {
-                *slot = new_bits;
-            }
-            self.weak_slots.push(slot);
-            return;
-        }
-        let bits = *slot;
-        if let Some(new_bits) = self.visit_value_bits(bits) {
-            *slot = new_bits;
-        }
-        if !parent_header.is_null() && !self.skip_remembering {
-            let parent_user = (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize;
-            if barrier_parent_needs_remembering(parent_user, external) {
-                if let Some((child_addr, _, _)) = self.ptrs.decode_bits(*slot) {
-                    // Keep old→malloc pages dirty alongside old→nursery:
-                    // the malloc child is spared by this cycle's mark
-                    // (mark_addr handles CopyingPointerKind::Malloc) but
-                    // the NEXT minor's malloc sweep needs the edge again.
-                    if crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
-                        self.sticky.remember_slot(parent_header, slot, external);
-                    }
-                }
-            }
-        }
-    }
-
     pub(super) unsafe fn drain(&mut self) {
         let mut i = 0usize;
         while i < self.worklist.len() {
@@ -743,10 +699,16 @@ impl CopyingNurseryCollector {
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
         let mut changed = false;
+        // LAZY, not eager. Reading the fact once per traced OBJECT regressed
+        // all six fixtures (+0.88 % to +5.09 % instructions): a great many
+        // traced objects — strings, pointer-free arrays — have no slot to
+        // visit at all, and paid for an answer nobody then asked for.
+        let mut weak_holder: Option<bool> = None;
         visit_gc_rewrite_slots(header, |slot| unsafe {
             slot.record_layout_read();
             let before = *slot.slot;
-            self.visit_slot_with_parent(slot.slot, header, slot.external());
+            let weak = *weak_holder.get_or_insert_with(|| weak_holder_fact(header));
+            self.visit_slot_with_weak_fact(slot.slot, header, weak, slot.external());
             changed |= *slot.slot != before;
         });
         if changed {

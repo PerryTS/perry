@@ -4,7 +4,7 @@ use crate::types::Type;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
-use super::super::super::LoweringContext;
+use super::super::super::{lower_expr, LoweringContext};
 
 /// #1678 (Phase 0 of #1677) — classify a bare `Function(...)` /
 /// `eval(...)` call. The `Function('return this')()` globalThis fold runs
@@ -18,6 +18,8 @@ use super::super::super::LoweringContext;
 /// (defer) mode a runtime-unknown site returns `Ok(Some(throw_value))`
 /// (#5206): the caller uses that expression in place of the call so it
 /// throws a descriptive `Error` only if reached. `Ok(None)` means proceed.
+/// #10422: that throw-on-reach value is `eval`'s only; every unfolded
+/// `Function(...)` spelling builds its function at runtime instead.
 pub(crate) fn check_eval_function_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -108,7 +110,39 @@ pub(crate) fn check_eval_function_call(
         }
         .map(|a| a.expr.as_ref())
     };
-    match crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)? {
+    let decision =
+        crate::eval_classifier::check_site(surface, body_arg, &ctx.source_file_path, call.span)?;
+    if surface == crate::eval_classifier::EvalSurface::FunctionCall {
+        // #10422: the constant fold did not compile this call, so the function
+        // is built at runtime — by the same interpreter `new Function(...)`
+        // reaches (#6559), whichever bucket the body landed in. The call form
+        // used to compile a runtime-unknown body to a stub that always threw,
+        // and let every other unfolded call (an array parameter list, a
+        // known-library body) fall through to `undefined`. Strict-eval mode
+        // has already refused inside `check_site`.
+        crate::eval_classifier::note_dynamic_function_reachable();
+        // `Function(p, body)` is spec-identical to `new Function(p, body)`:
+        // take the direct from-strings entry. A spread argument list and the
+        // `.call` / `.apply` spellings keep the generic lowering, which invokes
+        // the `Function` value (`global_this_function_call_thunk`) with its
+        // spec argument handling (`apply` of an array-like or `undefined`).
+        if matches!(callee, ast::Expr::Ident(_)) && call.args.iter().all(|a| a.spread.is_none()) {
+            let args = call
+                .args
+                .iter()
+                .map(|a| lower_expr(ctx, &a.expr))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok(Some(Expr::New {
+                class_name: "Function".to_string(),
+                args,
+                type_args: Vec::new(),
+                byte_offset: call.span.lo.0,
+                cap_args_appended: 0,
+            }));
+        }
+        return Ok(None);
+    }
+    match decision {
         crate::eval_classifier::EvalDecision::Proceed => Ok(None),
         crate::eval_classifier::EvalDecision::DeferToRuntimeError(message) => Ok(Some(
             super::super::super::const_fold_fn::synth_deferred_eval_value(

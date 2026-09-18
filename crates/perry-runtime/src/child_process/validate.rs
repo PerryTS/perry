@@ -479,21 +479,21 @@ pub extern "C" fn js_child_process_validate_options(value: f64, sync: i32, allow
 /// otherwise drop them there; the classic link keeps them via the program's
 /// own undefined references and builds without the anchors.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CP_VALIDATE_COMMAND: unsafe extern "C" fn(f64, *const u8, u32) -> f64 =
     js_child_process_validate_command;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CP_VALIDATE_ARGS: extern "C" fn(f64) -> f64 = js_child_process_validate_args;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CP_VALIDATE_FORK_MODULE: extern "C" fn(f64) -> f64 =
     js_child_process_validate_fork_module;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CP_VALIDATE_OPTIONS: extern "C" fn(f64, i32, i32) -> f64 =
     js_child_process_validate_options;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CP_VALIDATE_SPAWN_ARGS: extern "C" fn(f64, i32, i32) -> f64 =
     js_child_process_validate_spawn_args;

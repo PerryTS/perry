@@ -103,7 +103,6 @@ pub(crate) fn emit_v8_export_call(
 
     let argc = lowered_args.len();
     let alloca_count = if argc == 0 { 1 } else { argc };
-    let blk = ctx.block();
     let argc_lit = format!("{}", argc);
     let spec_ptr = format!("@{}", spec_global);
     let name_ptr = format!("@{}", name_global);
@@ -112,12 +111,10 @@ pub(crate) fn emit_v8_export_call(
 
     // Stack-allocate the args buffer (zero-len → still need a pointer; an
     // `alloca [1 x double]` is well-formed in LLVM and never dereferenced
-    // because argc=0 in that branch of the runtime).
-    let args_slot = blk.fresh_reg();
-    blk.emit_raw(format!(
-        "{} = alloca [{} x double], align 8",
-        args_slot, alloca_count
-    ));
+    // because argc=0 in that branch of the runtime). #10463: in the entry
+    // block, so a call inside a loop does not grow the stack per iteration.
+    let args_slot = ctx.func.alloca_entry_array(DOUBLE, alloca_count);
+    let blk = ctx.block();
     for (i, v) in lowered_args.iter().enumerate() {
         let slot = blk.fresh_reg();
         blk.emit_raw(format!(
@@ -207,7 +204,6 @@ pub(crate) fn emit_v8_member_method_call(
 
     let argc = lowered_args.len();
     let alloca_count = if argc == 0 { 1 } else { argc };
-    let blk = ctx.block();
     let argc_lit = format!("{}", argc);
     let spec_ptr = format!("@{}", spec_global);
     let member_ptr = format!("@{}", member_global);
@@ -216,11 +212,9 @@ pub(crate) fn emit_v8_member_method_call(
     let member_len_lit = format!("{}", member_bytes);
     let method_len_lit = format!("{}", method_bytes);
 
-    let args_slot = blk.fresh_reg();
-    blk.emit_raw(format!(
-        "{} = alloca [{} x double], align 8",
-        args_slot, alloca_count
-    ));
+    // #10463: entry-block args buffer (see `emit_v8_export_call`).
+    let args_slot = ctx.func.alloca_entry_array(DOUBLE, alloca_count);
+    let blk = ctx.block();
     for (i, v) in lowered_args.iter().enumerate() {
         let slot = blk.fresh_reg();
         blk.emit_raw(format!(
@@ -278,7 +272,7 @@ pub(crate) fn emit_v8_member_method_call(
 ///     collision-free `(namespace, member)` registry key; the rest of the
 ///     lower_new path resolves that key through the usual `ctx.classes`
 ///     lookup.
-fn is_global_object_expr(expr: &Expr) -> bool {
+pub(crate) fn is_global_object_expr(expr: &Expr) -> bool {
     match expr {
         Expr::GlobalGet(_) => true,
         Expr::PropertyGet {
@@ -308,6 +302,18 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
             object, property, ..
         } => {
             if is_global_object_expr(object.as_ref()) {
+                // #10359: `lower_new` resolves the name against the module's
+                // classes, class aliases and imports before (or instead of)
+                // the builtin, but a module binding is never a property of
+                // the global object. With `import { Event } from "./ev"` in
+                // scope, folding `new globalThis.Event()` built the imported
+                // class; read the property and construct it at runtime.
+                if ctx.classes.contains_key(property)
+                    || ctx.local_class_aliases.contains_key(property)
+                    || ctx.import_function_prefixes.contains_key(property)
+                {
+                    return None;
+                }
                 return Some(Cow::Borrowed(property.as_str()));
             }
             // Namespace import: `import * as ns from 'm'; new ns.Foo()`.

@@ -133,7 +133,7 @@ pub extern "C" fn js_string_substr(
 // so the whole-program auto-optimize bitcode rebuild would dead-strip it
 // without an anchor (see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SUBSTR: extern "C" fn(*const StringHeader, f64, f64) -> *mut StringHeader =
     js_string_substr;
 
@@ -587,7 +587,7 @@ pub extern "C" fn js_string_position_to_index(pos_f64: f64) -> i32 {
 // generated `.o`, so the auto-optimize whole-program bitcode pass would
 // otherwise dead-strip it.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_POSITION_TO_INDEX: extern "C" fn(f64) -> i32 = js_string_position_to_index;
 
 /// Find the last index of a substring (-1 if not found).

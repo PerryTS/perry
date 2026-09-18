@@ -36,7 +36,7 @@ use super::{
     install_proto_method, js_object_alloc, set_builtin_property_attrs, ObjectHeader, PropertyAttrs,
 };
 use crate::value::JSValue;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 // GC-rooted singleton slots. Each realm builds its own tower in its own arena;
 // the process-global handles resolve to per-agent atomics and are scanned in
@@ -66,9 +66,50 @@ pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
 pub(crate) static ITERATOR_HELPER_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&ITERATOR_HELPER_PROTOTYPE_PTR_SLOT);
 
-/// #10086: the array-iterator prototype object is about to be handed to user
-/// code, so `%ArrayIteratorPrototype%.next` may be replaced at any point after
-/// this. Publish that to generated code.
+/// Sticky per-family siblings of `PERRY_ARRAY_ITERATION_NOT_PRISTINE`: the
+/// Map / Set / String iterator PROTOTYPE object escaped to user code, so
+/// `%MapIteratorPrototype%.next` (etc.) may be patched from here on.
+///
+/// The array byte is exported because GENERATED code reads it (the `for…of`
+/// index loop, #10086's destructuring arm). These three are read only from
+/// Rust — `array_from_spread_value`'s Map / Set / string element-copy arms —
+/// so a plain `AtomicBool` is enough. `AtomicBool` holds no heap pointer, so
+/// none of them is a GC root (`scripts/gc_runtime_root_holders.py`).
+static MAP_ITERATION_NOT_PRISTINE: AtomicBool = AtomicBool::new(false);
+static SET_ITERATION_NOT_PRISTINE: AtomicBool = AtomicBool::new(false);
+static STRING_ITERATION_NOT_PRISTINE: AtomicBool = AtomicBool::new(false);
+
+/// Has `%MapIteratorPrototype%` escaped to user code? See
+/// [`note_iterator_prototype_exposed`].
+#[inline]
+pub(crate) fn map_iteration_not_pristine() -> bool {
+    MAP_ITERATION_NOT_PRISTINE.load(Ordering::Acquire)
+}
+
+/// Has `%SetIteratorPrototype%` escaped to user code? See
+/// [`note_iterator_prototype_exposed`].
+#[inline]
+pub(crate) fn set_iteration_not_pristine() -> bool {
+    SET_ITERATION_NOT_PRISTINE.load(Ordering::Acquire)
+}
+
+/// Has `%StringIteratorPrototype%` escaped to user code? See
+/// [`note_iterator_prototype_exposed`].
+#[inline]
+pub(crate) fn string_iteration_not_pristine() -> bool {
+    STRING_ITERATION_NOT_PRISTINE.load(Ordering::Acquire)
+}
+
+/// #10086: a built-in iterator prototype object is about to be handed to user
+/// code, so `%ArrayIteratorPrototype%.next` (or its Map / Set / String
+/// sibling) may be replaced at any point after this. Publish that.
+///
+/// #9846 widened this from the array family alone. The array byte covers the
+/// two GENERATED fast arms; the three booleans cover the RUNTIME element-copy
+/// arms in `array_from_spread_value`, which are the same kind of hole —
+/// `[...new Set([1, 2])]` memcpy'd the Set's backing and `[..."ab"]` cut the
+/// string into chars, so a patched `%SetIteratorPrototype%.next` /
+/// `%StringIteratorPrototype%.next` never ran.
 ///
 /// A replaced `next` is detected per `.next()` call by
 /// [`prototype_next_is_canonical`] — which a non-iterator fast arm (the
@@ -86,7 +127,7 @@ pub(crate) static ITERATOR_HELPER_PROTOTYPE_PTR: super::RealmAtomicI64 =
 /// So the flag is set when the object escapes, patched or not. The cost lands
 /// only on programs that introspect an array iterator — and those are exactly
 /// the programs about to patch one.
-pub(crate) fn note_array_iterator_prototype_exposed(value: f64) {
+pub(crate) fn note_iterator_prototype_exposed(value: f64) {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
         return;
@@ -97,6 +138,29 @@ pub(crate) fn note_array_iterator_prototype_exposed(value: f64) {
     }
     if ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
         crate::array::note_array_iteration_not_pristine();
+        return;
+    }
+    if MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
+        MAP_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
+        return;
+    }
+    if SET_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
+        SET_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
+        return;
+    }
+    if STRING_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
+        STRING_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
+        return;
+    }
+    // `%IteratorPrototype%` itself is the parent of all four families, and a
+    // patch there is inherited by every one of them. Reaching it needs a
+    // second `getPrototypeOf` hop off a family prototype, so this arm is
+    // strictly rarer than the four above — mark them all.
+    if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == addr {
+        crate::array::note_array_iteration_not_pristine();
+        MAP_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
+        SET_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
+        STRING_ITERATION_NOT_PRISTINE.store(true, Ordering::Release);
     }
 }
 

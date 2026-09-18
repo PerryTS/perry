@@ -13,6 +13,8 @@
 //! - `compression` - zlib compression
 //! - `full` - Everything (default)
 
+// Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
+#![feature(used_with_arg)]
 // Re-export the updater crate so its #[no_mangle] FFI symbols are
 // retained in libperry_stdlib.a (Cargo would otherwise drop unused
 // rlib deps during the staticlib bundle step).

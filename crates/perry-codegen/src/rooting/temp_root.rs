@@ -285,6 +285,15 @@ pub(in crate::rooting) fn rooted_array_begin(ctx: &mut FnCtx<'_>, cap: &str) -> 
     temp_root_push_i64(ctx, &arr)
 }
 
+/// Root an array the caller has already built, in the same slot shape
+/// [`rooted_array_begin`] produces. The inline construction path builds the
+/// whole array before anything else can collect; what follows (another
+/// bundle's allocation, the consuming call) still can, so it must be rooted
+/// exactly like an accumulator.
+pub(in crate::rooting) fn rooted_array_adopt(ctx: &mut FnCtx<'_>, arr: &str) -> String {
+    temp_root_push_i64(ctx, arr)
+}
+
 /// Read the accumulator back out of its temp-root slot. Does NOT truncate:
 /// callers truncate after the consuming call, so the array is still rooted
 /// while the consumer runs (formatting an argument list allocates).

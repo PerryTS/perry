@@ -104,7 +104,7 @@ pub extern "C" fn js_promise_mark_internally_handled(promise: *mut Promise) {
 /// PERRY_NO_AUTO_OPTIMIZE prebuilt-lib link (same pattern as the checkpoint
 /// hook anchors below).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PROMISE_MARK_INTERNALLY_HANDLED: extern "C" fn(*mut Promise) =
     js_promise_mark_internally_handled;
 
@@ -269,7 +269,7 @@ pub extern "C" fn js_promise_report_unhandled_rejections() {
 // fails with "undefined symbol". The classic link needs no anchor (see the
 // error.rs/combinators.rs anchors for the same pattern).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PROMISE_REPORT_UNHANDLED_REJECTIONS: extern "C" fn() =
     js_promise_report_unhandled_rejections;
 

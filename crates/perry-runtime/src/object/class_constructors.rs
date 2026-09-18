@@ -18,7 +18,7 @@ use super::ObjectHeader;
 /// refresh sites along every assignment path, including paths that skipped the
 /// corresponding class expression.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLASS_OBJECT_REFRESH_CAPTURE_VALUES: extern "C" fn(f64, i64, f64) =
     js_class_object_refresh_capture_values;
 
@@ -45,7 +45,7 @@ pub extern "C" fn js_class_object_refresh_capture_values(
 /// `undefined` slots and therefore never consults a later evaluation's
 /// name-keyed state.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLASS_CAPTURE_VALUE_FOR_RECEIVER: extern "C" fn(f64, u32, u32) -> f64 =
     js_class_capture_value_for_receiver;
 
@@ -176,7 +176,7 @@ pub extern "C" fn js_register_class_constructor_flags(
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLASS_CONSTRUCTOR_FLAGS: extern "C" fn(i64, i64, i64) =
     js_register_class_constructor_flags;
 
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn js_class_register_capture_values(
 /// Keepalive anchor for the auto-optimize whole-program build —
 /// `js_class_register_capture_values` is a generated-code-only callee.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLASS_REGISTER_CAPTURE_VALUES: unsafe extern "C" fn(u32, *const f64, usize) =
     js_class_register_capture_values;
 
@@ -421,14 +421,14 @@ pub(crate) fn fallback_is_tag_stripped(fallback: f64) -> bool {
 
 /// Keepalive anchors (generated-code-only callees).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLASS_CAPTURE_VALUE: extern "C" fn(u32, u32) -> f64 = js_class_capture_value;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLASS_CAPTURE_VALUE_OR: extern "C" fn(u32, u32, f64) -> f64 =
     js_class_capture_value_or;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_PARAM_OR_CLASS_CAPTURE_VALUE: extern "C" fn(f64, u32, u32) -> f64 =
     js_param_or_class_capture_value;
 
@@ -627,7 +627,7 @@ pub unsafe extern "C" fn js_super_construct_apply(
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SUPER_CONSTRUCT_APPLY: unsafe extern "C" fn(u32, f64, f64) -> f64 =
     js_super_construct_apply;
 
@@ -805,7 +805,7 @@ unsafe fn call_displaced_native_base_method(
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC: unsafe extern "C" fn(
     u32,
     *const u8,
@@ -863,7 +863,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic_apply(
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC_APPLY: unsafe extern "C" fn(
     u32,
     *const u8,
@@ -1020,7 +1020,7 @@ pub unsafe extern "C" fn js_array_push_spread_any(
 
 /// Keepalive anchor (generated-code-only callee).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_PUSH_SPREAD_ANY: unsafe extern "C" fn(
     *mut crate::array::ArrayHeader,
     f64,
@@ -1139,13 +1139,13 @@ pub unsafe extern "C" fn js_error_subclass_default_init_with_options(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT_WITH_OPTIONS: unsafe extern "C" fn(f64, f64, f64) =
     js_error_subclass_default_init_with_options;
 
 /// Keepalive: generated code is the only caller (#6469).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(f64, f64) =
     js_error_subclass_default_init;
 

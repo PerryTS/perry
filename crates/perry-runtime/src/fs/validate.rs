@@ -378,7 +378,7 @@ pub unsafe extern "C" fn js_validate_event_listener(
 /// via the stdlib/ext events validators, so without an anchor the bitcode
 /// internalizer drops it and the default `perry file.ts -o out` link fails.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32) -> i64 =
     js_validate_event_listener;
 

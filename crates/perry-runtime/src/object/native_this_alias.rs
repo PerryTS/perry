@@ -294,10 +294,10 @@ pub unsafe extern "C" fn js_https_server_construct_with_this(
 /// dead-strips `#[no_mangle]` fns referenced only from generated `.o`
 /// files. See the `KEEP_JS_FUNCTION_BIND` precedent in closure/dispatch.rs.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_HTTP_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64) -> f64 =
     js_http_server_construct_with_this;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_HTTPS_SERVER_CONSTRUCT_WITH_THIS: unsafe extern "C" fn(f64, f64, f64) -> f64 =
     js_https_server_construct_with_this;

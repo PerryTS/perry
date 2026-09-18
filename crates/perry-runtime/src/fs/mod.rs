@@ -301,9 +301,8 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
     }
 }
 
-/// Read a file synchronously and return its contents as a string
-/// Returns null pointer on error
-/// Accepts NaN-boxed string path
+/// Read a file synchronously and return its contents as a string.
+/// Throws a Node-shaped fs error on failure. Accepts NaN-boxed string path.
 // These readFileSync entry points intentionally throw on I/O failure. They
 // must permit the generated landingpad transport to cross their Rust FFI
 // frames so Node-style `try { readFileSync(optional) } catch { ... }` works
@@ -321,15 +320,14 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
     validate::validate_path_or_fd("path", path_value, "read");
     validate::validate_string_or_object_options("options", options_value);
     unsafe {
-        let _path_str_for_log = decode_path_value(path_value).unwrap_or_default();
-
         // Debug: log path on Android
         #[cfg(target_os = "android")]
         {
             extern "C" {
                 fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
             }
-            let c_path = std::ffi::CString::new(_path_str_for_log).unwrap_or_default();
+            let path_str_for_log = decode_path_value(path_value).unwrap_or_default();
+            let c_path = std::ffi::CString::new(path_str_for_log).unwrap_or_default();
             __android_log_print(
                 3,
                 b"PerryFS\0".as_ptr(),
@@ -339,7 +337,7 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
         }
 
         match read_file_bytes_with_options(path_value, options_value) {
-            Some(bytes) => {
+            Ok(bytes) => {
                 #[cfg(target_os = "android")]
                 {
                     extern "C" {
@@ -359,7 +357,7 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
                 }
                 js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
             }
-            None => {
+            Err(failure) => {
                 #[cfg(target_os = "android")]
                 {
                     extern "C" {
@@ -389,13 +387,7 @@ pub extern "C-unwind" fn js_fs_read_file_sync_options(
                 // a Node-shaped fs error instead. This is a real, catchable JS
                 // throw (caught by JS try/catch) — NOT the null-pointer segfault
                 // the previous empty-string workaround was guarding against.
-                let path_str = decode_path_value(path_value).unwrap_or_default();
-                let io_err = std::fs::read(&path_str)
-                    .err()
-                    .unwrap_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound));
-                crate::exception::js_throw(crate::fs::errors::build_fs_error_value(
-                    &io_err, "open", &path_str,
-                ))
+                crate::exception::js_throw(failure.error_value())
             }
         }
     }
@@ -407,13 +399,31 @@ pub extern "C-unwind" fn js_fs_read_file_dispatch(path_value: f64, options_value
         let str_ptr = js_fs_read_file_sync_options(path_value, options_value);
         f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
     } else {
+        // Throws on failure (#10452) — never null, so never `undefined`.
         let buf = js_fs_read_file_binary_options(path_value, options_value);
-        if buf.is_null() {
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        } else {
-            f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
-        }
+        f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
     }
+}
+
+/// `readFile`'s shared core for the sync, callback and promise forms (#10452):
+/// the contents as a string (`as_string`) or a Buffer, or the Node-shaped
+/// error value to throw, hand to the callback, or reject with.
+pub(crate) unsafe fn read_file_value_result(
+    path_value: f64,
+    options_value: f64,
+    as_string: bool,
+) -> Result<f64, f64> {
+    validate::validate_path_or_fd("path", path_value, "read");
+    validate::validate_string_or_object_options("options", options_value);
+    let bytes = read_file_bytes_with_options(path_value, options_value)
+        .map_err(|failure| failure.error_value())?;
+    Ok(if as_string {
+        let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        f64::from_bits(crate::value::JSValue::string_ptr(str_ptr).bits())
+    } else {
+        let buf = buffer_from_file_bytes(&bytes);
+        f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+    })
 }
 
 /// Write content to a file synchronously
@@ -439,7 +449,7 @@ fn js_string_value(value: f64) -> Option<String> {
     }
 }
 
-fn read_file_encoding(options_value: f64) -> Option<String> {
+pub(crate) fn read_file_encoding(options_value: f64) -> Option<String> {
     let value = crate::value::JSValue::from_bits(options_value.to_bits());
     if value.is_undefined() || value.is_null() {
         return None;
@@ -500,18 +510,28 @@ fn open_file_for_read_flag(path: &str, flag: &str) -> std::io::Result<fs::File> 
     opts.open(path)
 }
 
-fn read_file_bytes_with_options(path_value: f64, options_value: f64) -> Option<Vec<u8>> {
+/// The bytes behind every `readFile` form. Failures used to collapse into
+/// `None`, which the Buffer forms turned into `null`/`undefined` instead of an
+/// error (#10452); they now carry the OS error and the failing syscall.
+fn read_file_bytes_with_options(
+    path_value: f64,
+    options_value: f64,
+) -> Result<Vec<u8>, FsReadFailure> {
     unsafe {
         if let Some(fd) = numeric_fd_value(path_value) {
             let mut bytes = Vec::new();
-            FD_REGISTRY.with(|r| {
-                if let Some(file) = r.borrow_mut().get_mut(&fd) {
-                    let _ = file.read_to_end(&mut bytes);
-                }
+            let read = FD_REGISTRY.with(|r| {
+                r.borrow_mut()
+                    .get_mut(&fd)
+                    .map(|file| file.read_to_end(&mut bytes))
             });
-            return Some(bytes);
+            // `validate_path_or_fd` already threw EBADF for an unknown fd.
+            let read = read.unwrap_or_else(|| Err(ebadf_os_error()));
+            return read.map(|_| bytes).map_err(FsReadFailure::read);
         }
-        let path_str = decode_path_value(path_value)?;
+        let Some(path_str) = decode_path_value(path_value) else {
+            return Err(FsReadFailure::open(enoent_os_error(), ""));
+        };
         // #5731 — virtual filesystem: a `$perryfs/...` path (or a bare key that
         // matches an embedded asset) is served from the in-binary registry
         // before any disk access, so `fs.readFileSync`/`readFile` (text and
@@ -519,16 +539,19 @@ fn read_file_bytes_with_options(path_value: f64, options_value: f64) -> Option<V
         // A successful registry lookup is the only short-circuit; an unresolved
         // `$perryfs/...` path is treated as missing, never a literal disk read.
         if let Some(bytes) = crate::embedded::lookup(&path_str) {
-            return Some(bytes.to_vec());
+            return Ok(bytes.to_vec());
         }
         if crate::embedded::is_virtual_path(&path_str) {
-            return None;
+            return Err(FsReadFailure::open(enoent_os_error(), &path_str));
         }
         let flag = read_file_flag(options_value);
-        let mut file = open_file_for_read_flag(&path_str, &flag).ok()?;
+        let mut file = match open_file_for_read_flag(&path_str, &flag) {
+            Ok(file) => file,
+            Err(err) => return Err(FsReadFailure::open(err, &path_str)),
+        };
         let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).ok()?;
-        Some(bytes)
+        file.read_to_end(&mut bytes).map_err(FsReadFailure::read)?;
+        Ok(bytes)
     }
 }
 
@@ -877,15 +900,18 @@ pub extern "C" fn js_fs_chmod_sync(path_value: f64, mode: f64) -> i32 {
 }
 
 /// Read a file synchronously as binary and return a Buffer (binary-safe, works for PNG etc.)
-/// Returns a *mut BufferHeader on success, null on error
-/// Accepts NaN-boxed string path
+/// Returns a *mut BufferHeader on success and throws a Node-shaped fs error on
+/// failure, like the string form (#10452 — it used to return null, which the
+/// callers surfaced as `null`/`undefined`). Accepts NaN-boxed string path.
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_binary(path_value: f64) -> *mut crate::buffer::BufferHeader {
+pub extern "C-unwind" fn js_fs_read_file_binary(
+    path_value: f64,
+) -> *mut crate::buffer::BufferHeader {
     js_fs_read_file_binary_options(path_value, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 #[no_mangle]
-pub extern "C" fn js_fs_read_file_binary_options(
+pub extern "C-unwind" fn js_fs_read_file_binary_options(
     path_value: f64,
     options_value: f64,
 ) -> *mut crate::buffer::BufferHeader {
@@ -893,19 +919,22 @@ pub extern "C" fn js_fs_read_file_binary_options(
     validate::validate_string_or_object_options("options", options_value);
     unsafe {
         match read_file_bytes_with_options(path_value, options_value) {
-            Some(bytes) => {
-                let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-                if !buf.is_null() {
-                    let buf_data =
-                        (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf_data, bytes.len());
-                    (*buf).length = bytes.len() as u32;
-                }
-                buf
-            }
-            None => std::ptr::null_mut(),
+            Ok(bytes) => buffer_from_file_bytes(&bytes),
+            Err(failure) => crate::exception::js_throw(failure.error_value()),
         }
     }
+}
+
+/// A fresh Buffer holding `bytes`. A new allocation is never a view or
+/// foreign-backed, so its data sits directly after the header.
+unsafe fn buffer_from_file_bytes(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
+    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
+    if !buf.is_null() {
+        let buf_data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf_data, bytes.len());
+        (*buf).length = bytes.len() as u32;
+    }
+    buf
 }
 
 /// Recursively remove a directory or file.

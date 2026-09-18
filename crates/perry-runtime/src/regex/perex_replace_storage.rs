@@ -171,16 +171,140 @@ impl<'a, 's> Units<'a, 's> {
     }
 }
 
+/// Which string a native piece spans. A string-template replacement never
+/// produces a piece from anywhere else: every piece is part of the subject or
+/// part of the template, both of which outlive the replacement and are already
+/// rooted by the caller.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Source {
+    Original,
+    Template,
+}
+
+/// Native piece records, for the replacement paths whose pieces are all spans
+/// of the subject or the template (#10411).
+///
+/// The JS-array backing costs about a kilobyte of traced heap per piece — three
+/// `js_array_push_f64` calls, each with a handle scope and a string addref,
+/// against an array the collector must trace and grow. A 550 KB subject with
+/// 100,000 matches peaked at 545 MB RSS that way, against Node's 122 MB, and
+/// the cost scaled with the number of pieces rather than the size of the data.
+/// These records are 12 bytes each, allocated once, and traced by nobody.
+struct NativePieces {
+    records: Vec<(Source, u32, u32)>,
+    noted: usize,
+}
+impl NativePieces {
+    /// Keep the operation's external-byte accounting in step with the vector's
+    /// capacity, as `Spans` does for the span list.
+    fn note_growth(&mut self) -> Result<(), EngineError> {
+        let bytes = self.records.capacity() * std::mem::size_of::<(Source, u32, u32)>();
+        if bytes > self.noted {
+            let grown = bytes - self.noted;
+            self.noted = bytes;
+            api::caught(|| crate::gc::gc_note_external_side_alloc(grown))?;
+        }
+        Ok(())
+    }
+}
+impl Drop for NativePieces {
+    fn drop(&mut self) {
+        crate::gc::gc_note_external_side_free(self.noted);
+    }
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Counts `Pieces` that kept their records native, so a test can assert
+    /// which backing a replacement took rather than infer it from a timing.
+    pub(crate) static NATIVE_PIECES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) struct Pieces<'a> {
     list: List<'a>,
+    /// `Some` while every piece is a span of the subject or the template. A
+    /// callback replacement produces JS strings from user code, so it keeps
+    /// the list.
+    native: Option<NativePieces>,
     units: usize,
 }
 impl<'a> Pieces<'a> {
     pub(super) fn new(scope: &'a RuntimeHandleScope) -> Result<Self, EngineError> {
         Ok(Self {
             list: List::new(scope)?,
+            native: None,
             units: 0,
         })
+    }
+
+    /// A `Pieces` whose records stay native. ONLY a string-template
+    /// replacement may use it, and the two backings must never both be
+    /// populated: `walk` emits every native record before any list entry, so a
+    /// caller that mixed them would silently lose the interleaving and produce
+    /// reordered output. `append` and `whole` therefore refuse a native
+    /// `Pieces` rather than falling back to the list, and `walk` asserts the
+    /// same invariant.
+    pub(super) fn new_native(scope: &'a RuntimeHandleScope) -> Result<Self, EngineError> {
+        #[cfg(test)]
+        NATIVE_PIECES.with(|n| n.set(n.get() + 1));
+        Ok(Self {
+            list: List::new(scope)?,
+            native: Some(NativePieces {
+                records: Vec::new(),
+                noted: 0,
+            }),
+            units: 0,
+        })
+    }
+
+    /// Record a span of the subject, natively when this `Pieces` is native.
+    pub(super) fn append_original(
+        &mut self,
+        original: &RuntimeHandle<'_>,
+        start: usize,
+        end: usize,
+        budget: &mut Budget,
+    ) -> Result<(), EngineError> {
+        self.append_tagged(Source::Original, original, start, end, budget)
+    }
+
+    /// Record a span of the template, natively when this `Pieces` is native.
+    pub(super) fn append_template(
+        &mut self,
+        template: &RuntimeHandle<'_>,
+        start: usize,
+        end: usize,
+        budget: &mut Budget,
+    ) -> Result<(), EngineError> {
+        self.append_tagged(Source::Template, template, start, end, budget)
+    }
+
+    fn append_tagged(
+        &mut self,
+        source: Source,
+        handle: &RuntimeHandle<'_>,
+        start: usize,
+        end: usize,
+        budget: &mut Budget,
+    ) -> Result<(), EngineError> {
+        if self.native.is_none() {
+            return self.append(handle, start, end, budget);
+        }
+        if start > end || end > length(handle) {
+            return Err(EngineError::InvalidSpan);
+        }
+        if start == end {
+            return Ok(());
+        }
+        self.units = self
+            .units
+            .checked_add(end - start)
+            .filter(|&n| n <= crate::string::MAX_STRING_LENGTH)
+            .ok_or(StorageError::Limit)?;
+        host::charge(budget, 1)?;
+        let native = self.native.as_mut().expect("checked above");
+        native.records.push((source, start as u32, end as u32));
+        native.note_growth()
     }
     pub(super) fn append(
         &mut self,
@@ -189,6 +313,17 @@ impl<'a> Pieces<'a> {
         end: usize,
         budget: &mut Budget,
     ) -> Result<(), EngineError> {
+        // A native `Pieces` must not also hold list entries: `walk` emits all
+        // of one before any of the other, so mixing them reorders the output
+        // rather than merely costing the saving. Fail here, where the mistake
+        // is, instead of producing wrong bytes at `finish`.
+        debug_assert!(
+            self.native.is_none(),
+            "a native Pieces cannot take an arbitrary source; walk would reorder the output"
+        );
+        if self.native.is_some() {
+            return Err(EngineError::InvalidSpan);
+        }
         if start > end || end > length(source) {
             return Err(EngineError::InvalidSpan);
         }
@@ -232,6 +367,36 @@ impl<'a> Pieces<'a> {
                     .map_err(|e| read_error(e, |n| match n {}))
             })
             .transpose()?;
+        if let Some(native) = self.native.as_ref() {
+            for &(source, start, end) in &native.records {
+                let span =
+                    Span::new(start as usize, end as usize).ok_or(EngineError::InvalidSpan)?;
+                match source {
+                    Source::Original => {
+                        original_reader
+                            .retarget(span)
+                            .map_err(|e| read_error(e, |n| match n {}))?;
+                        step(&mut original_reader, budget)?;
+                    }
+                    Source::Template => {
+                        let reader = template_reader.as_mut().ok_or(EngineError::InvalidSpan)?;
+                        reader
+                            .retarget(span)
+                            .map_err(|e| read_error(e, |n| match n {}))?;
+                        step(reader, budget)?;
+                    }
+                }
+            }
+            debug_assert!(
+                self.list.len() == 0,
+                "native and list records must never both be populated; walk emits \
+                 every native record before any list entry"
+            );
+            if self.list.len() != 0 {
+                return Err(EngineError::InvalidSpan);
+            }
+            return Ok(());
+        }
         for index in (0..self.list.len()).step_by(3) {
             let local = RuntimeHandleScope::new();
             let source = local.root_string_ptr(crate::value::js_get_string_pointer_unified(

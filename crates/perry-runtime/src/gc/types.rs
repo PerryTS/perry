@@ -917,10 +917,9 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
         GcMoveHookKind::None => {}
         GcMoveHookKind::ObjectOverflowFields => {
             crate::object::overflow_fields_owner_moved(old_user, new_user);
-            // #2820: migrate any recorded `Object.setPrototypeOf` entry for
-            // this ordinary object so getPrototypeOf/inherited reads still
-            // resolve after evacuation.
-            crate::object::prototype_chain::object_static_prototype_owner_moved(old_user, new_user);
+            // The residual `Object.setPrototypeOf` registry is rekeyed by the
+            // relocation funnel for every owner kind (`gc/layout/transfer.rs`),
+            // which runs before this hook on every move.
             crate::object::module_wrapper_owner_moved(old_user, new_user);
         }
         GcMoveHookKind::ClosureDynamicProps => {

@@ -10,7 +10,10 @@ use perry_hir::Expr;
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
-use super::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use super::{
+    lower_expr, lower_js_args_array, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64,
+    FnCtx,
+};
 
 /// Field selector codes for `js_date_apply_setter`. Must match the runtime
 /// (`crates/perry-runtime/src/date.rs`): 0=FullYear 1=Month 2=Date 3=Hours
@@ -42,22 +45,12 @@ pub(crate) fn lower_date_setter(
     for a in args {
         arg_vals.push(lower_expr(ctx, a)?);
     }
-    let blk = ctx.block();
-    let (args_ptr, argc) = if arg_vals.is_empty() {
-        ("null".to_string(), "0".to_string())
-    } else {
-        let n = arg_vals.len();
-        let buf_reg = blk.next_reg();
-        blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-        for (i, val) in arg_vals.iter().enumerate() {
-            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-            blk.store(DOUBLE, val, &slot);
-        }
-        (buf_reg, format!("{}", n))
-    };
+    // #10463: the buffer is an entry-block alloca. Emitted here, in whatever
+    // block is current, it grew the stack on every loop iteration.
+    let (args_ptr, argc) = lower_js_args_array(ctx, &arg_vals);
     let is_utc_str = if is_utc { "1" } else { "0" };
     let field_str = format!("{}", field);
-    Ok(blk.call(
+    Ok(ctx.block().call(
         DOUBLE,
         "js_date_apply_setter",
         &[
@@ -350,23 +343,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 item_vals.push(lower_expr(ctx, it)?);
             }
 
+            let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
+            // #10463: entry-block buffer (see `lower_date_setter`).
+            let (items_ptr, items_count_str) = lower_js_args_array(ctx, &item_vals);
+
             let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-
-            let (items_ptr, items_count_str) = if item_vals.is_empty() {
-                ("null".to_string(), "0".to_string())
-            } else {
-                let n = item_vals.len();
-                let items_count_str = format!("{}", n);
-                let buf_reg = blk.next_reg();
-                blk.emit_raw(format!("{} = alloca [{} x double]", buf_reg, n));
-                for (i, val) in item_vals.iter().enumerate() {
-                    let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", i))]);
-                    blk.store(DOUBLE, val, &slot);
-                }
-                (buf_reg, items_count_str)
-            };
-
             let result = blk.call(
                 I64,
                 "js_array_to_spliced",

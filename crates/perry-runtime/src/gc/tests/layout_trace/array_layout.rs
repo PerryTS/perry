@@ -66,6 +66,7 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
 
     let moved = crate::array::js_array_alloc_with_length(4);
     unsafe {
+        model_relocation_header_copy(grown as usize, moved as usize);
         layout_transfer(grown as *mut u8, moved as *mut u8);
     }
     assert_eq!(test_layout_pointer_slot_count(moved as usize, 4), Some(1));

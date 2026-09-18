@@ -148,9 +148,166 @@ fn errno_backed() -> Vec<(i32, &'static str, &'static str)> {
     t
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn errno_backed() -> Vec<(i32, &'static str, &'static str)> {
+    // Keyed by the POSITIVE magnitude, like the unix table above: `lookup`
+    // negates it. Codes `uv_internal` already carries are skipped so the two
+    // tables cannot disagree about a key.
+    UV_WINDOWS_ERRNOS
+        .iter()
+        .filter(|(_, name, _)| !uv_internal().iter().any(|(_, other, _)| other == name))
+        .map(|(errno, name, message)| (-errno, *name, *message))
+        .collect()
+}
+
+#[cfg(not(any(unix, windows)))]
 fn errno_backed() -> Vec<(i32, &'static str, &'static str)> {
     Vec::new()
+}
+
+/// libuv's error numbers on Windows, with libuv's messages.
+///
+/// `include/uv/errno.h` defines each `UV__E*` as `-errno` only on a platform
+/// that has that errno and is not `_WIN32`; on Windows every code falls back to
+/// a fixed negative number, so `UV__ENOENT` is `-4058` rather than `-2`. Node
+/// reports those as `err.errno` there. The messages are libuv's own
+/// (`UV_ERRNO_MAP` in `uv.h`) and are the same text the unix table carries —
+/// `windows_and_unix_tables_agree` pins that.
+///
+/// The set is the filesystem-relevant one: every code `win32_error_to_uv` can
+/// produce, plus the ones `io_error_code`'s `ErrorKind` fallback can name.
+///
+/// Only Windows reads these tables; `cfg(test)` keeps them (and the pure
+/// translation below) compiled — and asserted — on every host.
+#[cfg(any(windows, test))]
+const UV_WINDOWS_ERRNOS: &[(i32, &str, &str)] = &[
+    (-4093, "E2BIG", "argument list too long"),
+    (-4092, "EACCES", "permission denied"),
+    (-4088, "EAGAIN", "resource temporarily unavailable"),
+    (-4083, "EBADF", "bad file descriptor"),
+    (-4082, "EBUSY", "resource busy or locked"),
+    (-4081, "ECANCELED", "operation canceled"),
+    (-4080, "ECHARSET", "invalid Unicode character"),
+    (-4075, "EEXIST", "file already exists"),
+    (-4074, "EFAULT", "bad address in system call argument"),
+    (-4028, "EFTYPE", "inappropriate file type or format"),
+    (-4071, "EINVAL", "invalid argument"),
+    (-4070, "EIO", "i/o error"),
+    (-4068, "EISDIR", "illegal operation on a directory"),
+    (-4067, "ELOOP", "too many symbolic links encountered"),
+    (-4066, "EMFILE", "too many open files"),
+    (-4064, "ENAMETOOLONG", "name too long"),
+    (-4058, "ENOENT", "no such file or directory"),
+    (-4057, "ENOMEM", "not enough memory"),
+    (-4055, "ENOSPC", "no space left on device"),
+    (-4052, "ENOTDIR", "not a directory"),
+    (-4051, "ENOTEMPTY", "directory not empty"),
+    (-4049, "ENOTSUP", "operation not supported on socket"),
+    (-4048, "EPERM", "operation not permitted"),
+    (-4047, "EPIPE", "broken pipe"),
+    (-4043, "EROFS", "read-only file system"),
+    (-4039, "ETIMEDOUT", "connection timed out"),
+    (-4037, "EXDEV", "cross-device link not permitted"),
+    (-4095, "EOF", "end of file"),
+    (-4094, "UNKNOWN", "unknown error"),
+];
+
+/// libuv's `uv_translate_sys_error` (`src/win/error.c` in libuv v1.52.1, the
+/// libuv node 26.5.1 ships) restricted to the Win32 errors a filesystem call
+/// returns. The socket (`WSAE*`) and network `ERROR_*` arms are left out:
+/// nothing on this path produces them, and an unmapped code keeps the existing
+/// `ErrorKind` fallback. The Win32 names are documentation; the numbers are
+/// `windows-sys`' `Win32::Foundation` values.
+#[cfg(any(windows, test))]
+const WIN32_TO_UV: &[(i32, &str, &str)] = &[
+    (740, "ERROR_ELEVATION_REQUIRED", "EACCES"),
+    (1920, "ERROR_CANT_ACCESS_FILE", "EACCES"),
+    (232, "ERROR_NO_DATA", "EAGAIN"),
+    (1004, "ERROR_INVALID_FLAGS", "EBADF"),
+    (6, "ERROR_INVALID_HANDLE", "EBADF"),
+    (33, "ERROR_LOCK_VIOLATION", "EBUSY"),
+    (231, "ERROR_PIPE_BUSY", "EBUSY"),
+    (32, "ERROR_SHARING_VIOLATION", "EBUSY"),
+    (995, "ERROR_OPERATION_ABORTED", "ECANCELED"),
+    (1113, "ERROR_NO_UNICODE_TRANSLATION", "ECHARSET"),
+    (183, "ERROR_ALREADY_EXISTS", "EEXIST"),
+    (80, "ERROR_FILE_EXISTS", "EEXIST"),
+    (998, "ERROR_NOACCESS", "EFAULT"),
+    (122, "ERROR_INSUFFICIENT_BUFFER", "EINVAL"),
+    (13, "ERROR_INVALID_DATA", "EINVAL"),
+    (87, "ERROR_INVALID_PARAMETER", "EINVAL"),
+    (1464, "ERROR_SYMLINK_NOT_SUPPORTED", "EINVAL"),
+    (1102, "ERROR_BEGINNING_OF_MEDIA", "EIO"),
+    (1111, "ERROR_BUS_RESET", "EIO"),
+    (23, "ERROR_CRC", "EIO"),
+    (1166, "ERROR_DEVICE_DOOR_OPEN", "EIO"),
+    (1165, "ERROR_DEVICE_REQUIRES_CLEANING", "EIO"),
+    (1393, "ERROR_DISK_CORRUPT", "EIO"),
+    (1129, "ERROR_EOM_OVERFLOW", "EIO"),
+    (1101, "ERROR_FILEMARK_DETECTED", "EIO"),
+    (31, "ERROR_GEN_FAILURE", "EIO"),
+    (1106, "ERROR_INVALID_BLOCK_LENGTH", "EIO"),
+    (1117, "ERROR_IO_DEVICE", "EIO"),
+    (1104, "ERROR_NO_DATA_DETECTED", "EIO"),
+    (205, "ERROR_NO_SIGNAL_SENT", "EIO"),
+    (110, "ERROR_OPEN_FAILED", "EIO"),
+    (1103, "ERROR_SETMARK_DETECTED", "EIO"),
+    (156, "ERROR_SIGNAL_REFUSED", "EIO"),
+    (1921, "ERROR_CANT_RESOLVE_FILENAME", "ELOOP"),
+    (4, "ERROR_TOO_MANY_OPEN_FILES", "EMFILE"),
+    (111, "ERROR_BUFFER_OVERFLOW", "ENAMETOOLONG"),
+    (206, "ERROR_FILENAME_EXCED_RANGE", "ENAMETOOLONG"),
+    (161, "ERROR_BAD_PATHNAME", "ENOENT"),
+    // libuv maps ERROR_DIRECTORY to ENOENT, not ENOTDIR.
+    (267, "ERROR_DIRECTORY", "ENOENT"),
+    (203, "ERROR_ENVVAR_NOT_FOUND", "ENOENT"),
+    (2, "ERROR_FILE_NOT_FOUND", "ENOENT"),
+    (123, "ERROR_INVALID_NAME", "ENOENT"),
+    (15, "ERROR_INVALID_DRIVE", "ENOENT"),
+    (4392, "ERROR_INVALID_REPARSE_DATA", "ENOENT"),
+    (126, "ERROR_MOD_NOT_FOUND", "ENOENT"),
+    (3, "ERROR_PATH_NOT_FOUND", "ENOENT"),
+    (8, "ERROR_NOT_ENOUGH_MEMORY", "ENOMEM"),
+    (14, "ERROR_OUTOFMEMORY", "ENOMEM"),
+    (82, "ERROR_CANNOT_MAKE", "ENOSPC"),
+    (112, "ERROR_DISK_FULL", "ENOSPC"),
+    (277, "ERROR_EA_TABLE_FULL", "ENOSPC"),
+    (1100, "ERROR_END_OF_MEDIA", "ENOSPC"),
+    (39, "ERROR_HANDLE_DISK_FULL", "ENOSPC"),
+    (145, "ERROR_DIR_NOT_EMPTY", "ENOTEMPTY"),
+    (50, "ERROR_NOT_SUPPORTED", "ENOTSUP"),
+    (109, "ERROR_BROKEN_PIPE", "EOF"),
+    // libuv reports a denied Win32 access as EPERM, not EACCES.
+    (5, "ERROR_ACCESS_DENIED", "EPERM"),
+    (1314, "ERROR_PRIVILEGE_NOT_HELD", "EPERM"),
+    (230, "ERROR_BAD_PIPE", "EPIPE"),
+    (233, "ERROR_PIPE_NOT_CONNECTED", "EPIPE"),
+    (19, "ERROR_WRITE_PROTECT", "EROFS"),
+    (121, "ERROR_SEM_TIMEOUT", "ETIMEDOUT"),
+    (17, "ERROR_NOT_SAME_DEVICE", "EXDEV"),
+    (1, "ERROR_INVALID_FUNCTION", "EISDIR"),
+    (208, "ERROR_META_EXPANSION_TOO_LONG", "E2BIG"),
+    (193, "ERROR_BAD_EXE_FORMAT", "EFTYPE"),
+];
+
+/// The libuv error number a code has on Windows (`UV__ENOENT` → `-4058`).
+#[cfg(any(windows, test))]
+pub(crate) fn uv_windows_errno(code: &str) -> Option<i32> {
+    UV_WINDOWS_ERRNOS
+        .iter()
+        .find_map(|(errno, name, _)| (*name == code).then_some(*errno))
+}
+
+/// The libuv `(errno, code)` for a Win32 error, or `None` when libuv's table
+/// has no filesystem arm for it (the caller then keeps its `ErrorKind`
+/// fallback). Pure, so it is unit tested on every host; only `io_error_code`
+/// and `io_error_errno` call it, under `cfg(windows)`.
+#[cfg(any(windows, test))]
+pub(crate) fn win32_error_to_uv(win32: i32) -> Option<(i32, &'static str)> {
+    let code = WIN32_TO_UV
+        .iter()
+        .find_map(|(value, _, code)| (*value == win32).then_some(*code))?;
+    Some((uv_windows_errno(code)?, code))
 }
 
 /// libuv-internal codes with no system errno — fixed negative keys.
@@ -288,6 +445,12 @@ pub(crate) fn system_error_name_for_code(code: i64) -> String {
     }
 }
 
+/// libuv's message for a libuv-style code (`-2` → "no such file or
+/// directory"), if mapped. Shared with the fs error builders.
+pub(crate) fn system_error_message_for_code(code: i64) -> Option<&'static str> {
+    lookup(code).map(|(_, message)| message)
+}
+
 fn system_error_name(value: f64) -> String {
     let code = validate_system_error_code(value);
     system_error_name_for_code(code)
@@ -339,6 +502,73 @@ pub extern "C" fn js_util_get_system_error_map() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// libuv's Windows translation is pure, so it is checked on every host —
+    /// this repo cannot run Windows.
+    #[test]
+    fn win32_errors_translate_to_libuv_windows_codes() {
+        // (Win32 code, libuv code) pairs read off `uv_translate_sys_error`.
+        assert_eq!(win32_error_to_uv(2), Some((-4058, "ENOENT"))); // ERROR_FILE_NOT_FOUND
+        assert_eq!(win32_error_to_uv(3), Some((-4058, "ENOENT"))); // ERROR_PATH_NOT_FOUND
+        assert_eq!(win32_error_to_uv(123), Some((-4058, "ENOENT"))); // ERROR_INVALID_NAME
+                                                                     // libuv maps a denied Win32 access to EPERM and ERROR_DIRECTORY to
+                                                                     // ENOENT — neither is the errno name a unix reader would guess.
+        assert_eq!(win32_error_to_uv(5), Some((-4048, "EPERM"))); // ERROR_ACCESS_DENIED
+        assert_eq!(win32_error_to_uv(267), Some((-4058, "ENOENT"))); // ERROR_DIRECTORY
+        assert_eq!(win32_error_to_uv(183), Some((-4075, "EEXIST"))); // ERROR_ALREADY_EXISTS
+        assert_eq!(win32_error_to_uv(145), Some((-4051, "ENOTEMPTY"))); // ERROR_DIR_NOT_EMPTY
+        assert_eq!(win32_error_to_uv(6), Some((-4083, "EBADF"))); // ERROR_INVALID_HANDLE
+        assert_eq!(win32_error_to_uv(4), Some((-4066, "EMFILE"))); // ERROR_TOO_MANY_OPEN_FILES
+        assert_eq!(win32_error_to_uv(32), Some((-4082, "EBUSY"))); // ERROR_SHARING_VIOLATION
+        assert_eq!(win32_error_to_uv(17), Some((-4037, "EXDEV"))); // ERROR_NOT_SAME_DEVICE
+        assert_eq!(win32_error_to_uv(1), Some((-4068, "EISDIR"))); // ERROR_INVALID_FUNCTION
+        assert_eq!(win32_error_to_uv(112), Some((-4055, "ENOSPC"))); // ERROR_DISK_FULL
+                                                                     // A socket/network arm, or anything libuv does not map, declines so the
+                                                                     // caller keeps its `ErrorKind` fallback.
+        assert_eq!(win32_error_to_uv(10061), None); // WSAECONNREFUSED
+        assert_eq!(win32_error_to_uv(0), None);
+    }
+
+    #[test]
+    fn the_windows_tables_are_consistent() {
+        for (win32, win32_name, code) in WIN32_TO_UV {
+            assert!(
+                uv_windows_errno(code).is_some(),
+                "{win32_name} maps to {code}, which UV_WINDOWS_ERRNOS does not carry"
+            );
+            assert_eq!(
+                WIN32_TO_UV.iter().filter(|(v, _, _)| v == win32).count(),
+                1,
+                "{win32_name} ({win32}) is listed twice"
+            );
+        }
+        for (errno, name, _) in UV_WINDOWS_ERRNOS {
+            assert!(*errno < 0, "{name} must be a negative libuv code");
+            assert_eq!(
+                UV_WINDOWS_ERRNOS
+                    .iter()
+                    .filter(|(_, n, _)| n == name)
+                    .count(),
+                1,
+                "{name} is listed twice"
+            );
+        }
+    }
+
+    /// The Windows table and the tables serving `util.getSystemErrorMessage`
+    /// must not drift: a code in both says the same thing.
+    #[cfg(unix)]
+    #[test]
+    fn windows_and_unix_tables_agree_on_messages() {
+        for (_, name, message) in UV_WINDOWS_ERRNOS {
+            if let Some((_, _, unix)) = errno_backed().iter().find(|(_, n, _)| n == name) {
+                assert_eq!(message, unix, "{name} message drifted");
+            }
+            if let Some((_, _, internal)) = uv_internal().iter().find(|(_, n, _)| n == name) {
+                assert_eq!(message, internal, "{name} message drifted");
+            }
+        }
+    }
 
     #[cfg(unix)]
     #[test]

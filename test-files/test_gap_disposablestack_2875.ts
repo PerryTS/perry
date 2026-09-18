@@ -37,3 +37,18 @@ console.log((err.error as Error).message);
 console.log((err.suppressed as Error).message);
 console.log(err instanceof Error);
 console.log(err instanceof SuppressedError);
+
+// 5) The `instanceof Error` above must hold because the CHAIN says so, not
+// because a registry happened to answer first: ECMA-262 gives
+// `%SuppressedError%` the [[Prototype]] `%Error%` and
+// `%SuppressedError.prototype%` the [[Prototype]] `%Error.prototype%`, exactly
+// like the NativeErrors. Assert both links directly, and assert the inherited
+// `Error.prototype.toString` behaviour that only a real chain can produce —
+// without them `instanceof` regressed to `false` the moment it started
+// answering from the recorded prototype walk.
+console.log(Object.getPrototypeOf(SuppressedError) === Error);
+console.log(Object.getPrototypeOf(SuppressedError.prototype) === Error.prototype);
+console.log(Object.getPrototypeOf(TypeError.prototype) === Error.prototype);
+console.log(Object.prototype.toString.call(err));
+console.log(String(err));
+console.log(JSON.stringify(new SuppressedError(new Error("a"), new Error("b")).message));

@@ -178,6 +178,73 @@ pub(crate) unsafe fn store_array_slot_resolved(
     value_bits
 }
 
+/// Store one element into a plain array the caller is BULK-FILLING, from a
+/// header resolved once.
+///
+/// Same protocol as [`note_array_slot_layout_only`] — canonicalize under a
+/// raw-f64 layout, write, keep the numeric-layout flags honest, note the slot
+/// layout unless that note is provably a no-op, and keep the born-old
+/// remembered-set edge — but a filler that has just re-derived the live head
+/// from its own root already owns the ownership/forwarding proof each of those
+/// steps otherwise repeats: `clean_arr_ptr` inside the canonicalization, a
+/// second `addr_class::try_read_gc_header` inside the elision check, a third
+/// flag read inside the numeric note. `a.map(v => v + 1)` paid all three per
+/// element.
+///
+/// Anything this cannot prove from that one header — an unrecognized or
+/// forwarded head — falls back to the fully re-classifying helper, so the
+/// conservative path stays the default rather than the exception.
+///
+/// # Safety
+///
+/// `arr` must be a live, forwarding-resolved `GC_TYPE_ARRAY` head re-derived
+/// below the last collection point, with `index` inside its allocation.
+#[inline]
+pub(crate) unsafe fn fill_resolved_array_slot(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value_bits: u64,
+) {
+    let Some(header) = super::header::array_gc_header(arr) else {
+        note_array_slot_layout_only(arr, index, value_bits);
+        return;
+    };
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        note_array_slot_layout_only(arr, index, value_bits);
+        return;
+    }
+    let flags = (*header)._reserved;
+    let raw_layout = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+    let number = super::header::value_bits_to_number(value_bits);
+    let value_bits = match number {
+        Some(n) if flags & raw_layout != 0 => n.to_bits(),
+        _ => value_bits,
+    };
+    // GC_STORE_AUDIT(INIT): bulk fill of a caller-owned array; the layout note
+    // and born-old barrier below cover this slot exactly as the layout-only
+    // helper does.
+    std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
+    if number.is_none() {
+        // A non-number retires the dense raw-f64 claim, exactly as
+        // `note_array_numeric_index_write` does.
+        super::header::clear_array_numeric_layout(arr);
+    }
+    let scalar = !crate::gc::layout_pointer_bearing_bits(value_bits);
+    let note_elidable = flags & SCALAR_NOTE_ELIDABLE_MASK == crate::gc::GC_LAYOUT_POINTER_FREE;
+    if !(scalar && note_elidable) {
+        crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    }
+    // Born-old arrays still need the old->young edge; a scalar child skips by
+    // shape before the old-gen classification runs (see the note in
+    // `note_array_slot_layout_only`).
+    if !crate::gc::barrier_scalar_child_skips(value_bits)
+        && crate::arena::pointer_in_old_gen(arr as usize)
+    {
+        let slot = array_elements_ptr(arr).add(index) as usize;
+        crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+    }
+}
+
 #[inline]
 pub(crate) unsafe fn note_array_slot_layout_only(
     arr: *mut ArrayHeader,

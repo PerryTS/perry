@@ -8,19 +8,19 @@
 use crate::value::{JSValue, TAG_FALSE};
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SEA_IS_SEA: extern "C" fn() -> f64 = js_sea_is_sea;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SEA_GET_ASSET: extern "C" fn(f64, f64) -> f64 = js_sea_get_asset;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SEA_GET_ASSET_AS_BLOB: extern "C" fn(f64, f64) -> f64 = js_sea_get_asset_as_blob;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SEA_GET_RAW_ASSET: extern "C" fn(f64) -> f64 = js_sea_get_raw_asset;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_SEA_GET_ASSET_KEYS: extern "C" fn() -> f64 = js_sea_get_asset_keys;
 
 fn false_value() -> f64 {

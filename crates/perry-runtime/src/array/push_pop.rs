@@ -33,6 +33,17 @@ fn array_length_is_non_writable_with_flags(arr: *const ArrayHeader, flags: u16) 
             .unwrap_or(false)
 }
 
+/// §23.1.3.21 push performs `Set(O, len, value, true)`; on a non-extensible
+/// receiver `CreateDataProperty` for the new index fails, and `Throw=true`
+/// makes that a TypeError. Node words it exactly this way for
+/// `preventExtensions`, `seal` AND `freeze`.
+#[cold]
+pub(crate) fn throw_non_extensible_array_push(index: u32) -> ! {
+    crate::collection_iter::throw_type_error(&format!(
+        "Cannot add property {index}, object is not extensible"
+    ));
+}
+
 #[cold]
 fn throw_non_writable_length() -> ! {
     crate::collection_iter::throw_type_error(
@@ -875,7 +886,7 @@ pub extern "C" fn js_array_push_u31_with_length(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_PUSH_U31_WITH_LENGTH: extern "C" fn(
     *mut ArrayHeader,
     u32,
@@ -892,6 +903,25 @@ static KEEP_JS_ARRAY_PUSH_U31_WITH_LENGTH: extern "C" fn(
 #[no_mangle]
 pub extern "C" fn js_array_push_f64_spec(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
     if let Some(plain) = direct_plain_push_receiver(arr) {
+        // A non-extensible receiver must THROW here, not decline silently.
+        // `js_array_push_f64_resolved` answers `SEALED | NO_EXTEND` with a bare
+        // `return arr`, which is right for its other caller — `js_array_push_f64`
+        // is the INTERNAL CreateDataProperty-style append that runtime code uses
+        // to build fresh result arrays, and those must not throw. It is wrong for
+        // user `push`: `Object.preventExtensions(a); a.push(1)` silently kept the
+        // old length where Node raises TypeError. `Object.seal` happened to throw
+        // only because sealing also marks the receiver's element descriptors,
+        // which sends it down the exotic route instead of this one.
+        //
+        // FROZEN is left to the resolved append below, which throws its own
+        // frozen message; only the extensibility bits are answered here.
+        // SAFETY: `direct_plain_push_receiver` just proved the resolved head.
+        let flags = unsafe { array_object_flags_resolved(plain) };
+        if flags & crate::gc::OBJ_FLAG_FROZEN == 0
+            && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
+        {
+            throw_non_extensible_array_push(unsafe { (*plain).length });
+        }
         crate::string::js_string_addref_if_heap_string(value);
         return unsafe { js_array_push_f64_resolved(plain, value) };
     }
@@ -982,15 +1012,34 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
+    // ONE read of the already-resolved header answers all three integrity
+    // questions. Each of `array_is_sealed_or_no_extend`, `array_is_frozen` and
+    // `guard_writable_length` went through the non-resolved
+    // `array::header::array_object_flags`, which re-runs `clean_arr_ptr` — the
+    // allocator-ownership and forwarding classification — before every single
+    // bit test. On a pointer `clean_arr_ptr_mut` resolved on the line above,
+    // that is three further resolutions to re-derive a fact already proved.
+    //
+    // `array_object_flags_from_tag` keeps the exact semantics of the helpers it
+    // replaces: a receiver whose header is not `GC_TYPE_ARRAY` (a Buffer, a
+    // typed array) reads as flags `0`, just as `array_object_flags` returned 0
+    // for it, so the exotic check below still owns those receivers.
+    //
+    // Measured on `for (…) { a.push(v); a.pop(); }`: `array_object_flags` was
+    // 24.0% of all samples in the loop, every one of them from this function.
+    let flags = crate::array::array_object_flags_from_tag(crate::array::array_receiver_gc_tag(arr));
+    if flags
+        & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_FROZEN)
+        != 0
+    {
         return arr;
     }
-    guard_writable_length(arr);
+    guard_writable_length_with_flags(arr, flags);
     unsafe {
-        if crate::array::array_iteration_is_exotic(arr) {
+        if crate::array::array_iteration_is_exotic_cleaned(arr, flags) {
             return js_array_push_f64_spec(arr, value);
         }
-        if array_numeric_raw_f64_push_inbounds(arr, value) {
+        if crate::array::array_numeric_raw_f64_push_inbounds_resolved(arr, value) {
             return arr;
         }
     }
@@ -1000,7 +1049,7 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
 // This raw numeric-array helper is called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` export.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NUMERIC_PUSH_F64_UNBOXED: extern "C" fn(
     *mut ArrayHeader,
     f64,
@@ -1882,6 +1931,6 @@ fn unshift_array_spec_path(arr: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHe
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_UNSHIFT_VARIADIC: extern "C" fn(*mut ArrayHeader, *const f64, u32) -> *mut ArrayHeader =
     js_array_unshift_variadic;

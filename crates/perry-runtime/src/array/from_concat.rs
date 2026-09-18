@@ -74,6 +74,32 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
 ///
 /// Takes the raw NaN-boxed f64 value (NOT a pre-unboxed pointer) so it can
 /// inspect the tag bits before stripping.
+/// #9846: is `value` a String / Set / Map whose iterator prototype has escaped
+/// to user code, so its `Array.from` element copy is no longer unobservable?
+/// See the call site in [`js_array_from_value`].
+fn array_from_family_not_pristine(value: f64) -> bool {
+    // Sticky-flag loads FIRST. The classification below costs two registry
+    // lookups, and `Array.from` is hot: in the overwhelmingly common program no
+    // iterator prototype has ever escaped, so this must cost three relaxed
+    // loads and nothing else.
+    let string_dirty = crate::object::iterator_prototypes::string_iteration_not_pristine();
+    let set_dirty = crate::object::iterator_prototypes::set_iteration_not_pristine();
+    let map_dirty = crate::object::iterator_prototypes::map_iteration_not_pristine();
+    if !(string_dirty || set_dirty || map_dirty) {
+        return false;
+    }
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_any_string() {
+        return string_dirty;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as usize;
+    if raw == 0 {
+        return false;
+    }
+    (set_dirty && crate::set::is_registered_set(raw))
+        || (map_dirty && crate::map::is_registered_map(raw))
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     let bits = boxed.to_bits();
@@ -91,14 +117,29 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // `js_array_clone` then behaves exactly as it does for a literal.
     // #7542: `Array.from(arr)` is `GetIterator(arr)` + drain, so a patched
     // `Array.prototype[Symbol.iterator]` drives it exactly as it drives spread.
+    // #9846 widened the condition from the `Symbol.iterator` write alone to the
+    // whole "array iteration is no longer provably pristine" fact, so a patched
+    // `%ArrayIteratorPrototype%.next` drives `Array.from(arr)` too.
     // This function's array arm ends in a raw `js_array_clone` — a shallow
     // element copy that never consults the protocol — so the guard has to be
     // here rather than downstream. `array_from_spread_value` already routes the
     // patched case through `js_get_iterator`; reuse it so the two entry points
     // cannot answer differently for the same receiver.
-    if crate::array::array_proto_iterator_modified()
+    if crate::array::array_iteration_not_pristine()
         && crate::array::js_array_is_array(boxed).to_bits() == crate::value::TAG_TRUE
     {
+        return crate::array::js_array_clone_for_spread(boxed);
+    }
+    // #9846: the Map / Set / String families have the same hole. Their arms end
+    // in `js_array_clone`'s element copies (the Set backing, the Map entry
+    // pairs, the string's codepoint cut), none of which calls `.next()`, so a
+    // patched `%SetIteratorPrototype%.next` was invisible to `Array.from(set)`
+    // exactly as it was to `[...set]`. `array_from_spread_value` is the one
+    // implementation that declines those copies on the escape signal; delegate
+    // to it rather than restate the decision here. Every receiver this admits
+    // is iterable, so the delegation cannot turn an accepted `Array.from` into
+    // the "not iterable" throw.
+    if array_from_family_not_pristine(boxed) {
         return crate::array::js_array_clone_for_spread(boxed);
     }
 
@@ -156,7 +197,7 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FROM_VALUE: extern "C" fn(f64) -> *mut ArrayHeader = js_array_from_value;
 
 /// `Array.from(source, mapFn, thisArg)` — the mapped form. Throws for nullish
@@ -182,7 +223,7 @@ pub extern "C" fn js_array_from_mapped(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_FROM_MAPPED: extern "C" fn(f64, f64, f64) -> *mut ArrayHeader =
     js_array_from_mapped;
 
@@ -301,7 +342,7 @@ pub extern "C" fn js_array_concat_variadic(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_CONCAT_VARIADIC: extern "C" fn(
     *const ArrayHeader,
     *const f64,

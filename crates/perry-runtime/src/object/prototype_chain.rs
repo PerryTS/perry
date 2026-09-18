@@ -132,6 +132,34 @@ pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
 /// an object — the overwhelmingly common case.
 static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
+/// Latched true by the first `OBJECT_META_FLAG_USER_PROTO_OVERRIDE` a receiver
+/// is ever given — i.e. the first `Object.setPrototypeOf` / `util.inherits`
+/// that re-points a live object's `[[Prototype]]` away from its class default.
+///
+/// The flag lives on the receiver's meta record, so asking "does this object
+/// have one?" costs two dependent loads — but only after the caller has
+/// already found the object. `instanceof`'s `util.inherits` escape hatch has
+/// to look up TWO class declaration prototypes through the class registry
+/// before it can ask, and that pair of registry probes was the single largest
+/// cost of a `o instanceof C` MISS (~130 instructions each, on a path whose
+/// whole budget was 669). This latch answers for the entire process in one
+/// relaxed-acquire load.
+///
+/// Conservative by construction: it is set, never cleared, and it is stored
+/// BEFORE the flag it guards (same discipline as [`OBJECT_PROTOTYPES_NONEMPTY`]
+/// above), so any reader that could observe the flag already observes the
+/// latch. A false positive costs a probe pair; a false negative is impossible.
+static USER_PROTO_OVERRIDE_EVER: AtomicBool = AtomicBool::new(false);
+
+/// Has any object in this process ever been given a user `[[Prototype]]`
+/// override? A `false` proves `object_has_user_prototype_override` would
+/// answer `false` for every receiver, so a caller may skip whatever work it
+/// would need to do to ask.
+#[inline]
+pub(crate) fn any_user_prototype_override() -> bool {
+    USER_PROTO_OVERRIDE_EVER.load(Ordering::Acquire)
+}
+
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -258,6 +286,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_DIVERGED;
             }
             if user_override {
+                // Latch BEFORE the flag: a reader that observes the flag must
+                // already observe the latch (see `USER_PROTO_OVERRIDE_EVER`).
+                USER_PROTO_OVERRIDE_EVER.store(true, Ordering::Release);
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
             }
             if link_kind == PrototypeLinkKind::ClassEvaluation {
@@ -467,6 +498,45 @@ pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -
             OBJECT_PROTOTYPES_NONEMPTY.store(false, Ordering::Release);
         }
     }
+}
+
+/// Can the residual owner registry hold an entry at all?
+///
+/// The latch is stored (`Release`) before the first insert, so `false` proves
+/// the registry empty — the same proof [`object_static_prototype_owner_moved`]
+/// makes on entry, exposed so the relocation funnel
+/// (`gc/layout/transfer.rs`) can decide without the call (#10362).
+#[inline]
+pub(crate) fn object_static_prototypes_maybe_nonempty() -> bool {
+    OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire)
+}
+
+/// Can a cell of `obj_type` own an entry in the residual registry?
+///
+/// The registry's population is every owner [`meta_capable_object`] turns
+/// away, and the recorder is reached with whatever the caller holds:
+/// `Object.setPrototypeOf` with an array, lazy JSON array, Map, Set, Error,
+/// Promise, Date, RegExp or Temporal cell, `dyn_eval` with a closure. Only the
+/// kinds that can never be a receiver stand outside it: strings and bigints
+/// are primitives, meta records and compiled regex programs are internal.
+/// `GC_TYPE_OBJECT` stays inside — its prototypes live in its meta record, and
+/// the registry's obligations were always met for it too.
+///
+/// The collector keys both of the registry's per-owner obligations on this
+/// one predicate: the relocation rekey (`gc/layout/transfer.rs`) and the
+/// value visit (`gc/layout_slot_visit.rs`). Both used to be wired to arrays
+/// and ordinary objects by hand, so every other movable owner lost its
+/// explicit prototype at its first relocation, and none had the prototype
+/// value traced or rewritten.
+#[inline]
+pub(crate) fn residual_prototype_owner_type(obj_type: u8) -> bool {
+    !matches!(
+        obj_type,
+        crate::gc::GC_TYPE_STRING
+            | crate::gc::GC_TYPE_BIGINT
+            | crate::gc::GC_TYPE_OBJECT_META
+            | crate::gc::GC_TYPE_REGEX_PROGRAM
+    )
 }
 
 /// Migrate the residual side-table entry when an owner's allocation address

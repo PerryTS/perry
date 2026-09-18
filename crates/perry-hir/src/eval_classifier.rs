@@ -53,6 +53,7 @@
 //! mirroring `#503`'s `PERRY_ALLOW_DYNAMIC_STDLIB`.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use swc_ecma_ast as ast;
@@ -622,9 +623,27 @@ fn record_deferred_site(classification: &EvalClassification) {
     );
 }
 
+/// #10421: the program can construct a function from runtime strings through a
+/// path no recorded site stands for — a known-codegen-library site, a
+/// `Function(...)` whose constant fold failed, or the constructor reached as a
+/// value (`const F = Function`, `ctx.Function`, `fn.constructor(...)`). Only
+/// ever set to `true` during a compile; process-global for the same reason as
+/// [`EVAL_DEFERRED_SITES`], and cleared with it by the notice drain.
+static DYNAMIC_FUNCTION_REACHABLE: AtomicBool = AtomicBool::new(false);
+
+/// Record that the program being compiled can reach the runtime `Function`
+/// constructor, so the auto-optimized runtime keeps the `dyn-eval`
+/// interpreter. Over-reporting costs binary size only; a miss compiles a
+/// program that throws at runtime while a `PERRY_NO_AUTO_OPTIMIZE=1` build of
+/// it works.
+pub fn note_dynamic_function_reachable() {
+    DYNAMIC_FUNCTION_REACHABLE.store(true, Ordering::Relaxed);
+}
+
 /// Drain and return every deferred bucket-3 site recorded so far this
 /// compile. Called by the driver to render the end-of-compile notice.
 pub fn take_deferred_eval_sites() -> Vec<DeferredEvalSite> {
+    DYNAMIC_FUNCTION_REACHABLE.store(false, Ordering::Relaxed);
     EVAL_DEFERRED_SITES
         .lock()
         .map(|mut v| std::mem::take(&mut *v))
@@ -637,15 +656,17 @@ pub fn take_deferred_eval_sites() -> Vec<DeferredEvalSite> {
 /// BEFORE the notice drain, to decide whether `libperry_runtime.a` must carry
 /// the `dyn-eval` interpreter feature. Dynamic-`import(...)` and
 /// unimplemented-API deferrals don't count — they never reach the Function
-/// constructor.
+/// constructor. #10421: neither does a recorded site alone — see
+/// [`note_dynamic_function_reachable`].
 pub fn has_deferred_dynamic_code_sites() -> bool {
-    EVAL_DEFERRED_SITES
-        .lock()
-        .map(|v| {
-            v.iter()
-                .any(|s| s.kind.contains("eval") || s.kind.contains("Function"))
-        })
-        .unwrap_or(false)
+    DYNAMIC_FUNCTION_REACHABLE.load(Ordering::Relaxed)
+        || EVAL_DEFERRED_SITES
+            .lock()
+            .map(|v| {
+                v.iter()
+                    .any(|s| s.kind.contains("eval") || s.kind.contains("Function"))
+            })
+            .unwrap_or(false)
 }
 
 /// What the lowering site should do with a classified call (#5206).
@@ -951,6 +972,14 @@ mod tests {
         let mine: Vec<_> = sites.iter().filter(|s| s.location.contains(path)).collect();
         assert_eq!(mine.len(), 1, "exactly one recorded site for {path}");
         assert_eq!(mine[0].kind, "eval(...)");
+    }
+
+    /// #10421: a Function constructor reached without a recorded site still
+    /// selects the `dyn-eval` runtime.
+    #[test]
+    fn noted_dynamic_function_reach_needs_the_interpreter() {
+        note_dynamic_function_reachable();
+        assert!(has_deferred_dynamic_code_sites());
     }
 
     /// Strict-eval mode: a runtime-unknown site is a hard compile-time error.

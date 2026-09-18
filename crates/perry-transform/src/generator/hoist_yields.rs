@@ -101,11 +101,24 @@ fn hoist_yields_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
             // of the loop. Condition/update are per-iteration — left in place
             // for the linearizer's For arm (matching the await pass's
             // single-hoist approximation for loop condition/update).
+            //
+            // The init's OWN top-level yield must be hoisted too (#10419):
+            // `for (let t = yield x; …)` / `for (yield x; …)` sit in a slot no
+            // linearizer arm splits, so the residual yield never suspended.
+            // The statement-level walk keeps a top-level yield in place, so
+            // hoist the init expression fully instead.
             if let Some(i) = init {
-                let mut inner = Vec::new();
-                let replaced = hoist_yields_in_stmt((**i).clone(), next_id, &mut inner);
-                hoisted.extend(inner);
-                **i = replaced;
+                match i.as_mut() {
+                    Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) => {
+                        hoist_yields_in_expr_full(e, next_id, hoisted);
+                    }
+                    _ => {
+                        let mut inner = Vec::new();
+                        let replaced = hoist_yields_in_stmt((**i).clone(), next_id, &mut inner);
+                        hoisted.extend(inner);
+                        **i = replaced;
+                    }
+                }
             }
             hoist_yields_in_stmts(body, next_id);
         }

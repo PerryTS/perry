@@ -313,6 +313,13 @@ fn consume_fs_read_stream_for_write_file<F>(
 where
     F: FnMut(&[u8]) -> Result<(), f64>,
 {
+    // A stream whose constructor open failed has no fd, so reading it would
+    // report EBADF and lose the failure the constructor stored — node rejects
+    // `fs.promises.writeFile(out, createReadStream(missing))` with that
+    // stream's `ENOENT ... open '<path>'` (#10451 review).
+    if let Some(error_value) = stored_node_error_value(id) {
+        return Err(error_value);
+    }
     loop {
         check_write_file_aborted(signal)?;
         match read_next_chunk(id) {
@@ -324,7 +331,7 @@ where
                 finish_read_stream(id);
                 return Ok(());
             }
-            Err(message) => return Err(make_error_value(&message)),
+            Err(failure) => return Err(unsafe { failure.error_value() }),
         }
     }
 }

@@ -835,12 +835,12 @@ pub(crate) fn lookup_closure_versioned_loop_direct(
 /// Keepalive anchor for the auto-optimize whole-program build — registration
 /// is referenced only by generated module-init code.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLOSURE_TRUSTED_DIRECT: extern "C" fn(*const u8, *const u8, u32, u64) =
     js_register_closure_trusted_direct;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLOSURE_VERSIONED_LOOP_DIRECT: extern "C" fn(
     *const u8,
     *const u8,
@@ -861,7 +861,7 @@ pub extern "C" fn js_register_closure_strict_function(func_ptr: *const u8) {
 /// Keepalive anchor for the auto-optimize whole-program build — the strict
 /// registration is emitted only from generated module-init code.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_CLOSURE_STRICT_FUNCTION: extern "C" fn(*const u8) =
     js_register_closure_strict_function;
 
@@ -1002,10 +1002,8 @@ pub unsafe fn build_rest_array(values: &[f64], arguments_object: bool) -> f64 {
 /// `fixed_arity` onwards is bundled into a fresh JS Array passed as the
 /// last arg. The body is then invoked with exactly `fixed_arity + 1` doubles.
 ///
-/// Currently supports `fixed_arity` in `0..=15` — the same ceiling as
-/// `js_closure_callN`. A program that defines a rest closure with more than
-/// 15 fixed params before the rest is unsupported (and would already trip
-/// the `Phase D.1: closure call with N args (max 16)` guard in lower_call).
+/// `fixed_arity` 0..=15 have exact arms; wider bodies go through the padded
+/// ladder in `wide_call` (#10420).
 #[inline(never)]
 pub unsafe fn dispatch_rest_bundled(
     closure: *const ClosureHeader,
@@ -1282,10 +1280,18 @@ pub unsafe fn dispatch_rest_bundled(
         14 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13),
         15 => rest_arm!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14),
         _ => {
-            // Unsupported arity — fall back to undefined so we don't
-            // mis-call the body and trigger UB. This mirrors the upper
-            // bound that lower_call's static-bundling path enforces.
-            f64::from_bits(crate::value::TAG_UNDEFINED)
+            // #10420: 16+ fixed params used to return `undefined` without
+            // calling the body. Lay out the full ABI — fixed params, rest
+            // array, then the `arguments` object when the body has one — and
+            // call through the padded ladder.
+            let mut slots: Vec<f64> = Vec::with_capacity(k + 2);
+            slots.extend((0..k).map(|i| a!(i)));
+            slots.push(rest_double);
+            if let Some(arguments_double) = all_arguments_double {
+                slots.push(arguments_double);
+            }
+            let width = slots.len();
+            super::dispatch_wide_abi(closure, func_ptr, &slots, width)
         }
     }
 }
@@ -1326,10 +1332,11 @@ pub unsafe fn dispatch_with_arity(
     }
     // One match arm per declared arity. Each arm transmutes `func_ptr` to
     // the concrete `(closure, f64 x N)` signature and forwards the (padded)
-    // args. Arities up to 32 are supported so high-arity closures dispatched
+    // args. Arities up to 32 have exact arms so high-arity closures dispatched
     // dynamically — e.g. qs's recursive `stringify`, which declares 18
     // params and self-calls with 18 args (#3527) — call their body
-    // correctly instead of mis-calling and corrupting registers. The
+    // correctly instead of mis-calling and corrupting registers; wider
+    // bodies take the padded ladder in `wide_call` (#10420). The
     // `arm!` macro builds the fn type and the (padded) call args from the
     // arg-index token list; `arm!(@ty $i)` maps any index token to `f64`.
     macro_rules! arm {
@@ -1405,11 +1412,9 @@ pub unsafe fn dispatch_with_arity(
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
             24, 25, 26, 27, 28, 29, 30, 31
         ),
-        _ => {
-            // Unsupported arity (>32 declared params). Fall back to
-            // undefined rather than mis-calling and triggering UB.
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        }
+        // #10420: more than 32 declared params used to return `undefined`
+        // without calling the body.
+        _ => super::dispatch_wide_abi(closure, func_ptr, args, k),
     }
 }
 

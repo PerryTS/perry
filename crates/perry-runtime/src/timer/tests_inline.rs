@@ -48,6 +48,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
             context.clone(),
             0,
             0,
+            None,
         ));
         timers.insert_timer(Entry::callback(
             TEST_INTERVAL_TIMER_ID,
@@ -59,6 +60,7 @@ pub(crate) fn test_seed_timer_scanner_roots(
             context.clone(),
             0,
             0,
+            None,
         ));
     });
 }

@@ -103,275 +103,312 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
     }
     let element_refs: Vec<&Expr> = elements.iter().collect();
     rooting::with_operands_rooted(ctx, &element_refs, |ctx, vals| {
-        // #5391: oversized modules outline array-literal construction. The inline
-        // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
-        // data-table builders huge (single 18MB functions are impractical to
-        // optimize). Instead spill the already-evaluated element values to
-        // a per-literal stack buffer and build the array in ONE runtime call. The
-        // buffer is hoisted to the entry block (fixed size per site; bounded total
-        // stack) and consumed immediately by the call, so no GC-visible window.
-        if crate::codegen::full_outline_ic_enabled() {
-            let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-            for (i, v) in vals.iter().enumerate() {
-                let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                ctx.block().store(DOUBLE, v, &slot);
-            }
-            let n_str = n.to_string();
-            let arr = ctx
-                .block()
-                .call(I64, "js_array_from_values", &[(PTR, &buf), (I32, &n_str)]);
-            return Ok(nanbox_pointer_inline(ctx.block(), &arr));
-        }
-
-        // Inline bump-allocator path for small literals. Size threshold matches
-        // `MAX_SCALAR_ARRAY_LEN` in collectors.rs so every candidate the escape
-        // pass rejects can still benefit from the inline alloc.
-        const INLINE_MAX_ELEMENTS: usize = 16;
-        if n <= INLINE_MAX_ELEMENTS {
-            // Layout constants — must match `ArrayHeader` in array.rs and
-            // `GcHeader` in gc.rs. Duplicated here because codegen emits raw
-            // byte offsets; the runtime declarations are authoritative.
-            const GC_HEADER_SIZE: u64 = 8;
-            const ARRAY_HEADER_SIZE: u64 = 8;
-            const ELEMENT_SIZE: u64 = 8;
-            const GC_TYPE_ARRAY: u64 = 1;
-            const GC_FLAG_ARENA: u64 = 0x02;
-            // PR #1146: pointer-free hint for slot-layout tracking. The
-            // element-store loop below only suppresses per-slot notes for
-            // values whose non-pointer bits are proven by expression shape.
-            const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
-
-            let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (n as u64) * ELEMENT_SIZE;
-            let total_size_str = total_size.to_string();
-
-            // Load state + compute bump check. `total_size` is always a
-            // multiple of 8, every prior alloc rounds offset to 8, and blocks
-            // start 8-aligned, so no align-up step is needed.
-            let state_ptr = load_inline_arena_state(ctx);
-            let blk = ctx.block();
-            let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-            let offset_val = blk.load(I64, &offset_field_ptr);
-            let aligned_off = offset_val.clone();
-            let new_offset = blk.add(I64, &aligned_off, &total_size_str);
-            let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-            let size_val = blk.load(I64, &size_field_ptr);
-            let fits = blk.icmp_ule(I64, &new_offset, &size_val);
-
-            let fast_idx = ctx.new_block("arrlit.fast");
-            let slow_idx = ctx.new_block("arrlit.slow");
-            let merge_idx = ctx.new_block("arrlit.merge");
-            let fast_label = ctx.block_label(fast_idx);
-            let slow_label = ctx.block_label(slow_idx);
-            let merge_label = ctx.block_label(merge_idx);
-
-            ctx.block().cond_br(&fits, &fast_label, &slow_label);
-
-            // Fast path: commit the bump, compute `data + offset`.
-            ctx.current_block = fast_idx;
-            let blk = ctx.block();
-            // GC_STORE_AUDIT(INIT): arena bump offset is allocator metadata, not a JS heap edge.
-            blk.store(I64, &new_offset, &offset_field_ptr);
-            let data_ptr = blk.load(PTR, &state_ptr);
-            let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-            let fast_pred_label = blk.label.clone();
-            blk.br(&merge_label);
-
-            // Slow path: call the runtime slow-alloc (same one used by the
-            // inline `new` path). Returns a fresh raw pointer (inclusive of
-            // GcHeader space).
-            ctx.current_block = slow_idx;
-            let raw_slow = ctx.block().call(
-                PTR,
-                "js_inline_arena_slow_alloc",
-                &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
-            );
-            let slow_pred_label = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
-
-            // Merge: phi the raw pointer and write everything.
-            ctx.current_block = merge_idx;
-            let blk = ctx.block();
-            let raw = blk.phi(
-                PTR,
-                &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
-            );
-
-            // Packed GcHeader (bits 0..7 obj_type, 8..15 gc_flags, 16..31
-            // _reserved, 32..63 size). PR #1146 packs the layout-tag in the
-            // reserved bits so the GC sees the array as pointer-free until
-            // the element-store loop overrides per-slot via
-            // `js_gc_note_slot_layout` below.
-            let gc_packed: u64 = GC_TYPE_ARRAY
-                | (GC_FLAG_ARENA << 8)
-                | (GC_LAYOUT_POINTER_FREE << 16)
-                | (total_size << 32);
-            // A literal whose elements are statically numbers is usually all
-            // plain doubles at runtime. Then the array is born exactly as
-            // `js_array_mark_numeric_f64_layout` would leave it — pointer-free
-            // with the dense raw-f64 flag — so decide that with one signed
-            // compare per element and skip every per-slot note and the
-            // marking walk. Any NaN-boxed element (an int32 box, or a value
-            // whose annotation lied) takes the unchanged noted path.
-            let all_plain_numbers = if all_numeric_elements {
-                let mut all_plain: Option<String> = None;
-                for (i, v) in vals.iter().enumerate() {
-                    if canonical_raw_f64[i] {
-                        continue;
-                    }
-                    let bits = blk.bitcast_double_to_i64(v);
-                    // 0x7FF9 << 48: the lowest NaN-box tag.
-                    let plain = blk.icmp_slt(I64, &bits, "9221401712017801216");
-                    all_plain = Some(match all_plain {
-                        None => plain,
-                        Some(acc) => blk.and(I1, &acc, &plain),
-                    });
-                }
-                Some(all_plain.unwrap_or_else(|| "true".to_string()))
-            } else {
-                None
-            };
-            let header_word = match &all_plain_numbers {
-                Some(all_plain) => {
-                    // GC_ARRAY_RAW_F64_LAYOUT (0x80) in `_reserved`.
-                    let flagged = gc_packed | (0x80u64 << 16);
-                    blk.select(
-                        I1,
-                        all_plain,
-                        I64,
-                        &flagged.to_string(),
-                        &gc_packed.to_string(),
-                    )
-                }
-                None => gc_packed.to_string(),
-            };
-            // GC_STORE_AUDIT(INIT): freshly allocated array header starts pointer-free until slot notes below.
-            blk.store(I64, &header_word, &raw);
-
-            // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
-            let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
-            let arr_header_packed = (n as u64) | ((n as u64) << 32);
-            // GC_STORE_AUDIT(INIT): freshly allocated ArrayHeader length/capacity, no child pointer.
-            blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
-
-            // User pointer = raw + GC_HEADER_SIZE. Computed before the
-            // element loop so the per-slot layout notes target the correct
-            // user-visible address.
-            let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-            let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
-
-            if let Some(all_plain) = all_plain_numbers {
-                let plain_idx = ctx.new_block("arrlit.plain_numbers");
-                let noted_idx = ctx.new_block("arrlit.noted");
-                let done_idx = ctx.new_block("arrlit.done");
-                let plain_label = ctx.block_label(plain_idx);
-                let noted_label = ctx.block_label(noted_idx);
-                let done_label = ctx.block_label(done_idx);
-                ctx.block().cond_br(&all_plain, &plain_label, &noted_label);
-
-                ctx.current_block = plain_idx;
-                {
-                    let blk = ctx.block();
-                    for (i, v) in vals.iter().enumerate() {
-                        let offset = (16 + i * 8).to_string();
-                        let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
-                        // GC_STORE_AUDIT(POINTER_FREE): every element was just
-                        // tested to be a plain double; the header already says
-                        // pointer-free raw-f64.
-                        blk.store(DOUBLE, v, &elem_ptr);
-                    }
-                    blk.br(&done_label);
-                }
-
-                ctx.current_block = noted_idx;
-                {
-                    let blk = ctx.block();
-                    for (i, v) in vals.iter().enumerate() {
-                        let offset = (16 + i * 8).to_string();
-                        let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
-                        let slot_index = i.to_string();
-                        emit_jsvalue_slot_store_on_block(
-                            blk,
-                            &elem_ptr,
-                            v,
-                            &user_ptr_as_i64,
-                            &slot_index,
-                            layout_notes_needed[i],
-                            &user_ptr_as_i64,
-                            "0",
-                            false,
-                        );
-                    }
-                    blk.call(
-                        I32,
-                        "js_array_mark_numeric_f64_layout",
-                        &[(I64, &user_ptr_as_i64)],
-                    );
-                    blk.br(&done_label);
-                }
-                ctx.current_block = done_idx;
-                return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
-            }
-
-            // Elements at raw+16 + i*8.
-            let blk = ctx.block();
-            for (i, v) in vals.iter().enumerate() {
-                let offset = (16 + i * 8).to_string();
-                let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
-                let slot_index = i.to_string();
-                emit_jsvalue_slot_store_on_block(
-                    blk,
-                    &elem_ptr,
-                    v,
-                    &user_ptr_as_i64,
-                    &slot_index,
-                    layout_notes_needed[i],
-                    &user_ptr_as_i64,
-                    "0",
-                    false,
-                );
-            }
-
-            return Ok(nanbox_pointer_inline(ctx.block(), &user_ptr_as_i64));
-        }
-
-        // Fallback for N > INLINE_MAX_ELEMENTS: keep the extern call + N inline
-        // stores. Thin-LTO already inlines this call into user IR, so the cost
-        // is ~1 inlined arena bump plus some LLVM churn around the arg pack.
-        let cap_str = n.to_string();
-        let arr = ctx
-            .block()
-            .call(I64, "js_array_alloc_literal", &[(I32, &cap_str)]);
-
-        let arr_ptr = ctx.block().inttoptr(I64, &arr);
-        for (i, v) in vals.iter().enumerate() {
-            let offset = (8 + i * 8).to_string();
-            let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
-            let elem_addr = if layout_notes_needed[i] {
-                ctx.block().ptrtoint(&elem_ptr, I64)
-            } else {
-                "0".to_string()
-            };
-            let slot_index = i.to_string();
-            emit_jsvalue_slot_store_on_block(
-                ctx.block(),
-                &elem_ptr,
-                v,
-                &arr,
-                &slot_index,
-                layout_notes_needed[i],
-                &arr,
-                &elem_addr,
-                layout_notes_needed[i],
-            );
-        }
-
-        if all_numeric_elements {
-            ctx.block()
-                .call(I32, "js_array_mark_numeric_f64_layout", &[(I64, &arr)]);
-        }
-
+        let arr = emit_array_from_lowered_values(
+            ctx,
+            vals,
+            &canonical_raw_f64,
+            &layout_notes_needed,
+            all_numeric_elements,
+        )?;
         Ok(nanbox_pointer_inline(ctx.block(), &arr))
     })
+}
+
+/// Element count up to which an array is built inline (bump allocation plus N
+/// stores) rather than through `js_array_alloc`. Matches `MAX_SCALAR_ARRAY_LEN`
+/// in collectors.rs so every candidate the escape pass rejects still benefits.
+pub(crate) const INLINE_ARRAY_MAX_ELEMENTS: usize = 16;
+
+/// Build an array from element values the caller has already lowered (and
+/// rooted), returning the raw `i64` user pointer.
+///
+/// Split out of [`lower_array_literal`] so the rest/`arguments` bundle at a
+/// call site builds its array the same way a literal does — one inline bump
+/// allocation and N stores — instead of `js_array_alloc` plus one
+/// `js_array_push_f64` per element, where every push re-classifies the
+/// receiver, re-notes the slot layout and re-checks the barrier (#7154's
+/// accumulator shape keeps the rooting, only the construction changes).
+///
+/// `canonical_raw_f64[i]` says element `i` is a plain double by construction,
+/// `layout_notes_needed[i]` that it may carry a heap pointer, and
+/// `all_numeric_elements` that every element is statically a number. The
+/// caller owns rooting: the slow arm of the bump allocator collects, so every
+/// pointer value must already live in a root the group re-reads.
+pub(crate) fn emit_array_from_lowered_values(
+    ctx: &mut FnCtx<'_>,
+    vals: &[String],
+    canonical_raw_f64: &[bool],
+    layout_notes_needed: &[bool],
+    all_numeric_elements: bool,
+) -> Result<String> {
+    let n = vals.len();
+    // #5391: oversized modules outline array-literal construction. The inline
+    // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
+    // data-table builders huge (single 18MB functions are impractical to
+    // optimize). Instead spill the already-evaluated element values to
+    // a per-literal stack buffer and build the array in ONE runtime call. The
+    // buffer is hoisted to the entry block (fixed size per site; bounded total
+    // stack) and consumed immediately by the call, so no GC-visible window.
+    if crate::codegen::full_outline_ic_enabled() {
+        let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+        for (i, v) in vals.iter().enumerate() {
+            let slot = ctx.block().gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+            ctx.block().store(DOUBLE, v, &slot);
+        }
+        let n_str = n.to_string();
+        let arr = ctx
+            .block()
+            .call(I64, "js_array_from_values", &[(PTR, &buf), (I32, &n_str)]);
+        return Ok(arr);
+    }
+
+    // Inline bump-allocator path for small literals. Size threshold matches
+    // `MAX_SCALAR_ARRAY_LEN` in collectors.rs so every candidate the escape
+    // pass rejects can still benefit from the inline alloc.
+    if n <= INLINE_ARRAY_MAX_ELEMENTS {
+        // Layout constants — must match `ArrayHeader` in array.rs and
+        // `GcHeader` in gc.rs. Duplicated here because codegen emits raw
+        // byte offsets; the runtime declarations are authoritative.
+        const GC_HEADER_SIZE: u64 = 8;
+        const ARRAY_HEADER_SIZE: u64 = 8;
+        const ELEMENT_SIZE: u64 = 8;
+        const GC_TYPE_ARRAY: u64 = 1;
+        const GC_FLAG_ARENA: u64 = 0x02;
+        // PR #1146: pointer-free hint for slot-layout tracking. The
+        // element-store loop below only suppresses per-slot notes for
+        // values whose non-pointer bits are proven by expression shape.
+        const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
+
+        let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (n as u64) * ELEMENT_SIZE;
+        let total_size_str = total_size.to_string();
+
+        // Load state + compute bump check. `total_size` is always a
+        // multiple of 8, every prior alloc rounds offset to 8, and blocks
+        // start 8-aligned, so no align-up step is needed.
+        let state_ptr = load_inline_arena_state(ctx);
+        let blk = ctx.block();
+        let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
+        let offset_val = blk.load(I64, &offset_field_ptr);
+        let aligned_off = offset_val.clone();
+        let new_offset = blk.add(I64, &aligned_off, &total_size_str);
+        let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
+        let size_val = blk.load(I64, &size_field_ptr);
+        let fits = blk.icmp_ule(I64, &new_offset, &size_val);
+
+        let fast_idx = ctx.new_block("arrlit.fast");
+        let slow_idx = ctx.new_block("arrlit.slow");
+        let merge_idx = ctx.new_block("arrlit.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(slow_idx);
+        let merge_label = ctx.block_label(merge_idx);
+
+        ctx.block().cond_br(&fits, &fast_label, &slow_label);
+
+        // Fast path: commit the bump, compute `data + offset`.
+        ctx.current_block = fast_idx;
+        let blk = ctx.block();
+        // GC_STORE_AUDIT(INIT): arena bump offset is allocator metadata, not a JS heap edge.
+        blk.store(I64, &new_offset, &offset_field_ptr);
+        let data_ptr = blk.load(PTR, &state_ptr);
+        let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
+        let fast_pred_label = blk.label.clone();
+        blk.br(&merge_label);
+
+        // Slow path: call the runtime slow-alloc (same one used by the
+        // inline `new` path). Returns a fresh raw pointer (inclusive of
+        // GcHeader space).
+        ctx.current_block = slow_idx;
+        let raw_slow = ctx.block().call(
+            PTR,
+            "js_inline_arena_slow_alloc",
+            &[(PTR, &state_ptr), (I64, &total_size_str), (I64, "8")],
+        );
+        let slow_pred_label = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        // Merge: phi the raw pointer and write everything.
+        ctx.current_block = merge_idx;
+        let blk = ctx.block();
+        let raw = blk.phi(
+            PTR,
+            &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
+        );
+
+        // Packed GcHeader (bits 0..7 obj_type, 8..15 gc_flags, 16..31
+        // _reserved, 32..63 size). PR #1146 packs the layout-tag in the
+        // reserved bits so the GC sees the array as pointer-free until
+        // the element-store loop overrides per-slot via
+        // `js_gc_note_slot_layout` below.
+        let gc_packed: u64 = GC_TYPE_ARRAY
+            | (GC_FLAG_ARENA << 8)
+            | (GC_LAYOUT_POINTER_FREE << 16)
+            | (total_size << 32);
+        // A literal whose elements are statically numbers is usually all
+        // plain doubles at runtime. Then the array is born exactly as
+        // `js_array_mark_numeric_f64_layout` would leave it — pointer-free
+        // with the dense raw-f64 flag — so decide that with one signed
+        // compare per element and skip every per-slot note and the
+        // marking walk. Any NaN-boxed element (an int32 box, or a value
+        // whose annotation lied) takes the unchanged noted path.
+        let all_plain_numbers = if all_numeric_elements {
+            let mut all_plain: Option<String> = None;
+            for (i, v) in vals.iter().enumerate() {
+                if canonical_raw_f64[i] {
+                    continue;
+                }
+                let bits = blk.bitcast_double_to_i64(v);
+                // 0x7FF9 << 48: the lowest NaN-box tag.
+                let plain = blk.icmp_slt(I64, &bits, "9221401712017801216");
+                all_plain = Some(match all_plain {
+                    None => plain,
+                    Some(acc) => blk.and(I1, &acc, &plain),
+                });
+            }
+            Some(all_plain.unwrap_or_else(|| "true".to_string()))
+        } else {
+            None
+        };
+        let header_word = match &all_plain_numbers {
+            Some(all_plain) => {
+                // GC_ARRAY_RAW_F64_LAYOUT (0x80) in `_reserved`.
+                let flagged = gc_packed | (0x80u64 << 16);
+                blk.select(
+                    I1,
+                    all_plain,
+                    I64,
+                    &flagged.to_string(),
+                    &gc_packed.to_string(),
+                )
+            }
+            None => gc_packed.to_string(),
+        };
+        // GC_STORE_AUDIT(INIT): freshly allocated array header starts pointer-free until slot notes below.
+        blk.store(I64, &header_word, &raw);
+
+        // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
+        let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
+        let arr_header_packed = (n as u64) | ((n as u64) << 32);
+        // GC_STORE_AUDIT(INIT): freshly allocated ArrayHeader length/capacity, no child pointer.
+        blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
+
+        // User pointer = raw + GC_HEADER_SIZE. Computed before the
+        // element loop so the per-slot layout notes target the correct
+        // user-visible address.
+        let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
+        let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
+
+        if let Some(all_plain) = all_plain_numbers {
+            let plain_idx = ctx.new_block("arrlit.plain_numbers");
+            let noted_idx = ctx.new_block("arrlit.noted");
+            let done_idx = ctx.new_block("arrlit.done");
+            let plain_label = ctx.block_label(plain_idx);
+            let noted_label = ctx.block_label(noted_idx);
+            let done_label = ctx.block_label(done_idx);
+            ctx.block().cond_br(&all_plain, &plain_label, &noted_label);
+
+            ctx.current_block = plain_idx;
+            {
+                let blk = ctx.block();
+                for (i, v) in vals.iter().enumerate() {
+                    let offset = (16 + i * 8).to_string();
+                    let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+                    // GC_STORE_AUDIT(POINTER_FREE): every element was just
+                    // tested to be a plain double; the header already says
+                    // pointer-free raw-f64.
+                    blk.store(DOUBLE, v, &elem_ptr);
+                }
+                blk.br(&done_label);
+            }
+
+            ctx.current_block = noted_idx;
+            {
+                let blk = ctx.block();
+                for (i, v) in vals.iter().enumerate() {
+                    let offset = (16 + i * 8).to_string();
+                    let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+                    let slot_index = i.to_string();
+                    emit_jsvalue_slot_store_on_block(
+                        blk,
+                        &elem_ptr,
+                        v,
+                        &user_ptr_as_i64,
+                        &slot_index,
+                        layout_notes_needed[i],
+                        &user_ptr_as_i64,
+                        "0",
+                        false,
+                    );
+                }
+                blk.call(
+                    I32,
+                    "js_array_mark_numeric_f64_layout",
+                    &[(I64, &user_ptr_as_i64)],
+                );
+                blk.br(&done_label);
+            }
+            ctx.current_block = done_idx;
+            return Ok(user_ptr_as_i64);
+        }
+
+        // Elements at raw+16 + i*8.
+        let blk = ctx.block();
+        for (i, v) in vals.iter().enumerate() {
+            let offset = (16 + i * 8).to_string();
+            let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+            let slot_index = i.to_string();
+            emit_jsvalue_slot_store_on_block(
+                blk,
+                &elem_ptr,
+                v,
+                &user_ptr_as_i64,
+                &slot_index,
+                layout_notes_needed[i],
+                &user_ptr_as_i64,
+                "0",
+                false,
+            );
+        }
+
+        return Ok(user_ptr_as_i64);
+    }
+
+    // Fallback for N > INLINE_MAX_ELEMENTS: keep the extern call + N inline
+    // stores. Thin-LTO already inlines this call into user IR, so the cost
+    // is ~1 inlined arena bump plus some LLVM churn around the arg pack.
+    let cap_str = n.to_string();
+    let arr = ctx
+        .block()
+        .call(I64, "js_array_alloc_literal", &[(I32, &cap_str)]);
+
+    let arr_ptr = ctx.block().inttoptr(I64, &arr);
+    for (i, v) in vals.iter().enumerate() {
+        let offset = (8 + i * 8).to_string();
+        let elem_ptr = ctx.block().gep_inbounds(I8, &arr_ptr, &[(I64, &offset)]);
+        let elem_addr = if layout_notes_needed[i] {
+            ctx.block().ptrtoint(&elem_ptr, I64)
+        } else {
+            "0".to_string()
+        };
+        let slot_index = i.to_string();
+        emit_jsvalue_slot_store_on_block(
+            ctx.block(),
+            &elem_ptr,
+            v,
+            &arr,
+            &slot_index,
+            layout_notes_needed[i],
+            &arr,
+            &elem_addr,
+            layout_notes_needed[i],
+        );
+    }
+
+    if all_numeric_elements {
+        ctx.block()
+            .call(I32, "js_array_mark_numeric_f64_layout", &[(I64, &arr)]);
+    }
+
+    Ok(arr)
 }
 
 /// #8583 follow-up gate. Default ON; `PERRY_CONST_ARRAY_DESCRIPTOR=0/off/false`

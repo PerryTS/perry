@@ -19,6 +19,7 @@ fn entry_at(id: i64, class: Class, base: Instant, delay_ms: u64) -> Entry {
         crate::async_context::AsyncContextSnapshot::default(),
         0,
         0,
+        None,
     )
 }
 
@@ -240,7 +241,7 @@ fn interval_rearms_from_the_phase_clock_read() {
     with_current(|timers| {
         timers.insert_timer(entry_at(1, Class::Interval, base, 10));
         let phase_now = base + Duration::from_millis(10);
-        let entry = timers
+        let mut entry = timers
             .pop_due(phase_now, u64::MAX)
             .expect("the interval is due");
         timers.rearm_interval(entry.duplicate_for_rearm(), phase_now);

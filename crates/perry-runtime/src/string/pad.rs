@@ -31,7 +31,7 @@ pub extern "C" fn js_string_pad_fill(value: f64) -> *mut StringHeader {
 // `.o`, so the whole-program auto-optimize bitcode rebuild would dead-strip it
 // without an anchor (see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_PAD_FILL: extern "C" fn(f64) -> *mut StringHeader = js_string_pad_fill;
 
 /// ToLength coercion (ECMA-262 §7.1.21) for `padStart`/`padEnd`'s target

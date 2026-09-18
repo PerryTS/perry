@@ -76,6 +76,15 @@ const NO_POS: usize = usize::MAX;
 /// every entry (guarded by `class`), which is what keeps the incremental scan a
 /// simple index walk.
 pub(super) struct Entry {
+    /// #10447: pins this id's ref state in the handle registry for exactly as
+    /// long as the entry is queued. Dropping the entry — `take`, a slab slot
+    /// being reused, `purge_agent_timers` — retires the id, so no removal site
+    /// can forget to, and a still-queued timer can never be evicted out from
+    /// under `.hasRef()`/`.ref()`/`.unref()`.
+    ///
+    /// `None` for promise timers, which have no JS handle to query.
+    /// Declared FIRST so it drops last, after the fields it guards.
+    pub(super) _scheduled: Option<super::ref_states::ScheduledTimerId>,
     /// JS handle id. Promise timers have no JS handle and use 0.
     pub(super) id: i64,
     pub(super) class: Class,
@@ -121,8 +130,10 @@ impl Entry {
         context: crate::async_context::AsyncContextSnapshot,
         async_id: u64,
         trigger_async_id: u64,
+        scheduled: Option<super::ref_states::ScheduledTimerId>,
     ) -> Self {
         Self {
+            _scheduled: scheduled,
             id,
             class,
             deadline,
@@ -144,8 +155,16 @@ impl Entry {
     /// one is dispatched. libuv re-arms a repeating timer before calling its
     /// callback, so `clearInterval` from inside the callback has something to
     /// cancel; the dispatching copy is rooted separately for the call.
-    pub(super) fn duplicate_for_rearm(&self) -> Self {
+    ///
+    /// Takes `&mut self` to MOVE the #10447 pin into the copy. The copy is what
+    /// goes back in the heap and is therefore the live timer; `self` is
+    /// dispatched and then dropped. Leaving the pin on `self` would retire the
+    /// id the moment the callback finished, while the re-armed entry was still
+    /// queued — and `ScheduledTimerId` is deliberately `!Clone`, so the
+    /// borrow checker does not let the mistake be written accidentally.
+    pub(super) fn duplicate_for_rearm(&mut self) -> Self {
         Self {
+            _scheduled: self._scheduled.take(),
             id: self.id,
             class: self.class,
             deadline: self.deadline,
@@ -170,6 +189,9 @@ impl Entry {
         refed: bool,
     ) -> Self {
         Self {
+            // A promise timer has no JS handle, so nothing can query its ref
+            // state and there is nothing to pin.
+            _scheduled: None,
             id: 0,
             class: Class::Promise,
             deadline,

@@ -807,15 +807,15 @@ pub extern "C" fn js_closure_set_capture_ptr(closure: *mut ClosureHeader, index:
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLOSURE_GET_CAPTURE_BITS: extern "C" fn(*const ClosureHeader, u32) -> u64 =
     js_closure_get_capture_bits;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern "C" fn(*mut ClosureHeader, u32, u64) =
     js_closure_set_capture_bits;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_CLOSURE_SET_BOX_CAPTURE_PTR: extern "C" fn(*mut ClosureHeader, u32, i64) =
     js_closure_set_box_capture_ptr;
 

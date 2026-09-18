@@ -6,8 +6,8 @@
 
 use super::gc_scan::{consume_timer_root_work, TimerRootScanState};
 use super::{
-    call_timer_callback, next_timer_id, normalize_timer_delay, record_timer_handle_kind,
-    record_timer_ref_state, CallbackTimerKind,
+    call_timer_callback, next_timer_id, normalize_timer_delay, record_timer_ref_state,
+    CallbackTimerKind,
 };
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -168,7 +168,8 @@ pub(super) fn schedule_mock_callback_timer(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay = normalize_timer_delay(delay_ms);
     let id = next_timer_id();
-    record_timer_handle_kind(id, kind);
+    // #10447: the mock schedules a real id, so it pins it too.
+    let _scheduled = super::ref_states::register_scheduled_timer(id, kind);
     let due_ms = state.current_ms + delay as f64;
     // `capture_context` allocates, and a struct literal evaluates its fields in
     // source order — reading the closure pointer first would leave a stale
@@ -204,7 +205,8 @@ pub(super) fn schedule_mock_interval_timer(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let interval = normalize_timer_delay(interval_ms);
     let id = next_timer_id();
-    record_timer_handle_kind(id, CallbackTimerKind::Timeout);
+    // #10447: the mock schedules a real id, so it pins it too.
+    let _scheduled = super::ref_states::register_scheduled_timer(id, CallbackTimerKind::Timeout);
     let next_ms = state.current_ms + interval as f64;
     // See `schedule_mock_callback_timer`: the capture allocates, so the closure
     // pointer is reloaded after it rather than read before.

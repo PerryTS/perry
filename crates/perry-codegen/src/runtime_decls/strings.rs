@@ -455,6 +455,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_map_from_iterable", I64, &[DOUBLE]);
     module.declare_function("js_object_has_property", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_in_operator", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_in_operator_presence_ic", DOUBLE, &[DOUBLE, DOUBLE, PTR]);
     module.declare_function(
         "js_private_brand_check",
         DOUBLE,

@@ -72,12 +72,14 @@ pub(crate) fn run_timers_phase() -> i32 {
     let mut interval_fired = 0u64;
     loop {
         let Some(entry) = store::with_current(|timers| {
-            let entry = timers.pop_due(phase_now, horizon)?;
+            let mut entry = timers.pop_due(phase_now, horizon)?;
             // libuv re-arms a repeating timer BEFORE calling its callback
             // (`uv_timer_again` then `timer_cb`), which is what lets the
             // callback's own `clearInterval` cancel it. Re-arming afterwards
             // would resurrect an interval the callback had just cleared.
             if entry.class == Class::Interval {
+                // `entry` is mutable so the #10447 pin can MOVE into the re-armed
+                // copy: that copy is the live timer from here on.
                 timers.rearm_interval(entry.duplicate_for_rearm(), phase_now);
             }
             Some(entry)

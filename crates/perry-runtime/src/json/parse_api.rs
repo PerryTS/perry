@@ -23,7 +23,7 @@ pub extern "C" fn js_json_text_to_string(value: f64) -> *mut StringHeader {
 // Anchor so the auto-optimize bitcode rebuild doesn't dead-strip this
 // codegen-only `#[no_mangle]` (see KEEP_RAW_JSON in json/raw_json.rs).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JSON_TEXT_TO_STRING: extern "C" fn(f64) -> *mut StringHeader = js_json_text_to_string;
 
 // ─── JSON.parse ───────────────────────────────────────────────────────────────

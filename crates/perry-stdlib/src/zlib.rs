@@ -220,7 +220,7 @@ struct KeepZlibFfi<const N: usize>(
 // SAFETY: a link-time keepalive anchor only — the pointers are never read or
 // dereferenced, so cross-thread sharing of the raw pointers is sound.
 unsafe impl<const N: usize> Sync for KeepZlibFfi<N> {}
-#[used]
+#[used(compiler)]
 static KEEP_ZLIB_FFI: KeepZlibFfi<21> = KeepZlibFfi([
     js_zlib_create_deflate as *const (),
     js_zlib_create_deflate_raw as *const (),
@@ -245,7 +245,7 @@ static KEEP_ZLIB_FFI: KeepZlibFfi<21> = KeepZlibFfi([
     js_zlib_unzip_sync as *const (),
 ]);
 #[cfg(feature = "compression-brotli")]
-#[used]
+#[used(compiler)]
 static KEEP_ZLIB_BROTLI_FFI: KeepZlibFfi<6> = KeepZlibFfi([
     js_zlib_brotli_compress as *const (),
     js_zlib_brotli_compress_sync as *const (),
@@ -255,7 +255,7 @@ static KEEP_ZLIB_BROTLI_FFI: KeepZlibFfi<6> = KeepZlibFfi([
     js_zlib_create_brotli_decompress as *const (),
 ]);
 #[cfg(feature = "compression-zstd")]
-#[used]
+#[used(compiler)]
 static KEEP_ZLIB_ZSTD_FFI: KeepZlibFfi<6> = KeepZlibFfi([
     js_zlib_create_zstd_compress as *const (),
     js_zlib_create_zstd_decompress as *const (),

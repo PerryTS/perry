@@ -1300,3 +1300,57 @@ fn dense_array_subclass_guard_rejects_other_object_brands() {
         17.0
     );
 }
+
+/// Retiring a packed-numeric proof is idempotent, and only the call that
+/// ACTUALLY retires one reports `true`.
+///
+/// `array_subclass_fast_pop_validated` flushes the process-global store-plan
+/// cache when this returns `true`. It used to flush unconditionally, so a pop
+/// loop discarded every cached store plan in the program on every iteration
+/// while retiring a proof only on the first.
+#[test]
+fn retiring_a_packed_numeric_proof_reports_only_the_call_that_did_it() {
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
+    let class_id = 0x0074_8694;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    crate::node_stream::js_array_subclass_init(receiver_h.get_nanbox_f64(), 0.0);
+    for (index, value) in [11.0, 22.0, 33.0].into_iter().enumerate() {
+        let live_raw = receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF;
+        crate::object::js_object_set_index_polymorphic(live_raw as i64, index as f64, value);
+    }
+    let mut facts = [0u64; 7];
+    assert_eq!(
+        js_packed_arraylike_loop_guard(receiver_h.get_nanbox_f64(), 3.0, 1, facts.as_mut_ptr()),
+        2,
+        "test premise: the numeric range establishes a proof to retire"
+    );
+
+    let live =
+        || (receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+    let epoch_before = crate::object::prop_plan::prop_plan_semantic_epoch();
+    assert!(
+        unsafe { super::subclass::clear_packed_subclass_numeric_proof(live()) },
+        "the first retire must report that it retired the proof"
+    );
+    let epoch_after_retire = crate::object::prop_plan::prop_plan_semantic_epoch();
+
+    for _ in 0..4 {
+        assert!(
+            !unsafe { super::subclass::clear_packed_subclass_numeric_proof(live()) },
+            "a receiver with no proof left must report that it retired nothing"
+        );
+    }
+    assert_eq!(
+        crate::object::prop_plan::prop_plan_semantic_epoch(),
+        epoch_after_retire,
+        "retiring nothing must not move the epoch — the whole point of the \
+         conditional flush in array_subclass_fast_pop_validated"
+    );
+    let _ = epoch_before;
+}

@@ -24,8 +24,9 @@ mod member;
 mod non_ident;
 
 pub(crate) use helpers::{
-    callee_is_generic_construct_shape, is_depd_wrapfunction_shape, is_fetch_constructor_name,
-    is_global_object_expr, is_url_encoding_constructor_name, is_worker_messaging_constructor_name,
+    callee_is_generic_construct_shape, global_name_has_user_binding, global_property_new_dynamic,
+    is_depd_wrapfunction_shape, is_fetch_constructor_name, is_global_object_expr,
+    is_url_encoding_constructor_name, is_worker_messaging_constructor_name,
     is_worker_threads_module_name, lower_new_spread_args, lower_optional_args,
     lower_text_decoder_new, lower_url_encoding_constructor, lower_worker_messaging_new,
     lower_worker_new, nonconstructable_builtin_throw_expr, peel_new_callee,
@@ -139,6 +140,37 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 args,
             });
         }
+        // #10430: `new Stream()` for the legacy `node:stream` `Stream`
+        // constructor — the named export (any alias) or the default import,
+        // which IS that constructor. The by-name `Expr::New { "Stream" }`
+        // fallback built a prototype-less placeholder with no `on`/`emit`;
+        // construct the export value instead, so the runtime makes the
+        // instance inherit `Stream.prototype` (and through it EventEmitter).
+        // A namespace import keeps its builtin-module alias and is excluded.
+        let callee_name = callee_ident.sym.as_ref();
+        let is_stream_constructor_value = ctx.lookup_local(callee_name).is_none()
+            && match ctx.lookup_native_module(callee_name) {
+                Some(("stream" | "node:stream", Some("Stream"))) => true,
+                Some(("stream" | "node:stream", None)) => {
+                    ctx.lookup_builtin_module_alias(callee_name).is_none()
+                }
+                _ => false,
+            };
+        let has_spread_arg = new_expr
+            .args
+            .as_deref()
+            .is_some_and(|args| args.iter().any(|arg| arg.spread.is_some()));
+        if is_stream_constructor_value && !has_spread_arg {
+            return Ok(Expr::NewDynamic {
+                callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::NativeModuleRef("stream".to_string())),
+                    property: "Stream".to_string(),
+                }),
+                args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                byte_offset: new_byte_offset,
+            });
+        }
         // #4995: `new EE()` where `EE` is the events module *value* — the
         // default import (`import EE from 'events'`) or a CJS alias
         // (`var EE = require('events')`). Node's `events` module exports the
@@ -211,6 +243,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     //    shadows the bare name, so the re-dispatch sets
     //    `global_intrinsic_new_once` to tell the recursive call to ignore that
     //    shadowing (consumed at the top of `lower_new`, above).
+    //  - #10359: ignoring the shadow only helps the arms that build a dedicated
+    //    HIR node (`SetNew`, `ErrorNew`, …). A name with no such arm (`Event`,
+    //    `Request`, `MessageChannel`, a multi-argument typed array) reaches the
+    //    by-name tail, which a same-named user binding still captured; the
+    //    recursive call builds `global_property_new_dynamic` there instead.
     if let ast::Expr::Member(member) = callee_expr {
         if let (ast::Expr::Ident(obj_ident), ast::MemberProp::Ident(prop_ident)) =
             (peel_new_callee(member.obj.as_ref()), &member.prop)
@@ -248,7 +285,8 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // must use the same kind-aware path (`new GeneratorFunction()`,
             // `new AsyncFunction(...)`, and async generators) instead of the
             // generic object-construction fallback.
-            if ctx.local_decl_scope_depth(ident.sym.as_ref()) == Some(0) {
+            if !force_global_intrinsic && ctx.local_decl_scope_depth(ident.sym.as_ref()) == Some(0)
+            {
                 if let Some(super::fn_ctor_env::FnCtorShape::DynCtor(kind)) =
                     ctx.fn_ctor_env.entries.get(ident.sym.as_str()).cloned()
                 {
@@ -287,7 +325,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 == Some(ident.sym.as_str())
                 && ctx.current_class.is_some()
                 && !nearest_local_is_inside_class_binding;
-            let mut class_name = if is_current_class_self {
+            // #10359: a re-dispatched `globalThis.<name>` is the global's own
+            // name — never a collision-renamed or enclosing user class key.
+            let mut class_name = if force_global_intrinsic {
+                source_class_name.to_string()
+            } else if is_current_class_self {
                 ctx.current_class.clone().unwrap()
             } else {
                 ctx.resolve_class_name(source_class_name)
@@ -383,6 +425,12 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     || ctx.lookup_func(&class_name).is_some()
                     || ctx.lookup_imported_func(&class_name).is_some()
                     || ctx.forward_class_names.contains(source_class_name));
+            // #10359: the re-dispatched counterpart. Here the shadowing binding
+            // must NOT win, so every arm that would construct by name backs
+            // off and the tail builds `global_property_new_dynamic`. Snapshotted
+            // with the flags above, for the same scope-stack reason.
+            let global_intrinsic_shadowed =
+                force_global_intrinsic && global_name_has_user_binding(ctx, source_class_name);
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
@@ -448,7 +496,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // runtime globals delegate to the registered worker_threads
             // factories when the stdlib is present, so ports stay fully
             // functional in graphs that have it.
-            if is_worker_messaging_constructor_name(&class_name) && !shadowed_by_user_binding {
+            if is_worker_messaging_constructor_name(&class_name)
+                && !shadowed_by_user_binding
+                && !global_intrinsic_shadowed
+            {
                 return Ok(Expr::New {
                     class_name: class_name.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
@@ -717,8 +768,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // the same kind-aware fold as a direct dynamic-function-constructor
             // call. The trivial explicit constructor supplies no arguments;
             // the implicit constructor forwards the new-site arguments.
-            if let Some((kind, forward_args)) =
-                ctx.dynamic_function_subclasses.get(&class_name).copied()
+            if let Some((kind, forward_args)) = ctx
+                .dynamic_function_subclasses
+                .get(&class_name)
+                .copied()
+                .filter(|_| !global_intrinsic_shadowed)
             {
                 let empty_args: &[ast::ExprOrSpread] = &[];
                 let args_slice = if forward_args {
@@ -789,6 +843,29 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         // TypeError) if the generated source is beyond it —
                         // still catchable, still located, never a crash.
                         crate::eval_classifier::EvalDecision::DeferToRuntimeError(_message) => {}
+                    }
+                    // #10421: whichever bucket the body landed in (a
+                    // known-library body, or constant strings the fold could
+                    // not use), the function is built at runtime, so the
+                    // auto-optimized runtime must keep the interpreter.
+                    crate::eval_classifier::note_dynamic_function_reachable();
+                    // #10424: a spread argument list (`new Function(...parts)`)
+                    // must reach the constructor element by element. The
+                    // by-name `Expr::New` below lowers each argument as one
+                    // value, so the whole array became a single non-string
+                    // argument and the function got an empty body.
+                    if args_slice.iter().any(|a| a.spread.is_some()) {
+                        let callee = Expr::PropertyGet {
+                            byte_offset: 0,
+                            object: Box::new(Expr::GlobalGet(0)),
+                            property: "Function".to_string(),
+                        };
+                        let args = lower_new_spread_args(ctx, args_slice)?;
+                        return Ok(Expr::NewDynamicSpread {
+                            callee: Box::new(callee),
+                            args,
+                            byte_offset: new_byte_offset,
+                        });
                     }
                 }
             }
@@ -1074,7 +1151,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     arg_present,
                 });
             }
-            if ctx.is_proxy_local(&class_name) {
+            if !global_intrinsic_shadowed && ctx.is_proxy_local(&class_name) {
                 let args = new_expr
                     .args
                     .as_ref()
@@ -1386,6 +1463,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                     // Multi-arg form (buffer, byteOffset, length): fall through.
                 }
+            }
+
+            // #10359: no dedicated intrinsic arm matched a re-dispatched
+            // `new globalThis.<name>()` whose name a user binding shares. Every
+            // arm below resolves by name (`Expr::New { class_name }`, `FuncRef`,
+            // `LocalGet`), so it would construct that binding — construct the
+            // global property's value instead.
+            if global_intrinsic_shadowed {
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(global_property_new_dynamic(
+                    source_class_name,
+                    args,
+                    new_byte_offset,
+                ));
             }
 
             let mut args = new_expr

@@ -10,7 +10,7 @@
 //! Each `try_lower_*` returns `Ok(Some(s))` when it handled the call,
 //! `Ok(None)` to let the caller try the next branch.
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
@@ -351,20 +351,12 @@ pub fn try_lower_current_step_closure_call(
         for a in args {
             lowered_args.push(lower_expr(ctx, a)?);
         }
-        if lowered_args.len() > 16 {
-            bail!(
-                "perry-codegen Phase D.1: CurrentStepClosure call with {} args (max 16)",
-                lowered_args.len()
-            );
-        }
-        let blk = ctx.block();
-        let closure_handle = unbox_to_i64(blk, &recv_box);
-        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
-        let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
-        for v in &lowered_args {
-            call_args.push((DOUBLE, v.as_str()));
-        }
-        return Ok(Some(blk.call(DOUBLE, &runtime_fn, &call_args)));
+        let closure_handle = unbox_to_i64(ctx.block(), &recv_box);
+        return Ok(Some(super::emit_closure_handle_call(
+            ctx,
+            &closure_handle,
+            &lowered_args,
+        )));
     }
     Ok(None)
 }
@@ -445,12 +437,10 @@ pub fn try_lower_closure_typed_local_call(
             // FuncRef calls (direct function-symbol dispatch) keep their
             // static-bundling at lower_call.rs:444+ because they don't go
             // through js_closure_callN.
-            if lowered_args.len() > 16 {
-                bail!(
-                    "perry-codegen Phase D.1: closure call with {} args (max 16)",
-                    lowered_args.len()
-                );
-            }
+            //
+            // #10420: no arity ceiling here. More than 16 arguments dispatch
+            // through `js_closure_call_array` (`emit_closure_handle_call`); the
+            // exact-closure direct arm below is an ordinary N-argument call.
             // Re-read below the argument lowering, THEN unmask: the unmask
             // must consume the post-relocation address.
             let recv_box = callee_group.reread(ctx, callee_root)?;
@@ -531,12 +521,8 @@ pub fn try_lower_closure_typed_local_call(
 
                 ctx.current_block = fallback_idx;
                 let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
-                let runtime_fn = format!("js_closure_call{}", lowered_args.len());
-                let mut fallback_args: Vec<(crate::types::LlvmType, &str)> =
-                    Vec::with_capacity(lowered_args.len() + 1);
-                fallback_args.push((I64, &closure_handle));
-                fallback_args.extend(lowered_args.iter().map(|value| (DOUBLE, value.as_str())));
-                let fallback_value = ctx.block().call(DOUBLE, &runtime_fn, &fallback_args);
+                let fallback_value =
+                    super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
                 crate::rooting::implicit_this_restore(ctx, prev_this);
                 let after_fallback = ctx.block().label.clone();
                 if !ctx.block().is_terminated() {
@@ -1183,13 +1169,8 @@ pub fn try_lower_closure_typed_local_call(
                     } else {
                         None
                     };
-                    let runtime_fn = format!("js_closure_call{}", lowered_args.len());
-                    let mut fallback_args: Vec<(crate::types::LlvmType, &str)> =
-                        vec![(I64, &closure_handle)];
-                    for v in &lowered_args {
-                        fallback_args.push((DOUBLE, v.as_str()));
-                    }
-                    let fallback_value = ctx.block().call(DOUBLE, &runtime_fn, &fallback_args);
+                    let fallback_value =
+                        super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
                     // Inner save, released inside its own arm — so the outer
                     // slot (restored in the merge block) is still live and the
                     // temp-root depth matches on both paths into the merge.
@@ -1223,12 +1204,7 @@ pub fn try_lower_closure_typed_local_call(
             // read `this`, so the reset is unconditional here.
             // #7211: rooted save/restore across the runtime-resolved callee.
             let prev_this = crate::rooting::implicit_this_save(ctx, &undef_this);
-            let runtime_fn = format!("js_closure_call{}", lowered_args.len());
-            let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
-            for v in &lowered_args {
-                call_args.push((DOUBLE, v.as_str()));
-            }
-            let result = ctx.block().call(DOUBLE, &runtime_fn, &call_args);
+            let result = super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
             crate::rooting::implicit_this_restore(ctx, prev_this);
             callee_group.release(ctx);
             return Ok(Some(result));

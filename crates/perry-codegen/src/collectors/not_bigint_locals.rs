@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::Type as HirType;
-use perry_hir::{Expr, Param, Stmt, UnaryOp};
+use perry_hir::{BinaryOp, Expr, Param, Stmt, UnaryOp};
 
 use crate::type_analysis::is_numeric_typed_array_class;
 
@@ -37,16 +37,93 @@ pub fn collect_not_bigint_locals(
     params: &[Param],
     binding_types: &HashMap<u32, HirType>,
 ) -> HashSet<u32> {
-    // Declared-type map (params + let bindings). Used to judge a `LocalGet`
-    // leaf whose id is not one of the analyzed (written) candidates.
-    let mut types: HashMap<u32, HirType> = binding_types.clone();
-    for p in params {
-        types.entry(p.id).or_insert_with(|| p.ty.clone());
-    }
-    // #7700: locals holding a number, so `u8[k]` keyed on one is a byte read
-    // (which is never a BigInt) rather than a property read (which can be).
-    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
+    NotBigIntFacts::collect(stmts, params, binding_types).locals
+}
 
+/// The non-BigInt proof in a form the `FnCtx`-free collectors can query
+/// (#10418): the fixpoint's local set plus the leaf facts its judgment reads.
+///
+/// `&` `|` `^` `<<` `>>` and `~` compute a BigInt from BigInt operands, so the
+/// integer-local proofs may treat one of them as an int32 producer only when
+/// [`NotBigIntFacts::bitwise_result_is_number`] holds. Before, they admitted
+/// every bitwise expression, and `const x = a & b` over two `BigInt(…)` values
+/// took an int32 slot that `ToInt32`'d the BigInt result to `0`.
+///
+/// `Default` is the empty fact set — literal operands still prove a Number.
+#[derive(Default)]
+pub(crate) struct NotBigIntFacts {
+    types: HashMap<u32, HirType>,
+    numeric_locals: HashSet<u32>,
+    locals: HashSet<u32>,
+}
+
+impl NotBigIntFacts {
+    pub(crate) fn collect(
+        stmts: &[Stmt],
+        params: &[Param],
+        binding_types: &HashMap<u32, HirType>,
+    ) -> Self {
+        // Declared-type map (params + let bindings). Used to judge a `LocalGet`
+        // leaf whose id is not one of the analyzed (written) candidates.
+        let mut types: HashMap<u32, HirType> = binding_types.clone();
+        for p in params {
+            types.entry(p.id).or_insert_with(|| p.ty.clone());
+        }
+        // #7700: locals holding a number, so `u8[k]` keyed on one is a byte
+        // read (which is never a BigInt) rather than a property read (which
+        // can be).
+        let numeric_locals = super::collect_numeric_typed_locals(stmts, params, binding_types);
+        let locals = not_bigint_fixpoint(stmts, &types, &numeric_locals);
+        Self {
+            types,
+            numeric_locals,
+            locals,
+        }
+    }
+
+    /// Locals whose value is provably never a BigInt.
+    pub(crate) fn into_locals(self) -> HashSet<u32> {
+        self.locals
+    }
+
+    /// Can evaluating `e` never produce a BigInt?
+    pub(crate) fn expr_is_not_bigint(&self, e: &Expr) -> bool {
+        expr_not_bigint(e, &self.types, &self.locals, &self.numeric_locals)
+    }
+
+    /// Is `e` a bitwise operator whose completed result is always a Number?
+    /// `>>>` has no BigInt form. The other binary operators and `~` produce
+    /// a BigInt for BigInt operands and throw for a mixed pair, so they are a
+    /// Number once an operand provably is not a BigInt. Anything else: `false`.
+    pub(crate) fn bitwise_result_is_number(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Binary {
+                op: BinaryOp::UShr, ..
+            } => true,
+            Expr::Binary {
+                op:
+                    BinaryOp::BitAnd
+                    | BinaryOp::BitOr
+                    | BinaryOp::BitXor
+                    | BinaryOp::Shl
+                    | BinaryOp::Shr,
+                left,
+                right,
+            } => self.expr_is_not_bigint(left) || self.expr_is_not_bigint(right),
+            Expr::Unary {
+                op: UnaryOp::BitNot,
+                operand,
+            } => self.expr_is_not_bigint(operand),
+            _ => false,
+        }
+    }
+}
+
+fn not_bigint_fixpoint(
+    stmts: &[Stmt],
+    types: &HashMap<u32, HirType>,
+    numeric_locals: &HashSet<u32>,
+) -> HashSet<u32> {
     // Every write (Let init + `LocalSet` rhs) per candidate local. Descends
     // into closure bodies so a `LocalSet` to an ENCLOSING local inside a
     // closure is captured (LocalIds are unique per function, so the write is
@@ -73,7 +150,7 @@ pub fn collect_not_bigint_locals(
                     ws.iter().all(|rhs| match rhs {
                         // A `let x;` binding is `undefined` — a non-BigInt.
                         None => true,
-                        Some(rhs) => expr_not_bigint(rhs, &types, &not_bigint, &numeric_locals),
+                        Some(rhs) => expr_not_bigint(rhs, types, &not_bigint, numeric_locals),
                     })
                 })
                 .unwrap_or(true);
@@ -190,16 +267,7 @@ fn expr_not_bigint(
 /// `Named` (an object could `ToPrimitive` to a BigInt), and unions are
 /// deliberately excluded.
 fn type_is_not_bigint(t: Option<&HirType>) -> bool {
-    matches!(
-        t,
-        Some(
-            HirType::Number
-                | HirType::Int32
-                | HirType::Boolean
-                | HirType::String
-                | HirType::StringLiteral(_)
-        )
-    )
+    t.is_some_and(HirType::is_non_bigint_primitive)
 }
 
 /// True when `object` indexes a numeric typed array (`Int32Array` etc.) or a

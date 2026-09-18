@@ -47,6 +47,7 @@ mod class_method_arguments_object_tests;
 mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
+mod in_presence_ic;
 mod index;
 mod nanbox_inline;
 mod native_memory;
@@ -64,7 +65,9 @@ mod v8_interop;
 mod write_barrier;
 
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
-pub(crate) use array_literal::lower_array_literal;
+pub(crate) use array_literal::{
+    emit_array_from_lowered_values, lower_array_literal, INLINE_ARRAY_MAX_ELEMENTS,
+};
 pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
@@ -161,6 +164,8 @@ mod class_field_barrier_tests;
 #[cfg(test)]
 mod class_field_get_shape_tests;
 mod dispatch;
+#[cfg(test)]
+mod entry_block_alloca_tests;
 #[cfg(test)]
 mod hit_path_access_tests;
 #[cfg(test)]
@@ -3005,6 +3010,8 @@ mod string_length;
 pub(crate) mod string_window;
 pub(crate) mod suffix_cursor;
 
+#[cfg(test)]
+mod bigint_bitwise_tests;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
 mod u8_buffer_read;
@@ -3027,6 +3034,8 @@ mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
+#[cfg(test)]
+mod packed_loop_shadow_barrier_tests;
 mod typed_array_rmw;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;
 pub(crate) mod class_field_inline_guard;

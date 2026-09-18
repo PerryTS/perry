@@ -501,3 +501,7 @@ pub fn transform_plain_async_closure_body(
 #[cfg(test)]
 #[path = "dispatch_growth_tests.rs"]
 mod dispatch_growth_tests;
+
+#[cfg(test)]
+#[path = "loop_header_yield_tests.rs"]
+mod loop_header_yield_tests;

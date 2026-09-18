@@ -414,15 +414,15 @@ pub extern "C" fn js_string_validate_collator_args(locales: f64, options: f64) {
 // only from generated `.o`, so the whole-program auto-optimize bitcode rebuild
 // would otherwise dead-strip them (see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_LOCALE_LOWER: extern "C" fn(*const StringHeader, f64) -> *mut StringHeader =
     js_string_to_locale_lower_case;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_LOCALE_UPPER: extern "C" fn(*const StringHeader, f64) -> *mut StringHeader =
     js_string_to_locale_upper_case;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_VALIDATE_COLLATOR_ARGS: extern "C" fn(f64, f64) = js_string_validate_collator_args;
 
 #[cfg(test)]

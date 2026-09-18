@@ -181,54 +181,54 @@ pub extern "C" fn js_typed_string_arg_to_raw(value: f64) -> i64 {
 // function-pointer references to prevent whole-program LTO/dead-strip from
 // removing the exported symbols.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_F64_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_f64_arg_guard;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_F64_ARG_TO_RAW: extern "C" fn(f64) -> f64 = js_typed_f64_arg_to_raw;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_I32_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_i32_arg_guard;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_I32_ARG_TO_RAW: extern "C" fn(f64) -> i32 = js_typed_i32_arg_to_raw;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_I1_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_i1_arg_guard;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_I1_ARG_TO_RAW: extern "C" fn(f64) -> i32 = js_typed_i1_arg_to_raw;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_STRING_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_string_arg_guard;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_STRING_ARG_TO_RAW: extern "C" fn(f64) -> i64 = js_typed_string_arg_to_raw;
 
 // Manifest calls are emitted from generated LLVM IR and therefore have no
 // Rust call graph edge in a release staticlib. Keep every newly public exact-
 // width boundary helper alive under whole-program LTO/dead stripping.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_CHECK_I8: extern "C" fn(f64) -> i8 = js_native_abi_check_i8;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_CHECK_I16: extern "C" fn(f64) -> i16 = js_native_abi_check_i16;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_CHECK_U8: extern "C" fn(f64) -> u8 = js_native_abi_check_u8;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_CHECK_U16: extern "C" fn(f64) -> u16 = js_native_abi_check_u16;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_CHECK_ISIZE: extern "C" fn(f64) -> isize = js_native_abi_check_isize;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_MATERIALIZE_I64: extern "C" fn(i64) -> f64 =
     js_native_abi_materialize_i64;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_ABI_MATERIALIZE_U64: extern "C" fn(u64) -> f64 =
     js_native_abi_materialize_u64;
 
@@ -236,15 +236,15 @@ static KEEP_JS_NATIVE_ABI_MATERIALIZE_U64: extern "C" fn(u64) -> f64 =
 // from generated LLVM IR. Keep roots here so LTO cannot strip the symbols just
 // because the Rust crate graph has no ordinary caller.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_OBJECT_GET_FIELD_BY_PROPERTY_ID_F64: extern "C" fn(*const ObjectHeader, i64) -> f64 =
     crate::object::js_object_get_field_by_property_id_f64;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_OBJECT_SET_FIELD_BY_PROPERTY_ID: extern "C" fn(*mut ObjectHeader, i64, f64) =
     crate::object::js_object_set_field_by_property_id;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
     f64,
     i64,
@@ -252,18 +252,18 @@ static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
     usize,
 ) -> f64 = crate::object::js_native_call_method_by_id;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, i64, i64) -> f64 =
     crate::object::js_native_call_method_apply_by_id;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SPREAD_TAIL_FALLBACK_ARGS: unsafe extern "C-unwind" fn(
     *const f64,
     usize,
     f64,
 ) -> i64 = crate::object::js_spread_tail_fallback_args;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_SHORT_PACKED_SPREAD_VALUES: unsafe extern "C" fn(f64, *mut f64) -> i32 =
     crate::array::js_short_packed_spread_values;
 

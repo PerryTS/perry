@@ -1517,7 +1517,7 @@ pub extern "C" fn js_string_array_range_loop_guard(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_STRING_ARRAY_RANGE_LOOP_GUARD: extern "C" fn(f64, i32, i32) -> i32 =
     js_string_array_range_loop_guard;
 
@@ -1801,17 +1801,27 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         {
             return false;
         }
-        if crate::object::get_property_attrs(raw_addr, "length")
-            .map(|attrs| !attrs.writable())
-            .unwrap_or(false)
-        {
-            return false;
-        }
+        // A non-writable `length` is reachable only through a descriptor
+        // write, and every one of those marks the receiver
+        // `OBJ_FLAG_ARRAY_DESCRIPTORS` (`array::named_props::mark_array_descriptors`
+        // — the bit is documented there as the shared "index-accessor /
+        // non-writable-length / sparse-index" gate). The flag test above has
+        // already returned `false` for any receiver carrying it, so by this
+        // point the array provably has no descriptors and its `length` is
+        // provably writable. `array::push_pop::array_length_is_non_writable_with_flags`
+        // encodes the same implication the other way round, short-circuiting on
+        // the flag before it will look a descriptor up at all.
+        //
+        // The lookup that used to sit here was therefore unreachable-true, and
+        // it was not cheap: a string-keyed descriptor probe on EVERY push. In a
+        // `for (…) { a.push(v); a.pop(); }` loop it was the single heaviest
+        // frame in the profile at 16.5% of all samples, more than the append it
+        // was guarding.
         len <= 16_000_000
             && cap <= 16_000_000
             && len < cap
             && is_numeric_value_bits(value.to_bits())
-            && crate::array::js_array_is_numeric_f64_layout(arr) != 0
+            && crate::array::js_array_is_numeric_f64_layout_resolved(arr) != 0
     }
 }
 
@@ -2139,7 +2149,7 @@ pub extern "C" fn js_typed_feedback_packed_f64_range_loop_guard(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_F64_RANGE_LOOP_GUARD: extern "C" fn(
     u64,
     f64,
@@ -2181,7 +2191,7 @@ pub extern "C" fn js_typed_feedback_packed_i32_array_loop_guard(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_I32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_i32_array_loop_guard;
 
@@ -2219,7 +2229,7 @@ pub extern "C" fn js_typed_feedback_packed_u32_array_loop_guard(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_TYPED_FEEDBACK_PACKED_U32_ARRAY_LOOP_GUARD: extern "C" fn(u64, f64) -> i32 =
     js_typed_feedback_packed_u32_array_loop_guard;
 
@@ -2548,6 +2558,14 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     value: f64,
 ) -> i32 {
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    // #5094's gate, which this guard never got. With recording off (the
+    // default) `guard_observe` hands back `contract_valid` untouched, so the
+    // push index lookup, the `classify_array` walk and the observation are all
+    // dead work on every `a.push(v)`. Every sibling array guard already gates
+    // here; this one was the last hot one that did not.
+    if !typed_feedback_enabled() {
+        return numeric_array_push_guard(raw_addr as *const ArrayHeader, value) as i32;
+    }
     let push_index = match gc_header_for_user_addr(raw_addr) {
         Some(header) if unsafe { (*header).obj_type == crate::gc::GC_TYPE_ARRAY } => unsafe {
             (*(raw_addr as *const ArrayHeader)).length
@@ -2793,6 +2811,18 @@ pub extern "C" fn js_typed_feedback_object_set_unboxed_f64_field(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // #5094's gate. `object_shape` resolves the receiver's shape and `key_hash`
+    // hashes the key purely to fill an `Observation` that `guard_observe`
+    // discards while recording is off.
+    if !typed_feedback_enabled() {
+        if object_key_matches_field(obj, key, field_index) && is_plain_number_bits(value.to_bits())
+        {
+            crate::object::js_object_set_field(obj, field_index, crate::JSValue::number(value));
+        } else {
+            crate::object::js_object_set_field_by_name(obj, key, value);
+        }
+        return;
+    }
     let object_addr = normalize_raw_object_addr(obj as u64);
     let (shape_addr, class_id, gc_type) = object_shape(object_addr);
     let observation = Observation {
@@ -2826,6 +2856,12 @@ pub extern "C" fn js_typed_feedback_object_set_unboxed_f64_field(
 
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_observe_helper_return(site_id: u64, value: f64) -> f64 {
+    // #5094's gate. The contract is unconditionally valid here, so with
+    // recording off this wrapper is the identity function and `helper_return_facts`
+    // (which resolves a shape for a pointer payload) is pure dead work.
+    if !typed_feedback_enabled() {
+        return value;
+    }
     let bits = value.to_bits();
     let (shape_addr, class_id, heap_type, aux, value_kind) = helper_return_facts(bits);
     let observation = Observation {

@@ -327,7 +327,7 @@ pub extern "C" fn js_event_subclass_init(
 /// Keepalive anchor for the auto-optimize whole-program build —
 /// `js_event_subclass_init` is a generated-code-only callee.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_EVENT_SUBCLASS_INIT: extern "C" fn(f64, f64, f64, u32, u32) -> f64 =
     js_event_subclass_init;
 
@@ -377,7 +377,7 @@ pub extern "C" fn js_dom_exception_subclass_init(this_value: f64, message: f64, 
 
 /// Keepalive anchor for the auto-optimize whole-program build —
 /// `js_dom_exception_subclass_init` is a generated-code-only callee.
-#[used]
+#[used(compiler)]
 static KEEP_JS_DOM_EXCEPTION_SUBCLASS_INIT: extern "C" fn(f64, f64, f64) -> f64 =
     js_dom_exception_subclass_init;
 

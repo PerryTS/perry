@@ -966,6 +966,14 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         throw_not_iterable(value());
     }
     if jsv.is_any_string() {
+        // #9846: `[..."ab"]` is `GetIterator(str)` + drain per spec, and
+        // `js_string_to_char_array` is an element cut that never calls
+        // `%StringIteratorPrototype%.next`. That is unobservable — until the
+        // prototype object escapes to user code, after which the cut would
+        // silently ignore a patched `next`. Decline then, and run the protocol.
+        if crate::object::iterator_prototypes::string_iteration_not_pristine() {
+            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+        }
         let str_ptr = crate::value::js_get_string_pointer_unified(value());
         let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
         return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
@@ -1038,7 +1046,7 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // not preempt the walk below for that case: `js_get_iterator`'s patched
     // branch reads the PROTOTYPE only, and would throw "not iterable" for an
     // array carrying its own method once the prototype slot has been deleted.
-    if crate::array::array_proto_iterator_modified()
+    if crate::array::array_iteration_not_pristine()
         && crate::array::js_array_is_array(value()).to_bits() == crate::value::TAG_TRUE
         && !array_has_own_iterator(value())
     {
@@ -1051,10 +1059,21 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     if crate::buffer::is_registered_buffer(raw_ptr()) {
         return crate::buffer::buffer_to_array(raw_ptr() as *const crate::buffer::BufferHeader);
     }
+    // #9846: the Set / Map arms below copy the backing store instead of
+    // driving `%SetIteratorPrototype%.next` / `%MapIteratorPrototype%.next`.
+    // Same trade as the array dense arm and the string cut above: free while
+    // the family prototype has never escaped to user code, wrong the moment it
+    // has, so decline on the escape signal and run the real protocol.
     if crate::set::is_registered_set(raw_ptr()) {
+        if crate::object::iterator_prototypes::set_iteration_not_pristine() {
+            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+        }
         return crate::set::js_set_to_array(raw_ptr() as *const crate::set::SetHeader);
     }
     if crate::map::is_registered_map(raw_ptr()) {
+        if crate::object::iterator_prototypes::map_iteration_not_pristine() {
+            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
+        }
         return crate::map::js_map_entries(raw_ptr() as *const crate::map::MapHeader);
     }
     // `class X extends Map | Set` instance — spread (`[...container]`,

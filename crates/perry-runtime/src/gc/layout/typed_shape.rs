@@ -306,7 +306,7 @@ pub extern "C" fn js_register_imported_class_shape_slot(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_REGISTER_IMPORTED_CLASS_SHAPE_SLOT: extern "C" fn(
     u32,
     u32,

@@ -32,7 +32,7 @@
 //! | fast proof | `_reserved` bit 7 | `_reserved` bit 11 |
 //! | rides a move | yes (`_reserved` is copied) | yes (same word) |
 //! | self-heals by rescan | `ensure_array_numeric_raw_f64` | [`ensure_element_shape`] |
-//! | move fixup | `transfer_array_numeric_layout` | [`transfer_element_shape`] |
+//! | move fixup | none — the bit IS the record | [`transfer_element_shape`] |
 //! | clear funnel | `clear_array_numeric_layout` | [`clear_element_shape`] |
 //!
 //! The one thing 4a does not need is a *payload*: "raw f64" is the whole
@@ -443,16 +443,6 @@ pub(crate) unsafe fn clear_element_shape(arr: *const ArrayHeader) {
     bump_epoch();
 }
 
-/// Address-keyed sibling of [`clear_element_shape`], for the `layout_*`
-/// family and other callers that hold a `usize`.
-#[inline]
-pub(crate) fn clear_element_shape_ptr(user_ptr: usize) {
-    if user_ptr == 0 {
-        return;
-    }
-    unsafe { clear_element_shape(user_ptr as *const ArrayHeader) }
-}
-
 /// Forget everything about an address, bit included. Used when an allocation
 /// dies and its address may be recycled (`layout_clear_for_ptr`).
 pub(crate) fn forget_element_shape(user_ptr: usize) {
@@ -838,12 +828,12 @@ pub extern "C" fn js_array_element_shape_check(
 // those two — and only those two — are anchored. The other four stay
 // unanchored and dead-strippable until something emits a call to them.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_ensure_element_shape;
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_ENSURE_ELEMENT_SHAPE_ORDINARY: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_ensure_element_shape_ordinary;
 

@@ -1144,7 +1144,11 @@ pub(crate) extern "C" fn filehandle_read_file_impl(
             return promise_value_fs(f64::from_bits(crate::value::TAG_UNDEFINED));
         };
         let mut bytes = Vec::new();
-        let _ = file.read_to_end(&mut bytes);
+        if let Err(err) = file.read_to_end(&mut bytes) {
+            // #10452: a failed read rejects (`EISDIR ... read` for a directory)
+            // instead of resolving with whatever was read before it failed.
+            return promise_rejected_fs(unsafe { build_fs_error_value_no_path(&err, "read") });
+        }
         if read_file_encoding(encoding).is_none() {
             let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
             if !buf.is_null() {

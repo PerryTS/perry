@@ -258,7 +258,7 @@ pub extern "C" fn js_tagged_template_get_or_init(
 }
 
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_TAGGED_TEMPLATE_GET_OR_INIT: extern "C" fn(
     u64,
     *mut ArrayHeader,
@@ -1297,6 +1297,33 @@ pub(crate) unsafe fn clear_array_numeric_layout(arr: *const ArrayHeader) {
     clear_array_raw_f64_layout_flag(arr);
 }
 
+/// Re-derive the raw-f64 numeric layout flag from the slots that are actually
+/// there, CLEARING it when any live slot is not a number. Never sets it.
+///
+/// `js_array_alloc` stamps `GC_ARRAY_RAW_F64_LAYOUT` on the fresh (length 0)
+/// array, where it is vacuously true. A producer that fills the array through
+/// the noting store helpers keeps the flag honest; one that sets `length` and
+/// `std::ptr::write`s the element words directly — the documented "internal
+/// scratch array" shape called out on [`mark_array_raw_f64_holes_fresh`] —
+/// bypasses every clear and leaves a NaN-boxed pointer sitting in a slot the
+/// flag promises is a plain double.
+///
+/// That used to be merely latent. `json::stringify_primitive_array` (#9849)
+/// now takes the flag as proof and emits every slot through `write_number`, so
+/// a mislabelled array serializes its strings as `null`
+/// (`JSON.stringify([...Map.groupBy("aba", ch => ch).entries()])`). This is the
+/// repair for the choke point those producers already call,
+/// `object::gc_slots::rebuild_array_layout_from_slots`.
+#[inline]
+pub(crate) unsafe fn reclassify_array_numeric_layout_from_slots(arr: *mut ArrayHeader) {
+    if arr.is_null() || !array_has_raw_f64_layout_flag(arr) {
+        return;
+    }
+    if !array_slots_are_numeric(arr) {
+        clear_array_numeric_layout(arr);
+    }
+}
+
 #[inline]
 pub(crate) fn clear_array_numeric_layout_ptr(user_ptr: usize) {
     if user_ptr == 0 {
@@ -1308,30 +1335,23 @@ pub(crate) fn clear_array_numeric_layout_ptr(user_ptr: usize) {
 }
 
 #[inline]
-pub(crate) fn transfer_array_numeric_layout(old_user: usize, new_user: usize) {
-    if old_user == 0 || new_user == 0 || old_user == new_user {
-        return;
-    }
-    unsafe {
-        if array_has_raw_f64_layout_flag(old_user as *const ArrayHeader) {
-            set_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
-        } else if array_has_raw_f64_holes_flag(old_user as *const ArrayHeader) {
-            // #6011: relocation copies slot bits verbatim, so the verified
-            // raw-f64-or-holes invariant carries over to the new backing.
-            clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
-            set_array_raw_f64_holes_flag(new_user as *const ArrayHeader);
-        } else {
-            clear_array_raw_f64_layout_flag(new_user as *const ArrayHeader);
-        }
-    }
-}
-
-#[inline]
 pub(crate) unsafe fn array_numeric_layout(arr: *const ArrayHeader) -> Option<NumericArrayLayout> {
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return None;
     }
+    unsafe { array_numeric_layout_resolved(arr) }
+}
+
+/// [`array_numeric_layout`] for an already-resolved head.
+///
+/// # Safety
+/// `arr` is a non-null [`clean_arr_ptr`] result with no intervening allocation
+/// or safepoint.
+#[inline]
+pub(crate) unsafe fn array_numeric_layout_resolved(
+    arr: *const ArrayHeader,
+) -> Option<NumericArrayLayout> {
     array_has_raw_f64_layout_flag(arr).then_some(NumericArrayLayout::RawF64)
 }
 
@@ -1367,6 +1387,17 @@ pub(crate) unsafe fn ensure_array_numeric_raw_f64(arr: *mut ArrayHeader) -> bool
     if arr.is_null() {
         return false;
     }
+    unsafe { ensure_array_numeric_raw_f64_resolved(arr) }
+}
+
+/// [`ensure_array_numeric_raw_f64`] for a receiver the caller has already put
+/// through [`clean_arr_ptr_mut`].
+///
+/// # Safety
+/// `arr` is that non-null resolved head, with no intervening allocation or
+/// safepoint — the same contract [`array_object_flags_resolved`] carries.
+#[inline]
+pub(crate) unsafe fn ensure_array_numeric_raw_f64_resolved(arr: *mut ArrayHeader) -> bool {
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
     if length > capacity || length > 16_000_000 {
@@ -1429,12 +1460,23 @@ pub(crate) unsafe fn array_numeric_raw_f64_set_inbounds(
 }
 
 #[inline]
-pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
+
+/// [`array_numeric_raw_f64_push_inbounds`] for an already-resolved receiver.
+///
+/// The append chain re-entered `clean_arr_ptr` — allocator-ownership plus
+/// forwarding classification — once per helper: the unboxed push entry
+/// resolved, then this did, then `ensure_array_numeric_raw_f64` did again, all
+/// on the one pointer the entry had already proved live. Threading the resolved
+/// head through removes the repeats instead of caching their answer.
+///
+/// # Safety
+/// `arr` is a non-null [`clean_arr_ptr_mut`] result with no intervening
+/// allocation or safepoint.
+pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds_resolved(
     arr: *mut ArrayHeader,
     value: f64,
 ) -> bool {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() || !ensure_array_numeric_raw_f64(arr) {
+    if !ensure_array_numeric_raw_f64_resolved(arr) {
         return false;
     }
     let length = (*arr).length;
@@ -1450,7 +1492,27 @@ pub(crate) unsafe fn array_numeric_raw_f64_push_inbounds(
     let elements_ptr = array_elements_ptr(arr) as *mut f64;
     // GC_STORE_AUDIT(POINTER_FREE): raw-f64 push stores numeric payloads only.
     std::ptr::write(elements_ptr.add(length as usize), number);
-    crate::gc::layout_note_slot(arr as usize, length as usize, number.to_bits());
+    // `layout_note_slot`'s MASK work is a provable no-op for a value that is a
+    // plain number, and `value_bits_to_number` just proved that above. The
+    // argument is the one already written out for the codegen-side elision on
+    // `array_store_needs_layout_note`'s object twin, and it holds in every
+    // layout state the receiver can be in: `GC_LAYOUT_UNKNOWN` returns at the
+    // note's own state check; an intact typed descriptor lets a non-pointer
+    // fall through the pointer-mask arm untouched; `GC_LAYOUT_POINTER_FREE`
+    // hits the note's `!pointer && POINTER_FREE` early return; and under
+    // `GC_LAYOUT_SIDE_MASK` the note could only ever CLEAR this slot's bit, so
+    // skipping it leaves at worst a stale set bit over a non-pointer word —
+    // which costs one extra visit and nothing else, because
+    // `gc::trace::mark_field_into_worklist` re-validates every slot word and
+    // rejects f64 bit patterns as out-of-range addresses.
+    //
+    // That leaves the #7480 element-shape invariant, which is NOT part of that
+    // argument and is kept — through the resolved-flags entry, so it reads the
+    // header this function already holds instead of classifying the parent a
+    // second time. Measured: `layout_note_slot` was 15.0% of a push/pop loop,
+    // 96 of its 109 samples from this one call.
+    let flags = array_object_flags_resolved(arr);
+    crate::array::note_element_store_resolved_flags(arr, length as usize, number.to_bits(), flags);
     (*arr).length = length + 1;
     true
 }
@@ -1609,8 +1671,22 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
     if arr.is_null() {
         return 0;
     }
+    unsafe { js_array_is_numeric_f64_layout_resolved(arr) }
+}
+
+/// [`js_array_is_numeric_f64_layout`] for a caller holding a resolved head.
+///
+/// The typed-feedback push guard reaches this with a pointer it has already
+/// normalized, header-checked and proved non-forwarded, so the entry's own
+/// `clean_arr_ptr` — and the second one `array_numeric_layout` used to perform
+/// inside it — were both re-deriving that proof once per push.
+///
+/// # Safety
+/// `arr` is a non-null resolved head with no intervening allocation or
+/// safepoint.
+pub(crate) unsafe fn js_array_is_numeric_f64_layout_resolved(arr: *const ArrayHeader) -> i32 {
     unsafe {
-        if array_numeric_layout(arr) == Some(NumericArrayLayout::RawF64) {
+        if array_numeric_layout_resolved(arr) == Some(NumericArrayLayout::RawF64) {
             return 1;
         }
         // #6011 follow-up: a holes-flagged array (`new Array(n)` mid-fill)
@@ -1646,31 +1722,31 @@ pub extern "C" fn js_array_is_numeric_f64_layout(arr: *const ArrayHeader) -> i32
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NUMERIC_VALUE_TO_RAW_F64: extern "C" fn(f64) -> f64 =
     js_array_numeric_value_to_raw_f64;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_MARK_NUMERIC_F64_LAYOUT: extern "C" fn(*mut ArrayHeader) -> i32 =
     js_array_mark_numeric_f64_layout;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
     js_array_clear_numeric_layout;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
     js_array_note_numeric_write;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_DECLARE_ALL_POINTER_ELEMENTS: extern "C" fn(*mut ArrayHeader) =
     js_array_declare_all_pointer_elements;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_IS_NUMERIC_F64_LAYOUT: extern "C" fn(*const ArrayHeader) -> i32 =
     js_array_is_numeric_f64_layout;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 = js_array_refresh_local_head;
 
 /// Calculate the byte size for an array with N elements capacity

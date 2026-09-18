@@ -98,6 +98,35 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
     unsafe { array_iteration_is_exotic_resolved(arr, flags) }
 }
 
+/// [`array_iteration_is_exotic`] for a caller holding a resolved head and its
+/// flag word, but which has NOT excluded Buffer / TypedArray receivers.
+///
+/// This is the shape the hot append wants: `js_array_numeric_push_f64_unboxed`
+/// resolved the receiver and read the header once, so the only thing it still
+/// needs from `array_iteration_is_exotic` is the registry probe plus the policy
+/// tests — not a second `clean_arr_ptr`, which re-runs allocator-ownership and
+/// forwarding classification on a pointer already proved live one call up.
+///
+/// The registry probes stay: a Buffer or typed array must still be routed to
+/// the spec path, and the flag word cannot answer that (their headers are not
+/// `GC_TYPE_ARRAY`, so `array_object_flags_from_tag` reads them as `0`, which
+/// on its own would let a typed array reach the raw-f64 append).
+///
+/// # Safety
+///
+/// `arr` and `flags` must satisfy [`array_object_flags_resolved`]'s contract.
+pub(crate) unsafe fn array_iteration_is_exotic_cleaned(
+    arr: *const ArrayHeader,
+    flags: u16,
+) -> bool {
+    if crate::buffer::is_registered_buffer(arr as usize)
+        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
+        return true;
+    }
+    unsafe { array_iteration_is_exotic_resolved(arr, flags) }
+}
+
 /// [`array_iteration_is_exotic`] for a caller that already resolved the live
 /// plain-array head, excluded Buffer/TypedArray receivers, and owns the header
 /// word: the policy tests without a second receiver resolution and registry
@@ -187,7 +216,7 @@ pub(crate) fn array_get_property_by_key(
 /// `#[no_mangle]` C export AND survive dead-stripping even when no Rust caller
 /// keeps it referenced — mirroring the neighbouring `js_array_push`.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_length;
 
 #[no_mangle]
@@ -745,11 +774,11 @@ pub extern "C" fn js_array_numeric_set_f64_unboxed(
 // These raw numeric-array helpers are called from generated code, so release/LTO
 // builds may otherwise internalize and strip the `#[no_mangle]` exports.
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NUMERIC_GET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32) -> f64 =
     js_array_numeric_get_f64_unboxed;
 #[cfg(feature = "keepalive-anchors")]
-#[used]
+#[used(compiler)]
 static KEEP_JS_ARRAY_NUMERIC_SET_F64_UNBOXED: extern "C" fn(*mut ArrayHeader, u32, f64) -> i32 =
     js_array_numeric_set_f64_unboxed;
 

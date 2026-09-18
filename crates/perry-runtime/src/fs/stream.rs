@@ -88,6 +88,9 @@ pub(crate) struct StreamState {
     /// deferred open, handed to the pending callbacks and to `'error'`.
     /// `undefined` until then; `error_msg` stays the "errored" flag.
     error_value: f64,
+    /// #10451: a read stream's constructor-time open failure, held as the OS
+    /// error until `store_open_failure` turns it into `error_value`.
+    open_failure: Option<FsReadFailure>,
     /// #9493: a turn is already parked on the callback-timer queue.
     turn_pending: bool,
     bytes_read: u64,
@@ -167,6 +170,7 @@ impl StreamState {
             pending_writes: Vec::new(),
             end_callback: f64::from_bits(crate::value::TAG_UNDEFINED),
             error_value: f64::from_bits(crate::value::TAG_UNDEFINED),
+            open_failure: None,
             turn_pending: false,
             bytes_read: 0,
             bytes_written: 0,
@@ -572,13 +576,6 @@ fn refresh_props(id: usize) {
     });
 }
 
-fn make_error_value(message: &str) -> f64 {
-    let msg = message.as_bytes();
-    let err_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_obj = crate::error::js_error_new_with_message(err_str);
-    crate::value::js_nanbox_pointer(err_obj as i64)
-}
-
 fn event_name(value: f64) -> String {
     String::from_utf8_lossy(&bytes_from_value(value)).into_owned()
 }
@@ -707,36 +704,6 @@ fn call_js_method2(receiver: f64, name: &[u8], arg0: f64, arg1: f64) -> f64 {
             args.len(),
         )
     }
-}
-
-/// The stream's stored error as a JS value: the node-shaped value the deferred
-/// open produced when there is one (#9493), else an `Error` over `error_msg`.
-fn stored_error_value(state: &StreamState) -> Option<f64> {
-    if !JSValue::from_bits(state.error_value.to_bits()).is_undefined() {
-        return Some(state.error_value);
-    }
-    state.error_msg.as_deref().map(make_error_value)
-}
-
-fn emit_stored_error(id: usize) {
-    let error_value = STREAM_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        registry.get(&id).and_then(stored_error_value)
-    });
-    if let Some(err) = error_value {
-        emit_event1(id, "error", err);
-    }
-}
-
-fn record_stream_error(id: usize, message: String) {
-    STREAM_REGISTRY.with(|registry| {
-        if let Some(state) = registry.borrow_mut().get_mut(&id) {
-            state.errored = true;
-            state.error_msg = Some(message);
-        }
-    });
-    refresh_props(id);
-    emit_stored_error(id);
 }
 
 fn close_fd_for_state(state: &mut StreamState) {
@@ -1271,6 +1238,8 @@ fn throw_plain_type_error_value(message: &str) -> ! {
 
 mod options_init;
 use options_init::*;
+mod stream_errors;
+use stream_errors::*;
 mod utf8_stream;
 pub(crate) use utf8_stream::*;
 
@@ -1301,7 +1270,7 @@ fn read_chunk_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
     }
 }
 
-fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, String> {
+fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsReadFailure> {
     let (fd, pos, amount, encoding) = STREAM_REGISTRY.with(|registry| {
         let registry = registry.borrow();
         let Some(state) = registry.get(&id) else {
@@ -1325,18 +1294,19 @@ fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, Strin
     if amount == 0 {
         return Ok(None);
     }
+    let ebadf = || FsReadFailure::read(ebadf_os_error());
     let Some(fd) = fd else {
-        return Err("bad file descriptor".to_string());
+        return Err(ebadf());
     };
     let result = FD_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
         let Some(file) = registry.get_mut(&fd) else {
-            return Err("bad file descriptor".to_string());
+            return Err(ebadf());
         };
         file.seek(SeekFrom::Start(pos))
-            .map_err(|err| err.to_string())?;
+            .map_err(FsReadFailure::read)?;
         let mut buffer = vec![0; amount];
-        let read = file.read(&mut buffer).map_err(|err| err.to_string())?;
+        let read = file.read(&mut buffer).map_err(FsReadFailure::read)?;
         buffer.truncate(read);
         Ok(buffer)
     })?;
@@ -1481,13 +1451,13 @@ fn read_stream_pump(id: usize) {
                 finish_read_stream(id);
                 return;
             }
-            Err(message) => {
+            Err(failure) => {
                 STREAM_REGISTRY.with(|registry| {
                     if let Some(state) = registry.borrow_mut().get_mut(&id) {
                         state.pumping = false;
                     }
                 });
-                record_stream_error(id, message);
+                record_read_failure(id, failure);
                 maybe_close_stream(id, false);
                 return;
             }
@@ -1745,6 +1715,7 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
 fn create_read_stream_with_state(state: StreamState) -> f64 {
     register_stream_method_arities();
     let id = alloc_stream(state);
+    store_open_failure(id);
     let method_funcs: [(&str, extern "C" fn()); 10] = [
         ("on", unsafe {
             std::mem::transmute::<
