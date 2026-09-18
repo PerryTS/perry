@@ -1209,6 +1209,19 @@ pub(crate) unsafe fn replay_class_object_constructor(
     let scope = crate::gc::RuntimeHandleScope::new();
     let classobj_handle = scope.root_nanbox_f64(classobj_value);
     let inst_handle = scope.root_raw_mut_ptr(inst);
+    // #10624: remember which specific evaluation of this template built
+    // `inst`, so a later `instanceof` check against it can walk THAT
+    // evaluation's own pinned heritage instead of the shared, possibly
+    // since-overwritten class_id registry (`object/instanceof.rs`'s
+    // `class_chain_reaches_dynamic`). Runs before anything below can
+    // allocate/collect and return early, so `inst` is pinned regardless of
+    // which path this replay takes.
+    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+        super::class_registry::pin_instance_constructing_class(
+            inst,
+            classobj_handle.get_nanbox_f64(),
+        );
+    });
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // must run with the same argument list. `lookup_class_constructor` holds
