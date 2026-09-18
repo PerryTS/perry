@@ -160,6 +160,130 @@ pub(crate) fn any_user_prototype_override() -> bool {
     USER_PROTO_OVERRIDE_EVER.load(Ordering::Acquire)
 }
 
+/// #10362: mark `obj_ptr`'s own header as an owner in the residual registry.
+///
+/// Called under the registry lock and BEFORE the insert, the same discipline
+/// `OBJECT_PROTOTYPES_NONEMPTY` uses one line below: the proof is published
+/// before the fact it guards, so a reader that can observe the entry already
+/// observes the bit.
+///
+/// Silently does nothing for a `GC_TYPE_OBJECT` owner. Such an owner normally
+/// never reaches the registry at all (`meta_capable_object` takes it), but it
+/// can when that function turns it away for a non-type reason — and bit 6 means
+/// `OBJ_FLAG_NULL_PROTO` there, so it must not be reused. Those owners keep the
+/// latch-only gate, which is what every owner had before this change.
+unsafe fn set_residual_proto_owner_bit(obj_ptr: usize) {
+    #[cfg(test)]
+    if residual_proto_bit_sabotage::suppressed() {
+        return;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) else {
+        return;
+    };
+    if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+        return;
+    }
+    let header = (obj_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*header)._reserved |= crate::gc::GC_RESIDUAL_PROTO_OWNER;
+}
+
+/// Can the cell at `header` own a residual-prototype entry, judged from its own
+/// header rather than from the process-global latch?
+///
+/// This is the per-owner half of the registry's gate. Callers keep asking
+/// [`object_static_prototypes_maybe_nonempty`] FIRST — it is one byte load and
+/// false for any process that never re-prototyped a non-object — and ask this
+/// second, which is what stops an ARMED process paying per traced cell.
+///
+/// Conservative for `GC_TYPE_OBJECT`: see `set_residual_proto_owner_bit`.
+///
+/// # Safety
+///
+/// `header` is a readable `GcHeader` of a live allocation.
+#[inline]
+pub(crate) unsafe fn residual_entry_possible_for(header: *const crate::gc::GcHeader) -> bool {
+    if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        return true;
+    }
+    (*header)._reserved & crate::gc::GC_RESIDUAL_PROTO_OWNER != 0
+}
+
+/// The invariant the collector's gates rest on: a LIVE non-object owner that
+/// has an entry in the registry carries the bit.
+///
+/// Asserted in test and debug builds — including `cargo test --release`, how the
+/// GC suites run — for the same reason
+/// `gc::layout::transfer::assert_relocation_copied_the_header` is: a test proves
+/// today's code, an assertion proves tomorrow's. A future path that inserts an
+/// entry without the bit would make every collector gate skip that owner's
+/// prototype edge, which is #10493's bug exactly — correct before a collection,
+/// wrong after, exit code 0 and no warning.
+///
+/// Only this direction is an invariant. The reverse (bit set implies an entry)
+/// is deliberately NOT asserted: the bit is set-only, and the two rekey paths
+/// remove-then-insert with the lock released in between, so a bit without an
+/// entry is a legal transient and a benign steady state.
+#[inline]
+pub(crate) unsafe fn debug_assert_residual_owner_bit(obj_ptr: usize) {
+    #[cfg(any(test, debug_assertions))]
+    {
+        #[cfg(test)]
+        if residual_proto_bit_sabotage::suppressed() {
+            return;
+        }
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj_ptr) {
+            if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+                assert!(
+                    header._reserved & crate::gc::GC_RESIDUAL_PROTO_OWNER != 0,
+                    "residual prototype registry: owner {obj_ptr:#x} (obj_type {}) has an \
+                     entry but not `GC_RESIDUAL_PROTO_OWNER`, so every collector gate will \
+                     skip its prototype edge — the prototype is neither retained nor \
+                     rewritten (#10493's failure mode)",
+                    header.obj_type
+                );
+            }
+        }
+    }
+    #[cfg(not(any(test, debug_assertions)))]
+    {
+        let _ = obj_ptr;
+    }
+}
+
+/// Test-only sabotage for [`set_residual_proto_owner_bit`]: the bit is never
+/// set, so every per-owner gate falls back to "no entry here" and the collector
+/// skips the prototype edge.
+///
+/// Both tests in `gc/tests/residual_prototype_relocation.rs` MUST fail while
+/// this is armed. If they pass, the bit is not load-bearing and is
+/// documentation — the failure mode CLAUDE.md calls "a gate that cannot fail".
+#[cfg(test)]
+pub(crate) mod residual_proto_bit_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn suppressed() -> bool {
+        SUPPRESSED.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(SUPPRESSED.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            SUPPRESSED.with(|s| s.set(self.0));
+        }
+    }
+}
+
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
     OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -325,6 +449,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
         // The publish property is unchanged: a reader that sees `true` takes
         // the lock and therefore sees whatever the writer committed.
         OBJECT_PROTOTYPES_NONEMPTY.store(true, Ordering::Release);
+        // #10362: the per-OWNER half of the same proof, published under the
+        // same lock and before the same insert, for the same reason.
+        unsafe { set_residual_proto_owner_bit(obj_ptr) };
         let slot = map.entry(obj_ptr).or_insert(0);
         *slot = proto_bits;
         slot_addr = slot as *mut u64 as usize;
@@ -360,10 +487,17 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
         return None;
     }
-    get_object_prototypes()
+    let recorded = get_object_prototypes()
         .lock()
         .ok()
-        .and_then(|map| map.get(&obj_ptr).copied())
+        .and_then(|map| map.get(&obj_ptr).copied());
+    // #10362: the invariant every collector gate rests on, checked on the read
+    // paths that are NOT gated by the bit — asserting it inside a bit-gated
+    // path would be vacuous.
+    if recorded.is_some() {
+        unsafe { debug_assert_residual_owner_bit(obj_ptr) };
+    }
+    recorded
 }
 
 /// Look up the residual prototype registry for a caller that has already
@@ -383,10 +517,14 @@ pub(crate) fn object_static_prototype_known_non_meta(obj_ptr: usize) -> Option<u
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
         return None;
     }
-    get_object_prototypes()
+    let recorded = get_object_prototypes()
         .lock()
         .ok()
-        .and_then(|map| map.get(&obj_ptr).copied())
+        .and_then(|map| map.get(&obj_ptr).copied());
+    if recorded.is_some() {
+        unsafe { debug_assert_residual_owner_bit(obj_ptr) };
+    }
+    recorded
 }
 
 #[inline]

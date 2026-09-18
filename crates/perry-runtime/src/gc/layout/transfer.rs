@@ -95,10 +95,17 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     // layout kinds (module docs). The latch first: it is one byte load, false
     // for any process that never re-prototyped a non-object, and the move is
     // out of line.
+    let relocating_header = header_from_user_ptr(old_user as *const u8);
     if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
         && crate::object::prototype_chain::residual_prototype_owner_type(
-            (*header_from_user_ptr(old_user as *const u8)).obj_type,
+            (*relocating_header).obj_type,
         )
+        // #10362: the per-OWNER half, same bit and same proof as the trace
+        // path's. `_reserved` rides every relocation by construction — all four
+        // callers copy it before calling here and
+        // `assert_relocation_copied_the_header` enforces that — so the bit is
+        // already correct at this point and needs no transfer of its own.
+        && crate::object::prototype_chain::residual_entry_possible_for(relocating_header)
     {
         transfer_residual_prototype(old_user as usize, new_user as usize);
     }
