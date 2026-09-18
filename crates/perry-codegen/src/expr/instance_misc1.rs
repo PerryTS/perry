@@ -122,6 +122,14 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "BigInt64Array" => 0xFFFF0039,
         "BigUint64Array" => 0xFFFF003A,
         "Function" => 0xFFFF00F0,
+        // #10556: `class Sub extends EventEmitter {}` — same shape as the
+        // Array/Map/Set/Error builtins above. Without this edge,
+        // `new Sub() instanceof EventEmitter` never reaches the class-chain
+        // walk in `js_instanceof` and falls back to the dynamic-dispatch
+        // handle/prototype probes in perry-runtime/src/object/instanceof.rs,
+        // which don't recognize a genuine subclass ObjectHeader. Keep in
+        // sync with `CLASS_ID_EVENT_EMITTER` there.
+        "EventEmitter" => 0xFFFF0076,
         _ => return None,
     })
 }

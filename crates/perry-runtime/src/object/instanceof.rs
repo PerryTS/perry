@@ -331,9 +331,20 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
         if module == "events" && method == "EventEmitter" {
+            // #10556: a genuine subclass instance (`class Sub extends
+            // EventEmitter {}`) is a real ObjectHeader carrying Sub's own
+            // class id, not a handle and not prototype-linked to the real
+            // `EventEmitter.prototype` — so it is invisible to the
+            // handle/prototype probes below. Delegate to the static path
+            // first: `js_instanceof` walks the class-chain parent edge that
+            // codegen registers for `extends EventEmitter`
+            // (`builtin_parent_reserved_class_id` in
+            // perry-codegen/src/expr/instance_misc1.rs), and its own
+            // `CLASS_ID_EVENT_EMITTER` branch already covers the direct
+            // handle/`util.inherits` cases. Keep the general prototype walk
+            // as a fallback for shapes neither path reaches.
             return f64::from_bits(
-                if is_event_emitter_instance_value(value)
-                    || super::tls_constructor_prototype_is_instance_of(value, method.as_str())
+                if js_instanceof(value, CLASS_ID_EVENT_EMITTER).to_bits() == crate::value::TAG_TRUE
                     || ordinary_has_instance_prototype_walk(value, type_ref)
                 {
                     crate::value::TAG_TRUE
