@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2093 entries across 136 modules
+// Coverage: 2087 entries across 134 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2249,24 +2249,6 @@ declare module "moment" {
 declare module "mongodb" {
   /** stdlib */
   export function connect(p0: any): any;
-}
-
-declare module "mysql2" {
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function createConnection(p0: any): any;
-  /** stdlib */
-  export function createPool(p0: any): any;
-}
-
-declare module "mysql2/promise" {
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function createConnection(p0: any): any;
-  /** stdlib */
-  export function createPool(p0: any): any;
 }
 
 declare module "nanoid" {
