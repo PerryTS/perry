@@ -460,19 +460,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                             Some("Connection")
                                         }
                                         ("pg", "connect") => Some("Client"),
-                                        // axios.get/post/put/delete/patch/request — mirror
-                                        // the top-level decl arm in lower.rs:4011 so
-                                        // `await axios.get(...)` registers the result as
-                                        // an axios.Response inside async function bodies.
-                                        // Without this, `r.status` / `r.data` fall through
-                                        // to generic property dispatch and read the
-                                        // raw handle pointer as an ObjectHeader. Issue
-                                        // #604 followup — same pattern as the createServer
-                                        // registration above.
-                                        (
-                                            "axios",
-                                            "get" | "post" | "put" | "delete" | "patch" | "request",
-                                        ) => Some("Response"),
                                         _ => None,
                                     };
                                     if let Some(class_name) = class_name {

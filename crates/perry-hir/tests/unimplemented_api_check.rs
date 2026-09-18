@@ -319,8 +319,9 @@ fn os_eol_and_path_sep_compile() {
 
 /// As of #513, every module in `NATIVE_MODULES` has at least one
 /// manifest entry, so the permissive fall-through is unreachable for
-/// supported modules. `axios.foo` (which used to silently compile under
-/// the pre-#513 zero-entries-permissive shape) now errors.
+/// supported modules. `node-fetch`'s bogus member (which used to
+/// silently compile under the pre-#513 zero-entries-permissive shape)
+/// now errors.
 ///
 /// The drift test `every_native_module_has_at_least_one_manifest_entry`
 /// in `crates/perry-codegen/tests/manifest_consistency.rs` makes this
@@ -330,14 +331,14 @@ fn os_eol_and_path_sep_compile() {
 fn supported_module_with_unknown_member_is_rejected() {
     let result = lower_result_strict(
         r#"
-        import axios from "axios";
-        const x = axios.foo;
+        import fetch from "node-fetch";
+        const x = fetch.foo;
     "#,
     );
-    let err = result.expect_err("axios.foo should error post-#513");
+    let err = result.expect_err("node-fetch.foo should error post-#513");
     assert!(
-        err.contains("axios.foo") && err.contains("not implemented"),
-        "expected error naming `axios.foo` and `not implemented`, got: {err}"
+        err.contains("fetch.foo") && err.contains("not implemented"),
+        "expected error naming `fetch.foo` and `not implemented`, got: {err}"
     );
 }
 

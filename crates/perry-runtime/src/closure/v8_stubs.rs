@@ -1,5 +1,5 @@
 //! V8-interop no-op stubs and AOT no-op stubs for unconditionally-declared
-//! FFI symbols (lodash, axios, argon2, sharp, ratelimit).
+//! FFI symbols (lodash, argon2, sharp, ratelimit).
 
 // V8 interop no-op stubs. Perry no longer ships a runtime JS engine: the
 // `perry-jsruntime` crate (V8 via `deno_core`) that used to provide the real
@@ -286,14 +286,6 @@ pub extern "C" fn js_lodash_unescape() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_lodash_upper_first() -> f64 {
     0.0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_create() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_request() -> i64 {
-    0
 }
 #[no_mangle]
 pub extern "C" fn js_argon2_hash_options() -> i64 {

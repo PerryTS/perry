@@ -34,7 +34,6 @@ implementations, organized by category:
 ### HTTP & Networking
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
-| `axios` | [reqwest](https://crates.io/crates/reqwest) | HTTP client with full method support |
 | `node-fetch` | [reqwest](https://crates.io/crates/reqwest) | Fetch API implementation |
 | `ws` | [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) | WebSocket client |
 | `nodemailer` | [lettre](https://crates.io/crates/lettre) | SMTP email sending |
@@ -115,7 +114,6 @@ Click any library name to jump to its documentation:
 
 | Library | Category | Jump |
 |---------|----------|------|
-| axios | HTTP Client | [docs](#axios) |
 | argon2 | Security | [docs](#argon2) |
 | bcrypt | Security | [docs](#bcrypt) |
 | better-sqlite3 | Database | [docs](#better-sqlite3) |
@@ -917,52 +915,6 @@ const dayEnd = endOfDay(new Date());
 - Format tokens differ from dayjs: `yyyy` (not `YYYY`), etc.
 - Functions are pure (no mutation)
 - All times are UTC
-
----
-
-## axios
-
-**npm package:** [axios](https://www.npmjs.com/package/axios)
-**Rust backend:** [reqwest](https://crates.io/crates/reqwest) v0.12
-
-### Supported API
-
-```typescript
-import axios from 'axios';
-
-// Simple requests
-const response = await axios.get('https://jsonplaceholder.typicode.com/posts/1');
-const postResponse = await axios.post('https://jsonplaceholder.typicode.com/posts', { title: 'hello' });
-const putResponse = await axios.put('https://jsonplaceholder.typicode.com/posts/1', { title: 'updated' });
-const deleteResponse = await axios.delete('https://jsonplaceholder.typicode.com/posts/1');
-
-// Full request with config
-const response2 = await axios.request({
-  method: 'POST',
-  url: 'https://jsonplaceholder.typicode.com/posts',
-  headers: { 'Content-Type': 'application/json' },
-  data: { title: 'hello' }
-});
-
-// Create instance with defaults
-const api = axios.create({
-  baseURL: 'https://jsonplaceholder.typicode.com',
-  timeout: 5000,
-  headers: { 'Authorization': 'Bearer token' }
-});
-```
-
-### Response Properties
-
-- `response.status` - HTTP status code
-- `response.statusText` - HTTP status text
-- `response.data` - Response body (JSON parsed)
-- `response.headers` - Response headers
-
-### Notes
-- HTTPS supported via rustls
-- JSON bodies automatically serialized/parsed
-- Timeouts supported via config
 
 ---
 
