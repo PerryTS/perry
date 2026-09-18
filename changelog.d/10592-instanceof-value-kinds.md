@@ -15,3 +15,10 @@ a real object carrying its own class id, not a handle and not prototype-linked t
 answered `false`. EventEmitter's reserved class id is now a valid `extends` parent, and the
 dynamic-dispatch branch delegates to the class-chain walk first, falling back to the prototype walk
 for `util.inherits`-style shapes.
+
+A CodeRabbit review pass on this PR also found that `instanceof`'s dynamic-RHS classification (and
+`value_is_callable`) trusted the INT32-class-ref tag band alone, without checking the class id was
+actually registered. A JS program can construct a `number` sharing that same tag band directly (via
+`DataView`), which was then misread as a class reference instead of correctly reaching the
+unresolved-RHS `TypeError`. Both sites now go through the same `class_ref_id` helper (which also
+checks `is_class_id_registered`) that the rest of the crate already uses for this.
