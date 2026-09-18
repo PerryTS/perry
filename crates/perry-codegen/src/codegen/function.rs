@@ -863,6 +863,7 @@ pub(super) fn compile_function(
         }
         map
     };
+    super::arguments::release_boxed_param_slots_at_exit(lf, &f.params, &boxed_vars, &locals);
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.

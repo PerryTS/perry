@@ -12,57 +12,76 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 use super::{lower_expr, nanbox_pointer_inline, FnCtx};
 
-/// Whether this is the compiler-private step closure for a lowered plain
-/// async activation. `ReleaseBoxes` is emitted only in that closure's
-/// terminal arms; user-authored closures can never contain it.
+/// The activation cells of the compiler-private step closure for a lowered
+/// plain async activation: every id its terminal `ReleaseBoxes` arms name, or
+/// `None` for any other closure. `ReleaseBoxes` is emitted only in that
+/// closure's terminal arms; user-authored closures can never contain it.
 ///
 /// Queued and running instances of this closure are already covered by the
-/// activation token's refcount. Counting its boxed capture slots as escaping
+/// activation token's refcount. Counting those boxed capture slots as escaping
 /// GC-closure edges would make every cell in the complete activation frame
-/// wait for a full collection, even when no user closure can observe it.
-fn is_plain_async_step_body(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|stmt| match stmt {
-        Stmt::ReleaseBoxes(_) => true,
-        Stmt::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            is_plain_async_step_body(then_branch)
-                || else_branch.as_deref().is_some_and(is_plain_async_step_body)
+/// wait for a full collection, even when no user closure can observe it. A
+/// cell from an ENCLOSING scope is not covered by that token (#10464: its
+/// owner frame now releases it at scope exit), so only these ids go uncounted.
+fn plain_async_step_release_ids(stmts: &[Stmt]) -> Option<std::collections::HashSet<u32>> {
+    fn walk(stmts: &[Stmt], out: &mut Option<std::collections::HashSet<u32>>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::ReleaseBoxes(ids) => out
+                    .get_or_insert_with(Default::default)
+                    .extend(ids.iter().copied()),
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    walk(then_branch, out);
+                    if let Some(else_branch) = else_branch {
+                        walk(else_branch, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => walk(body, out),
+                Stmt::For { init, body, .. } => {
+                    if let Some(init) = init {
+                        walk(std::slice::from_ref(init.as_ref()), out);
+                    }
+                    walk(body, out);
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    walk(body, out);
+                    if let Some(catch) = catch {
+                        walk(&catch.body, out);
+                    }
+                    if let Some(finally) = finally {
+                        walk(finally, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for case in cases {
+                        walk(&case.body, out);
+                    }
+                }
+                Stmt::Labeled { body, .. } => walk(std::slice::from_ref(body.as_ref()), out),
+                Stmt::Let { .. }
+                | Stmt::Expr(_)
+                | Stmt::Return(_)
+                | Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::Throw(_)
+                | Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_) => {}
+            }
         }
-        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => is_plain_async_step_body(body),
-        Stmt::For { init, body, .. } => {
-            init.as_deref()
-                .is_some_and(|stmt| is_plain_async_step_body(std::slice::from_ref(stmt)))
-                || is_plain_async_step_body(body)
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            is_plain_async_step_body(body)
-                || catch
-                    .as_ref()
-                    .is_some_and(|catch| is_plain_async_step_body(&catch.body))
-                || finally.as_deref().is_some_and(is_plain_async_step_body)
-        }
-        Stmt::Switch { cases, .. } => cases
-            .iter()
-            .any(|case| is_plain_async_step_body(&case.body)),
-        Stmt::Labeled { body, .. } => is_plain_async_step_body(std::slice::from_ref(body.as_ref())),
-        Stmt::Let { .. }
-        | Stmt::Expr(_)
-        | Stmt::Return(_)
-        | Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
-        | Stmt::LabeledContinue(_)
-        | Stmt::Throw(_)
-        | Stmt::PreallocateBoxes(_)
-        | Stmt::PreallocateTdzBoxes(_) => false,
-    })
+    }
+    let mut out = None;
+    walk(stmts, &mut out);
+    out
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -130,6 +149,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // closure body can deref it via js_box_get/set. Without
             // this, each closure would get a snapshot of the box's
             // current value.
+            let plain_async_step_cells = plain_async_step_release_ids(body);
+            let uncounted_box_capture = |cap_id: &u32| {
+                plain_async_step_cells
+                    .as_ref()
+                    .is_some_and(|cells| cells.contains(cap_id))
+            };
             let mut captured_value_bits: Vec<String> = Vec::with_capacity(auto_captures.len());
             for cap_id in &auto_captures {
                 if ctx.boxed_vars.contains(cap_id) {
@@ -156,6 +181,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else if let Some(slot) = ctx.locals.get(cap_id).cloned() {
                         // Enclosing function owns the box: slot holds
                         // the raw box pointer as i64.
+                        if uncounted_box_capture(cap_id) {
+                            // #10464: the activation, not this frame, owns
+                            // the cell's lifetime from here on.
+                            ctx.func.forget_pre_return_box_release(&slot);
+                        }
                         let box_ptr = ctx.block().load(I64, &slot);
                         captured_value_bits.push(box_ptr);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {
@@ -297,13 +327,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //
             // The singleton caches therefore only serve closures the
             // COMPILER synthesized: the async-activation step closures
-            // recognized by `is_plain_async_step_body` (their terminal
+            // recognized by `plain_async_step_release_ids` (their terminal
             // `ReleaseBoxes` arms cannot appear in user code, and their
             // identity never escapes the runtime's promise machinery).
             // Those are the closures the caches were built for — re-created
             // per resume with the same per-activation box captures. User
             // arrows and function expressions always mint fresh objects.
-            let is_plain_async_step = is_plain_async_step_body(body);
+            let is_plain_async_step = plain_async_step_cells.is_some();
             let singleton_identity_safe = is_plain_async_step && (*is_arrow || captures_all_boxed);
             let no_capture_singleton = is_plain_async_step && *is_arrow && total_caps == 0;
             let captured_singleton =
@@ -347,9 +377,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 && !captured_singleton
                 && total_caps > 0
                 && !captured_value_bits.is_empty()
-                && auto_captures
-                    .iter()
-                    .all(|cap_id| is_plain_async_step || !ctx.boxed_vars.contains(cap_id));
+                && auto_captures.iter().all(|cap_id| {
+                    !ctx.boxed_vars.contains(cap_id) || uncounted_box_capture(cap_id)
+                });
             let closure_handle = if no_capture_singleton {
                 let blk = ctx.block();
                 blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &func_ref)])
@@ -435,17 +465,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // their lifetime edges are declared; fresh closures need every
             // slot initialized here. The compiler-private plain-async step
             // closure is different: its activation refcount already covers
-            // every queued/running instance, so declaring its whole boxed
-            // frame as escaped would delay every terminal cell until a full
-            // GC. User closures nested inside it still take the dedicated
-            // setter and therefore preserve #8213's escaped-cell lifetime.
-            let boxed_capture_slots = auto_captures
+            // every queued/running instance of its OWN cells, so declaring its
+            // whole boxed frame as escaped would delay every terminal cell
+            // until a full GC. User closures nested inside it still take the
+            // dedicated setter and therefore preserve #8213's escaped-cell
+            // lifetime, and so does a step closure's capture of an enclosing
+            // scope's cell (#10464).
+            let tracked_box_capture_slots = auto_captures
                 .iter()
-                .map(|cap_id| ctx.boxed_vars.contains(cap_id))
+                .map(|cap_id| ctx.boxed_vars.contains(cap_id) && !uncounted_box_capture(cap_id))
                 .collect::<Vec<_>>();
             let blk = ctx.block();
             for (idx, val_bits) in captured_value_bits.iter().enumerate() {
-                let track_box_capture = boxed_capture_slots[idx] && !is_plain_async_step;
+                let track_box_capture = tracked_box_capture_slots[idx];
                 if bulk_fresh_init {
                     // Every slot was written by `js_closure_alloc_init`.
                     continue;
