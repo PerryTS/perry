@@ -183,6 +183,33 @@ fn arrow_candidate(id: LocalId, init: &Expr) -> Option<(LocalId, Vec<LocalId>, E
     let [Stmt::Return(Some(expr))] = body.as_slice() else {
         return None;
     };
+    // #10567: a param captured by a closure NESTED inside `expr` (e.g. `(f,
+    // isOpt) => arr.forEach(([k, v]) => check(k, v, isOpt))`) cannot be
+    // beta-reduced the way a plain read can. `rewrite_calls` clones
+    // `body_expr` fresh per call site and hands the clone to
+    // `substitute_locals`, which — for a nested `Expr::Closure` — bakes a
+    // non-`LocalGet` argument straight into that closure's body and drops
+    // it from its `captures` list (see `inline/substitute.rs`'s
+    // `Expr::Closure` arm), but never mints a fresh `func_id` for the
+    // rewritten closure literal. Codegen compiles exactly one body per
+    // `func_id` (whichever occurrence its module-wide closure scan sees
+    // first), so every call site's clone of the nested closure keeps
+    // sharing the SAME `func_id` — once there is more than one call site,
+    // only the first-seen clone's baked-in argument is ever compiled, and
+    // every other call silently runs it too. Bail out when any param is
+    // captured by a nested closure so such an arrow is left as a real,
+    // per-call closure — each invocation then creates its own closure
+    // instance whose nested callback correctly captures that call's
+    // argument by reference (the existing, non-beta-reduced path already
+    // gets this right).
+    let mut closure_captured_params = std::collections::HashSet::new();
+    crate::inline::collect_closure_captured_local_ids(body, &mut closure_captured_params);
+    if params
+        .iter()
+        .any(|p| closure_captured_params.contains(&p.id))
+    {
+        return None;
+    }
     Some((id, params.iter().map(|p| p.id).collect(), expr.clone()))
 }
 
