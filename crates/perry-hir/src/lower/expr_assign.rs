@@ -829,9 +829,10 @@ fn lower_assignment_target(
                                     && ctx.lookup_func(&cls_name).is_none()
                                 {
                                     None
-                                } else if ctx.lookup_local(&cls_name).is_some()
-                                    && !ctx.inferred_class_bindings.contains(cls_name.as_str())
-                                {
+                                } else if ctx.lookup_local(&cls_name).is_some_and(|local| {
+                                    ctx.inferred_class_bindings.class_key_for(local, &cls_name)
+                                        != Some(cls_name.as_str())
+                                }) {
                                     // A lexical local shadows any same-named
                                     // module-scope class for this write too
                                     // (wall 7's disease, 4th surface): the

@@ -1543,15 +1543,21 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // attach), which the generic dynamic construct does not.
                 // A shadowing local over an UNRELATED same-named class
                 // declaration has no alias entry, so wall 7's reroute keeps
-                // firing.
-                let local_is_class_alias =
-                    ctx.inferred_class_bindings.contains(class_name.as_str());
-                if !local_is_class_alias {
-                    return Ok(Expr::NewDynamic {
-                        callee: Box::new(Expr::LocalGet(local_id)),
-                        args,
-                        byte_offset: new_byte_offset,
-                    });
+                // firing. When two class expressions claimed this name, the
+                // binding's OWN class is used (#10489), never the first
+                // claimant's.
+                match ctx
+                    .inferred_class_bindings
+                    .class_key_for(local_id, &class_name)
+                {
+                    Some(key) => class_name = key.to_string(),
+                    None => {
+                        return Ok(Expr::NewDynamic {
+                            callee: Box::new(Expr::LocalGet(local_id)),
+                            args,
+                            byte_offset: new_byte_offset,
+                        });
+                    }
                 }
             }
             // Issue #838 followup (b): when `<Ident>` is NOT a real

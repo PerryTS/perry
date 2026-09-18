@@ -75,6 +75,7 @@ fn is_cap_name_of(name: &str, ids: &HashSet<LocalId>) -> bool {
 struct BodySharedCaptures {
     ids: HashSet<LocalId>,
     by_class: HashMap<String, HashSet<LocalId>>,
+    census: DeclCensus,
 }
 
 pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
@@ -112,27 +113,19 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
         let fn_shared: Vec<BodySharedCaptures> = module
             .functions
             .iter()
-            .map(|f| detect_shared_in_body(&f.body, &classes))
+            .map(|f| detect_shared_in_body(&f.params, &f.body, &classes))
             .collect();
-        let init_shared = detect_shared_in_body(&module.init, &classes);
+        let init_shared = detect_shared_in_body(&[], &module.init, &classes);
         (fn_shared, init_shared)
     };
-    // Keep only ids that are UNAMBIGUOUS within their body (declared exactly
-    // once across deep `Let`s + nested closure params — see
-    // `retain_unambiguous`). Nested closures restart their id spaces, so a
-    // numeric rewrite over the whole body is only sound for unique ids.
-    for (f, shared) in module.functions.iter().zip(fn_shared.iter_mut()) {
+    // Keep only ids that denote ONE binding within their body (see
+    // `DeclCensus::is_one_binding`). Nested closures restart their id spaces,
+    // so a numeric rewrite over the whole body is only sound for those.
+    for shared in fn_shared.iter_mut() {
         if shared.ids.is_empty() {
             continue;
         }
-        let mut counts: HashMap<LocalId, u32> = HashMap::new();
-        for p in &f.params {
-            *counts.entry(p.id).or_default() += 1;
-        }
-        for st in &f.body {
-            collect_declared_counts_stmt(st, &mut counts);
-        }
-        retain_unambiguous(&mut shared.ids, &counts);
+        retain_unambiguous(&mut shared.ids, &shared.census);
         let retained = &shared.ids;
         for ids in shared.by_class.values_mut() {
             ids.retain(|id| retained.contains(id));
@@ -140,11 +133,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
         shared.by_class.retain(|_, ids| !ids.is_empty());
     }
     if !init_shared.ids.is_empty() {
-        let mut counts: HashMap<LocalId, u32> = HashMap::new();
-        for st in &module.init {
-            collect_declared_counts_stmt(st, &mut counts);
-        }
-        retain_unambiguous(&mut init_shared.ids, &counts);
+        retain_unambiguous(&mut init_shared.ids, &init_shared.census);
         let retained = &init_shared.ids;
         for ids in init_shared.by_class.values_mut() {
             ids.retain(|id| retained.contains(id));
@@ -167,6 +156,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
                 .extend(ids.iter().copied());
         }
     }
+    propagate_cells_to_nested_classes(module, &mut shared_by_class);
 
     // ---- declaring bodies: rewrite with ONLY the ids detected in them -------
     for (f, shared) in module.functions.iter_mut().zip(fn_shared.iter()) {
@@ -192,6 +182,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
                     }
                 })
                 .collect();
+            demote_var_redeclarations(&f.params, &mut f.body, ids);
             rewrite_stmts(&mut f.body, ids, ids);
             for id in shared_params.into_iter().rev() {
                 f.body.insert(
@@ -205,6 +196,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
         }
     }
     if !init_shared.ids.is_empty() {
+        demote_var_redeclarations(&[], &mut module.init, &init_shared.ids);
         rewrite_stmts(&mut module.init, &init_shared.ids, &init_shared.ids);
     }
 
@@ -257,24 +249,22 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
         }
         if !ctor_ids.is_empty() {
             // Uniqueness over the whole ctor+fields region (one scope).
-            let mut counts: HashMap<LocalId, u32> = HashMap::new();
+            let mut census = DeclCensus::default();
+            let mut walker = CensusWalker::new(&mut census);
+            let scope = walker.open_scope();
             if let Some(ctor) = &c.constructor {
-                for p in &ctor.params {
-                    *counts.entry(p.id).or_default() += 1;
-                }
-                for st in &ctor.body {
-                    collect_declared_counts_stmt(st, &mut counts);
-                }
+                walker.params(&ctor.params, scope);
+                walker.stmts(&ctor.body, scope, 0, true);
             }
             for f in &c.fields {
                 if let Some(init) = &f.init {
-                    collect_declared_counts_expr(init, &mut counts);
+                    walker.expr(init, scope, 0);
                 }
                 if let Some(key) = &f.key_expr {
-                    collect_declared_counts_expr(key, &mut counts);
+                    walker.expr(key, scope, 0);
                 }
             }
-            retain_unambiguous(&mut ctor_ids, &counts);
+            retain_unambiguous(&mut ctor_ids, &census);
         }
         if !ctor_ids.is_empty() {
             if let Some(ctor) = &mut c.constructor {
@@ -338,8 +328,8 @@ fn collect_fn_target_ids(f: &Function, targets: &HashSet<LocalId>, out: &mut Has
 }
 
 /// Rewrite one lifted member body with ONLY its own rebind ids — and only
-/// those that are UNAMBIGUOUS within the member (declared exactly once across
-/// its params and deep `Let`s/closure params; see `retain_unambiguous`).
+/// those that are UNAMBIGUOUS within the member (one binding across its params
+/// and deep `Let`s/closure params; see `retain_unambiguous`).
 fn rewrite_member_scoped(
     f: &mut Function,
     targets: &HashSet<LocalId>,
@@ -350,20 +340,14 @@ fn rewrite_member_scoped(
     if ids.is_empty() {
         return;
     }
-    let mut counts: HashMap<LocalId, u32> = HashMap::new();
-    for p in &f.params {
-        *counts.entry(p.id).or_default() += 1;
-    }
-    for s in &f.body {
-        collect_declared_counts_stmt(s, &mut counts);
-    }
-    retain_unambiguous(&mut ids, &counts);
+    let census = DeclCensus::of_body(&f.params, &f.body);
+    retain_unambiguous(&mut ids, &census);
     if !ids.is_empty() {
         rewrite_stmts(&mut f.body, no_shared, &ids);
     }
 }
 
-/// Drop every id that is declared more than once in the rewritten region.
+/// Drop every id that does not denote exactly ONE binding in the region.
 ///
 /// LocalIds restart per closure scope (#5143 family): inside a CJS module
 /// wrapper the whole module body is ONE function whose nested closures reuse
@@ -374,40 +358,366 @@ fn rewrite_member_scoped(
 /// every route of the Next.js standalone server (#6089). An ambiguous id is
 /// skipped: its capture stays a split cell (the lesser, pre-#6054 behavior)
 /// instead of corrupting unrelated code.
-fn retain_unambiguous(ids: &mut HashSet<LocalId>, counts: &HashMap<LocalId, u32>) {
+fn retain_unambiguous(ids: &mut HashSet<LocalId>, census: &DeclCensus) {
     if std::env::var("PERRY_5951_TRACE").as_deref() == Ok("1") {
         let dropped: Vec<LocalId> = ids
             .iter()
             .copied()
-            .filter(|id| counts.get(id).copied().unwrap_or(0) != 1)
+            .filter(|id| !census.is_one_binding(*id))
             .collect();
         if !dropped.is_empty() {
             eprintln!("[5951] skipped ambiguous ids {dropped:?}");
         }
     }
-    ids.retain(|id| counts.get(id).copied().unwrap_or(0) == 1);
+    ids.retain(|id| census.is_one_binding(*id));
 }
 
-/// Count declarations per id across a region: `Let`s plus nested closure
-/// PARAMS (which `collect_let_names_*` ignores), descending into closures.
-fn collect_declared_counts_stmt(stmt: &Stmt, out: &mut HashMap<LocalId, u32>) {
-    if let Stmt::Let { id, .. } = stmt {
-        *out.entry(*id).or_default() += 1;
+/// One declaration of a `LocalId` inside a detection region.
+#[derive(Debug)]
+struct DeclSite {
+    /// Closure scope the declaration lives in (0 = the region's own body).
+    scope: u32,
+    name: String,
+    /// A parameter, or a `Let` that is a direct statement of its scope's body
+    /// outside any loop: it runs once, before every later site of that scope.
+    dominating: bool,
+}
+
+/// Every declaration of every id in a region (params, `Let`s, nested closure
+/// params and bodies), in execution order, plus the `var` re-declarations that
+/// are real writes to a class-captured binding.
+#[derive(Default, Debug)]
+struct DeclCensus {
+    sites: HashMap<LocalId, Vec<DeclSite>>,
+    /// Ids re-declared (`var x = v` after the body-entry `var` slot) at a point
+    /// where a class has ALREADY captured the binding, or inside a loop that
+    /// can re-run the declaration after a capture. Those declarations are
+    /// assignments to a captured binding, exactly like `x = v`.
+    late_redeclared: HashSet<LocalId>,
+}
+
+impl DeclCensus {
+    fn of_body(params: &[Param], body: &[Stmt]) -> Self {
+        let mut census = DeclCensus::default();
+        let mut walker = CensusWalker::new(&mut census);
+        let scope = walker.open_scope();
+        walker.params(params, scope);
+        walker.stmts(body, scope, 0, true);
+        census
     }
-    for_each_child_stmt(stmt, &mut |s| collect_declared_counts_stmt(s, out));
-    for_each_top_expr(stmt, &mut |e| collect_declared_counts_expr(e, out));
+
+    /// Is `id` exactly one binding in this region?
+    ///
+    /// A single declaration trivially is. Several are one binding only when
+    /// they all sit in the SAME closure scope under the SAME name and the first
+    /// dominates the rest. That is the shape of a `var`: lowering declares it at
+    /// body entry (`predefine_var_bindings_in_function_body`) or reuses a
+    /// same-named parameter, and every `var x = v` statement re-declares the
+    /// same id (#10485/#10489). Treating those as distinct bindings left every
+    /// `var` captured by a class on the value-snapshot path, so class members
+    /// never saw later writes and their own writes were lost. Declarations of
+    /// one id in different closure scopes stay ambiguous (#6089).
+    fn is_one_binding(&self, id: LocalId) -> bool {
+        match self.sites.get(&id).map(Vec::as_slice) {
+            None | Some([]) => false,
+            Some([_]) => true,
+            Some([first, rest @ ..]) => {
+                first.dominating
+                    && rest
+                        .iter()
+                        .all(|site| site.scope == first.scope && site.name == first.name)
+            }
+        }
+    }
 }
 
-fn collect_declared_counts_expr(expr: &Expr, out: &mut HashMap<LocalId, u32>) {
-    if let Expr::Closure { params, body, .. } = expr {
+/// Execution-order walk that fills a [`DeclCensus`]. Closure bodies open a new
+/// scope with a fresh loop depth: each closure invocation gets its own
+/// bindings, so an enclosing loop does not re-run a closure-local declaration.
+struct CensusWalker<'a> {
+    census: &'a mut DeclCensus,
+    next_scope: u32,
+    /// Ids captured by a class registration seen so far.
+    captured: HashSet<LocalId>,
+}
+
+impl<'a> CensusWalker<'a> {
+    fn new(census: &'a mut DeclCensus) -> Self {
+        CensusWalker {
+            census,
+            next_scope: 0,
+            captured: HashSet::new(),
+        }
+    }
+
+    fn open_scope(&mut self) -> u32 {
+        let scope = self.next_scope;
+        self.next_scope += 1;
+        scope
+    }
+
+    fn declare(&mut self, id: LocalId, name: &str, scope: u32, dominating: bool) {
+        self.census.sites.entry(id).or_default().push(DeclSite {
+            scope,
+            name: name.to_string(),
+            dominating,
+        });
+    }
+
+    fn params(&mut self, params: &[Param], scope: u32) {
         for p in params {
-            *out.entry(p.id).or_default() += 1;
-        }
-        for s in body {
-            collect_declared_counts_stmt(s, out);
+            if let Some(default) = &p.default {
+                self.expr(default, scope, 0);
+            }
+            self.declare(p.id, &p.name, scope, true);
         }
     }
-    walk_expr_children(expr, &mut |e| collect_declared_counts_expr(e, out));
+
+    fn stmts(&mut self, stmts: &[Stmt], scope: u32, loop_depth: u32, top: bool) {
+        for s in stmts {
+            self.stmt(s, scope, loop_depth, top);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt, scope: u32, loop_depth: u32, top: bool) {
+        match stmt {
+            Stmt::Let { id, name, init, .. } => {
+                if let Some(e) = init {
+                    self.expr(e, scope, loop_depth);
+                }
+                let redeclaration = self.census.sites.contains_key(id);
+                if redeclaration && init.is_some() && (loop_depth > 0 || self.captured.contains(id))
+                {
+                    self.census.late_redeclared.insert(*id);
+                }
+                self.declare(*id, name, scope, top && loop_depth == 0);
+            }
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                self.expr(e, scope, loop_depth)
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.expr(condition, scope, loop_depth);
+                self.stmts(then_branch, scope, loop_depth, false);
+                if let Some(e) = else_branch {
+                    self.stmts(e, scope, loop_depth, false);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                self.expr(condition, scope, loop_depth + 1);
+                self.stmts(body, scope, loop_depth + 1, false);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(i) = init {
+                    self.stmt(i, scope, loop_depth, false);
+                }
+                if let Some(c) = condition {
+                    self.expr(c, scope, loop_depth + 1);
+                }
+                self.stmts(body, scope, loop_depth + 1, false);
+                if let Some(u) = update {
+                    self.expr(u, scope, loop_depth + 1);
+                }
+            }
+            Stmt::Labeled { body, .. } => self.stmt(body, scope, loop_depth, false),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                self.stmts(body, scope, loop_depth, false);
+                if let Some(c) = catch {
+                    self.stmts(&c.body, scope, loop_depth, false);
+                }
+                if let Some(fin) = finally {
+                    self.stmts(fin, scope, loop_depth, false);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                self.expr(discriminant, scope, loop_depth);
+                for case in cases {
+                    if let Some(t) = &case.test {
+                        self.expr(t, scope, loop_depth);
+                    }
+                    self.stmts(&case.body, scope, loop_depth, false);
+                }
+            }
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+
+    fn expr(&mut self, expr: &Expr, scope: u32, loop_depth: u32) {
+        match expr {
+            Expr::Closure { params, body, .. } => {
+                let inner = self.open_scope();
+                self.params(params, inner);
+                self.stmts(body, inner, 0, true);
+                return;
+            }
+            Expr::RegisterClassCaptures { captures, .. }
+            | Expr::ClassExprFresh {
+                captured_args: captures,
+                ..
+            } => {
+                for capture in captures {
+                    if let Expr::LocalGet(id) = capture {
+                        self.captured.insert(*id);
+                    }
+                }
+            }
+            _ => {}
+        }
+        walk_expr_children(expr, &mut |e| self.expr(e, scope, loop_depth));
+    }
+}
+
+/// Turn every re-declaration of a shared id into a plain assignment, so the
+/// rewrite below writes the binding's EXISTING cell (`x[0] = v`) instead of
+/// minting a new one that classes captured earlier would never see. A `var x;`
+/// re-declaration without an initializer does not touch the binding at all.
+/// Only ids `DeclCensus::is_one_binding` accepted reach here, so the first
+/// site seen in execution order is the dominating declaration.
+fn demote_var_redeclarations(params: &[Param], body: &mut [Stmt], ids: &HashSet<LocalId>) {
+    let mut seen: HashSet<LocalId> = params
+        .iter()
+        .map(|p| p.id)
+        .filter(|id| ids.contains(id))
+        .collect();
+    for s in body.iter_mut() {
+        demote_redeclarations_stmt(s, ids, &mut seen);
+    }
+}
+
+fn demote_redeclarations_stmt(
+    stmt: &mut Stmt,
+    ids: &HashSet<LocalId>,
+    seen: &mut HashSet<LocalId>,
+) {
+    if let Stmt::Let { id, init, .. } = stmt {
+        if let Some(e) = init {
+            demote_redeclarations_expr(e, ids, seen);
+        }
+        if ids.contains(id) && !seen.insert(*id) {
+            *stmt = Stmt::Expr(match init.take() {
+                Some(value) => Expr::LocalSet(*id, Box::new(value)),
+                None => Expr::Undefined,
+            });
+        }
+        return;
+    }
+    let stmts = |body: &mut [Stmt], seen: &mut HashSet<LocalId>| {
+        for s in body.iter_mut() {
+            demote_redeclarations_stmt(s, ids, seen);
+        }
+    };
+    match stmt {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+            demote_redeclarations_expr(e, ids, seen)
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            demote_redeclarations_expr(condition, ids, seen);
+            stmts(then_branch, seen);
+            if let Some(e) = else_branch {
+                stmts(e, seen);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            demote_redeclarations_expr(condition, ids, seen);
+            stmts(body, seen);
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                demote_redeclarations_stmt(i, ids, seen);
+            }
+            if let Some(c) = condition {
+                demote_redeclarations_expr(c, ids, seen);
+            }
+            stmts(body, seen);
+            if let Some(u) = update {
+                demote_redeclarations_expr(u, ids, seen);
+            }
+        }
+        Stmt::Labeled { body, .. } => demote_redeclarations_stmt(body, ids, seen),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts(body, seen);
+            if let Some(c) = catch {
+                stmts(&mut c.body, seen);
+            }
+            if let Some(fin) = finally {
+                stmts(fin, seen);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            demote_redeclarations_expr(discriminant, ids, seen);
+            for case in cases {
+                if let Some(t) = &mut case.test {
+                    demote_redeclarations_expr(t, ids, seen);
+                }
+                stmts(&mut case.body, seen);
+            }
+        }
+        Stmt::Let { .. }
+        | Stmt::Return(None)
+        | Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
+    }
+}
+
+fn demote_redeclarations_expr(
+    expr: &mut Expr,
+    ids: &HashSet<LocalId>,
+    seen: &mut HashSet<LocalId>,
+) {
+    if let Expr::Closure { params, body, .. } = expr {
+        for p in params.iter() {
+            if ids.contains(&p.id) {
+                seen.insert(p.id);
+            }
+        }
+        for s in body.iter_mut() {
+            demote_redeclarations_stmt(s, ids, seen);
+        }
+    }
+    walk_expr_children_mut(expr, &mut |e| demote_redeclarations_expr(e, ids, seen));
 }
 
 fn retype_capture_holders(
@@ -522,7 +832,11 @@ fn retype_lets_in_expr(expr: &mut Expr, targets: &HashSet<LocalId>) {
 /// Detect the shared-mutable capture ids declared in ONE body. The returned
 /// ids are meaningful only within that body's scope — callers must not apply
 /// them to other functions (LocalIds repeat across scopes; see #6089).
-fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> BodySharedCaptures {
+fn detect_shared_in_body(
+    params: &[Param],
+    body: &[Stmt],
+    classes: &HashMap<&str, &Class>,
+) -> BodySharedCaptures {
     let mut shared = BodySharedCaptures::default();
     let mut regs = Vec::new();
     for s in body {
@@ -531,10 +845,14 @@ fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> Body
     if regs.is_empty() {
         return shared;
     }
+    shared.census = DeclCensus::of_body(params, body);
     let mut assigned: HashSet<LocalId> = HashSet::new();
     for s in body {
         collect_assigned_deep_stmt(s, &mut assigned);
     }
+    // A `var x = v` re-declaration that runs after a class captured `x` writes
+    // the captured binding just like `x = v` does.
+    assigned.extend(shared.census.late_redeclared.iter().copied());
     for (class_name, ids) in &regs {
         for id in ids {
             // Declaring-function-side mutation (`c = 99` after `new T()`).
@@ -544,7 +862,7 @@ fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> Body
             }
             // Class-side mutation: a member assigns rebind local `__perry_cap_<id>`.
             if let Some(c) = classes.get(class_name.as_str()) {
-                if class_mutates_capture(c, *id) {
+                if class_mutates_capture(classes, c, *id, 0) {
                     shared.ids.insert(*id);
                 }
             }
@@ -566,14 +884,207 @@ fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> Body
     shared
 }
 
-fn class_mutates_capture(c: &Class, id: LocalId) -> bool {
+/// Does class `c` (or a class NESTED in one of its member bodies) assign the
+/// capture of `id`?
+///
+/// A member's own write lands on its rebind local `__perry_cap_<id>`. A class
+/// declared inside that member body (`class Outer { make() { return class Inner
+/// { constructor() { n++ } } } }`, the emscripten/`FS` shape) captures the
+/// REBIND local instead, and its write lands one level deeper — invisible to a
+/// walk of `c` alone, because a nested class's members live in their own
+/// `module.classes` entry, not inside the method body (#10489).
+fn class_mutates_capture(
+    classes: &HashMap<&str, &Class>,
+    c: &Class,
+    id: LocalId,
+    depth: u32,
+) -> bool {
     let id_name = collect_class_names(c);
     let assigned = collect_class_assigned(c);
-    assigned.iter().any(|aid| {
+    let names_id = |aid: &LocalId| {
         id_name
             .get(aid)
             .is_some_and(|n| crate::cap_fields::cap_field_outer_id(n) == Some(id))
+    };
+    if assigned.iter().any(names_id) {
+        return true;
+    }
+    // Bounded: each level is one class nesting, and the chain is finite.
+    if depth >= MAX_NESTED_CLASS_DEPTH {
+        return false;
+    }
+    for_each_nested_capture(c, &HashSet::from([id]), |nested_name, outer_id| {
+        classes
+            .get(nested_name)
+            .is_some_and(|nested| class_mutates_capture(classes, nested, outer_id, depth + 1))
     })
+}
+
+/// How far the nested-class walks descend (`class` inside a member body, whose
+/// member body declares another class, …). Deep enough for real code, bounded
+/// so a cyclic registration cannot loop.
+const MAX_NESTED_CLASS_DEPTH: u32 = 8;
+
+/// Call `visit(nested_class_name, outer_id)` for every class registered inside
+/// a member body of `c` that captures that member's rebind local for `outer_id`
+/// (an id in `targets`). Returns true as soon as `visit` does.
+///
+/// The nested class was lowered BEFORE `synthesize_class_captures` renamed the
+/// enclosing member's references, so its own rebind holders are still named for
+/// the ORIGINAL outer id — which is what the reported id must be for the
+/// name-keyed matching in `rewrite_member_scoped` / `retype_capture_holders`.
+fn for_each_nested_capture(
+    c: &Class,
+    targets: &HashSet<LocalId>,
+    mut visit: impl FnMut(&str, LocalId) -> bool,
+) -> bool {
+    for f in class_member_fns(c) {
+        let mut rebinds = member_rebind_targets(f, targets);
+        let mut regs = Vec::new();
+        for s in &f.body {
+            find_regs_stmt(s, &mut regs);
+            find_cap_arg_news_stmt(s, &mut regs);
+        }
+        // A field initializer shares the constructor's scope (it is lowered
+        // into the ctor body), so a class declared in one holds the ctor's
+        // rebind params.
+        if c.constructor.as_ref().is_some_and(|ctor| ctor.id == f.id) {
+            for field in &c.fields {
+                for expr in field.init.iter().chain(field.key_expr.iter()) {
+                    let mut names: HashMap<LocalId, String> = HashMap::new();
+                    collect_let_names_expr(expr, &mut names);
+                    for (id, name) in names {
+                        if let Some(outer) = crate::cap_fields::cap_field_outer_id(&name) {
+                            if targets.contains(&outer) {
+                                rebinds.insert(id, outer);
+                            }
+                        }
+                    }
+                    find_regs_expr(expr, &mut regs);
+                    find_cap_arg_news_expr(expr, &mut regs);
+                }
+            }
+        }
+        if rebinds.is_empty() {
+            continue;
+        }
+        for (nested_name, ids) in regs {
+            for id in ids {
+                if let Some(outer_id) = rebinds.get(&id) {
+                    if visit(&nested_name, *outer_id) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Class constructions whose trailing `cap_args_appended` arguments forward
+/// capture handles. An IMMEDIATELY constructed class expression (`new (class {
+/// … })()`) has neither a `RegisterClassCaptures` nor a `ClassExprFresh` node —
+/// `lower_new` lowers it straight to `Expr::New` — so `find_regs_stmt` alone
+/// misses it, and its members kept reading the raw cell (#10485's nested-class
+/// row printed `[[2],["set"]]` instead of the values).
+fn find_cap_arg_news_stmt(stmt: &Stmt, out: &mut Vec<(String, Vec<LocalId>)>) {
+    for_each_child_stmt(stmt, &mut |s| find_cap_arg_news_stmt(s, out));
+    for_each_top_expr(stmt, &mut |e| find_cap_arg_news_expr(e, out));
+}
+
+fn find_cap_arg_news_expr(expr: &Expr, out: &mut Vec<(String, Vec<LocalId>)>) {
+    if let Expr::New {
+        class_name,
+        args,
+        cap_args_appended,
+        ..
+    } = expr
+    {
+        let appended = *cap_args_appended as usize;
+        if appended > 0 && args.len() >= appended {
+            let ids: Vec<LocalId> = args[args.len() - appended..]
+                .iter()
+                .filter_map(|a| match a {
+                    Expr::LocalGet(id) => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            if !ids.is_empty() {
+                out.push((class_name.clone(), ids));
+            }
+        }
+    }
+    if let Expr::Closure { body, .. } = expr {
+        for s in body {
+            find_cap_arg_news_stmt(s, out);
+        }
+    }
+    walk_expr_children(expr, &mut |e| find_cap_arg_news_expr(e, out));
+}
+
+/// The member's capture holders (`__perry_cap_<outer>` params and `Let`s),
+/// mapped back to the outer id each one rebinds.
+fn member_rebind_targets(f: &Function, targets: &HashSet<LocalId>) -> HashMap<LocalId, LocalId> {
+    let mut rebinds: HashMap<LocalId, LocalId> = HashMap::new();
+    let record = |id: LocalId, name: &str, out: &mut HashMap<LocalId, LocalId>| {
+        if let Some(outer) = crate::cap_fields::cap_field_outer_id(name) {
+            if targets.contains(&outer) {
+                out.insert(id, outer);
+            }
+        }
+    };
+    for p in &f.params {
+        record(p.id, &p.name, &mut rebinds);
+    }
+    let mut names: HashMap<LocalId, String> = HashMap::new();
+    for s in &f.body {
+        collect_let_names_stmt(s, &mut names);
+    }
+    for (id, n) in names {
+        record(id, &n, &mut rebinds);
+    }
+    rebinds
+}
+
+/// A class nested in a member body holds its captures through the member's
+/// REBIND locals, which by then carry the shared cell — so ITS members must
+/// index through `[0]` too. Walk the nesting chain and mark those classes.
+fn propagate_cells_to_nested_classes(
+    module: &Module,
+    shared_by_class: &mut HashMap<String, HashSet<LocalId>>,
+) {
+    for _ in 0..MAX_NESTED_CLASS_DEPTH {
+        let mut discovered: Vec<(String, LocalId)> = Vec::new();
+        for c in &module.classes {
+            let Some(targets) = shared_by_class.get(&c.name) else {
+                continue;
+            };
+            for_each_nested_capture(c, targets, |nested_name, outer_id| {
+                discovered.push((nested_name.to_string(), outer_id));
+                false
+            });
+        }
+        let mut added = false;
+        for (class_name, id) in discovered {
+            added |= shared_by_class.entry(class_name).or_default().insert(id);
+        }
+        if !added {
+            break;
+        }
+    }
+}
+
+/// Every member function of a class: methods, accessors, statics, computed
+/// members and the constructor (whose scope the field initializers share).
+fn class_member_fns(c: &Class) -> Vec<&Function> {
+    let mut v: Vec<&Function> = Vec::new();
+    v.extend(c.methods.iter());
+    v.extend(c.getters.iter().map(|(_, g)| g));
+    v.extend(c.setters.iter().map(|(_, s)| s));
+    v.extend(c.static_methods.iter());
+    v.extend(c.computed_members.iter().map(|m| &m.function));
+    v.extend(c.constructor.iter());
+    v
 }
 
 /// id -> name across a class: every member function's PARAMS (a field-init
@@ -622,8 +1133,8 @@ fn collect_class_names(c: &Class) -> HashMap<LocalId, String> {
 /// descending into closures).
 fn collect_class_assigned(c: &Class) -> HashSet<LocalId> {
     let mut assigned = HashSet::new();
-    for body in class_member_bodies(c) {
-        for s in body {
+    for f in class_member_fns(c) {
+        for s in &f.body {
             collect_assigned_deep_stmt(s, &mut assigned);
         }
     }
@@ -636,29 +1147,6 @@ fn collect_class_assigned(c: &Class) -> HashSet<LocalId> {
         }
     }
     assigned
-}
-
-fn class_member_bodies(c: &Class) -> Vec<&Vec<Stmt>> {
-    let mut v: Vec<&Vec<Stmt>> = Vec::new();
-    for m in &c.methods {
-        v.push(&m.body);
-    }
-    for (_, g) in &c.getters {
-        v.push(&g.body);
-    }
-    for (_, s) in &c.setters {
-        v.push(&s.body);
-    }
-    for sm in &c.static_methods {
-        v.push(&sm.body);
-    }
-    for member in &c.computed_members {
-        v.push(&member.function.body);
-    }
-    if let Some(ctor) = &c.constructor {
-        v.push(&ctor.body);
-    }
-    v
 }
 
 // ---- read-only walkers (exhaustive over Stmt; exprs recurse into closures) --
@@ -807,6 +1295,27 @@ fn for_each_top_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
 // Rewrite (mutable, exhaustive over Stmt)
 // ---------------------------------------------------------------------------
 
+/// `Sequence([LocalSet(id, _) | Update { id }, this.__perry_cap_N = LocalGet(id)])`
+/// for a cell id — see the `Expr::Sequence` arm of [`rewrite_expr`].
+fn is_redundant_cell_propagation(items: &[Expr], index_uses: &HashSet<LocalId>) -> bool {
+    let [write, Expr::PropertySet {
+        object,
+        property,
+        value,
+    }] = items
+    else {
+        return false;
+    };
+    let written = match write {
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => *id,
+        _ => return false,
+    };
+    index_uses.contains(&written)
+        && matches!(object.as_ref(), Expr::This)
+        && property.starts_with("__perry_cap_")
+        && matches!(value.as_ref(), Expr::LocalGet(id) if *id == written)
+}
+
 fn rewrite_stmts(stmts: &mut [Stmt], shared: &HashSet<LocalId>, index_uses: &HashSet<LocalId>) {
     for s in stmts.iter_mut() {
         rewrite_stmt(s, shared, index_uses);
@@ -947,6 +1456,19 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
 
 fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet<LocalId>) {
     match expr {
+        // A member's write to a captured local arrives wrapped by the field
+        // propagation of `synthesize_class_captures`:
+        // `Sequence([write, this.__perry_cap_N = LocalGet(rebind)])`, which
+        // keeps a value SNAPSHOT field in step with the member's local. A
+        // shared cell needs no propagation — the field already holds the same
+        // cell — and keeping it makes the sequence yield the cell handle instead
+        // of the write's value (`return n++` returned `[3]`, not 2; #10489).
+        Expr::Sequence(items) if is_redundant_cell_propagation(items, index_uses) => {
+            let write = items.swap_remove(0);
+            *expr = write;
+            rewrite_expr(expr, shared, index_uses);
+            return;
+        }
         // A value read of a boxed id -> `id[0]`. The synthesized `LocalGet` is
         // the ARRAY handle and is not re-rewritten.
         Expr::LocalGet(id) if index_uses.contains(id) => {
