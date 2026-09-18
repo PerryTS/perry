@@ -38,7 +38,7 @@
     "crates/perry-runtime/src/gc/promote_in_place.rs": 11,
     "crates/perry-runtime/src/gc/roots/runtime_handles.rs": 2,
     "crates/perry-runtime/src/gc/roots/scan_mode.rs": 1,
-    "crates/perry-runtime/src/gc/roots/shadow_stack.rs": 2,
+    "crates/perry-runtime/src/gc/roots/shadow_stack.rs": 1,
     "crates/perry-runtime/src/gc/roots/temp_roots.rs": 1,
     "crates/perry-runtime/src/gc/scan_fallback.rs": 2,
     "crates/perry-runtime/src/gc/shape_install.rs": 1,

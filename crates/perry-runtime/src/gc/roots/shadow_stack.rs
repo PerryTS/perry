@@ -207,11 +207,34 @@ impl ShadowStackState {
     }
 }
 
-thread_local! {
-    /// `const`-initialized and drop-free, so the access is a plain TLS address
-    /// computation with no lazy-init or destructor-registration check. The
-    /// buffer is reserved lazily on the first push instead of eagerly at thread
-    /// start, and released by [`ShadowBufferGuard`].
+crate::perry_thread_local! {
+    /// `const`-initialized and drop-free, so the access has no lazy-init or
+    /// destructor-registration check. The buffer is reserved lazily on the
+    /// first push instead of eagerly at thread start, and released by
+    /// [`ShadowBufferGuard`].
+    ///
+    /// Was a raw `thread_local!` until #try-entry-perf: every `try`/`catch`
+    /// pays this exact resolution once per entry, unconditionally, through
+    /// `shadow_stack_savepoint()` — and `SHADOW_FRAMES` (the latch that lets
+    /// most other savepoint fields skip their own thread-local read, see
+    /// `crate::exception::savepoints`) is set by the FIRST shadow-frame push
+    /// anywhere in the process, which for real programs is essentially
+    /// "immediately" (any function with a pointer-typed local pushes one, and
+    /// a caught exception's own binding needs a slot). So the latch does not
+    /// make this read rare in practice, and profiling a `try`/`catch` loop
+    /// (`node --experimental-strip-types`-verified against `test-files/`)
+    /// showed it as a genuine leaf `_tlv_get_addr` call, ~6% of total
+    /// instructions retired per non-throwing `try` entry — the one savepoint
+    /// field NOT already routed through `tls_hot`'s cache (`EXCEPTION_STATE`,
+    /// `CALL_METHOD_DEPTH` and the named `runtime_handle_stack`/`temp_roots`
+    /// fields all were). Moving to `perry_thread_local!` is a pure
+    /// storage-mechanism swap — same type, same `.with()`/`.try_with()`
+    /// call sites below, same const-init/drop-free semantics (needs_drop is
+    /// still false, so no destructor is registered) — so it changes nothing
+    /// about liveness, restore-on-throw, or the address-stability contract
+    /// [`js_shadow_frame_enter`] depends on (the value still lives at a
+    /// fixed, never-reallocated thread-local address for the thread's whole
+    /// lifetime).
     pub(crate) static SHADOW: UnsafeCell<ShadowStackState> = const {
         UnsafeCell::new(ShadowStackState {
             ptr: std::ptr::null_mut(),
