@@ -755,6 +755,56 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             return dispatch(this_box);
         }
     }
+    // #10448: `class X extends Transform` (and Readable/Writable/Duplex)
+    // never called the subclass's `_transform`/`_write`/`_read` override
+    // unless the heritage was a shape `is_genuine_node_stream_parent`
+    // recognizes statically (`crates/perry-hir/src/lower_decl/class_decl.rs`)
+    // — a local alias (`const Alias = Transform`), a namespace member reached
+    // through a CJS destructured `require('stream')`, or an indirect
+    // subclass all fell through to the ordinary-call dispatch below,
+    // which invokes the bound `stream` export as a plain constructor and
+    // drops the result — `this` stayed an empty object, so `write()` threw
+    // `ERR_METHOD_NOT_IMPLEMENTED`. Recognize the resolved bound-export
+    // value here, exactly as the WASI arm above does, and run the same
+    // runtime shim the static `extends Transform` path already uses
+    // (`js_node_stream_*_subclass_init`, `crates/perry-codegen/src/expr/write_barrier.rs`'s
+    // `lower_node_stream_super_init`), so every heritage shape installs the
+    // override onto `this` identically.
+    //
+    // `PassThrough` is deliberately NOT handled here: HIR never recognizes
+    // it as a node:stream native parent at all, even via a bare import
+    // (`canonical_native_parent_name` lists Readable/Writable/Duplex/
+    // Transform but not PassThrough), so the hidden `_transform` field this
+    // shim reads is never pre-seeded for ANY `PassThrough` heritage shape —
+    // that's a separate, deeper HIR-level gap needing its own fix; adding an
+    // arm here alone was confirmed (empirically) to change nothing.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if super::super::native_module::normalize_native_module_alias(module.as_str()) == "stream" {
+            let opts = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let handled = match method.as_str() {
+                "Readable" => Some(crate::node_stream::js_node_stream_readable_subclass_init(
+                    this_box, opts,
+                )),
+                "Writable" => Some(crate::node_stream::js_node_stream_writable_subclass_init(
+                    this_box, opts,
+                )),
+                "Duplex" => Some(crate::node_stream::js_node_stream_duplex_subclass_init(
+                    this_box, opts,
+                )),
+                "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
+                    this_box, opts,
+                )),
+                _ => None,
+            };
+            if handled.is_some() {
+                return undef;
+            }
+        }
+    }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
     // constructor returns a fresh NaN-boxed cell and does NOT mutate the
     // implicit `this`, so the ordinary dispatch below would drop that cell and
