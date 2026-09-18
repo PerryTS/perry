@@ -35,7 +35,11 @@ pub(super) fn extend_class_method_source_text(
         if symbol.is_empty() || !llmod.has_function(&symbol) || !seen.insert(symbol.clone()) {
             return;
         }
-        user_fn_source.push((symbol, source.text.clone(), source.is_non_strict_ordinary));
+        user_fn_source.push((
+            symbol,
+            super::function_source_header::retained_function_text(hir, func_id, &source.text),
+            source.is_non_strict_ordinary,
+        ));
     };
 
     for class in &hir.classes {

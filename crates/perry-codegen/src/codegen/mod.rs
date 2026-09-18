@@ -199,6 +199,7 @@ mod entry;
 pub mod entry_outline;
 pub(crate) mod func_registry;
 mod function;
+mod function_source_header;
 #[cfg(test)]
 mod guarded_falsy_default_method_tests;
 #[cfg(test)]
