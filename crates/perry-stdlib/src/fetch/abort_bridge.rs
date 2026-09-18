@@ -80,6 +80,12 @@ pub extern "C" fn js_fetch_notify_signal_aborted(signal_ptr: i64) {
         // on `notified()`, so an abort that races the spawn is not lost.
         notify.notify_one();
     }
+    // turnloop P6: a request the engine accepted has no tokio future to
+    // cancel. Cancelling it there closes the socket, which cancels the
+    // in-flight operation on the loop exactly once, and delivers the request
+    // as aborted. A miss (every request on this signal took the reqwest path)
+    // is a no-op.
+    crate::turnloop_client::abort_signal(key);
 }
 
 /// A live abort watch for one request: the `Notify` the request future selects
@@ -93,6 +99,12 @@ impl FetchAbortWatch {
     /// Resolves when the bound signal aborts.
     pub(crate) async fn aborted(&self) {
         self.notify.notified().await;
+    }
+
+    /// The signal's object address, used by the turnloop engine as its own
+    /// cancellation key. Never dereferenced there.
+    pub(crate) fn signal_ptr(&self) -> usize {
+        self.signal_ptr
     }
 }
 

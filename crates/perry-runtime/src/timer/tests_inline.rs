@@ -1,19 +1,17 @@
-//! Inline unit tests extracted from `timer.rs` (#8354 follow-up to #8328).
+//! Test scaffolding other modules reach as `crate::timer::…`, plus the inline
+//! unit tests extracted from `timer.rs` (#8354).
 //!
-//! `timer.rs` crossed the 2000-line cap enforced by
-//! `scripts/check_file_size.sh` at 2001 lines. These are the same tests,
-//! moved verbatim; the `#[path]` + `mod` declaration at the end of
-//! `timer.rs` keeps them in the `crate::timer` module so every `super::`
-//! and private-item reference still resolves.
+//! turnloop P3 replaced the three queues these helpers used to seed with the
+//! per-agent store, so the seeding goes through the store's own API. The GC
+//! root-scanner tests that consume them are unchanged: they ask for a timeout,
+//! a callback timer and an interval whose slots the collector must visit.
 
+use super::store::{self, Class, Entry};
 use super::*;
 
-#[cfg(test)]
-const TEST_CALLBACK_TIMER_ID: i64 = i64::MIN + 101;
-#[cfg(test)]
-const TEST_INTERVAL_TIMER_ID: i64 = i64::MIN + 102;
+pub(crate) const TEST_CALLBACK_TIMER_ID: i64 = i64::MIN + 101;
+pub(crate) const TEST_INTERVAL_TIMER_ID: i64 = i64::MIN + 102;
 
-#[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct TestTimerScannerSnapshot {
     pub timeout_promise_ptr: usize,
@@ -25,7 +23,10 @@ pub(crate) struct TestTimerScannerSnapshot {
     pub interval_context_store_bits: u64,
 }
 
-#[cfg(test)]
+fn far_future() -> Instant {
+    Instant::now() + Duration::from_secs(86_400)
+}
+
 pub(crate) fn test_seed_timer_scanner_roots(
     promise: *mut Promise,
     value: f64,
@@ -34,213 +35,95 @@ pub(crate) fn test_seed_timer_scanner_roots(
     context_store: f64,
 ) {
     let context = crate::async_context::test_snapshot_with_store(context_store);
-    let deadline = Instant::now() + Duration::from_secs(86_400);
-    TIMER_QUEUE.lock().unwrap().push(Timer {
-        // #6185: test scaffolding runs on the primary agent.
-        owner: crate::agent::current_agent(),
-        deadline,
-        promise,
-        value,
-        has_ref: true,
-    });
-    CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
-        // #6185: test scaffolding runs on the primary agent.
-        owner: crate::agent::current_agent(),
-        id: TEST_CALLBACK_TIMER_ID,
-        kind: CallbackTimerKind::Timeout,
-        deadline,
-        delay_ms: 86_400_000,
-        callback,
-        args: vec![arg],
-        context: context.clone(),
-        async_id: 0,
-        trigger_async_id: 0,
-        cleared: false,
-        _scheduled: ref_states::ScheduledTimerId::unregistered(),
-    });
-    INTERVAL_TIMERS.lock().unwrap().push(IntervalTimer {
-        // #6185: test scaffolding runs on the primary agent.
-        owner: crate::agent::current_agent(),
-        id: TEST_INTERVAL_TIMER_ID,
-        callback,
-        interval_ms: 86_400_000,
-        next_deadline: deadline,
-        args: Vec::new(),
-        context,
-        async_id: 0,
-        trigger_async_id: 0,
-        cleared: false,
-        _scheduled: ref_states::ScheduledTimerId::unregistered(),
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
-    let deadline = Instant::now() + Duration::from_secs(86_400);
-    let mut q = TIMER_QUEUE.lock().unwrap();
-    q.clear();
-    for &value in values {
-        q.push(Timer {
-            // #6185: test scaffolding runs on the primary agent.
-            owner: crate::agent::current_agent(),
+    let deadline = far_future();
+    store::with_current(|timers| {
+        timers.insert_timer(Entry::promise(deadline, promise, value, true));
+        timers.insert_timer(Entry::callback(
+            TEST_CALLBACK_TIMER_ID,
+            Class::Timeout,
             deadline,
-            promise: std::ptr::null_mut(),
-            value,
-            has_ref: true,
-        });
-    }
+            86_400_000,
+            callback,
+            vec![arg],
+            context.clone(),
+            0,
+            0,
+            None,
+        ));
+        timers.insert_timer(Entry::callback(
+            TEST_INTERVAL_TIMER_ID,
+            Class::Interval,
+            deadline,
+            86_400_000,
+            callback,
+            Vec::new(),
+            context.clone(),
+            0,
+            0,
+            None,
+        ));
+    });
 }
 
-#[cfg(test)]
+pub(crate) fn test_seed_many_timeout_roots(values: &[f64]) {
+    let deadline = far_future();
+    store::with_current(|timers| {
+        timers.test_clear();
+        for &value in values {
+            timers.insert_timer(Entry::promise(deadline, std::ptr::null_mut(), value, true));
+        }
+    });
+}
+
 pub(crate) fn test_clear_all_timer_scanner_roots() {
-    TIMER_QUEUE.lock().unwrap().clear();
-    CALLBACK_TIMERS.lock().unwrap().clear();
-    INTERVAL_TIMERS.lock().unwrap().clear();
+    store::with_current(|timers| timers.test_clear());
 }
 
-#[cfg(test)]
 pub(crate) fn test_timer_scanner_snapshot() -> TestTimerScannerSnapshot {
     let mut snapshot = TestTimerScannerSnapshot::default();
-    if let Some(timer) = TIMER_QUEUE.lock().unwrap().last() {
-        snapshot.timeout_promise_ptr = timer.promise as usize;
-        snapshot.timeout_value_bits = timer.value.to_bits();
-    }
-    if let Some(timer) = CALLBACK_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|timer| timer.id == TEST_CALLBACK_TIMER_ID)
-    {
-        snapshot.callback_ptr = timer.callback as usize;
-        snapshot.callback_arg_bits = timer.args.first().copied().map(f64::to_bits).unwrap_or(0);
-        snapshot.callback_context_store_bits =
-            crate::async_context::test_snapshot_first_store(&timer.context)
-                .map(f64::to_bits)
-                .unwrap_or(0);
-    }
-    if let Some(timer) = INTERVAL_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|timer| timer.id == TEST_INTERVAL_TIMER_ID)
-    {
-        snapshot.interval_callback_ptr = timer.callback as usize;
-        snapshot.interval_context_store_bits =
-            crate::async_context::test_snapshot_first_store(&timer.context)
-                .map(f64::to_bits)
-                .unwrap_or(0);
-    }
+    store::with_current(|timers| {
+        if let Some(entry) = timers.test_last_of_class(Class::Promise) {
+            snapshot.timeout_promise_ptr = entry.promise as usize;
+            snapshot.timeout_value_bits = entry.value.to_bits();
+        }
+        if let Some(entry) = timers.test_find_by_id(TEST_CALLBACK_TIMER_ID) {
+            snapshot.callback_ptr = entry.callback as usize;
+            snapshot.callback_arg_bits = entry.args.first().copied().map(f64::to_bits).unwrap_or(0);
+            snapshot.callback_context_store_bits =
+                crate::async_context::test_snapshot_first_store(&entry.context)
+                    .map(f64::to_bits)
+                    .unwrap_or(0);
+        }
+        if let Some(entry) = timers.test_find_by_id(TEST_INTERVAL_TIMER_ID) {
+            snapshot.interval_callback_ptr = entry.callback as usize;
+            snapshot.interval_context_store_bits =
+                crate::async_context::test_snapshot_first_store(&entry.context)
+                    .map(f64::to_bits)
+                    .unwrap_or(0);
+        }
+    });
     snapshot
 }
 
-#[cfg(test)]
 pub(crate) fn test_callback_timer_snapshot(timer_id: i64) -> Option<(usize, u64)> {
-    CALLBACK_TIMERS
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|timer| timer.id == timer_id)
-        .map(|timer| {
+    store::with_current(|timers| {
+        timers.test_find_by_id(timer_id).map(|entry| {
             (
-                timer.callback as usize,
-                timer.args.first().copied().map(f64::to_bits).unwrap_or(0),
+                entry.callback as usize,
+                entry.args.first().copied().map(f64::to_bits).unwrap_or(0),
             )
         })
+    })
 }
 
-#[cfg(test)]
 pub(crate) fn test_clear_timer_scanner_roots(promise_before: usize, promise_after: usize) {
-    TIMER_QUEUE.lock().unwrap().retain(|timer| {
-        let promise = timer.promise as usize;
-        promise != promise_before && promise != promise_after
+    store::with_current(|timers| {
+        timers.test_retain(|entry| match entry.class {
+            Class::Promise => {
+                let promise = entry.promise as usize;
+                promise != promise_before && promise != promise_after
+            }
+            _ => entry.id != TEST_CALLBACK_TIMER_ID && entry.id != TEST_INTERVAL_TIMER_ID,
+        });
     });
-    CALLBACK_TIMERS
-        .lock()
-        .unwrap()
-        .retain(|timer| timer.id != TEST_CALLBACK_TIMER_ID);
-    INTERVAL_TIMERS
-        .lock()
-        .unwrap()
-        .retain(|timer| timer.id != TEST_INTERVAL_TIMER_ID);
-}
-
-#[cfg(test)]
-mod drain_expired_tests;
-
-#[cfg(test)]
-mod expired_batch_order_tests {
-    use super::{order_expired_callback_batch, CallbackTimer, CallbackTimerKind};
-    use std::time::{Duration, Instant};
-
-    fn timer(id: i64, kind: CallbackTimerKind, base: Instant, delay_ms: u64) -> CallbackTimer {
-        CallbackTimer {
-            // #6185: test scaffolding runs on the primary agent.
-            owner: crate::agent::current_agent(),
-            id,
-            kind,
-            deadline: base + Duration::from_millis(delay_ms),
-            delay_ms,
-            callback: 0,
-            args: Vec::new(),
-            context: crate::async_context::AsyncContextSnapshot::default(),
-            async_id: 0,
-            trigger_async_id: 0,
-            cleared: false,
-            _scheduled: crate::timer::ref_states::ScheduledTimerId::unregistered(),
-        }
-    }
-
-    /// #6287 case 1: the batch fires in DEADLINE order, not creation order —
-    /// a 5 ms timer created after a 10 ms one still fires first. Ground truth
-    /// from node: `setTimeout(f,10); setTimeout(g,5)` runs g then f.
-    #[test]
-    fn expired_timeouts_fire_in_deadline_order() {
-        let base = Instant::now();
-        let mut batch = vec![
-            timer(1, CallbackTimerKind::Timeout, base, 10),
-            timer(2, CallbackTimerKind::Timeout, base, 5),
-            timer(3, CallbackTimerKind::Timeout, base, 1),
-        ];
-        order_expired_callback_batch(&mut batch);
-        let ids: Vec<i64> = batch.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec![3, 2, 1], "earliest deadline first");
-    }
-
-    /// Same-deadline timers must STILL fire in creation order — the ordering
-    /// Perry already got right, preserved by the sort being stable.
-    #[test]
-    fn same_deadline_timeouts_keep_creation_order() {
-        let base = Instant::now();
-        let mut batch = vec![
-            timer(1, CallbackTimerKind::Timeout, base, 3),
-            timer(2, CallbackTimerKind::Timeout, base, 3),
-            timer(3, CallbackTimerKind::Timeout, base, 3),
-        ];
-        order_expired_callback_batch(&mut batch);
-        let ids: Vec<i64> = batch.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec![1, 2, 3], "stable sort keeps creation order");
-    }
-
-    /// #6287 case 2: setImmediate runs in the CHECK phase, so an expired
-    /// setTimeout fires ahead of an immediate scheduled earlier — and this is
-    /// exactly why a naive sort by deadline alone is wrong (an immediate's
-    /// deadline is ~now, so it would sort ahead of the timeout). Immediates
-    /// keep FIFO order among themselves.
-    #[test]
-    fn expired_timeouts_precede_immediates_which_stay_fifo() {
-        let base = Instant::now();
-        let mut batch = vec![
-            timer(1, CallbackTimerKind::Immediate, base, 0),
-            timer(2, CallbackTimerKind::Timeout, base, 5),
-            timer(3, CallbackTimerKind::Immediate, base, 0),
-            timer(4, CallbackTimerKind::Timeout, base, 1),
-        ];
-        order_expired_callback_batch(&mut batch);
-        let ids: Vec<i64> = batch.iter().map(|t| t.id).collect();
-        assert_eq!(
-            ids,
-            vec![4, 2, 1, 3],
-            "timeouts by deadline (4 then 2), then immediates FIFO (1 then 3)"
-        );
-    }
 }

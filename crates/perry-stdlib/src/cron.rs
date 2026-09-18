@@ -23,7 +23,7 @@
 //! never fired in user code.
 
 use crate::common::{
-    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle, RUNTIME,
+    get_handle, register_handle, string_from_header_lossy as string_from_header, Handle,
 };
 use cron::Schedule;
 use perry_runtime::closure::{js_closure_call0, ClosureHeader};
@@ -513,27 +513,38 @@ pub unsafe extern "C" fn js_cron_describe(expr_ptr: *const StringHeader) -> *mut
 // ============================================================================
 // Interval/Timeout helpers (not strictly cron, but commonly used together)
 // ============================================================================
+//
+// These four symbols are declared by codegen
+// (`runtime_decls/stdlib_ffi/third_party.rs`) but NO lowering path emits a call
+// to any of them: `setInterval`/`setTimeout` lower to the runtime's timer heap,
+// and the npm `cron` surface lowers to `js_cron_schedule` / `js_cron_job_*`.
+// They are a handle allocator and nothing more, and perry-ext-cron — the copy
+// the well-known flip actually links for `import 'cron'` — has always been
+// exactly that.
+//
+// perry-stdlib's copies additionally spawned a native task per call
+// (turnloop P8). That task never invoked the callback: its body was the
+// `// Invoke callback (in real impl: ...)` placeholder this module's own header
+// records as the bug `js_cron_schedule` was rewritten to fix. So the task could
+// not do the thing it existed for, and an interval's task never terminated —
+// `js_cron_clear_interval` flips the flag, but the loop only observes it after
+// the next sleep, so a cleared 24-hour interval held a tokio task for a day.
+// Reaching it would have been a defect; reaching it was also impossible.
+//
+// The spawn is therefore removed rather than migrated to turnloop, and the two
+// copies now agree. This is the CLAUDE.md kill-policy call, not a transport one:
+// an unreachable mode that behaves differently from the reachable copy of the
+// same symbol is a decision nobody made.
 
-/// Set an interval (simplified - returns handle)
+/// Set an interval — allocates a handle. See the note above: nothing lowers to
+/// this, and it has never invoked a callback.
 #[no_mangle]
-pub extern "C" fn js_cron_set_interval(_callback_id: f64, interval_ms: f64) -> Handle {
+pub extern "C" fn js_cron_set_interval(_callback_id: f64, _interval_ms: f64) -> Handle {
     let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-    let interval = interval_ms as u64;
-
-    RUNTIME.spawn(async move {
-        while running_clone.load(Ordering::SeqCst) {
-            tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
-            if running_clone.load(Ordering::SeqCst) {
-                // Invoke callback (in real impl: js_callback_invoke(callback_id))
-            }
-        }
-    });
 
     // Store running flag in a handle
     struct IntervalHandle {
-        // #854: the spawned task owns `running_clone`; this handle copy keeps
-        // the Arc alive for the handle's lifetime but isn't read back.
+        // Read back by `js_cron_clear_interval`, which is the whole surface.
         #[allow(dead_code)]
         running: Arc<AtomicBool>,
     }
@@ -553,23 +564,14 @@ pub unsafe extern "C" fn js_cron_clear_interval(handle: Handle) {
     }
 }
 
-/// Set a timeout (simplified - returns handle)
+/// Set a timeout — allocates a handle. See the note above the interval helper:
+/// nothing lowers to this, and it has never invoked a callback.
 #[no_mangle]
-pub extern "C" fn js_cron_set_timeout(_callback_id: f64, timeout_ms: f64) -> Handle {
+pub extern "C" fn js_cron_set_timeout(_callback_id: f64, _timeout_ms: f64) -> Handle {
     let cancelled = Arc::new(AtomicBool::new(false));
-    let cancelled_clone = cancelled.clone();
-    let timeout = timeout_ms as u64;
-
-    RUNTIME.spawn(async move {
-        tokio::time::sleep(tokio::time::Duration::from_millis(timeout)).await;
-        if !cancelled_clone.load(Ordering::SeqCst) {
-            // Invoke callback (in real impl: js_callback_invoke(callback_id))
-        }
-    });
 
     struct TimeoutHandle {
-        // #854: the spawned task owns `cancelled_clone`; this handle copy keeps
-        // the Arc alive for the handle's lifetime but isn't read back.
+        // Read back by `js_cron_clear_timeout`, which is the whole surface.
         #[allow(dead_code)]
         cancelled: Arc<AtomicBool>,
     }

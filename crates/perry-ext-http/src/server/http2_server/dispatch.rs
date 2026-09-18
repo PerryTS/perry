@@ -68,6 +68,8 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
                 response_tx: None,
                 response_status: 200,
                 response_headers: Vec::new(),
+                turnloop_conn: 0,
+                turnloop_responded: false,
             });
             handle_to_pointer_f64(stream_handle)
         }
@@ -85,15 +87,19 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
         }
         "close" => {
             let callback = closure_arg(args.first().copied());
+            let turnloop = super::turnloop_conn_of_session(handle);
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
                 session.closed = true;
                 session.destroyed = true;
-                if let Ok(mut slot) = session.sender.lock() {
-                    *slot = None;
-                }
                 if callback != 0 {
                     session.close_callbacks.push(callback);
                 }
+            }
+            // Node's graceful close: GOAWAY(NO_ERROR, last_remote), then the
+            // transport ends once every live stream has finished. The legacy
+            // path sent nothing at all.
+            if let Some(conn) = turnloop {
+                crate::server::turnloop_h2::control::session_close(conn);
             }
             push_h2_event(Http2PendingEvent::ClientClose {
                 session_handle: handle,
@@ -102,12 +108,14 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
             self_ref
         }
         "destroy" => {
+            let turnloop = super::turnloop_conn_of_session(handle);
             if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
                 session.closed = true;
                 session.destroyed = true;
-                if let Ok(mut slot) = session.sender.lock() {
-                    *slot = None;
-                }
+            }
+            // `destroy()` is the abrupt one: no GOAWAY, no drain.
+            if let Some(conn) = turnloop {
+                crate::server::turnloop_h2::control::session_destroy(conn);
             }
             self_ref
         }
@@ -291,9 +299,21 @@ pub unsafe extern "C" fn js_ext_http2_stream_dispatch_method(
             self_ref
         }
         "close" => {
+            let code = args
+                .first()
+                .and_then(|v| numeric_value(*v))
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .map(|n| n as u32);
+            let turnloop = super::turnloop_target_of_stream(handle);
             if let Some(stream) = get_handle_mut::<Http2StreamHandle>(handle) {
                 stream.closed = true;
                 stream.destroyed = true;
+                stream.turnloop_responded = true;
+            }
+            // Node's `stream.close([code])` emits RST_STREAM with NO_ERROR by
+            // default. The legacy transport had no way to send one at all.
+            if let Some((conn, h2_id)) = turnloop {
+                crate::server::turnloop_h2::destroy_stream(conn, h2_id, code.unwrap_or(0));
             }
             self_ref
         }
@@ -303,29 +323,50 @@ pub unsafe extern "C" fn js_ext_http2_stream_dispatch_method(
     }
 }
 
+/// `stream.end([body])` on a server-side `Http2Stream`.
+///
+/// On turnloop the frames are encoded and submitted on this thread; on the
+/// legacy transport the shape is parked in the `oneshot` the hyper service fn
+/// is awaiting.
 fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
-    if let Some(stream) = get_handle_mut::<Http2StreamHandle>(handle) {
-        stream.closed = true;
-        stream.destroyed = true;
-        stream.headers_sent = true;
-        let mut headers = stream.response_headers.clone();
-        if !headers
+    let turnloop = super::turnloop_target_of_stream(handle);
+    let Some(stream) = get_handle_mut::<Http2StreamHandle>(handle) else {
+        return;
+    };
+    stream.closed = true;
+    stream.destroyed = true;
+    stream.headers_sent = true;
+    let status = stream.response_status;
+    // RFC 9113 §8.1.1: these carry no body, so they carry no length either.
+    // The hyper path relied on hyper to drop the header; nothing drops it on
+    // the way to a frame, so it is not added in the first place.
+    let bodyless = matches!(status, 204 | 304) || (100..200).contains(&status);
+    let mut headers = stream.response_headers.clone();
+    if !bodyless
+        && !headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        {
-            headers.push(("Content-Length".to_string(), body.len().to_string()));
+    {
+        headers.push(("Content-Length".to_string(), body.len().to_string()));
+    }
+    let shape = HyperResponseShape {
+        status,
+        status_message: None,
+        response_version: None,
+        headers,
+        trailers: Vec::new(),
+        body: crate::server::response::ShapeBody::Full(body),
+        auto_content_length: false,
+    };
+    match turnloop {
+        Some((conn, h2_id)) => {
+            stream.turnloop_responded = true;
+            crate::server::turnloop_h2::h2_send_response(conn, h2_id, shape);
         }
-        let shape = HyperResponseShape {
-            status: stream.response_status,
-            status_message: None,
-            response_version: None,
-            headers,
-            trailers: Vec::new(),
-            body: crate::server::response::ShapeBody::Full(body),
-            auto_content_length: false,
-        };
-        if let Some(tx) = stream.response_tx.take() {
-            let _ = tx.send(shape);
+        None => {
+            if let Some(tx) = stream.response_tx.take() {
+                let _ = tx.send(shape);
+            }
         }
     }
 }
@@ -358,6 +399,9 @@ pub extern "C" fn js_node_http2_server_address_json(handle: i64) -> *mut StringH
 /// `http2SecureServer.close(cb?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) {
+    // Stop accepting first. Live sessions finish, which is Node's contract:
+    // `server.close()` resolves once every session has closed.
+    super::turnloop_listen::close_turnloop_listener(handle);
     if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
         s.base.listening = false;
         s.base.connections_checking_interval_destroyed = true;

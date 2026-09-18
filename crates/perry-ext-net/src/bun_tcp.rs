@@ -610,7 +610,11 @@ unsafe fn socket_write(handle: i64, value: f64, offset: f64, length: f64) -> f64
         bytes = bytes[start..start + count].to_vec();
     }
 
-    let (accepted, token, sender) = {
+    // The submission happens under the registry lock, through
+    // `SocketState::command`, because a turnloop-backed socket has no channel
+    // to send on afterwards — its command channel exists only to keep one
+    // `SocketState` shape across both transports and has no receiver.
+    let (accepted, token, delivered) = {
         let mut net_sockets = statics::sockets().lock().unwrap();
         let Some(socket) = net_sockets.get_mut(&handle) else {
             return -1.0;
@@ -637,25 +641,21 @@ unsafe fn socket_write(handle: i64, value: f64, offset: f64, length: f64) -> f64
         }
         static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1 << 63);
         let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-        let sender = socket.cmd_tx.clone();
-        socket.bytes_queued = socket.bytes_queued.saturating_add(accepted as u64);
-        (accepted, token, sender)
+        write_tokens().lock().unwrap().insert(token, handle);
+        let delivered = socket.command(
+            handle,
+            SocketCommand::Write(bytes[..accepted].to_vec(), token),
+        );
+        (accepted, token, delivered)
     };
+    if delivered.is_err() {
+        write_tokens().lock().unwrap().remove(&token);
+        return -1.0;
+    }
     if accepted < bytes.len() {
         if let Some(socket) = sockets().lock().unwrap().get_mut(&handle) {
             socket.needs_drain = true;
         }
-    }
-    write_tokens().lock().unwrap().insert(token, handle);
-    if sender
-        .send(SocketCommand::Write(bytes[..accepted].to_vec(), token))
-        .is_err()
-    {
-        write_tokens().lock().unwrap().remove(&token);
-        if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
-            socket.bytes_queued = socket.bytes_queued.saturating_sub(accepted as u64);
-        }
-        return -1.0;
     }
     accepted as f64
 }

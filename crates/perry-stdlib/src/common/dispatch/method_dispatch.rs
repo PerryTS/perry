@@ -1,8 +1,4 @@
-#[cfg(any(
-    feature = "crypto",
-    feature = "database-redis",
-    feature = "bundled-mysql2"
-))]
+#[cfg(feature = "crypto")]
 use super::super::handle::with_handle;
 use super::*;
 
@@ -215,10 +211,17 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return value;
     }
 
-    // mysql2 handles frequently pass through interface-typed fields in Drizzle,
-    // which removes the static class information used by native lowering.
-    #[cfg(feature = "bundled-mysql2")]
-    if let Some(value) = crate::mysql2::dispatch_mysql2_method(handle, method_name, &args) {
+    // turnloop P6: `nodemailer.createTransport(...)` returns a bare handle
+    // NUMBER, so `transporter.sendMail(...)` / `.verify()` are lowered as
+    // generic calls on an untyped receiver and land here. No arm claimed them,
+    // so the whole surface answered `TypeError: (number).sendMail is not a
+    // function` — on the base commit too, in every call shape. This is the
+    // bundled-surface half of the fix; `perry-ext-nodemailer` registers a
+    // dispatch EXTENSION for the well-known-flip half, because its handles live
+    // in perry-ffi's registry rather than this one.
+    #[cfg(feature = "bundled-nodemailer")]
+    if let Some(value) = crate::nodemailer::dispatch_transporter_method(handle, method_name, &args)
+    {
         return value;
     }
 
@@ -329,27 +332,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // `app.get(...)` / `reply.send(...)` calls lower via the static
     // NATIVE_MODULE_TABLE rather than this dynamic-handle dispatcher — so no
     // fastify arm is needed here.
-
-    // ioredis client.
-    #[cfg(feature = "database-redis")]
-    if matches!(
-        method_name,
-        "connect"
-            | "get"
-            | "set"
-            | "setex"
-            | "del"
-            | "exists"
-            | "incr"
-            | "decr"
-            | "expire"
-            | "ping"
-            | "quit"
-            | "disconnect"
-    ) && with_handle::<crate::ioredis::RedisClient, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return super::super::dispatch_ioredis::dispatch_ioredis(handle, method_name, &args);
-    }
 
     // crypto Hash handle: createHash(...).update(...).digest().
     // The order vs. net (below) does not matter once method-gated, but we

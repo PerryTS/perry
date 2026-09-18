@@ -1,11 +1,129 @@
 //! WebSocket server construction and HTTP-server attachment.
+//!
+//! # The standalone server
+//!
+//! `new WebSocketServer({ port })` binds through [`perry_http_server`], the
+//! shared HTTP/1.1 server core, and takes the upgrade through its
+//! [`perry_http_server::Host`] hook. That is not incidental reuse: a `ws`
+//! server *is* an HTTP server that answers exactly one kind of request, and
+//! the thing it has to get right before the `101` — decoding a request head,
+//! answering a malformed one with a `400`, not parsing a pipelined frame as a
+//! second request — is that core's, already tested. What used to be here was a
+//! `tokio::net::TcpListener` accept loop plus a hand-rolled `read`-until-head
+//! loop (`accept_on_stream`), and it is gone.
+//!
+//! `perry-http-server`'s upgrade hook went in *for this caller*: its module
+//! header recorded the hook as withheld until a WebSocket implementation
+//! existed that did not need an owned `AsyncRead + AsyncWrite`, and
+//! [`crate::turnloop_link`] is that implementation.
 use super::*;
+
+use perry_http_server::{Request as HttpRequest, Response as HttpResponse, Upgraded};
+
+/// The listener slot this crate's standalone server binds on.
+///
+/// Distinct from [`crate::turnloop_io::SUBSYSTEM`]: a slot holds one sink
+/// function, and these are two — `perry-http-server`'s, which decodes HTTP on
+/// the accepted connections, and this crate's own, which drives outbound
+/// clients.
+pub(crate) const SERVER_SUBSYSTEM: u8 = 8;
+
+/// `ws` does not idle-close a WebSocket, and an upgraded connection is exempt
+/// from the keep-alive deadline anyway. A plain HTTP request to a `ws` port is
+/// answered with a `400` and closed, so nothing on this listener is ever an
+/// idle keep-alive connection.
+const IDLE_CLOSE_MS: u64 = 0;
+
+/// The `perry_http_server::Host` behind one standalone `WebSocketServer`.
+///
+/// Every method runs inside the completion sink — on the loop thread, after a
+/// turn — so nothing here runs JS. What an upgrade produces is a
+/// `PendingWsEvent::Connection`, which `js_ws_process_pending` dispatches on
+/// its own tick, exactly where the accept task's channel send used to deliver
+/// it.
+struct WsHost {
+    server_handle: Handle,
+}
+
+impl perry_http_server::Host for WsHost {
+    /// A request that is not an upgrade. `ws` answers `400 Bad Request` and
+    /// closes, rather than leaving a browser hanging on a plain `GET /`.
+    fn on_request(&self, request: HttpRequest) {
+        perry_http_server::respond(
+            request.conn_id,
+            request.seq,
+            HttpResponse {
+                status: 400,
+                headers: vec![
+                    ("Connection".to_string(), "close".to_string()),
+                    ("Content-Length".to_string(), "0".to_string()),
+                ],
+                ..Default::default()
+            },
+        );
+    }
+
+    fn takes_upgrades(&self) -> bool {
+        true
+    }
+
+    fn on_upgrade(&self, request: HttpRequest, leftover: Vec<u8>) {
+        let conn_id = request.conn_id;
+        let server_handle = self.server_handle;
+        let accepted = crate::accept_http_upgrade(
+            &request,
+            &leftover,
+            crate::HTTP_SERVER_TRANSPORT,
+            &[],
+            |ws_id| {
+                // The parent link is what routes a frame pipelined behind the
+                // handshake to the server's own `'message'` listener, and
+                // queueing `'connection'` here is what keeps that frame's
+                // event from reaching the pump ahead of it. Both must happen
+                // before the leftover is decoded, which is what this callback
+                // is for.
+                WS_CLIENT_PARENT_SERVER
+                    .lock()
+                    .unwrap()
+                    .insert(ws_id, server_handle);
+                push_ws_event(PendingWsEvent::Connection(server_handle, ws_id));
+            },
+        );
+        if let Err(refusal) = accepted {
+            perry_http_server::write_raw(conn_id, &refusal.response);
+            push_ws_event(PendingWsEvent::ServerError(
+                server_handle,
+                format!("WebSocket handshake error: {}", refusal.message),
+            ));
+            perry_http_server::finish(conn_id);
+        }
+    }
+
+    fn on_upgraded(&self, conn_id: i64, event: Upgraded<'_>) {
+        if crate::drive_http_upgraded(conn_id, event) {
+            // A half-close the protocol layer is finished with: end our side
+            // gracefully rather than cancelling what it just queued.
+            perry_http_server::finish(conn_id);
+        }
+    }
+}
 
 extern "C" {
     fn js_object_get_field_by_name(
         object: *const perry_ffi::ObjectHeader,
         key: *const StringHeader,
     ) -> JsValue;
+}
+
+/// Read one named field off a JS object value.
+///
+/// # Safety
+/// `key` must be a Perry-runtime `StringHeader`.
+pub(super) unsafe fn object_field_by_name(object: JsValue, key: *const StringHeader) -> JsValue {
+    if !object.is_pointer() {
+        return JsValue::from_bits(0x7FFC_0000_0000_0001);
+    }
+    js_object_get_field_by_name(object.as_pointer::<perry_ffi::ObjectHeader>(), key)
 }
 
 pub(super) fn value_string(value: JsValue) -> Option<String> {
@@ -69,12 +187,11 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
             is_listening: false,
             client_ids: Vec::new(),
             clients_bits,
-            shutdown_tx: None,
+            listener_id: None,
         });
     }
     let port = port.unwrap();
 
-    let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
     let server_handle = register_handle(WsServerHandle {
         listeners: HashMap::new(),
         port,
@@ -84,92 +201,54 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         is_listening: false,
         client_ids: Vec::new(),
         clients_bits,
-        shutdown_tx: Some(shutdown_tx),
+        listener_id: None,
     });
-    WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
-    let handle_id = server_handle;
-    // Issue #606 — `spawn_blocking_with_reactor` already runs the closure
-    // inside a tokio worker task, so `Handle::current().block_on(fut)` panics
-    // with "Cannot start a runtime from within a runtime". Schedule the
-    // accept loop as a sibling task on the existing runtime instead.
-    // (Same root cause as the v0.5.691 sweep that fixed perry-ext-http's
-    // server.rs / https_server.rs / http2_server.rs and perry-ext-ws's
-    // `drive_server_client_io` — this site was missed in that sweep.)
-    spawn_blocking(move || {
-        tokio::spawn(async move {
-            let addr = (host.as_str(), port);
-            let listener = match tokio::net::TcpListener::bind(addr).await {
-                Ok(l) => l,
-                Err(e) => {
-                    push_ws_event(PendingWsEvent::ServerError(
-                        handle_id,
-                        format!("WebSocketServer bind error: {}", e),
-                    ));
-                    WS_ACTIVE_SERVERS.fetch_sub(1, Ordering::Relaxed);
-                    return;
-                }
-            };
-            if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                s.is_listening = true;
-                if let Ok(address) = listener.local_addr() {
-                    s.port = address.port();
-                    s.host = address.ip().to_string();
-                }
+
+    if !perry_http_server::available(SERVER_SUBSYSTEM) {
+        // This agent owns no `turnloop::Loop` — a `worker_threads` agent, or
+        // the `tokio-wait-driver` A/B arm — and this crate has no second
+        // transport since the tokio accept loop was deleted. Say so on
+        // `'error'` rather than returning a handle that silently never
+        // listens.
+        push_ws_event(PendingWsEvent::ServerError(
+            server_handle,
+            "WebSocketServer bind error: no event loop on this thread".to_string(),
+        ));
+        return server_handle;
+    }
+
+    let bound = perry_http_server::listen(
+        SERVER_SUBSYSTEM,
+        std::sync::Arc::new(WsHost { server_handle }),
+        &host,
+        port,
+        511,
+        false,
+        // `ws` sets TCP_NODELAY on accepted sockets; without it a small frame
+        // can sit in Nagle's queue behind the handshake.
+        true,
+        IDLE_CLOSE_MS,
+    );
+    match bound {
+        Ok(bound) => {
+            // The bind is synchronous, so `wss.address()` is already correct
+            // inside a `listen(0)` program's first tick.
+            if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+                server.is_listening = true;
+                server.port = bound.port;
+                server.host = bound.address;
+                server.listener_id = Some(bound.listener_id);
             }
-            push_ws_event(PendingWsEvent::Listening(handle_id));
-            loop {
-                tokio::select! {
-                    accept_result = listener.accept() => {
-                        match accept_result {
-                            Ok((tcp_stream, _addr)) => {
-                                match tokio_tungstenite::accept_async(tcp_stream).await {
-                                    Ok(ws_stream) => {
-                                        let ws_id = register_handle(WsClientHandle) as usize;
-                                        let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-                                        WS_CONNECTIONS.lock().unwrap().insert(ws_id, WsConnection {
-                                            sender: tx,
-                                            messages: Vec::new(),
-                                            is_open: true,
-                                            is_closing: false,
-                                            is_closed: false,
-                                        });
-                                        WS_CLIENT_LISTENERS.lock().unwrap().insert(ws_id, WsClientListeners {
-                                            listeners: HashMap::new(),
-                                        });
-                                        if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                                            s.client_ids.push(ws_id);
-                                        }
-                                        WS_CLIENT_PARENT_SERVER.lock().unwrap().insert(ws_id, handle_id);
-                                        push_ws_event(PendingWsEvent::Connection(handle_id, ws_id));
-                                        drive_server_client_io(ws_id, ws_stream, rx);
-                                    }
-                                    Err(e) => {
-                                        push_ws_event(PendingWsEvent::ServerError(
-                                            handle_id,
-                                            format!("WebSocket handshake error: {}", e),
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                push_ws_event(PendingWsEvent::ServerError(
-                                    handle_id,
-                                    format!("accept error: {}", e),
-                                ));
-                            }
-                        }
-                    }
-                    _ = shutdown_rx.recv() => {
-                        break;
-                    }
-                }
-            }
-            if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                s.is_listening = false;
-            }
-            WS_ACTIVE_SERVERS.fetch_sub(1, Ordering::Relaxed);
-        });
-    });
+            WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
+            push_ws_event(PendingWsEvent::Listening(server_handle));
+        }
+        Err(e) => {
+            push_ws_event(PendingWsEvent::ServerError(
+                server_handle,
+                format!("WebSocketServer bind error: {}", e.message()),
+            ));
+        }
+    }
     server_handle
 }
 

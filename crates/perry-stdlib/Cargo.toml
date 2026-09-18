@@ -16,6 +16,12 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# turnloop P0 A/B measurement arm, default OFF: restores the pre-P0 wait driver
+# exactly (every agent parks through the tokio current-thread tick with its
+# whole-millisecond budget; runtime-only binaries use the legacy condvar park).
+# Nothing else may depend on it. Build it TOGETHER with perry-runtime-static so
+# the forwarded runtime feature unifies into both archives. Deleted in P8.
+tokio-wait-driver = ["perry-runtime/tokio-wait-driver"]
 # Default: include everything for backwards compatibility
 default = ["full"]
 
@@ -23,7 +29,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "turnloop-smtp-client", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -68,13 +74,20 @@ bundled-moment = []
 # to perry-ext-commander instead.
 bundled-commander = []
 
-# HTTP server (hyper-based native framework)
+# HTTP server (the native framework's own server)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.
-# Gates the `framework` module (non-fastify hyper plumbing) only. fastify is no
-# longer in-stdlib — `import 'fastify'` is served exclusively by the external
-# perry-ext-fastify crate via the well-known flip (see well_known_bindings.toml);
-# perry-stdlib's per-tick bridge into it lives behind `external-fastify-pump`.
-http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
+# Gates the `framework` module only. fastify is no longer in-stdlib —
+# `import 'fastify'` is served exclusively by the external perry-ext-fastify
+# crate via the well-known flip (see well_known_bindings.toml); perry-stdlib's
+# per-tick bridge into it lives behind `external-fastify-pump`.
+#
+# turnloop: this used to be `dep:hyper` + `dep:hyper-util` + an `async-runtime`
+# (tokio) requirement, for a hyper service in `framework/server.rs`. It is
+# `perry-http-server` now — the shared HTTP/1.1 core on turnloop — and the
+# module needs no async runtime at all, so `async-runtime` is gone from this
+# gate too. The framework module is in `full`, so those were edges every
+# default build of perry-stdlib carried.
+http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
 
 # Web Fetch and Axios compatibility surface. The well-known flip can
 # strip this when the external binding owns the imported surface.
@@ -88,7 +101,13 @@ http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes",
 # #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API)
 # plus the Axios compatibility module. Node HTTP is provided only by
 # perry-ext-http.
-web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams"]
+# turnloop P6: the outbound HTTP/1.1 client engine
+# (`src/turnloop_client/`). Rides under `web-fetch` because that is the
+# gate the Web Fetch surface itself is behind; the reqwest client stays
+# beside it as the declining path (proxy, HTTP/2, a worker agent with no
+# loop) exactly as P1 kept the tokio socket task.
+turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http"]
+web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams", "turnloop-http-client"]
 http-client = ["web-fetch"]
 
 # Web Streams API (issue #237). Per-binding gate v0.5.572 — the
@@ -102,11 +121,21 @@ bundled-streams = ["dep:flate2", "dep:brotli"]
 # `import 'ws'` can route to perry-ext-ws without duplicate
 # `_js_ws_*` symbols at link time.
 websocket = ["bundled-ws"]
+# turnloop WS lane: the codec is `turnloop-websocket`'s sans-I/O protocol core,
+# with `turnloop-http` supplying the HTTP/1 head codec the opening handshake is
+# expressed in, driven over the tokio streams `ws.rs` already owned. It
+# replaced the old `WebSocketStream<S>` wrapper, which welded the codec to the
+# transport. `dep:url` parses the connect target; `dep:tokio-rustls` +
+# `dep:rustls-native-certs` are the outbound `wss://` client — both were
+# already declared for `tls-runtime`, so no new third-party crate enters the
+# graph. perry-stdlib must NOT depend on perry-ext-ws: it is the bundled
+# alternative to that crate, so the duplication between the two `ws` bindings
+# is deliberate.
 # #6117: `dep:rustls` so the client-connect path can install a process-level
 # CryptoProvider before the first `wss://` handshake — feature unification
 # enables BOTH `ring` and `aws-lc-rs` in the final link, so rustls panics
 # unless one is installed explicitly (same as the `tls` feature's paths).
-bundled-ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:rustls", "async-runtime"]
+bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to
@@ -168,7 +197,7 @@ external-events-construct = []
 
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
-# cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.
+# cross-compile unblocked; matches the reqwest/mongodb feature flags.
 #
 # `tls-runtime` contains the shared TLS server/preflight implementation. The
 # `external-net-tls` adapter uses that implementation while resolving
@@ -201,24 +230,21 @@ external-tls-server = [
 ]
 
 # Databases
-database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
-# `database-postgres` umbrella retained for backwards-compat;
-# v0.5.566's well-known flip toggles `bundled-pg` instead.
-database-postgres = ["bundled-pg"]
-bundled-pg = ["dep:sqlx", "async-runtime"]
-# `database-mysql` umbrella retained for backwards-compat;
-# v0.5.567's well-known flip toggles `bundled-mysql2` instead.
-database-mysql = ["bundled-mysql2"]
-bundled-mysql2 = ["dep:sqlx", "async-runtime"]
+#
+# turnloop P8 group H: the bundled `pg` / `mysql2` / `ioredis` / `mongodb`
+# copies are GONE. They were the pre-#466 in-stdlib implementations, kept as
+# the fallback the well-known flip declined to. Every `extern "C"` symbol they
+# defined is also defined — and strictly extended — by perry-ext-pg /
+# perry-ext-mysql2 / perry-ext-ioredis / perry-ext-mongodb, which is the only
+# path the flip has routed those imports down since v0.5.565-568. Keeping them
+# cost perry-stdlib a `sqlx` + `redis` + `mongodb` manifest edge, and 76 of the
+# 502 packages in this crate's own dependency closure (502 -> 426), for code no
+# default compile reached. Cargo.lock itself does NOT shrink: perry-ext-pg /
+# -mysql2 / -ioredis / -mongodb keep the same drivers. `database-sqlite` is
+# NOT in that set: rusqlite is not a tokio dependency and `dispatch_sqlite_stmt`
+# is deliberately retained through the flip (Refs #643).
+database = ["database-sqlite"]
 database-sqlite = ["dep:rusqlite"]
-# `database-redis` umbrella retained for backwards-compat;
-# v0.5.565's well-known flip toggles `bundled-ioredis` instead.
-database-redis = ["bundled-ioredis"]
-bundled-ioredis = ["dep:redis", "async-runtime"]
-# `database-mongodb` umbrella retained for backwards-compat;
-# v0.5.568's well-known flip toggles `bundled-mongodb` instead.
-database-mongodb = ["bundled-mongodb"]
-bundled-mongodb = ["dep:mongodb", "dep:bson", "dep:futures-util", "async-runtime"]
 
 # Crypto (sha256, md5, bcrypt, jwt, etc.)
 # Implies `async-runtime` because bcrypt/jwt/argon2 hashing offloads to
@@ -266,7 +292,14 @@ compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
 # backwards-compat; v0.5.558's well-known flip toggles
 # `bundled-nodemailer` instead.
 email = ["bundled-nodemailer"]
-bundled-nodemailer = ["dep:lettre", "async-runtime"]
+# `async-runtime` stays: the surrounding binding still builds its promises
+# through `common::async_bridge`. The transport itself takes no tokio thread.
+bundled-nodemailer = ["async-runtime", "turnloop-smtp-client"]
+# turnloop P6: SMTP on turnloop (`src/turnloop_smtp/`). Kept OUT of the
+# `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
+# the `js_smtp_*` entry points survive the well-known flip that strips
+# `bundled-nodemailer`, and perry-ext-nodemailer can reach them.
+turnloop-smtp-client = ["dep:turnloop-smtp", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url"]
 
 # Image processing (sharp) — `image` umbrella stays for
 # backwards-compat; v0.5.551's well-known flip toggles
@@ -336,6 +369,19 @@ perry-container-compose = { path = "../perry-container-compose", optional = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 once_cell.workspace = true
+# turnloop P6 — the outbound client engines. Optional: a build without
+# `web-fetch` / `turnloop-smtp-client` links neither.
+turnloop-http = { workspace = true, optional = true }
+turnloop-tls = { workspace = true, optional = true }
+# P11: the extracted TLS client session (one copy, shared with the CLI's
+# blocking HTTP client). Follows turnloop-tls's optionality exactly.
+perry-tls-session = { workspace = true, optional = true }
+turnloop-smtp = { workspace = true, optional = true }
+# `turnloop_http::client::Request` exposes a `url::Url`, and the canonical
+# reason phrase `Response.statusText` reports comes from `http::StatusCode`
+# — the same crate reqwest already puts in this graph.
+url = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
 lazy_static.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 rand = "0.10"  # Required by lodash (core module)
@@ -347,8 +393,7 @@ rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"
 tokio = { version = "1", features = ["full"], optional = true }
 
 # HTTP Server
-hyper = { workspace = true, features = ["server", "http1", "http2"], optional = true }
-hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"], optional = true }
+perry-http-server = { workspace = true, optional = true }
 http-body-util = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
@@ -358,10 +403,9 @@ dashmap.workspace = true
 # HTTP Client
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }
 
-# WebSocket
-tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
-futures-util = { version = "0.3", optional = true }
-
+# WebSocket — the sans-I/O protocol core the `ws` module's codec is built on.
+# `turnloop-http` is declared with the other turnloop client engines above.
+turnloop-websocket = { workspace = true, optional = true }
 # TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.
 tokio-rustls = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
@@ -369,10 +413,10 @@ rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 
 # Database
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
-redis = { version = "1.2", features = ["tokio-comp", "connection-manager"], optional = true }
-mongodb = { version = "3.7", default-features = false, features = ["bson-3", "compat-3-3-0", "rustls-tls", "dns-resolver"], optional = true }
-bson = { version = "3.1", optional = true, features = ["serde"] }
+#
+# No sqlx / redis / mongodb / bson here any more (turnloop P8 group H): the
+# bundled copies that needed them were deleted, and the perry-ext-* wrappers
+# carry their own edges. rusqlite stays — it is not a tokio driver.
 rusqlite = { version = "0.39", features = ["bundled", "column_decltype", "limits", "session"], optional = true }
 
 # Crypto
@@ -428,8 +472,11 @@ brotli = { version = "8.0.2", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
 zstd = { version = "0.13.3", optional = true }
 
-# Email
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"], optional = true }
+# Email: no direct lettre edge. The MIME builder comes through
+# `turnloop_smtp::message`, which re-exports lettre's `Message` and
+# `message::header` from a dependency pinned to lettre's `builder` feature.
+# Declaring lettre here instead would drag `tokio1` / `tokio1-rustls-tls` /
+# `pool` back in, which is the whole tokio edge this crate's mail surface had.
 
 # Image
 image = { version = "0.25", optional = true }

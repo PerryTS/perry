@@ -93,7 +93,9 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                         js_closure_call0(cb);
                     }
                 }
-                servers().lock().unwrap().remove(&server_id);
+                if let Some(server) = servers().lock().unwrap().remove(&server_id) {
+                    liveness::step(liveness::server_keeps_alive(&server), false);
+                }
                 listeners().lock().unwrap().remove(&server_id);
                 once_flags().lock().unwrap().remove(&server_id);
             }
@@ -170,7 +172,9 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                         js_closure_call0(cb);
                     }
                 }
-                sockets().lock().unwrap().remove(&socket_id);
+                if let Some(socket) = sockets().lock().unwrap().remove(&socket_id) {
+                    liveness::step(liveness::socket_keeps_alive(&socket), false);
+                }
                 listeners().lock().unwrap().remove(&socket_id);
                 once_flags().lock().unwrap().remove(&socket_id);
             }
@@ -198,21 +202,8 @@ pub fn js_tls_has_active_handles() -> i32 {
     if !pending_events().lock().unwrap().is_empty() {
         return 1;
     }
-    if servers()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|server| server.listening || (server.closing && server.active_connections > 0))
-    {
-        return 1;
-    }
-    if sockets()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|s| s.server_side && s.cmd_tx.is_some())
-    {
-        return 1;
-    }
-    0
+    // turnloop P0: O(1) (`tls/liveness.rs`); debug builds re-derive the count.
+    #[cfg(debug_assertions)]
+    liveness::debug_verify();
+    i32::from(liveness::any())
 }

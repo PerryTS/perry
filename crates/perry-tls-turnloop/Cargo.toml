@@ -1,0 +1,25 @@
+[package]
+name = "perry-tls-turnloop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The public TLS client installer for a turnloop socket — ALPN in, negotiated protocol and RFC 5929 channel binding out. Shared by the four database bindings and the HTTP/2 client."
+
+[lints]
+workspace = true
+
+[lib]
+# rlib only: it is linked *into* each binding's staticlib, never alongside it,
+# so it exports no symbol of its own. Same reason perry-db-turnloop is rlib.
+crate-type = ["rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+perry-tls-session.workspace = true
+turnloop-tls.workspace = true
+
+[dev-dependencies]
+# The crate references `perry_ffi::turnloop_net`'s externs, so a test binary
+# needs the runtime half of them to link even though these tests drive the
+# session in memory and never touch a handle.
+perry-ffi = { workspace = true, features = ["runtime-link"] }

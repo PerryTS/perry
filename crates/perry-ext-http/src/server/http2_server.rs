@@ -19,7 +19,6 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -60,6 +59,8 @@ mod controls;
 pub(crate) mod dispatch;
 mod pump;
 mod session;
+mod turnloop_glue;
+mod turnloop_listen;
 
 pub(crate) use controls::{
     numeric_value, queue_session_goaway, queue_session_ping, queue_session_settings,
@@ -72,6 +73,15 @@ pub(crate) use session::{
     local_client_connect_ready, local_server_handle_for_client, local_server_session_event_ready,
     mark_server_sessions_closed, mark_session_closed, parse_headers_object,
     register_server_session, start_client_request,
+};
+pub(crate) use turnloop_glue::{
+    bind_turnloop_client_port, bind_turnloop_session, bind_turnloop_stream_id,
+    complete_turnloop_ping, complete_turnloop_settings, mark_turnloop_client_connected,
+    mark_turnloop_session_closed, mark_turnloop_settings_acked, mark_turnloop_stream_closed,
+    queue_turnloop_client_body, queue_turnloop_client_response, queue_turnloop_goaway,
+    queue_turnloop_remote_settings, queue_turnloop_session_error, queue_turnloop_stream_error,
+    queue_turnloop_stream_reset, register_turnloop_server_session, register_turnloop_stream_handle,
+    server_has_stream_listener, turnloop_conn_of_session, turnloop_target_of_stream,
 };
 
 // `handle_h2_request` is consumed by `js_node_http2_server_listen` below.
@@ -176,6 +186,13 @@ pub struct Http2SecureServer {
     pub tls_config: Option<Arc<rustls::ServerConfig>>,
     pub plaintext: bool,
     pub base: HttpServer,
+    /// `options.settings`, merged over the defaults at construction because the
+    /// options object is not kept until `listen()`.
+    pub settings: Http2SettingsState,
+    /// Node's `allowHTTP1`: what an ALPN negotiation of `http/1.1` means.
+    pub allow_http1: bool,
+    /// The turnloop listener id, or zero when this server is on hyper.
+    pub turnloop_listener: i64,
 }
 
 pub struct Http2SessionHandle {
@@ -199,11 +216,14 @@ pub struct Http2SessionHandle {
     pub local_settings: Http2SettingsState,
     pub remote_settings: Http2SettingsState,
     pub local_window_size: i64,
-    pub sender: Arc<Mutex<Option<h2::client::SendRequest<Bytes>>>>,
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
     pub pending_callbacks: Vec<i64>,
     pub timeout_callback: i64,
+    /// The turnloop connection carrying this session, or zero when the
+    /// session has no transport at all. Every control surface routes on this:
+    /// non-zero means the frame reaches a wire.
+    pub turnloop_conn: i64,
 }
 
 pub struct Http2StreamHandle {
@@ -222,6 +242,14 @@ pub struct Http2StreamHandle {
     pub response_tx: Option<oneshot::Sender<HyperResponseShape>>,
     pub response_status: u16,
     pub response_headers: Vec<(String, String)>,
+    /// The turnloop connection this stream belongs to; zero on the legacy
+    /// transport. `id` then carries the real RFC 9113 stream id rather than the
+    /// process-global odd counter.
+    pub turnloop_conn: i64,
+    /// Whether `respond()` / `end()` already produced a response on the
+    /// turnloop path. The hyper path answers the same question with
+    /// `response_tx.is_none()`, which a turnloop stream has no sender for.
+    pub turnloop_responded: bool,
 }
 
 pub(crate) enum Http2PendingEvent {
@@ -456,11 +484,15 @@ pub unsafe extern "C" fn js_node_http2_create_secure_server(opts_f64: f64, handl
         }
     };
 
+    let (settings, allow_http1) = turnloop_listen::server_options(opts_f64);
     register_handle(Http2SecureServer {
         handler,
         tls_config,
         plaintext: false,
         base: HttpServer::with_handler(handler),
+        settings,
+        allow_http1,
+        turnloop_listener: 0,
     })
 }
 
@@ -478,11 +510,20 @@ pub unsafe extern "C" fn js_node_http2_create_server(first_arg: f64, second_arg:
         0
     };
 
+    let options = if js_value_is_closure(first_bits as i64) != 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        first_arg
+    };
+    let (settings, allow_http1) = turnloop_listen::server_options(options);
     register_handle(Http2SecureServer {
         handler,
         tls_config: None,
         plaintext: true,
         base: HttpServer::with_handler(handler),
+        settings,
+        allow_http1,
+        turnloop_listener: 0,
     })
 }
 
@@ -508,6 +549,18 @@ pub(super) unsafe fn listen_http2_server(
         .host
         .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
     let callback = parsed.callback;
+
+    // The turnloop transport first: it binds synchronously, so
+    // `server.address().port` is correct inside the `listen(0, cb)` callback
+    // exactly as the hyper path's `std::net::TcpListener` bind made it.
+    if let Some((_id, _port, _host)) =
+        turnloop_listen::try_listen_on_turnloop(server_handle, &host, port)
+    {
+        if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
+            crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+        }
+        return server_handle;
+    }
 
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();

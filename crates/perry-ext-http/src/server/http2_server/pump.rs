@@ -90,6 +90,8 @@ pub(crate) async fn handle_h2_request(
             response_tx: Some(response_tx),
             response_status: 200,
             response_headers: Vec::new(),
+            turnloop_conn: 0,
+            turnloop_responded: false,
         });
         let headers_vec = stream_headers
             .iter()
@@ -135,6 +137,22 @@ pub(crate) async fn handle_h2_request(
 /// Non-blocking try_recv for HTTP/2 pending requests. Called by
 /// `js_node_http_server_process_pending` in `server.rs` each tick.
 pub(crate) fn try_recv_pending_h2_nonblocking(server_handle: i64) -> Option<HttpPendingRequest> {
+    // The turnloop transport queues on this thread; there is no channel and no
+    // thread hop, but the dispatch tick is the same one hyper's `mpsc` was
+    // drained on, so the event-loop phase order does not move.
+    if let Some(pending) = crate::server::turnloop_h2::take_pending(server_handle) {
+        return Some(pending);
+    }
+    // A connection this server accepted, negotiated `http/1.1` on, and handed to
+    // the HTTP/1.1 state machine (`allowHTTP1`) queues into P5's own queue —
+    // keyed by THIS handle, which is an `Http2SecureServer`. `js_node_http_server_
+    // process_pending` drains that queue only for `HttpServer` handles, so
+    // without this an ALPN `http/1.1` request is decoded, queued, and never
+    // dispatched: `curl --http1.1` against `createSecureServer({ allowHTTP1:
+    // true })` hangs forever. Measured.
+    if let Some(pending) = crate::server::turnloop_serve::take_pending(server_handle) {
+        return Some(pending);
+    }
     if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
         if let Some(rx) = s.base.request_rx.as_mut() {
             return rx.try_recv().ok();
@@ -234,8 +252,16 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
 }
 
 fn synthesize_default_h2_stream_response(stream_handle: i64) {
+    let turnloop = super::turnloop_target_of_stream(stream_handle);
     if let Some(stream) = get_handle_mut::<Http2StreamHandle>(stream_handle) {
-        if stream.response_tx.is_none() {
+        // "Has this stream already been answered?" — `response_tx.is_none()` on
+        // the legacy transport, an explicit flag on turnloop, which has no
+        // sender to consume.
+        let answered = match turnloop {
+            Some(_) => stream.turnloop_responded,
+            None => stream.response_tx.is_none(),
+        };
+        if answered {
             return;
         }
         stream.headers_sent = true;
@@ -257,8 +283,16 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
             body: crate::server::response::ShapeBody::Full(Vec::new()),
             auto_content_length: false,
         };
-        if let Some(tx) = stream.response_tx.take() {
-            let _ = tx.send(shape);
+        match turnloop {
+            Some((conn, h2_id)) => {
+                stream.turnloop_responded = true;
+                crate::server::turnloop_h2::h2_send_response(conn, h2_id, shape);
+            }
+            None => {
+                if let Some(tx) = stream.response_tx.take() {
+                    let _ = tx.send(shape);
+                }
+            }
         }
     }
 }
@@ -271,7 +305,7 @@ pub(crate) fn has_pending_h2_events() -> bool {
 }
 
 pub(crate) fn has_active_h2_clients() -> bool {
-    if has_pending_h2_events() {
+    if has_pending_h2_events() || crate::server::turnloop_h2::has_pending() {
         return true;
     }
     let mut active = false;
@@ -536,7 +570,6 @@ pub(crate) fn process_pending_h2_events() -> i32 {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
 
     fn test_session(
         server_handle: i64,
@@ -561,11 +594,11 @@ mod tests {
             local_settings: Http2SettingsState::default(),
             remote_settings: Http2SettingsState::default(),
             local_window_size: 65_535,
-            sender: Arc::new(Mutex::new(None)),
             listeners: HashMap::new(),
             close_callbacks: Vec::new(),
             pending_callbacks: Vec::new(),
             timeout_callback: 0,
+            turnloop_conn: 0,
         }
     }
 

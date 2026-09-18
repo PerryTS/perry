@@ -6,24 +6,27 @@
 //!
 //! # Design
 //!
-//! When the hyper service fn in `server.rs` sees a request with
-//! `Connection: Upgrade` + `Upgrade: websocket`, fastify diverges
-//! from the normal route flow:
+//! `perry_http_server` decodes the request head, sees `Connection: upgrade`
+//! and asks `FastifyHost::takes_upgrades`. For an app that registered
+//! `app.server.on('upgrade', …)` handlers the answer is yes, and the core
+//! stops being an HTTP connection:
 //!
-//! 1. The accepting tokio task awaits `hyper::upgrade::on(&mut req)`,
-//!    yielding an `Upgraded` stream after hyper sends the 101.
-//! 2. It builds a `tokio_tungstenite::WebSocketStream` from that raw
-//!    socket with `Role::Server` (the handshake bytes were already
-//!    exchanged via the 101 response we returned synchronously).
-//! 3. The resulting stream is registered in perry-ext-ws's connection
-//!    registry through `perry_ext_ws::register_external_ws_stream`,
-//!    yielding the standard `ws_id`.
-//! 4. The fastify `upgrade_handlers` (registered via
-//!    `app.server.on("upgrade", cb)`) are fired with
-//!    `(req, ws_id, head)`. `ws_id` is the same integer id the
-//!    standalone `WebSocketServer({port})` path produces, so
-//!    `wss.handleUpgrade(req, socket, head, cb)` re-dispatches it
-//!    through perry-ext-ws's `js_ws_handle_upgrade`.
+//! 1. `FastifyHost::on_upgrade` validates the handshake and writes the `101`
+//!    through [`perry_ext_ws::accept_http_upgrade`], which then installs
+//!    `turnloop_websocket`'s sans-I/O codec on the connection in place.
+//! 2. That yields the standard `ws_id` — the same integer the standalone
+//!    `WebSocketServer({port})` path produces, so
+//!    `wss.handleUpgrade(req, socket, head, cb)` re-dispatches it through
+//!    perry-ext-ws's `js_ws_handle_upgrade`.
+//! 3. A `FastifyPendingUpgrade` is queued, because `on_upgrade` runs in the
+//!    completion sink and must not run JS.
+//! 4. `js_fastify_process_pending` fires the `upgrade_handlers` with
+//!    `(req, ws_id, head)` on the main thread's own tick.
+//!
+//! What this replaced: a synchronous hand-built `101` so hyper would switch
+//! protocols, a `tokio::spawn`ed task awaiting `hyper::upgrade::on`, a
+//! `tokio_tungstenite::WebSocketStream::from_raw_socket`, and a
+//! worker-to-main channel hop. Steps 3 and 4 are the only ones that survive.
 
 use perry_ffi::{
     alloc_string, build_object_shape, get_handle, js_object_alloc_with_shape, js_object_set_field,
@@ -40,26 +43,6 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 extern "C" {
     fn js_promise_run_microtasks() -> i32;
-}
-
-/// Test whether a request looks like a WebSocket upgrade — checks
-/// `Connection: Upgrade` (case-insensitive contains) and
-/// `Upgrade: websocket` (case-insensitive). Hyper's `headers()`
-/// already lowercases names, so we only normalize values. Identical
-/// to perry-ext-http's `is_websocket_upgrade`.
-pub(crate) fn is_websocket_upgrade(req: &hyper::Request<hyper::body::Incoming>) -> bool {
-    let h = req.headers();
-    let connection_ok = h
-        .get("connection")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_ascii_lowercase().contains("upgrade"))
-        .unwrap_or(false);
-    let upgrade_ok = h
-        .get("upgrade")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.eq_ignore_ascii_case("websocket"))
-        .unwrap_or(false);
-    connection_ok && upgrade_ok
 }
 
 /// Build a minimal pointer-tagged request object exposing

@@ -355,7 +355,9 @@ pub extern "C" fn js_error_new_with_message(message: *mut StringHeader) -> *mut 
 }
 
 /// Create a new Error-like object with a custom `.name` and stack prefix.
-pub(crate) fn js_error_new_with_name_message(
+/// `pub` for perry-stdlib's fetch transport, whose `cause` carries the `.name`
+/// Node sets (`ConnectionRefused`, `AbortError`, …).
+pub fn js_error_new_with_name_message(
     name: &'static [u8],
     message: *mut StringHeader,
 ) -> *mut ErrorHeader {

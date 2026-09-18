@@ -264,7 +264,12 @@ fn notify_fetch_abort(signal_ptr: i64) {
     }
     #[cfg(not(feature = "external-fetch-symbols"))]
     {
-        let _ = signal_ptr;
+        // A default build reaches the global `fetch` through the registered
+        // function pointer, not the linked symbol, so the abort hook has to be
+        // registered too. Without this the whole `AbortSignal` path was dead in
+        // exactly the configuration `fetch(url, { signal })` normally compiles
+        // to — see `global_fetch::js_register_global_fetch_notify_abort`.
+        crate::object::global_fetch::notify_fetch_abort_registered(signal_ptr);
     }
 }
 

@@ -123,6 +123,13 @@ fn ipc_function4(name: &str, thunk: IpcFunction4, length: u32) -> f64 {
 
 /// Initialize the inherited child IPC channel once. This also removes Node's
 /// bootstrap-only env vars so `process.env.NODE_CHANNEL_FD` follows Node.
+/// turnloop P0: whether `process_ipc_ensure_initialized` has finished probing
+/// for an inherited IPC channel, and whether it found one. `available` never
+/// reverts once set, so after a probe that found no channel the per-turn
+/// keep-alive check answers from these two atomics without the IPC lock.
+static IPC_PROBED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static IPC_AVAILABLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub(crate) fn process_ipc_ensure_initialized() {
     {
         let mut state = ipc_lock();
@@ -148,6 +155,7 @@ pub(crate) fn process_ipc_ensure_initialized() {
     {
         let _ = (fd_var, serialization_mode);
     }
+    IPC_PROBED.store(true, std::sync::atomic::Ordering::Release);
 }
 
 #[cfg(unix)]
@@ -168,6 +176,7 @@ fn initialize_unix_ipc(fd_var: Option<String>, serialization_mode: &str) {
     spawn_ipc_reader(stream, advanced);
 
     let mut state = ipc_lock();
+    IPC_AVAILABLE.store(true, std::sync::atomic::Ordering::Release);
     state.available = true;
     state.connected = true;
     state.refed = false;
@@ -223,6 +232,7 @@ fn initialize_windows_ipc(fd_var: Option<String>, serialization_mode: &str) {
     spawn_ipc_reader(stream, advanced);
 
     let mut state = ipc_lock();
+    IPC_AVAILABLE.store(true, std::sync::atomic::Ordering::Release);
     state.available = true;
     state.connected = true;
     state.refed = false;
@@ -676,6 +686,11 @@ pub extern "C" fn js_process_ipc_drain() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn js_process_ipc_has_active() -> i32 {
+    if IPC_PROBED.load(std::sync::atomic::Ordering::Acquire)
+        && !IPC_AVAILABLE.load(std::sync::atomic::Ordering::Acquire)
+    {
+        return 0;
+    }
     process_ipc_ensure_initialized();
     let state = ipc_lock();
     if state.available && state.connected && state.refed {

@@ -1367,6 +1367,9 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // safepoints the schedule actually saw. Inert (one cached-`Option` load) and
     // once-only when the mode is off.
     schedule::report_exit_summary();
+    // turnloop P0: destroy this thread's agent loop and print the
+    // `PERRY_LOOP_STATS=1` line on the same all-exits funnel.
+    crate::event_pump::shutdown_wait_driver();
     crate::r#box::report_box_stats_at_exit();
     crate::arena::alloc_sample::report("exit");
     diag_sites::report_charges("exit");

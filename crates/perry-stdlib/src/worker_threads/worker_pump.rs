@@ -129,7 +129,8 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
             WorkerEvent::Exit(worker_id, code) => {
                 let (terminate_promise, async_resources) =
                     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
-                        worker.alive = false;
+                        let refed = worker.refed;
+                        worker.set_liveness(false, refed);
                         (
                             worker.terminate_promise.take(),
                             Some(worker.async_resources),
@@ -197,11 +198,18 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
     let eof = STDIN_EOF.with(|eof| *eof.borrow());
     let has_messages = PENDING_MESSAGES.with(|q| !q.borrow().is_empty());
     let has_worker_events = !PARENT_EVENTS.lock().unwrap().is_empty();
-    let has_live_refed_worker = WORKERS
-        .lock()
-        .unwrap()
-        .values()
-        .any(|worker| worker.alive && worker.refed);
+    // turnloop P0: O(1) (`LIVE_REFED_WORKERS`); debug builds re-derive it.
+    let has_live_refed_worker = LIVE_REFED_WORKERS.load(Ordering::Acquire) != 0;
+    #[cfg(debug_assertions)]
+    {
+        let workers = WORKERS.lock().unwrap();
+        let expected = workers.values().filter(|w| w.alive && w.refed).count() as u64;
+        debug_assert_eq!(
+            LIVE_REFED_WORKERS.load(Ordering::Acquire),
+            expected,
+            "live worker count drifted from WORKERS"
+        );
+    }
 
     if has_messages || has_worker_events || has_live_refed_worker || (started && !eof) {
         1

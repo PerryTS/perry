@@ -53,6 +53,20 @@ pub use async_runtime::{
     PERRY_NATIVE_ASYNC_THREAD_MAIN, PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 
+pub mod turnloop_net;
+
+/// turnloop P10: run a job on the loop of the agent this thread acts for.
+///
+/// What a binding uses INSTEAD of keeping an async runtime alive when it is a
+/// second thread acting for an agent another thread owns — the single decline
+/// reason behind most of the remaining tokio edges in the binding crates.
+pub mod agent_post;
+
+/// perry-ffi async ABI v2: blocking and CPU-bound work on turnloop's shared
+/// bounded pool, with the result delivered on the thread that owns the JS
+/// heap. See the module docs for what v1 remains and why.
+pub mod pool;
+
 mod tls_environment;
 pub use tls_environment::{node_tls_client_environment, NodeTlsClientEnvironment};
 

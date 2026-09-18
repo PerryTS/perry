@@ -56,10 +56,10 @@ pub(crate) use listeners::{
 // Networking helpers + `dgram_emit_message` (the latter is called from
 // `crate::dgram_reactor`).
 pub(crate) use net::{
-    bind_socket, build_address_info, build_rinfo, deterministic, dgram_emit_message, ensure_bound,
-    finish_send, live_udp, lookup_bound_socket, make_buffer, message_bytes, parse_multicast_v4,
-    parse_multicast_v6, reactor_id, real_bind, real_send_bytes, ref_impl, remove_bound_socket,
-    socket_error_value, with_udp,
+    bind_socket, build_address_info, build_rinfo, complete_send, deterministic, dgram_emit_message,
+    emit_socket_error, ensure_bound, finish_send, live_udp, lookup_bound_socket, make_buffer,
+    message_bytes, parse_multicast_v4, parse_multicast_v6, reactor_id, real_bind, real_send_bytes,
+    ref_impl, remove_bound_socket, socket_error_value, with_udp,
 };
 
 // Socket operation implementations (used by thunks + FFI siblings).

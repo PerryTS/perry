@@ -70,6 +70,9 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             server_id: None,
             server_connection_active: false,
             tls: Default::default(),
+            // An adopted tokio `TcpStream` (an HTTP upgrade handing its
+            // connection to `net`) keeps the tokio transport by construction.
+            turnloop: false,
         },
     );
     statics::listeners()
@@ -81,6 +84,70 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
         run_socket_task(id, transport, &mut rx).await;
     });
     id
+}
+
+/// Adopt an already-accepted **turnloop** connection as a `net.Socket` (P5).
+///
+/// The HTTP `'upgrade'` handoff with no descriptor moving: the runtime's
+/// `turnloop_net::transfer` has already pointed the connection's completions
+/// at this crate's sink, keeping the id and the outstanding multishot read, so
+/// the next byte arrives here with no gap and no resubmission. All this has to
+/// do is publish the JS-visible socket record under the same id.
+///
+/// Called on the loop thread from perry-ext-http's completion sink, so it may
+/// touch the registries directly but must not build JS values — it doesn't.
+pub fn adopt_turnloop_upgrade(id: i64) -> bool {
+    if id == perry_ffi::INVALID_HANDLE {
+        return false;
+    }
+    let local = crate::turnloop_io::local_endpoint(id)
+        .as_ref()
+        .and_then(endpoint_to_addr);
+    let remote = perry_ffi::turnloop_net::peer_address(id)
+        .as_ref()
+        .and_then(endpoint_to_addr);
+    // A turnloop socket never uses its command channel; the receiver is
+    // dropped immediately, exactly as `register_turnloop_socket` does.
+    let (tx, _rx) = mpsc::unbounded_channel::<SocketCommand>();
+    statics::sockets().lock().unwrap().insert(
+        id,
+        SocketState {
+            tcp_async_id: 0,
+            connect_async_id: 0,
+            shutdown_async_id: 0,
+            cmd_tx: tx,
+            pending_rx: None,
+            is_open: true,
+            raw_fd: None,
+            refed: true,
+            local_addr: local,
+            remote_addr: remote,
+            raw: None,
+            destroyed: false,
+            bytes_read: 0,
+            bytes_written: 0,
+            bytes_queued: 0,
+            timeout: None,
+            type_of_service: 0,
+            server_id: None,
+            server_connection_active: false,
+            tls: Default::default(),
+            turnloop: true,
+        },
+    );
+    statics::listeners()
+        .lock()
+        .unwrap()
+        .insert(id, HashMap::new());
+    true
+}
+
+fn endpoint_to_addr(endpoint: &perry_ffi::turnloop_net::Endpoint) -> Option<std::net::SocketAddr> {
+    endpoint
+        .address
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| std::net::SocketAddr::new(ip, endpoint.port))
 }
 
 /// Main-thread companion to `adopt_upgraded_tcp_stream`: registers the GC

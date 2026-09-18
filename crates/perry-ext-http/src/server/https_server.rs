@@ -489,7 +489,43 @@ pub(super) unsafe fn listen_https_server(
             return server_handle;
         }
     };
-    crate::tls_client::register_internal_https_server(actual_port, certificate_cn);
+    crate::tls_client::register_internal_https_server(actual_port, certificate_cn.clone());
+
+    // P5: bind and accept on the agent's turnloop loop, with the same rustls
+    // configuration driven through its unbuffered API instead of
+    // `tokio_rustls::TlsAcceptor`. Declines for the same three reasons the
+    // plain-HTTP path declines (`try_listen_on_turnloop`), plus one more: the
+    // `std::net::TcpListener` bound above is already holding the port, so it
+    // has to be released before turnloop can bind the same address.
+    if turnloop_https_listen(
+        server_handle,
+        &host,
+        actual_port,
+        std_listener,
+        tls_config.clone(),
+        no_delay,
+    ) {
+        let server_async_id =
+            crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len());
+        if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+            s.base.async_id = server_async_id;
+            crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+        } else {
+            crate::js_async_hooks_provider_destroy(server_async_id);
+        }
+        return server_handle;
+    }
+    let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("[node:https] rebind {}:{} failed: {}", host, actual_port, e);
+            return server_handle;
+        }
+    };
+    if let Err(e) = std_listener.set_nonblocking(true) {
+        eprintln!("[node:https] set_nonblocking failed: {}", e);
+        return server_handle;
+    }
 
     // TLS accept workers queue Rust request handles; JS callbacks run from
     // the main-thread HTTP pump, so listener lifetime is GC-safe.
@@ -758,8 +794,8 @@ async fn handle_https_request(
     perry_ffi::notify_main_thread();
     match response_rx.await {
         Ok(mut shape) => {
-            if http_version == hyper::Version::HTTP_10 {
-                shape.response_version = Some(hyper::Version::HTTP_10);
+            if http_version == http::Version::HTTP_10 {
+                shape.response_version = Some(http::Version::HTTP_10);
             }
             let server_closing = get_handle::<HttpsServer>(server_handle)
                 .map(|server| !server.base.listening)
@@ -792,7 +828,60 @@ async fn handle_https_request(
 
 /// Non-blocking try_recv for HTTPS pending requests. Called by
 /// `js_node_http_server_process_pending` in `server.rs` each tick.
+/// Hand the already-bound port to turnloop, if this thread can take that path.
+///
+/// The `std::net::TcpListener` bound synchronously above (so
+/// `server.address().port` is right inside the `listen` callback) is dropped
+/// *first*: turnloop binds the same address itself, and two listeners on one
+/// port without `SO_REUSEPORT` is an `EADDRINUSE`. On failure the caller
+/// rebinds and keeps the hyper path, which is why the drop is safe.
+fn turnloop_https_listen(
+    server_handle: i64,
+    host: &str,
+    port: u16,
+    std_listener: std::net::TcpListener,
+    tls_config: Arc<rustls::ServerConfig>,
+    no_delay: bool,
+) -> bool {
+    // An attached `WebSocketServer` no longer declines: its handshake runs over
+    // the connection rather than over an owned stream, and the 101 and every
+    // frame go out through the same TLS layer the HTTP responses did.
+    //
+    // A cluster worker no longer declines either. turnloop 0.1.0-alpha.6's
+    // `ReusePort::Share` is what `cluster_bind::bind_listener` does by hand, so
+    // the worker binds the port it already bound above, the same way, on the
+    // loop. See `server::turnloop_listen::try_listen_on_turnloop` for why it is
+    // `Share` and not `Distribute`, and for the SCHED_RR fd-passing half that
+    // is still open — `https.createServer` has no rr-inject path at all, so a
+    // SCHED_RR worker here reaches this with the reuseport bind either way.
+    if !crate::server::turnloop_serve::enabled() {
+        return false;
+    }
+    let reuse_port = crate::server::cluster_bind::is_cluster_worker();
+    let idle_close_ms = match get_handle::<HttpsServer>(server_handle) {
+        Some(server) => crate::server::server::idle_close_ms(&server.base),
+        None => return false,
+    };
+    drop(std_listener);
+    match crate::server::turnloop_serve::listen(
+        server_handle,
+        host,
+        port,
+        511,
+        Some(tls_config),
+        reuse_port,
+        no_delay,
+        idle_close_ms,
+    ) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
 pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<HttpPendingRequest> {
+    if let Some(pending) = crate::server::turnloop_serve::take_pending(server_handle) {
+        return Some(pending);
+    }
     if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
         if let Some(rx) = s.base.request_rx.as_mut() {
             return rx.try_recv().ok();
@@ -969,6 +1058,10 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
         s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
         crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
+    }
+    // P5: stop accepting on the turnloop listener, if this server has one.
+    if let Some(listener) = crate::server::turnloop_serve::listener_for_server(handle) {
+        crate::server::turnloop_serve::close_listener(listener);
     }
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905/#4971).

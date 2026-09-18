@@ -68,6 +68,9 @@ mod response_end;
 mod response_fast;
 mod server;
 mod tls;
+mod turnloop_h2;
+mod turnloop_route;
+mod turnloop_serve;
 mod types;
 mod upgrade;
 
@@ -421,6 +424,9 @@ mod tests {
             tls_config: None,
             plaintext: false,
             base: http_server(h2_base_handler, listener_map("close", h2_listener)),
+            settings: crate::server::http2_session_settings::Http2SettingsState::default(),
+            allow_http1: false,
+            turnloop_listener: 0,
         });
 
         let incoming_listener = young_gc_root();

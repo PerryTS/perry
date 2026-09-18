@@ -356,6 +356,33 @@ jobs:
           python3 scripts/addr_class_inventory.py --self-test
           python3 scripts/addr_class_inventory.py
 
+      # Two bindings on one turnloop completion-sink slot is a correctness bug:
+      # every completion goes to whichever registered last, which reads the
+      # token's low bits as one of its OWN connection ids. Three pairs shipped
+      # that way — the P7 database lane and the P5 server lane numbered from
+      # two different ledgers — and reaching one needs a program linking both
+      # bindings (a fastify app using mysql2), so no test caught it. The
+      # runtime now refuses a duplicate registration; this makes the collision
+      # fail the build instead of quietly costing one binding its transport.
+      - name: turnloop subsystem slot collisions
+        if: ${{ !cancelled() }}
+        run: python3 scripts/subsystem_slots.py
+
+      # turnloop migration (docs/turnloop/): Perry is moving off tokio, and the
+      # only record of what is left used to be eight lane reports written at
+      # eight different commits — which had already gone stale in both
+      # directions by the time P8 read them. This re-derives the remaining
+      # surface from the tree: every (workspace crate -> tokio-family crate)
+      # manifest edge and every tokio-family package in Cargo.lock, compared
+      # strictly against scripts/tokio_inventory.json. A NEW edge fails, and so
+      # does a STALE entry, so a lane that removes an edge must delete its own
+      # line and the file can never describe a tree that is gone.
+      - name: tokio dependency inventory
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/tokio_inventory.py --self-test
+          python3 scripts/tokio_inventory.py
+
       # String payloads live directly after StringHeader in the moving GC heap.
       # Keep new consumers on the owned-copy or rooted-reread APIs instead of
       # adding more layout arithmetic and caller-chosen `&'static str` helpers.
@@ -847,6 +874,17 @@ jobs:
             exit 1
           fi
           echo "✅ API docs match the manifest."
+
+      # The tokio-vs-turnloop A/B has two arms, and only one of them is built
+      # by any other job. `tokio-wait-driver` compiles the legacy park instead
+      # of the per-agent turnloop loop, and it silently stopped compiling in
+      # the P3 timers commit — an `event_pump.rs` import left without the cfg
+      # every sibling item carries. A baseline that does not build is not a
+      # baseline, and nothing was red, so nobody looked. `check`, not
+      # `warnings`: the arm legitimately leaves turnloop-side code dead.
+      - name: Build the tokio-wait-driver A/B baseline arm
+        if: ${{ !cancelled() }}
+        run: cargo check -p perry-stdlib --features tokio-wait-driver
 
   # ---------------------------------------------------------------------------
   # rustc warnings gate

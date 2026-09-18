@@ -3,6 +3,7 @@
 //! Native implementation of the 'argon2' npm package.
 //! Provides secure password hashing using Argon2id algorithm.
 
+use crate::common::async_bridge::pool_for_promise_deferred;
 use crate::common::spawn_for_promise;
 use crate::common::string_from_header_lossy as string_from_header;
 use argon2::{
@@ -28,19 +29,26 @@ pub unsafe extern "C" fn js_argon2_hash(password_ptr: *const StringHeader) -> *m
         }
     };
 
-    spawn_for_promise(promise as *mut u8, async move {
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-
-        match argon2.hash_password(password.as_bytes(), &salt) {
-            Ok(hash) => {
-                let hash_str = hash.to_string();
-                let ptr = js_string_from_bytes(hash_str.as_ptr(), hash_str.len() as u32);
-                Ok(perry_runtime::JSValue::string_ptr(ptr).bits())
-            }
-            Err(e) => Err(format!("Failed to hash password: {}", e)),
-        }
-    });
+    // turnloop P4: argon2 is the phase's clearest case. The hash used to run
+    // *inline* inside an async block on the shared current-thread runtime —
+    // that is, on the thread that owns the JS heap — so `argon2.hash()` stalled
+    // the event loop for the whole derivation and only the resolution was
+    // deferred. It now runs on turnloop's shared blocking pool, and the JS
+    // string is built on the owning thread where allocation is legal.
+    pool_for_promise_deferred(
+        promise as *mut u8,
+        move || {
+            let salt = SaltString::generate(&mut OsRng);
+            Argon2::default()
+                .hash_password(password.as_bytes(), &salt)
+                .map(|hash| hash.to_string())
+                .map_err(|e| format!("Failed to hash password: {}", e))
+        },
+        move |hash: String| {
+            let ptr = js_string_from_bytes(hash.as_ptr(), hash.len() as u32);
+            perry_runtime::JSValue::string_ptr(ptr).bits()
+        },
+    );
 
     promise
 }
@@ -99,19 +107,19 @@ pub unsafe extern "C" fn js_argon2_verify(
         }
     };
 
-    spawn_for_promise(promise as *mut u8, async move {
-        let parsed_hash = match PasswordHash::new(&hash_str) {
-            Ok(h) => h,
-            Err(e) => return Err(format!("Invalid hash format: {}", e)),
-        };
-
-        let argon2 = Argon2::default();
-        let is_valid = argon2
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .is_ok();
-
-        Ok(perry_runtime::JSValue::bool(is_valid).bits())
-    });
+    // turnloop P4: same move as `hash` above — the verification is the same
+    // memory-hard derivation and cost the event loop the same stall.
+    pool_for_promise_deferred(
+        promise as *mut u8,
+        move || -> Result<bool, String> {
+            let parsed_hash =
+                PasswordHash::new(&hash_str).map_err(|e| format!("Invalid hash format: {}", e))?;
+            Ok(Argon2::default()
+                .verify_password(password.as_bytes(), &parsed_hash)
+                .is_ok())
+        },
+        move |is_valid: bool| perry_runtime::JSValue::bool(is_valid).bits(),
+    );
 
     promise
 }

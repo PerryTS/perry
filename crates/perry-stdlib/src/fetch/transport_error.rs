@@ -8,6 +8,10 @@ pub(crate) struct FetchFailure {
     errno: Option<i32>,
     syscall: Option<&'static str>,
     hostname: Option<String>,
+    /// `cause.name`. Transport failures are plain `Error`s, which is what Node
+    /// reports for them; a request undici refuses to build carries a DOM
+    /// exception name instead (`NotSupportedError`).
+    cause_name: Option<&'static [u8]>,
 }
 
 impl FetchFailure {
@@ -27,6 +31,54 @@ impl FetchFailure {
         Self::classify(url, &chain, cause_message)
     }
 
+    /// The turnloop client engine's failure, which already carries Node's
+    /// `cause.code` and `syscall` rather than a prose chain to classify.
+    /// `getaddrinfo ENOTFOUND` keeps the `errno` and `hostname` Node reports,
+    /// because that is the one shape callers match on (the reqwest path
+    /// synthesized the same triple).
+    pub(crate) fn from_client(
+        code: &'static str,
+        message: String,
+        syscall: Option<&'static str>,
+    ) -> Self {
+        let hostname = (code == "ENOTFOUND").then(|| {
+            message
+                .rsplit(' ')
+                .next()
+                .filter(|h| !h.is_empty() && *h != code)
+                .unwrap_or_default()
+                .to_string()
+        });
+        Self {
+            cause_message: message,
+            code: Some(code),
+            errno: (code == "ENOTFOUND").then_some(-3008),
+            syscall,
+            hostname,
+            cause_name: None,
+        }
+    }
+
+    /// A request undici refuses to construct at all.
+    ///
+    /// The Fetch standard lists `Expect` among the forbidden request headers,
+    /// and undici does not silently drop it the way a "forbidden header" reader
+    /// might expect — it throws, so `fetch()` rejects with
+    /// `TypeError: fetch failed` whose cause is
+    /// `NotSupportedError: expect header not supported` with
+    /// `code: 'UND_ERR_NOT_SUPPORTED'`. Measured against Node 26.5.1, not
+    /// inferred from the spec text.
+    pub(crate) fn forbidden_header(name: &str) -> Self {
+        Self {
+            cause_message: format!("{name} header not supported"),
+            code: Some("UND_ERR_NOT_SUPPORTED"),
+            errno: None,
+            syscall: None,
+            hostname: None,
+            cause_name: Some(b"NotSupportedError"),
+        }
+    }
+
     fn classify(url: &str, chain: &str, fallback_message: String) -> Self {
         let hostname = reqwest::Url::parse(url)
             .ok()
@@ -39,6 +91,7 @@ impl FetchFailure {
                 errno: Some(-3008),
                 syscall: Some("getaddrinfo"),
                 hostname: Some(hostname),
+                cause_name: None,
             };
         }
         Self {
@@ -47,6 +100,7 @@ impl FetchFailure {
             errno: None,
             syscall: None,
             hostname: None,
+            cause_name: None,
         }
     }
 
@@ -67,7 +121,10 @@ impl FetchFailure {
         if let Some(hostname) = self.hostname {
             perry_runtime::node_submodules::register_error_hostname(cause_message, hostname);
         }
-        let cause = perry_runtime::error::js_error_new_with_message(cause_message);
+        let cause = match self.cause_name {
+            Some(name) => perry_runtime::error::js_error_new_with_name_message(name, cause_message),
+            None => perry_runtime::error::js_error_new_with_message(cause_message),
+        };
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let cause_handle =
             scope.root_nanbox_u64(perry_runtime::JSValue::pointer(cause as *const u8).bits());

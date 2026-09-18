@@ -1,15 +1,35 @@
 //! Native bindings for the npm `bcrypt` package.
 //!
-//! First async-wrapper port under #466 Phase 5 — exercises the
-//! `JsPromise` + `spawn_blocking` surface that perry-ffi grew in
-//! v0.5.1. Functionally identical to
-//! `crates/perry-stdlib/src/bcrypt.rs` modulo the eprintln! debug
-//! lines that have been on the perry-stdlib copy since v0.5.0.
+//! First async-wrapper port under #466 Phase 5. Since turnloop P4 it is the
+//! reference consumer of the perry-ffi async **ABI v2** ([`perry_ffi::pool`]):
+//! the hashing runs on turnloop's shared bounded pool and the JS string is
+//! built on the thread that owns the heap.
+//!
+//! That second half is not cosmetic. The v1 version called
+//! `promise.resolve_string(&hash)` from *inside* the `spawn_blocking` closure,
+//! i.e. it allocated a `StringHeader` on a tokio blocking-pool thread — the
+//! arena hazard #1824 describes, which perry-stdlib's copy had already worked
+//! around with a deferred converter and this crate had not. Under v2 the split
+//! is a trait bound: `work` is `Send`, `JsPromise` never crosses.
+//!
+//! Functionally identical to `crates/perry-stdlib/src/bcrypt.rs` modulo the
+//! eprintln! debug lines that have been on the perry-stdlib copy since v0.5.0.
 
 use perry_ffi::{
-    alloc_string, nanbox_string_bits, read_string, spawn_blocking, JsPromise, JsString, Promise,
-    StringHeader,
+    alloc_string, nanbox_string_bits, pool, read_string, JsPromise, JsString, Promise, StringHeader,
 };
+
+/// Settle `promise` from one pool outcome. Every async entry point below
+/// funnels through this so a cancelled or panicking job can never leave the
+/// awaiter hanging (turnloop DESIGN D4).
+fn settle_string(promise: JsPromise, outcome: pool::Outcome<Result<String, String>>, what: &str) {
+    match outcome {
+        pool::Outcome::Done(Ok(value)) => promise.resolve_string(&value),
+        pool::Outcome::Done(Err(message)) => promise.reject_string(&message),
+        pool::Outcome::Cancelled => promise.reject_string(&format!("{what} was cancelled")),
+        pool::Outcome::Failed => promise.reject_string(&format!("{what} failed")),
+    }
+}
 
 /// `bcrypt.hash(password, saltRounds) -> Promise<string>` — hash a
 /// password with the requested cost factor. Spawns the actual
@@ -35,10 +55,10 @@ pub unsafe extern "C" fn js_bcrypt_hash(
     };
 
     let cost = salt_rounds as u32;
-    spawn_blocking(move || match bcrypt::hash(&password, cost) {
-        Ok(hash) => promise.resolve_string(&hash),
-        Err(e) => promise.reject_string(&format!("Bcrypt error: {}", e)),
-    });
+    pool::submit_or_run_inline(
+        move || bcrypt::hash(&password, cost).map_err(|e| format!("Bcrypt error: {}", e)),
+        move |outcome| settle_string(promise, outcome, "bcrypt.hash"),
+    );
     raw
 }
 
@@ -66,10 +86,15 @@ pub unsafe extern "C" fn js_bcrypt_compare(
         return raw;
     };
 
-    spawn_blocking(move || match bcrypt::verify(&password, &hash) {
-        Ok(matches) => promise.resolve_bool(matches),
-        Err(e) => promise.reject_string(&format!("Bcrypt verify error: {}", e)),
-    });
+    pool::submit_or_run_inline(
+        move || bcrypt::verify(&password, &hash).map_err(|e| format!("Bcrypt verify error: {}", e)),
+        move |outcome| match outcome {
+            pool::Outcome::Done(Ok(matches)) => promise.resolve_bool(matches),
+            pool::Outcome::Done(Err(message)) => promise.reject_string(&message),
+            pool::Outcome::Cancelled => promise.reject_string("bcrypt.compare was cancelled"),
+            pool::Outcome::Failed => promise.reject_string("bcrypt.compare failed"),
+        },
+    );
     raw
 }
 
@@ -85,11 +110,14 @@ pub extern "C" fn js_bcrypt_gen_salt(rounds: f64) -> *mut Promise {
     let raw = promise.as_raw();
 
     let cost = rounds as u32;
-    spawn_blocking(move || match bcrypt::hash("", cost) {
-        Ok(h) if h.len() >= 29 => promise.resolve_string(&h[..29]),
-        Ok(_) => promise.reject_string("Invalid hash format"),
-        Err(e) => promise.reject_string(&format!("{}", e)),
-    });
+    pool::submit_or_run_inline(
+        move || match bcrypt::hash("", cost) {
+            Ok(h) if h.len() >= 29 => Ok(h[..29].to_string()),
+            Ok(_) => Err("Invalid hash format".to_string()),
+            Err(e) => Err(format!("{}", e)),
+        },
+        move |outcome| settle_string(promise, outcome, "bcrypt.genSalt"),
+    );
     raw
 }
 

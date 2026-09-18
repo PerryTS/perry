@@ -3,7 +3,7 @@ name = "perry-ext-ws"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for npm `ws` — WebSocket client + server via tokio-tungstenite. Uses only `perry-ffi`. Per-client + per-server task via spawn_blocking; per-module pending queue + GC root scanner for listener closures."
+description = "Native bindings for npm `ws` — WebSocket client + server on turnloop-websocket's sans-I/O protocol core, driven entirely over turnloop handles. No async runtime."
 
 [lints]
 workspace = true
@@ -13,19 +13,31 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-tokio = { workspace = true }
-# Use the workspace pin so perry-ext-http (issue #577) and
-# perry-ext-ws agree on the WebSocketStream<S> type for the upgrade
-# handoff; mismatched versions split type identity and the
-# `register_external_ws_stream` re-export silently fails to compile.
-tokio-tungstenite = { workspace = true }
-# #6117: already in the graph via tokio-tungstenite's rustls-tls, so this
-# pulls nothing new — declared so the connect path can install a process-level
-# CryptoProvider (feature unification enables both `ring` and `aws-lc-rs` in
-# the final link, and rustls panics on the first wss:// handshake unless one
-# is installed). Same pattern as perry-ext-net.
-rustls.workspace = true
-futures-util = "0.3"
+# The protocol, sans-I/O. This is what lets one codec serve every host: a
+# `turnloop_websocket::Connection` is a state machine over byte slices, so it
+# runs equally on a connection this crate dialled, one its own listener
+# accepted, and one `perry-ext-http` owns. It replaced `tokio-tungstenite`,
+# whose `WebSocketStream<S>` needs an owned `AsyncRead + AsyncWrite` that a
+# turnloop connection cannot produce -- the blocker P5 recorded for the
+# attached `WebSocketServer`.
+turnloop-websocket = { workspace = true }
+# The HTTP/1 head codec the upgrade handshake is expressed in. Already in the
+# graph via turnloop-websocket; declared because this crate names its types.
+turnloop-http = { workspace = true }
+url.workspace = true
+# The standalone `WebSocketServer({ port })`: `perry-http-server` is the shared
+# HTTP/1.1 server core on turnloop, and this crate is the caller its upgrade
+# hook was withheld for. Tokio-free, and small -- `perry-ffi` plus
+# `turnloop-http`, both already here.
+perry-http-server.workspace = true
+# The outbound `wss://` client's TLS, as a host-driven session above the same
+# turnloop handle rather than a stack that owns the socket. One copy of the
+# state machine, shared with perry-stdlib's fetch/SMTP engines and the CLI.
+perry-tls-session.workspace = true
+# rustls, its crypto provider (the handshake nonce) and `ClientConfig`, reached
+# through the same re-export `perry-tls-session` takes them from, so the two
+# cannot disagree about which rustls they mean.
+turnloop-tls.workspace = true
 lazy_static.workspace = true
 
 [dev-dependencies]

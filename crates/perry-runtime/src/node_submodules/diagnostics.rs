@@ -134,6 +134,11 @@ static DIAG_GLOBAL_ACTIVE_COUNTS: LazyLock<Mutex<HashMap<DiagChannelKey, usize>>
 /// deserialized only when the event-loop pump drains this queue.
 static DIAG_PENDING_PUBLISHES: LazyLock<Mutex<Vec<PendingDiagPublish>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
+/// turnloop P0: `DIAG_PENDING_PUBLISHES.len()`, republished under its lock
+/// after every mutation, so the per-turn microtask liveness check reads one
+/// atomic instead of locking (and first-touch initializing) the queue.
+static DIAG_PENDING_PUBLISHES_LEN: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 struct PendingDiagPublish {
     key: DiagChannelKey,
@@ -204,15 +209,13 @@ fn enqueue_cross_thread_publish(key: DiagChannelKey, data: f64, local_delivered:
             origin_thread,
             local_delivered,
         });
+        DIAG_PENDING_PUBLISHES_LEN.store(pending.len(), std::sync::atomic::Ordering::Release);
     }
     crate::event_pump::js_notify_main_thread();
 }
 
 pub fn diagnostics_channel_has_pending_publishes() -> bool {
-    !DIAG_PENDING_PUBLISHES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .is_empty()
+    DIAG_PENDING_PUBLISHES_LEN.load(std::sync::atomic::Ordering::Acquire) != 0
 }
 
 /// Drain worker-originated diagnostics publishes on the current event-loop
@@ -225,6 +228,7 @@ pub fn diagnostics_channel_process_pending() -> i32 {
         let mut pending = DIAG_PENDING_PUBLISHES
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        DIAG_PENDING_PUBLISHES_LEN.store(0, std::sync::atomic::Ordering::Release);
         std::mem::take(&mut *pending)
     };
     let mut delivered = 0i32;
@@ -261,6 +265,7 @@ pub fn diagnostics_channel_process_pending() -> i32 {
         // thread first.
         retained.append(&mut *pending);
         *pending = retained;
+        DIAG_PENDING_PUBLISHES_LEN.store(pending.len(), std::sync::atomic::Ordering::Release);
     }
     delivered
 }

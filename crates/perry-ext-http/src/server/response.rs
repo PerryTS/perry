@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 
 use bytes::Bytes;
+use http::header::{HeaderName, HeaderValue};
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
-use hyper::header::{HeaderName, HeaderValue};
 use hyper::{HeaderMap, Response, StatusCode};
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
@@ -275,6 +275,16 @@ pub struct ServerResponse {
     /// flips `true` after `destroy()`, and a post-destroy `write(chunk, cb)`
     /// invokes `cb` with an `ERR_STREAM_DESTROYED` error instead of buffering.
     pub destroyed: bool,
+    /// P5: the turnloop connection this response writes to, and the request
+    /// ordinal it answers. `Some` replaces both channel fields above — there
+    /// is no hyper task to hand a shape to, because the handler, the codec and
+    /// the socket are all on the same thread. `seq` is what keeps a late
+    /// `res.end()` from writing onto the connection's *next* request after the
+    /// first one was destroyed.
+    pub turnloop: Option<(i64, u64)>,
+    /// P5: the head has gone out and further writes stream straight to the
+    /// socket. The turnloop twin of `stream_tx.is_some()`.
+    pub turnloop_streaming: bool,
 }
 
 /// Owned shape produced by `.end()` — the per-request oneshot channel
@@ -282,7 +292,7 @@ pub struct ServerResponse {
 pub struct HyperResponseShape {
     pub status: u16,
     pub status_message: Option<String>,
-    pub response_version: Option<hyper::Version>,
+    pub response_version: Option<http::Version>,
     pub headers: Vec<(String, String)>,
     pub trailers: Vec<(String, String)>,
     pub body: ShapeBody,
@@ -359,73 +369,12 @@ impl HyperResponseShape {
         builder.body(body).unwrap()
     }
 
-    /// Inject Node-compatible default `Connection` / `Keep-Alive` headers
-    /// (#2132). Node's HTTP/1.x server appends `Connection: keep-alive` plus
-    /// `Keep-Alive: timeout=<keepAliveTimeout/1000>` whenever the connection
-    /// is kept alive, and `Connection: close` otherwise. Hyper drives the
-    /// transport-level keep-alive itself but does not surface these headers in
-    /// the response bytes, so byte-for-byte parity tests — and any client
-    /// reading `res.headers.connection` / `res.headers['keep-alive']` — see
-    /// them missing. Add them before handing the shape to hyper, unless the
-    /// handler already set a `Connection` header explicitly. HTTP/2 manages
-    /// connection reuse at the protocol level, so it gets neither header.
-    pub fn apply_default_connection_headers(
-        &mut self,
-        version: hyper::Version,
-        req_connection: Option<&str>,
-        keep_alive_timeout_ms: f64,
-    ) {
-        if self
-            .headers
-            .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("connection"))
-        {
-            return;
-        }
-        if matches!(version, hyper::Version::HTTP_2 | hyper::Version::HTTP_3) {
-            return;
-        }
-
-        let conn_lower = req_connection.map(str::to_ascii_lowercase);
-        let has_token = |tok: &str| {
-            conn_lower
-                .as_deref()
-                .map(|c| c.split(',').any(|t| t.trim() == tok))
-                .unwrap_or(false)
-        };
-
-        // HTTP/1.0 defaults to close (keep-alive only when explicitly
-        // requested); HTTP/1.1 defaults to keep-alive unless asked to close.
-        let should_keep_alive = if version == hyper::Version::HTTP_10 {
-            has_token("keep-alive")
-        } else {
-            !has_token("close")
-        };
-
-        if should_keep_alive && keep_alive_timeout_ms > 0.0 {
-            self.headers
-                .push(("Connection".to_string(), "keep-alive".to_string()));
-            let secs = (keep_alive_timeout_ms / 1000.0).floor().max(0.0) as u64;
-            // Fast path: the `Keep-Alive: timeout=N` value is interned for the
-            // timeouts servers commonly run with (Node's 5 s default, etc.), so
-            // the per-response `format!` only fires for an unusual timeout. The
-            // interned string equals `format!("timeout={}", secs)` exactly.
-            let value = crate::server::response_fast::keep_alive_header_value(secs)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("timeout={}", secs));
-            self.headers.push(("Keep-Alive".to_string(), value));
-        } else {
-            self.headers
-                .push(("Connection".to_string(), "close".to_string()));
-        }
-    }
-
     /// Node uses EOF framing for an HTTP/1.0 response that promises
     /// no explicit length or chunked framing and whose client did not
     /// advertise `TE: chunked`. Hyper sees a full body and would otherwise add
     /// Content-Length, changing the connection edge.
-    pub fn apply_http10_eof_framing(&mut self, version: hyper::Version, request_te: Option<&str>) {
-        if version != hyper::Version::HTTP_10 || !self.auto_content_length {
+    pub fn apply_http10_eof_framing(&mut self, version: http::Version, request_te: Option<&str>) {
+        if version != http::Version::HTTP_10 || !self.auto_content_length {
             return;
         }
         let client_accepts_chunked = request_te
@@ -453,10 +402,10 @@ impl HyperResponseShape {
     /// Transfer-Encoding without changing hyper's keep-alive accounting.
     pub fn apply_http10_chunked_framing(
         &mut self,
-        version: hyper::Version,
+        version: http::Version,
         request_te: Option<&str>,
     ) -> bool {
-        if version != hyper::Version::HTTP_10 {
+        if version != http::Version::HTTP_10 {
             return false;
         }
         let client_accepts_chunked = request_te
@@ -540,6 +489,8 @@ impl ServerResponse {
             standalone_req_method: None,
             pending_write_callbacks: Vec::new(),
             destroyed: false,
+            turnloop: None,
+            turnloop_streaming: false,
         }
     }
 
@@ -600,7 +551,7 @@ impl ServerResponse {
         }
     }
 
-    fn snapshot_trailers(&self) -> Vec<(String, String)> {
+    pub(crate) fn snapshot_trailers(&self) -> Vec<(String, String)> {
         let mut out = Vec::with_capacity(self.trailers.len());
         for (lower_k, v) in &self.trailers {
             let orig = self
@@ -1258,6 +1209,24 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
     if !begin_streaming(handle) {
         return None;
     }
+    // P5: the chunk is framed and submitted to the socket now, and
+    // backpressure is the socket's own queued-byte count rather than a
+    // channel's in-flight counter.
+    if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
+        if !crate::server::turnloop_route::send_body(conn, seq, bytes) {
+            return None;
+        }
+        let queued = perry_ffi::turnloop_net::queued_bytes(conn);
+        let sr = get_handle_mut::<ServerResponse>(handle)?;
+        if callback != 0 {
+            sr.pending_write_callbacks.push(callback);
+        }
+        let below_hwm = queued <= DEFAULT_HIGH_WATER_MARK;
+        if !below_hwm {
+            sr.needs_drain = true;
+        }
+        return Some(below_hwm);
+    }
     let sr = get_handle_mut::<ServerResponse>(handle)?;
     // Clone the channel handles so the immutable borrow of `sr` ends before we
     // mutate `pending_write_callbacks` / `needs_drain` (the sender + Arc are
@@ -1433,6 +1402,25 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         return None;
     }
 
+    // P5 streaming: the head already went to the wire on this thread, so the
+    // final chunk and the trailer block are encoded and submitted directly.
+    if sr.turnloop_streaming {
+        let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
+        let chunk = final_chunk.clone();
+        let trailers = sr.snapshot_trailers();
+        sr.writable_ended = true;
+        sr.writable_finished = true;
+        sr.needs_drain = false;
+        let finish_listeners = take_event_listeners(sr, "finish");
+        let close_listeners = take_event_listeners(sr, "close");
+        if let Some(c) = chunk {
+            crate::server::turnloop_route::send_body(conn, seq, &c);
+        }
+        crate::server::turnloop_route::finish_body(conn, seq, &trailers);
+        crate::server::request::mark_connection_written(req_handle_of(handle));
+        return Some((finish_listeners, close_listeners));
+    }
+
     // Streaming mode: the head already went to the wire. Send the final
     // chunk + trailer block as frames and close the channel — hyper ends
     // the (chunked) body when the sender drops.
@@ -1488,11 +1476,23 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     };
     let finish_listeners = take_event_listeners(sr, "finish");
     let close_listeners = take_event_listeners(sr, "close");
-    if let Some(tx) = sr.response_tx.take() {
-        let _ = tx.send(shape);
+    let turnloop = sr.turnloop;
+    let req_handle = sr.req_handle;
+    match turnloop {
+        // P5: the handler, the codec and the socket are on the same thread,
+        // so the response is encoded and submitted here rather than parked in
+        // a oneshot for a hyper task to pick up.
+        Some((conn, seq)) => crate::server::turnloop_route::send_response(conn, seq, shape),
+        None => {
+            if let Some(tx) = sr.response_tx.take() {
+                let _ = tx.send(shape);
+            }
+        }
     }
-    sr.writable_finished = true;
-    crate::server::request::mark_connection_written(sr.req_handle);
+    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        sr.writable_finished = true;
+    }
+    crate::server::request::mark_connection_written(req_handle);
     Some((finish_listeners, close_listeners))
 }
 
@@ -1515,11 +1515,35 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     if sr.writable_ended {
         return false;
     }
-    if sr.stream_tx.is_some() {
+    if sr.stream_tx.is_some() || sr.turnloop_streaming {
         return true;
     }
     if sr.standalone || sr.outgoing_message_only {
         return false;
+    }
+    if let Some((conn, seq)) = sr.turnloop {
+        let shape = HyperResponseShape {
+            status: sr.status_code,
+            status_message: sr.status_message.clone(),
+            response_version: None,
+            headers: sr.snapshot_headers(),
+            trailers: Vec::new(),
+            body: ShapeBody::Full(Vec::new()),
+            auto_content_length: false,
+        };
+        let first = std::mem::take(&mut sr.buffered_body);
+        sr.headers_sent = true;
+        sr.turnloop_streaming = true;
+        if !crate::server::turnloop_route::begin_stream(conn, seq, shape) {
+            if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+                sr.turnloop_streaming = false;
+            }
+            return false;
+        }
+        if !first.is_empty() {
+            crate::server::turnloop_route::send_body(conn, seq, &first);
+        }
+        return true;
     }
     let receiver_alive = sr
         .response_tx
@@ -1569,24 +1593,21 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
     if !sr.needs_drain || sr.writable_ended {
         return Vec::new();
     }
-    let below = sr
-        .stream_in_flight
-        .as_ref()
-        .map(|c| c.load(std::sync::atomic::Ordering::Acquire) <= DEFAULT_HIGH_WATER_MARK)
-        .unwrap_or(false);
+    let below = match sr.turnloop {
+        Some((conn, _)) if sr.turnloop_streaming => {
+            perry_ffi::turnloop_net::queued_bytes(conn) <= DEFAULT_HIGH_WATER_MARK
+        }
+        _ => sr
+            .stream_in_flight
+            .as_ref()
+            .map(|c| c.load(std::sync::atomic::Ordering::Acquire) <= DEFAULT_HIGH_WATER_MARK)
+            .unwrap_or(false),
+    };
     if !below {
         return Vec::new();
     }
     sr.needs_drain = false;
     take_event_listeners(sr, "drain")
-}
-
-/// True when a streaming response's connection died under it (hyper
-/// dropped the body receiver — client disconnect / server close).
-pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
-    get_handle::<ServerResponse>(handle)
-        .and_then(|sr| sr.stream_tx.as_ref().map(|tx| tx.is_closed()))
-        .unwrap_or(false)
 }
 
 /// `res.flushHeaders()` — Node sends headers immediately even before
@@ -1670,26 +1691,6 @@ pub unsafe extern "C" fn js_node_http_res_write_early_hints(
             );
         }
     }
-}
-
-/// `res.writeContinue()` — acknowledge an `Expect: 100-continue` request.
-///
-/// #5080: the interim `HTTP/1.1 100 Continue` is written by hyper the moment
-/// the request body is polled (`req.collect()` in the service fn), which is
-/// what unblocks the client's withheld body before `'checkContinue'` even
-/// fires on the main thread. So by the time the handler calls
-/// `writeContinue()` the 100 is already on the wire; this entry point exists
-/// for API parity (the canonical `checkContinue` handler calls it) and is a
-/// confirmation no-op rather than a second 100 line.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_write_continue(_handle: i64) {
-    // Interim 100 already flushed by hyper on first body poll — see above.
-}
-
-/// `res.writeProcessing()` — emits an HTTP/1.1 102-Processing. Stub.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_write_processing(_handle: i64) {
-    // No-op stub.
 }
 
 /// `res.on(event, cb)` — register a listener.
@@ -1968,6 +1969,12 @@ fn jsvalue_truthy(value: f64) -> bool {
 pub(crate) fn _force_link_helpers(v: f64) -> bool {
     f64::from_bits(TAG_NULL) == v
 }
+
+#[path = "response_turnloop.rs"]
+mod turnloop_shape;
+pub(crate) use turnloop_shape::{
+    alloc_server_response_for_turnloop, req_handle_of, stream_receiver_gone,
+};
 
 #[cfg(test)]
 #[path = "response_tests.rs"]

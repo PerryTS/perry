@@ -69,13 +69,17 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "tls" => &["tls"],
 
         // ── Databases ─────────────────────────────────────────────────
-        // `database-mysql` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-mysql2` (v0.5.567).
-        "mysql2" | "mysql2/promise" => &["bundled-mysql2"],
-        // `database-postgres` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-pg` (v0.5.566) so the
-        // well-known flip can route to perry-ext-pg.
-        "pg" => &["bundled-pg"],
+        // pg / mysql2 / ioredis / mongodb need no perry-stdlib feature: the
+        // bundled copies were deleted in turnloop P8 group H, so these imports
+        // are served entirely by perry-ext-pg / perry-ext-mysql2 /
+        // perry-ext-ioredis / perry-ext-mongodb via the well-known flip — the
+        // same shape `fastify` and `node:http` already have above. Their
+        // `async-runtime` requirement (the `perry_ffi_*` shim each wrapper
+        // settles its promises through) is re-asserted in
+        // optimized_libs/driver.rs rather than named here, because everything
+        // named here gets STRIPPED by the flip loop.
+        "mysql2" | "mysql2/promise" => &[],
+        "pg" => &[],
         "better-sqlite3" => &["database-sqlite"],
         // node:sqlite (#3183/#3184) shares the rusqlite-backed
         // `database-sqlite` feature with better-sqlite3 — DatabaseSync /
@@ -91,16 +95,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // repo (`bun add @perryts/iroh`) since v0.5.557 — same model
         // as tursodb above.
         "iroh" => &[],
-        // Redis is detected via the ioredis class name in collect_modules,
-        // but if it shows up as an explicit import we still need the feature.
-        // `database-redis` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-ioredis` (v0.5.565) so the
-        // well-known flip can route to perry-ext-ioredis.
-        "ioredis" | "redis" | "iovalkey" => &["bundled-ioredis"],
-        // `database-mongodb` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-mongodb` (v0.5.568) so the
-        // well-known flip can route to perry-ext-mongodb.
-        "mongodb" => &["bundled-mongodb"],
+        // Redis is detected via the ioredis class name in collect_modules.
+        // Served by perry-ext-ioredis only (see the note above).
+        "ioredis" | "redis" | "iovalkey" => &[],
+        // Served by perry-ext-mongodb only (see the note above).
+        "mongodb" => &[],
 
         // ── Crypto ────────────────────────────────────────────────────
         // bcrypt split off into its own `bundled-bcrypt` feature in
@@ -335,6 +334,35 @@ mod tests {
         assert!(module_to_features("node:https").is_empty());
         assert!(module_to_features("http2").is_empty());
         assert_eq!(module_to_features("axios"), &["http-client"]);
+    }
+
+    #[test]
+    fn bundled_database_copies_map_to_no_stdlib_features() {
+        // turnloop P8 group H deleted perry-stdlib's bundled pg / mysql2 /
+        // ioredis / mongodb modules. Naming a feature here would ask cargo
+        // for a gate that no longer exists; the wrappers own these imports
+        // outright, and their `async-runtime` need is re-asserted by the
+        // flip loop in optimized_libs/driver.rs.
+        for module in [
+            "pg",
+            "mysql2",
+            "mysql2/promise",
+            "ioredis",
+            "redis",
+            "iovalkey",
+            "mongodb",
+            "node:mongodb",
+        ] {
+            assert_eq!(
+                module_to_features(module),
+                &[] as &[&str],
+                "{module} must select no perry-stdlib feature"
+            );
+        }
+        // sqlite is NOT part of that set — rusqlite is not a tokio driver
+        // and the bundled module stays.
+        assert_eq!(module_to_features("better-sqlite3"), &["database-sqlite"]);
+        assert_eq!(module_to_features("node:sqlite"), &["database-sqlite"]);
     }
 
     #[test]

@@ -1,12 +1,31 @@
 //! Native bindings for the npm `ioredis` Redis client — uses only
-//! perry-ffi. Async via `redis::AsyncCommands` bridged through
-//! `spawn_blocking` + `JsPromise` + `tokio::Handle::current().block_on`.
+//! perry-ffi.
 //!
-//! Mirrors perry-stdlib's existing surface byte-for-byte: lazy
-//! connection (cached `MultiplexedConnection` per handle, established
-//! on first command), 10-second default timeout, env-var-driven URL
-//! construction (`REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` /
+//! Since turnloop P7 a client is **loop-driven state**: one turnloop socket and
+//! a `turnloop_redis::Connection` sans-I/O core, driven from the event loop's
+//! own completion dispatch (`turnloop_io`). No thread is held at any point.
+//! The legacy transport — `redis::AsyncCommands` bridged through
+//! `spawn_blocking` + `tokio::Handle::current().block_on`, which borrowed a
+//! tokio blocking-pool thread for every round trip — remains for the clients
+//! that decline: a `worker_threads` agent (no loop of its own) and the
+//! `tokio-wait-driver` A/B arm. A TLS (`rediss://`) client no longer declines,
+//! and that is the case that matters most here: `REDIS_TLS` defaults to
+//! `true`, and the legacy path has no TLS backend compiled into its `redis`
+//! dependency, so until the driver could perform the upgrade itself every
+//! default `new Redis()` declined onto a transport that could not serve it.
+//!
+//! Mirrors perry-stdlib's existing surface byte-for-byte on both transports:
+//! lazy connection (established on first command), 10-second default timeout,
+//! env-var-driven endpoint (`REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` /
 //! `REDIS_TLS`).
+
+mod turnloop_io;
+
+/// Production binaries receive these symbols from perry-stdlib's async bridge;
+/// a standalone `cargo test -p perry-ext-ioredis` binary has no stdlib archive,
+/// so it supplies its own. Same file as `perry-ext-mysql2`'s.
+#[cfg(test)]
+mod test_async_shims;
 
 use lazy_static::lazy_static;
 use perry_ffi::{
@@ -18,8 +37,68 @@ use redis::AsyncCommands;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
+use turnloop_io::Shape;
 
-const DEFAULT_TIMEOUT_SECS: u64 = 10;
+pub(crate) const DEFAULT_TIMEOUT_SECS: u64 = 10;
+
+/// Where a client connects, and on which transport.
+///
+/// The transport is decided **once, at `new Redis()`**, and never changes — P1's
+/// rule for sockets, for the same reason: whether a client will be TLS-upgraded
+/// or which agent it belongs to is not knowable later, and a client that
+/// switched mid-life would have two different connections to the same server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RedisEndpoint {
+    pub(crate) host: String,
+    pub(crate) port: u16,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+    pub(crate) tls: bool,
+    /// The transport this client was created on: its own thread's loop, the
+    /// loop of another thread of the same agent, or the legacy `redis` driver.
+    pub(crate) transport: turnloop_io::Transport,
+}
+
+lazy_static! {
+    static ref ENDPOINTS: Mutex<HashMap<Handle, RedisEndpoint>> = Mutex::new(HashMap::new());
+}
+
+pub(crate) fn endpoint_for(handle: Handle) -> Option<RedisEndpoint> {
+    ENDPOINTS.lock().unwrap().get(&handle).cloned()
+}
+
+/// How this client reaches its server, or `None` for an unknown handle.
+fn transport_of(handle: Handle) -> Option<turnloop_io::Transport> {
+    ENDPOINTS.lock().unwrap().get(&handle).map(|e| e.transport)
+}
+
+/// Submit one command on the turnloop transport, or report that this client is
+/// not on it.
+fn tl_command(
+    handle: Handle,
+    label: &'static str,
+    shape: Shape,
+    args: &[&[u8]],
+) -> Option<*mut Promise> {
+    let transport = transport_of(handle)?;
+    if transport == turnloop_io::Transport::Legacy {
+        return None;
+    }
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    match transport {
+        // This thread owns the loop: submit where the FFI call happens.
+        turnloop_io::Transport::Direct => turnloop_io::command(handle, promise, label, shape, args),
+        // Another thread of this same agent owns it. Hand the work over rather
+        // than keeping a tokio driver alive for this thread: the owner serves
+        // the same JS heap, so the reply is built where these values live.
+        turnloop_io::Transport::Posted => {
+            turnloop_io::post_command(handle, promise, label, shape, args)
+        }
+        turnloop_io::Transport::Legacy => unreachable!("returned above"),
+    }
+    Some(raw)
+}
 
 pub(crate) struct RedisClient {
     // #854: connection URL is looked up via the URLS side-map at connect time;
@@ -64,7 +143,7 @@ pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) ->
         .unwrap_or(true);
 
     let scheme = if use_tls { "rediss" } else { "redis" };
-    let url = if let Some(pw) = password {
+    let url = if let Some(pw) = &password {
         format!("{}://:{}@{}:{}", scheme, pw, host, port)
     } else {
         format!("{}://{}:{}", scheme, host, port)
@@ -72,6 +151,26 @@ pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) ->
 
     let handle = register_handle(RedisClient { url: url.clone() });
     URLS.lock().unwrap().insert(handle, url);
+    // TLS no longer sends a client to the legacy transport: `turnloop_redis`
+    // asks its host for the upgrade and `perry-db-turnloop` now performs it.
+    // Nor is the agent-shaped decline one any more: `transport()` answers with
+    // three values, and the middle one — another thread of this same agent owns
+    // the loop — hands its commands to that owner instead of to tokio. Only a
+    // genuine absence of a loop (the `tokio-wait-driver` A/B arm, or a host
+    // where `Loop::new` failed) still reaches the `redis` crate. Asked once,
+    // here: a connection belongs to one transport for its whole life.
+    let transport = turnloop_io::transport();
+    ENDPOINTS.lock().unwrap().insert(
+        handle,
+        RedisEndpoint {
+            host: host.clone(),
+            port: port.parse().unwrap_or(6379),
+            username: None,
+            password: password.clone(),
+            tls: use_tls,
+            transport,
+        },
+    );
     handle
 }
 
@@ -176,6 +275,17 @@ where
 pub extern "C" fn js_ioredis_connect(handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+    match transport_of(handle) {
+        Some(turnloop_io::Transport::Direct) => {
+            turnloop_io::connect(handle, promise);
+            return raw;
+        }
+        Some(turnloop_io::Transport::Posted) => {
+            turnloop_io::post_connect(handle, promise);
+            return raw;
+        }
+        _ => {}
+    }
     spawn_blocking(move || {
         match tokio::runtime::Handle::current().block_on(get_connection(handle)) {
             Ok(_) => promise.resolve_undefined(),
@@ -197,6 +307,14 @@ pub unsafe extern "C" fn js_ioredis_set(
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
     let value = read_str(value_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(
+        handle,
+        "SET",
+        Shape::Ok,
+        &[b"SET", key.as_bytes(), value.as_bytes()],
+    ) {
+        return p;
+    }
     dispatch::<_, _, ()>(handle, "SET", move |mut conn| async move {
         conn.set::<_, _, ()>(&key, &value).await
     })
@@ -216,6 +334,20 @@ pub unsafe extern "C" fn js_ioredis_setex(
     let key = read_str(key_ptr).unwrap_or_default();
     let value = read_str(value_ptr).unwrap_or_default();
     let ttl = seconds.max(0.0) as u64;
+    let ttl_text = ttl.to_string();
+    if let Some(p) = tl_command(
+        handle,
+        "SETEX",
+        Shape::Ok,
+        &[
+            b"SETEX",
+            key.as_bytes(),
+            ttl_text.as_bytes(),
+            value.as_bytes(),
+        ],
+    ) {
+        return p;
+    }
     dispatch::<_, _, ()>(handle, "SETEX", move |mut conn| async move {
         conn.set_ex::<_, _, ()>(&key, &value, ttl).await
     })
@@ -231,6 +363,9 @@ pub unsafe extern "C" fn js_ioredis_get(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(handle, "GET", Shape::OptString, &[b"GET", key.as_bytes()]) {
+        return p;
+    }
     dispatch::<_, _, Option<String>>(handle, "GET", move |mut conn| async move {
         conn.get(&key).await
     })
@@ -246,6 +381,9 @@ pub unsafe extern "C" fn js_ioredis_del(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(handle, "DEL", Shape::Number, &[b"DEL", key.as_bytes()]) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "DEL", move |mut conn| async move {
         conn.del(&key).await
     })
@@ -261,6 +399,14 @@ pub unsafe extern "C" fn js_ioredis_exists(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(
+        handle,
+        "EXISTS",
+        Shape::Number,
+        &[b"EXISTS", key.as_bytes()],
+    ) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "EXISTS", move |mut conn| async move {
         conn.exists(&key).await
     })
@@ -276,6 +422,9 @@ pub unsafe extern "C" fn js_ioredis_incr(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(handle, "INCR", Shape::Number, &[b"INCR", key.as_bytes()]) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "INCR", move |mut conn| async move {
         conn.incr(&key, 1).await
     })
@@ -291,6 +440,9 @@ pub unsafe extern "C" fn js_ioredis_decr(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(handle, "DECR", Shape::Number, &[b"DECR", key.as_bytes()]) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "DECR", move |mut conn| async move {
         conn.decr(&key, 1).await
     })
@@ -308,6 +460,15 @@ pub unsafe extern "C" fn js_ioredis_expire(
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
     let ttl = seconds.max(0.0) as i64;
+    let ttl_text = ttl.to_string();
+    if let Some(p) = tl_command(
+        handle,
+        "EXPIRE",
+        Shape::Number,
+        &[b"EXPIRE", key.as_bytes(), ttl_text.as_bytes()],
+    ) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "EXPIRE", move |mut conn| async move {
         conn.expire(&key, ttl).await
     })
@@ -316,6 +477,9 @@ pub unsafe extern "C" fn js_ioredis_expire(
 /// `redis.ping() -> Promise<"PONG">`.
 #[no_mangle]
 pub extern "C" fn js_ioredis_ping(handle: Handle) -> *mut Promise {
+    if let Some(p) = tl_command(handle, "PING", Shape::Text, &[b"PING"]) {
+        return p;
+    }
     dispatch::<_, _, String>(handle, "PING", move |mut conn| async move {
         let cmd: redis::Cmd = redis::cmd("PING").to_owned();
         cmd.query_async(&mut conn).await
@@ -334,6 +498,14 @@ pub unsafe extern "C" fn js_ioredis_hget(
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
     let field = read_str(field_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(
+        handle,
+        "HGET",
+        Shape::OptString,
+        &[b"HGET", key.as_bytes(), field.as_bytes()],
+    ) {
+        return p;
+    }
     dispatch::<_, _, Option<String>>(handle, "HGET", move |mut conn| async move {
         conn.hget(&key, &field).await
     })
@@ -353,6 +525,14 @@ pub unsafe extern "C" fn js_ioredis_hset(
     let key = read_str(key_ptr).unwrap_or_default();
     let field = read_str(field_ptr).unwrap_or_default();
     let value = read_str(value_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(
+        handle,
+        "HSET",
+        Shape::Number,
+        &[b"HSET", key.as_bytes(), field.as_bytes(), value.as_bytes()],
+    ) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "HSET", move |mut conn| async move {
         conn.hset(&key, &field, &value).await
     })
@@ -370,6 +550,14 @@ pub unsafe extern "C" fn js_ioredis_hdel(
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
     let field = read_str(field_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(
+        handle,
+        "HDEL",
+        Shape::Number,
+        &[b"HDEL", key.as_bytes(), field.as_bytes()],
+    ) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "HDEL", move |mut conn| async move {
         conn.hdel(&key, &field).await
     })
@@ -385,6 +573,9 @@ pub unsafe extern "C" fn js_ioredis_hlen(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(handle, "HLEN", Shape::Number, &[b"HLEN", key.as_bytes()]) {
+        return p;
+    }
     dispatch::<_, _, i64>(handle, "HLEN", move |mut conn| async move {
         conn.hlen(&key).await
     })
@@ -402,6 +593,14 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
     key_ptr: *const StringHeader,
 ) -> *mut Promise {
     let key = read_str(key_ptr).unwrap_or_default();
+    if let Some(p) = tl_command(
+        handle,
+        "HGETALL",
+        Shape::Hash,
+        &[b"HGETALL", key.as_bytes()],
+    ) {
+        return p;
+    }
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     spawn_blocking(move || {
@@ -450,6 +649,19 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
 /// `redis.disconnect()` — drop the cached connection synchronously.
 #[no_mangle]
 pub extern "C" fn js_ioredis_disconnect(handle: Handle) {
+    match transport_of(handle) {
+        Some(turnloop_io::Transport::Direct) => {
+            turnloop_io::disconnect(handle);
+            return;
+        }
+        // The connection table lives on the owner, so the close goes there too.
+        // Fire-and-forget, exactly as ioredis's own `disconnect()` is.
+        Some(turnloop_io::Transport::Posted) => {
+            turnloop_io::post_disconnect(handle);
+            return;
+        }
+        _ => {}
+    }
     let mut conns = CONNECTIONS.lock().unwrap();
     conns.remove(&handle);
 }
@@ -460,6 +672,34 @@ pub extern "C" fn js_ioredis_disconnect(handle: Handle) {
 pub extern "C" fn js_ioredis_quit(handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
+    // Checked before the promise moves: `turnloop_io::quit` takes it by value,
+    // so asking afterwards would have dropped it — and a dropped `JsPromise` is
+    // a promise that never settles.
+    let transport = transport_of(handle);
+    match transport {
+        Some(turnloop_io::Transport::Direct) => turnloop_io::quit(handle, promise),
+        // The QUIT goes to the thread that owns the connection, same as every
+        // other command on this client.
+        Some(turnloop_io::Transport::Posted) => turnloop_io::post_quit(handle, promise),
+        _ => {
+            // Legacy transport: fall through to the `redis`-crate path below,
+            // which still owns `promise`.
+            return js_ioredis_quit_legacy(handle, promise, raw);
+        }
+    }
+    // The client is retired either way; drop the legacy bookkeeping too so a
+    // later `new Redis()` cannot inherit this handle's entries.
+    URLS.lock().unwrap().remove(&handle);
+    ENDPOINTS.lock().unwrap().remove(&handle);
+    take_handle::<RedisClient>(handle);
+    raw
+}
+
+/// `redis.quit()` on the legacy `redis`-crate transport.
+///
+/// Split out so the turnloop paths above can settle the promise and return
+/// without the borrow checker having to prove `promise` survives them.
+fn js_ioredis_quit_legacy(handle: Handle, promise: JsPromise, raw: *mut Promise) -> *mut Promise {
     spawn_blocking(move || {
         let outcome: Result<(), String> = tokio::runtime::Handle::current().block_on(async move {
             let conn_opt = CONNECTIONS.lock().unwrap().remove(&handle);

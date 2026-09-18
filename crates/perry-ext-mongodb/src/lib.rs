@@ -24,14 +24,44 @@
 //!   string-taking runtime fns by JSON-stringifying through
 //!   `perry_ffi::json_stringify`.
 //!
+//! # Transports (turnloop P7)
+//!
+//! A client is **loop-driven state** when its URI names a direct,
+//! single-server endpoint, encrypted or not: one turnloop socket plus a
+//! `turnloop_mongodb::Connection` sans-I/O core, driven from the event loop's
+//! own completion dispatch (`turnloop_io`), with `perry-db-turnloop` performing
+//! the TLS upgrade the core asks for. No thread is held at any point.
+//!
+//! Every other configuration keeps the `mongodb`-crate path above, unchanged:
+//! `mongodb+srv://`, several hosts, `replicaSet=`, a compressor, a
+//! per-connection TLS key (`tlsCAFile`, `tlsInsecure`), a URI this parser
+//! rejects, and any agent with no loop of its own (a `worker_threads` Worker).
+//! Those need SRV/DNS resolution, replica-set topology discovery with
+//! background monitors, a trust store belonging to one connection, or a
+//! connection pool — none of which this slice reimplements, and none of which
+//! it deletes. `turnloop_io`'s module docs state the boundary precisely.
+//!
+//! The JS-visible surface is identical on both: the same 26 `js_mongodb_*`
+//! symbols with the same signatures, results crossing as JSON strings, the same
+//! rejection-message prefixes.
+//!
 //! # Deferred
 //!
 //! - BSON `ObjectId` construction across the FFI boundary (returns
 //!   the inserted id as a stringified `ObjectId(...)` for now).
-//! - Streaming `find` with cursor (today batches the full result via
-//!   `try_collect()` and returns one JSON-encoded array string).
+//! - Streaming `find` with cursor (both transports batch the full result — the
+//!   legacy one via `try_collect()`, the turnloop one by following the cursor
+//!   with `getMore` — and return one JSON-encoded array string).
 //! - Change streams (`watch()`).
 //! - Aggregation pipelines beyond the simple `find` filter.
+
+mod turnloop_io;
+
+/// Production binaries receive the async-bridge symbols from perry-stdlib; a
+/// standalone `cargo test -p perry-ext-mongodb` binary has no stdlib archive,
+/// so it supplies its own. Same file as `perry-ext-ioredis`'s.
+#[cfg(test)]
+mod test_async_shims;
 
 use bson::{doc, Document};
 use futures_util::TryStreamExt;
@@ -76,8 +106,18 @@ fn jsvalue_f64_to_json(value: f64) -> String {
 /// combined `MongoClient.connect(uri)` factory still returns a
 /// fully-connected handle in one step (back-compat with perry-stdlib).
 pub struct MongoClientHandle {
+    /// The `mongodb`-crate client. `None` on the turnloop transport, where the
+    /// connection is loop-driven state rather than a crate object.
     pub client: Option<Client>,
     pub pending_uri: Option<String>,
+    /// Set when this client lives on turnloop, and then never changed.
+    ///
+    /// The transport is decided **once, at `new MongoClient(uri)`** — P1's rule
+    /// for sockets, for the same reason: whether a client needs TLS, SRV
+    /// resolution or topology discovery is a property of its URI, and a client
+    /// that switched mid-life would have two different connections to the same
+    /// server. Exactly one of `client` and `turnloop` is ever set.
+    pub(crate) turnloop: Option<turnloop_io::Endpoint>,
 }
 
 impl MongoClientHandle {
@@ -85,14 +125,39 @@ impl MongoClientHandle {
         Self {
             client: Some(client),
             pending_uri: None,
+            turnloop: None,
         }
     }
 
     pub fn pending(uri: String) -> Self {
+        // The transport decision happens here, before any I/O: see the field's
+        // documentation.
+        let turnloop = turnloop_io::classify(&uri);
         Self {
             client: None,
             pending_uri: Some(uri),
+            turnloop,
         }
+    }
+
+    /// A turnloop client that is already through `connect()` — the combined
+    /// `MongoClient.connect(uri)` factory's result.
+    pub(crate) fn turnloop(endpoint: turnloop_io::Endpoint) -> Self {
+        Self {
+            client: None,
+            pending_uri: None,
+            turnloop: Some(endpoint),
+        }
+    }
+
+    /// Whether a turnloop client has been connected.
+    ///
+    /// `connect()` flips a client by taking its `pending_uri`, so this is the
+    /// same precondition [`Self::client_ref`] encodes for the legacy path:
+    /// `new MongoClient(uri)` followed by `client.db(...)` with no
+    /// `await client.connect()` in between fails on either transport.
+    pub(crate) fn turnloop_connected(&self) -> bool {
+        self.turnloop.is_some() && self.pending_uri.is_none()
     }
 
     /// Borrow the connected client. Used by query paths that require
@@ -107,15 +172,50 @@ impl MongoClientHandle {
 
 /// Database handle wraps a `mongodb::Database`. Cheap to clone —
 /// the underlying Client is Arc'd inside the mongodb crate.
+///
+/// On the turnloop transport there is no `Database` object: `db` is `None` and
+/// `turnloop` names the client whose single connection carries this database.
+/// Exactly one of the two is set.
 pub struct MongoDatabaseHandle {
-    pub db: Database,
+    pub db: Option<Database>,
+    pub(crate) turnloop: Option<turnloop_io::Target>,
 }
 
 /// Collection handle. `Document` is the BSON document type; we
 /// serialize between JSON ↔ BSON at the FFI boundary so user code
 /// doesn't see the bson crate at all.
+///
+/// Same two-transport shape as [`MongoDatabaseHandle`]: a turnloop collection
+/// handle owns no connection, it names one.
 pub struct MongoCollectionHandle {
-    pub collection: Collection<Document>,
+    pub collection: Option<Collection<Document>>,
+    pub(crate) turnloop: Option<turnloop_io::Target>,
+}
+
+/// The `mongodb`-crate collection behind a handle.
+///
+/// `None` for an unknown handle *and* for a turnloop handle, which owns no
+/// `Collection` — every caller has already offered the turnloop path its turn
+/// by then, so the remaining `None` means "invalid handle" and keeps the
+/// pre-existing rejection.
+fn legacy_collection(handle: Handle) -> Option<&'static Collection<Document>> {
+    get_handle::<MongoCollectionHandle>(handle)?
+        .collection
+        .as_ref()
+}
+
+/// The turnloop target behind a collection handle, if it has one.
+fn turnloop_collection(handle: Handle) -> Option<turnloop_io::Target> {
+    get_handle::<MongoCollectionHandle>(handle)?
+        .turnloop
+        .clone()
+}
+
+/// The endpoint a turnloop client connects to. Read by `turnloop_io` when it
+/// opens the connection, which is on the first operation rather than at
+/// `connect()`.
+pub(crate) fn turnloop_endpoint(handle: Handle) -> Option<turnloop_io::Endpoint> {
+    get_handle::<MongoClientHandle>(handle)?.turnloop.clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -151,10 +251,9 @@ pub unsafe extern "C" fn js_mongodb_client_connect(client_handle: Handle) -> *mu
 
     // Take the pending URI on the calling thread (the handle is
     // a runtime handle; `take_pending` is a synchronous local op).
-    let pending = if let Some(h) = get_handle_mut::<MongoClientHandle>(client_handle) {
-        h.pending_uri.take()
-    } else {
-        None
+    let (pending, turnloop) = match get_handle_mut::<MongoClientHandle>(client_handle) {
+        Some(h) => (h.pending_uri.take(), h.turnloop.is_some()),
+        None => (None, false),
     };
 
     let Some(uri) = pending else {
@@ -162,6 +261,16 @@ pub unsafe extern "C" fn js_mongodb_client_connect(client_handle: Handle) -> *mu
         promise.resolve_undefined();
         return raw;
     };
+
+    if turnloop {
+        // The URI was parsed and the endpoint fixed at `new MongoClient(uri)`,
+        // and taking `pending_uri` above is what flips this client to
+        // connected. The socket itself opens on the first operation: see
+        // `turnloop_io`'s module docs on why an eager connect here would turn
+        // today's resolved promise into a rejected one against a down server.
+        turnloop_io::connect(promise);
+        return raw;
+    }
 
     spawn_blocking(move || {
         let result: Result<Client, String> =
@@ -211,6 +320,15 @@ pub unsafe extern "C" fn js_mongodb_connect(uri_ptr: *const StringHeader) -> *mu
             return raw;
         }
     };
+
+    if let Some(endpoint) = turnloop_io::classify(&uri) {
+        // `Client::with_options` performs no I/O either, so resolving the
+        // handle without contacting the server is what this factory already
+        // did; the first operation is what fails when nothing is listening.
+        let handle = register_handle(MongoClientHandle::turnloop(endpoint));
+        promise.resolve_number(handle as f64);
+        return raw;
+    }
 
     spawn_blocking(move || {
         let result: Result<Client, String> =
@@ -262,10 +380,28 @@ pub unsafe extern "C" fn js_mongodb_client_db(
     // null-name path uses. Sub-handle dispatch (db.collection, etc.) will
     // continue to fail-soft with -1 propagation.
     if let Some(client_wrapper) = get_handle::<MongoClientHandle>(client_handle) {
+        if client_wrapper.turnloop.is_some() {
+            // A turnloop database handle is a name plus the client whose single
+            // connection carries it — no socket, no pool, nothing to fail.
+            if !client_wrapper.turnloop_connected() {
+                return -1;
+            }
+            return register_handle(MongoDatabaseHandle {
+                db: None,
+                turnloop: Some(turnloop_io::Target {
+                    client: client_handle,
+                    database: name,
+                    collection: String::new(),
+                }),
+            });
+        }
         match client_wrapper.client_ref() {
             Ok(client) => {
                 let db = client.database(&name);
-                register_handle(MongoDatabaseHandle { db })
+                register_handle(MongoDatabaseHandle {
+                    db: Some(db),
+                    turnloop: None,
+                })
             }
             Err(_) => -1,
         }
@@ -289,8 +425,26 @@ pub unsafe extern "C" fn js_mongodb_db_collection(
     };
 
     if let Some(db_wrapper) = get_handle::<MongoDatabaseHandle>(db_handle) {
-        let collection = db_wrapper.db.collection::<Document>(&name);
-        register_handle(MongoCollectionHandle { collection })
+        if let Some(target) = &db_wrapper.turnloop {
+            return register_handle(MongoCollectionHandle {
+                collection: None,
+                turnloop: Some(turnloop_io::Target {
+                    client: target.client,
+                    database: target.database.clone(),
+                    collection: name,
+                }),
+            });
+        }
+        match &db_wrapper.db {
+            Some(db) => {
+                let collection = db.collection::<Document>(&name);
+                register_handle(MongoCollectionHandle {
+                    collection: Some(collection),
+                    turnloop: None,
+                })
+            }
+            None => -1,
+        }
     } else {
         -1
     }
@@ -319,14 +473,19 @@ pub unsafe extern "C" fn js_mongodb_collection_find_one(
 
     let filter_json = read_str(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        turnloop_io::find_one(target, promise, &filter_json);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<Option<String>, String> =
             tokio::runtime::Handle::current().block_on(async move {
-                if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+                if let Some(collection) = legacy_collection(collection_handle) {
                     let filter: Document =
                         serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
-                    match coll_wrapper.collection.find_one(filter).await {
+                    match collection.find_one(filter).await {
                         Ok(Some(doc)) => {
                             let json =
                                 serde_json::to_string(&doc).unwrap_or_else(|_| "{}".to_string());
@@ -362,14 +521,19 @@ pub unsafe extern "C" fn js_mongodb_collection_find(
 
     let filter_json = read_str(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        turnloop_io::find(target, promise, &filter_json);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<String, String> =
             tokio::runtime::Handle::current().block_on(async move {
-                if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+                if let Some(collection) = legacy_collection(collection_handle) {
                     let filter: Document =
                         serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
-                    match coll_wrapper.collection.find(filter).await {
+                    match collection.find(filter).await {
                         Ok(cursor) => {
                             let docs: Vec<Document> = cursor
                                 .try_collect()
@@ -414,14 +578,25 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_one(
         }
     };
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        match serde_json::from_str::<Document>(&doc_json) {
+            Ok(document) => turnloop_io::insert_one(target, promise, document),
+            // Word for word the message the legacy path's closure produces: a
+            // caller that surfaces `err.message` must not be able to tell which
+            // transport decoded its argument.
+            Err(e) => promise.reject_string(&format!("Invalid JSON: {}", e)),
+        }
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<String, String> =
             tokio::runtime::Handle::current().block_on(async move {
-                if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+                if let Some(collection) = legacy_collection(collection_handle) {
                     let doc: Document = serde_json::from_str(&doc_json)
                         .map_err(|e| format!("Invalid JSON: {}", e))?;
 
-                    match coll_wrapper.collection.insert_one(doc).await {
+                    match collection.insert_one(doc).await {
                         Ok(r) => Ok(r.inserted_id.to_string()),
                         Err(e) => Err(format!("Insert failed: {}", e)),
                     }
@@ -458,13 +633,21 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_many(
         }
     };
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        match serde_json::from_str::<Vec<Document>>(&docs_json) {
+            Ok(documents) => turnloop_io::insert_many(target, promise, documents),
+            Err(e) => promise.reject_string(&format!("Invalid JSON: {}", e)),
+        }
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<u64, String> = tokio::runtime::Handle::current().block_on(async move {
-            if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+            if let Some(collection) = legacy_collection(collection_handle) {
                 let docs: Vec<Document> =
                     serde_json::from_str(&docs_json).map_err(|e| format!("Invalid JSON: {}", e))?;
 
-                match coll_wrapper.collection.insert_many(docs).await {
+                match collection.insert_many(docs).await {
                     Ok(r) => Ok(r.inserted_ids.len() as u64),
                     Err(e) => Err(format!("Insert failed: {}", e)),
                 }
@@ -502,15 +685,23 @@ pub unsafe extern "C" fn js_mongodb_collection_update_one(
         }
     };
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        match serde_json::from_str::<Document>(&update_json) {
+            Ok(update) => turnloop_io::update(target, promise, &filter_json, update, false),
+            Err(e) => promise.reject_string(&format!("Invalid update JSON: {}", e)),
+        }
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<u64, String> = tokio::runtime::Handle::current().block_on(async move {
-            if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+            if let Some(collection) = legacy_collection(collection_handle) {
                 let filter: Document =
                     serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
                 let update: Document = serde_json::from_str(&update_json)
                     .map_err(|e| format!("Invalid update JSON: {}", e))?;
 
-                match coll_wrapper.collection.update_one(filter, update).await {
+                match collection.update_one(filter, update).await {
                     Ok(r) => Ok(r.modified_count),
                     Err(e) => Err(format!("Update failed: {}", e)),
                 }
@@ -548,15 +739,23 @@ pub unsafe extern "C" fn js_mongodb_collection_update_many(
         }
     };
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        match serde_json::from_str::<Document>(&update_json) {
+            Ok(update) => turnloop_io::update(target, promise, &filter_json, update, true),
+            Err(e) => promise.reject_string(&format!("Invalid update JSON: {}", e)),
+        }
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<u64, String> = tokio::runtime::Handle::current().block_on(async move {
-            if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+            if let Some(collection) = legacy_collection(collection_handle) {
                 let filter: Document =
                     serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
                 let update: Document = serde_json::from_str(&update_json)
                     .map_err(|e| format!("Invalid update JSON: {}", e))?;
 
-                match coll_wrapper.collection.update_many(filter, update).await {
+                match collection.update_many(filter, update).await {
                     Ok(r) => Ok(r.modified_count),
                     Err(e) => Err(format!("Update failed: {}", e)),
                 }
@@ -586,13 +785,18 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_one(
 
     let filter_json = read_str(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        turnloop_io::delete(target, promise, &filter_json, false);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<u64, String> = tokio::runtime::Handle::current().block_on(async move {
-            if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+            if let Some(collection) = legacy_collection(collection_handle) {
                 let filter: Document =
                     serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
-                match coll_wrapper.collection.delete_one(filter).await {
+                match collection.delete_one(filter).await {
                     Ok(r) => Ok(r.deleted_count),
                     Err(e) => Err(format!("Delete failed: {}", e)),
                 }
@@ -622,13 +826,18 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_many(
 
     let filter_json = read_str(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        turnloop_io::delete(target, promise, &filter_json, true);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<u64, String> = tokio::runtime::Handle::current().block_on(async move {
-            if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+            if let Some(collection) = legacy_collection(collection_handle) {
                 let filter: Document =
                     serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
-                match coll_wrapper.collection.delete_many(filter).await {
+                match collection.delete_many(filter).await {
                     Ok(r) => Ok(r.deleted_count),
                     Err(e) => Err(format!("Delete failed: {}", e)),
                 }
@@ -657,13 +866,18 @@ pub unsafe extern "C" fn js_mongodb_collection_count(
 
     let filter_json = read_str(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
+    if let Some(target) = turnloop_collection(collection_handle) {
+        turnloop_io::count(target, promise, &filter_json);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<u64, String> = tokio::runtime::Handle::current().block_on(async move {
-            if let Some(coll_wrapper) = get_handle::<MongoCollectionHandle>(collection_handle) {
+            if let Some(collection) = legacy_collection(collection_handle) {
                 let filter: Document =
                     serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
-                match coll_wrapper.collection.count_documents(filter).await {
+                match collection.count_documents(filter).await {
                     Ok(n) => Ok(n),
                     Err(e) => Err(format!("Count failed: {}", e)),
                 }
@@ -810,6 +1024,20 @@ pub unsafe extern "C" fn js_mongodb_client_list_databases(client_handle: Handle)
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
+    if let Some(client_wrapper) = get_handle::<MongoClientHandle>(client_handle) {
+        if client_wrapper.turnloop.is_some() {
+            if !client_wrapper.turnloop_connected() {
+                // The unprefixed message the legacy path propagates straight
+                // out of `client_ref()?`.
+                promise
+                    .reject_string("MongoClient not connected — call await client.connect() first");
+                return raw;
+            }
+            turnloop_io::list_databases(client_handle, promise);
+            return raw;
+        }
+    }
+
     spawn_blocking(move || {
         let result: Result<String, String> =
             tokio::runtime::Handle::current().block_on(async move {
@@ -842,11 +1070,20 @@ pub unsafe extern "C" fn js_mongodb_db_list_collections(db_handle: Handle) -> *m
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
+    if let Some(target) =
+        get_handle::<MongoDatabaseHandle>(db_handle).and_then(|d| d.turnloop.clone())
+    {
+        turnloop_io::list_collections(target.client, &target.database, promise);
+        return raw;
+    }
+
     spawn_blocking(move || {
         let result: Result<String, String> =
             tokio::runtime::Handle::current().block_on(async move {
-                if let Some(db_wrapper) = get_handle::<MongoDatabaseHandle>(db_handle) {
-                    match db_wrapper.db.list_collection_names().await {
+                if let Some(db) =
+                    get_handle::<MongoDatabaseHandle>(db_handle).and_then(|d| d.db.as_ref())
+                {
+                    match db.list_collection_names().await {
                         Ok(names) => {
                             Ok(serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string()))
                         }

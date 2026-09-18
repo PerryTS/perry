@@ -3,7 +3,7 @@ name = "perry-ext-nodemailer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for npm `nodemailer` — uses only `perry-ffi`. SMTP transport via `lettre`. Async via spawn_blocking + JsPromise."
+description = "Native bindings for npm `nodemailer` — uses only `perry-ffi`. SMTP transport on turnloop via perry-stdlib's engine; MIME through turnloop-smtp's lettre builder."
 
 [lints]
 workspace = true
@@ -13,8 +13,14 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
-tokio = { workspace = true }
+# The MIME builder only. `turnloop-smtp` re-exports lettre's `Message` and
+# `message::header` from a dependency pinned to lettre's `builder` feature, so
+# taking the builder through here instead of declaring lettre directly is what
+# drops `tokio1` / `tokio1-rustls-tls` / `pool` — and with them this crate's
+# tokio edge. Nothing of turnloop-smtp's protocol half is used here: the
+# transport is reached through perry-stdlib's `js_perry_smtp_*` C seam, because
+# a staticlib must not carry a second copy of the engine's thread-local tables.
+turnloop-smtp.workspace = true
 uuid = { version = "1.23", features = ["v4"] }
 
 [dev-dependencies]

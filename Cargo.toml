@@ -10,6 +10,11 @@ members = [
     "crates/perry-dispatch",
     "crates/perry-runtime",
     "crates/perry-ffi",
+    "crates/perry-db-turnloop",
+    "crates/perry-tls-turnloop",
+    "crates/perry-tls-session",
+    "crates/perry-http-client",
+    "crates/perry-http-server",
     "crates/perry-native-registration",
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
@@ -40,7 +45,6 @@ members = [
     "crates/perry-ext-ioredis",
     "crates/perry-ext-pg",
     "crates/perry-ext-mysql2",
-    "crates/perry-ext-fetch",
     "crates/perry-ext-undici",
     "crates/perry-ext-mongodb",
     "crates/perry-ext-ws",
@@ -400,6 +404,58 @@ regex = "1.12"
 aho-corasick = "1.1"
 # The single regular-expression engine, through crates/perry-perex.
 perex = "0.1.7"
+# turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
+# stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
+# 0.1.0-alpha.3 switched turnloop's own dependency requirements from exact pins
+# to carets, which is what lifts the forced downgrades alpha.2 imposed on libc,
+# tokio, redis and wasm-bindgen across this workspace. A caret here for the same
+# reason; the exact version is pinned by Cargo.lock, locked once with the
+# owner-approved one-time publish-age override. alpha.6 carries turnloop#89
+# (ring slots allocated zeroed rather than written, which took Perry's idle RSS
+# from +17.8 % to +2.9 % against the tokio arm and flipped two RSS rows to
+# wins), #83 (multi-threaded accept / SO_REUSEPORT) and #85. Published
+# 2026-09-17T13:24:47Z, sha256
+# d04fa71225fc8a61ce9707bf1d5510ebe448a3ba00d71924f3aff8a2140e33a4 — the
+# checksum Cargo.lock records, verified against the crates.io API rather than
+# against the publishing workflow going green. The soak skill's rule holds:
+# opting out is a committed, reviewable change and never a silent one, so the
+# override lives here in the diff and the lock pins the exact artifact.
+turnloop = "0.1.0-alpha.6"
+# turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
+# replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
+# `tokio_rustls` on every TLS path the loop owns. Default features only — the
+# `turnloop` feature of these crates pulls `turnloop-io`'s `LocalExecutor`,
+# which owns its OWN `Driver` and drops every completion whose token it did not
+# issue; Perry already owns a `turnloop::Loop` and routes P1/P2/P3 tokens
+# through it, so the codecs are driven sans-I/O over the P1 socket layer
+# instead (docs/turnloop/p5-report.md, "Why sans-I/O").
+turnloop-http = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-tls = { version = "0.1.0-alpha.6", default-features = false }
+# turnloop WS lane: the sans-I/O WebSocket protocol + HTTP-upgrade helpers that
+# replace tokio-tungstenite everywhere in the tree. Default features only --
+# the `turnloop` feature pulls turnloop-io's LocalExecutor, which Perry cannot
+# adopt for the same reason P5 recorded (it builds its own Driver and drops
+# every completion it did not issue). See docs/turnloop/ws-report.md.
+turnloop-websocket = { version = "0.1.0-alpha.6", default-features = false }
+# turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
+# replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
+# module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface
+# already uses, so only the transport changes
+# (docs/turnloop/p6-report.md).
+turnloop-smtp = { version = "0.1.0-alpha.6", default-features = false }
+# turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
+# cores that replace sqlx, the `redis` crate and the `mongodb` driver on the
+# paths Perry's bindings own. Default features only, for the same reason as the
+# two above — with the `turnloop` feature off these crates depend on neither
+# `turnloop-io` nor `turnloop-tls`, so they are pure protocol state machines and
+# Perry drives them over P1's socket layer. alpha.4 rather than alpha.3 because
+# it is the release that gave MySQL and MongoDB one deflate state per
+# connection, each compressed message framed as its own zlib stream; alpha.3
+# re-created the state per message and is a wire-level regression to adopt.
+turnloop-mysql = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-postgres = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-redis = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-mongodb = { version = "0.1.0-alpha.6", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
@@ -433,6 +489,9 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 hyper = "1.4"
 hyper-util = "0.1"
 http-body-util = "0.1"
+# The `http` types crate. Already in the graph via hyper/reqwest/turnloop-http;
+# named here so perry-stdlib can reach `StatusCode::canonical_reason` directly.
+http = "1"
 tokio-rustls = "0.26"
 rustls = "0.23"
 rustls-pemfile = "2"
@@ -448,6 +507,9 @@ dotenvy = "0.15"
 flate2 = "1"
 tar = "0.4"
 base64 = "0.22"
+# RFC 6455 §4.2.2's `Sec-WebSocket-Accept` digest. Already in the lockfile
+# through perry-stdlib's optional `sha1`, so naming it here adds no package.
+sha1 = "0.11"
 zip = "8"
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
@@ -476,6 +538,33 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 # `wasm-host` must stay out of `default`, generalized to all heavy features.
 perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
+# turnloop P7 (docs/turnloop/p7-report.md): the loop-driven transport the four
+# database bindings share. rlib only — it is linked *into* each binding's
+# staticlib, never alongside it, so it exports no symbol of its own.
+perry-db-turnloop = { path = "crates/perry-db-turnloop" }
+# turnloop P11 (docs/turnloop/p11-report.md): the one copy of P6's outbound TLS
+# client session — no socket, no loop, no I/O — shared by perry-stdlib's fetch
+# and SMTP engines (which drive it from a completion sink) and by
+# perry-http-client (which drives it from a blocking call on a loop it owns).
+perry-tls-session = { path = "crates/perry-tls-session" }
+# turnloop P12 (docs/turnloop/p12-report.md): the PUBLIC TLS client installer
+# for a turnloop socket — the one thing P5 built for `perry-ext-net` and left
+# `pub(crate)` there. ALPN goes in, the negotiated protocol and the RFC 5929
+# `tls-server-end-point` channel binding come back out. rlib only: it is linked
+# *into* each binding's staticlib, exactly like perry-db-turnloop.
+perry-tls-turnloop = { path = "crates/perry-tls-turnloop" }
+# turnloop P11: a blocking HTTP/1.1 + WebSocket client on a self-owned
+# `turnloop::Loop`, for callers with NO JS event loop to cooperate with — the
+# `perry` CLI, and the `perry-ext-*` HTTP bindings that already run on a
+# blocking-pool thread. Nothing in perry-runtime or perry-stdlib depends on it
+# and nothing should; see the crate docs for why an owned loop is correct here
+# and nowhere else (PerryTS/turnloop#45).
+perry-http-client = { path = "crates/perry-http-client" }
+# turnloop: the HTTP/1.1 SERVER core, shared by every binding that serves
+# HTTP and is not perry-ext-http (perry-ext-fastify, perry-stdlib's bundled
+# framework server). See its lib.rs header for why the core moved down into a
+# crate instead of those bindings taking an edge to perry-ext-http.
+perry-http-server = { path = "crates/perry-http-server" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
@@ -506,7 +595,6 @@ perry-ext-cron = { path = "crates/perry-ext-cron" }
 perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
 perry-ext-pg = { path = "crates/perry-ext-pg" }
 perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
-perry-ext-fetch = { path = "crates/perry-ext-fetch" }
 perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }

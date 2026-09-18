@@ -276,6 +276,16 @@ static STDIN_READABLE_ONCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(V
 // buffer has drained (so `'data'` precedes `'end'`, per Node).
 static STDIN_END_LISTENERS: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
 static STDIN_END_ONCE: std::sync::Mutex<Vec<i64>> = std::sync::Mutex::new(Vec::new());
+/// turnloop P0: set before the first push into any of the six listener lists
+/// above and never cleared. Until then those lists are provably empty, so
+/// `stdin_listeners_keep_loop_alive` — asked on every event-loop turn — answers
+/// with one atomic load instead of six mutexes. After it, the exact check runs.
+static STDIN_LISTENERS_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn arm_stdin_listeners() {
+    STDIN_LISTENERS_ARMED.store(true, std::sync::atomic::Ordering::Release);
+}
 // Set by the reader thread on fd-0 EOF; observed by the main-thread pump.
 static STDIN_EOF_SEEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 // Set once the `'end'`/`'close'` listeners have fired, so they fire at most once.
@@ -735,6 +745,7 @@ pub fn enable_process_stdin_keypress_events(callback: i64) {
     if let Some((on, _, _)) = stdin_ops_provider() {
         on(b"data".as_ptr(), 4, callback, 0);
     } else if let Ok(mut listeners) = STDIN_DATA_LISTENERS.lock() {
+        arm_stdin_listeners();
         listeners.push(callback);
     }
     ensure_stdin_reader();
@@ -958,6 +969,7 @@ pub(crate) fn test_set_stdin_data_listener(cb: Option<i64>) {
     if let Ok(mut l) = STDIN_DATA_LISTENERS.lock() {
         l.clear();
         if let Some(cb) = cb {
+            arm_stdin_listeners();
             l.push(cb);
         }
     }
@@ -966,7 +978,7 @@ pub(crate) fn test_set_stdin_data_listener(cb: Option<i64>) {
 }
 
 pub fn stdin_listeners_keep_loop_alive() -> bool {
-    if stdin_is_detached() {
+    if !STDIN_LISTENERS_ARMED.load(std::sync::atomic::Ordering::Acquire) || stdin_is_detached() {
         return false;
     }
     let non_empty =
@@ -1057,6 +1069,7 @@ fn register_stdin_listener(
                 // `once` registration must fire independently, so don't dedupe
                 // there.
                 if is_once || !l.contains(&cb) {
+                    arm_stdin_listeners();
                     l.push(cb);
                 }
             }

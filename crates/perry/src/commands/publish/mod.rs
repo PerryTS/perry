@@ -7,12 +7,12 @@ use dialoguer::{Confirm, Input, Select};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
-use reqwest::multipart;
+use perry_http_client::ws::Message;
+use perry_http_client::{Form, Request, WebSocket};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 use walkdir::WalkDir;
 
@@ -49,9 +49,8 @@ use credentials::{
 };
 use preflight::{ios_preflight_validation, macos_preflight_validation, run_security_audit_step};
 use resolve::{resolve_bundle_id, resolve_entry};
-use server_api::{
-    BuildManifest, BuildResponse, CredentialsPayload, RegisterResponse, ServerMessage,
-};
+pub(crate) use server_api::auto_register_license;
+use server_api::{BuildManifest, BuildResponse, CredentialsPayload, ServerMessage};
 
 pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u8) -> Result<()> {
     if !check_beta_consent("publish") {
@@ -68,8 +67,11 @@ pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u
         _ => Some("macos"),
     };
 
-    let rt = tokio::runtime::Runtime::new()?;
-    let result = rt.block_on(run_async(args, format, use_color));
+    // Synchronous since P11: every network call below runs on
+    // `perry_http_client`, which owns a `turnloop::Loop` per connection and
+    // turns it to completion. `run_async` keeps its name because it is the one
+    // the telemetry and error-report call sites reference.
+    let result = run_async(args, format, use_color);
 
     if let Err(ref e) = result {
         report_beta_error("publish", &format!("{e:#}"), target_hint);
@@ -79,7 +81,7 @@ pub fn run(args: PublishArgs, format: OutputFormat, use_color: bool, _verbose: u
 }
 
 #[allow(unused_assignments)] // see the `done` declaration below
-async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
+fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
     let project_dir = args.project.canonicalize().unwrap_or(args.project.clone());
 
     // Load .env file from project directory (if present) so users can set
@@ -107,7 +109,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     };
 
     // --- Integration: Security Audit ---
-    run_security_audit_step(&args, &project_dir, &config, format).await?;
+    run_security_audit_step(&args, &project_dir, &config, format)?;
 
     // Resolve app info (always from perry.toml)
     let app_name = config
@@ -460,7 +462,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     print!("  No license key found. Registering free license...");
                     std::io::stdout().flush().ok();
                 }
-                let key = auto_register_license(&server_url).await?;
+                let key = auto_register_license(&server_url)?;
                 if let OutputFormat::Text = format {
                     println!(" {}", style("done").green());
                     println!(
@@ -1473,8 +1475,10 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     use base64::Engine;
     let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(&tarball);
 
-    let client = reqwest::Client::new();
-    let mut form = multipart::Form::new()
+    // `reqwest::Client::new()` had no timeout here and a publish upload is a
+    // whole project tarball, so the budget is generous rather than default.
+    let client = perry_http_client::Client::with_timeout(std::time::Duration::from_secs(900));
+    let mut form = Form::new()
         .text("manifest", serde_json::to_string(&manifest)?)
         .text("credentials", serde_json::to_string(&credentials)?)
         .text("tarball_b64", tarball_b64);
@@ -1484,23 +1488,23 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         form = form.text("license_key", license_key.clone());
     }
 
-    let mut req = client
-        .post(format!("{server_url}/api/v1/build"))
-        .multipart(form);
+    let (content_type, body) = form.finish();
+    let mut req = Request::post(format!("{server_url}/api/v1/build"))
+        .header("content-type", content_type)
+        .body(body);
 
     // Add Bearer token for API-token auth
     if use_bearer_auth {
-        req = req.header("Authorization", format!("Bearer {}", license_key));
+        req = req.bearer(&license_key);
     }
 
-    let resp = req
-        .send()
-        .await
+    let resp = client
+        .execute(req)
         .context("Failed to connect to build server")?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    if !resp.is_success() {
+        let status = resp.status;
+        let body = resp.text();
 
         // Handle specific error codes with helpful messages
         if let Ok(err_json) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -1540,7 +1544,8 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
         bail!("Build server returned {status}: {body}");
     }
 
-    let build_resp: BuildResponse = resp.json().await.context("Invalid build response")?;
+    let build_resp: BuildResponse =
+        serde_json::from_slice(&resp.body).context("Invalid build response")?;
 
     if let OutputFormat::Text = format {
         println!(" {}", style("done").green());
@@ -1569,20 +1574,21 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
             )
         };
 
-    let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
-        .await
-        .context("Failed to connect WebSocket")?;
+    // The hub drops idle connections while a job sits in the queue, so a read
+    // that finds nothing for this long is treated as a drop and reconnects —
+    // the same outcome the async stream produced when it ended, reached
+    // deliberately rather than by waiting forever.
+    const WS_IDLE: std::time::Duration = std::time::Duration::from_secs(600);
+    const WS_CONNECT: std::time::Duration = std::time::Duration::from_secs(30);
 
-    let (mut ws_write, mut read) = ws_stream.split();
+    let mut ws = WebSocket::connect(&ws_url, WS_CONNECT).context("Failed to connect WebSocket")?;
 
     // Send subscribe message to identify as CLI client for this job
-    use futures_util::SinkExt;
-    ws_write
-        .send(Message::Text(
-            format!(r#"{{"type":"subscribe","job_id":"{}"}}"#, build_resp.job_id).into(),
-        ))
-        .await
-        .context("Failed to send subscribe message")?;
+    ws.send_text(
+        &format!(r#"{{"type":"subscribe","job_id":"{}"}}"#, build_resp.job_id),
+        WS_CONNECT,
+    )
+    .context("Failed to send subscribe message")?;
 
     let pb = if let OutputFormat::Text = format {
         let pb = ProgressBar::new(100);
@@ -1619,8 +1625,6 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
     let mut ws_retries = 0u32;
     let max_ws_retries = 60u32; // ~10 minutes with backoff
 
-    use futures_util::StreamExt;
-
     // Reconnect to the hub and re-subscribe to the job. Used whenever the stream
     // errors, closes, or ends before a terminal message. Bails after exhausting
     // retries so CI fails loudly instead of going green with no artifact.
@@ -1646,20 +1650,18 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                         pb.println(format!("    {} Connection lost ({}), reconnecting in {delay}s ({ws_retries}/{max_ws_retries})...", style("!").yellow(), $why));
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
-                match tokio_tungstenite::connect_async(&ws_url).await {
-                    Ok((new_ws, _)) => {
-                        let (mut new_write, new_read) = new_ws.split();
-                        let _ = new_write
-                            .send(Message::Text(
-                                format!(
-                                    r#"{{"type":"subscribe","job_id":"{}"}}"#,
-                                    build_resp.job_id
-                                )
-                                .into(),
-                            ))
-                            .await;
-                        read = new_read;
+                std::thread::sleep(std::time::Duration::from_secs(delay));
+                match WebSocket::connect(&ws_url, WS_CONNECT) {
+                    Ok(mut new_ws) => {
+                        let _ = new_ws.send_text(
+                            &format!(
+                                r#"{{"type":"subscribe","job_id":"{}"}}"#,
+                                build_resp.job_id
+                            ),
+                            WS_CONNECT,
+                        );
+                        ws.close();
+                        ws = new_ws;
                         ws_retries = 0; // reset on successful reconnect
                         break;
                     }
@@ -1672,13 +1674,13 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
 
     'ws_loop: loop {
         loop {
-            let msg = match read.next().await {
-                Some(Ok(m)) => m,
-                Some(Err(_e)) => {
+            let msg = match ws.read_message(WS_IDLE) {
+                Ok(Some(m)) => m,
+                Err(_e) => {
                     reconnect_or_bail!("errored");
                     continue 'ws_loop;
                 }
-                None => {
+                Ok(None) => {
                     // Stream ended. If we already have a terminal result, proceed
                     // to the download/finish step; otherwise the hub dropped us —
                     // reconnect rather than exit empty-handed.
@@ -1699,7 +1701,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     reconnect_or_bail!("closed by server");
                     continue 'ws_loop;
                 }
-                _ => continue,
+                Message::Binary(_) => continue,
             };
 
             let server_msg: ServerMessage = match serde_json::from_str(&text) {
@@ -1872,17 +1874,21 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                     } else {
                         format!("{server_url}{url}")
                     };
+                    // Buffered rather than streamed, exactly as before — the
+                    // base64 sniff below needs the whole body anyway. The
+                    // default 32 MiB ceiling would refuse a real app bundle, so
+                    // it is raised here rather than in the default.
                     let resp = client
-                        .get(&full_url)
-                        .send()
-                        .await
+                        .clone()
+                        .max_body(2 * 1024 * 1024 * 1024)
+                        .execute(Request::get(&full_url))
                         .context("Failed to download artifact")?;
 
-                    if !resp.status().is_success() {
-                        bail!("Download failed: {}", resp.status());
+                    if !resp.is_success() {
+                        bail!("Download failed: {}", resp.status);
                     }
 
-                    let bytes = resp.bytes().await?;
+                    let bytes = resp.body;
                     // The hub may store artifacts as base64 (perry runtime doesn't
                     // decode Buffer.from(data, 'base64')). Detect and decode.
                     let data = if bytes.len() > 4
@@ -1897,7 +1903,7 @@ async fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) ->
                         use base64::Engine;
                         base64::engine::general_purpose::STANDARD
                             .decode(&bytes)
-                            .unwrap_or_else(|_| bytes.to_vec())
+                            .unwrap_or(bytes)
                     } else {
                         bytes.to_vec()
                     };
@@ -1979,20 +1985,4 @@ fn server_is_local(server_url: &str) -> bool {
         },
         Err(_) => false,
     }
-}
-
-pub(crate) async fn auto_register_license(server_url: &str) -> Result<String> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{server_url}/api/v1/license/register"))
-        .json(&serde_json::json!({}))
-        .send()
-        .await
-        .context("Failed to register license")?;
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        bail!("License registration failed: {body}");
-    }
-    let reg: RegisterResponse = resp.json().await?;
-    Ok(reg.license_key)
 }

@@ -219,6 +219,19 @@ pub(crate) fn should_drop_connection(server_id: i64, stream: &TcpStream) -> Opti
     reserve_connection(server_id, stream.local_addr().ok(), stream.peer_addr().ok())
 }
 
+/// Admission check for a connection turnloop accepted.
+///
+/// The turnloop twin of [`should_drop_connection`], which reads the endpoints
+/// off a `tokio::net::TcpStream`. turnloop hands the addresses back directly,
+/// so this takes them rather than a stream.
+pub(crate) fn should_drop_accepted(
+    server_id: i64,
+    local: Option<std::net::SocketAddr>,
+    peer: Option<std::net::SocketAddr>,
+) -> Option<DropInfo> {
+    reserve_connection(server_id, local, peer)
+}
+
 pub(crate) fn should_drop_ipc_connection(server_id: i64) -> Option<DropInfo> {
     reserve_connection(server_id, None, None)
 }
@@ -337,10 +350,8 @@ pub(crate) fn activate_connection(server_id: i64, socket_id: i64) {
 /// returned. Any writes/end queued by that callback are already ahead of this
 /// marker in the channel, so peer-EOF handling can safely auto-close after it.
 pub(crate) fn release_connection_callback(socket_id: i64) {
-    if let Some(socket) = statics::sockets().lock().unwrap().get(&socket_id) {
-        let _ = socket
-            .cmd_tx
-            .send(crate::SocketCommand::ServerConnectionReady);
+    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&socket_id) {
+        let _ = socket.command(socket_id, crate::SocketCommand::ServerConnectionReady);
     }
 }
 

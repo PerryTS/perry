@@ -123,14 +123,6 @@ impl Drop for ScheduledTimerId {
     }
 }
 
-#[cfg(test)]
-impl ScheduledTimerId {
-    /// For test scaffolding entries whose ids were never registered.
-    pub(super) fn unregistered() -> Self {
-        Self(i64::MIN)
-    }
-}
-
 /// Register a timer id as scheduled (ref'd, with its handle kind). Runs before
 /// the id is observable — the async_hooks `init` hook already sees the handle.
 pub(super) fn register_scheduled_timer(id: i64, kind: CallbackTimerKind) -> ScheduledTimerId {
@@ -162,25 +154,16 @@ pub(super) fn timer_handle_kind(id: i64) -> Option<CallbackTimerKind> {
     timer_handle_state(id).and_then(|state| state.kind)
 }
 
-/// Read-only view for a whole-queue liveness scan, under ONE registry lock
-/// instead of one per entry.
-pub(super) struct RefStatesView<'a>(Option<&'a TimerRefStates>);
+// `RefStatesView` / `with_ref_states` are not carried over from main's #10447.
+// They existed so `ownership.rs`'s `has_refed_{promise,callback,interval}_timer`
+// could scan the global CALLBACK_TIMERS / INTERVAL_TIMERS vectors under ONE
+// registry lock instead of one lock per entry. turnloop P3 replaced those
+// globals with a per-agent store, and keep-alive now reads
+// `store::has_refed_timers()` / `store::has_refed_check()`, which carry `refed`
+// on the queue entry itself — there is no batch scan left to amortise. Kept out
+// rather than kept dead, per CLAUDE.md's kill-policy: an unexercised mode is a
+// decision nobody has made.
 
-impl RefStatesView<'_> {
-    pub(super) fn has_ref(&self, id: i64) -> bool {
-        self.0
-            .and_then(|states| states.get(id))
-            .map_or(true, |state| state.has_ref)
-    }
-}
-
-/// `f` must not drop a timer entry (see [`ScheduledTimerId`]).
-pub(super) fn with_ref_states<R>(f: impl FnOnce(&RefStatesView<'_>) -> R) -> R {
-    let guard = lock_states();
-    f(&RefStatesView(guard.as_ref()))
-}
-
-/// `PERRY_GC_CENSUS` row for the registry.
 pub(super) fn ref_states_census() -> crate::gc::census::SideTableRow {
     let guard = lock_states();
     let (len, bytes) = guard.as_ref().map_or((0, 0), |states| {
@@ -377,14 +360,23 @@ mod tests {
         // Only the ref'd immediate keeps the loop alive; once it is gone,
         // nothing does — and re-`ref()`ing the timeout re-arms it.
         clearImmediate(immediate);
+        // `js_timer_has_pending`, not `js_callback_timer_has_pending`. turnloop
+        // P3 repurposed the three liveness entry points onto the per-agent
+        // store: `js_timer_has_pending` and `js_interval_timer_has_pending` both
+        // answer `has_refed_timers()` (the Timeout/Interval classes) while
+        // `js_callback_timer_has_pending` answers `has_refed_check()` (the
+        // check phase, i.e. setImmediate). The generated loop's liveness
+        // disjunction asks all three, so the union is unchanged — but this
+        // assertion is about a `setTimeout`, and on this branch the timeout
+        // classes are the first accessor's question, not the third's.
         assert_eq!(
-            js_callback_timer_has_pending(),
+            js_timer_has_pending(),
             0,
             "unref'd timeout kept the loop alive"
         );
         js_timer_ref(timeout);
         assert_eq!(
-            js_callback_timer_has_pending(),
+            js_timer_has_pending(),
             1,
             "ref() after churn did not re-arm"
         );

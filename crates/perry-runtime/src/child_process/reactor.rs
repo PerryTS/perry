@@ -51,7 +51,16 @@ type CpWaiter = Box<dyn FnOnce() -> (Option<i32>, Option<i32>) + Send>;
 
 mod stdin;
 use stdin::CpStdin;
+/// turnloop P2: the child's readable pipes as loop entries (split out only to
+/// keep this file under the 2000-line cap; it is one subject with the reader
+/// call sites above).
+mod streams;
 pub(super) use stdin::CP_STDIN_HIGH_WATER_MARK;
+use streams::{
+    cp_pipe_from_child_stderr, cp_pipe_from_child_stdout, cp_pipe_from_file, cp_spawn_reader,
+    CpPipe,
+};
+pub(crate) use streams::{cp_release_loop_streams, on_stream_completion};
 
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
@@ -128,6 +137,11 @@ struct LiveChild {
     /// stderr before stdout for a child that closes both descriptors together.
     stdout_eof_pending: bool,
     extra_open: Vec<usize>,
+    /// turnloop entries carrying this child's readable pipes, as
+    /// `(fd, entry id)`. Empty on the thread fallback, and drained at EOF and
+    /// at teardown so the driver never keeps a descriptor the child is done
+    /// with.
+    loop_streams: Vec<(usize, u64)>,
     /// Whether the `spawn` event has been emitted yet.
     spawned: bool,
     /// `Some((code, signal))` once the waiter reported termination.
@@ -280,28 +294,6 @@ fn libc_sigterm() -> i32 {
     }
 }
 
-/// Spawn a reader thread that streams `pipe` to the event queue until EOF.
-fn cp_spawn_reader<R: Read + Send + 'static>(handle: u64, mut pipe: R, fd: usize) {
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            match pipe.read(&mut buf) {
-                Ok(0) | Err(_) => {
-                    cp_push_event(CpEvent::Eof { handle, fd });
-                    break;
-                }
-                Ok(n) => {
-                    cp_push_event(CpEvent::Data {
-                        handle,
-                        fd,
-                        bytes: buf[..n].to_vec(),
-                    });
-                }
-            }
-        }
-    });
-}
-
 /// IPC reader (#1933): read newline-delimited JSON from the parent socket and
 /// push each line for main-thread parse + `'message'` delivery. For
 /// `serialization: 'advanced'` (#2130) the framing is instead a 4-byte
@@ -391,8 +383,8 @@ pub(super) fn cp_register_live_child(
     #[cfg(windows)]
     let win_proc_handle = cp_win_dup_proc_handle(&child);
 
-    let stdout_pipe = child.stdout.take().map(|pipe| Box::new(pipe) as CpReader);
-    let stderr_pipe = child.stderr.take().map(|pipe| Box::new(pipe) as CpReader);
+    let stdout_pipe = child.stdout.take().map(cp_pipe_from_child_stdout);
+    let stderr_pipe = child.stderr.take().map(cp_pipe_from_child_stderr);
     let stdin_pipe = child.stdin.take().map(|pipe| {
         #[cfg(unix)]
         {
@@ -505,8 +497,8 @@ fn cp_register_live_child_parts(
     extra_pipes: Vec<(usize, f64, std::fs::File)>,
     pid: u32,
     stdin_pipe: Option<CpStdin>,
-    stdout_pipe: Option<CpReader>,
-    stderr_pipe: Option<CpReader>,
+    stdout_pipe: Option<CpPipe>,
+    stderr_pipe: Option<CpPipe>,
     waiter: CpWaiter,
     ipc: Option<IpcStream>,
     ipc_advanced: bool,
@@ -560,6 +552,7 @@ fn cp_register_live_child_parts(
                 stderr_open,
                 stdout_eof_pending: false,
                 extra_open: extra_pipes.iter().map(|(fd, _, _)| *fd).collect(),
+                loop_streams: Vec::new(),
                 spawned: false,
                 exited: None,
                 exit_emitted: false,
@@ -589,7 +582,7 @@ fn cp_register_live_child_parts(
         cp_spawn_reader(handle, e, 2);
     }
     for (fd, _, pipe) in extra_pipes {
-        cp_spawn_reader(handle, pipe, fd);
+        cp_spawn_reader(handle, cp_pipe_from_file(pipe), fd);
     }
     cp_spawn_waiter(
         handle,
@@ -1186,6 +1179,7 @@ pub(super) fn cp_exec_async(
                         stderr_open,
                         stdout_eof_pending: false,
                         extra_open: Vec::new(),
+                        loop_streams: Vec::new(),
                         spawned: false,
                         exited: None,
                         exit_emitted: false,
@@ -1209,10 +1203,10 @@ pub(super) fn cp_exec_async(
             CP_REFED_COUNT.fetch_add(1, Ordering::SeqCst);
 
             if let Some(o) = stdout_pipe {
-                cp_spawn_reader(handle, o, 1);
+                cp_spawn_reader(handle, cp_pipe_from_child_stdout(o), 1);
             }
             if let Some(e) = stderr_pipe {
-                cp_spawn_reader(handle, e, 2);
+                cp_spawn_reader(handle, cp_pipe_from_child_stderr(e), 2);
             }
             let waiter: CpWaiter = Box::new(move || match child.wait() {
                 Ok(status) => {
@@ -1365,6 +1359,11 @@ pub(crate) fn cp_reactor_pump() {
     if CP_PUMPING.with(|p| p.replace(true)) {
         return; // already pumping (re-entrant await inside a handler)
     }
+    // turnloop P2: a child's pipes are loop operations now, so their bytes
+    // exist only once the loop has been turned. A caller that drives this pump
+    // without parking — the `await` poll loop, and the lifecycle tests below —
+    // would otherwise spin against a queue nothing can fill.
+    crate::turnloop_proc::drain_pending();
     cp_reactor_pump_inner();
     CP_PUMPING.with(|p| p.set(false));
 }
@@ -1646,6 +1645,9 @@ fn cp_reactor_pump_inner() {
             let signal_f = cp_get_field(cp, b"signalCode");
             cp_emit(cp, "close", &[code_f, signal_f]);
         }
+        // Release any loop entry still carrying one of this child's pipes
+        // BEFORE the registry entry goes, because that is where the ids live.
+        cp_release_loop_streams(item.handle);
         if let Some(map) = cp_live_lock().as_mut() {
             map.remove(&item.handle);
         }

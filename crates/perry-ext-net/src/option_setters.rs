@@ -128,8 +128,8 @@ pub unsafe extern "C" fn js_net_socket_set_no_delay(handle: i64, arg_bits: i64) 
     let arg = f64::from_bits(arg_bits as u64);
     let enable = perry_ffi::JsValue::from_bits(arg.to_bits()).is_undefined()
         || unsafe { js_is_truthy(arg) } != 0;
-    if let Some(s) = crate::statics::sockets().lock().unwrap().get(&handle) {
-        let _ = s.cmd_tx.send(crate::SocketCommand::SetNoDelay(enable));
+    if let Some(s) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
+        let _ = s.command(handle, crate::SocketCommand::SetNoDelay(enable));
     }
     handle
 }

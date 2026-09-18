@@ -1,7 +1,21 @@
-//! Native bindings for the npm `nodemailer` package — SMTP
-//! transport via the `lettre` crate. Sync `createTransport`,
-//! async `sendMail` / `verify` bridged through `spawn_blocking`
-//! + `JsPromise` + `tokio::Handle::current().block_on`.
+//! Native bindings for the npm `nodemailer` package.
+//!
+//! Sync `createTransport`; async `sendMail` / `verify` on perry-stdlib's
+//! turnloop SMTP engine, reached through the `js_perry_smtp_*` C seam and
+//! settled from a completion on this agent's own loop. There is no second
+//! transport: the `AsyncSmtpTransport<Tokio1Executor>` fallback this crate
+//! carried — and the `spawn_blocking` + `Handle::current().block_on` pair that
+//! drove it — is gone, and with it lettre's `tokio1` / `tokio1-rustls-tls` /
+//! `pool` features and this crate's tokio dependency. The MIME half is
+//! unchanged: it is still lettre's builder, now reached through
+//! `turnloop_smtp::message`, which re-exports it from a `builder`-only pin.
+//!
+//! What a decline costs, stated plainly: an agent that cannot get a
+//! `turnloop::Loop` (a host pump thread, the `tokio-wait-driver` A/B arm, a
+//! host where `Loop::new` failed) now REJECTS instead of silently taking a
+//! second transport. That is the kill-policy trade CLAUDE.md asks for — the
+//! fallback was never exercised by any test, so "it still works there" was
+//! never a claim anyone had evidence for.
 //!
 //! Exercises perry-ffi v0.5's nested-object reading surface
 //! (`js_object_get_field` indexed lookups for the user's SMTP
@@ -10,14 +24,14 @@
 //! `js_object_alloc_with_shape` / `js_object_set_field`) for the
 //! info object resolved back to user code on success.
 
-use lettre::message::header::ContentType;
-use lettre::transport::smtp::authentication::Credentials;
-use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use perry_ffi::{
     alloc_string, build_object_shape, get_handle, js_object_alloc_with_shape, js_object_get_field,
-    js_object_set_field, register_handle, spawn_blocking, Handle, JsPromise, JsValue, ObjectHeader,
-    Promise, StringHeader,
+    js_object_set_field, register_handle, Handle, JsPromise, JsValue, ObjectHeader, Promise,
+    StringHeader,
 };
+
+mod dispatch_ext;
+mod turnloop_bridge;
 
 #[derive(Debug, Clone)]
 pub struct SmtpConfig {
@@ -111,6 +125,12 @@ unsafe fn parse_smtp_config(config: JsValue) -> SmtpConfig {
 pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
     let config = JsValue::from_bits(config_f.to_bits());
     let smtp_config = parse_smtp_config(config);
+    // The transporter is returned to JS as a bare handle NUMBER, so every
+    // method call on it lands in the runtime's untyped dispatch. Register the
+    // extension that claims those before the first one can happen — without it
+    // `transporter.sendMail(...)` is `TypeError: (number).sendMail is not a
+    // function`, which is what it was on the base commit.
+    dispatch_ext::ensure_registered();
     register_handle(SmtpTransportHandle::new(smtp_config)) as f64
 }
 
@@ -176,77 +196,17 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
         }
     };
 
-    spawn_blocking(move || {
-        let outcome = (|| -> Result<JsValue, String> {
-            let wrapper = get_handle::<SmtpTransportHandle>(transporter_handle)
-                .ok_or_else(|| "Invalid transporter handle".to_string())?;
-            let config = &wrapper.config;
-
-            let mailer_result = if config.secure {
-                AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-            } else {
-                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
-            };
-
-            let mailer: AsyncSmtpTransport<Tokio1Executor> = match mailer_result {
-                Ok(builder) => {
-                    let mut builder = builder.port(config.port);
-                    if let (Some(user), Some(pass)) = (&config.user, &config.pass) {
-                        let creds = Credentials::new(user.clone(), pass.clone());
-                        builder = builder.credentials(creds);
-                    }
-                    builder.build()
-                }
-                Err(e) => return Err(format!("Failed to create transport: {}", e)),
-            };
-
-            let email_builder = Message::builder()
-                .from(
-                    mail_opts
-                        .from
-                        .parse()
-                        .map_err(|e| format!("Invalid from address: {}", e))?,
-                )
-                .to(mail_opts
-                    .to
-                    .parse()
-                    .map_err(|e| format!("Invalid to address: {}", e))?)
-                .subject(mail_opts.subject);
-
-            let email = if let Some(html) = mail_opts.html {
-                email_builder
-                    .header(ContentType::TEXT_HTML)
-                    .body(html)
-                    .map_err(|e| format!("Failed to build email: {}", e))?
-            } else if let Some(text) = mail_opts.text {
-                email_builder
-                    .header(ContentType::TEXT_PLAIN)
-                    .body(text)
-                    .map_err(|e| format!("Failed to build email: {}", e))?
-            } else {
-                email_builder
-                    .body(String::new())
-                    .map_err(|e| format!("Failed to build email: {}", e))?
-            };
-
-            let send_result =
-                tokio::runtime::Handle::current().block_on(async move { mailer.send(email).await });
-
-            match send_result {
-                Ok(response) => {
-                    let message_id = format!("<{}@perry>", uuid::Uuid::new_v4());
-                    let response_str = format!("{:?}", response);
-                    Ok(build_info_object(&message_id, &response_str))
-                }
-                Err(e) => Err(format!("Failed to send email: {}", e)),
-            }
-        })();
-
-        match outcome {
-            Ok(info) => promise.resolve(info),
-            Err(e) => promise.reject_string(&e),
-        }
-    });
+    // The engine settles `raw` exactly once. A refusal returns the message to
+    // reject with, rather than falling through to a second transport.
+    let Some(config) =
+        get_handle::<SmtpTransportHandle>(transporter_handle).map(|w| w.config.clone())
+    else {
+        promise.reject_string("Invalid transporter handle");
+        return raw;
+    };
+    if let Err(message) = turnloop_bridge::try_send(&config, &mail_opts, raw) {
+        promise.reject_string(&message);
+    }
     raw
 }
 
@@ -256,41 +216,15 @@ pub extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mut Promi
     let promise = JsPromise::new();
     let raw = promise.as_raw();
 
-    spawn_blocking(move || {
-        let outcome = (|| -> Result<bool, String> {
-            let wrapper = get_handle::<SmtpTransportHandle>(transporter_handle)
-                .ok_or_else(|| "Invalid transporter handle".to_string())?;
-            let config = &wrapper.config;
-
-            let mailer_result = if config.secure {
-                AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-            } else {
-                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
-            };
-
-            let mailer: AsyncSmtpTransport<Tokio1Executor> = match mailer_result {
-                Ok(builder) => {
-                    let mut builder = builder.port(config.port);
-                    if let (Some(user), Some(pass)) = (&config.user, &config.pass) {
-                        let creds = Credentials::new(user.clone(), pass.clone());
-                        builder = builder.credentials(creds);
-                    }
-                    builder.build()
-                }
-                Err(e) => return Err(format!("Failed to create transport: {}", e)),
-            };
-
-            let test_result = tokio::runtime::Handle::current()
-                .block_on(async move { mailer.test_connection().await });
-
-            test_result.map_err(|e| format!("Connection test failed: {}", e))
-        })();
-
-        match outcome {
-            Ok(b) => promise.resolve(JsValue::from_bool(b)),
-            Err(e) => promise.reject_string(&e),
-        }
-    });
+    let Some(config) =
+        get_handle::<SmtpTransportHandle>(transporter_handle).map(|w| w.config.clone())
+    else {
+        promise.reject_string("Invalid transporter handle");
+        return raw;
+    };
+    if let Err(message) = turnloop_bridge::try_verify(&config, raw) {
+        promise.reject_string(&message);
+    }
     raw
 }
 

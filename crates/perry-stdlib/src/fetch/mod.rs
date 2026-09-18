@@ -18,9 +18,15 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 // `use super::*`.
 mod abort_bridge;
 pub use abort_bridge::*;
+
+// turnloop P6: the outbound transport this module prefers when the agent owns a
+// loop. Every transport-bearing entry point below asks it first and keeps its
+// reqwest future only when it declines (see the bridge's module note).
 mod headers;
 mod request_handle;
 mod transport_error;
+#[path = "turnloop_bridge.rs"]
+mod turnloop_bridge;
 pub use headers::*;
 
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
@@ -116,6 +122,17 @@ lazy_static::lazy_static! {
     /// prebuilt at install time so per-request cost stays a clone (Arc bump).
     static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
         std::sync::RwLock::new(None);
+
+    /// The same override as data, for the turnloop engine.
+    ///
+    /// The reqwest client above is a prebuilt object and nothing can read a URL
+    /// back out of it, which is precisely why P6 had to DECLINE a proxied fetch
+    /// — its blocker said "a CONNECT tunnel driven from a URL rather than from a
+    /// prebuilt `reqwest::Client`". Keeping the `(uri, token)` beside the client
+    /// is that URL. Written under the same lock order as the client (client
+    /// first, then this) so a reader that sees one sees the other.
+    static ref GLOBAL_PROXY_URI: std::sync::RwLock<Option<(String, Option<String>)>> =
+        std::sync::RwLock::new(None);
 }
 
 /// Shared builder options for every fetch client (direct or proxied).
@@ -199,6 +216,9 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
     if uri_ptr.is_null() {
         if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
             *guard = None;
+            if let Ok(mut uri) = GLOBAL_PROXY_URI.write() {
+                *uri = None;
+            }
             return 1.0;
         }
         return 0.0;
@@ -211,6 +231,9 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         Ok(client) => {
             if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
                 *guard = Some(client);
+                if let Ok(mut stored) = GLOBAL_PROXY_URI.write() {
+                    *stored = Some((uri, token));
+                }
                 1.0
             } else {
                 0.0
@@ -218,6 +241,36 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         }
         Err(_) => 0.0,
     }
+}
+
+/// The installed dispatcher proxy as `(uri, token)`, for the turnloop engine.
+pub(crate) fn global_dispatcher_proxy() -> Option<(String, Option<String>)> {
+    GLOBAL_PROXY_URI.read().ok()?.clone()
+}
+
+/// Request headers `fetch` refuses outright, and the failure to reject with.
+///
+/// The Fetch standard's forbidden-header list is mostly *ignored* — a value is
+/// dropped and the request goes out — but `Expect` is different in undici: it
+/// throws, so `fetch()` rejects. Perry did neither thing consistently. On the
+/// reqwest path the header went on the wire and the request SUCCEEDED, which is
+/// a silent divergence from Node. On the turnloop path it reached
+/// `Http1Connection::start`, which read `expect: 100-continue` on a non-empty
+/// body as "park the upload until the server says 100" — `can_send_body()` went
+/// false and the very next `send_body` failed `UND_ERR_INVALID_ARG "request
+/// body is not writable"`, so the POST never left the process and the promise
+/// rejected with a message naming the body rather than the header.
+///
+/// So the same program gave three different answers depending on transport, and
+/// none of them was Node's. Deciding it here, before dispatch, is what makes the
+/// answer transport-independent.
+fn forbidden_header_failure(
+    headers: &HashMap<String, String>,
+) -> Option<transport_error::FetchFailure> {
+    headers
+        .keys()
+        .find(|name| name.eq_ignore_ascii_case("expect"))
+        .map(|_| transport_error::FetchFailure::forbidden_header("expect"))
 }
 
 fn alloc_fetch_handle_id() -> usize {
@@ -249,6 +302,44 @@ struct StreamState {
     http_status: u16,
     #[allow(dead_code)]
     error: String,
+}
+
+impl StreamState {
+    /// The line splitter, shared by both transports so the poll surface cannot
+    /// observe which one carried the stream. Bytes accumulate in `partial`
+    /// until a `\n`; empty lines are dropped, which is what the poll contract
+    /// has always done (an empty return from `js_fetch_stream_poll` means
+    /// "nothing pending", so an empty line could not be represented).
+    fn push_text(&mut self, text: &str) {
+        self.partial.push_str(text);
+        while let Some(pos) = self.partial.find('\n') {
+            let line = self.partial[..pos].to_string();
+            self.partial = self.partial[pos + 1..].to_string();
+            if !line.is_empty() {
+                self.pending_lines.push(line);
+            }
+        }
+    }
+
+    /// End of body: flush a trailing unterminated line and mark the stream
+    /// complete.
+    fn finish(&mut self) {
+        if !self.partial.is_empty() {
+            let rest = std::mem::take(&mut self.partial);
+            self.pending_lines.push(rest);
+        }
+        self.status = 2;
+    }
+}
+
+/// Run `f` against one live stream's state. A miss is a no-op: the JS side may
+/// have called `js_fetch_stream_close` while bytes were still arriving.
+fn with_stream(id: usize, f: impl FnOnce(&mut StreamState)) {
+    if let Ok(mut guard) = STREAM_HANDLES.lock() {
+        if let Some(state) = guard.get_mut(&id) {
+            f(state);
+        }
+    }
 }
 
 struct FetchResponse {
@@ -467,6 +558,19 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
         }
     };
 
+    if turnloop_bridge::try_dispatch(
+        turnloop_bridge::FetchDispatch {
+            url: url.clone(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: None,
+            abort_key: None,
+        },
+        promise_ptr,
+    ) {
+        return promise;
+    }
+
     spawn(async move {
         match fetch_client().get(&url).send().await {
             Ok(response) => {
@@ -534,6 +638,22 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
     };
 
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
+
+    if turnloop_bridge::try_dispatch(
+        turnloop_bridge::FetchDispatch {
+            url: url.clone(),
+            method: "GET".to_string(),
+            headers: auth_header
+                .is_empty()
+                .then(Vec::new)
+                .unwrap_or_else(|| vec![("authorization".to_string(), auth_header.clone())]),
+            body: None,
+            abort_key: None,
+        },
+        promise_ptr,
+    ) {
+        return promise;
+    }
 
     spawn(async move {
         let client = fetch_client();
@@ -607,6 +727,25 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
 
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
     let body = string_from_header(body_ptr).unwrap_or_default();
+
+    {
+        let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+        if !auth_header.is_empty() {
+            headers.push(("authorization".to_string(), auth_header.clone()));
+        }
+        if turnloop_bridge::try_dispatch(
+            turnloop_bridge::FetchDispatch {
+                url: url.clone(),
+                method: "POST".to_string(),
+                headers,
+                body: Some(body.clone().into_bytes()),
+                abort_key: None,
+            },
+            promise_ptr,
+        ) {
+            return promise;
+        }
+    }
 
     spawn(async move {
         let client = fetch_client();
@@ -694,6 +833,19 @@ pub unsafe extern "C" fn js_fetch_post(
     let content_type = string_from_header(content_type_ptr)
         .or(form_data_content_type)
         .unwrap_or_else(|| "application/json".to_string());
+
+    if turnloop_bridge::try_dispatch(
+        turnloop_bridge::FetchDispatch {
+            url: url.clone(),
+            method: "POST".to_string(),
+            headers: vec![("content-type".to_string(), content_type.clone())],
+            body: Some(body.clone()),
+            abort_key: None,
+        },
+        promise_ptr,
+    ) {
+        return promise;
+    }
 
     spawn(async move {
         let client = fetch_client();
@@ -805,6 +957,29 @@ pub unsafe extern "C" fn js_fetch_with_options(
             .entry("content-type".to_string())
             .or_insert(content_type);
     }
+
+    // Refused before either transport is chosen, so the answer does not depend
+    // on which one would have carried it — which was the bug. See
+    // `forbidden_header_failure`.
+    if let Some(failure) = forbidden_header_failure(&inputs.custom_headers) {
+        queue_promise_resolution(promise_ptr, false, failure.into_js_bits());
+        return promise;
+    }
+
+    // turnloop first: accepting here means no tokio task is created at all,
+    // which is what makes `tokio_ticks=0` on a fetch-only workload true. The
+    // watch is dropped on acceptance because the engine owns cancellation from
+    // then on — `js_fetch_notify_signal_aborted` reaches it directly.
+    let abort_key = abort_watch
+        .as_ref()
+        .map(abort_bridge::FetchAbortWatch::signal_ptr);
+    let inputs = match turnloop_bridge::try_dispatch_inputs(inputs, abort_key, promise_ptr) {
+        Ok(()) => {
+            drop(abort_watch);
+            return promise;
+        }
+        Err(inputs) => inputs,
+    };
 
     // Dispatch + abort handling live in `abort_bridge::run_request` (keeps this
     // file under the line-size lint gate).
@@ -1024,6 +1199,10 @@ pub unsafe extern "C" fn js_fetch_text(
         }
     };
 
+    if turnloop_bridge::try_dispatch_text(url.clone(), promise_ptr) {
+        return promise;
+    }
+
     spawn(async move {
         match fetch_client().get(&url).send().await {
             Ok(response) => match response.text().await {
@@ -1081,6 +1260,22 @@ pub unsafe extern "C" fn js_fetch_stream_start(
         },
     );
     let sid = stream_id;
+    // turnloop P6's streaming sink. Until this lane the engine's
+    // `Sink::on_head` / `Sink::on_chunk` hooks existed and NOTHING called them
+    // — an unexercised mode, which CLAUDE.md's GC-knob kill policy calls a
+    // decision nobody has made. This is the caller.
+    if turnloop_bridge::try_dispatch_stream(
+        sid,
+        url.clone(),
+        method.clone(),
+        custom_headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        body.clone().map(String::into_bytes),
+    ) {
+        return stream_id as f64;
+    }
     spawn(async move {
         let client = fetch_client();
         let mut request = match method.to_uppercase().as_str() {
@@ -1111,18 +1306,7 @@ pub unsafe extern "C" fn js_fetch_stream_start(
                             let text = String::from_utf8_lossy(&chunk).to_string();
                             let mut g = STREAM_HANDLES.lock().unwrap();
                             if let Some(s) = g.get_mut(&sid) {
-                                s.partial.push_str(&text);
-                                loop {
-                                    if let Some(pos) = s.partial.find('\n') {
-                                        let line = s.partial[..pos].to_string();
-                                        s.partial = s.partial[pos + 1..].to_string();
-                                        if !line.is_empty() {
-                                            s.pending_lines.push(line);
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
+                                s.push_text(&text);
                             } else {
                                 break;
                             }
@@ -1130,11 +1314,7 @@ pub unsafe extern "C" fn js_fetch_stream_start(
                         Ok(None) => {
                             let mut g = STREAM_HANDLES.lock().unwrap();
                             if let Some(s) = g.get_mut(&sid) {
-                                if !s.partial.is_empty() {
-                                    let r = std::mem::take(&mut s.partial);
-                                    s.pending_lines.push(r);
-                                }
-                                s.status = 2;
+                                s.finish();
                             }
                             break;
                         }
@@ -1205,84 +1385,8 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
-#[derive(Clone, Default)]
-struct HeadersStore {
-    /// (lowercase_name, value) entries — insertion order preserved
-    entries: Vec<(String, String)>,
-}
-
-impl HeadersStore {
-    fn set(&mut self, key: &str, value: &str) {
-        let lk = key.to_ascii_lowercase();
-        self.entries.retain(|(k, _)| *k != lk);
-        self.entries.push((lk, value.to_string()));
-    }
-    /// Web Fetch `Headers.append` — combines repeated normal headers with
-    /// `", "`, but keeps `Set-Cookie` values as separate entries so
-    /// `getSetCookie()` can return them individually.
-    fn append(&mut self, key: &str, value: &str) {
-        let lk = key.to_ascii_lowercase();
-        if lk == "set-cookie" {
-            self.entries.push((lk, value.to_string()));
-            return;
-        }
-        for entry in self.entries.iter_mut() {
-            if entry.0 == lk {
-                entry.1.push_str(", ");
-                entry.1.push_str(value);
-                return;
-            }
-        }
-        self.entries.push((lk, value.to_string()));
-    }
-    fn get(&self, key: &str) -> Option<String> {
-        let lk = key.to_ascii_lowercase();
-        if lk == "set-cookie" {
-            let values: Vec<&str> = self
-                .entries
-                .iter()
-                .filter(|(k, _)| *k == lk)
-                .map(|(_, v)| v.as_str())
-                .collect();
-            if values.is_empty() {
-                None
-            } else {
-                Some(values.join(", "))
-            }
-        } else {
-            self.entries
-                .iter()
-                .find(|(k, _)| *k == lk)
-                .map(|(_, v)| v.clone())
-        }
-    }
-    fn has(&self, key: &str) -> bool {
-        let lk = key.to_ascii_lowercase();
-        self.entries.iter().any(|(k, _)| *k == lk)
-    }
-    fn delete(&mut self, key: &str) {
-        let lk = key.to_ascii_lowercase();
-        self.entries.retain(|(k, _)| *k != lk);
-    }
-    fn set_cookie_values(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|(k, _)| k == "set-cookie")
-            .map(|(_, v)| v.clone())
-            .collect()
-    }
-}
-
-fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore {
-    let mut store = HeadersStore::default();
-    for (key, value) in headers {
-        if let Ok(v) = value.to_str() {
-            store.append(key.as_str(), v);
-        }
-    }
-    store
-}
-
+mod headers_store;
+use headers_store::{headers_from_header_map, HeadersStore};
 #[derive(Clone)]
 struct RequestRecord {
     url: String,

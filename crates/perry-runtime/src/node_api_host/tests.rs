@@ -905,6 +905,13 @@ fn async_work_executes_off_thread_and_completes_on_owner() {
     ASYNC_EXECUTED.store(0, Ordering::SeqCst);
     ASYNC_COMPLETED.store(0, Ordering::SeqCst);
     ASYNC_OFF_THREAD_REJECTED.store(0, Ordering::SeqCst);
+    // turnloop P4: the work item goes to the shared blocking pool instead of a
+    // fresh thread per queue. "Off thread" alone cannot tell the two apart —
+    // both satisfy every assertion below — so the pool's own counter is read
+    // around the queue. A run that fell back to the thread path leaves it
+    // unchanged, and this says so instead of passing quietly.
+    #[cfg(not(target_arch = "wasm32"))]
+    let pool_before = crate::turnloop_pool::submitted_total();
     let env = test_env();
     let mut name = std::ptr::null_mut();
     assert_eq!(
@@ -937,6 +944,12 @@ fn async_work_executes_off_thread_and_completes_on_owner() {
     assert_eq!(ASYNC_EXECUTED.load(Ordering::SeqCst), 1);
     assert_eq!(ASYNC_OFF_THREAD_REJECTED.load(Ordering::SeqCst), 1);
     assert_eq!(ASYNC_COMPLETED.load(Ordering::SeqCst), 1);
+    #[cfg(not(target_arch = "wasm32"))]
+    assert_eq!(
+        crate::turnloop_pool::submitted_total(),
+        pool_before + 1,
+        "the work item went to the shared blocking pool, not to a fresh thread"
+    );
     assert_eq!(unsafe { napi_delete_async_work(env, work) }, NapiStatus::Ok);
 }
 

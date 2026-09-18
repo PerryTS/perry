@@ -103,9 +103,9 @@ extern "C" fn perry_net_raw_write(socket_id: i64, ptr: *const u8, len: usize) ->
     } else {
         unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
     };
-    if let Ok(g) = statics::sockets().lock() {
-        if let Some(s) = g.get(&socket_id) {
-            return i32::from(s.cmd_tx.send(SocketCommand::Write(bytes, 0)).is_ok());
+    if let Ok(mut g) = statics::sockets().lock() {
+        if let Some(s) = g.get_mut(&socket_id) {
+            return i32::from(s.command(socket_id, SocketCommand::Write(bytes, 0)).is_ok());
         }
     }
     0
@@ -149,9 +149,9 @@ extern "C" fn perry_net_raw_poll_read(socket_id: i64, out: *mut u8, max: usize) 
 extern "C" fn perry_net_raw_close(socket_id: i64) {
     // Signal the read/write task to stop (best-effort; dropping the
     // SocketState below also closes the cmd channel, ending the task).
-    if let Ok(g) = statics::sockets().lock() {
-        if let Some(s) = g.get(&socket_id) {
-            let _ = s.cmd_tx.send(SocketCommand::Destroy);
+    if let Ok(mut g) = statics::sockets().lock() {
+        if let Some(s) = g.get_mut(&socket_id) {
+            let _ = s.command(socket_id, SocketCommand::Destroy);
         }
     }
     let _ = statics::sockets().lock().map(|mut g| g.remove(&socket_id));

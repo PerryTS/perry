@@ -44,15 +44,34 @@ gstreamer-app = "0.25"
 # Bluetooth headphones (#366). Linux-only; zbus has Linux-specific
 # system deps that don't build on macOS / Windows hosts, so the crate
 # stays gated behind cfg(target_os = "linux") in the source.
-mpris-server = { version = "0.10", features = ["tokio"] }
-tokio = { version = "1", features = ["rt", "sync", "time", "net", "io-util"] }
+# NO tokio here, deliberately (turnloop). `mpris-server`'s `tokio`
+# feature only forwards to `zbus/tokio` and is not in its defaults;
+# with it off, zbus runs on `async-io` and starts its own
+# `zbus::Connection executor` thread for the connection.
+mpris-server = "0.10"
 # perry/ui — system tray icon support via the StatusNotifierItem
 # (KSNI / KDE / GNOME-with-extension / XFCE / Plasma / Cinnamon)
 # DBus protocol (#490). Pure-Rust — no native systray library
 # dependency. Linux-only because the SNI protocol IS the Linux
 # tray protocol; macOS / Windows have native equivalents handled
 # in their respective UI crates.
-ksni = { version = "0.3", features = ["tokio"] }
+#
+# `async-io` instead of the `tokio` default: the two are mutually
+# exclusive (ksni's `compat` module has a `compile_error!` if both are
+# enabled), and in `async-io` mode ksni owns an `async_executor` driver
+# thread of its own and builds its zbus connection with
+# `internal_executor(false)`. It needs no ambient runtime.
+ksni = { version = "0.3", default-features = false, features = ["async-io"] }
+# The leftovers of what tokio used to provide here, all `smol`-family and
+# all already in the graph under ksni / mpris-server / zbus:
+#   async-executor — the one background thread in `background.rs` that
+#                    replaces `Runtime::spawn` for tray refreshes.
+#   futures-lite   — `block_on`, replacing `Runtime::block_on`.
+#   async-channel  — main thread -> MPRIS server thread property pushes,
+#                    replacing `tokio::sync::mpsc::unbounded_channel`.
+async-executor = "1"
+futures-lite = "2"
+async-channel = "2.5"
 
 [features]
 geisterhand = []

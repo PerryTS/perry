@@ -251,6 +251,9 @@ fn executable_exit_block_emits_the_process_exit_event() {
         "js_timer_tick",
         "js_interval_timer_tick",
         "js_callback_timer_tick",
+        "js_event_loop_timers_phase",
+        "js_event_loop_poll_callbacks",
+        "js_event_loop_check_phase",
         "js_wait_for_event",
         "js_run_stdlib_pump",
     ] {
@@ -268,13 +271,49 @@ fn executable_exit_block_emits_the_process_exit_event() {
     );
 }
 
+/// turnloop P3: one loop iteration runs Node's phases in Node's order.
+///
+/// The order is the subject, not the presence of the calls: emitting the check
+/// phase before the poll phase — which is what the pre-P3 body did, by firing
+/// the immediate queue inside the microtask checkpoint — makes a `setImmediate`
+/// scheduled in an I/O callback run before a `setTimeout` scheduled beside it,
+/// the reverse of Node. Asserting only that the symbols appear would not catch
+/// that, so this walks the body block and checks their relative positions.
 #[test]
-fn event_loop_microtask_pump_is_the_single_timer_phase_owner() {
+fn event_loop_body_emits_nodes_phase_order() {
     let ir = emitted_ir("executable");
-    assert!(
-        ir.contains("call i32 @js_promise_run_microtasks_event_loop()"),
-        "the executable entry must retain its event-loop checkpoint\n{ir}"
-    );
+    let body_start = ir
+        .find("\nevent_loop.body.")
+        .map(|offset| offset + 1)
+        .unwrap_or_else(|| panic!("missing event-loop body block in emitted IR:\n{ir}"));
+    let body_len = ir[body_start..]
+        .find("\nevent_loop.")
+        .expect("the body block should be followed by another event_loop block");
+    let body = &ir[body_start..body_start + body_len];
+
+    let mut previous = 0usize;
+    for (phase, call) in [
+        (
+            "microtask checkpoint",
+            "@js_promise_run_microtasks_event_loop()",
+        ),
+        ("timers", "@js_event_loop_timers_phase()"),
+        ("poll: I/O pump", "@js_run_stdlib_pump()"),
+        ("poll: native callbacks", "@js_event_loop_poll_callbacks()"),
+        ("check", "@js_event_loop_check_phase()"),
+    ] {
+        let at = body
+            .find(call)
+            .unwrap_or_else(|| panic!("the body never runs the {phase} phase\n{body}"));
+        assert!(
+            at > previous,
+            "the {phase} phase is emitted out of Node's order\n{body}"
+        );
+        previous = at;
+    }
+
+    // The legacy composite ticks would run the check phase ahead of the poll
+    // phase again; the phase-ordered body must not emit them.
     for redundant_call in [
         "call i32 @js_timer_tick()",
         "call i32 @js_timer_tick_if_refed()",
@@ -283,7 +322,7 @@ fn event_loop_microtask_pump_is_the_single_timer_phase_owner() {
     ] {
         assert!(
             !ir.contains(redundant_call),
-            "{redundant_call} duplicates the timer phases already owned by the event-loop checkpoint\n{ir}"
+            "{redundant_call} runs the phases out of order\n{ir}"
         );
     }
 }
@@ -340,6 +379,14 @@ fn event_loop_body_rechecks_liveness_before_parking() {
             "the post-body re-check must consult {arm} exactly as the header does\n{check_block}"
         );
     }
+    // turnloop P3: the park is ALSO gated on there being no check-phase or
+    // poll-phase callback waiting to run, because Node computes a zero poll
+    // timeout while its immediate queue is non-empty. Without this an immediate
+    // queued by a check callback would wait out the next timer deadline.
+    assert!(
+        check_block.contains("js_immediate_has_pending"),
+        "the park must be skipped while a check/poll callback is queued\n{check_block}"
+    );
     assert!(
         check_block.contains("br i1 ") && check_block.contains("%event_loop.body_wait"),
         "the re-check must branch to the park only when something is still live\n{check_block}"

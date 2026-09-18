@@ -450,25 +450,19 @@ fn send_compat_report(report: &CompatibilityReport) {
             return;
         }
 
-        let client = match reqwest::blocking::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(5))
-            .build()
-        {
-            Ok(c) => c,
-            Err(_) => return,
-        };
+        // 3 s connect + 5 s request, summed into one whole-request budget —
+        // see the note in `telemetry::send_event_blocking`.
+        let client = perry_http_client::Client::with_timeout(std::time::Duration::from_secs(8));
         let envelope = serde_json::json!({
             "event": "compat_report",
             "dims": body,
         });
-        let _ = client
-            .post("https://api.chirp247.com/api/v1/event")
-            .header("Content-Type", "application/json")
-            .header("X-Chirp-Key", "testkey123")
-            .header("X-Chirp-Client", client_id)
-            .json(&envelope)
-            .send();
+        let _ = client.execute(
+            perry_http_client::Request::post("https://api.chirp247.com/api/v1/event")
+                .header("x-chirp-key", "testkey123")
+                .header("x-chirp-client", client_id)
+                .json_body(envelope.to_string()),
+        );
     });
 }
 

@@ -112,6 +112,18 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     module.declare_function("js_ws_on", I64, &[I64, I64, I64]);
     module.declare_function("js_ws_receive", I64, &[I64]);
     module.declare_function("js_ws_send", VOID, &[I64, I64]);
+    // The value-taking send/close/ping/pong family. `ws.send(data)` frames a
+    // string as text and anything buffer-shaped as binary, so the argument has
+    // to arrive as a JSValue rather than a `StringHeader*`; `close(code, reason)`
+    // needs both arguments for the same reason — they used to be dropped.
+    module.declare_function("js_ws_send_value", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_ws_send_value_client_i64", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_ws_server_close_with", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_ws_close_with", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_ws_close_with_client_i64", VOID, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function("js_ws_ping", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_ws_pong", VOID, &[I64, DOUBLE]);
+    module.declare_function("js_ws_terminate", VOID, &[I64]);
     // Issue #577 Phase 4 — `js_ws_send_to_client` takes the handle
     // as f64 so a TS-side numeric ws_id (received from the
     // `Server.on('upgrade', (req, wsId, head) => ...)` callback)

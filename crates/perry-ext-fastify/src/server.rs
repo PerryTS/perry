@@ -1,27 +1,31 @@
-//! HTTP server loop and request dispatch (hyper-based).
+//! HTTP server loop and request dispatch.
 //!
-//! `js_fastify_listen` is a blocking call: TS code calls
-//! `app.listen({ port: 3000 })` and the wrapper enters an event loop
-//! that doesn't return until the program exits. The actual TCP
-//! accept loop lives on a perry-ffi-spawned blocking task; the main
-//! thread receives `FastifyPendingRequest`s through an `mpsc`
-//! channel and invokes the user's TS handler synchronously, then
-//! sends the response back via a oneshot channel.
+//! # Two transports, and which one a server gets
+//!
+//! The transport is **turnloop**, through [`perry_http_server`]: one multishot
+//! accept, one multishot read, a sans-I/O `turnloop_http::http1` codec, and no
+//! task, no thread hop and no cross-thread notify anywhere on the request
+//! path. `js_fastify_listen` binds synchronously (so the `(err, address)`
+//! callback reports the real port), installs a [`FastifyHost`], and returns;
+//! `js_fastify_process_pending` drains the decoded requests on the main thread
+//! each tick, exactly where the hyper path's `mpsc` delivered them.
+//!
+//! There is no second transport. The hyper accept loop survived for one case —
+//! an app with `app.server.on("upgrade", …)` handlers, whose handshake ended in
+//! `perry_ext_ws::register_external_ws_stream` and needed an owned
+//! `AsyncRead + AsyncWrite` stream a turnloop connection cannot produce — and
+//! that blocker is gone: `perry_ext_ws::accept_http_upgrade` answers the
+//! handshake over bytes on the connection the core already owns, through
+//! `Host::on_upgrade`. An agent with no `turnloop::Loop` (a `worker_threads`
+//! agent, the `tokio-wait-driver` A/B arm) therefore has no fastify server at
+//! all, and `listen()` reports that through its `(err, address)` callback
+//! rather than falling back. See `docs/turnloop/fastify-report.md`.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::os::raw::c_int;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{body::Incoming, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
 
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, iter_handle_ids_of, read_bytes, register_handle,
@@ -81,7 +85,7 @@ extern "C" {
     /// `js_ws_process_pending`, `js_net_process_pending`,
     /// `js_http_process_pending`, etc.). Called from the fastify
     /// event loop so perry-ext-{ws,net,http,fetch} events accumulated
-    /// on tokio workers get dispatched on the JS main thread. See #747.
+    /// off the main thread get dispatched on it. See #747.
     fn js_run_stdlib_pump();
 
     /// True if `ptr` is a Promise (NaN-boxed pointer to a runtime
@@ -101,8 +105,9 @@ extern "C" {
     /// returns when no explicit response body was set.
     fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
 
-    /// Condvar-based wait for the next event (timer fire, notify from a
-    /// tokio worker, or 1 s idle cap). Used by `wait_for_promise` so the
+    /// Condvar-based wait for the next event (timer fire, a notify from
+    /// whichever thread produced one, or 1 s idle cap). Used by
+    /// `wait_for_promise` so the
     /// handler dispatcher blocks on real events instead of burning the
     /// CPU in a 100 us-poll loop. Wakes the moment any stdlib worker
     /// calls `js_notify_main_thread`, including the per-promise wake
@@ -201,35 +206,109 @@ pub struct ErrorHeader {
 pub struct FastifyServerHandle {
     pub port: u16,
     pub app_handle: Handle,
-    pub shutdown_tx: Option<oneshot::Sender<()>>,
-    /// Drained by `js_fastify_process_pending` from the main TS thread
-    /// each tick. `Mutex` because the handle registry hands out `&'static`
-    /// references but the pump needs `&mut` access to `try_recv` and
-    /// we can't statically prove the pump is the only mutator.
+    /// The `perry_http_server` listener. `js_fastify_close` stops accepting
+    /// through `perry_http_server::close_listener`; there is no second
+    /// shutdown channel now that there is no second accept loop.
+    pub listener_id: i64,
+    /// Drained by `js_fastify_process_pending` from the main TS thread each
+    /// tick. The producer is the completion sink on *this* thread, so the
+    /// channel is a same-thread hand-off rather than a thread hop. Bounded at
+    /// [`REQUEST_QUEUE_DEPTH`], which is the backpressure: a full queue is
+    /// answered `503` at once instead of growing without limit.
+    ///
+    /// `Mutex` because the handle registry hands out `&'static` references but
+    /// the pump needs `&mut` access to `try_recv`.
     pub request_rx: Mutex<Option<mpsc::Receiver<FastifyPendingRequest>>>,
-    /// #1113 — WebSocket upgrade events queued from the hyper accept
-    /// task once `hyper::upgrade::on` resolves and the upgraded stream
-    /// has been registered with `perry_ext_ws::register_external_ws_stream`.
-    /// Drained alongside `request_rx` in `js_fastify_process_pending`.
+    /// #1113 — accepted `app.server.on('upgrade', …)` handshakes, queued by
+    /// the completion sink for the main-thread pump to fire.
     pub upgrade_rx: Mutex<Option<mpsc::Receiver<FastifyPendingUpgrade>>>,
-    /// True between `listen()` and `close()`. The
-    /// `js_fastify_has_active` extern returns 1 while any server has
-    /// this set, keeping the runtime's main event loop alive until the
-    /// user explicitly closes the server.
-    pub listening: AtomicBool,
+    /// How many upgrades have been queued and not yet drained. `std`'s
+    /// `Receiver` has no `is_empty`, and the runtime keepalive has to know
+    /// whether a queued upgrade is still waiting for the pump.
+    pub upgrade_depth: Arc<AtomicUsize>,
+    /// True between `listen()` and `close()`. The `js_fastify_has_active`
+    /// extern returns 1 while any server has this set, keeping the runtime's
+    /// main event loop alive until the user explicitly closes the server.
+    pub listening: Arc<AtomicBool>,
 }
 
+/// The per-server request queue depth. A request that does not fit is refused
+/// with `503` rather than queued, which is what the hyper path got from
+/// `mpsc::Sender::send(...).await` resolving `Err` on a closed channel.
+const REQUEST_QUEUE_DEPTH: usize = 1024;
+
+/// The per-server upgrade queue depth. The same 256 the hyper path used: an
+/// upgrade is a handshake per *connection*, not per request, so it does not
+/// need the request queue's headroom.
+const UPGRADE_QUEUE_DEPTH: usize = 256;
+
 /// #1113 — pending WebSocket upgrade ready to fire the fastify
-/// `app.server.on("upgrade", …)` handlers. Sent by the hyper accept
-/// task after `hyper::upgrade::on` resolves and the upgraded stream
-/// has been registered with `perry_ext_ws::register_external_ws_stream`.
-/// Mirror of perry-ext-http's `HttpPendingUpgrade`.
+/// `app.server.on("upgrade", …)` handlers. Queued by the completion
+/// sink once the `101` has been written and the upgraded connection
+/// has been adopted by `perry_ext_ws::accept_http_upgrade`.
 pub struct FastifyPendingUpgrade {
     pub app_handle: Handle,
     pub method: String,
     pub path: String,
     pub headers: HashMap<String, String>,
     pub ws_id: i64,
+}
+
+/// Where a dispatched request's response goes.
+///
+/// This is what replaced the `oneshot::Sender<FastifyResponse>` the hyper
+/// service fn awaited. The handler now runs on the thread that owns the
+/// connection, so there is nothing to wake: the response encodes and submits
+/// its own write.
+pub enum Reply {
+    /// A live `perry_http_server` exchange: the connection id and the sequence
+    /// number that names the request on it. A `seq` that is no longer the
+    /// connection's active request is ignored by the core rather than
+    /// mis-delivered, which is what makes a late response from an abandoned
+    /// handler harmless.
+    Turnloop { conn_id: i64, seq: u64 },
+    /// Nothing is waiting — a reply already sent, or a test that only cares
+    /// that the dispatcher ran.
+    None,
+    /// A test's capture of what the dispatcher produced.
+    ///
+    /// `#[cfg(test)]` on purpose. This used to be `Hyper(oneshot::Sender<…>)`,
+    /// a production variant two unit tests borrowed; with the hyper path gone
+    /// the honest replacement is a variant that does not exist in a shipped
+    /// build, rather than a second live reply mode nothing reaches.
+    #[cfg(test)]
+    Captured(std::sync::mpsc::SyncSender<FastifyResponse>),
+}
+
+impl Reply {
+    /// Send the response, consuming the reply. Returns false when the peer is
+    /// already gone.
+    fn send(&mut self, response: FastifyResponse) -> bool {
+        match std::mem::replace(self, Reply::None) {
+            Reply::Turnloop { conn_id, seq } => {
+                perry_http_server::respond(conn_id, seq, into_core_response(response));
+                true
+            }
+            Reply::None => false,
+            #[cfg(test)]
+            Reply::Captured(tx) => tx.send(response).is_ok(),
+        }
+    }
+
+    /// Refuse the request: the queue was full, or the pending was dropped
+    /// before a handler ever ran. Answering here is what keeps the client from
+    /// hanging — the hyper path got the same effect from `response_tx`'s Drop
+    /// resolving the awaiting service fn `Err`.
+    fn refuse(&mut self) {
+        if matches!(self, Reply::None) {
+            return;
+        }
+        self.send(FastifyResponse {
+            status: 503,
+            headers: vec![("content-type".to_string(), "text/plain".to_string())],
+            body: b"Server unavailable".to_vec(),
+        });
+    }
 }
 
 /// Pending request waiting for the TS handler to produce a response.
@@ -239,7 +318,17 @@ pub struct FastifyPendingRequest {
     pub headers: HashMap<String, String>,
     pub body: Option<Vec<u8>>,
     pub params: HashMap<String, String>,
-    pub response_tx: oneshot::Sender<FastifyResponse>,
+    pub reply: Reply,
+}
+
+impl Drop for FastifyPendingRequest {
+    /// A pending that is dropped without being answered — the deferred queue
+    /// hit its cap, or the server closed under it — must still close the
+    /// exchange, or the client waits forever. This is the explicit form of the
+    /// hyper path's "dropping `response_tx` resolves the service fn `Err`".
+    fn drop(&mut self) {
+        self.reply.refuse();
+    }
 }
 
 /// Response built by the TS handler, sent back to hyper's worker.
@@ -253,212 +342,33 @@ pub struct FastifyResponse {
 // FFI: listen + close
 // ============================================================================
 
-/// `app.listen({ port }, callback?)` — start the server. Blocks the
-/// caller indefinitely (the TS-visible API is "kick off the server,
-/// then live in the event loop"; main thread returns to the event
-/// loop after this call returns).
-///
-/// # Safety
-///
-/// `app_handle` must be a registered `FastifyApp` handle. `callback`
-/// is an optional `*const ClosureHeader` (NaN-boxed or raw); pass `0`
-/// for "no callback".
-#[no_mangle]
-pub unsafe extern "C" fn js_fastify_listen(app_handle: Handle, opts: f64, callback: i64) {
-    // Extract port — accepts `{ port: 3000 }`, a bare number, or
-    // falls back to 3000.
-    let port = extract_port(opts);
-    // Honor an explicit `{ reusePort: true }` (the Node/Bun listen option) in
-    // addition to auto-enabling SO_REUSEPORT for cluster workers.
-    let reuse_port = extract_reuse_port(opts);
-
-    // Bind synchronously, BEFORE registering the server or firing the success
-    // callback, so a bind failure (e.g. EADDRINUSE) reaches the `(err, address)`
-    // callback as an error instead of being silently dropped inside the accept
-    // task while the caller has already been told listening succeeded. Only
-    // `from_std` needs a runtime context, so it stays in the spawned task below;
-    // the bind + `set_nonblocking` that actually fail on a port clash run here.
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let std_listener = match crate::cluster_bind::bind_listener(addr, reuse_port) {
-        Ok(l) => l,
-        Err(e) => {
-            fire_listen_error(callback, &e, port);
-            return;
-        }
-    };
-    if let Err(e) = std_listener.set_nonblocking(true) {
-        fire_listen_error(callback, &e, port);
-        return;
-    }
-    // `listen(0)` asks the OS for an ephemeral port; read the real one back so
-    // the registered handle + callback report the actual bound port.
-    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
-
-    let (request_tx, request_rx) = mpsc::channel::<FastifyPendingRequest>(1024);
-    // #1113 — separate channel for WebSocket upgrade events so a busy
-    // request stream can't starve them (mirror of perry-ext-http).
-    let (upgrade_tx, upgrade_rx) = mpsc::channel::<FastifyPendingUpgrade>(256);
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-    let request_tx = Arc::new(request_tx);
-    let upgrade_tx = Arc::new(upgrade_tx);
-
-    // Snapshot only route-matching metadata for the server task. Handler
-    // closure pointers stay in the FastifyApp handle and are read by the
-    // main-thread pump during dispatch.
-    let routes_arc = Arc::new(
-        get_handle::<FastifyApp>(app_handle)
-            .map(|app| {
-                app.routes
-                    .iter()
-                    .map(RouteMatcher::from_route)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default(),
-    );
-
-    // Tokio workers only match routes and queue raw request/upgrade data.
-    // User JS dispatch runs from `js_fastify_process_pending` on the main
-    // thread, so a server lifetime must not suppress GC.
-
-    let request_tx_for_spawn = request_tx.clone();
-    let upgrade_tx_for_spawn = upgrade_tx.clone();
-    let routes_for_spawn = routes_arc.clone();
-
-    // The accept loop must run as a cooperative task on the shared
-    // multi-thread runtime. A plain `spawn_blocking` thread does not
-    // reliably carry the runtime's reactor/worker context: with
-    // `Handle::current().block_on(accept_loop)` the listener bound and
-    // accepted connections, but the per-connection
-    // `tokio::spawn(serve_connection)` tasks below were never driven — the
-    // request bytes sat unread and every response hung (the "in release the
-    // IO loop silently failed to start" brittleness the net/ws adapters
-    // hit). `spawn_blocking_with_reactor` runs the closure inside a worker
-    // task (`runtime().spawn(async { … })`), so `tokio::spawn`-ing the
-    // accept loop drives it and its fan-out serve tasks on the worker pool —
-    // mirroring perry-ext-http / -net / -ws. (A bare
-    // `Handle::current().block_on` here would panic "Cannot start a runtime
-    // from within a runtime" inside the worker task; spawn instead.)
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        tokio::spawn(async move {
-            // The bind already succeeded on the caller thread (so a port clash
-            // was reported to the listen callback). Here we only report the
-            // bound address for `cluster.on('listening')` and adopt the std
-            // listener into the tokio reactor — `from_std` is the one step that
-            // needs the runtime context this task provides.
-            crate::cluster_bind::notify_listening("0.0.0.0", actual_port);
-            let listener = match TcpListener::from_std(std_listener) {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("[fastify] adopting listener failed: {}", e);
-                    return;
-                }
-            };
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        match accepted {
-                            Ok((stream, _)) => {
-                                let io = TokioIo::new(stream);
-                                let request_tx = request_tx_for_spawn.clone();
-                                let upgrade_tx = upgrade_tx_for_spawn.clone();
-                                let routes = routes_for_spawn.clone();
-                                tokio::spawn(async move {
-                                    let service = service_fn(move |req: Request<Incoming>| {
-                                        let request_tx = request_tx.clone();
-                                        let upgrade_tx = upgrade_tx.clone();
-                                        let routes = routes.clone();
-                                        async move {
-                                            handle_request(app_handle, req, request_tx, upgrade_tx, routes).await
-                                        }
-                                    });
-                                    // #1113: `.with_upgrades()` is REQUIRED for
-                                    // `hyper::upgrade::on(&mut req)` to resolve.
-                                    // Without it the upgrade future never
-                                    // completes and the WS handshake stalls.
-                                    if let Err(e) = http1::Builder::new()
-                                        .serve_connection(io, service)
-                                        .with_upgrades()
-                                        .await
-                                    {
-                                        // perry#924: hyper surfaces every malformed
-                                        // client read as a per-connection error
-                                        // (HTTP/2 prefaces, scanner garbage). The
-                                        // application never sees these requests, so
-                                        // logging them by default just floods PM2
-                                        // error logs. Gate behind `PERRY_DEBUG=1`.
-                                        if std::env::var_os("PERRY_DEBUG").is_some() {
-                                            eprintln!("Connection error: {}", e);
-                                        }
-                                    }
-                                });
-                            }
-                            Err(e) => eprintln!("Accept error: {}", e),
-                        }
-                    }
-                    _ = &mut shutdown_rx => {
-                        break;
-                    }
-                }
-            }
-        });
-    });
-
-    // Register the server handle so `js_fastify_close` and the
-    // process_pending pump can find it. The receiver lives inside the
-    // handle so the pump (driven from perry-stdlib's main loop) can
-    // drain it after `listen()` returns.
-    let _server_handle = register_handle(FastifyServerHandle {
-        port: actual_port,
-        app_handle,
-        shutdown_tx: Some(shutdown_tx),
-        request_rx: Mutex::new(Some(request_rx)),
-        upgrade_rx: Mutex::new(Some(upgrade_rx)),
-        listening: AtomicBool::new(true),
-    });
-
-    // Fire the user's `(err, address) => { ... }` callback — null
-    // err, address as a string.
-    if callback != 0 {
-        let raw = if (callback as u64 & 0xFFFF_0000_0000_0000) == POINTER_TAG {
-            (callback as u64 & PTR_MASK) as *const RawClosureHeader
-        } else {
-            callback as *const RawClosureHeader
-        };
-        let address = format!("http://0.0.0.0:{}", actual_port);
-        let addr_str = alloc_string(&address);
-        let addr_val = JsValue::from_string_ptr(addr_str.as_raw());
-        let null_val = f64::from_bits(TAG_NULL);
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call2(null_val, f64::from_bits(addr_val.bits()));
-        }
-    }
-
-    println!("Server listening on http://0.0.0.0:{}", actual_port);
-
-    // `listen()` is now non-blocking — the accept loop is already
-    // spawned above, and `js_fastify_process_pending` drains pending
-    // requests from the registered handle on every tick of
-    // perry-stdlib's main pump. Pre-fix this function entered the
-    // blocking `event_loop(...)` and never returned, so
-    // `await app.listen(...)` in user code never resumed — every
-    // subsequent line (the in-process `fetch` against itself,
-    // `app.close()`, etc.) was unreachable.
-}
+// The listen path — the bind and the turnloop `Host` — lives in `listen.rs`,
+// declared as a `#[path]` child
+// module so `use super::*` there resolves exactly as it did inline. Split out
+// only to keep this file under the repository's 2000-line-per-file lint cap
+// (`scripts/check_file_size.sh`).
+#[path = "listen.rs"]
+mod listen;
+pub use listen::*;
 
 /// Close one specific server by its `FastifyServerHandle` id. Marks
 /// the server as no-longer-listening (so `js_fastify_has_active`
-/// stops reporting it as active), drops the request receiver, and
-/// fires the shutdown oneshot so the accept loop exits. Idempotent —
-/// safe to call multiple times.
+/// stops reporting it as active), drops the request and upgrade
+/// receivers, and stops the listener accepting. Idempotent — safe to
+/// call multiple times.
 #[no_mangle]
 pub unsafe extern "C" fn js_fastify_close(server_handle: Handle) -> bool {
     if let Some(server) = get_handle_mut::<FastifyServerHandle>(server_handle) {
         server.listening.store(false, Ordering::Release);
+        // Dropping the receiver drops every queued pending, and a pending's
+        // Drop answers its exchange 503 rather than leaving the client to hang.
         *server.request_rx.lock().unwrap() = None;
         *server.upgrade_rx.lock().unwrap() = None;
-        if let Some(tx) = server.shutdown_tx.take() {
-            let _ = tx.send(());
+        if server.listener_id != 0 {
+            // Stop accepting. In-flight connections finish, which is Node's
+            // `server.close()` contract.
+            perry_http_server::close_listener(server.listener_id);
+            server.listener_id = 0;
         }
         return true;
     }
@@ -487,9 +397,9 @@ pub unsafe extern "C" fn js_fastify_app_close(app_handle: Handle) {
 
 /// Cap on the per-thread deferred-request queue (see
 /// `js_fastify_process_pending`). A pathological awaited-handler storm that
-/// exceeds this drops the newest pending — its `response_tx` Drop makes the
-/// awaiting hyper service-fn resolve `Err` (→ an error response), so memory is
-/// bounded (backpressure) rather than growing without limit.
+/// exceeds this drops the newest pending — and `FastifyPendingRequest::drop`
+/// answers that exchange `503` — so memory is bounded (backpressure) rather
+/// than growing without limit, and no client is left hanging.
 const DEFERRED_QUEUE_CAP: usize = 4096;
 
 /// Non-blocking `try_recv` of one pending request from a server's channel.
@@ -506,7 +416,7 @@ fn try_recv_pending_request(server_handle: Handle) -> Option<FastifyPendingReque
 /// NOT dispatch (dispatching in a nested frame would deepen the try-frame
 /// nesting toward `MAX_TRY_DEPTH`). Respects `cap`: once `deferred` holds `cap`
 /// entries, further pending are dropped, and dropping a `FastifyPendingRequest`
-/// drops its `response_tx`, signalling the awaiting service-fn with `Err`.
+/// answers its exchange `503`.
 /// Returns the number actually moved into `deferred`.
 fn drain_server_requests_into_deferred(
     server_handle: Handle,
@@ -520,7 +430,7 @@ fn drain_server_requests_into_deferred(
             deferred.push_back((app_handle, pending));
             moved += 1;
         }
-        // else: `pending` is dropped here → response_tx Drop → service-fn Err.
+        // else: `pending` is dropped here → its Drop answers the exchange 503.
     }
     moved
 }
@@ -531,7 +441,11 @@ fn drain_server_requests_into_deferred(
 /// can't starve them. Returns the number fired.
 fn drain_server_upgrades(server_handle: Handle) -> i32 {
     let mut count = 0i32;
+    let depth = get_handle::<FastifyServerHandle>(server_handle).map(|s| s.upgrade_depth.clone());
     while let Some(up) = try_recv_fastify_upgrade(server_handle) {
+        if let Some(d) = depth.as_ref() {
+            d.fetch_sub(1, Ordering::AcqRel);
+        }
         let req_bits =
             unsafe { crate::upgrade::build_request_object(&up.method, &up.path, &up.headers) }
                 .to_bits() as i64;
@@ -693,16 +607,13 @@ pub extern "C" fn js_fastify_has_active() -> i32 {
             if s.listening.load(Ordering::Acquire) {
                 active = 1;
             }
-            // Even after close(), the upgrade channel may still hold
-            // queued items the pump needs to drain on a later tick
-            // before the program can exit cleanly (mirror of
-            // perry-ext-http's `server_is_active`).
-            if let Ok(guard) = s.upgrade_rx.lock() {
-                if let Some(rx) = guard.as_ref() {
-                    if !rx.is_closed() && !rx.is_empty() {
-                        active = 1;
-                    }
-                }
+            // Even after close(), the upgrade queue may still hold items the
+            // pump needs to drain on a later tick before the program can exit
+            // cleanly (mirror of perry-ext-http's `server_is_active`).
+            // `std::sync::mpsc::Receiver` has no `is_empty`, so the depth is
+            // counted explicitly as items are queued and drained.
+            if s.upgrade_depth.load(Ordering::Acquire) > 0 {
+                active = 1;
             }
         }
     });
@@ -712,228 +623,6 @@ pub extern "C" fn js_fastify_has_active() -> i32 {
 // ============================================================================
 // Request dispatch
 // ============================================================================
-
-/// Hyper service function — match the route, hand the request to the
-/// main thread via mpsc, await the response.
-async fn handle_request(
-    app_handle: Handle,
-    req: Request<Incoming>,
-    request_tx: Arc<mpsc::Sender<FastifyPendingRequest>>,
-    upgrade_tx: Arc<mpsc::Sender<FastifyPendingUpgrade>>,
-    routes: Arc<Vec<RouteMatcher>>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    let method = req.method().to_string();
-    let uri = req.uri();
-    let path = match uri.query() {
-        Some(q) => format!("{}?{}", uri.path(), q),
-        None => uri.path().to_string(),
-    };
-
-    let mut headers = HashMap::new();
-    for (name, value) in req.headers() {
-        if let Ok(v) = value.to_str() {
-            headers.insert(name.to_string().to_lowercase(), v.to_string());
-        }
-    }
-
-    // #1113: detect WebSocket upgrade requests. The user's pattern
-    //
-    //   import { WebSocketServer } from "ws";
-    //   const wss = new WebSocketServer({ noServer: true });
-    //   app.server.on("upgrade", (req, socket, head) => {
-    //     wss.handleUpgrade(req, socket, head, (sock) => { ... });
-    //   });
-    //
-    // expects the fastify accept loop to surface upgrade requests via
-    // `app.server`'s registered `"upgrade"` handler. Branch into the
-    // handshake path: build the 101 response synchronously and spawn
-    // a task that awaits hyper's upgraded stream, completes the
-    // tungstenite server handshake, registers the WebSocketStream
-    // with perry-ext-ws, and queues a `FastifyPendingUpgrade` for the
-    // main-thread pump to fire the registered handlers. Mirror of
-    // perry-ext-http's #577 Phase 4 path.
-    if crate::upgrade::is_websocket_upgrade(&req) {
-        return handle_fastify_websocket_upgrade(
-            app_handle, req, method, path, headers, upgrade_tx,
-        )
-        .await;
-    }
-
-    let body = match req.collect().await {
-        Ok(collected) => {
-            let bytes = collected.to_bytes();
-            if bytes.is_empty() {
-                None
-            } else {
-                Some(bytes.to_vec())
-            }
-        }
-        Err(_) => None,
-    };
-
-    // Match: first try the exact method, then — for HEAD — fall back to
-    // a GET route with the same path. Node fastify auto-handles HEAD
-    // against any registered GET (via `app.head` shadowing) by running
-    // the GET handler and dropping the body before sending. We do the
-    // same: rewrite the method to GET so the handler sees a vanilla
-    // request, then strip the body on the way out (see `head_for_get`
-    // below). #1120 part 2.
-    let mut matched_params = HashMap::new();
-    let mut found_route = false;
-    let mut head_for_get = false;
-    for route in routes.iter() {
-        if route.method == method {
-            if let Some(params) = route.pattern.match_path(&path) {
-                matched_params = params;
-                found_route = true;
-                break;
-            }
-        }
-    }
-    if !found_route && method == "HEAD" {
-        for route in routes.iter() {
-            if route.method == "GET" {
-                if let Some(params) = route.pattern.match_path(&path) {
-                    matched_params = params;
-                    found_route = true;
-                    head_for_get = true;
-                    break;
-                }
-            }
-        }
-    }
-
-    if !found_route {
-        return Ok(Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(r#"{"error":"Not Found"}"#)))
-            .unwrap());
-    }
-
-    let (response_tx, response_rx) = oneshot::channel::<FastifyResponse>();
-    // When fronting a GET handler for an inbound HEAD, surface the
-    // method as `GET` to the handler — Node fastify's shadowing
-    // semantics. The body-drop happens below in the hyper response
-    // assembly.
-    let dispatch_method = if head_for_get {
-        "GET".to_string()
-    } else {
-        method.clone()
-    };
-    let pending = FastifyPendingRequest {
-        method: dispatch_method,
-        path,
-        headers,
-        body,
-        params: matched_params,
-        response_tx,
-    };
-
-    if request_tx.send(pending).await.is_err() {
-        return Ok(Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .body(Full::new(Bytes::from("Server unavailable")))
-            .unwrap());
-    }
-
-    // Wake the main thread so it doesn't wait on its 10ms timeout.
-    perry_ffi::notify_main_thread();
-
-    match response_rx.await {
-        Ok(fr) => {
-            let body_len = fr.body.len();
-            let mut builder = Response::builder()
-                .status(StatusCode::from_u16(fr.status).unwrap_or(StatusCode::OK));
-            let mut had_content_length = false;
-            for (name, value) in fr.headers {
-                if name.eq_ignore_ascii_case("content-length") {
-                    had_content_length = true;
-                }
-                builder = builder.header(name, value);
-            }
-            let body_bytes = if head_for_get {
-                // HEAD response: no body on the wire, but expose the
-                // would-have-been size via Content-Length so clients
-                // (curl -I, browsers, monitoring) see what GET would
-                // produce. Mirror of Node fastify's HEAD-on-GET path.
-                if !had_content_length {
-                    builder = builder.header("content-length", body_len.to_string());
-                }
-                Bytes::new()
-            } else {
-                Bytes::from(fr.body)
-            };
-            Ok(builder.body(Full::new(body_bytes)).unwrap())
-        }
-        Err(_) => Ok(Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Full::new(Bytes::from("Handler error")))
-            .unwrap()),
-    }
-}
-
-/// #1113 — WebSocket upgrade dispatch (mirror of perry-ext-http's
-/// `handle_websocket_upgrade`, issue #577 Phase 4).
-///
-/// Synchronously builds the 101 response (so hyper drives the protocol
-/// switch) and spawns a tokio task that awaits the upgraded stream,
-/// finishes the handshake server-side via
-/// `tokio_tungstenite::WebSocketStream::from_raw_socket`, registers
-/// the stream with perry-ext-ws, and queues a `FastifyPendingUpgrade`
-/// on the per-server channel; the main-thread pump fires the
-/// `app.server.on("upgrade", …)` handlers with `(req, ws_id, head)`.
-async fn handle_fastify_websocket_upgrade(
-    app_handle: Handle,
-    mut req: Request<Incoming>,
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-    upgrade_tx: Arc<mpsc::Sender<FastifyPendingUpgrade>>,
-) -> Result<Response<Full<Bytes>>, hyper::Error> {
-    // Compute the Sec-WebSocket-Accept value before consuming req.
-    let accept_value = req
-        .headers()
-        .get("sec-websocket-key")
-        .and_then(|v| v.to_str().ok())
-        .map(|k| tokio_tungstenite::tungstenite::handshake::derive_accept_key(k.as_bytes()))
-        .unwrap_or_default();
-
-    // Spawn a task that waits for hyper to perform the protocol
-    // switch, completes the tungstenite handshake, and hands the
-    // resulting stream to perry-ext-ws.
-    tokio::spawn(async move {
-        let upgraded = match hyper::upgrade::on(&mut req).await {
-            Ok(u) => u,
-            Err(_) => return,
-        };
-        let io = TokioIo::new(upgraded);
-        let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
-            io,
-            tokio_tungstenite::tungstenite::protocol::Role::Server,
-            None,
-        )
-        .await;
-        let ws_id = perry_ext_ws::register_external_ws_stream(ws);
-        let pending = FastifyPendingUpgrade {
-            app_handle,
-            method,
-            path,
-            headers,
-            ws_id,
-        };
-        let _ = upgrade_tx.send(pending).await;
-        perry_ffi::notify_main_thread();
-    });
-
-    Ok(Response::builder()
-        .status(101)
-        .header("upgrade", "websocket")
-        .header("connection", "Upgrade")
-        .header("sec-websocket-accept", accept_value)
-        .body(Full::new(Bytes::new()))
-        .unwrap())
-}
 
 /// Build the per-request [`FastifyContext`], MOVING the pending request's
 /// headers/body/params out of `pending` (via `mem::take` / `Option::take`)
@@ -1117,7 +806,7 @@ pub(crate) fn process_request(app_handle: Handle, mut pending: FastifyPendingReq
                 .headers
                 .push(("content-type".to_string(), ct.to_string()));
         }
-        let _ = pending.response_tx.send(response);
+        pending.reply.send(response);
     }
 
     // Free the context handle so it doesn't leak.
@@ -1623,16 +1312,25 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
 
     /// Build a pending request tagged by `path`; return it plus its response
-    /// receiver so a test can observe `response_tx`'s fate (kept open vs dropped).
-    fn make_pending(path: &str) -> (FastifyPendingRequest, oneshot::Receiver<FastifyResponse>) {
-        let (response_tx, response_rx) = oneshot::channel::<FastifyResponse>();
+    /// receiver so a test can observe the reply's fate — still pending, or
+    /// refused because the pending was dropped over the cap.
+    fn make_pending(
+        path: &str,
+    ) -> (
+        FastifyPendingRequest,
+        std::sync::mpsc::Receiver<FastifyResponse>,
+    ) {
+        // Capacity 1: every assertion below is "exactly one reply, or none",
+        // and a bounded channel makes a second send fail loudly rather than
+        // queue behind the first.
+        let (response_tx, response_rx) = std::sync::mpsc::sync_channel::<FastifyResponse>(1);
         let pending = FastifyPendingRequest {
             method: "GET".to_string(),
             path: path.to_string(),
             headers: HashMap::new(),
             body: None,
             params: HashMap::new(),
-            response_tx,
+            reply: Reply::Captured(response_tx),
         };
         (pending, response_rx)
     }
@@ -1644,10 +1342,11 @@ mod tests {
         let server = FastifyServerHandle {
             port: 0,
             app_handle,
-            shutdown_tx: None,
+            listener_id: 0,
             request_rx: Mutex::new(Some(rx)),
             upgrade_rx: Mutex::new(None),
-            listening: AtomicBool::new(true),
+            upgrade_depth: Arc::new(AtomicUsize::new(0)),
+            listening: Arc::new(AtomicBool::new(true)),
         };
         (register_handle(server), app_handle)
     }
@@ -1659,7 +1358,7 @@ mod tests {
     fn deferred_drain_respects_cap_and_drains_channel_fully() {
         let n = 10usize;
         let cap = 4usize;
-        let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(n + 1);
+        let (tx, rx) = mpsc::sync_channel::<FastifyPendingRequest>(n + 1);
         let (server_h, app_h) = register_test_server(rx);
         let mut rxs = Vec::new();
         for i in 0..n {
@@ -1693,7 +1392,7 @@ mod tests {
     #[test]
     fn deferred_drain_under_cap_moves_all_without_dropping() {
         let n = 5usize;
-        let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(n + 1);
+        let (tx, rx) = mpsc::sync_channel::<FastifyPendingRequest>(n + 1);
         let (server_h, app_h) = register_test_server(rx);
         let mut rxs = Vec::new();
         for i in 0..n {
@@ -1710,11 +1409,11 @@ mod tests {
         for (i, (_, p)) in deferred.iter().enumerate() {
             assert_eq!(p.path, format!("r{i}"));
         }
-        // Nothing dropped: every response channel is still open (Empty, not Closed).
+        // Nothing dropped: no request has been refused.
         for r in &mut rxs {
             assert!(
-                matches!(r.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
-                "kept request's response_tx must remain alive"
+                matches!(r.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+                "a kept request must not have been answered yet"
             );
         }
 
@@ -1723,15 +1422,14 @@ mod tests {
     }
 
     /// Backpressure contract: when the cap is hit, the OVER-cap requests are
-    /// dropped, and dropping a pending drops its `response_tx`, which makes the
-    /// awaiting hyper service-fn resolve `Closed` → an error response. This
-    /// proves the client is signalled (no hang / no leak) rather than the
-    /// request silently vanishing.
+    /// dropped, and dropping a pending answers its exchange `503`. This proves
+    /// the client is signalled (no hang / no leak) rather than the request
+    /// silently vanishing.
     #[test]
     fn deferred_drain_over_cap_signals_dropped_clients() {
         let n = 8usize;
         let cap = 3usize;
-        let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(n + 1);
+        let (tx, rx) = mpsc::sync_channel::<FastifyPendingRequest>(n + 1);
         let (server_h, app_h) = register_test_server(rx);
         let mut rxs = Vec::new();
         for i in 0..n {
@@ -1743,19 +1441,26 @@ mod tests {
         let mut deferred: VecDeque<(Handle, FastifyPendingRequest)> = VecDeque::new();
         drain_server_requests_into_deferred(server_h, app_h, &mut deferred, cap);
 
-        // Kept entries: response channel still open.
+        // Kept entries: nothing sent yet, the handler has not run.
         for r in rxs.iter_mut().take(cap) {
             assert!(
-                matches!(r.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+                matches!(r.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
                 "kept entries stay open"
             );
         }
-        // Over-cap entries: dropped → response_tx Drop → client observes Closed.
+        // Over-cap entries: dropped → `FastifyPendingRequest::drop` refuses the
+        // exchange with a 503, so the client is answered rather than hung. The
+        // hyper path got this from `response_tx`'s Drop resolving the awaiting
+        // service fn `Err`; making it an explicit response is what lets the
+        // turnloop path — which has no channel to close — do the same thing.
         for r in rxs.iter_mut().skip(cap) {
-            assert!(
-                matches!(r.try_recv(), Err(oneshot::error::TryRecvError::Closed)),
-                "over-cap entries must signal the client (error response, not a hang)"
-            );
+            match r.try_recv() {
+                Ok(response) => assert_eq!(
+                    response.status, 503,
+                    "over-cap entries must be answered, not hung"
+                ),
+                Err(e) => panic!("expected a 503 for a dropped pending, got {e:?}"),
+            }
         }
 
         drop_handle(server_h);
@@ -1772,13 +1477,13 @@ mod tests {
         let mut servers: Vec<(
             Handle,
             Handle,
-            mpsc::Sender<FastifyPendingRequest>,
+            mpsc::SyncSender<FastifyPendingRequest>,
             usize,
             usize,
         )> = Vec::new();
         let mut expected_total = 0usize;
         for (s, depth) in [(0usize, 1usize), (1, 5), (2, 0), (3, 12)] {
-            let (tx, rx) = mpsc::channel::<FastifyPendingRequest>(depth + 1);
+            let (tx, rx) = mpsc::sync_channel::<FastifyPendingRequest>(depth + 1);
             let (server_h, app_h) = register_test_server(rx);
             for i in 0..depth {
                 let (p, _r) = make_pending(&format!("s{s}-r{i}"));

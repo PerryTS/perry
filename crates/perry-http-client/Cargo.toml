@@ -1,0 +1,18 @@
+[package]
+name = "perry-http-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Blocking HTTP/1.1 and WebSocket client on a self-owned turnloop::Loop — for callers with no JS event loop to cooperate with (the perry CLI, and bindings that already run on a blocking-pool thread)."
+
+[lints]
+workspace = true
+
+[dependencies]
+turnloop.workspace = true
+turnloop-http.workspace = true
+turnloop-tls.workspace = true
+perry-tls-session.workspace = true
+url.workspace = true
+base64.workspace = true
+sha1.workspace = true

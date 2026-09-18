@@ -154,9 +154,14 @@ fn escape_timeout_expired() -> bool {
     }
 }
 
-/// Deadline provider registered with perry-runtime's event pump. Returning the
-/// ceiling avoids truncating a sub-millisecond remainder to zero and spinning
-/// before the timeout is actually due.
+/// Deadline provider registered with perry-runtime's event pump, in fractional
+/// milliseconds.
+///
+/// turnloop P0: the primary agent turns this into an exact `Instant` deadline,
+/// so the exact remainder is returned — rounding up would only flush a lone ESC
+/// late. The `tokio-wait-driver` A/B arm keeps the legacy ceiling, which stops
+/// its whole-millisecond park from truncating a sub-millisecond remainder to
+/// zero and spinning before the timeout is actually due.
 pub(crate) extern "C" fn js_readline_next_wake_ms() -> f64 {
     if STDIN_DESTROYED.load(Ordering::Acquire) || STDIN_PAUSED.load(Ordering::Acquire) {
         return -1.0;
@@ -170,8 +175,10 @@ pub(crate) extern "C" fn js_readline_next_wake_ms() -> f64 {
     let now = Instant::now();
     if deadline <= now {
         0.0
-    } else {
+    } else if cfg!(feature = "tokio-wait-driver") {
         deadline.duration_since(now).as_millis().saturating_add(1) as f64
+    } else {
+        deadline.duration_since(now).as_secs_f64() * 1000.0
     }
 }
 

@@ -210,6 +210,29 @@ pub mod typedarray;
 pub mod typedarray_half;
 pub(crate) mod typedarray_props;
 pub mod typedarray_view;
+// turnloop P1: Perry's stream networking on turnloop handles
+// (`turnloop_net/mod.rs`). Native targets only, matching the turnloop
+// dependency itself; the web/WASI targets keep their host integration until
+// their backends are wired per agent.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_net;
+// turnloop P2: child processes, their pipes, `process.stdin`, dgram sockets
+// and OS signals on turnloop handles (`turnloop_proc/mod.rs`). Same target
+// gate as P1 — the driver itself is a native-only dependency.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_proc;
+// turnloop P4: blocking and CPU-bound work on turnloop's shared bounded pool
+// (`turnloop_pool/mod.rs`). Same target gate as P1 and P2 — the driver itself
+// is a native-only dependency, and the pool it wraps is turnloop's.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_pool;
+// turnloop P10: run a host job on the loop of the agent this thread acts for
+// (`turnloop_post/mod.rs`). Same target gate as P1, P2 and P4. This is what a
+// thread that could not get a loop of its own uses INSTEAD of keeping a tokio
+// driver alive — the single decline reason behind most of the remaining tokio
+// edges in the binding crates.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod turnloop_post;
 pub mod url;
 pub mod v8;
 pub mod validators;
@@ -401,7 +424,7 @@ mod ext_pump {
 pub(crate) mod stdlib_pump {
     use std::cell::Cell;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
@@ -581,6 +604,10 @@ pub(crate) mod stdlib_pump {
     static AUX_TICK_BEGIN_HOOKS: Mutex<Vec<extern "C" fn()>> = Mutex::new(Vec::new());
     static AUX_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
     static AUX_HAS_ACTIVE: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
+    /// turnloop P0: `AUX_HAS_ACTIVE.len()`. The registry only grows, so a zero
+    /// here is an exact "no extension contributes"; the per-turn keep-alive
+    /// check then skips the lock and the callback-list clone entirely.
+    static AUX_HAS_ACTIVE_LEN: AtomicUsize = AtomicUsize::new(0);
 
     /// Register an auxiliary pump callback (a `perry-ext-*` crate's
     /// `*_process_pending`). Idempotent — registering the same function
@@ -645,6 +672,7 @@ pub(crate) mod stdlib_pump {
         if let Ok(mut fns) = AUX_HAS_ACTIVE.lock() {
             if !fns.contains(&f) {
                 fns.push(f);
+                AUX_HAS_ACTIVE_LEN.store(fns.len(), Ordering::Release);
             }
         }
     }
@@ -664,6 +692,9 @@ pub(crate) mod stdlib_pump {
 
     /// True if any registered auxiliary has-active callback reports live work.
     fn aux_has_active() -> bool {
+        if AUX_HAS_ACTIVE_LEN.load(Ordering::Acquire) == 0 {
+            return false;
+        }
         let fns: Vec<extern "C" fn() -> i32> = match AUX_HAS_ACTIVE.lock() {
             Ok(g) => g.clone(),
             Err(_) => return false,
@@ -690,6 +721,11 @@ pub(crate) mod stdlib_pump {
     /// Register the stdlib's nearest-deadline provider. This lets native
     /// one-shots participate in `js_wait_for_event` without manufacturing a JS
     /// timer callback or relying on the one-second idle heartbeat.
+    ///
+    /// Contract (turnloop P0): the callback returns the remaining time in
+    /// *fractional* milliseconds (`-1` for none). The primary agent's park
+    /// converts it to an exact `Instant`, so a provider must not round — the
+    /// legacy whole-millisecond park truncates on its own side.
     #[no_mangle]
     pub extern "C" fn js_register_stdlib_next_wake(f: extern "C" fn() -> f64) {
         STDLIB_NEXT_WAKE_FN.store(f as *mut (), Ordering::Release);
@@ -774,6 +810,17 @@ pub(crate) mod stdlib_pump {
             return 1;
         }
         if crate::promise::js_native_async_has_active() != 0 {
+            return 1;
+        }
+        // turnloop P4: a job accepted by the shared blocking pool is work the
+        // process still owes an answer for. Its promise (or its callback, or
+        // an addon's `complete`) settles only when the completion reaches the
+        // owning thread, so the loop must outlive the job exactly as it
+        // outlived a `perry_ffi_spawn_blocking` closure (#591). Process-wide
+        // and one relaxed load; a program that never used the pool pays an
+        // atomic read.
+        #[cfg(not(target_arch = "wasm32"))]
+        if crate::turnloop_pool::has_pending_jobs() {
             return 1;
         }
         // #1934: a live spawn-reactor child keeps the event loop alive even when

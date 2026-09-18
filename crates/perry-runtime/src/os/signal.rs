@@ -346,6 +346,165 @@ fn ensure_signal_wake_thread() {
     }
 }
 
+// ── turnloop P2: signals as loop subscriptions ──────────────────────────────
+//
+// The self-pipe below is a wake primitive, and P2 exists to delete wake
+// primitives. Where turnloop can carry a signal, the subscription replaces
+// both the `sigaction` and the `perry-signal-wake` thread: turnloop's own
+// process-wide dispatcher fans the signal out to this agent's loop, the
+// completion lands on the thread that owns the JS heap, and it bumps the very
+// same `pending` counter the handler used to bump — so `js_process_signal_drain`
+// and every listener-count rule above are untouched.
+//
+// **Not every signal can move.** turnloop's portable `Signal` covers
+// Int/Term/Hup/Usr1/Usr2 (plus Kill, Chld, WinCh and Break, which no slot
+// here uses); Perry additionally offers SIGQUIT, SIGABRT, SIGBUS and SIGPIPE,
+// which have no portable name and must not be silently dropped — SIGABRT and
+// SIGBUS in particular are co-owned by the GC quarantine reporter. Those keep
+// the `sigaction` path, and the wake thread now starts **only** if one of them
+// is actually subscribed. A program that handles SIGINT and SIGTERM — which is
+// every CLI with a graceful shutdown — starts no thread at all.
+
+/// The portable turnloop name for a signal, or `None` when it has none and the
+/// `sigaction` path must be kept.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn turnloop_signal_for(number: libc::c_int) -> Option<turnloop::Signal> {
+    match number {
+        libc::SIGHUP => Some(turnloop::Signal::Hup),
+        libc::SIGINT => Some(turnloop::Signal::Int),
+        libc::SIGTERM => Some(turnloop::Signal::Term),
+        libc::SIGUSR1 => Some(turnloop::Signal::Usr1),
+        libc::SIGUSR2 => Some(turnloop::Signal::Usr2),
+        _ => None,
+    }
+}
+
+/// Which slots are currently subscribed through turnloop rather than through
+/// `sigaction`, as a bitmask over `PROCESS_SIGNAL_SLOTS` indices. One word
+/// rather than nine more statics, and the uninstall path has to know which
+/// transport to unwind.
+#[cfg(unix)]
+static TURNLOOP_SIGNALS: AtomicUsize = AtomicUsize::new(0);
+
+/// The live loop-entry id per slot, so uninstall names the subscription it is
+/// actually unwinding. Zero means "none". Kept next to the bitmask rather than
+/// derived from the signal number, because an `off()`/`on()` pair for the same
+/// signal produces two entries whose lifetimes overlap.
+#[cfg(unix)]
+static TURNLOOP_SIGNAL_IDS: [AtomicUsize; 9] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+
+// A slot added above without a matching id cell would silently index out of
+// bounds at runtime; say so at compile time instead.
+#[cfg(unix)]
+const _: () = assert!(
+    TURNLOOP_SIGNAL_IDS.len() == PROCESS_SIGNAL_SLOTS.len(),
+    "one turnloop id cell per process-signal slot"
+);
+
+#[cfg(unix)]
+fn slot_index(slot: &'static ProcessSignalSlot) -> usize {
+    PROCESS_SIGNAL_SLOTS
+        .iter()
+        .position(|candidate| candidate.number == slot.number)
+        .unwrap_or(0)
+}
+
+#[cfg(unix)]
+fn mark_on_turnloop(slot: &'static ProcessSignalSlot, on: bool) {
+    let bit = 1usize << slot_index(slot);
+    if on {
+        TURNLOOP_SIGNALS.fetch_or(bit, Ordering::AcqRel);
+    } else {
+        TURNLOOP_SIGNALS.fetch_and(!bit, Ordering::AcqRel);
+    }
+}
+
+#[cfg(unix)]
+fn is_on_turnloop(slot: &'static ProcessSignalSlot) -> bool {
+    TURNLOOP_SIGNALS.load(Ordering::Acquire) & (1usize << slot_index(slot)) != 0
+}
+
+/// Whether any signal is still being delivered through turnloop. The "subject
+/// ran" predicate a test needs: a claim that signals moved off the thread is
+/// only worth making if this was ever true.
+#[cfg(unix)]
+pub fn signals_on_turnloop() -> usize {
+    TURNLOOP_SIGNALS.load(Ordering::Acquire).count_ones() as usize
+}
+
+#[cfg(not(unix))]
+pub fn signals_on_turnloop() -> usize {
+    0
+}
+
+/// Subscribe this agent's loop to `slot`. Returns whether it took.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn install_signal_on_loop(slot: &'static ProcessSignalSlot) -> bool {
+    let Some(signal) = turnloop_signal_for(slot.number) else {
+        return false;
+    };
+    if !crate::turnloop_proc::available() {
+        return false;
+    }
+    let Ok(id) = crate::turnloop_proc::signal_start(
+        signal,
+        crate::turnloop_proc::Owner::ProcessSignal {
+            signum: slot.number,
+        },
+    ) else {
+        return false;
+    };
+    TURNLOOP_SIGNAL_IDS[slot_index(slot)].store(id as usize, Ordering::Release);
+    // A registered listener is ref-NEUTRAL (see `has_active_process_signal_listeners`
+    // and `crates/perry/tests/issue_signal_listener_ref_neutral.rs`): it must
+    // not by itself keep the process alive. Unreffing the subscription encodes
+    // that in the transport instead of leaving it to a second counter to undo.
+    crate::turnloop_proc::set_ref(id, false);
+    mark_on_turnloop(slot, true);
+    true
+}
+
+#[cfg(all(unix, target_arch = "wasm32"))]
+fn install_signal_on_loop(_slot: &'static ProcessSignalSlot) -> bool {
+    false
+}
+
+/// One signal completion, delivered on the loop-owning thread.
+///
+/// Does exactly what the `sigaction` handler plus the wake thread did between
+/// them — bump the slot's pending count, wake the loop — with neither the
+/// async-signal-safety constraint nor the thread. Everything downstream
+/// (`take_pending_process_signals`, `js_process_signal_drain`, the listener
+/// re-sync) is unchanged.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) fn on_signal_completion(signum: i32, event: crate::turnloop_proc::StreamEvent) {
+    use crate::turnloop_proc::StreamEvent;
+    match event {
+        StreamEvent::Signal => {
+            if let Some(slot) = slot_by_number(signum) {
+                slot.pending.fetch_add(1, Ordering::Release);
+            }
+            crate::event_pump::js_notify_main_thread();
+        }
+        // The terminal completion of a subscription that has already been
+        // unwound. `uninstall_process_signal_handler` cleared the bit and the
+        // id, so there is nothing left to release; it is named here only to
+        // make the exhaustive match say so.
+        StreamEvent::Closed => {}
+        _ => {}
+    }
+}
+
 #[cfg(unix)]
 fn install_process_signal_handler(slot: &'static ProcessSignalSlot) {
     if slot
@@ -356,6 +515,15 @@ fn install_process_signal_handler(slot: &'static ProcessSignalSlot) {
         return;
     }
 
+    if install_signal_on_loop(slot) {
+        return;
+    }
+
+    // No portable turnloop name, or no loop on this thread: keep the pre-P2
+    // transport verbatim, self-pipe and wake thread included. The thread is
+    // started HERE rather than unconditionally, so it exists only for a
+    // program that actually subscribes to one of the signals turnloop cannot
+    // carry.
     ensure_signal_wake_thread();
     unsafe {
         let mut sa: libc::sigaction = std::mem::zeroed();
@@ -379,11 +547,25 @@ fn uninstall_process_signal_handler(slot: &'static ProcessSignalSlot) {
         return;
     }
 
-    unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = libc::SIG_DFL;
-        libc::sigemptyset(&mut sa.sa_mask);
-        let _ = libc::sigaction(slot.number, &sa, std::ptr::null_mut());
+    if is_on_turnloop(slot) {
+        // turnloop restores the previous disposition when the subscription
+        // ends; the bit is cleared by the terminal completion, not here, so
+        // the unwind stays exactly-once (DESIGN D4).
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let id = TURNLOOP_SIGNAL_IDS[slot_index(slot)].swap(0, Ordering::AcqRel);
+            if id != 0 {
+                crate::turnloop_proc::signal_stop(id as u64);
+            }
+        }
+        mark_on_turnloop(slot, false);
+    } else {
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = libc::SIG_DFL;
+            libc::sigemptyset(&mut sa.sa_mask);
+            let _ = libc::sigaction(slot.number, &sa, std::ptr::null_mut());
+        }
     }
     // `PERRY_GC_CENSUS` owns SIGUSR2 for the life of the process; give it
     // back after the JS listener's disposition reset. No-op when unset.

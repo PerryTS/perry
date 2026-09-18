@@ -1,16 +1,21 @@
 //! Nodemailer module (nodemailer compatible)
 //!
-//! Native implementation of the 'nodemailer' npm package using lettre.
-//! Supports sending emails via SMTP.
+//! Native implementation of the 'nodemailer' npm package. The SMTP protocol is
+//! `turnloop-smtp`'s, driven over a turnloop socket on this agent's own loop
+//! (`crate::turnloop_smtp`); the MIME bytes are still lettre's builder, reached
+//! through `turnloop_smtp::message` so perry-stdlib no longer declares lettre
+//! itself — which is what drops lettre's `tokio1` / `tokio1-rustls-tls` /
+//! `pool` features from the graph.
+//!
+//! The `AsyncSmtpTransport<Tokio1Executor>` fallback is gone. An agent that
+//! cannot get a loop now REJECTS rather than quietly taking a second,
+//! never-exercised transport.
 
-use lettre::message::header::ContentType;
-use lettre::transport::smtp::authentication::Credentials;
-use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
-use perry_runtime::{
-    js_promise_new_cross_thread, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader,
-};
+use perry_runtime::{js_promise_new_cross_thread, JSValue, ObjectHeader, Promise, StringHeader};
 
 use crate::common::{register_handle, Handle};
+
+mod turnloop_bridge;
 
 /// SMTP transporter configuration
 #[derive(Debug, Clone)]
@@ -131,12 +136,12 @@ pub unsafe extern "C" fn js_nodemailer_create_transport(config_f: f64) -> f64 {
 }
 
 /// Email message options
-struct MailOptions {
-    from: String,
-    to: String,
-    subject: String,
-    text: Option<String>,
-    html: Option<String>,
+pub(crate) struct MailOptions {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) subject: String,
+    pub(crate) text: Option<String>,
+    pub(crate) html: Option<String>,
 }
 
 /// Parse mail options from JSValue
@@ -207,88 +212,13 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use crate::common::get_handle;
-
-        if let Some(wrapper) = get_handle::<SmtpTransportHandle>(transporter_handle) {
-            let config = &wrapper.config;
-
-            // Build the transporter
-            let mailer_result = if config.secure {
-                AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-            } else {
-                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
-            };
-
-            let mailer: AsyncSmtpTransport<Tokio1Executor> = match mailer_result {
-                Ok(builder) => {
-                    let mut builder = builder.port(config.port);
-
-                    // Add credentials if provided
-                    if let (Some(user), Some(pass)) = (&config.user, &config.pass) {
-                        let creds = Credentials::new(user.clone(), pass.clone());
-                        builder = builder.credentials(creds);
-                    }
-
-                    builder.build()
-                }
-                Err(e) => return Err(format!("Failed to create transport: {}", e)),
-            };
-
-            // Build the email message
-            let email_builder = Message::builder()
-                .from(
-                    mail_opts
-                        .from
-                        .parse()
-                        .map_err(|e| format!("Invalid from address: {}", e))?,
-                )
-                .to(mail_opts
-                    .to
-                    .parse()
-                    .map_err(|e| format!("Invalid to address: {}", e))?)
-                .subject(mail_opts.subject);
-
-            let email = if let Some(html) = mail_opts.html {
-                email_builder
-                    .header(ContentType::TEXT_HTML)
-                    .body(html)
-                    .map_err(|e| format!("Failed to build email: {}", e))?
-            } else if let Some(text) = mail_opts.text {
-                email_builder
-                    .header(ContentType::TEXT_PLAIN)
-                    .body(text)
-                    .map_err(|e| format!("Failed to build email: {}", e))?
-            } else {
-                email_builder
-                    .body(String::new())
-                    .map_err(|e| format!("Failed to build email: {}", e))?
-            };
-
-            // Send the email
-            match mailer.send(email).await {
-                Ok(response) => {
-                    // Return info object with messageId
-                    let message_id = format!("<{}@perry>", uuid::Uuid::new_v4());
-                    let info_obj = perry_runtime::js_object_alloc(0, 2);
-
-                    // Set messageId (field 0)
-                    let id_ptr = js_string_from_bytes(message_id.as_ptr(), message_id.len() as u32);
-                    perry_runtime::js_object_set_field(info_obj, 0, JSValue::string_ptr(id_ptr));
-
-                    // Set response (field 1)
-                    let resp_str = format!("{:?}", response);
-                    let resp_ptr = js_string_from_bytes(resp_str.as_ptr(), resp_str.len() as u32);
-                    perry_runtime::js_object_set_field(info_obj, 1, JSValue::string_ptr(resp_ptr));
-
-                    Ok(JSValue::object_ptr(info_obj as *mut u8).bits())
-                }
-                Err(e) => Err(format!("Failed to send email: {}", e)),
-            }
-        } else {
-            Err("Invalid transporter handle".to_string())
-        }
-    });
+    // The engine settles the promise exactly once. A refusal comes back as the
+    // text to reject with; there is no second transport to fall through to.
+    if let Err(message) =
+        turnloop_bridge::try_send(transporter_handle, &mail_opts, promise as usize)
+    {
+        turnloop_bridge::reject(promise as usize, message);
+    }
 
     promise
 }
@@ -300,42 +230,49 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
 pub unsafe extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use crate::common::get_handle;
-
-        if let Some(wrapper) = get_handle::<SmtpTransportHandle>(transporter_handle) {
-            let config = &wrapper.config;
-
-            // Try to build and test the transporter
-            let mailer_result = if config.secure {
-                AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host)
-            } else {
-                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
-            };
-
-            match mailer_result {
-                Ok(builder) => {
-                    let mut builder = builder.port(config.port);
-
-                    if let (Some(user), Some(pass)) = (&config.user, &config.pass) {
-                        let creds = Credentials::new(user.clone(), pass.clone());
-                        builder = builder.credentials(creds);
-                    }
-
-                    let mailer: AsyncSmtpTransport<Tokio1Executor> = builder.build();
-
-                    match mailer.test_connection().await {
-                        Ok(true) => Ok(JSValue::bool(true).bits()),
-                        Ok(false) => Ok(JSValue::bool(false).bits()),
-                        Err(e) => Err(format!("Connection test failed: {}", e)),
-                    }
-                }
-                Err(e) => Err(format!("Failed to create transport: {}", e)),
-            }
-        } else {
-            Err("Invalid transporter handle".to_string())
-        }
-    });
+    if let Err(message) = turnloop_bridge::try_verify(transporter_handle, promise as usize) {
+        turnloop_bridge::reject(promise as usize, message);
+    }
 
     promise
+}
+
+/// Runtime method dispatch for a transporter handle whose static type was lost.
+///
+/// `createTransport` hands JS a bare handle id (`NR_F64`), so EVERY method call
+/// on the result is an untyped call. See the arm in
+/// `common/dispatch/method_dispatch.rs` for why this had to exist.
+///
+/// Registry membership is checked first and the name vocabulary second, so an
+/// id belonging to another subsystem, or a name this binding does not
+/// implement, is never claimed — the runtime then falls through to the
+/// prototype chain, as it must for a user object wrapping the transporter.
+///
+/// # Safety
+/// `handle` comes from the runtime's dispatcher and `args` are NaN-boxed.
+pub(crate) unsafe fn dispatch_transporter_method(
+    handle: Handle,
+    method: &str,
+    args: &[f64],
+) -> Option<f64> {
+    if crate::common::get_handle::<SmtpTransportHandle>(handle).is_none() {
+        return None;
+    }
+    let promise = match method {
+        "sendMail" => {
+            let options = args
+                .first()
+                .copied()
+                .map(|bits| JSValue::from_bits(bits.to_bits()))
+                .unwrap_or_else(|| {
+                    JSValue::from_bits(crate::common::dispatch::TAG_UNDEFINED_F64.to_bits())
+                });
+            js_nodemailer_send_mail(handle, options)
+        }
+        "verify" => js_nodemailer_verify(handle),
+        _ => return None,
+    };
+    Some(f64::from_bits(
+        JSValue::pointer(promise as *const u8).bits(),
+    ))
 }

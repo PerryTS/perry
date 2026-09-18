@@ -11,7 +11,6 @@ pub mod handle;
 pub mod async_bridge;
 pub mod dispatch;
 pub(crate) mod dispatch_http;
-mod dispatch_ioredis;
 pub mod net_method_values;
 mod net_socket_bridge;
 

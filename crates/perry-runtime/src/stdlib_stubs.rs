@@ -69,6 +69,49 @@ mod ws_stubs {
         perry_stub_warn("js_ws_close", WS_REASON, None);
     }
 
+    // The value-taking send/close family and the control-frame senders. A
+    // program that emits these without the `ws` wrapper on the link line needs
+    // a definition here for the same reason `js_ws_send` does.
+    #[no_mangle]
+    pub extern "C" fn js_ws_send_value(_handle: i64, _value: f64, _options: f64) {
+        perry_stub_warn("js_ws_send_value", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_send_value_client_i64(_handle: i64, _value: f64, _options: f64) {
+        perry_stub_warn("js_ws_send_value_client_i64", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_server_close_with(_handle: i64, _callback: f64) {
+        perry_stub_warn("js_ws_server_close_with", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_close_with(_handle: i64, _code: f64, _reason: f64) {
+        perry_stub_warn("js_ws_close_with", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_close_with_client_i64(_handle: i64, _code: f64, _reason: f64) {
+        perry_stub_warn("js_ws_close_with_client_i64", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_ping(_handle: i64, _value: f64) {
+        perry_stub_warn("js_ws_ping", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_pong(_handle: i64, _value: f64) {
+        perry_stub_warn("js_ws_pong", WS_REASON, None);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn js_ws_terminate(_handle: i64) {
+        perry_stub_warn("js_ws_terminate", WS_REASON, None);
+    }
+
     #[no_mangle]
     pub extern "C" fn js_ws_is_open(_handle: i64) -> f64 {
         perry_stub_warn("js_ws_is_open", WS_REASON, None);

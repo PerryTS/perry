@@ -3,24 +3,27 @@
 //! Replaces `perry-stdlib`'s in-tree `fastify/` module — same FFI
 //! surface (`js_fastify_*` symbols), implemented on top of `perry-ffi`
 //! v0.5 only (handle registry + JsValue + JsClosure + GC scanner +
-//! spawn_blocking + notify_main_thread). hyper provides the HTTP
-//! transport.
+//! notify_main_thread). `perry-http-server` provides the HTTP
+//! transport, on turnloop; this crate declares no async runtime.
 //!
 //! # Architecture
 //!
 //! - `Fastify(opts?)` returns a `FastifyApp` handle. Routes / hooks /
 //!   plugins / error handler are registered via the per-method FFI
 //!   calls, all mutating that single handle.
-//! - `app.listen({ port })` spawns a perry-ffi blocking task that
-//!   runs the hyper accept loop on the shared tokio runtime, then
-//!   enters a main-thread event loop that drains pending requests
-//!   from an mpsc channel.
+//! - `app.listen({ port })` binds through `perry_http_server::listen`
+//!   (one multishot `accept_start` on the agent's own `turnloop::Loop`)
+//!   and returns. Decoded requests are queued by the completion sink —
+//!   which runs on this thread, after a turn, and never runs JS — and
+//!   `js_fastify_process_pending` dispatches them on the main thread's
+//!   own tick.
 //! - Each request is matched against the snapshot of routes captured
 //!   at `listen()` time, then dispatched: lifecycle hooks fire first
 //!   (any hook that calls `reply.send` aborts the chain), then the
 //!   route handler runs, then the response (which may carry a value
-//!   from the handler's return or an explicit `reply.send`) is sent
-//!   back via a oneshot channel.
+//!   from the handler's return or an explicit `reply.send`) encodes
+//!   and submits its own write on the connection that carried the
+//!   request.
 //! - User closures (route handlers, hooks, error handler, plugin
 //!   bodies) are stored as raw `i64` pointers inside the
 //!   `FastifyApp`. A mutable GC root scanner keeps each closure live
@@ -32,14 +35,15 @@
 //!
 //! Documented here so future ports know what to extend:
 //!
-//! - **HTTP/2** — hyper's `http2` builder isn't wired up; we use
-//!   `http1::Builder::new()`. Adding a configurable
-//!   `http2: true` option-flag would require switching to
-//!   `hyper_util::server::conn::auto::Builder` for upgrade
-//!   negotiation. perry-stdlib's existing copy has the same gap.
-//! - **WebSocket upgrade** — fastify exposes `app.register(websocket)`
-//!   for protocol upgrades; we don't support that path. Programs
-//!   that need a server-side WebSocket should reach for `ws` directly
+//! - **HTTP/2** — `perry-http-server` serves HTTP/1.1 and nothing else,
+//!   and the hyper `http2` builder this crate declared a feature for was
+//!   never wired up either. perry-stdlib's existing copy has the same gap.
+//! - **TLS** — likewise: `perry-http-server` serves cleartext, so
+//!   `app.listen({ https })` is not a thing here.
+//! - **`app.register(websocket)`** — fastify's own plugin surface is still
+//!   unsupported; `app.server.on('upgrade', …)` **is** (#1113), and it now
+//!   runs on the same turnloop connection the request arrived on. Programs
+//!   wanting a server-side WebSocket can also reach for `ws` directly
 //!   (perry-ext-ws).
 //! - **Multipart / file upload parsing** — `req.body` exposes raw
 //!   bytes; multipart structuring is left to user code (or
@@ -579,14 +583,14 @@ mod tests {
     #[test]
     fn context_handle_dropped_after_dispatch() {
         let app_handle = register_handle(FastifyApp::new());
-        let (response_tx, mut response_rx) = tokio::sync::oneshot::channel();
+        let (response_tx, response_rx) = std::sync::mpsc::sync_channel(1);
         let pending = crate::server::FastifyPendingRequest {
             method: "GET".to_string(),
             path: "/health".to_string(),
             headers: HashMap::new(),
             body: None,
             params: HashMap::new(),
-            response_tx,
+            reply: crate::server::Reply::Captured(response_tx),
         };
 
         // Drive the real dispatcher; it returns the context handle it
@@ -794,16 +798,17 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("id".to_string(), "42".to_string());
 
-        // The response channel is irrelevant to context construction; a dropped
-        // receiver is fine — the helper never touches `response_tx`.
-        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        // The reply is irrelevant to context construction; a dropped receiver
+        // is fine — the helper never touches it. (Dropping the pending then
+        // refuses through a closed channel, which is a no-op.)
+        let (response_tx, _response_rx) = std::sync::mpsc::sync_channel(1);
         let mut pending = FastifyPendingRequest {
             method: "POST".to_string(),
             path: "/users/42".to_string(),
             headers,
             body: Some(b"{\"hello\":\"world\"}".to_vec()),
             params,
-            response_tx,
+            reply: crate::server::Reply::Captured(response_tx),
         };
 
         // Exercise the production construction path.

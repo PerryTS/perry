@@ -13,6 +13,8 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
+perry-db-turnloop.workspace = true
+turnloop-mongodb.workspace = true
 mongodb = { version = "3.7", default-features = false, features = ["bson-3", "compat-3-3-0", "rustls-tls", "dns-resolver"] }
 bson = { version = "3.1", features = ["serde"] }
 tokio = { workspace = true }
@@ -21,3 +23,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+# Standalone extension tests need the runtime half of the test-only async FFI
+# shims (`perry_ffi_promise_resolve_deferred` lives in perry-stdlib, which a
+# `cargo test -p perry-ext-mongodb` binary does not link); production code
+# still depends on perry-ffi only. Same dev-dependency perry-ext-ioredis has.
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }

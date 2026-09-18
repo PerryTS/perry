@@ -183,6 +183,10 @@ struct EventListener {
 static NEXT_WORKER_ID: AtomicU64 = AtomicU64::new(1);
 static WORKERS: LazyLock<Mutex<HashMap<u64, WorkerRecord>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+/// turnloop P0: `#{WorkerRecord : alive && refed}`, maintained under the
+/// `WORKERS` lock by `WorkerRecord::set_liveness` (records are never removed,
+/// only marked dead), so the per-turn keep-alive check is an atomic load.
+static LIVE_REFED_WORKERS: AtomicU64 = AtomicU64::new(0);
 static PARENT_EVENTS: LazyLock<Mutex<VecDeque<WorkerEvent>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
 
@@ -210,6 +214,26 @@ struct WorkerRecord {
     terminate_promise: Option<usize>,
     async_resources: [perry_runtime::async_hooks::AsyncResourceIds; 3],
     async_resource_bits: [u64; 3],
+}
+
+impl WorkerRecord {
+    /// Change `alive`/`refed` and move `LIVE_REFED_WORKERS` with them. Call with
+    /// the `WORKERS` lock held; a fresh record enters the count at insert.
+    fn set_liveness(&mut self, alive: bool, refed: bool) {
+        let before = self.alive && self.refed;
+        self.alive = alive;
+        self.refed = refed;
+        match (before, alive && refed) {
+            (false, true) => {
+                LIVE_REFED_WORKERS.fetch_add(1, Ordering::AcqRel);
+            }
+            (true, false) => {
+                let previous = LIVE_REFED_WORKERS.fetch_sub(1, Ordering::AcqRel);
+                debug_assert!(previous > 0, "live worker count underflow");
+            }
+            _ => {}
+        }
+    }
 }
 
 struct WorkerListener {
@@ -926,7 +950,8 @@ extern "C" fn worker_ref(closure: *const ClosureHeader) -> f64 {
 
 fn worker_ref_by_id(worker_id: u64) -> f64 {
     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
-        worker.refed = true;
+        let alive = worker.alive;
+        worker.set_liveness(alive, true);
     }
     js_undefined()
 }
@@ -937,7 +962,8 @@ extern "C" fn worker_unref(closure: *const ClosureHeader) -> f64 {
 
 fn worker_unref_by_id(worker_id: u64) -> f64 {
     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
-        worker.refed = false;
+        let alive = worker.alive;
+        worker.set_liveness(alive, false);
     }
     js_undefined()
 }
@@ -1223,19 +1249,20 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         resource_handles[1].get_nanbox_f64().to_bits(),
         resource_handles[2].get_nanbox_f64().to_bits(),
     ];
-    WORKERS.lock().unwrap().insert(
-        worker_id,
-        WorkerRecord {
-            sender: tx,
-            object_bits: object_value(worker_obj).to_bits(),
-            listeners: HashMap::new(),
-            alive: true,
-            refed: true,
-            terminate_promise: None,
-            async_resources,
-            async_resource_bits,
-        },
-    );
+    let mut record = WorkerRecord {
+        sender: tx,
+        object_bits: object_value(worker_obj).to_bits(),
+        listeners: HashMap::new(),
+        alive: false,
+        refed: false,
+        terminate_promise: None,
+        async_resources,
+        async_resource_bits,
+    };
+    let mut workers = WORKERS.lock().unwrap();
+    record.set_liveness(true, true);
+    workers.insert(worker_id, record);
+    drop(workers);
 
     let thread_options = options_state.clone();
     // #8546: the Worker re-runs its module bodies on its own thread, but it is
@@ -1245,6 +1272,15 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     let class_image = perry_runtime::object::class_image::current_image_handle();
     std::thread::spawn(move || {
         perry_runtime::object::class_image::adopt_image(class_image);
+        // A `worker_threads` Worker runs JS on its own thread with its own heap,
+        // so it IS an agent and must claim an id before it can allocate or
+        // enqueue anything — exactly as `perry/thread`'s spawn/parallelMap do
+        // (#6185). Without this the thread reports `PRIMARY_AGENT`, which makes
+        // `agent_loop::net_available()` true on a thread that cannot own the
+        // primary agent's turnloop loop: `fetch()` is then accepted by the
+        // submit guard and refused a moment later by `ensure_loop_with`, so the
+        // request fails after acceptance instead of taking the fallback path.
+        let worker_agent = perry_runtime::agent::enter_worker_agent();
         let previous_env = apply_worker_env(&thread_options.env);
         CURRENT_WORKER_ID.with(|id| id.set(worker_id));
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
@@ -1315,6 +1351,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             }
         };
         push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
+        // The arena backing this agent is about to go away; purge anything
+        // still queued under its id rather than leaving it for a drain that
+        // can never legally run.
+        perry_runtime::agent::retire_agent(worker_agent);
     });
 
     object_value(worker_obj)

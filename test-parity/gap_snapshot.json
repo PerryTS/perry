@@ -24,6 +24,104 @@
       "category": "bug-open",
       "reason": "process SIGINT trace hook gap; standing per #5917 diff."
     },
+    "test_gap_http2_alpn_secure": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). A default createSecureServer accepts http/1.1 where Node fails the handshake with NO_APPLICATION_PROTOCOL; http2.connect over TLS fails outright ('received corrupt message of type InvalidContentType', printed to stdout); the allowHTTP1 path reports httpVersion 2.0 for an HTTP/1.1 request."
+    },
+    "test_gap_http2_e2e_streams": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 stream surface (#10327). Both ends are Perry, so this is the regression floor rather than a wire test. ':status' is a string not a number; state.nextStreamID never advances; stream ids diverge; stream.resume is undefined and a GET does not auto-end; stream.close(code) produces no error and no rstCode; trailers do nothing; once/off/removeListener/emit/removeAllListeners are undefined on the session handle."
+    },
+    "test_gap_http2_session_isolation": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 control-surface isolation (#10327). A server session's settings() and goaway() reach EVERY client session in the process: controls.rs scans the handle table with iter_handle_ids_of::<Http2SessionHandle> and its server-handle filter is unwrap_or(true) for a server caller. Node delivers each control frame to exactly one peer."
+    },
+    "test_gap_http2_wire_client_ping": {
+      "status": "crash",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). session.ping() puts nothing on the wire — the loopback shim in controls.rs pushes a synthetic callback at the caller's own handle — so the duration is 0.0 and every argument-validation case is a silent no-op where Node throws ERR_HTTP2_PING_LENGTH / ERR_INVALID_ARG_TYPE. TIMEOUT rather than parity_fail because the process prints its full output and then does not exit."
+    },
+    "test_gap_http2_wire_flow_control": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). Server-side window arithmetic is byte-exact; the failure is the CLIENT read path — after stream.pause(), resume() delivers 0 of 300000 bytes (stream.resume is undefined on a Perry http2 stream)."
+    },
+    "test_gap_http2_wire_frame_errors": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). Every malformed frame is answered with GOAWAY(code=1) where Node distinguishes 6/1/2/9, and no session 'error' event is emitted at all (Node: ERR_HTTP2_ERROR, errno -505). Unknown frame types are correctly ignored."
+    },
+    "test_gap_http2_wire_goaway_recv": {
+      "status": "crash",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). A GOAWAY frame from a real peer fires no 'goaway' event and changes no session state. Node's third argument is undefined (not a zero-length Buffer) when the frame carried no opaque data. TIMEOUT: full output, then no exit."
+    },
+    "test_gap_http2_wire_goaway_send": {
+      "status": "crash",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). Every goaway() form writes nothing to the wire. Node also drops a client goaway() whose lastStreamID is ODD, silently — see docs/src/testing/http2-conformance.md. TIMEOUT: full output, then no exit."
+    },
+    "test_gap_http2_wire_goaway_server": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). A server session's goaway() writes nothing, so a stream opened after the 'graceful GOAWAY' is served normally; server.close() writes no GOAWAY; a client GOAWAY is not surfaced. Node ignores a post-GOAWAY stream entirely (no RST_STREAM)."
+    },
+    "test_gap_http2_wire_refused_stream": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). SETTINGS_MAX_CONCURRENT_STREAMS is not enforced: all four concurrent streams are accepted and no RST_STREAM is sent. Node refuses with code=7 before the peer ACKs the limit and tears the session down with GOAWAY(code=2) after."
+    },
+    "test_gap_http2_wire_server_ping": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). Inbound PING is ACKed correctly (h2 does it below the shim), but session.ping() writes no frame and its callback gets a hardcoded 0.0 duration (pump.rs call3(callback, err, 0.0, payload)); an unsolicited PING|ACK is ignored where Node answers GOAWAY(code=2)."
+    },
+    "test_gap_http2_wire_server_settings": {
+      "status": "parity_fail",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). The server sends a hardcoded SETTINGS {3=200,4=1048576,5=16384,6=16384} whatever createServer({settings}) asks for, plus an unsolicited connection WINDOW_UPDATE inc=983041 Node never sends. Node sends an EMPTY SETTINGS by default and serialises configured keys in ascending identifier order."
+    },
+    "test_gap_http2_wire_session_lifecycle": {
+      "status": "crash",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). close() writes one GOAWAY instead of two; closed and destroyed are always both true (Node: destroy() leaves closed false); destroy(err, code) writes code=0 and emits no 'error'. TIMEOUT: full output, then no exit."
+    },
+    "test_gap_http2_wire_settings_ack": {
+      "status": "crash",
+      "issue": "10327",
+      "added": "2026-09-16",
+      "category": "module-inventory",
+      "reason": "node:http2 real transport (#10327). settings() applies immediately and fires its callback with no peer ACK and no third (duration) argument; no SETTINGS frame reaches the wire; no remoteSettings at connect; a peer SETTINGS frame mid-session is answered with GOAWAY(code=1) instead of an ACK. TIMEOUT: full output, then no exit."
+    },
     "test_gap_json_lazy_defineproperty_index": {
       "status": "parity_fail",
       "issue": "10097",

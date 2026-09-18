@@ -1,4 +1,22 @@
-//! Session SETTINGS / PING / GOAWAY frame controls.
+//! Session SETTINGS / PING / GOAWAY controls.
+//!
+//! # Two transports, and only one of them reaches a wire
+//!
+//! On turnloop these encode a frame (`turnloop_h2::control`) and the peer's
+//! acknowledgement is what fires the callback. Off it they are a **loopback
+//! simulation**: they enumerate `Http2SessionHandle`s with
+//! `iter_handle_ids_of`, pick the ones whose `session_type` is the opposite of
+//! the caller's, and push a synthetic event into their queues. No frame is
+//! encoded, which is why `test-parity/node-suite/http2/` passes today — every
+//! case in it is a Perry client talking to a Perry server in one process.
+//!
+//! Which sessions are still off turnloop is narrower than it was. The `h2`
+//! CLIENT is gone entirely — `http2.connect`, TLS included, is turnloop or it
+//! is an `'error'` — so what routes here is a SERVER session on the hyper
+//! declining path (`turnloop_conn == 0`, plan A), and a declined client for the
+//! moment before it is destroyed. The simulation is not extended to turnloop
+//! sessions: a real SETTINGS frame and a synthetic `'remoteSettings'` on some
+//! unrelated in-process peer would fire the event twice on a loopback pair.
 
 use super::*;
 
@@ -13,6 +31,12 @@ pub(crate) fn numeric_value(value: f64) -> Option<f64> {
     } else {
         None
     }
+}
+
+/// Whether this session's frames reach a wire, and which connection carries
+/// them.
+fn turnloop_of(handle: i64) -> Option<i64> {
+    super::turnloop_conn_of_session(handle)
 }
 
 pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
@@ -41,6 +65,20 @@ pub(crate) fn queue_session_ping(handle: i64, args: &[f64]) -> f64 {
         payload.resize(8, 0);
         payload.truncate(8);
     }
+    if let Some(conn) = turnloop_of(handle) {
+        let mut data = [0u8; 8];
+        data.copy_from_slice(&payload[..8]);
+        if !crate::server::turnloop_h2::control::send_ping(conn, data) {
+            return bool_value(false);
+        }
+        // The callback lives in `pending_callbacks` — which
+        // `scan_http_server_roots` visits, so it survives the round trip — and
+        // is fired by `complete_turnloop_ping` from `Event::Ping { ack: true }`.
+        if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+            session.pending_callbacks.push(callback);
+        }
+        return bool_value(true);
+    }
     if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
         session.pending_callbacks.push(callback);
     }
@@ -66,6 +104,22 @@ pub(crate) fn queue_session_settings(handle: i64, args: &[f64]) -> f64 {
         .map(|session| session.local_settings.clone())
         .unwrap_or_default();
     settings.apply_value(settings_value_arg);
+    if let Some(conn) = turnloop_of(handle) {
+        // A real SETTINGS frame, clamped to what the core can honour; the
+        // acknowledgement fires `'localSettings'` and the callback.
+        let Some(effective) = crate::server::turnloop_h2::control::send_settings(conn, &settings)
+        else {
+            return f64::from_bits(TAG_UNDEFINED);
+        };
+        if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
+            session.local_settings = effective;
+            session.pending_settings_ack = true;
+            if callback != 0 {
+                session.pending_callbacks.push(callback);
+            }
+        }
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     if let Some(session) = get_handle_mut::<Http2SessionHandle>(handle) {
         session.local_settings = settings.clone();
         session.pending_settings_ack = true;
@@ -132,6 +186,15 @@ pub(crate) fn queue_session_goaway(handle: i64, args: &[f64]) -> f64 {
         .copied()
         .and_then(jsvalue_to_body_bytes)
         .unwrap_or_default();
+    if let Some(conn) = turnloop_of(handle) {
+        crate::server::turnloop_h2::control::send_goaway(
+            conn,
+            code as u32,
+            last_stream_id as u32,
+            &opaque_data,
+        );
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     let caller_type = get_handle::<Http2SessionHandle>(handle)
         .map(|session| session.session_type)
         .unwrap_or(1);
