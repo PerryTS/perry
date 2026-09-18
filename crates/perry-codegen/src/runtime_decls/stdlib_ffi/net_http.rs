@@ -141,6 +141,12 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     );
     module.declare_function("js_http_response_headers", DOUBLE, &[I64]);
     module.declare_function("js_http_response_trailers", DOUBLE, &[I64]);
+    // #10467 — client rawHeaders / httpVersion* / complete accessors.
+    module.declare_function("js_http_response_raw_headers", DOUBLE, &[I64]);
+    module.declare_function("js_http_response_http_version", I64, &[I64]);
+    module.declare_function("js_http_response_http_version_major", DOUBLE, &[I64]);
+    module.declare_function("js_http_response_http_version_minor", DOUBLE, &[I64]);
+    module.declare_function("js_http_response_complete", DOUBLE, &[I64]);
     module.declare_function("js_http_incoming_message_socket", DOUBLE, &[I64]);
     module.declare_function("js_http_incoming_message_req", DOUBLE, &[I64]);
     module.declare_function("js_http_incoming_message_set_encoding", I64, &[I64, I64]);

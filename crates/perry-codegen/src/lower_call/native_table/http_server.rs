@@ -691,7 +691,12 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "httpVersion",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_http_version",
+        // #10467 — route through the client accessor (falls back to the
+        // server one internally, `server_incoming_property`) so a
+        // client-side `res.httpVersion` resolves instead of reading the
+        // server-only registry and returning the "1.1" default for every
+        // client response.
+        runtime: "js_http_response_http_version",
         args: &[],
         ret: NR_STR,
     },
@@ -732,12 +737,14 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_STR,
     },
+    // #10467 — same client-accessor-with-server-fallback shape as the
+    // bare `httpVersion` entry above.
     NativeModSig {
         module: "http",
         has_receiver: true,
         method: "__get_httpVersion",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_http_version",
+        runtime: "js_http_response_http_version",
         args: &[],
         ret: NR_STR,
     },
@@ -746,7 +753,16 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "__get_httpVersionMajor",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_http_version_major",
+        runtime: "js_http_response_http_version_major",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "httpVersionMajor",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_http_version_major",
         args: &[],
         ret: NR_F64,
     },
@@ -755,18 +771,58 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "__get_httpVersionMinor",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_http_version_minor",
+        runtime: "js_http_response_http_version_minor",
         args: &[],
         ret: NR_F64,
     },
     NativeModSig {
         module: "http",
         has_receiver: true,
+        method: "httpVersionMinor",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_http_version_minor",
+        args: &[],
+        ret: NR_F64,
+    },
+    // `js_http_response_complete` already returns a boxed JS boolean (f64
+    // bit pattern), not a raw C `i32` like the server-only accessor this
+    // replaced — hence `NR_F64`, matching `headers`/`trailers`/`socket`
+    // below (also client accessors returning pre-boxed values).
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
         method: "__get_complete",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_complete",
+        runtime: "js_http_response_complete",
         args: &[],
-        ret: NR_I32,
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "complete",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_complete",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_rawHeaders",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_raw_headers",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "rawHeaders",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_response_raw_headers",
+        args: &[],
+        ret: NR_F64,
     },
     NativeModSig {
         module: "http",

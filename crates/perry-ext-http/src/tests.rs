@@ -99,6 +99,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         close_emitted: false,
         agent_handle: 0,
         agent_key: "localhost::".to_string(),
+        request_create_connection: 0,
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -126,6 +127,8 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         pipes: Vec::new(),
         socket_handle: 0,
         request_handle,
+        http_version: (1, 1),
+        complete: true,
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();
@@ -187,6 +190,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         close_emitted: false,
         agent_handle: 0,
         agent_key: "localhost::".to_string(),
+        request_create_connection: 0,
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -208,6 +212,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
             200,
             "OK".to_string(),
             Vec::new(),
+            (1, 1),
         );
         // Each production chunk is a refcounted `Bytes` (reqwest's
         // `response.chunk()` shape) — build the input the same way so the
@@ -359,6 +364,7 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         close_emitted: false,
         agent_handle: 0,
         agent_key: "localhost::".to_string(),
+        request_create_connection: 0,
         agent_active: false,
         agent_queued: false,
         reused_socket: false,

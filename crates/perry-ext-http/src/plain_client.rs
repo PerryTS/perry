@@ -112,6 +112,7 @@ pub(crate) async fn dispatch_plain_http_request(
                 headers: parsed.headers,
                 trailers: parsed.trailers,
                 body: parsed.body,
+                http_version: parsed.http_version,
             });
             Some(Ok(()))
         }
@@ -127,6 +128,10 @@ pub(crate) struct ParsedHttpResponse {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) trailers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
+    /// `(major, minor)` parsed from the status line (`HTTP/1.1 200 OK`).
+    /// Falls back to `(1, 1)` on anything that doesn't parse as
+    /// `HTTP/<major>.<minor>` (#10467).
+    pub(crate) http_version: (u8, u8),
 }
 
 /// Parse a raw HTTP/1.1 response (the bytes read off a socket) into status /
@@ -144,7 +149,12 @@ pub(crate) fn parse_http_response(raw: &[u8]) -> Result<ParsedHttpResponse, Stri
     let mut lines = head.split("\r\n");
     let status_line = lines.next().unwrap_or_default();
     let mut status_parts = status_line.splitn(3, ' ');
-    let _version = status_parts.next();
+    let http_version = status_parts
+        .next()
+        .and_then(|v| v.strip_prefix("HTTP/"))
+        .and_then(|v| v.split_once('.'))
+        .and_then(|(maj, min)| Some((maj.parse::<u8>().ok()?, min.parse::<u8>().ok()?)))
+        .unwrap_or((1, 1));
     let status = status_parts
         .next()
         .and_then(|s| s.parse::<u16>().ok())
@@ -215,5 +225,6 @@ pub(crate) fn parse_http_response(raw: &[u8]) -> Result<ParsedHttpResponse, Stri
         headers: hdrs,
         trailers,
         body: decoded,
+        http_version,
     })
 }

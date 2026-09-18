@@ -20,6 +20,21 @@ use crate::{
 /// fresh detached task on the same multi-thread runtime; it drives
 /// itself via `await` chains while we return immediately. Mirrors
 /// the `spawn_socket_runner` pattern in `perry-ext-net`.
+/// #10467 — map a reqwest response's negotiated HTTP version to the
+/// `(major, minor)` pair `IncomingMessage.httpVersion*` expects. The pooled
+/// client only ever sees these five; anything else (there isn't one today)
+/// falls back to `(1, 1)`.
+fn reqwest_version_pair(v: reqwest::Version) -> (u8, u8) {
+    match v {
+        reqwest::Version::HTTP_09 => (0, 9),
+        reqwest::Version::HTTP_10 => (1, 0),
+        reqwest::Version::HTTP_11 => (1, 1),
+        reqwest::Version::HTTP_2 => (2, 0),
+        reqwest::Version::HTTP_3 => (3, 0),
+        _ => (1, 1),
+    }
+}
+
 pub(crate) fn dispatch_request(
     request_handle: Handle,
     method: String,
@@ -79,6 +94,28 @@ pub(crate) fn dispatch_request(
         let inflight_guard = ClientInflightGuard::new(request_handle);
         let jh = handle.spawn(async move {
             let _inflight = inflight_guard;
+            // #10468 — `Connection: Upgrade` needs the raw socket handed
+            // back on `101`, which reqwest can't do. Checked before the
+            // trailer-aware bypass below (disjoint triggers: `TE: trailers`
+            // vs `Connection: Upgrade`, never both on the same request).
+            if let Some(result) = crate::client_upgrade::dispatch_upgrade_http_request(
+                request_handle,
+                method.as_str(),
+                &url,
+                &headers,
+                &body,
+                timeout_ms,
+            )
+            .await
+            {
+                if let Err(error_message) = result {
+                    push_event(PendingHttpEvent::Error {
+                        request_handle,
+                        error_message,
+                    });
+                }
+                return;
+            }
             if let Some(result) = dispatch_plain_http_request(
                 request_handle,
                 method.as_str(),
@@ -148,6 +185,7 @@ pub(crate) fn dispatch_request(
                         .canonical_reason()
                         .unwrap_or("")
                         .to_string();
+                    let http_version = reqwest_version_pair(response.version());
                     let mut hdrs = Vec::new();
                     for (k, v) in response.headers() {
                         if let Ok(s) = v.to_str() {
@@ -164,6 +202,7 @@ pub(crate) fn dispatch_request(
                         status,
                         status_message,
                         headers: hdrs,
+                        http_version,
                     });
                     loop {
                         match response.chunk().await {

@@ -48,6 +48,7 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 headers,
                 trailers,
                 body,
+                http_version,
             } => client_events::handle_response_event(
                 request_handle,
                 status,
@@ -55,17 +56,35 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 headers,
                 trailers,
                 body,
+                http_version,
             ),
             PendingHttpEvent::ResponseHead {
                 request_handle,
                 status,
                 status_message,
                 headers,
+                http_version,
             } => client_events::handle_response_head_event(
                 request_handle,
                 status,
                 status_message,
                 headers,
+                http_version,
+            ),
+            PendingHttpEvent::Upgrade {
+                request_handle,
+                status,
+                status_message,
+                headers,
+                socket_handle,
+                head,
+            } => client_events::handle_upgrade_event(
+                request_handle,
+                status,
+                status_message,
+                headers,
+                socket_handle,
+                head,
             ),
             PendingHttpEvent::ResponseChunk {
                 request_handle,
