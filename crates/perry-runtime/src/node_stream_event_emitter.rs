@@ -746,6 +746,22 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     if event_identity_bytes(event).is_none() {
         return f64::from_bits(super::TAG_FALSE);
     }
+    // #10600: `listener_snapshot`'s Vec, `stream`, `event` and `args` are all
+    // plain Rust locals, not GC roots. A listener can allocate enough to
+    // trigger a moving minor collection; an unrooted copy then holds a
+    // retired from-space address for the NEXT listener dispatched from this
+    // same loop (reproduced: a `class X extends EventEmitter` whose second
+    // listener allocates heavily segfaults dereferencing the third
+    // listener's stale closure pointer under the default generational GC —
+    // confirmed gone under `PERRY_GEN_GC=0`). Root the whole dispatch
+    // window through one handle scope and re-read every value's current
+    // (possibly relocated) bits before each call, the pattern `events.rs`'s
+    // async branch already uses.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream_h = scope.root_nanbox_f64(stream);
+    let event_h = scope.root_nanbox_f64(event);
+    let arg_handles = scope.root_nanbox_f64_slice(args);
+
     if super::string_value_eq(event, b"error") {
         if let Some(first) = args.first() {
             super::set_hidden_value(stream, super::hidden_error_key(), *first);
@@ -756,14 +772,21 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
         if monitor_snapshot.iter().any(|(_, once)| *once) {
             remove_once_listeners(stream, monitor_event);
         }
-        for (listener, _) in monitor_snapshot {
-            call_listener_args(stream, listener, args);
+        let monitor_listener_values: Vec<f64> = monitor_snapshot.iter().map(|(l, _)| *l).collect();
+        let monitor_handles = scope.root_nanbox_f64_slice(&monitor_listener_values);
+        for handle in &monitor_handles {
+            let live_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+            call_listener_args(
+                stream_h.get_nanbox_f64(),
+                handle.get_nanbox_f64(),
+                &live_args,
+            );
         }
     }
 
-    let snapshot = listener_snapshot(stream, event);
+    let snapshot = listener_snapshot(stream_h.get_nanbox_f64(), event_h.get_nanbox_f64());
     if snapshot.is_empty() {
-        if super::string_value_eq(event, b"error") {
+        if super::string_value_eq(event_h.get_nanbox_f64(), b"error") {
             let err = args
                 .first()
                 .copied()
@@ -773,17 +796,25 @@ pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
         return f64::from_bits(super::TAG_FALSE);
     }
     if snapshot.iter().any(|(_, once)| *once) {
-        remove_once_listeners(stream, event);
+        remove_once_listeners(stream_h.get_nanbox_f64(), event_h.get_nanbox_f64());
     }
     // Node's Readable data delivery path does not route async `data` listener
     // rejections through captureRejections; custom EventEmitter-style events do.
-    let is_data = super::string_value_eq(event, b"data");
-    let capture_rejections =
-        capture_rejections_enabled(stream) && !super::string_value_eq(event, b"error") && !is_data;
-    for (listener, _) in snapshot {
-        let result = call_listener_args(stream, listener, args);
+    let is_data = super::string_value_eq(event_h.get_nanbox_f64(), b"data");
+    let capture_rejections = capture_rejections_enabled(stream_h.get_nanbox_f64())
+        && !super::string_value_eq(event_h.get_nanbox_f64(), b"error")
+        && !is_data;
+    let listener_values: Vec<f64> = snapshot.iter().map(|(l, _)| *l).collect();
+    let listener_handles = scope.root_nanbox_f64_slice(&listener_values);
+    for handle in &listener_handles {
+        let live_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+        let result = call_listener_args(
+            stream_h.get_nanbox_f64(),
+            handle.get_nanbox_f64(),
+            &live_args,
+        );
         if capture_rejections {
-            capture_listener_rejection(stream, result);
+            capture_listener_rejection(stream_h.get_nanbox_f64(), result);
         } else if is_data {
             // Node's Readable swallows a rejection returned by an async `data`
             // listener — it is neither captured to `error` nor surfaced as an
