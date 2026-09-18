@@ -676,6 +676,16 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 # and compares it with `expected_class_identity`, which puts
                 # the ShapeId in the high 32 bits. All three halves are
                 # required, so dropping the ShapeId from the compare fails.
+                #
+                # The expectation is the POISONABLE `@perry_class_guard_shape_*`
+                # twin, not `@perry_class_shape_id_*`, and it is read VOLATILE
+                # per access. That is load-bearing, not incidental: this compare
+                # now carries the authority the
+                # `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch used to, so a
+                # lowering that hoisted the load, or read the ShapeId global
+                # instead, would take a fast path the runtime has already closed
+                # — and would still pass a shape-only assertion. Both halves are
+                # required here for that reason.
                 require_code(
                     body,
                     r"load\s*\(\s*I64\s*,\s*&obj_ptr\s*\)",
@@ -683,8 +693,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 )
                 require_code(
                     body,
-                    r"expected_class_identity\s*\(\s*blk\s*,\s*expected_class_id\s*,\s*expected_shape_id\s*\)",
-                    f"{name} compares the identity word with the expected ShapeId",
+                    r"expected_class_identity\s*\(\s*blk\s*,\s*expected_class_id\s*,\s*&live_shape\s*\)",
+                    f"{name} compares the identity word with the live expectation",
+                )
+                require_code(
+                    body,
+                    r"load_volatile\s*\(\s*I32\s*,\s*&format!\(\s*\"@\{guard_shape_global\}\"",
+                    f"{name} reads the poisonable expectation VOLATILE, per access",
                 )
                 require_code(
                     function_body(raw_class_guard, "expected_class_identity"),
