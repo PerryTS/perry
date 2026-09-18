@@ -303,35 +303,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("sqlite", "setAllowUnknownNamedParameters", true, None),
     method("sqlite", "sourceSQL", true, None),
     method("sqlite", "expandedSQL", true, None),
-    // tursodb (#424). open / exec / execBatch / close /
-    // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
-    // queryOne shipped in v0.5.553 (close the row-as-object gap by
-    // building shapes inside spawn_blocking and resolving with
-    // POINTER_TAG'd JsValues).
-    method("tursodb", "open", false, None),
-    method("tursodb", "exec", true, None),
-    method("tursodb", "execBatch", true, None),
-    method("tursodb", "queryAll", true, None),
-    method("tursodb", "queryOne", true, None),
-    method("tursodb", "close", true, None),
-    method("tursodb", "lastInsertRowid", true, None),
-    method("tursodb", "isAutocommit", true, None),
-    // iroh (#425). bind / nodeId / close shipped in v0.5.544; the
-    // peer connection + stream surface (connect / acceptOne /
-    // openBi / acceptBi / streamWrite / streamFinish /
-    // streamReadToEnd / connClose) shipped in v0.5.554. ALPN is
-    // hardcoded to `b"perry-iroh/0"` for v0.
-    method("iroh", "bind", false, None),
-    method("iroh", "nodeId", true, None),
-    method("iroh", "close", true, None),
-    method("iroh", "connect", true, None),
-    method("iroh", "acceptOne", true, None),
-    method("iroh", "openBi", true, None),
-    method("iroh", "acceptBi", true, None),
-    method("iroh", "streamWrite", true, None),
-    method("iroh", "streamFinish", true, None),
-    method("iroh", "streamReadToEnd", true, None),
-    method("iroh", "connClose", true, None),
     property("sea", "default"),
     method("sea", "isSea", false, None),
     method("sea", "getAsset", false, None),

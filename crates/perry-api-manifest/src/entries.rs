@@ -54,8 +54,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "mongodb",        // MongoDB driver
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
     "sqlite",         // node:sqlite builtin surface
-    "tursodb",        // Turso/libSQL client (legacy in-tree; now @perryts/tursodb)
-    "iroh",           // iroh p2p (legacy in-tree; now @perryts/iroh)
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier
     // (unlike `node:`, which is stripped) — `import { dlopen } from "bun:ffi"`.
     "bun:ffi",
@@ -158,7 +156,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     // ── More third-party npm packages ──
     "redis",                 // npm `redis` client (aliases ioredis)
     "rate-limiter-flexible", // rate limiting
-    "fetch",                 // bare-name alias for the node-fetch surface
     // `undici` (#466) — served by perry's native fetch stack via the
     // bundled perry-ext-undici wrapper (ProxyAgent / Agent /
     // setGlobalDispatcher / getGlobalDispatcher / fetch subset).
