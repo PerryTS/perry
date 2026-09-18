@@ -41,9 +41,9 @@ pub(super) unsafe fn define_declared_class_accessor(
         // The validator compares accessor halves by closure `func_ptr`, which a
         // reflected class accessor value carries. Root the getter value across
         // the setter value's allocation; the validator roots both on entry.
-        let get = scope.root_nanbox_f64(super::super::class_registry::class_accessor_function_value(
-            getter, false, name,
-        ));
+        let get = scope.root_nanbox_f64(
+            super::super::class_registry::class_accessor_function_value(getter, false, name),
+        );
         let set = super::super::class_registry::class_accessor_function_value(setter, true, name);
         validate_nonconfigurable_redefine(
             name,

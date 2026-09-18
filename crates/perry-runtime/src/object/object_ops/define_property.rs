@@ -1420,13 +1420,15 @@ pub extern "C" fn js_object_define_property(
                 // over them. A physical key (an expando that shadows the class
                 // member) keeps the ordinary arm.
                 if !own_key_present(obj, key_str)
-                    && across!(super::define_class_accessor::define_declared_class_accessor(
-                        target_cid,
-                        false,
-                        name,
-                        descriptor_value,
-                        desc_view.as_ref(),
-                    ))
+                    && across!(
+                        super::define_class_accessor::define_declared_class_accessor(
+                            target_cid,
+                            false,
+                            name,
+                            descriptor_value,
+                            desc_view.as_ref(),
+                        )
+                    )
                 {
                     return obj_value;
                 }

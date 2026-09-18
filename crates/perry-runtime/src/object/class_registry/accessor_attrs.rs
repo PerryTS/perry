@@ -123,7 +123,9 @@ pub(crate) fn class_enumerable_accessor_names(class_id: u32, is_static: bool) ->
         table
             .borrow()
             .iter()
-            .any(|(&(cid, st, _), &(enumerable, _))| cid == class_id && st == is_static && enumerable)
+            .any(|(&(cid, st, _), &(enumerable, _))| {
+                cid == class_id && st == is_static && enumerable
+            })
     });
     if !any {
         return Vec::new();
@@ -318,6 +320,8 @@ mod tests {
         );
         assert!(class_enumerable_accessor_names(cid, true).is_empty());
         assert_eq!(class_declared_accessor_ptrs(cid, false, "gone"), None);
-        assert!(class_declared_accessor_ptrs(cid, false, "a").is_some_and(|(g, s)| g != 0 && s == 0));
+        assert!(
+            class_declared_accessor_ptrs(cid, false, "a").is_some_and(|(g, s)| g != 0 && s == 0)
+        );
     }
 }
