@@ -3,6 +3,7 @@ use super::support::*;
 use std::cell::Cell;
 mod arraylike_callbacks;
 mod bound_method_builder;
+mod call_argument_lists;
 mod callback_scanners;
 mod fs_options_object;
 mod generator_attach_prototype;
