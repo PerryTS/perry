@@ -582,6 +582,32 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// A DECLARED-only `number` local — the erased TypeScript annotation, not a
+/// runtime or dataflow proof. Mirrors `is_declared_string_expr`
+/// (`type_analysis/strings.rs`) exactly, one call site up the stack: that
+/// predicate lets `expr/binary.rs` trust `s: string` for the pairwise concat
+/// fast path because the receiving helper (`js_string_concat_box`) tag-
+/// dispatches both operands itself, so a lying annotation degrades to the
+/// helper's own dynamic fallback rather than misreading bits. This is the
+/// number-typed twin, for `lower_string_concat.rs`'s n-way concat-chain fold:
+/// see `chain_part_without_redundant_coerce` for why the same trust is sound
+/// there (`js_string_concat_chain`'s own classify loop is what actually
+/// dispatches on the runtime tag; a lying declaration only changes which of
+/// two call sites produces the identical answer).
+///
+/// Deliberately narrower than [`is_numeric_expr`]: only a direct `LocalGet`
+/// of a `number`-declared binding. `Int32` is excluded on purpose — an
+/// integer-range local already has a stronger *proof* available
+/// (`ctx.integer_locals` / `is_numeric_expr` +
+/// `expr_produces_non_pointer_bits_by_construction`), so it never needs this
+/// weaker, declaration-only fallback.
+pub(crate) fn is_declared_number_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Expr::LocalGet(id) = e else {
+        return false;
+    };
+    matches!(ctx.local_type_hint(id), Some(HirType::Number))
+}
+
 /// Repsel Phase 4a.0 (#6904): statically prove that an expression's LOWERED
 /// value is a **canonical raw f64** — a real machine double whose bit pattern
 /// is never a NaN-box tag (`0x7FF9..=0x7FFF` upper 16 with a set quiet-NaN

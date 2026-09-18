@@ -475,6 +475,14 @@
     },
     {
       "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
+      "function": "is_declared_number_expr",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "A declared local number selects only js_string_concat_chain's part-classifier elision (chain_part_without_redundant_coerce); that helper tag-dispatches every part itself and falls back to js_jsvalue_to_string/js_string_materialize_to_heap for any shape that isn't a plain number, the same calls js_string_coerce forwards to for those shapes, so a lying annotation still produces byte-identical output."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
       "function": "is_numeric_expr",
       "access": "stable_local_type_proof",
       "count": 3,
