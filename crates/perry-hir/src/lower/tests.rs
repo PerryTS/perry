@@ -1995,4 +1995,5 @@ mod mixin_parent_chain;
 mod native_module_sync;
 
 mod nullish_over_optional_chain;
+mod subclass_ctor_inherited_method;
 mod ui_widget_add_child;

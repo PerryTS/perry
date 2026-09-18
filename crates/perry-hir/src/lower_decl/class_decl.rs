@@ -974,6 +974,20 @@ pub fn lower_class_decl(
                 _ => {}
             }
         }
+        // Issue #10487: pull in the parent chain's own+inherited method
+        // names too, mirroring the accessor union just above. A subclass
+        // constructor's `this.close = …` overriding a PARENT method (not
+        // redeclared on this class) must be recognized as a method
+        // override, not a new own data field, or the field wins the
+        // dynamic-dispatch lookup and instance reads see `undefined`
+        // until the assignment statement runs.
+        if let Some(ref parent_name) = extends_name {
+            if let Some(parent_methods) = ctx.lookup_class_method_names(parent_name) {
+                for m in parent_methods {
+                    method_names.insert(m.clone());
+                }
+            }
+        }
 
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
@@ -1065,6 +1079,12 @@ pub fn lower_class_decl(
         // bodies. `accessor_names` already contains the getter/setter names
         // from the parent-chain lookup above.
         ctx.register_class_accessor_names(name.clone(), accessor_names);
+
+        // Issue #10487: register this class's complete (own + inherited)
+        // method-name set, mirroring the accessor registration just above,
+        // so a further subclass lowered after this one sees the full
+        // chain in one lookup.
+        ctx.register_class_method_names(name.clone(), method_names.into_iter().collect());
 
         // Issue #302: also register field TYPES so the for-of arm can
         // detect `for (... of this.someMap)` patterns. Only own fields are

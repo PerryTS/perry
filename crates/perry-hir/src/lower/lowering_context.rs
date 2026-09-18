@@ -201,6 +201,18 @@ pub struct LoweringContext {
     /// `lookup_class_accessor_names` and walked across the parent chain when
     /// processing a subclass's ctor body.
     pub(crate) class_accessor_names: HashMap<String, ClassAccessorNames>,
+    /// Issue #10487: own+inherited instance METHOD names per class (mirrors
+    /// `class_accessor_names`). Used by the "infer fields from ctor body
+    /// `this.x = ...`" pass to avoid mis-categorising an assignment that
+    /// overrides an INHERITED method (`this.close = () => …` where `close`
+    /// is declared on a parent class) as a new own data field — that
+    /// allocated an inline slot shadowing the inherited method from the
+    /// moment `super()` returns, so `this.close` read `undefined` until the
+    /// assignment ran (undici MockPool/MockClient's `this.close.bind(this)`
+    /// threw "Bind must be called on a function" for the same reason).
+    /// Own-class methods were already excluded (#665-adjacent zod fix);
+    /// this extends the exclusion across the `extends` chain.
+    pub(crate) class_method_names: HashMap<String, Vec<String>>,
     /// Issue #562: class name → `(module, class)` tuple from
     /// `native_extends`. Populated when lowering each class, consumed by
     /// `destructuring.rs` to register `let x = new SubclassOfStream()`
@@ -1175,4 +1187,20 @@ pub struct LoweringContext {
     /// (ES2025 §15.2.1.1, early error for `new.target` in eval). ArrowFunction
     /// bodies and module/script top-level both leave this false.
     pub(crate) in_nonarrow_fn: bool,
+}
+
+// Issue #10487: own+inherited instance method names per class (mirrors
+// `class_accessor_names`'s register/lookup pair in context.rs). Split into
+// its own `impl` block here rather than in context.rs, which sits at the
+// file-size cap.
+impl LoweringContext {
+    pub(crate) fn register_class_method_names(&mut self, class_name: String, names: Vec<String>) {
+        self.class_method_names.insert(class_name, names);
+    }
+
+    pub(crate) fn lookup_class_method_names(&self, class_name: &str) -> Option<&[String]> {
+        self.class_method_names
+            .get(class_name)
+            .map(|n| n.as_slice())
+    }
 }
