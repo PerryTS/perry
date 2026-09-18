@@ -30,7 +30,11 @@ pub(crate) fn value_is_callable(value: f64) -> bool {
     // INT32-tagged class references (top 16 bits = 0x7FFE) are callable
     // constructors emitted by codegen. `is_pointer()` only checks 0x7FFD,
     // so they would fall through to `return false` without this guard.
-    if (value.to_bits() >> 48) == 0x7FFE {
+    // `class_ref_id` also requires `is_class_id_registered`, so a
+    // user-crafted NaN payload sharing this tag band (e.g. via
+    // `DataView.setFloat64` — a real JS number, not a class ref) is not
+    // misclassified as callable.
+    if class_ref_id(value).is_some() {
         return true;
     }
     let jv = crate::JSValue::from_bits(value.to_bits());
@@ -248,12 +252,13 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
     }
     let bits = type_ref.to_bits();
-    let top16 = bits >> 48;
-    if top16 == 0x7FFE {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
-        if class_id != 0 {
-            return js_instanceof(value, class_id);
-        }
+    // `class_ref_id` requires `is_class_id_registered`, not just the tag —
+    // a user-crafted NaN payload sharing the 0x7FFE band (a real JS number
+    // constructed via `DataView.setFloat64`, not a codegen-emitted class
+    // ref) must fall through to the unresolved-RHS `TypeError` below
+    // instead of being dispatched into `js_instanceof` as a bogus class id.
+    if let Some(class_id) = class_ref_id(type_ref) {
+        return js_instanceof(value, class_id);
     }
     // #9502: a heap class object's template id identifies its code, not its
     // evaluation. Compare the actual prototype objects so sibling evaluations
