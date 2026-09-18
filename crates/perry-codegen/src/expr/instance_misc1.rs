@@ -130,6 +130,14 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         // which don't recognize a genuine subclass ObjectHeader. Keep in
         // sync with `CLASS_ID_EVENT_EMITTER` there.
         "EventEmitter" => 0xFFFF0076,
+        // #10599: `class Sub extends EventEmitterAsyncResource {}` needs the
+        // same parent edge as plain EventEmitter above -- without it,
+        // `get_parent_class_id` never resolves for this id, and the
+        // getPrototypeOf-identity fallback in
+        // perry-runtime/src/object/class_registry/state.rs
+        // (`reserved_native_parent_prototype_bits`) never runs. Keep in sync
+        // with `CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE` there.
+        "EventEmitterAsyncResource" => 0xFFFF0077,
         _ => return None,
     })
 }
