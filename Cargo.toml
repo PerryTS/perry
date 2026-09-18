@@ -399,7 +399,7 @@ chrono = "0.4"
 regex = "1.12"
 aho-corasick = "1.1"
 # The single regular-expression engine, through crates/perry-perex.
-perex = "0.1.7"
+perex = "0.1.9"
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
