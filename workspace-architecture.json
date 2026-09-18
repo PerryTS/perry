@@ -265,11 +265,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-mysql2": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-nanoid": {
       "category": "binding",
       "decision": "externalize",

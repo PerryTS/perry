@@ -1,8 +1,4 @@
-#[cfg(any(
-    feature = "crypto",
-    feature = "database-redis",
-    feature = "bundled-mysql2"
-))]
+#[cfg(any(feature = "crypto", feature = "database-redis"))]
 use super::super::handle::with_handle;
 use super::*;
 
@@ -212,13 +208,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     }
 
     if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
-        return value;
-    }
-
-    // mysql2 handles frequently pass through interface-typed fields in Drizzle,
-    // which removes the static class information used by native lowering.
-    #[cfg(feature = "bundled-mysql2")]
-    if let Some(value) = crate::mysql2::dispatch_mysql2_method(handle, method_name, &args) {
         return value;
     }
 
