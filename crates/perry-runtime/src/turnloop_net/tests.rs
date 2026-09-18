@@ -563,8 +563,9 @@ fn submissions_for_an_unknown_id_are_rejected_not_ignored() {
 #[test]
 fn listen_opts_put_each_argument_in_its_own_field() {
     let server = super::listen_opts(511, false, true);
-    assert!(
-        !server.reuse_port,
+    assert_eq!(
+        server.reuse_port,
+        turnloop::ReusePort::No,
         "a plain server listener must not set SO_REUSEPORT"
     );
     assert!(
@@ -575,7 +576,19 @@ fn listen_opts_put_each_argument_in_its_own_field() {
 
     // The two are independent, in both directions.
     let cluster = super::listen_opts(128, true, false);
-    assert!(cluster.reuse_port);
+    // Share, NOT Distribute. turnloop 0.1.0-alpha.6 split the old bool into
+    // three, and Distribute — permit the duplicate bind AND spread connections
+    // across listeners — is `Unsupported` on macOS, the BSDs, Windows, WASI and
+    // the web. `Share` is what this bool has always meant and what
+    // perry-ext-http's cluster_bind.rs sets by hand, so it is what preserves
+    // behaviour; a caller that wants kernel balancing must ask for it
+    // deliberately, on a platform that has it.
+    assert_eq!(cluster.reuse_port, turnloop::ReusePort::Share);
+    assert_ne!(
+        cluster.reuse_port,
+        turnloop::ReusePort::Distribute,
+        "the bool must not silently become the kernel-balanced variant"
+    );
     assert!(!cluster.accept_defaults.nodelay);
     assert_eq!(cluster.backlog, 128);
 

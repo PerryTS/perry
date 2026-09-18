@@ -410,9 +410,17 @@ perex = "0.1.4"
 # to carets, which is what lifts the forced downgrades alpha.2 imposed on libc,
 # tokio, redis and wasm-bindgen across this workspace. A caret here for the same
 # reason; the exact version is pinned by Cargo.lock, locked once with the
-# owner-approved one-time publish-age override (published 2026-09-15T09:37:32Z,
-# sha256 c3370511f37b90dc5ba694566cb941f0e89c205c84b798277f17a05f13e4a8ab).
-turnloop = "0.1.0-alpha.5"
+# owner-approved one-time publish-age override. alpha.6 carries turnloop#89
+# (ring slots allocated zeroed rather than written, which took Perry's idle RSS
+# from +17.8 % to +2.9 % against the tokio arm and flipped two RSS rows to
+# wins), #83 (multi-threaded accept / SO_REUSEPORT) and #85. Published
+# 2026-09-17T13:24:47Z, sha256
+# d04fa71225fc8a61ce9707bf1d5510ebe448a3ba00d71924f3aff8a2140e33a4 — the
+# checksum Cargo.lock records, verified against the crates.io API rather than
+# against the publishing workflow going green. The soak skill's rule holds:
+# opting out is a committed, reviewable change and never a silent one, so the
+# override lives here in the diff and the lock pins the exact artifact.
+turnloop = "0.1.0-alpha.6"
 # turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
 # replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
 # `tokio_rustls` on every TLS path the loop owns. Default features only — the
@@ -421,20 +429,20 @@ turnloop = "0.1.0-alpha.5"
 # issue; Perry already owns a `turnloop::Loop` and routes P1/P2/P3 tokens
 # through it, so the codecs are driven sans-I/O over the P1 socket layer
 # instead (docs/turnloop/p5-report.md, "Why sans-I/O").
-turnloop-http = { version = "0.1.0-alpha.5", default-features = false }
-turnloop-tls = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-http = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-tls = { version = "0.1.0-alpha.6", default-features = false }
 # turnloop WS lane: the sans-I/O WebSocket protocol + HTTP-upgrade helpers that
 # replace tokio-tungstenite everywhere in the tree. Default features only --
 # the `turnloop` feature pulls turnloop-io's LocalExecutor, which Perry cannot
 # adopt for the same reason P5 recorded (it builds its own Driver and drops
 # every completion it did not issue). See docs/turnloop/ws-report.md.
-turnloop-websocket = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-websocket = { version = "0.1.0-alpha.6", default-features = false }
 # turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
 # replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
 # module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface
 # already uses, so only the transport changes
 # (docs/turnloop/p6-report.md).
-turnloop-smtp = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-smtp = { version = "0.1.0-alpha.6", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
 # cores that replace sqlx, the `redis` crate and the `mongodb` driver on the
 # paths Perry's bindings own. Default features only, for the same reason as the
@@ -444,10 +452,10 @@ turnloop-smtp = { version = "0.1.0-alpha.5", default-features = false }
 # it is the release that gave MySQL and MongoDB one deflate state per
 # connection, each compressed message framed as its own zlib stream; alpha.3
 # re-created the state per message and is a wire-level regression to adopt.
-turnloop-mysql = { version = "0.1.0-alpha.5", default-features = false }
-turnloop-postgres = { version = "0.1.0-alpha.5", default-features = false }
-turnloop-redis = { version = "0.1.0-alpha.5", default-features = false }
-turnloop-mongodb = { version = "0.1.0-alpha.5", default-features = false }
+turnloop-mysql = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-postgres = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-redis = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-mongodb = { version = "0.1.0-alpha.6", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"
