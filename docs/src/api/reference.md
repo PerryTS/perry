@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3054 entries across 140 modules.
+Total: 3035 entries across 138 modules.
 
 ## Modules
 
@@ -64,7 +64,6 @@ Total: 3054 entries across 140 modules.
 - [`inspector/promises`](#inspectorpromises)
 - [`ioredis`](#ioredis)
 - [`iovalkey`](#iovalkey)
-- [`iroh`](#iroh)
 - [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
 - [`lru-cache`](#lru-cache)
@@ -132,7 +131,6 @@ Total: 3054 entries across 140 modules.
 - [`timers/promises`](#timerspromises)
 - [`tls`](#tls)
 - [`tty`](#tty)
-- [`tursodb`](#tursodb)
 - [`typescript`](#typescript)
 - [`undici`](#undici)
 - [`url`](#url)
@@ -2014,22 +2012,6 @@ Total: 3054 entries across 140 modules.
 
 - `createClient` — module
 
-## `iroh`
-
-### Methods
-
-- `acceptBi` — instance
-- `acceptOne` — instance
-- `bind` — module
-- `close` — instance
-- `connClose` — instance
-- `connect` — instance
-- `nodeId` — instance
-- `openBi` — instance
-- `streamFinish` — instance
-- `streamReadToEnd` — instance
-- `streamWrite` — instance
-
 ## `jsonwebtoken`
 
 ### Methods
@@ -3785,19 +3767,6 @@ Total: 3054 entries across 140 modules.
 - `removeAllListeners` — instance *(class: `WriteStream`)*
 - `removeListener` — instance *(class: `WriteStream`)*
 - `setRawMode` — instance *(class: `ReadStream`)*
-
-## `tursodb`
-
-### Methods
-
-- `close` — instance
-- `exec` — instance
-- `execBatch` — instance
-- `isAutocommit` — instance
-- `lastInsertRowid` — instance
-- `open` — module
-- `queryAll` — instance
-- `queryOne` — instance
 
 ## `typescript`
 

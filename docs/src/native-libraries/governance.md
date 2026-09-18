@@ -99,7 +99,7 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-events` | `events` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-exponential-backoff` | `exponential-backoff` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-fastify` | `fastify` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-fetch` | `fetch`<br>`node-fetch` | Source package | Compile the upstream package source | Bundled; migration pending |
+| `perry-ext-fetch` | `node-fetch` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-ioredis` | `ioredis`<br>`iovalkey`<br>`redis` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-jsonwebtoken` | `jsonwebtoken` | Source package | Compile the upstream package source | Bundled; migration pending |

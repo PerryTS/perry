@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2095 entries across 138 modules
+// Coverage: 2093 entries across 136 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2096,11 +2096,6 @@ declare module "iovalkey" {
   export function createClient(...args: any[]): any;
 }
 
-declare module "iroh" {
-  /** stdlib */
-  export function bind(...args: any[]): any;
-}
-
 declare module "jsonwebtoken" {
   /** stdlib */
   export function decode(token: string): any;
@@ -4139,11 +4134,6 @@ declare module "tty" {
   export function WriteStream(...args: any[]): any;
   /** stdlib */
   export function isatty(...args: any[]): any;
-}
-
-declare module "tursodb" {
-  /** stdlib */
-  export function open(...args: any[]): any;
 }
 
 declare module "typescript" {
