@@ -1154,6 +1154,25 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             replace_this_in_expr(else_expr, this_id);
         }
         Expr::Await(inner) => replace_this_in_expr(inner, this_id),
+        // #10445: a `for…of`/`for await…of` iterable that can't be proven a
+        // plain Array/Map/Set lowers to one of these wrapper exprs around the
+        // ORIGINAL receiver expression (see `stmt_loops.rs`'s
+        // `lower_stmt_for_of_inner` — `Expr::GetIterator`/`GetAsyncIterator`
+        // wrap the lazy-iterator-protocol receiver, `MapEntries`/`SetValues`
+        // wrap a Map/Set whose fast path is disabled). Missing them here left
+        // a `for (const x of this.gen())` inside a lifted
+        // `*[Symbol.iterator]()` generator (`synthesize_symbol_iterator_wrapper`
+        // below, which lifts the method to a top-level function and replaces
+        // `this` with an explicit param) with an unreplaced `Expr::This` deep
+        // inside the wrapper — it fell through to the catch-all and evaluated
+        // to `undefined` outside any method body, `Cannot read properties of
+        // undefined (reading 'gen')`. Hoisting the same call into a local
+        // first (`const it = this.gen(); for (const x of it)`) sidestepped
+        // the bug because the plain `Stmt::Let` init IS a matched `Expr::Call`.
+        Expr::GetIterator(inner) | Expr::GetAsyncIterator(inner) => {
+            replace_this_in_expr(inner, this_id)
+        }
+        Expr::MapEntries(inner) | Expr::SetValues(inner) => replace_this_in_expr(inner, this_id),
         Expr::Yield { value, .. } => {
             if let Some(v) = value {
                 replace_this_in_expr(v, this_id);
