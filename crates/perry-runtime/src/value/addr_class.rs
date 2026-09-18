@@ -238,6 +238,29 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
     if !is_plausible_heap_addr(addr) {
         return None;
     }
+    try_read_gc_header_known_plausible(addr)
+}
+
+/// [`try_read_gc_header`] for a caller that already ran
+/// [`is_plausible_heap_addr`] on this exact `addr` earlier in the same
+/// straight-line scope, with no intervening collection or reassignment of
+/// `addr`. Skips re-deriving that magnitude check.
+///
+/// `native_get::try_data_get_bytes`'s prototype-chain loop already branches
+/// on `is_plausible_heap_addr(addr)` (paired with the arena-generation
+/// classification) one statement above every call site this exists for, so
+/// the plain [`try_read_gc_header`] was re-running the same handle-band /
+/// heap-range compare a second time per step for free. `classify_heap_generation`
+/// runs in between and writes its own cache, which is enough to stop LLVM's
+/// CSE from eliding the duplicate call on its own (its side effect isn't
+/// provably unrelated to `is_plausible_heap_addr`'s inputs from the
+/// optimizer's point of view), so the redundancy was real, not just apparent.
+///
+/// # Safety
+/// As [`try_read_gc_header`], plus: `is_plausible_heap_addr(addr)` must be
+/// `true` for this `addr` already (unchecked here).
+#[inline(always)]
+pub(crate) unsafe fn try_read_gc_header_known_plausible(addr: usize) -> Option<&'static GcHeader> {
     // Small-buffer slab allocations are heap-plausible but carry NO GcHeader —
     // `addr - GC_HEADER_SIZE` is the previous slab entry's data bytes, so a
     // brand probe (Temporal/Date/Map/Set `obj_type` check) would read a

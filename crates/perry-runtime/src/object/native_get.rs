@@ -70,7 +70,10 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
         {
             return None;
         }
-        let header = crate::value::addr_class::try_read_gc_header(addr)?;
+        // `is_plausible_heap_addr(addr)` was just proven true above; skip
+        // `try_read_gc_header`'s own re-derivation of it (see
+        // `try_read_gc_header_known_plausible`'s doc comment).
+        let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
