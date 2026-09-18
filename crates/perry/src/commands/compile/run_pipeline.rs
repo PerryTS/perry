@@ -1147,7 +1147,7 @@ pub fn run_with_parse_cache(
         found
     });
     perry_codegen::set_program_has_worker(program_has_worker);
-    if program_has_worker && verbose {
+    if program_has_worker && verbose > 0 {
         eprintln!(
             "  #10399: program constructs a worker_threads Worker — \
              module-init guards and module-global slots are thread-local"
