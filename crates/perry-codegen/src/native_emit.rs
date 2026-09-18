@@ -467,10 +467,25 @@ pub fn compile_module_units_native(
     if llmod.deduped_function_refs().len() <= 1 || n <= 1 {
         return compile_module_native(llmod, target, module_prefix);
     }
+    // #10399: this table is pushed into EVERY unit, and the dedup set in
+    // `freeze_unit` only covers functions — a global declaration is never
+    // deduped against the unit that defines it. So a declaration that omits
+    // `thread_local` for a global this module defines thread-local lands in
+    // the defining unit AND every other one, and `ld -r` rejects the object:
+    //   "TLS definition ... mismatches non-TLS reference".
+    // Make the table agree with the definitions before it is handed out.
+    let tls_globals = llmod.thread_local_global_names();
     let external_declarations: Vec<(String, String)> = llmod
         .declaration_lines()
         .filter(|(name, _)| !llmod.has_function(name))
-        .map(|(name, line)| (name.to_string(), line.to_string()))
+        .map(|(name, line)| {
+            let line = if tls_globals.contains(name) && !line.contains(" thread_local ") {
+                line.replacen(" = external ", " = external thread_local ", 1)
+            } else {
+                line.to_string()
+            };
+            (name.to_string(), line)
+        })
         .collect();
     let target_triple = llmod.target_triple.clone();
     let owned_module = std::mem::replace(llmod, LlModule::new(target_triple));

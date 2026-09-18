@@ -120,6 +120,24 @@ impl LlModule {
             .map(|(name, line)| (name.as_str(), line.as_str()))
     }
 
+    /// #10399: names of the globals this module DEFINES thread-local.
+    ///
+    /// The TLS specifier is part of a symbol's identity. A stale non-TLS
+    /// `external` declaration for one of these — import metadata can register
+    /// one before the defining pass runs — makes the linker reject the object
+    /// with "TLS definition ... mismatches non-TLS reference". The native
+    /// unit path pushes the whole declaration table into every unit, so the
+    /// table itself has to agree with the definitions.
+    pub(crate) fn thread_local_global_names(&self) -> std::collections::HashSet<String> {
+        self.globals
+            .iter()
+            .filter(|g| g.contains(" thread_local "))
+            .filter_map(|g| {
+                global_symbol_name(g).map(|s| s.trim_start_matches('@').to_string())
+            })
+            .collect()
+    }
+
     pub fn new(target_triple: impl Into<String>) -> Self {
         Self::new_with_fp_flags(target_triple, FpFlags::default())
     }
@@ -1056,6 +1074,33 @@ impl LlModule {
                 push_statepoint_declarations(&mut pre);
             }
             pre.push('\n');
+
+            // #10399 diagnostic: dump every line in this unit that mentions a
+            // global the module defines thread-local, so a TLS/non-TLS
+            // mismatch names the exact emitting line. Off unless asked.
+            if std::env::var_os("PERRY_DEBUG_TLS_DECLS").is_some() {
+                let tls_names: Vec<String> = shared_globals
+                    .iter()
+                    .filter(|g| g.contains(" thread_local "))
+                    .filter_map(|g| {
+                        global_symbol_name(g).map(|s| s.trim_start_matches('@').to_string())
+                    })
+                    .collect();
+                for nm in &tls_names {
+                    for line in pre.lines() {
+                        if line.contains(nm.as_str()) {
+                            eprintln!("[tlsdbg] unit {bi} PRE: {line}");
+                        }
+                    }
+                    for f in &bucket {
+                        for line in f.render().lines() {
+                            if line.contains(nm.as_str()) {
+                                eprintln!("[tlsdbg] unit {bi} FN {}: {}", f.name, line.trim());
+                            }
+                        }
+                    }
+                }
+            }
 
             parts.push(CodegenUnitPart {
                 pre,
