@@ -1684,8 +1684,7 @@ pub(crate) unsafe fn try_create_connection_socket(
     if cc == 0 {
         return None;
     }
-    let options = build_connect_options(Some(handle), host, port, path);
-    invoke_create_connection_closure(cc, options)
+    invoke_create_connection_closure(cc, Some(handle), host, port, path)
 }
 
 /// #10469 — invoke the request option's own `createConnection` override
@@ -1701,18 +1700,27 @@ pub(crate) unsafe fn try_request_create_connection_socket(
     if closure_ptr == 0 {
         return None;
     }
-    let options = build_connect_options(None, host, port, path);
-    invoke_create_connection_closure(closure_ptr, options)
+    invoke_create_connection_closure(closure_ptr, None, host, port, path)
 }
 
-/// Shared tail of both `createConnection` invocation paths: call the
-/// closure with the `{ host, port, path, keepAlive, keepAliveInitialDelay }`
-/// options object (main thread only — JS closure calls must not run on a
-/// tokio worker) and extract the `net.Socket` handle id it returns.
-unsafe fn invoke_create_connection_closure(closure_ptr: i64, options: f64) -> Option<i64> {
+/// Shared tail of both `createConnection` invocation paths: root
+/// `closure_ptr` *before* calling `build_connect_options` (it allocates —
+/// without rooting first, a GC during that allocation could move the
+/// closure out from under the raw `i64` copy, matching the ordering the
+/// original #2154 code used), call it with `{ host, port, path, keepAlive,
+/// keepAliveInitialDelay }`, and extract the `net.Socket` handle id it
+/// returns. Main thread only — JS closure calls must not run on a tokio
+/// worker.
+unsafe fn invoke_create_connection_closure(
+    closure_ptr: i64,
+    agent_handle: Option<Handle>,
+    host: &str,
+    port: u16,
+    path: &str,
+) -> Option<i64> {
     let scope = perry_ffi::TransientRootScope::enter();
     let cc = scope.root_addr(closure_ptr);
-    let options = scope.root_nanbox(options);
+    let options = scope.root_nanbox(build_connect_options(agent_handle, host, port, path));
     let closure = JsClosure::from_raw(cc.get() as *const RawClosureHeader);
     let ret = closure.call1(options.get());
 
