@@ -111,6 +111,70 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
     None
 }
 
+/// [`keys_array_dense_slots`] for a keys array the caller read out of a LIVE
+/// `ShapeDescriptor`.
+///
+/// `descriptor.keys` is maintained by the COLLECTOR. When the keys array
+/// moves, `shapes::scan_shape_table_rekey_mut` writes the forwarded address
+/// back into every descriptor record in that family —
+/// `unsafe { (*record).keys = addr as u64 }` — and a descriptor whose keys
+/// array died is pruned in the same pass (`shape_keys_address_is_recycled`).
+/// So the pointer read out of a live descriptor already IS the resolved live
+/// head, and `clean_arr_ptr` on it re-derives a guarantee the collector has
+/// already made.
+///
+/// Measured: `keys_array_dense_slots` was 16.2% of an `o[k]` read loop, and
+/// `clean_arr_ptr` is what it spends that on.
+///
+/// # Safety
+///
+/// `keys` must be `ShapeDescriptor::keys` from a descriptor read on this same
+/// straight-line path, with no allocation or safepoint since that read.
+#[inline]
+pub(crate) unsafe fn keys_array_dense_slots_resolved(
+    keys: *const crate::array::ArrayHeader,
+) -> (*const f64, usize) {
+    if keys.is_null() {
+        return (std::ptr::null(), 0);
+    }
+    let len = (*keys).length.min((*keys).capacity) as usize;
+    (crate::array::array_elements_ptr(keys) as *const f64, len)
+}
+
+/// [`keys_find_slot_by_bytes`] for a keys array obtained from a live
+/// descriptor — see [`keys_array_dense_slots_resolved`] for why the receiver
+/// needs no second resolution.
+///
+/// # Safety
+///
+/// As [`keys_array_dense_slots_resolved`].
+pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
+    keys: *const crate::array::ArrayHeader,
+    key_count: u32,
+    key_bytes: &[u8],
+) -> Option<u32> {
+    if key_count >= KEYS_INDEX_THRESHOLD {
+        // The indexed path owns its own receiver handling; hand it the
+        // unresolved entry so its behaviour is bit-for-bit what it was.
+        return keys_find_slot_by_bytes(keys, key_count, key_bytes);
+    }
+    let (slots, slot_len) = keys_array_dense_slots_resolved(keys);
+    if slots.is_null() {
+        return None;
+    }
+    let n = (key_count as usize).min(slot_len);
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..n {
+        let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
+            if stored == key_bytes {
+                return Some(i as u32);
+            }
+        }
+    }
+    None
+}
+
 /// [`keys_find_slot_by_bytes`] for a key held as a `StringHeader`.
 pub(crate) unsafe fn keys_find_slot_by_key_ptr(
     keys: *const crate::array::ArrayHeader,
