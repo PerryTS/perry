@@ -16,6 +16,82 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
     }
 }
 
+/// `Symbol.toStringTag` for Perry's Web/runtime built-ins that carry no
+/// registered class-id hook and (for the handle-backed ones) no real
+/// `ObjectHeader` at all (#10555): `URL`/`URLSearchParams` (ordinary
+/// class_id-0 objects, detected structurally — see `is_url_object_shape` /
+/// `shape_is_url_search_params`), the Web Fetch family `Headers` / `Request`
+/// / `Response` / `Blob` / `FormData` (small-int handles owned by
+/// `perry-stdlib`, reached through `fetch_handle_kind_probe` — the same
+/// probe `instanceof` already uses), `TextEncoder` / `TextDecoder` (small-int
+/// handles owned by this crate's own `text` module), and the class-id-tagged
+/// `AbortController` / `AbortSignal` / `EventTarget` / `Event` / `CustomEvent`
+/// (real `ObjectHeader`s whose instances are never linked to their
+/// `.prototype` object via `object_static_prototype`, so the generic
+/// own/inherited-property walk in `object_to_string_tag_property` can never
+/// reach a tag installed there).
+///
+/// Shared by `js_object_to_string`'s brand string and
+/// `js_object_get_symbol_property`'s `x[Symbol.toStringTag]` own-property
+/// read (`crate::symbol::get`), so the two can never disagree.
+pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
+    let bits = value.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if crate::value::addr_class::is_small_handle(addr) {
+        // Web Fetch handle family — one shared id counter, disjoint registries
+        // (see `js_fetch_handle_kind`'s own doc comment).
+        if let Some(probe) = crate::object::fetch_handle_kind_probe() {
+            match unsafe { probe(addr) } {
+                1 => return Some("Response"),
+                2 => return Some("Request"),
+                3 => return Some("Headers"),
+                4 => return Some("Blob"),
+                5 => return Some("File"),
+                6 => return Some("FormData"),
+                _ => {}
+            }
+        }
+        // `TextEncoder` is a single stateless sentinel id; `TextDecoder`
+        // instances are `DECODER_REGISTRY` members. Neither overlaps the
+        // Web Fetch band (`FETCH_HANDLE_BAND_START` starts well above 2).
+        if addr == crate::text::TEXT_ENCODER_SENTINEL_ID as usize {
+            return Some("TextEncoder");
+        }
+        if crate::text::is_known_text_decoder_id(addr as i64) {
+            return Some("TextDecoder");
+        }
+        return None;
+    }
+    // #10555 lint: `is_valid_obj_ptr` alone is not a sufficient handle-band
+    // guard (its own doc says so -- the Linux/Android/iOS/Windows HEAP_MIN
+    // floor sits below the handle band). The `is_small_handle` branch above
+    // already excludes that band, but it is too far above this line for the
+    // addr-class ratchet's pairing window, so re-validate right here with
+    // `try_read_gc_header` -- the same idiom `is_url_object_shape` /
+    // `shape_is_url_search_params` already use for this exact receiver kind.
+    let obj = match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *const ObjectHeader,
+        _ => return None,
+    };
+    if crate::url::is_url_object_shape(obj as *mut ObjectHeader) {
+        return Some("URL");
+    }
+    if crate::url::search_params::shape_is_url_search_params(obj) {
+        return Some("URLSearchParams");
+    }
+    match unsafe { (*obj).class_id } {
+        crate::url::abort::ABORT_CONTROLLER_CLASS_ID => Some("AbortController"),
+        crate::url::abort::ABORT_SIGNAL_CLASS_ID => Some("AbortSignal"),
+        crate::event_target::CLASS_ID_EVENT_TARGET => Some("EventTarget"),
+        crate::event_target::CLASS_ID_EVENT => Some("Event"),
+        crate::event_target::CLASS_ID_CUSTOM_EVENT => Some("CustomEvent"),
+        _ => None,
+    }
+}
+
 unsafe fn string_value_to_owned(value: f64) -> Option<String> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if !jv.is_any_string() {
@@ -252,6 +328,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
     if let Some(tag) = web_stream_to_string_tag(value) {
+        let formatted = format!("[object {}]", tag);
+        let bytes = formatted.as_bytes();
+        let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
+    }
+    if let Some(tag) = web_builtin_to_string_tag(value) {
         let formatted = format!("[object {}]", tag);
         let bytes = formatted.as_bytes();
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
