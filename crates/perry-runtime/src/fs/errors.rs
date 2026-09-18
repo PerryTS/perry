@@ -4,6 +4,15 @@
 use super::*;
 
 pub(crate) fn io_error_code(err: &std::io::Error) -> &'static str {
+    // #10539 review: on Windows `raw_os_error` is a Win32 code, not an errno,
+    // so it goes through libuv's own translation table.
+    #[cfg(windows)]
+    if let Some((_, code)) = err
+        .raw_os_error()
+        .and_then(crate::util_syserr::win32_error_to_uv)
+    {
+        return code;
+    }
     #[cfg(unix)]
     if let Some(raw) = err.raw_os_error() {
         match raw {
@@ -59,6 +68,13 @@ pub(crate) fn io_error_errno(err: &std::io::Error) -> i32 {
     if let Some(raw) = err.raw_os_error() {
         return -raw;
     }
+    // Windows has no errno to negate: libuv gives each code a fixed negative
+    // number there (`ENOENT` is -4058, not -2), and that is what node reports.
+    #[cfg(windows)]
+    {
+        const UV_WINDOWS_EIO: i32 = -4070;
+        return crate::util_syserr::uv_windows_errno(io_error_code(err)).unwrap_or(UV_WINDOWS_EIO);
+    }
     #[cfg(unix)]
     match io_error_code(err) {
         "ENOENT" => -libc::ENOENT,
@@ -84,7 +100,7 @@ pub(crate) fn io_error_errno(err: &std::io::Error) -> i32 {
         "EXDEV" => -libc::EXDEV,
         _ => -libc::EIO,
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     match io_error_code(err) {
         "ENOENT" => -2,
         "EACCES" => -13,
@@ -210,6 +226,28 @@ pub(crate) unsafe fn build_fs_error_value_no_path(
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
     attach_fs_error_props(err_ptr, code, errno, syscall, None, None);
     crate::value::js_nanbox_pointer(err_ptr as i64)
+}
+
+/// An OS "no such file or directory" error. `libc::ENOENT` is 2 on Windows too,
+/// where `from_raw_os_error` reads it as `ERROR_FILE_NOT_FOUND` — which libuv
+/// also translates to `ENOENT`.
+pub(crate) fn enoent_os_error() -> std::io::Error {
+    std::io::Error::from_raw_os_error(libc::ENOENT)
+}
+
+/// An OS "bad file descriptor" error. On Windows this must be
+/// `ERROR_INVALID_HANDLE`, the Win32 error libuv translates to `EBADF`:
+/// `libc::EBADF` (9) is `ERROR_INVALID_BLOCK` there and translates to nothing.
+pub(crate) fn ebadf_os_error() -> std::io::Error {
+    #[cfg(windows)]
+    {
+        const ERROR_INVALID_HANDLE: i32 = 6;
+        std::io::Error::from_raw_os_error(ERROR_INVALID_HANDLE)
+    }
+    #[cfg(not(windows))]
+    {
+        std::io::Error::from_raw_os_error(libc::EBADF)
+    }
 }
 
 /// A failed file read (`readFile`, a read stream): the OS error plus the

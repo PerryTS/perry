@@ -7,7 +7,9 @@
 // branch. A directory read succeeded or reported `open` instead of Node's
 // `EISDIR ... read`.
 // #10451: a `fs.createReadStream` open/read failure emitted a bare Error with
-// no code/errno/syscall/path and the Rust `(os error N)` message text.
+// no code/errno/syscall/path and the Rust `(os error N)` message text, and a
+// failed stream handed to `fs.promises.writeFile` reported EBADF for its
+// missing fd instead of the constructor's failure.
 //
 // Every failure prints code/errno/syscall/path/message and the own-key order;
 // the successful reads are the controls.
@@ -153,6 +155,27 @@ async function main(): Promise<void> {
       resolve();
     });
   });
+
+  // A read stream consumed by fs.promises.writeFile must report the failure the
+  // constructor saw, not a later EBADF for its missing fd. Node's callback and
+  // sync writeFile reject a stream outright (ERR_INVALID_ARG_TYPE), so only the
+  // promise form is covered; the `'error'` listener keeps the failure handled,
+  // which is what makes the ordering deterministic.
+  const handled = (target: string) => {
+    const stream = fs.createReadStream(target);
+    stream.on("error", () => {});
+    return stream;
+  };
+  await promised("writeFile(out, readStream(missing))", () =>
+    fsp.writeFile(base + "/copy-missing.txt", handled(missing)),
+  );
+  await promised("writeFile(out, readStream(dir))", () =>
+    fsp.writeFile(base + "/copy-dir.txt", handled(dir)),
+  );
+  await promised("writeFile(out, readStream(ok))", () =>
+    fsp.writeFile(base + "/copy-ok.txt", handled(ok)),
+  );
+  console.log("copy-ok.txt:", show(fs.readFileSync(base + "/copy-ok.txt")));
 
   fs.rmSync(base, { recursive: true, force: true });
 }

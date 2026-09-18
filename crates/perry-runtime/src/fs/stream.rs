@@ -1294,7 +1294,7 @@ fn read_next_chunk(id: usize) -> Result<Option<(Vec<u8>, Option<String>)>, FsRea
     if amount == 0 {
         return Ok(None);
     }
-    let ebadf = || FsReadFailure::read(std::io::Error::from_raw_os_error(libc::EBADF));
+    let ebadf = || FsReadFailure::read(ebadf_os_error());
     let Some(fd) = fd else {
         return Err(ebadf());
     };

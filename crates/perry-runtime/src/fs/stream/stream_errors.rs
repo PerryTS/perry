@@ -70,6 +70,19 @@ pub(super) fn store_open_failure(id: usize) {
     }
 }
 
+/// The node-shaped error a read or write stream has already stored, if any.
+/// Unlike `stored_error_value` this never synthesizes a bare `Error` from
+/// `error_msg`: the caller wants the failure's `code`/`syscall`/`path` or
+/// nothing.
+pub(super) fn stored_node_error_value(id: usize) -> Option<f64> {
+    STREAM_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let state = registry.get(&id)?;
+        (!JSValue::from_bits(state.error_value.to_bits()).is_undefined())
+            .then_some(state.error_value)
+    })
+}
+
 /// A failed read while pumping (`EISDIR ... read` for a directory).
 pub(super) fn record_read_failure(id: usize, failure: FsReadFailure) {
     store_read_failure(id, &failure);
