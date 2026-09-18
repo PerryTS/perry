@@ -290,11 +290,6 @@
       "decision": "externalize",
       "migration": "external-package"
     },
-    "perry-ext-pg": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-qs": {
       "category": "binding",
       "decision": "externalize",
