@@ -57,6 +57,34 @@ fn runtime_handle_stack() -> StackRef {
             return unsafe { &*(stack as *const RuntimeHandleStack) };
         }
     }
+    runtime_handle_stack_cold()
+}
+
+/// Fallback arm of [`runtime_handle_stack`]: the raw `thread_local!` lookup,
+/// reached only before this thread's `HotTls` is published (or from inside
+/// `HotTls::fill` itself). `#[inline(never)]` on purpose, not just `#[cold]`.
+///
+/// `RuntimeHandleScope::new()` is called from dozens of arms throughout the
+/// runtime, many of them small and gated behind a cheap guard deep inside an
+/// otherwise hot function (`js_object_get_field_by_name`'s `.size`-key arm is
+/// one: see its own `RuntimeHandleScope::new()` call site, guarded on the key
+/// bytes equalling `"size"`, with a comment already defending against making
+/// the SCOPE unconditional). `crate::tls_hot`'s #7469 note explains why that
+/// defense is not enough on its own: a `thread_local!` address resolution is
+/// `readnone` from the optimizer's point of view — it has no observable side
+/// effect — so once the fallback arm above is visible to the inliner at such a
+/// call site, LLVM can (and does) hoist JUST that address computation out of
+/// every surrounding guard and run it unconditionally, regardless of how
+/// deeply the Rust-level scope construction is gated. Measured: on an `o[k]`
+/// loop over a two-property plain object (never touching a `.size` key or a
+/// Proxy), this fallback's `_tlv_get_addr` call sat directly in
+/// `js_object_get_field_by_name`'s prologue. Keeping this arm opaque to the
+/// inliner is what lets the FAST (published) arm above stay `#[inline(always)]`
+/// without dragging the raw TLS call along with it at every call site.
+#[inline(never)]
+#[cold]
+#[cfg(not(any(target_os = "android", target_env = "ohos")))]
+fn runtime_handle_stack_cold() -> StackRef {
     RUNTIME_HANDLE_STACK.with(|stack| {
         // SAFETY: the metadata is const-initialized and has no Drop. Its
         // cells remain valid throughout thread teardown. Cell is !Sync, so
