@@ -987,7 +987,8 @@ fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
         CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
         _ => return None,
     };
-    let func_value = super::super::native_module::bound_native_callable_export_value(module, symbol);
+    let func_value =
+        super::super::native_module::bound_native_callable_export_value(module, symbol);
     let parent_proto = super::function_prototype::js_function_prototype_value_for_read(func_value);
     class_parent_prototype_bits(parent_proto)
 }
