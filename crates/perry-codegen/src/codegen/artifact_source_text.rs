@@ -16,6 +16,7 @@ use super::helpers::{scoped_method_name, scoped_static_method_name};
 
 pub(super) fn extend_class_method_source_text(
     hir: &HirModule,
+    closures: &super::function_source_header::ClosureHeaders<'_>,
     module_prefix: &str,
     llmod: &LlModule,
     user_fn_source: &mut Vec<(String, String, bool)>,
@@ -37,7 +38,12 @@ pub(super) fn extend_class_method_source_text(
         }
         user_fn_source.push((
             symbol,
-            super::function_source_header::retained_function_text(hir, func_id, &source.text),
+            super::function_source_header::retained_function_text(
+                hir,
+                closures,
+                func_id,
+                &source.text,
+            ),
             source.is_non_strict_ordinary,
         ));
     };
