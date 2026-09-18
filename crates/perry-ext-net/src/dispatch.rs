@@ -72,7 +72,7 @@ pub(crate) fn ensure_runtime_dispatch_registered() {
     });
 }
 
-fn undefined() -> f64 {
+pub(crate) fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -80,7 +80,7 @@ fn null() -> f64 {
     f64::from_bits(TAG_NULL)
 }
 
-fn nanbox_handle(handle: i64) -> f64 {
+pub(crate) fn nanbox_handle(handle: i64) -> f64 {
     f64::from_bits(POINTER_TAG | (handle as u64 & POINTER_MASK))
 }
 
@@ -176,6 +176,16 @@ fn socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
         "once" => Some(b"once"),
+        // #10441 — front-inserting variants of `on`/`once`. Missing here
+        // meant the untyped dispatch fell through to the generic property
+        // read for these names, which returned `undefined`: calling it was
+        // a silent no-op instead of a `TypeError`.
+        "prependListener" => Some(b"prependListener"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
+        // #10444 — `net.Socket` is a `stream.Duplex`; `pipe`/`unpipe` were
+        // entirely absent from this table.
+        "pipe" => Some(b"pipe"),
+        "unpipe" => Some(b"unpipe"),
         "off" => Some(b"off"),
         "removeListener" => Some(b"removeListener"),
         "removeAllListeners" => Some(b"removeAllListeners"),
@@ -273,6 +283,38 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         }
         "on" | "addListener" if args.len() >= 2 => {
             crate::js_net_socket_on(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            nanbox_handle(handle)
+        }
+        // #10441 — same shape as `once` below, but inserted at the FRONT of
+        // the listener list.
+        "prependListener" if args.len() >= 2 => {
+            crate::js_net_socket_prepend_listener(
+                handle,
+                unbox_to_i64(args[0]),
+                unbox_to_i64(args[1]),
+            );
+            nanbox_handle(handle)
+        }
+        "prependOnceListener" if args.len() >= 2 => {
+            crate::js_net_socket_prepend_once_listener(
+                handle,
+                unbox_to_i64(args[0]),
+                unbox_to_i64(args[1]),
+            );
+            nanbox_handle(handle)
+        }
+        // #10444 — forward socket data to `dest` via the same generic
+        // Get("write")+call duck-typed dispatch the runtime already uses to
+        // resolve thenables (`crate::pipe`), so `dest` can be any Writable
+        // representation (another handle-backed socket, a node:stream
+        // object, …), not just one specific one.
+        "pipe" if !args.is_empty() => crate::pipe::socket_pipe(
+            handle,
+            args[0],
+            args.get(1).copied().unwrap_or_else(undefined),
+        ),
+        "unpipe" => {
+            crate::pipe::socket_unpipe(handle, args.first().copied().unwrap_or_else(undefined));
             nanbox_handle(handle)
         }
         "connect" if !args.is_empty() => {
@@ -559,6 +601,42 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
         Some(null())
     } else if prop == "destroyed" && crate::js_ext_net_is_socket_handle(handle) != 0 {
         Some(crate::js_net_socket_get_destroyed(handle))
+    } else if crate::js_ext_net_is_socket_handle(handle) != 0
+        && matches!(
+            prop,
+            "writable"
+                | "readable"
+                | "readyState"
+                | "connecting"
+                | "pending"
+                | "writableEnded"
+                | "readableEnded"
+        )
+    {
+        // #10465 — the untyped (`(sock: any)`/plain-JS-driver) dispatch path
+        // had NO arm at all for these; every driver holds its socket through
+        // an untyped field (`this.stream`), so this — not the typed-receiver
+        // table in `net_events.rs` — is the path pg/ioredis/iovalkey/
+        // @redis/client actually hit.
+        Some(match prop {
+            "writable" => crate::js_net_socket_get_writable(handle),
+            "readable" => crate::js_net_socket_get_readable(handle),
+            "connecting" => crate::js_net_socket_get_connecting(handle),
+            "pending" => crate::js_net_socket_get_pending(handle),
+            "writableEnded" => crate::js_net_socket_get_writable_ended(handle),
+            "readableEnded" => crate::js_net_socket_get_readable_ended(handle),
+            _ => f64::from_bits(
+                JsValue::from_string_ptr(crate::js_net_socket_get_ready_state(handle)).bits(),
+            ),
+        })
+    } else if prop == "_writableState" && crate::js_ext_net_is_socket_handle(handle) != 0 {
+        Some(json_str_to_value(crate::js_net_socket_get_writable_state(
+            handle,
+        )))
+    } else if prop == "_readableState" && crate::js_ext_net_is_socket_handle(handle) != 0 {
+        Some(json_str_to_value(crate::js_net_socket_get_readable_state(
+            handle,
+        )))
     } else if crate::js_ext_net_is_socket_handle(handle) != 0
         && matches!(
             prop,

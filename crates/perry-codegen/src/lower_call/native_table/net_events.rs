@@ -219,9 +219,61 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "on",
         class_filter: Some("Socket"),
+        // #10442 — was `ret: NR_VOID`. `js_ext_net_socket_on` (the runtime
+        // symbol both this row and `addListener` below call) now returns the
+        // socket handle (see `perry-ext-net/src/handle_exports.rs`), so a
+        // typed `const sock: net.Socket` can chain `sock.on(...).on(...)`
+        // the same way the untyped/`once`/`setNoDelay` paths already did.
         runtime: "js_ext_net_socket_on",
         args: &[NA_STR, NA_PTR],
-        ret: NR_VOID,
+        ret: NR_HANDLE_ID,
+    },
+    // #10441 — front-inserting variants of `on`. Absent entirely pre-fix:
+    // a typed `net.Socket` receiver fell through to a plain property read
+    // for `prependListener`/`prependOnceListener` and got `undefined`,
+    // matching the untyped-dispatch gap fixed in `dispatch.rs`'s
+    // `socket_method_name`.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "prependListener",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_prepend_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_HANDLE_ID,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "prependOnceListener",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_prepend_once_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_HANDLE_ID,
+    },
+    // #10444 — `net.Socket` is a `stream.Duplex`; `pipe`/`unpipe` had no
+    // typed-receiver row at all (nor an untyped one — see
+    // `dispatch.rs`'s `socket_method_name`). `js_net_socket_pipe` returns
+    // `dest` (an arbitrary JSValue, NOT a socket handle — hence NR_F64, the
+    // same return kind the generic `stream` table's own `pipe` row uses)
+    // for chaining, matching Node.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "pipe",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_pipe",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "unpipe",
+        class_filter: Some("Socket"),
+        runtime: "js_net_socket_unpipe",
+        args: &[NA_F64],
+        ret: NR_HANDLE_ID,
     },
     // Issue #1852 — chainable no-op `net.Socket` option setters. Perry's
     // TCP transport doesn't model Nagle/keep-alive/idle-timeout or read
@@ -385,6 +437,66 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_STR,
     },
+    // #10465 — `writable`/`readable`/`writableEnded`/`readableEnded`/
+    // `_writableState`/`_readableState` were entirely absent from this
+    // table (a typed `net.Socket` read `undefined` for all six; pg's
+    // `Connection._send` gates every protocol write on `this.stream.writable`
+    // being truthy, so the audit's client silently dropped its startup
+    // message and hung until the connection timeout).
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "writable",
+        class_filter: None,
+        runtime: "js_net_socket_get_writable",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "readable",
+        class_filter: None,
+        runtime: "js_net_socket_get_readable",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "writableEnded",
+        class_filter: None,
+        runtime: "js_net_socket_get_writable_ended",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "readableEnded",
+        class_filter: None,
+        runtime: "js_net_socket_get_readable_ended",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "_writableState",
+        class_filter: None,
+        runtime: "js_net_socket_get_writable_state",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "_readableState",
+        class_filter: None,
+        runtime: "js_net_socket_get_readable_state",
+        args: &[],
+        ret: NR_OBJ_FROM_JSON_STR,
+    },
     NativeModSig {
         module: "net",
         has_receiver: true,
@@ -511,9 +623,10 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "addListener",
         class_filter: Some("Socket"),
+        // #10442 — same fix as the `on` row above (same runtime symbol).
         runtime: "js_ext_net_socket_on",
         args: &[NA_STR, NA_PTR],
-        ret: NR_VOID,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
