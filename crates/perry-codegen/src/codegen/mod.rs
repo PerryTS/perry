@@ -2412,7 +2412,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .map(|object| (object.source_prefix.clone(), object.source_global_id))
             .collect();
     for (source_prefix, source_global_id) in &imported_object_producers {
-        llmod.add_external_global(
+        llmod.add_external_module_state_global(
             &format!("perry_global_{source_prefix}__{source_global_id}"),
             DOUBLE,
         );
@@ -2423,7 +2423,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             && imported_object_producers
                 .insert((candidate.source_prefix.clone(), candidate.source_global_id))
         {
-            llmod.add_external_global(
+            llmod.add_external_module_state_global(
                 &format!(
                     "perry_global_{}__{}",
                     candidate.source_prefix, candidate.source_global_id
@@ -2441,14 +2441,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if candidate.source_prefix != module_prefix
             && declared_short_spread_shapes.insert(candidate.shape_id_global.clone())
         {
-            llmod.add_external_global(&candidate.shape_id_global, I32);
+            llmod.add_external_module_state_global(&candidate.shape_id_global, I32);
         }
     }
     for candidate in opts.object_literal_method_candidates.values().flatten() {
         if candidate.source_prefix != module_prefix
             && declared_short_spread_shapes.insert(candidate.shape_id_global.clone())
         {
-            llmod.add_external_global(&candidate.shape_id_global, I32);
+            llmod.add_external_module_state_global(&candidate.shape_id_global, I32);
         }
     }
 

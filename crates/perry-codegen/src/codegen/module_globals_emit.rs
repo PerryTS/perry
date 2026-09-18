@@ -664,7 +664,7 @@ pub(crate) fn emit_module_globals(
             // defining global. Skip if already declared (multiple imports of
             // the same class).
             if external_globals_emitted.insert(global_name.clone()) {
-                llmod.add_external_global(&global_name, DOUBLE);
+                llmod.add_external_module_state_global(&global_name, DOUBLE);
             }
             // Register under both the alias (if any) and the source name so
             // either resolves.

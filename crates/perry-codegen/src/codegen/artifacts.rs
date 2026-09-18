@@ -1505,7 +1505,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 continue;
             }
             let ns_name = format!("__perry_ns_{}", prefix);
-            llmod.add_external_global(&ns_name, DOUBLE);
+            llmod.add_external_module_state_global(&ns_name, DOUBLE);
             // Issue #753: declare each dynamic-import target's `__init`
             // so the dispatch site in `Expr::DynamicImport` can call it
             // before loading the namespace. The wrapper-side init is

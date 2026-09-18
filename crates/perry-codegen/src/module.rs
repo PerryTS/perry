@@ -414,6 +414,21 @@ impl LlModule {
         }
     }
 
+    /// #10399: declare a module-state global that ANOTHER module defines.
+    /// The TLS specifier is part of the symbol's identity, so a declaration
+    /// must match the definition or the link fails with
+    /// "TLS definition ... mismatches non-TLS reference".
+    pub fn add_external_module_state_global(&mut self, name: &str, ty: LlvmType) {
+        if crate::codegen::program_has_worker() {
+            self.declarations.push((
+                name.to_string(),
+                format!("@{} = external thread_local global {}", name, ty),
+            ));
+        } else {
+            self.add_external_global(name, ty);
+        }
+    }
+
     /// Module-private read-only constant. Goes into `.rodata` instead of
     /// `.data` and the linker may merge identical copies across compilation
     /// units. Used by the ExternFuncRef-as-value path to emit static
@@ -783,6 +798,36 @@ impl LlModule {
         }
         for f in &funcs {
             decl_by_name.insert(f.name.as_str(), declare_line_for(f));
+        }
+        // #10399: the comment above promises this for anything "defined
+        // locally", but only functions got it. A GLOBAL this module defines
+        // can also sit in `self.declarations` as an `external` line (import
+        // metadata declares a class-keys / ShapeId / module-value slot before
+        // the defining pass runs). The stale entry then wins in every unit
+        // that does not define the global.
+        //
+        // That was harmless while every global was non-TLS. It is not
+        // harmless now: when the definition is `thread_local` and the stale
+        // declaration is not, `ld -r` rejects the module with
+        //   "TLS definition in <unit>.o section .tbss mismatches
+        //    non-TLS reference in <other unit>.o"
+        // which is how three prettier plugins stopped compiling. Synthesize
+        // the declaration from the definition, exactly as the function arm
+        // does, so the two always agree.
+        for def in &shared_globals {
+            if def.contains(" = external ") {
+                continue;
+            }
+            let Some(sym) = global_symbol_name(def) else {
+                continue;
+            };
+            let name = sym.trim_start_matches('@');
+            let Some(decl) = external_decl_for_global(def) else {
+                continue;
+            };
+            if let Some(slot) = decl_by_name.get_mut(name) {
+                *slot = decl;
+            }
         }
 
         // #7174 (real-app scaling): scan each bucket's functions first, then
