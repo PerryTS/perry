@@ -677,7 +677,24 @@ unsafe fn resolve_proto_chain_field_inner(
 /// At each node we follow the proto object's own class id (the
 /// `Object.create` prototype link) first, then fall back to
 /// `parent_class_id` (the `extends` link); a `visited` set bounds cycles.
-pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> Option<f64> {
+///
+/// #10481: an accessor found on a prototype object runs with `this ===
+/// receiver`, the object the read started from — never the prototype object
+/// that holds it.
+pub(crate) unsafe fn resolve_proto_chain_symbol(
+    class_id: u32,
+    sym_f64: f64,
+    receiver: f64,
+) -> Option<f64> {
+    proto_chain_symbol_slot(class_id, sym_f64).map(|slot| slot.read(receiver))
+}
+
+/// The walk behind [`resolve_proto_chain_symbol`], stopping at the nearest
+/// prototype object that owns `sym_f64` without invoking an accessor there.
+pub(crate) unsafe fn proto_chain_symbol_slot(
+    class_id: u32,
+    sym_f64: f64,
+) -> Option<crate::symbol::OwnSymbolSlot> {
     let mut cid = class_id;
     let mut depth = 0usize;
     let mut visited: [u32; 32] = [0; 32];
@@ -692,8 +709,8 @@ pub(crate) unsafe fn resolve_proto_chain_symbol(class_id: u32, sym_f64: f64) -> 
             let proto_f64 = f64::from_bits(JSValue::pointer(proto_obj as *const u8).bits());
             // OWN lookup only — this fn IS the chain walk, so recursing into
             // the full chain-walking getter would re-walk per prototype.
-            if let Some(v) = crate::symbol::own_symbol_property(proto_f64, sym_f64) {
-                return Some(v);
+            if let Some(slot) = crate::symbol::own_symbol_slot(proto_f64, sym_f64) {
+                return Some(slot);
             }
             // Prefer the `Object.create` prototype link: the next chain node
             // is the proto object's own class id (which maps to ITS proto in

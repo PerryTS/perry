@@ -1462,6 +1462,19 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         if !unsafe { crate::symbol::has_own_symbol_property(target, key) } {
             return None;
         }
+        // #10481: a symbol ACCESSOR is not a data slot — report its setter so
+        // the walk runs it with the receiver instead of shadowing it.
+        let (owner, sym_key) = unsafe {
+            (
+                crate::symbol::obj_key_from_f64(target),
+                crate::symbol::sym_key_from_f64(key),
+            )
+        };
+        if let Some((_, setter_bits)) =
+            crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key)
+        {
+            return Some(OwnSetDescriptor::Accessor { setter_bits });
+        }
         // An existing symbol-keyed own data property is non-writable when the
         // receiver is frozen or its per-symbol attrs say so — so a strict
         // `obj[sym] = v` is rejected (throws) rather than silently no-op'd
