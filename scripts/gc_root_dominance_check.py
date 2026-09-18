@@ -522,6 +522,10 @@ NONCOLLECTING = {
     # (#7510: letting these two lists drift one-sided printed 358 spurious
     # violations once the corpus widened).
     "js_box_release", "js_i32_box_release", "js_bool_box_release",
+    # #10464 scope-exit release (box/scope_release.rs): the same publish, or a
+    # TLS pending-map insert for a closure-captured cell.
+    "js_box_scope_release", "js_i32_box_scope_release",
+    "js_bool_box_scope_release",
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
@@ -2742,6 +2746,11 @@ def _probe_boxes_outside_the_gc_heap():
     still resume, which is a use-after-release aliasing hazard that this
     exemption would otherwise silently suppress. The old global quarantine is
     retained only as a conservative fallback for untracked callers.
+
+    #10464 adds the scope-exit release of an ordinary frame's cells
+    (`box/scope_release.rs`). It may publish directly only because it is gated
+    on the cell's closure capture count; a captured cell must take the same
+    drained-pending path closure death pruning publishes from.
     """
     try:
         with open("crates/perry-runtime/src/box.rs",
@@ -2785,6 +2794,22 @@ def _probe_boxes_outside_the_gc_heap():
                            "park until its activation reaches zero references. "
                            "Publishing overwrites the terminal value a stray "
                            "resume still writes through.")
+    scope_path = "crates/perry-runtime/src/box/scope_release.rs"
+    scope = rust_fn_body(scope_path, "release_scope_cell")
+    if scope is None:
+        return (False, "release_scope_cell not found in box/scope_release.rs; "
+                       "the #10464 scope-exit release changed shape")
+    if "note_frame_released_cell" not in scope \
+            or "FrameRelease::Deferred" not in scope:
+        return (False, "scope-exit release no longer defers a closure-captured "
+                       "cell to closure death")
+    try:
+        with open(scope_path, encoding="utf-8", errors="replace") as fh:
+            scope_src = fh.read()
+    except OSError:
+        return (False, f"{scope_path} not readable")
+    if re.search(r"\bdealloc\s*\(|arena_alloc\w*\s*\(", scope_src):
+        return (False, "box/scope_release.rs frees or arena-allocates cells")
     release_ref = rust_fn_body("crates/perry-runtime/src/box.rs",
                                "release_async_box_activation")
     if release_ref is None or "if new == 0" not in release_ref \

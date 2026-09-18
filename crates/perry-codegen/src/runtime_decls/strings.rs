@@ -1117,6 +1117,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_box_release", VOID, &[I64]);
     module.declare_function("js_i32_box_release", VOID, &[I64]);
     module.declare_function("js_bool_box_release", VOID, &[I64]);
+    // #10464: frame-exit release of cells an ordinary frame minted.
+    module.declare_function("js_box_scope_release", VOID, &[I64]);
+    module.declare_function("js_i32_box_scope_release", VOID, &[I64]);
+    module.declare_function("js_bool_box_scope_release", VOID, &[I64]);
     module.declare_function("js_bool_box_alloc", I64, &[I32]);
     module.declare_function("js_bool_box_get", I32, &[I64]);
     module.declare_function("js_bool_box_set", VOID, &[I64, I32]);

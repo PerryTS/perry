@@ -75,6 +75,7 @@ pub(crate) fn bind_inline_constructor_params(
         .collect();
 
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
+    let mapped_param_ids = crate::codegen::arguments::mapped_parameter_ids(params);
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for ((param, arg_val), proof) in params
@@ -86,7 +87,21 @@ pub(crate) fn bind_inline_constructor_params(
         let slot = ctx
             .func
             .alloca_entry(if boxed_param { I64 } else { DOUBLE });
-        if boxed_param {
+        if boxed_param && !mapped_param_ids.contains(&param.id) {
+            // #10464: this frame mints the cell (again per iteration when the
+            // `new` sits in a loop), so it also releases it.
+            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
+            ctx.func
+                .entry_allocas_push_store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot);
+            use crate::stmt::boxed_frame_release as frame_release;
+            frame_release::mint_frame_cell(
+                ctx,
+                &slot,
+                "js_box_alloc_bits",
+                &[(I64, &arg_bits)],
+                frame_release::JS_BOX_SCOPE_RELEASE,
+            );
+        } else if boxed_param {
             let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
             let box_ptr = ctx
                 .block()
