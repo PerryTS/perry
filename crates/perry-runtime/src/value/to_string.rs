@@ -1455,6 +1455,20 @@ pub(crate) unsafe fn coerce_validate_radix(radix_value: f64) -> Option<i32> {
 /// unchanged.
 #[no_mangle]
 pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string::StringHeader {
+    // `n.toString()` on a plain number is `Number::toString(n)` and nothing
+    // else, but it reached that answer through four frames:
+    // `to_string_method_impl` (nullish guard, pointer/regex probes, then a
+    // thread-local one-shot WRITE) -> `js_jsvalue_to_string` (which READS and
+    // clears that same one-shot, probes for a JS handle, then walks its own
+    // eight-arm tag ladder) -> `js_number_to_string`. None of it can change a
+    // plain double's answer: a number is never nullish, never a pointer, never
+    // a regex, and every arm of both ladders is keyed on a perry tag in the
+    // `0x7FF9..=0x7FFF` band that `is_number()` excludes by definition. The
+    // one-shot is only ever consumed by the object dispatch this value cannot
+    // reach, so not setting it leaves nothing stale behind.
+    if crate::value::JSValue::from_bits(value.to_bits()).is_number() {
+        return crate::string::js_number_to_string(value);
+    }
     // Explicit `x.toString()`: resolve `Object.prototype.toString` / an own
     // `toString`, never `[Symbol.toPrimitive]`. (#6373)
     to_string_method_impl(value, /* skip_to_primitive */ true)
