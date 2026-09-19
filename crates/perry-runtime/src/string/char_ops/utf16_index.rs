@@ -112,7 +112,6 @@ fn decode_step(bytes: &[u8], i: usize) -> (usize, usize, u32) {
 /// runs — see there.
 type IndexCache = crate::fast_hash::PtrHashMap<usize, Index>;
 
-
 crate::perry_thread_local! {
     static UTF16_INDEX_CACHE: RefCell<IndexCache> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());

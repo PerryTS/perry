@@ -242,9 +242,9 @@ fn code_point_at_matches_the_spec_through_the_cached_index() {
         crate::string::js_string_code_point_at(s, pair_start as i32),
         128512.0_f64
     );
-    assert!(
-        (0xDC00..0xE000).contains(&(crate::string::js_string_code_point_at(s, pair_start as i32 + 1) as u32 as u16))
-    );
+    assert!((0xDC00..0xE000).contains(
+        &(crate::string::js_string_code_point_at(s, pair_start as i32 + 1) as u32 as u16)
+    ));
     let _ = astral_at;
 
     // Out of bounds stays undefined.
