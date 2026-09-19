@@ -1,0 +1,55 @@
+{
+  "name": "@perryts/react",
+  "version": "0.1.0",
+  "description": "TypeScript types for Perry's React support — bundles @types/react / @types/react-dom and augments react-dom/client's createRoot with Perry's native-window overload (createRoot(null, { title, width, height })).",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "perry",
+    "react",
+    "react-dom",
+    "createRoot",
+    "native",
+    "types",
+    "typescript"
+  ],
+  "author": "Perry Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PerryTS/perry.git",
+    "directory": "packages/perry-react"
+  },
+  "homepage": "https://github.com/PerryTS/perry/tree/main/packages/perry-react#readme",
+  "bugs": {
+    "url": "https://github.com/PerryTS/perry/issues"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "react-dom": { "optional": true }
+  },
+  "dependencies": {
+    "@types/react": "^18.3.0 || ^19.0.0",
+    "@types/react-dom": "^18.3.0 || ^19.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,332 @@
+--- /Users/amlug/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/servo-script-0.1.0/Cargo.toml	2006-07-24 03:21:28
++++ /Users/amlug/projects/perry-worktrees/servo-forks/servo-script/Cargo.toml	2026-06-29 16:42:36
+@@ -293,8 +293,8 @@
+ version = "0.0.4"
+ 
+ [dependencies.ml-kem]
+-version = "0.2"
+-features = ["deterministic"]
++version = "0.3.2"
++features = ["getrandom"]
+ 
+ [dependencies.net_traits]
+ version = "0.1.0"
+--- /Users/amlug/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/servo-script-0.1.0/dom/subtlecrypto/ml_kem_operation.rs	2006-07-24 03:21:28
++++ /Users/amlug/projects/perry-worktrees/servo-forks/servo-script/dom/subtlecrypto/ml_kem_operation.rs	2026-06-29 16:43:00
+@@ -5,11 +5,16 @@
+ use der::asn1::{BitString, OctetString};
+ use der::{AnyRef, Choice, Decode, Encode, Sequence};
+ use js::context::JSContext;
+-use ml_kem::kem::{Decapsulate, Encapsulate, EncapsulationKey};
+ use ml_kem::{
+-    B32, Encoded, EncodedSizeUser, KemCore, MlKem512, MlKem512Params, MlKem768, MlKem768Params,
+-    MlKem1024, MlKem1024Params,
++    B32, Ciphertext, Decapsulate, DecapsulationKey, Encapsulate, EncapsulationKey, Key, KeyExport,
++    MlKem512, MlKem768, MlKem1024,
+ };
++// `ExpandedKeyEncoding` is deprecated in ml-kem 0.3.x, but it is the only API exposing the expanded
++// FIPS-203 decapsulation-key encoding (`dk_pke || ek_pke || H(ek) || z`). We need it to preserve
++// the seed/expanded-key consistency check in `convert_seed_to_handles`, which previously relied on
++// the (now seed-returning) `DecapsulationKey::as_bytes()`.
++#[allow(deprecated)]
++use ml_kem::ExpandedKeyEncoding;
+ use pkcs8::rand_core::{OsRng, RngCore};
+ use pkcs8::spki::AlgorithmIdentifier;
+ use pkcs8::{ObjectIdentifier, PrivateKeyInfo, SubjectPublicKeyInfo};
+@@ -153,10 +158,19 @@
+                     "The key handle is not representing an ML-KEM-512 public key".to_string(),
+                 )));
+             };
+-            let ek = EncapsulationKey::<MlKem512Params>::from_bytes(encoded_ek);
+-            let (encoded_ciphertext, shared_key) = ek.encapsulate(&mut OsRng).map_err(|_| {
+-                Error::Operation(Some("Failed to perform ML-KEM encapsulation".to_string()))
++            let ek = EncapsulationKey::<MlKem512>::new(encoded_ek).map_err(|_| {
++                Error::Operation(Some(
++                    "The ML-KEM-512 encapsulation key failed the FIPS-203 Section 7.2 check"
++                        .to_string(),
++                ))
+             })?;
++            // MIGRATION-NOTE: 0.2 used `ek.encapsulate(&mut OsRng)`. The literal 0.3.2 analogue
++            // `encapsulate_with_rng(&mut OsRng)` is NOT viable here: `pkcs8::rand_core::OsRng` is
++            // rand_core 0.6 (pkcs8 0.10), while ml-kem 0.3.2 requires a rand_core 0.10 `CryptoRng`,
++            // and rand_core 0.10 has no `OsRng`. `encapsulate()` (enabled by the `getrandom`
++            // feature) draws from the OS CSPRNG internally (`UnwrapErr(SysRng)`), the same entropy
++            // source as the old `OsRng`, so FIPS-203 ML-KEM.Encaps semantics are preserved.
++            let (encoded_ciphertext, shared_key) = ek.encapsulate();
+             (shared_key.to_vec(), encoded_ciphertext.to_vec())
+         },
+         CryptoAlgorithm::MlKem768 => {
+@@ -165,10 +179,14 @@
+                     "The key handle is not representing an ML-KEM-768 public key".to_string(),
+                 )));
+             };
+-            let ek = EncapsulationKey::<MlKem768Params>::from_bytes(encoded_ek);
+-            let (encoded_ciphertext, shared_key) = ek.encapsulate(&mut OsRng).map_err(|_| {
+-                Error::Operation(Some("Failed to perform ML-KEM encapsulation".to_string()))
++            let ek = EncapsulationKey::<MlKem768>::new(encoded_ek).map_err(|_| {
++                Error::Operation(Some(
++                    "The ML-KEM-768 encapsulation key failed the FIPS-203 Section 7.2 check"
++                        .to_string(),
++                ))
+             })?;
++            // MIGRATION-NOTE: see the ML-KEM-512 arm above re: `encapsulate()` vs OsRng.
++            let (encoded_ciphertext, shared_key) = ek.encapsulate();
+             (shared_key.to_vec(), encoded_ciphertext.to_vec())
+         },
+         CryptoAlgorithm::MlKem1024 => {
+@@ -177,10 +195,14 @@
+                     "The key handle is not representing an ML-KEM-1024 public key".to_string(),
+                 )));
+             };
+-            let ek = EncapsulationKey::<MlKem1024Params>::from_bytes(encoded_ek);
+-            let (encoded_ciphertext, shared_key) = ek.encapsulate(&mut OsRng).map_err(|_| {
+-                Error::Operation(Some("Failed to perform ML-KEM encapsulation".to_string()))
++            let ek = EncapsulationKey::<MlKem1024>::new(encoded_ek).map_err(|_| {
++                Error::Operation(Some(
++                    "The ML-KEM-1024 encapsulation key failed the FIPS-203 Section 7.2 check"
++                        .to_string(),
++                ))
+             })?;
++            // MIGRATION-NOTE: see the ML-KEM-512 arm above re: `encapsulate()` vs OsRng.
++            let (encoded_ciphertext, shared_key) = ek.encapsulate();
+             (shared_key.to_vec(), encoded_ciphertext.to_vec())
+         },
+         _ => {
+@@ -235,15 +257,11 @@
+                     "The key handle is not representing an ML-KEM-512 private key".to_string(),
+                 )));
+             };
+-            let ciphertext = ciphertext
++            let ciphertext: Ciphertext<MlKem512> = ciphertext
+                 .try_into()
+                 .map_err(|_| Error::Operation(Some("Failed to load the ciphertext".to_string())))?;
+-            let (dk, _) = MlKem512::generate_deterministic(&seed.0, &seed.1);
+-            dk.decapsulate(ciphertext)
+-                .map_err(|_| {
+-                    Error::Operation(Some("Failed to perform ML-KEM decapsulation".to_string()))
+-                })?
+-                .to_vec()
++            let dk = DecapsulationKey::<MlKem512>::from_seed(seed.0.concat(seed.1));
++            dk.decapsulate(&ciphertext).to_vec()
+         },
+         CryptoAlgorithm::MlKem768 => {
+             let Handle::MlKem768PrivateKey(seed) = key.handle() else {
+@@ -251,15 +269,11 @@
+                     "The key handle is not representing an ML-KEM-768 private key".to_string(),
+                 )));
+             };
+-            let ciphertext = ciphertext
++            let ciphertext: Ciphertext<MlKem768> = ciphertext
+                 .try_into()
+                 .map_err(|_| Error::Operation(Some("Failed to load the ciphertext".to_string())))?;
+-            let (dk, _) = MlKem768::generate_deterministic(&seed.0, &seed.1);
+-            dk.decapsulate(ciphertext)
+-                .map_err(|_| {
+-                    Error::Operation(Some("Failed to perform ML-KEM decapsulation".to_string()))
+-                })?
+-                .to_vec()
++            let dk = DecapsulationKey::<MlKem768>::from_seed(seed.0.concat(seed.1));
++            dk.decapsulate(&ciphertext).to_vec()
+         },
+         CryptoAlgorithm::MlKem1024 => {
+             let Handle::MlKem1024PrivateKey(seed) = key.handle() else {
+@@ -267,15 +281,11 @@
+                     "The key handle is not representing an ML-KEM-1024 private key".to_string(),
+                 )));
+             };
+-            let ciphertext = ciphertext
++            let ciphertext: Ciphertext<MlKem1024> = ciphertext
+                 .try_into()
+                 .map_err(|_| Error::Operation(Some("Failed to load the ciphertext".to_string())))?;
+-            let (dk, _) = MlKem1024::generate_deterministic(&seed.0, &seed.1);
+-            dk.decapsulate(ciphertext)
+-                .map_err(|_| {
+-                    Error::Operation(Some("Failed to perform ML-KEM decapsulation".to_string()))
+-                })?
+-                .to_vec()
++            let dk = DecapsulationKey::<MlKem1024>::from_seed(seed.0.concat(seed.1));
++            dk.decapsulate(&ciphertext).to_vec()
+         },
+         _ => {
+             return Err(Error::NotSupported(Some(format!(
+@@ -1209,16 +1219,22 @@
+     })?;
+     let handles = match algorithm_name {
+         CryptoAlgorithm::MlKem512 => {
+-            let (decapsulation_key, encapsulation_key) = MlKem512::generate_deterministic(&d, &z);
++            let decapsulation_key = DecapsulationKey::<MlKem512>::from_seed(d.concat(z));
++            let encapsulation_key = decapsulation_key.encapsulation_key();
+             if let Some(private_key_bytes) = private_key_bytes {
+-                if private_key_bytes != decapsulation_key.as_bytes().as_slice() {
++                // NOTE: `DecapsulationKey::to_bytes()` now returns the 64-byte seed, so we use the
++                // deprecated `to_expanded_bytes()` to recover the expanded FIPS-203 encoding
++                // (`dk_pke || ek_pke || H(ek) || z`) and keep the original consistency check.
++                #[allow(deprecated)]
++                let expanded_private_key = decapsulation_key.to_expanded_bytes();
++                if private_key_bytes != expanded_private_key.as_slice() {
+                     return Err(Error::Data(Some(
+                         "The expanded private key does not match the seed".to_string(),
+                     )));
+                 }
+             }
+             if let Some(public_key_bytes) = public_key_bytes {
+-                if public_key_bytes != encapsulation_key.as_bytes().as_slice() {
++                if public_key_bytes != encapsulation_key.to_bytes().as_slice() {
+                     return Err(Error::Data(Some(
+                         "The public key does not match the seed".to_string(),
+                     )));
+@@ -1227,20 +1243,26 @@
+ 
+             (
+                 Handle::MlKem512PrivateKey((d, z)),
+-                Handle::MlKem512PublicKey(Box::new(encapsulation_key.as_bytes())),
++                Handle::MlKem512PublicKey(Box::new(encapsulation_key.to_bytes())),
+             )
+         },
+         CryptoAlgorithm::MlKem768 => {
+-            let (decapsulation_key, encapsulation_key) = MlKem768::generate_deterministic(&d, &z);
++            let decapsulation_key = DecapsulationKey::<MlKem768>::from_seed(d.concat(z));
++            let encapsulation_key = decapsulation_key.encapsulation_key();
+             if let Some(private_key_bytes) = private_key_bytes {
+-                if private_key_bytes != decapsulation_key.as_bytes().as_slice() {
++                // NOTE: `DecapsulationKey::to_bytes()` now returns the 64-byte seed, so we use the
++                // deprecated `to_expanded_bytes()` to recover the expanded FIPS-203 encoding
++                // (`dk_pke || ek_pke || H(ek) || z`) and keep the original consistency check.
++                #[allow(deprecated)]
++                let expanded_private_key = decapsulation_key.to_expanded_bytes();
++                if private_key_bytes != expanded_private_key.as_slice() {
+                     return Err(Error::Data(Some(
+                         "The expanded private key does not match the seed".to_string(),
+                     )));
+                 }
+             }
+             if let Some(public_key_bytes) = public_key_bytes {
+-                if public_key_bytes != encapsulation_key.as_bytes().as_slice() {
++                if public_key_bytes != encapsulation_key.to_bytes().as_slice() {
+                     return Err(Error::Data(Some(
+                         "The public key does not match the seed".to_string(),
+                     )));
+@@ -1249,20 +1271,26 @@
+ 
+             (
+                 Handle::MlKem768PrivateKey((d, z)),
+-                Handle::MlKem768PublicKey(Box::new(encapsulation_key.as_bytes())),
++                Handle::MlKem768PublicKey(Box::new(encapsulation_key.to_bytes())),
+             )
+         },
+         CryptoAlgorithm::MlKem1024 => {
+-            let (decapsulation_key, encapsulation_key) = MlKem1024::generate_deterministic(&d, &z);
++            let decapsulation_key = DecapsulationKey::<MlKem1024>::from_seed(d.concat(z));
++            let encapsulation_key = decapsulation_key.encapsulation_key();
+             if let Some(private_key_bytes) = private_key_bytes {
+-                if private_key_bytes != decapsulation_key.as_bytes().as_slice() {
++                // NOTE: `DecapsulationKey::to_bytes()` now returns the 64-byte seed, so we use the
++                // deprecated `to_expanded_bytes()` to recover the expanded FIPS-203 encoding
++                // (`dk_pke || ek_pke || H(ek) || z`) and keep the original consistency check.
++                #[allow(deprecated)]
++                let expanded_private_key = decapsulation_key.to_expanded_bytes();
++                if private_key_bytes != expanded_private_key.as_slice() {
+                     return Err(Error::Data(Some(
+                         "The expanded private key does not match the seed".to_string(),
+                     )));
+                 }
+             }
+             if let Some(public_key_bytes) = public_key_bytes {
+-                if public_key_bytes != encapsulation_key.as_bytes().as_slice() {
++                if public_key_bytes != encapsulation_key.to_bytes().as_slice() {
+                     return Err(Error::Data(Some(
+                         "The public key does not match the seed".to_string(),
+                     )));
+@@ -1271,7 +1299,7 @@
+ 
+             (
+                 Handle::MlKem1024PrivateKey((d, z)),
+-                Handle::MlKem1024PublicKey(Box::new(encapsulation_key.as_bytes())),
++                Handle::MlKem1024PublicKey(Box::new(encapsulation_key.to_bytes())),
+             )
+         },
+         _ => {
+@@ -1293,24 +1321,24 @@
+ ) -> Result<Handle, Error> {
+     let public_key_handle = match algorithm_name {
+         CryptoAlgorithm::MlKem512 => {
+-            let encoded_encapsulation_key = Encoded::<EncapsulationKey<MlKem512Params>>::try_from(
+-                public_key_bytes,
+-            )
+-            .map_err(|_| Error::Data(Some("Failed to parse ML-KEM public key".to_string())))?;
++            let encoded_encapsulation_key =
++                Key::<EncapsulationKey<MlKem512>>::try_from(public_key_bytes).map_err(|_| {
++                    Error::Data(Some("Failed to parse ML-KEM public key".to_string()))
++                })?;
+             Handle::MlKem512PublicKey(Box::new(encoded_encapsulation_key))
+         },
+         CryptoAlgorithm::MlKem768 => {
+-            let encoded_encapsulation_key = Encoded::<EncapsulationKey<MlKem768Params>>::try_from(
+-                public_key_bytes,
+-            )
+-            .map_err(|_| Error::Data(Some("Failed to parse ML-KEM public key".to_string())))?;
++            let encoded_encapsulation_key =
++                Key::<EncapsulationKey<MlKem768>>::try_from(public_key_bytes).map_err(|_| {
++                    Error::Data(Some("Failed to parse ML-KEM public key".to_string()))
++                })?;
+             Handle::MlKem768PublicKey(Box::new(encoded_encapsulation_key))
+         },
+         CryptoAlgorithm::MlKem1024 => {
+-            let encoded_encapsulation_key = Encoded::<EncapsulationKey<MlKem1024Params>>::try_from(
+-                public_key_bytes,
+-            )
+-            .map_err(|_| Error::Data(Some("Failed to parse ML-KEM public key".to_string())))?;
++            let encoded_encapsulation_key =
++                Key::<EncapsulationKey<MlKem1024>>::try_from(public_key_bytes).map_err(|_| {
++                    Error::Data(Some("Failed to parse ML-KEM public key".to_string()))
++                })?;
+             Handle::MlKem1024PublicKey(Box::new(encoded_encapsulation_key))
+         },
+         _ => {
+@@ -1331,20 +1359,23 @@
+         Handle::MlKem512PrivateKey((d, z)) => {
+             let mut seed = d.to_vec();
+             seed.extend_from_slice(z);
+-            let (_private_key, public_key) = MlKem512::generate_deterministic(d, z);
+-            (seed, public_key.as_bytes().to_vec())
++            let decapsulation_key = DecapsulationKey::<MlKem512>::from_seed(d.concat(*z));
++            let public_key = decapsulation_key.encapsulation_key();
++            (seed, public_key.to_bytes().to_vec())
+         },
+         Handle::MlKem768PrivateKey((d, z)) => {
+             let mut seed = d.to_vec();
+             seed.extend_from_slice(z);
+-            let (_private_key, public_key) = MlKem768::generate_deterministic(d, z);
+-            (seed, public_key.as_bytes().to_vec())
++            let decapsulation_key = DecapsulationKey::<MlKem768>::from_seed(d.concat(*z));
++            let public_key = decapsulation_key.encapsulation_key();
++            (seed, public_key.to_bytes().to_vec())
+         },
+         Handle::MlKem1024PrivateKey((d, z)) => {
+             let mut seed = d.to_vec();
+             seed.extend_from_slice(z);
+-            let (_private_key, public_key) = MlKem1024::generate_deterministic(d, z);
+-            (seed, public_key.as_bytes().to_vec())
++            let decapsulation_key = DecapsulationKey::<MlKem1024>::from_seed(d.concat(*z));
++            let public_key = decapsulation_key.encapsulation_key();
++            (seed, public_key.to_bytes().to_vec())
+         },
+         _ => {
+             return Err(Error::Operation(Some(
+--- /Users/amlug/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/servo-script-0.1.0/dom/cryptokey.rs	2006-07-24 03:21:28
++++ /Users/amlug/projects/perry-worktrees/servo-forks/servo-script/dom/cryptokey.rs	2026-06-29 16:38:59
+@@ -48,11 +48,9 @@
+     MlKem512PrivateKey((ml_kem::B32, ml_kem::B32)),
+     MlKem768PrivateKey((ml_kem::B32, ml_kem::B32)),
+     MlKem1024PrivateKey((ml_kem::B32, ml_kem::B32)),
+-    MlKem512PublicKey(Box<ml_kem::Encoded<ml_kem::kem::EncapsulationKey<ml_kem::MlKem512Params>>>),
+-    MlKem768PublicKey(Box<ml_kem::Encoded<ml_kem::kem::EncapsulationKey<ml_kem::MlKem768Params>>>),
+-    MlKem1024PublicKey(
+-        Box<ml_kem::Encoded<ml_kem::kem::EncapsulationKey<ml_kem::MlKem1024Params>>>,
+-    ),
++    MlKem512PublicKey(Box<ml_kem::Key<ml_kem::EncapsulationKey<ml_kem::MlKem512>>>),
++    MlKem768PublicKey(Box<ml_kem::Key<ml_kem::EncapsulationKey<ml_kem::MlKem768>>>),
++    MlKem1024PublicKey(Box<ml_kem::Key<ml_kem::EncapsulationKey<ml_kem::MlKem1024>>>),
+     MlDsa44PrivateKey(ml_dsa::B32),
+     MlDsa65PrivateKey(ml_dsa::B32),
+     MlDsa87PrivateKey(ml_dsa::B32),

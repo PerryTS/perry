@@ -1,0 +1,28 @@
+{
+  "name": "electron",
+  "version": "0.1.0",
+  "description": "Electron-compatible app shell for Perry — run existing Electron apps natively (Tauri-model internals, Electron API surface)",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "perry": {
+    "nativeModule": true
+  },
+  "files": [
+    "src",
+    "bridge",
+    "README.md",
+    "DESIGN.md"
+  ],
+  "keywords": ["perry", "electron", "desktop", "webview", "ipc"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PerryTS/perry.git",
+    "directory": "packages/electron"
+  },
+  "homepage": "https://github.com/PerryTS/perry/tree/main/packages/electron#readme",
+  "bugs": "https://github.com/PerryTS/perry/issues",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
