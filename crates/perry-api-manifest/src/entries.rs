@@ -48,7 +48,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dotenv",         // .env file loader
     "dotenv/config",  // dotenv's auto-load-on-import subpath
     "nanoid",         // compact URL-safe ID generation
-    "validator",      // string validators/sanitizers
     "ethers",         // Ethereum library (utils/wallet/ABI)
     "mongodb",        // MongoDB driver
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)

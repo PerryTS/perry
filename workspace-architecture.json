@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 82,
+    "workspace_members": 80,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -68,8 +68,8 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 32,
-      "keep": 45,
+      "externalize": 31,
+      "keep": 44,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -320,11 +320,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-validator": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-ws": {
       "category": "binding",
       "decision": "keep",
@@ -432,10 +427,6 @@
       "decision": "merge"
     },
     "perry-updater": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-validation": {
       "category": "runtime-core",
       "decision": "keep"
     },

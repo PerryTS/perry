@@ -6224,15 +6224,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-validator"
-version = "0.5.1600"
-dependencies = [
- "perry-ffi",
- "perry-validation",
- "serde_json",
-]
-
-[[package]]
 name = "perry-ext-ws"
 version = "0.5.1600"
 dependencies = [
@@ -6426,7 +6417,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-updater",
- "perry-validation",
  "proptest",
  "rand 0.10.2",
  "rand_core 0.6.4",
@@ -6677,16 +6667,6 @@ dependencies = [
  "serde",
  "sha2 0.11.0",
  "tempfile",
-]
-
-[[package]]
-name = "perry-validation"
-version = "0.5.1600"
-dependencies = [
- "idna",
- "regex",
- "url",
- "validator",
 ]
 
 [[package]]
@@ -10029,20 +10009,6 @@ dependencies = [
  "aligned-vec",
  "num-traits",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "validator"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d68c6633c483df6780cc5277a417c7c2d1bceee2649d06c8ab6b0fd2dd3c81"
-dependencies = [
- "idna",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
- "url",
 ]
 
 [[package]]

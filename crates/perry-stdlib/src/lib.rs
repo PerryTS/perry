@@ -407,17 +407,6 @@ pub mod ratelimit;
 #[cfg(feature = "bundled-ratelimit")]
 pub use ratelimit::*;
 
-// === Validation ===
-// `validation` umbrella now expands to `bundled-validator`
-// (v0.5.538). Per-binding gate lets the well-known flip swap the
-// validator wrapper out without affecting the rest of the
-// validation surface (none — there's just the one wrapper today,
-// but the split unblocks future additions).
-#[cfg(feature = "bundled-validator")]
-pub mod validator;
-#[cfg(feature = "bundled-validator")]
-pub use validator::*;
-
 // === IDs ===
 // `bundled-uuid` / `bundled-nanoid` (v0.5.534) replace the old
 // `ids` umbrella so the well-known flip (#466 Phase 4) can toggle
