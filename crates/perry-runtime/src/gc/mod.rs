@@ -1295,7 +1295,6 @@ pub fn gc_init() {
     reg_scanner!(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
 }
 
-#[no_mangle]
 /// #10399: see `js_gc_init`. Default floor for `std::thread` stacks in a
 /// compiled program, chosen to leave usable stack after a multi-megabyte
 /// static TLS block. Overridable by setting RUST_MIN_STACK in the environment.
@@ -1307,6 +1306,7 @@ fn raise_default_thread_stack_floor() {
     std::env::set_var("RUST_MIN_STACK", FLOOR.to_string());
 }
 
+#[no_mangle]
 pub extern "C" fn js_gc_init() {
     // #8546: this is the first runtime call of every `main` / `perry_module_init`,
     // on the thread about to run that image's module init — so it is where the
