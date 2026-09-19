@@ -1279,22 +1279,6 @@ pub(crate) fn lower_event_emitter_subclass_init(ctx: &mut FnCtx<'_>, this_box: &
     );
 }
 
-/// #10293: `super(options)` for a source-compiled `class X extends LRUCache`.
-/// Installs the implemented cache surface directly onto `this` — `LRUCache` is
-/// a compile-time lowering with no runtime value, so there is no base
-/// constructor to call.
-pub(crate) fn lower_lru_cache_subclass_init(
-    ctx: &mut FnCtx<'_>,
-    this_box: &str,
-    options_box: &str,
-) {
-    ctx.block().call(
-        DOUBLE,
-        "js_lru_cache_subclass_init",
-        &[(DOUBLE, this_box), (DOUBLE, options_box)],
-    );
-}
-
 pub(crate) fn lower_event_emitter_async_resource_subclass_init(
     ctx: &mut FnCtx<'_>,
     this_box: &str,

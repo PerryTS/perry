@@ -101,7 +101,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-fetch` | `node-fetch` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-ioredis` | `ioredis`<br>`iovalkey`<br>`redis` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-lru-cache` | `lru-cache` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-moment` | `moment` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mongodb` | `mongodb` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mysql2` | `mysql2`<br>`mysql2/promise` | Source package | Compile the upstream package source | Bundled; migration pending |

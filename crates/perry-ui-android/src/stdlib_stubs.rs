@@ -1055,38 +1055,6 @@ pub extern "C" fn js_lodash_upper_first() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_lru_cache_clear() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_delete() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_get() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_has() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_new() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_peek() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_set() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_lru_cache_size() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_moment_add() -> i64 {
     0
 }

@@ -688,7 +688,6 @@ pub(crate) fn lower_module_decl(
                                                 Some("ws".to_string())
                                             }
                                             "Redis" => Some("ioredis".to_string()),
-                                            "LRUCache" => Some("lru-cache".to_string()),
                                             "Command" => Some("commander".to_string()),
                                             "Big" => Some("big.js".to_string()),
                                             "Decimal" => Some("decimal.js".to_string()),
@@ -756,7 +755,6 @@ pub(crate) fn lower_module_decl(
                                                     Some("ws".to_string())
                                                 }
                                                 "Redis" => Some("ioredis".to_string()),
-                                                "LRUCache" => Some("lru-cache".to_string()),
                                                 "Command" => Some("commander".to_string()),
                                                 "Big" => Some("big.js".to_string()),
                                                 "Decimal" => Some("decimal.js".to_string()),

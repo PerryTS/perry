@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3009 entries across 134 modules.
+Total: 3001 entries across 133 modules.
 
 ## Modules
 
@@ -64,7 +64,6 @@ Total: 3009 entries across 134 modules.
 - [`ioredis`](#ioredis)
 - [`iovalkey`](#iovalkey)
 - [`lodash`](#lodash)
-- [`lru-cache`](#lru-cache)
 - [`module`](#module)
 - [`moment`](#moment)
 - [`mongodb`](#mongodb)
@@ -2025,19 +2024,6 @@ Total: 3009 entries across 134 modules.
 - `take` — module
 - `times` — module
 - `uniq` — module
-
-## `lru-cache`
-
-### Methods
-
-- `clear` — instance
-- `default` — module
-- `delete` — instance
-- `get` — instance
-- `has` — instance
-- `peek` — instance
-- `set` — instance
-- `size` — instance
 
 ## `module`
 

@@ -122,7 +122,6 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
-pub mod lru_subclass;
 pub mod macos_bundle;
 pub mod map;
 pub mod math;
