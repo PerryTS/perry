@@ -508,18 +508,6 @@ pub extern "C" fn js_decimal_to_string() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_dotenv_config() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_dotenv_config_path() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_dotenv_parse() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_ethers_format_ether() -> i64 {
     0
 }

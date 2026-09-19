@@ -367,10 +367,7 @@ fn perry_native_namespace_rejects_unknown_call_in_strict_mode() {
 /// no value binding to read properties off, so the gate doesn't apply.
 #[test]
 fn every_supported_module_rejects_bogus_member() {
-    const SKIP: &[&str] = &[
-        // Side-effect-only — no value binding to access.
-        "dotenv/config",
-    ];
+    const SKIP: &[&str] = &[];
 
     let mut failures: Vec<String> = Vec::new();
     for &module in perry_api_manifest::NATIVE_MODULES {
@@ -444,10 +441,7 @@ fn every_supported_module_rejects_bogus_member() {
 /// land at the rejection.
 #[test]
 fn every_supported_module_rejects_bogus_call() {
-    const SKIP: &[&str] = &[
-        // Side-effect-only — no value binding to access.
-        "dotenv/config",
-    ];
+    const SKIP: &[&str] = &[];
 
     let mut failures: Vec<String> = Vec::new();
     for &module in perry_api_manifest::NATIVE_MODULES {

@@ -35,11 +35,6 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_commander_required_option", I64, &[I64, I64, I64, I64]);
     module.declare_function("js_commander_version", I64, &[I64, I64]);
 
-    // ========== Dotenv ==========
-    module.declare_function("js_dotenv_config", DOUBLE, &[]);
-    module.declare_function("js_dotenv_config_path", DOUBLE, &[I64]);
-    module.declare_function("js_dotenv_parse", I64, &[I64]);
-
     // ========== Date libs (dayjs/datefns/moment) ==========
     module.declare_function("js_datefns_add_days", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_datefns_add_months", DOUBLE, &[DOUBLE, DOUBLE]);
