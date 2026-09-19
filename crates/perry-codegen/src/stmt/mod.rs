@@ -22,6 +22,8 @@ mod boxed_slot_no_root_tests;
 mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
+#[cfg(test)]
+mod compound_alias_fold_tests;
 mod counter_range;
 mod element_shape_carried;
 mod element_shape_loop;
