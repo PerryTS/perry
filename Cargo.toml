@@ -13,7 +13,6 @@ members = [
     "crates/perry-native-registration",
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
-    "crates/perry-ext-uuid",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-argon2",
     "crates/perry-perex",
@@ -21,7 +20,6 @@ members = [
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
     "crates/perry-ext-exponential-backoff",
-    "crates/perry-ext-axios",
     "crates/perry-ext-events",
     "crates/perry-ext-decimal",
     "crates/perry-ext-dayjs",
@@ -335,7 +333,7 @@ codegen-units = 1
 codegen-units = 1
 
 [workspace.package]
-version = "0.5.1601"
+version = "0.5.1605"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -476,7 +474,6 @@ perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
-perry-ext-uuid = { path = "crates/perry-ext-uuid" }
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
 perry-perex = { path = "crates/perry-perex" }
@@ -484,7 +481,6 @@ perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }
-perry-ext-axios = { path = "crates/perry-ext-axios" }
 perry-ext-events = { path = "crates/perry-ext-events" }
 perry-ext-decimal = { path = "crates/perry-ext-decimal" }
 perry-ext-dayjs = { path = "crates/perry-ext-dayjs" }

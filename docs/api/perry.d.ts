@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2085 entries across 134 modules
+// Coverage: 2067 entries across 132 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -255,44 +255,6 @@ declare module "async_hooks" {
   export function executionAsyncResource(...args: any[]): any;
   /** stdlib */
   export function triggerAsyncId(...args: any[]): any;
-}
-
-declare module "axios" {
-  /** stdlib */
-  export function all(...args: any[]): any;
-  /** stdlib */
-  export function create(...args: any[]): any;
-  /** stdlib */
-  function _delete(...args: any[]): any;
-  export { _delete as delete };
-  /** stdlib */
-  export function get(...args: any[]): any;
-  /** stdlib */
-  export function head(...args: any[]): any;
-  /** stdlib */
-  export function options(...args: any[]): any;
-  /** stdlib */
-  export function patch(...args: any[]): any;
-  /** stdlib */
-  export function post(...args: any[]): any;
-  /** stdlib */
-  export function put(...args: any[]): any;
-  /** stdlib */
-  export function request(...args: any[]): any;
-  /** stdlib */
-  const _default: ((...args: any[]) => any) & {
-    all: typeof all;
-    create: typeof create;
-    delete: typeof _delete;
-    get: typeof get;
-    head: typeof head;
-    options: typeof options;
-    patch: typeof patch;
-    post: typeof post;
-    put: typeof put;
-    request: typeof request;
-  };
-  export default _default;
 }
 
 declare module "bcrypt" {
@@ -4360,23 +4322,6 @@ declare module "util/types" {
   export function isWeakMap(...args: any[]): any;
   /** stdlib */
   export function isWeakSet(...args: any[]): any;
-}
-
-declare module "uuid" {
-  /** stdlib */
-  export function v1(): string;
-  /** stdlib */
-  export function v3(name: string, namespace: string): string;
-  /** stdlib */
-  export function v4(): string;
-  /** stdlib */
-  export function v5(name: string, namespace: string): string;
-  /** stdlib */
-  export function v7(): string;
-  /** stdlib */
-  export function validate(id: string): boolean;
-  /** stdlib */
-  export function version(id: string): number;
 }
 
 declare module "v8" {

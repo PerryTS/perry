@@ -10,7 +10,7 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use super::get_raw_string_ptr;
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I1, I64};
 
@@ -152,61 +152,6 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
             "static_error" => {
                 let handle = ctx.block().call(DOUBLE, "js_response_static_error", &[]);
                 return Ok(Some(handle));
-            }
-            _ => {}
-        }
-    }
-
-    // ── axios: static HTTP method calls ──
-    // Must be before the receiver guard — these are receiver-less calls.
-    if module == "axios" && object.is_none() {
-        let url_box = if !args.is_empty() {
-            lower_expr(ctx, &args[0])?
-        } else {
-            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-        };
-        let blk = ctx.block();
-        let url_handle = unbox_to_i64(blk, &url_box);
-        match method {
-            "get" | "head" | "options" => {
-                let rt_fn = match method {
-                    "get" => "js_axios_get",
-                    "head" => "js_axios_head",
-                    _ => "js_axios_options",
-                };
-                let promise = blk.call(I64, rt_fn, &[(I64, &url_handle)]);
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
-            }
-            "delete" => {
-                let promise = blk.call(I64, "js_axios_delete", &[(I64, &url_handle)]);
-                return Ok(Some(nanbox_pointer_inline(blk, &promise)));
-            }
-            "post" | "put" | "patch" => {
-                // #598: pass the body as a NaN-boxed f64 instead of
-                // unboxing to i64. Pre-fix the unbox produced a raw
-                // pointer the runtime read as `*const StringHeader`
-                // — for an object literal the pointer was a real
-                // ObjectHeader, the runtime read its bytes as a
-                // StringHeader (length / refcount / data prefix),
-                // and the request body became `^@^B^@^@H...` (the
-                // ObjectHeader struct followed by the first character
-                // of the stringified field). The runtime side now
-                // detects strings vs everything-else via the NaN-box
-                // tag and routes through `js_json_stringify`.
-                let body_box = if args.len() > 1 {
-                    lower_expr(ctx, &args[1])?
-                } else {
-                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                };
-                let rt_fn = match method {
-                    "post" => "js_axios_post",
-                    "put" => "js_axios_put",
-                    _ => "js_axios_patch",
-                };
-                let promise =
-                    ctx.block()
-                        .call(I64, rt_fn, &[(I64, &url_handle), (DOUBLE, &body_box)]);
-                return Ok(Some(nanbox_pointer_inline(ctx.block(), &promise)));
             }
             _ => {}
         }
@@ -1256,45 +1201,6 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 return Ok(Some(v));
             }
             _ => return Ok(None),
-        }
-    }
-
-    // ── axios: response property access (response.status, .data, .statusText, .headers) ──
-    if module == "axios" {
-        if let Some(recv) = object {
-            let recv_handle = lower_expr(ctx, recv)?;
-            let blk = ctx.block();
-            // The awaited axios response is a Handle (i64) NaN-boxed via
-            // `JsValue::from_object_ptr(handle as *mut ())` (POINTER_TAG |
-            // (handle & POINTER_MASK)). Use `unbox_to_i64` to strip the
-            // tag and recover the bare handle id; calling
-            // `bitcast_double_to_i64` alone leaves the upper-16 tag bits
-            // and the runtime's `get_handle::<AxiosResponseHandle>` lookup
-            // misses, returning 0 / undefined for every property. (#604
-            // followup — only surfaced once the listen() hang was fixed.)
-            let h_i64 = unbox_to_i64(blk, &recv_handle);
-            match method {
-                "status" => {
-                    let status = blk.call(DOUBLE, "js_axios_response_status", &[(I64, &h_i64)]);
-                    return Ok(Some(status));
-                }
-                "statusText" => {
-                    let str_ptr = blk.call(I64, "js_axios_response_status_text", &[(I64, &h_i64)]);
-                    return Ok(Some(nanbox_string_inline(blk, &str_ptr)));
-                }
-                "data" => {
-                    // Use the auto-parsed variant (JSON when the body
-                    // looks like JSON, raw string otherwise) so
-                    // `r.data.ok` / `r.data[0]` work the same way as
-                    // in npm `axios`. The function returns a NaN-boxed
-                    // f64 directly; no need to nanbox here. (#604
-                    // followup — only surfaced once listen() hang fix
-                    // unblocked the axios chain.)
-                    let v = blk.call(DOUBLE, "js_axios_response_data_parsed", &[(I64, &h_i64)]);
-                    return Ok(Some(v));
-                }
-                _ => {}
-            }
         }
     }
 

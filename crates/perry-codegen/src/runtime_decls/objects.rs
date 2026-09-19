@@ -409,6 +409,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).
     module.declare_function("js_set_bun_platform", VOID, &[]);
+    // #10735: shared CJS "main module" (`require.main`) — the entry module
+    // publishes, every other CJS module reads back. See
+    // `__perry_runtime.setCjsMainModule` / `.getCjsMainModule`.
+    module.declare_function("js_set_cjs_main_module", VOID, &[DOUBLE]);
+    module.declare_function("js_get_cjs_main_module", DOUBLE, &[]);
+    // #10735: allocates and publishes the placeholder `require.main` object
+    // BEFORE any module's `__init` runs (called directly from `main()`, not
+    // from generated module JS — see `codegen::entry::compile_module_entry`).
+    module.declare_function("js_bootstrap_cjs_main_module_placeholder", VOID, &[]);
     // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
     // path so a runtime `require(absolutePath)` can trigger its lazy init.
     module.declare_function("js_register_path_init", VOID, &[PTR, I64, I64]);

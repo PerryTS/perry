@@ -35,6 +35,42 @@ request's merge base and fails if the checked-out copies are larger anywhere --
 the total, an existing module's ceiling, or a module that was not listed at all.
 Unchanged and lower both pass, so paying debt down stays a one-step change.
 
+RELOCATIONS: `# moved-from:` (#10583)
+=====================================
+
+Strict per-path monotonicity cannot express a pure FILE MOVE, and the 2000-line
+cap (`scripts/check_file_size.sh`) forces moves regularly. Splitting a listed
+module makes the bare run demand the emptied source's line be deleted (rule 3,
+"matches nothing") and the destination listed -- and `--no-raise-vs` then fails
+with "was not listed at the merge base" although the TOTAL never moved and the
+bodies are byte-identical. #10565 only escaped it by luck: all four of that
+file's sites sat in one block, so a different split carried none. A module whose
+debt is spread across it could not be split at all without first paying it down.
+
+A ledger line may therefore declare where its debt came from:
+
+    4 crates/perry-runtime/src/object/native_module/vtable_access.rs  # moved-from: crates/perry-runtime/src/object/native_module.rs
+
+`--no-raise-vs` then credits the destination with what the SOURCE ACTUALLY GAVE
+UP between the merge base and head (`base ceiling - head ceiling`, floored at
+zero), and nothing else. That keeps the ratchet monotone:
+
+  * the total check is untouched, so the sum still cannot rise;
+  * a relocation cannot launder new sites, because the credit is bounded by a
+    real reduction somewhere else in the same diff;
+  * two destinations splitting one source SHARE one pool -- the same surrendered
+    count cannot be spent twice;
+  * the annotation goes inert the moment the move lands. Once base and head
+    agree about both paths the source surrenders 0, so a later raise on the
+    destination is rejected exactly as before. A stale annotation is a comment,
+    not a standing permit.
+
+What it does NOT prove is that the moved bodies are the same bodies: a diff that
+genuinely cleans four sites in A while adding four unrelated sites in a new B
+can spell that as a relocation. Per-path monotonicity becomes total monotonicity
+plus ONE declared, reviewable transfer that names its source in the diff. That
+is the deliberate boundary -- a text ratchet cannot tell a move from a rewrite.
+
 Usage:
     scripts/raw_handle_debt.py            # report, fail if above the baseline
     scripts/raw_handle_debt.py --update   # rewrite the baseline (must go DOWN)
@@ -71,17 +107,68 @@ def count():
 
 FILES = ROOT / "scripts" / "raw_handle_debt_files.txt"
 
+# The ONE annotation a ledger entry may carry (#10583). Anchored to the end of
+# the line so it cannot be confused with a path.
+MOVED_FROM = re.compile(r"#\s*moved-from:\s*(\S+)\s*$")
+
+
+def parse_ledger(text):
+    """`({path: ceiling}, {path: moved_from})` from the per-module file's TEXT.
+
+    Whole-line comments and blanks are ignored. A trailing comment on an ENTRY
+    must be a well-formed `# moved-from: <path>`; anything else raises. That
+    strictness is the point: a typo (`moved_from:`, `moved-from :`) would
+    otherwise be silently dropped as a plain comment and the relocation it was
+    meant to declare would be rejected as new debt -- with a diagnostic naming
+    the destination, which is the one place the author would not look.
+    """
+    ceilings, moves = {}, {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        moved = None
+        if "#" in line:
+            moved = MOVED_FROM.search(line)
+            if not moved:
+                raise SystemExit(
+                    f"::error::{FILES.name}: unrecognised trailing comment on "
+                    f"the ledger entry {raw.strip()!r}. The only annotation an "
+                    f"entry may carry is `# moved-from: <path>` (#10583)."
+                )
+            line = line[: moved.start()].strip()
+        n, path = line.split(None, 1)
+        path = path.strip()
+        ceilings[path] = int(n)
+        if moved:
+            moves[path] = moved.group(1)
+    return ceilings, moves
+
 
 def load_ceilings():
     """`{path: ceiling}` from the per-module file. Comments and blanks ignored."""
-    out = {}
-    for line in FILES.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        n, path = line.split(None, 1)
-        out[path.strip()] = int(n)
-    return out
+    return parse_ledger(FILES.read_text(encoding="utf-8"))[0]
+
+
+def load_moves():
+    """`{path: moved_from}` declared by the CHECKED-OUT per-module file."""
+    return parse_ledger(FILES.read_text(encoding="utf-8"))[1]
+
+
+def render_ledger(header, per_file, moves):
+    """The per-module file's TEXT for `per_file`, keeping `moves` annotations.
+
+    Separated from `--update` so the round trip through `parse_ledger` can be
+    asserted: a writer that loses the annotation would revoke a relocation the
+    same commit declared, and nothing else in the gate would notice.
+    """
+    return (
+        "\n".join(header) + "\n"
+        + "".join(
+            f"{n} {p}" + (f"  # moved-from: {moves[p]}" if p in moves else "") + "\n"
+            for p, n in sorted(per_file.items())
+        )
+    )
 
 
 def check_per_module(per_file):
@@ -117,25 +204,29 @@ def check_per_module(per_file):
 
 
 def parse_ceilings(text):
-    """`{path: ceiling}` from the per-module file's TEXT (any revision of it)."""
-    out = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        n, path = line.split(None, 1)
-        out[path.strip()] = int(n)
-    return out
+    """`{path: ceiling}` from the per-module file's TEXT (any revision of it).
+
+    The BASE revision's own `moved-from` annotations are deliberately dropped:
+    credit is claimed by the head ledger and paid out of the base's numbers, so
+    a relocation the base already recorded is just two ordinary ceilings.
+    """
+    return parse_ledger(text)[0]
 
 
-def compare_across_base(base_total, base_ceilings, head_total, head_ceilings):
+def compare_across_base(base_total, base_ceilings, head_total, head_ceilings,
+                        head_moves=None):
     """Violations for a diff that RAISES recorded debt relative to its base.
 
     A module absent from the base's ceilings counts as 0, so adding a line is a
     raise from zero rather than a fresh start. Removals and decreases are
     silent: the ratchet exists to stop the number going up.
+
+    `head_moves` is `{destination: source}` from the head ledger's `moved-from:`
+    annotations (#10583). A destination may be raised by at most what its source
+    SURRENDERED between the base and head ledgers -- see the module docstring.
     """
     bad = []
+    head_moves = head_moves or {}
     if base_total is None and not base_ceilings:
         # The merge base recorded nothing at all -- the gate did not exist yet
         # on that side. There is no number to ratchet against, so every head
@@ -150,11 +241,40 @@ def compare_across_base(base_total, base_ceilings, head_total, head_ceilings):
             f"RuntimeHandle::across_{{mut,const,nanbox}} / "
             f"with_{{mut,const}}_ptr instead of recording them."
         )
+    # One credit pool per declared source, sized by what that source ACTUALLY
+    # gave up. Two destinations naming the same source therefore share it --
+    # spending the same surrendered count twice is the obvious way to launder
+    # new debt through a relocation, so the pool is drained, not re-read.
+    pool = {}
+    for src in set(head_moves.values()):
+        pool[src] = max(0, base_ceilings.get(src, 0) - head_ceilings.get(src, 0))
+
     for path, ceiling in sorted(head_ceilings.items()):
         was = base_ceilings.get(path, 0)
-        if ceiling > was:
-            where = "was not listed" if path not in base_ceilings else f"ceiling was {was}"
+        if ceiling <= was:
+            continue
+        where = "was not listed" if path not in base_ceilings else f"ceiling was {was}"
+        src = head_moves.get(path)
+        if src is None:
             bad.append(f"{path}: ceiling raised to {ceiling} ({where} at the merge base)")
+            continue
+        if src == path:
+            bad.append(
+                f"{path}: declares `moved-from: {src}`, which is its own path. A "
+                f"relocation must name the module the sites came FROM."
+            )
+            continue
+        need = ceiling - was
+        if pool[src] < need:
+            bad.append(
+                f"{path}: ceiling raised to {ceiling} ({where} at the merge base) "
+                f"declaring `moved-from: {src}`, but {src} surrendered only "
+                f"{pool[src]} site(s) between the merge base and head (needs "
+                f"{need}). A relocation credits only what its source actually "
+                f"gave up, so it cannot launder new debt."
+            )
+            continue
+        pool[src] -= need
     return bad
 
 
@@ -194,17 +314,25 @@ def no_raise_vs(ref):
     base_ceilings = parse_ceilings(base_files) if base_files else {}
 
     head_total = int(BASELINE.read_text().split()[0])
-    head_ceilings = load_ceilings()
+    head_ceilings, head_moves = parse_ledger(FILES.read_text(encoding="utf-8"))
 
-    bad = compare_across_base(base_total, base_ceilings, head_total, head_ceilings)
+    bad = compare_across_base(base_total, base_ceilings, head_total, head_ceilings,
+                              head_moves)
     if bad:
         print(f"::error::recorded raw-handle debt rose vs. {ref}: {len(bad)} violation(s)")
         for b in bad:
             print(f"  {b}")
         return 1
+    relocated = ""
+    if head_moves:
+        relocated = (
+            f", {len(head_moves)} declared relocation(s): "
+            + ", ".join(f"{src} -> {dst}" for dst, src in sorted(head_moves.items()))
+        )
     print(
         f"recorded debt vs. {ref}: baseline {base_total} -> {head_total}, "
         f"{len(base_ceilings)} -> {len(head_ceilings)} module ceiling(s), none raised"
+        f"{relocated}"
     )
     return 0
 
@@ -294,6 +422,111 @@ def self_test():
         if compare_across_base(bt, bc, ht, hc):
             print(f"self-test FAILED: merge-base rule fired on a legal diff: {label}")
             return 1
+
+    # #10583: a pure FILE MOVE. The shape the 2000-line cap forces -- `a.rs`
+    # emptied of its two sites, `split.rs` listing them, total unchanged.
+    moved_base = {"a.rs": 2, "b.rs": 1}
+    moved_head = {"split.rs": 2, "b.rs": 1}
+    # (i) It MUST be rejected without the annotation -- otherwise the relocation
+    #     support below is indistinguishable from having deleted the rule.
+    if not any("was not listed" in v for v in
+               compare_across_base(998, moved_base, 998, moved_head)):
+        print("self-test FAILED: an UNDECLARED relocation was accepted; the "
+              "per-path rule is gone, not relaxed")
+        return 1
+    # (ii) ...and accepted with it, because `a.rs` really did surrender two.
+    declared = compare_across_base(998, moved_base, 998, moved_head,
+                                   {"split.rs": "a.rs"})
+    if declared:
+        print(f"self-test FAILED: a declared relocation was rejected: {declared}")
+        return 1
+    # (iii) A relocation cannot LAUNDER new debt: `a.rs` keeps its two sites and
+    #       `split.rs` claims two more anyway. (The total is held flat here so
+    #       the total rule cannot be what fires -- this must be the per-path
+    #       credit, or the laundering case passes the day the totals differ.)
+    launder = compare_across_base(998, moved_base, 998,
+                                  {"a.rs": 2, "b.rs": 1, "split.rs": 2},
+                                  {"split.rs": "a.rs"})
+    if not any("surrendered only 0" in v for v in launder):
+        print(f"self-test FAILED: a relocation laundered new debt: {launder}")
+        return 1
+    # (iv) Nor may it over-draw: `a.rs` gave up one of its two, `split.rs` wants
+    #      both.
+    overdraw = compare_across_base(998, moved_base, 998,
+                                   {"a.rs": 1, "b.rs": 1, "split.rs": 2},
+                                   {"split.rs": "a.rs"})
+    if not any("surrendered only 1" in v and "needs 2" in v for v in overdraw):
+        print(f"self-test FAILED: a relocation over-drew its source: {overdraw}")
+        return 1
+    # (v) Nor may two destinations spend one source's surrender twice. A 2-site
+    #     module split THREE ways is legal; claiming 2+2 out of it is not.
+    three_way = compare_across_base(998, moved_base, 998,
+                                    {"b.rs": 1, "x.rs": 1, "y.rs": 1},
+                                    {"x.rs": "a.rs", "y.rs": "a.rs"})
+    if three_way:
+        print(f"self-test FAILED: a legal 1+1 split of a 2-site module was "
+              f"rejected: {three_way}")
+        return 1
+    double = compare_across_base(998, moved_base, 998,
+                                 {"b.rs": 1, "x.rs": 2, "y.rs": 2},
+                                 {"x.rs": "a.rs", "y.rs": "a.rs"})
+    if not any("y.rs" in v and "surrendered only 0" in v for v in double):
+        print(f"self-test FAILED: one source's surrender was spent twice: {double}")
+        return 1
+    # (vi) A STALE annotation is inert, not a standing permit. Once the move has
+    #      landed (base and head agree about both paths) the source surrenders
+    #      nothing, so a later raise on the destination is rejected as before.
+    landed = {"split.rs": 2, "b.rs": 1}
+    stale = compare_across_base(998, landed, 998, {"split.rs": 4, "b.rs": 1},
+                                {"split.rs": "a.rs"})
+    if not any("split.rs" in v and "surrendered only 0" in v for v in stale):
+        print(f"self-test FAILED: a stale moved-from annotation still granted "
+              f"credit: {stale}")
+        return 1
+    # (vii) A self-referential annotation is a typo, not a relocation.
+    selfmove = compare_across_base(998, moved_base, 998, {"a.rs": 3, "b.rs": 1},
+                                   {"a.rs": "a.rs"})
+    if not any("its own path" in v for v in selfmove):
+        print(f"self-test FAILED: a self-referential relocation was not "
+              f"rejected: {selfmove}")
+        return 1
+
+    # #10583, the parser. The annotation shares a line with the path, so a
+    # parser that does not strip it records a ceiling for a path that does not
+    # exist -- which rule 3 would then report as "matches nothing" forever.
+    parsed, parsed_moves = parse_ledger(
+        "# header\n"
+        "2 crates/x/split.rs  # moved-from: crates/x/a.rs\n"
+        "1 crates/x/b.rs\n"
+    )
+    if parsed != {"crates/x/split.rs": 2, "crates/x/b.rs": 1}:
+        print(f"self-test FAILED: the annotation leaked into the parsed "
+              f"ceilings: {parsed}")
+        return 1
+    if parsed_moves != {"crates/x/split.rs": "crates/x/a.rs"}:
+        print(f"self-test FAILED: the annotation did not parse: {parsed_moves}")
+        return 1
+    # A malformed annotation must RAISE rather than read as a plain comment: a
+    # silently-dropped `moved_from:` becomes "was not listed at the merge base",
+    # a diagnostic that names the destination and never mentions the typo.
+    for typo in ("2 x.rs  # movedfrom: a.rs\n", "2 x.rs  # see #10583\n"):
+        try:
+            parse_ledger(typo)
+        except SystemExit:
+            pass
+        else:
+            print(f"self-test FAILED: a malformed entry comment parsed "
+                  f"silently: {typo!r}")
+            return 1
+    # `--update` rewrites this file wholesale; a writer that drops the
+    # annotation would revoke the relocation its own commit is declaring.
+    round_tripped = parse_ledger(
+        render_ledger(["# header"], {"x.rs": 2, "b.rs": 1}, {"x.rs": "a.rs"})
+    )
+    if round_tripped != ({"x.rs": 2, "b.rs": 1}, {"x.rs": "a.rs"}):
+        print(f"self-test FAILED: --update's writer loses moved-from "
+              f"annotations: {round_tripped}")
+        return 1
     # The failure mode this rule is most likely to die of: an unfetched merge
     # base makes every file read as absent, which is indistinguishable from
     # "the gate did not exist there" -- i.e. a silent pass. Resolving the ref
@@ -308,7 +541,12 @@ def self_test():
 
     print(f"self-test ok ({total} sites across {len(per_file)} files); "
           f"all three per-module rules fire, clean case silent; "
-          f"merge-base rule rejects all three raises and passes four legal diffs")
+          f"merge-base rule rejects all three raises and passes four legal "
+          f"diffs; relocations credit a real surrender (declared move and a "
+          f"1+1 three-way split pass) and reject an undeclared move, "
+          f"laundering, an over-draw, a double-spend, a stale annotation and a "
+          f"self-reference; the annotation parses, survives --update's writer, "
+          f"and a malformed one raises")
     return 0
 
 def main():
@@ -329,17 +567,18 @@ def main():
             return 1
         BASELINE.write_text(f"{total}\n")
         # Rewrite the per-module ceilings too, preserving the header. Entries
-        # that reached zero simply do not come back -- rule 3.
+        # that reached zero simply do not come back -- rule 3. `moved-from:`
+        # annotations on surviving entries are CARRIED OVER: dropping them here
+        # would silently revoke the relocation the same commit is declaring, and
+        # `--no-raise-vs` would then reject the tree `--update` just wrote.
+        existing_moves = load_moves()
         header = []
         for line in FILES.read_text(encoding="utf-8").splitlines():
             if line.startswith("#") or not line.strip():
                 header.append(line)
             else:
                 break
-        FILES.write_text(
-            "\n".join(header) + "\n"
-            + "".join(f"{n} {p}\n" for p, n in sorted(per_file.items()))
-        )
+        FILES.write_text(render_ledger(header, per_file, existing_moves))
         print(f"baseline set to {total}" + (f" (was {prev})" if prev is not None else ""))
         print(f"per-module ceilings rewritten: {len(per_file)} entries")
         return 0

@@ -86,7 +86,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 |---|---|---|---|---|
 | `perry-ext-ads` | `perry/ads` | Obsolete integration | Remove after compatibility review | Bundled; removal pending |
 | `perry-ext-argon2` | `argon2` | External integration | Move to an external native package | Bundled; migration pending |
-| `perry-ext-axios` | `axios` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-bcrypt` | `bcrypt` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-better-sqlite3` | `better-sqlite3` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-cheerio` | `cheerio` | Source package | Compile the upstream package source | Bundled; migration pending |
@@ -119,7 +118,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-streams` | `streams` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-typescript` | `typescript` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-undici` | `undici` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-uuid` | `uuid` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ws` | `ws` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-zlib` | `zlib` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 <!-- END GENERATED BINDING GOVERNANCE -->

@@ -56,40 +56,6 @@ pub extern "C" fn js_await_js_promise() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_axios_create() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_delete() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_get() -> i64 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn js_axios_head() -> i64 {
-    0
-}
-
-#[no_mangle]
-pub extern "C" fn js_axios_options() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_post() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_put() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_axios_request() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_bcrypt_compare() -> i64 {
     0
 }
@@ -1444,30 +1410,6 @@ pub extern "C" fn js_sqlite_transaction_commit() -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn js_sqlite_transaction_rollback() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_nil() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_v1() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_v4() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_v7() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_validate() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_version() -> i64 {
     0
 }
 // readline (#347) — TUI use case isn't relevant on Android, so stubs

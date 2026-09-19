@@ -14,6 +14,7 @@ module.exports = binding
         src,
         &PathBuf::from("/tmp/node_modules/opencode/watcher.js"),
         Some("linux-x86_64-musl"),
+        false,
     );
     assert!(
         wrapped.contains("from '@parcel/watcher-linux-x64-musl'")

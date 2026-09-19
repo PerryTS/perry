@@ -21,11 +21,25 @@ LLVM-IR checker (blind to Rust locals) nor the root-holder census (enumerates
 
 This is a REPORT, not a proof. Rust has no effect system marking "this call may
 allocate", so the collection-point list is a curated denylist and the binding
-detection is line-order over source text. Expect false positives where the
+detection is statement-order over source text. Expect false positives where the
 allocation provably cannot trigger a collection, and false negatives wherever a
 pointer flows through a shape this does not spell. The number is useful as an
 EXPOSURE SURFACE -- how much of the surface no instrument is watching -- not as
 a bug count.
+
+STATEMENT-order, not line-order, since #10715: a `let` whose initializer
+rustfmt wrapped onto the following lines is folded back into one statement
+before matching. It used to be matched per line, so a binding broken after its
+`=` -- a function of indentation depth and identifier length, not of anything
+about the code -- was simply not counted. Deeply nested code, which is where
+rooting bugs live, was the least scanned, and the totals were in part a measure
+of formatting. Statements containing a brace are still read line by line, on
+purpose: see `join_let_statement`.
+
+`--no-raise-vs` SCANS THE WORKTREE, since #10713. It used to compare the merge
+base's recorded baseline against the checked-out one and nothing else, so a
+branch that added findings without touching the baseline passed it while
+`--check` failed on the same tree, seconds later, in the same run.
 
 Per CLAUDE.md, a new gate has never been green, so this ships as a report and
 `--check` compares against a recorded baseline rather than demanding zero.
@@ -49,7 +63,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts" / "unrooted_local_shape_baseline.json"
-BASELINE_SCHEMA = 2
+BASELINE_SCHEMA = 3
+
+# (base, head) schema pairs across which the DETECTOR itself changed, so the two
+# sides were measured with different yardsticks and their numbers are not
+# comparable. Each entry is a deliberate, reviewed act: the ratchet cannot tell
+# "the detector got better" from "the debt got worse" by looking at the totals,
+# so a migration is the one place the recorded number is allowed to rise, and it
+# is named here rather than inferred. Every schema pair NOT listed is rejected.
+#
+#   1 -> 2  #8253's ordinary-use blind spot, plus NaN-box pointer sources.
+#   2 -> 3  #10715's wrapped-`let` fold. The line-oriented matcher did not see a
+#           binding rustfmt broke after its `=`, so the old ceilings were
+#           produced by a detector that could not count the surface the new one
+#           counts. 558 -> 581 on the same tree: 34 bindings that were invisible
+#           minus 11 that were reported against a dead identity.
+AUDITED_MIGRATIONS = frozenset({(1, 2), (2, 3)})
 
 # Crate families outside `raw_handle_debt.py`'s scope -- the whole point.
 SCAN_GLOBS = (
@@ -134,7 +163,77 @@ ROOT_HANDLE_BINDINGS = (
 
 FN_START = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)")
 LET_BIND = re.compile(r"^\s*let\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*(.+)$")
+LET_HEAD = re.compile(r"^\s*let\s")
 IDENT = re.compile(r"\b\w+\b")
+
+# A wrapped `let` cannot span more lines than this before the fold gives up and
+# the statement is read one line at a time again. A bound purely so a malformed
+# or unterminated statement cannot walk to the end of the function.
+JOIN_MAX_LINES = 40
+
+
+def statement_is_complete(text: str) -> bool:
+    """True when TEXT holds a whole statement: a `;` outside every bracket."""
+    depth = 0
+    for ch in text:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == ";" and depth <= 0:
+            return True
+    return False
+
+
+def join_let_statement(body: list[str], offset: int) -> tuple[str, int]:
+    """Fold a `let` whose initializer rustfmt wrapped onto the lines after it.
+
+    #10715: `LET_BIND` was matched per line, so `rustfmt` breaking a binding
+    after the `=` left a head line with nothing on its right-hand side. Nothing
+    matched, the local was never tracked, and the finding disappeared -- a false
+    negative produced by indentation depth and identifier length rather than by
+    anything about the code. That made the deepest-nested code, which is exactly
+    where rooting bugs live, the least scanned, and made the totals partly a
+    measure of formatting. Returns the folded statement and the last line it ate.
+
+    Statements containing a brace are deliberately left alone. A `{` means a
+    closure, `match`, block or struct-literal initializer whose body carries its
+    OWN bindings and collection points; folding those into a single expression
+    would hide every one of them, trading this blind spot for a worse one. Line
+    order is already correct for that shape, since the head line keeps a
+    non-empty right-hand side.
+    """
+    head = body[offset]
+    if "{" in head or "}" in head or statement_is_complete(head):
+        return head, offset
+    text = head.rstrip()
+    for j in range(offset + 1, min(offset + 1 + JOIN_MAX_LINES, len(body))):
+        nxt = body[j]
+        if "{" in nxt or "}" in nxt:
+            return head, offset
+        text = f"{text} {nxt.strip()}"
+        if statement_is_complete(text):
+            return text, j
+    return head, offset
+
+
+def fold_wrapped_lets(body: list[str]) -> tuple[dict[int, str], set[int]]:
+    """Return (folded text by head offset, offsets absorbed into a head).
+
+    Absorbed lines are scanned as empty rather than dropped, so every line still
+    contributes its brace delta to the lexical depth and the reported line
+    numbers stay the function's own.
+    """
+    joined: dict[int, str] = {}
+    absorbed: set[int] = set()
+    for offset, line in enumerate(body):
+        if offset in absorbed or not LET_HEAD.match(line):
+            continue
+        text, last = join_let_statement(body, offset)
+        if last > offset:
+            joined[offset] = text
+            absorbed.update(range(offset + 1, last + 1))
+    return joined, absorbed
 
 
 def strip_comments(text: str) -> list[str]:
@@ -195,7 +294,12 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
     findings = []
     lexical_depth = 0
     runtime_scopes: list[tuple[str, int]] = []
-    for offset, line in enumerate(body):
+    joined, absorbed = fold_wrapped_lets(body)
+    for offset, source_line in enumerate(body):
+        # A folded continuation is scanned as empty: its text was already read
+        # as part of the `let` at the head offset, and reading it twice would
+        # report the same use once per line it wrapped onto.
+        line = "" if offset in absorbed else joined.get(offset, source_line)
         m = LET_BIND.match(line)
         expression = m.group(2) if m else line
         runtime_scopes = [
@@ -237,7 +341,10 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
             crossed.pop(local, None)
             if calls_any(rhs, POINTER_SOURCES) and not calls_any(rhs, ROOT_HANDLE_BINDINGS):
                 bound[local] = offset
-        lexical_depth += line.count("{") - line.count("}")
+        # Depth comes from the SOURCE line, never the folded text: an absorbed
+        # line is scanned as empty but still owns its braces. Folded statements
+        # are brace-free by construction, so this is the pre-#10715 arithmetic.
+        lexical_depth += source_line.count("{") - source_line.count("}")
     return findings
 
 
@@ -325,20 +432,46 @@ unsafe fn planted_after_runtime_scope() -> *mut ArrayHeader {
     let _other = js_array_alloc(0);
     stale
 }
+
+unsafe fn planted_wrapped_binding() -> *mut ObjectHeader {
+    let object =
+        js_object_alloc_with_shape(shape, 3, keys.as_ptr(), keys.len() as u32);
+    js_object_set_field(object, 0, first);
+    js_object_set_field(object, 1, second);
+    object
+}
+
+unsafe fn clean_wrapped_shadow_rebinds() -> usize {
+    let err_str = js_string_from_bytes(first.as_ptr(), first.len() as u32);
+    let _other = js_array_alloc(0);
+    let err_str =
+        js_string_from_bytes(second.as_ptr(), second.len() as u32);
+    string_len(err_str)
+}
+
+unsafe fn planted_inside_wrapped_closure() {
+    let handler = move |arg: f64| {
+        let inner = js_array_alloc(1);
+        let _other = js_array_alloc(0);
+        consume(inner);
+    };
+    register(handler);
+}
 '''
 
 
 def compare_baselines(base: dict, head: dict) -> list[str]:
     """Return recorded-debt increases from BASE to HEAD.
 
-    Schema 1 is the detector merged by #8253. Schema 2 fixes that detector's
-    ordinary-use blind spot and adds NaN-box pointer sources, so its initial
-    re-pin necessarily increases the measured surface. That one migration is
-    explicit; after it lands, both total and per-file ceilings only go down.
+    A detector change makes the re-pin necessarily raise the measured surface,
+    and the ratchet cannot distinguish that from real debt by reading totals. So
+    the schema pairs where it happened are enumerated in `AUDITED_MIGRATIONS`
+    and exempted by name; every other change of schema is rejected outright.
+    Between migrations, both total and per-file ceilings only go down.
     """
     base_schema = int(base.get("schema_version", 1))
     head_schema = int(head.get("schema_version", 1))
-    if (base_schema, head_schema) == (1, BASELINE_SCHEMA):
+    if (base_schema, head_schema) in AUDITED_MIGRATIONS:
         return []
     if base_schema != head_schema:
         return [f"baseline schema changed {base_schema} -> {head_schema} without an audited migration"]
@@ -355,8 +488,56 @@ def compare_baselines(base: dict, head: dict) -> list[str]:
     return bad
 
 
-def git_show_baseline(ref: str) -> dict | None:
-    """Read the baseline at REF, failing closed when REF was not fetched."""
+def compare_measured(base: dict, total: int, per_file: dict[str, int]) -> list[str]:
+    """Return rises of the MEASURED worktree over BASE's recorded ceilings.
+
+    #10713: this comparison did not exist, and its absence was the whole bug.
+    `--no-raise-vs` read two recorded BASELINE FILES -- the merge base's and the
+    checked-out one -- and never scanned a line of source. A branch that ADDED
+    findings without touching the baseline therefore compared 561 against 561
+    and printed "no ceiling raised" while `--check`, seconds later in the same
+    `run_lint_gates.sh` run on the same worktree, failed with
+    `REGRESSION: 563 findings exceeds baseline 561`. The variant whose entire
+    purpose is catching a rise against the base could not see one, because the
+    only number it ever looked at was one the diff had left alone.
+
+    Measuring against the base's RECORDED ceilings rather than the base's own
+    measurement is the closest comparison available without a second checkout,
+    and it is the same yardstick `--check` uses, so the two forms now agree.
+    """
+    bad = []
+    base_total = int(base["total"])
+    if total > base_total:
+        bad.append(f"measured total {total} exceeds merge-base recorded total {base_total}")
+    base_files = base.get("per_file", {})
+    for path, count in sorted(per_file.items()):
+        ceiling = int(base_files.get(path, 0))
+        if count > ceiling:
+            where = "not recorded at the merge base" if path not in base_files else f"ceiling {ceiling}"
+            bad.append(f"{path}: {count} measured findings exceeds {where}")
+    return bad
+
+
+def resolve_ref(ref: str) -> str:
+    """Return REF's commit SHA, failing closed on an empty or unfetched ref.
+
+    Resolving FIRST is the point, and `raw_handle_debt.py`'s `git_show` makes
+    the argument: a merge base the runner never fetched reports every file as
+    absent, which reads as "the base recorded nothing" -- a comparison that did
+    not happen, reported as a pass. It must be a RED build instead.
+
+    The empty string gets the same treatment, and for the same reason. It used
+    to get worse: `--no-raise-vs ""` is falsy, so `if args.no_raise_vs` was
+    False, the vs-base mode never ran at all, and the script fell through to the
+    plain report, which exits 0. An unset `$BASE_SHA` thus printed a perfectly
+    ordinary-looking finding table and passed, having compared nothing.
+    """
+    if not ref.strip():
+        raise SystemExit(
+            "::error::--no-raise-vs was given an empty ref. That is an unset "
+            "$BASE_SHA, not a request to skip the comparison -- failing rather "
+            "than passing on a comparison that did not happen."
+        )
     resolved = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
         cwd=ROOT,
@@ -367,8 +548,14 @@ def git_show_baseline(ref: str) -> dict | None:
         raise SystemExit(
             f"::error::cannot resolve {ref}. The merge base was not fetched, so "
             "the unrooted-local ratchet cannot compare against it -- failing "
-            "rather than passing on a comparison that did not happen."
+            "rather than passing on a comparison that did not happen. Fetch it "
+            "with `git fetch --no-tags --depth=1 origin <sha>`."
         )
+    return resolved.stdout.strip()
+
+
+def git_show_baseline(ref: str) -> dict | None:
+    """Read the baseline at REF. REF must already be resolved."""
     proc = subprocess.run(
         ["git", "show", f"{ref}:scripts/unrooted_local_shape_baseline.json"],
         cwd=ROOT,
@@ -381,29 +568,44 @@ def git_show_baseline(ref: str) -> dict | None:
 
 
 def no_raise_vs(ref: str) -> int:
-    base = git_show_baseline(ref)
+    resolved = resolve_ref(ref)
+    base = git_show_baseline(resolved)
     if base is None:
-        print(f"{ref} has no unrooted-local baseline; no recorded debt to compare")
+        print(f"{ref} ({resolved}) has no unrooted-local baseline; no recorded debt to compare")
         return 0
     head = json.loads(BASELINE.read_text(encoding="utf-8"))
     base_schema = int(base.get("schema_version", 1))
     head_schema = int(head.get("schema_version", 1))
+    migration = (base_schema, head_schema) in AUDITED_MIGRATIONS
     bad = compare_baselines(base, head)
+
+    # Scan the worktree too. Without this the whole mode is recorded-vs-recorded
+    # (#10713). Skipped only across the audited schema migration, where the two
+    # sides were measured by different detectors and the numbers are not
+    # comparable -- the same exemption `compare_baselines` already makes.
+    measured = "worktree not scanned (different detectors either side)"
+    if not migration:
+        results = collect()
+        total = sum(len(v) for v in results.values())
+        measured = f"measured {total}"
+        bad += compare_measured(base, total, {k: len(v) for k, v in results.items()})
+
+    where = (
+        f"vs. {ref} ({resolved}): recorded {base['total']} -> {head['total']}, "
+        f"{measured}"
+    )
     if bad:
-        print(f"::error::recorded unrooted-local debt rose vs. {ref}: {len(bad)} violation(s)")
+        print(f"::error::unrooted-local debt rose {where}: {len(bad)} violation(s)")
         for violation in bad:
             print(f"  {violation}")
         return 1
-    if (base_schema, head_schema) == (1, BASELINE_SCHEMA):
+    if migration:
         print(
-            f"recorded unrooted-local debt vs. {ref}: audited schema migration "
-            f"{base_schema} -> {head_schema}, baseline {base['total']} -> {head['total']}"
+            f"unrooted-local debt {where}: audited schema migration "
+            f"{base_schema} -> {head_schema}"
         )
     else:
-        print(
-            f"recorded unrooted-local debt vs. {ref}: {base['total']} -> {head['total']}, "
-            "no ceiling raised"
-        )
+        print(f"unrooted-local debt {where}, no ceiling raised")
     return 0
 
 
@@ -423,6 +625,16 @@ def self_test() -> int:
         "planted_later_rhs",
         "planted_after_transient_scope",
         "planted_after_runtime_scope",
+        # #10715. `let object =` with the initializer on the next line, the
+        # shape rustfmt produces once the binding is nested a few levels deep.
+        # The line-oriented matcher saw no right-hand side, never tracked
+        # `object`, and reported nothing -- a false negative bought with an
+        # indent. Taken from a live site (perry-ext-ws `js_ws_server_address`).
+        "planted_wrapped_binding",
+        # The fold must stop at a brace. A closure body carries its own
+        # bindings and collection points; swallowing it into one expression
+        # would trade #10715's blind spot for a strictly larger one.
+        "planted_inside_wrapped_closure",
     }
     missing = required - names
     if missing:
@@ -433,6 +645,11 @@ def self_test() -> int:
         "clean_use_on_first_collection",
         "clean_ffi_transient_root",
         "clean_active_runtime_scope",
+        # The same #10715 defect in the other direction: a WRAPPED shadowing
+        # `let` matched nothing, so the dead identity from the earlier binding
+        # of that name stayed live and every use of the fresh one was reported.
+        # Eleven of the findings in perry-stdlib/src/ioredis.rs were this.
+        "clean_wrapped_shadow_rebinds",
     } & names
     if forbidden:
         print(f"SELF-TEST FAIL: flagged clean control(s): {sorted(forbidden)}", file=sys.stderr)
@@ -445,7 +662,10 @@ def self_test() -> int:
             {"schema_version": 2, "total": 2, "per_file": {"a.rs": 1, "new.rs": 1}},
             "was not listed",
         ),
-        ({"schema_version": 3, "total": 2, "per_file": {"a.rs": 2}}, "schema changed"),
+        # An UNAUDITED schema pair is still rejected. 2 -> 4 rather than 2 -> 3,
+        # because 2 -> 3 is now a named migration: the exemption is a list, not
+        # a licence to renumber, and this asserts the rest of the space is shut.
+        ({"schema_version": 4, "total": 2, "per_file": {"a.rs": 2}}, "schema changed"),
     )
     for head, needle in comparisons:
         if not any(needle in violation for violation in compare_baselines(base, head)):
@@ -454,17 +674,140 @@ def self_test() -> int:
     if compare_baselines(base, base):
         print("SELF-TEST FAIL: unchanged baseline reported an increase", file=sys.stderr)
         ok = False
-    if compare_baselines({"total": 218, "per_file": {}}, {"schema_version": 2, "total": 999, "per_file": {}}):
-        print("SELF-TEST FAIL: audited schema-1 migration was rejected", file=sys.stderr)
+    for pair, head in (
+        ((1, 2), {"schema_version": 2, "total": 999, "per_file": {}}),
+        ((2, 3), {"schema_version": 3, "total": 999, "per_file": {"a.rs": 999}}),
+    ):
+        older = {"schema_version": pair[0], "total": 218, "per_file": {"a.rs": 218}}
+        if compare_baselines(older, head):
+            print(f"SELF-TEST FAIL: audited schema migration {pair} was rejected", file=sys.stderr)
+            ok = False
+    if BASELINE_SCHEMA != max(head for _, head in AUDITED_MIGRATIONS):
+        print(
+            f"SELF-TEST FAIL: BASELINE_SCHEMA is {BASELINE_SCHEMA} but the newest audited "
+            f"migration ends at {max(head for _, head in AUDITED_MIGRATIONS)}; a schema bump "
+            "must name its own migration or every PR is exempt from the ratchet",
+            file=sys.stderr,
+        )
         ok = False
+
+    # #10713. Everything above this line passed on the day `--no-raise-vs`
+    # returned green on a worktree `--check` rejected, which is the point: a
+    # self-test that does not cover the failing mode is not evidence about it.
+    measured_cases = (
+        ((3, {"a.rs": 3}), "measured total 3 exceeds merge-base recorded total 2"),
+        ((2, {"a.rs": 1, "new.rs": 1}), "new.rs: 1 measured findings exceeds not recorded"),
+    )
+    for (total, per_file), needle in measured_cases:
+        if not any(needle in violation for violation in compare_measured(base, total, per_file)):
+            print(f"SELF-TEST FAIL: measured rule did not fire for {needle!r}", file=sys.stderr)
+            ok = False
+    if compare_measured(base, 2, {"a.rs": 2}):
+        print("SELF-TEST FAIL: an unchanged worktree reported a measured rise", file=sys.stderr)
+        ok = False
+
+    # An empty ref is an unset $BASE_SHA -- a comparison that did not happen,
+    # which must be red. `resolve_ref` says so in those words; `git rev-parse`
+    # would reject it regardless, so this pair asserts the message, not the
+    # behaviour. The behaviour is the DISPATCH, checked below.
+    for bad_ref in ("", "   "):
+        try:
+            resolve_ref(bad_ref)
+        except SystemExit:
+            continue
+        print(f"SELF-TEST FAIL: resolve_ref({bad_ref!r}) did not fail closed", file=sys.stderr)
+        ok = False
+
+    ok = _self_test_empty_ref_dispatch() and ok
+    ok = _self_test_no_raise_vs() and ok
 
     if ok:
         print(
-            "self-test OK: collecting/plain-return/later-RHS sites flagged, "
-            "clean controls ignored, baseline increases rejected"
+            "self-test OK: collecting/plain-return/later-RHS/wrapped sites flagged, "
+            "clean controls ignored, baseline and measured increases rejected"
         )
         return 0
     return 1
+
+
+def _self_test_empty_ref_dispatch() -> bool:
+    """`--no-raise-vs ""` must fail closed, not fall through to the report.
+
+    The hole was in the dispatch, one character wide: `if args.no_raise_vs`
+    tests TRUTHINESS, and the empty string an unset `$BASE_SHA` expands to is
+    falsy. The vs-base mode was therefore never entered at all -- no ref was
+    resolved, no baseline read, nothing compared -- and the script printed an
+    ordinary finding table and exited 0. Guarding inside `resolve_ref` alone
+    does not cover this, because nothing called it.
+    """
+    import contextlib
+    import io
+
+    saved = sys.argv
+    outcome: object = None
+    try:
+        sys.argv = ["unrooted_local_shape.py", "--no-raise-vs", ""]
+        with contextlib.redirect_stdout(io.StringIO()):
+            outcome = main()
+    except SystemExit:
+        return True
+    finally:
+        sys.argv = saved
+    print(
+        f"SELF-TEST FAIL: `--no-raise-vs \"\"` returned {outcome!r} instead of failing "
+        "closed; an unset $BASE_SHA compared nothing and passed -- this is #10713",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _self_test_no_raise_vs() -> bool:
+    """Drive the real `--no-raise-vs` over the tree that fooled it (#10713).
+
+    Reproduces the observed combination exactly: the merge base and the
+    checked-out baseline both recording 561, and a worktree measuring 563. That
+    is a pass for a recorded-vs-recorded comparison and a `REGRESSION` for
+    `--check`, and both ran seconds apart in one `run_lint_gates.sh` invocation.
+    Stubs stand in for git and the scan so the case is a fixture rather than a
+    property of whatever this repo happens to measure today.
+    """
+    import contextlib
+    import io
+    import tempfile
+
+    recorded = {"schema_version": BASELINE_SCHEMA, "total": 561, "per_file": {"a.rs": 561}}
+    scope = globals()
+    saved = {k: scope[k] for k in ("resolve_ref", "git_show_baseline", "collect", "BASELINE")}
+    out = io.StringIO()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            head = Path(tmp) / "baseline.json"
+            head.write_text(json.dumps(recorded), encoding="utf-8")
+            scope["BASELINE"] = head
+            scope["resolve_ref"] = lambda ref: "0" * 40
+            scope["git_show_baseline"] = lambda ref: recorded
+            with contextlib.redirect_stdout(out):
+                scope["collect"] = lambda root=None: {"a.rs": [None] * 563}
+                regressed = no_raise_vs("planted-base")
+                scope["collect"] = lambda root=None: {"a.rs": [None] * 561}
+                unchanged = no_raise_vs("planted-base")
+    finally:
+        scope.update(saved)
+
+    ok = True
+    if regressed != 1:
+        print(
+            "SELF-TEST FAIL: --no-raise-vs passed a worktree measuring 563 against "
+            "a merge base recording 561 (both baselines identical) -- this is #10713",
+            file=sys.stderr,
+        )
+        ok = False
+    if unchanged != 0:
+        print("SELF-TEST FAIL: --no-raise-vs failed an unchanged worktree", file=sys.stderr)
+        ok = False
+    if not ok:
+        print(out.getvalue(), file=sys.stderr)
+    return ok
 
 
 def main() -> int:
@@ -478,7 +821,10 @@ def main() -> int:
 
     if args.self_test:
         return self_test()
-    if args.no_raise_vs:
+    # `is not None`, not truthiness: `--no-raise-vs ""` is an unset $BASE_SHA,
+    # and dropping through to the report on it is a pass without a comparison
+    # (#10713). `resolve_ref` rejects it.
+    if args.no_raise_vs is not None:
         return no_raise_vs(args.no_raise_vs)
 
     results = collect()

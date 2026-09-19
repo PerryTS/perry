@@ -383,22 +383,22 @@ pub(crate) fn lower_let(
                 ctx,
                 &perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone())),
             )?;
-            // #10488: a hoisted `var`'s real declaration reaches this
-            // redeclaration branch (#1803 predefine-then-declare shape) and
-            // returns below before the fresh-declaration path's
-            // `ctx.local_types.insert` ever runs. `proven_local_types` a few
-            // lines up IS refreshed per-site, so `is_numeric_expr` (which
-            // consults it via `stable_local_type_proof`) sees this
-            // declaration's more specific type — but `local_types` keeps
-            // whatever the FIRST (predefine) site declared, normally `Any`.
-            // That desyncs `is_numeric_expr` from `static_type_of` /
-            // `expr_may_return_boxed_value_from_raw_f64_fallback`, which both
-            // read `local_types`: a strict-equality compare against an
-            // out-of-bounds/hole array read was treated as definitely-numeric
-            // (a bare `fcmp`, which cannot represent `undefined`) instead of
-            // falling back to a boxed compare. Refresh `local_types` here too
-            // so both predicates agree on this local's current type.
-            ctx.local_types.insert(id, refined_ty.clone());
+            // #10488: a hoisted `var`'s real declaration reaches this branch
+            // (#1803 predefine-then-declare) and returns before the
+            // fresh-declaration path's `insert` runs, desyncing
+            // `is_numeric_expr` from the `local_types` readers. Refresh here.
+            //
+            // #10727: but NOT when the storage is a box. A captured local
+            // reaches this branch with no source redeclaration --
+            // `PreallocateBoxes` registers the id up front -- and the refined
+            // type then describes the VALUE while the slot holds a box
+            // pointer, so reads lower as raw local loads instead of
+            // `js_box_get_bits`: the declaring scope read `undefined` while a
+            // closure over the same binding saw the real value. A hoisted
+            // `var` is unboxed unless captured, so #10488 keeps its fix.
+            if !ctx.boxed_vars.contains(&id) {
+                ctx.local_types.insert(id, refined_ty.clone());
+            }
         } else if ctx.tdz_boxes.remove(&id) {
             // No-init reuse (`let x;`) of a TDZ-seeded box must still end the
             // dead zone by clearing the sentinel to `undefined`; otherwise a

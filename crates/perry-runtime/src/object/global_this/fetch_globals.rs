@@ -724,6 +724,87 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
+    // #10625: `class X extends AsyncLocalStorage` reached indirectly (local
+    // alias, namespace member, CJS destructured `require()`) hits the same gap
+    // #10453/#10621 fixed for AsyncResource: only the canonical bare
+    // `import { AsyncLocalStorage } from "node:async_hooks"` binding is
+    // recognized statically at HIR-lowering time
+    // (`crates/perry-hir/src/lower_decl/class_decl.rs`), which routes to
+    // perry-stdlib's `js_async_local_storage_subclass_init` via a
+    // codegen-declared extern symbol
+    // (`crates/perry-codegen/src/expr/this_super_call.rs`). Every other
+    // heritage shape resolves `parent_val` to the identical bound native
+    // export here, but this crate cannot call that stdlib helper directly —
+    // perry-runtime cannot depend on perry-stdlib, where the helper (and the
+    // `Handle` registry backing it) live — so route through the registration
+    // hook perry-stdlib installs at startup instead, exactly like the WASI arm
+    // above.
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str())
+                == "async_hooks"
+                && method.as_str() == "AsyncLocalStorage"
+        })
+    {
+        let ptr = crate::value::JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeAsyncLocalStorageSubclassInitFn =
+                std::mem::transmute(ptr);
+            return dispatch(this_box);
+        }
+    }
+    // #10448: `class X extends Transform` (and Readable/Writable/Duplex)
+    // never called the subclass's `_transform`/`_write`/`_read` override
+    // unless the heritage was a shape `is_genuine_node_stream_parent`
+    // recognizes statically (`crates/perry-hir/src/lower_decl/class_decl.rs`)
+    // — a local alias (`const Alias = Transform`), a namespace member reached
+    // through a CJS destructured `require('stream')`, or an indirect
+    // subclass all fell through to the ordinary-call dispatch below,
+    // which invokes the bound `stream` export as a plain constructor and
+    // drops the result — `this` stayed an empty object, so `write()` threw
+    // `ERR_METHOD_NOT_IMPLEMENTED`. Recognize the resolved bound-export
+    // value here, exactly as the WASI arm above does, and run the same
+    // runtime shim the static `extends Transform` path already uses
+    // (`js_node_stream_*_subclass_init`, `crates/perry-codegen/src/expr/write_barrier.rs`'s
+    // `lower_node_stream_super_init`), so every heritage shape installs the
+    // override onto `this` identically.
+    //
+    // `PassThrough` is deliberately NOT handled here: HIR never recognizes
+    // it as a node:stream native parent at all, even via a bare import
+    // (`canonical_native_parent_name` lists Readable/Writable/Duplex/
+    // Transform but not PassThrough), so the hidden `_transform` field this
+    // shim reads is never pre-seeded for ANY `PassThrough` heritage shape —
+    // that's a separate, deeper HIR-level gap needing its own fix; adding an
+    // arm here alone was confirmed (empirically) to change nothing.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if super::super::native_module::normalize_native_module_alias(module.as_str()) == "stream" {
+            let opts = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let handled = match method.as_str() {
+                "Readable" => Some(crate::node_stream::js_node_stream_readable_subclass_init(
+                    this_box, opts,
+                )),
+                "Writable" => Some(crate::node_stream::js_node_stream_writable_subclass_init(
+                    this_box, opts,
+                )),
+                "Duplex" => Some(crate::node_stream::js_node_stream_duplex_subclass_init(
+                    this_box, opts,
+                )),
+                "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
+                    this_box, opts,
+                )),
+                _ => None,
+            };
+            if handled.is_some() {
+                return undef;
+            }
+        }
+    }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
     // constructor returns a fresh NaN-boxed cell and does NOT mutate the
     // implicit `this`, so the ordinary dispatch below would drop that cell and

@@ -999,6 +999,11 @@ pub fn gc_init() {
     // Runtime path-module exports and cached initialization errors live in a
     // per-heap Rust registry, so moving GC must mark and rewrite them.
     reg_scanner!(crate::module_require::scan_module_path_roots_mut);
+    // #10735: the shared CJS "main module" (`require.main` / Node's
+    // `process.mainModule`) is a raw heap pointer cached in a thread-local
+    // outside any shadow frame — a moving collection must mark and rewrite
+    // it like any other mutable root.
+    reg_scanner!(crate::module_require::scan_cjs_main_module_root_mut);
     reg_budgeted_scanner!(
         promise_mutable_root_scanner,
         crate::promise::scan_promise_roots_mut_step,

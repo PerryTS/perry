@@ -15,6 +15,7 @@ mod buffer_side_tables;
 mod census;
 mod census_block_windows;
 mod census_whole_block;
+mod cjs_main_module;
 mod concat_site;
 mod contract;
 mod copy_slot_decode;

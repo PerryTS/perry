@@ -458,6 +458,58 @@ pub(in crate::commands::compile) fn has_top_level_module_exports_assignment(sour
     false
 }
 
+/// Returns true if `source` (expected to already be comment/string-stripped
+/// via [`strip_comments_and_strings`]) contains a top-level TypeScript
+/// `namespace X { … }` / legacy `module X { … }` declaration with a REAL
+/// (non-ambient) body — i.e. NOT `declare namespace X { … }`, which is
+/// type-only and never emits runtime code, so it can't be the cause of a
+/// namespace/function declaration-merge going missing at runtime.
+///
+/// Line-anchored rather than depth-tracked, unlike [`has_top_level_esm`]: a
+/// `namespace`/`module` block is hand-authored (or `tsc`-emitted) TypeScript
+/// source, never a minified bundle, so it is always written starting its own
+/// line. Requiring the `{` to follow the (possibly dotted) namespace name on
+/// the SAME statement, with only whitespace/dots in between, keeps this from
+/// matching ordinary CommonJS `module.exports = { … }` — there `module` is
+/// followed immediately by `.`, never by whitespace then an identifier.
+///
+/// Used together with [`has_top_level_export_equals`] (#10662): a package
+/// like `agent-base` merges `namespace createAgent { export class Agent
+/// extends EventEmitter { … } }` onto a same-named `function createAgent()`
+/// and exports the merged value via `export = createAgent`. Perry's HIR
+/// lowers the namespace's exported members as static-field-set init
+/// statements against a synthetic class entity that does not end up being
+/// the SAME runtime object `export =` exports — so a downstream `class X
+/// extends pkg.Agent` sees `pkg.Agent` as `undefined` and throws "Class
+/// extends value is not a constructor" (axios's `https-proxy-agent` →
+/// `agent-base` dependency chain). Node can't run this non-erasable TS
+/// syntax directly either (`--experimental-strip-types` rejects `namespace`/
+/// `export =`), so a package built this way is NEVER executed from its raw
+/// `.ts` source in practice — only via its compiled emit. Detecting the
+/// shape and falling back to that emit (see `is_hybrid_cjs_emit_input` in
+/// `resolve.rs`) matches what Node actually runs, instead of attempting to
+/// correctly implement namespace/function declaration merging.
+pub(in crate::commands::compile) fn has_top_level_namespace_or_module_block(source: &str) -> bool {
+    let re = perry_perex::tooling::Regex::new(
+        r"(?m)^[ \t]*(declare\s+)?(?:export\s+)?(?:namespace|module)\s+[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*\s*\{",
+    )
+    .expect("valid namespace/module regex");
+    re.captures_iter(source).any(|cap| cap.get(1).is_none())
+}
+
+/// Returns true if `source` (comment/string-stripped) contains a top-level
+/// TypeScript `export = <expr>;` statement — the CJS-interop export form a
+/// namespace-merged package like `agent-base` uses instead of `module.exports
+/// = …` (see [`has_top_level_namespace_or_module_block`], #10662). The
+/// trailing character class excludes `export ==`/`export =>`; neither is
+/// valid syntax here, but the exclusion costs nothing and avoids relying on
+/// lookahead, which the `regex` crate doesn't support.
+pub(in crate::commands::compile) fn has_top_level_export_equals(source: &str) -> bool {
+    let re = perry_perex::tooling::Regex::new(r"(?m)^[ \t]*export\s*=[\s\w$(\[{]")
+        .expect("valid export= regex");
+    re.is_match(source)
+}
+
 /// Returns true if `line` starts with `keyword` followed by a character
 /// that can legally begin an `import`/`export` statement's continuation:
 /// space, `{`, `*` (export only), `"`, `'`, or `(` (dynamic import). We

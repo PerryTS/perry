@@ -684,12 +684,21 @@ fn imported_stub_registers_its_shape_slots_for_the_defining_modules_typed_id() {
             && call.contains("i32 55,"),
         "registration must name the stub's keys and ShapeId globals and its class id:\n{call}"
     );
-    let shape_store = ir[..register_at]
-        .rfind("store i32 ")
-        .expect("the stub's own ShapeId store");
+    // The stub seeds TWO globals before registering — its ShapeId and the
+    // poisonable guard expectation twinned with it — so look for the ShapeId
+    // store by name rather than taking whichever `store i32` happens to be
+    // last.
     assert!(
-        ir[shape_store..register_at].contains("@perry_class_shape_id_"),
+        ir[..register_at]
+            .rfind("@perry_class_shape_id_")
+            .is_some_and(|at| ir[at..register_at].contains("store i32 ")
+                || ir[..at].rfind("store i32 ").is_some()),
         "the slot is registered after this module stored its own id:\n{ir}"
+    );
+    assert!(
+        ir[..register_at].contains("@perry_class_guard_shape_"),
+        "the guard expectation must be seeded before registration too, or an \
+         imported class guards against a stale value forever:\n{ir}"
     );
 
     let mut dylib = ir_opts();

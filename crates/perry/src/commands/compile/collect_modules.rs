@@ -408,6 +408,9 @@ fn collect_module_one(
     // left untouched.
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
+    // #10735: this module's `require.main` (CJS preamble below) must resolve
+    // to the compile-time entry -- same comparison as `is_entry_module` below.
+    let cjs_is_entry_module = ctx.entry_canonical.as_ref() == Some(&canonical);
     // #5247 / #7036: when source locations are requested, capture where the
     // original module body lands inside the wrapped output so debug frames and
     // opt reports can map a wrapped-coordinate byte offset back to an
@@ -415,8 +418,12 @@ fn collect_module_one(
     let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
     let source = if was_cjs_wrapped {
         if ctx.debug_symbols {
-            let (wrapped, body_off) =
-                super::cjs_wrap::wrap_commonjs_with_body_offset(&raw_source, &canonical, target);
+            let (wrapped, body_off) = super::cjs_wrap::wrap_commonjs_with_body_offset(
+                &raw_source,
+                &canonical,
+                target,
+                cjs_is_entry_module,
+            );
             // Newlines before the original body in the wrapped output = the
             // wrapper prefix line count. Recorded only when the body was
             // located; otherwise we skip the skew correction (graceful
@@ -429,7 +436,12 @@ fn collect_module_one(
             });
             wrapped
         } else {
-            super::cjs_wrap::wrap_commonjs_for_target(&raw_source, &canonical, target)
+            super::cjs_wrap::wrap_commonjs_for_target(
+                &raw_source,
+                &canonical,
+                target,
+                cjs_is_entry_module,
+            )
         }
     } else {
         raw_source

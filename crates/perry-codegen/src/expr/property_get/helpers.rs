@@ -765,11 +765,11 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         &obj_bits,
         &obj_handle,
         &expected_class_id_str,
-        &expected_shape_id,
         true,
         None,
         &fast_label,
         &subclass_arms,
+        &keys_global_name,
     );
     let guard_ok = ctx.block().call(
         I32,
