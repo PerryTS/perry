@@ -13,7 +13,6 @@
     "crates/perry-ext-fetch/src/tests.rs": 14,
     "crates/perry-ext-http/src/agent.rs": 3,
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
-    "crates/perry-ext-http/src/response_headers.rs": 1,
     "crates/perry-ext-http/src/server/handle_dispatch.rs": 2,
     "crates/perry-ext-http/src/server/request.rs": 7,
     "crates/perry-ext-http/src/server/response.rs": 1,
@@ -54,7 +53,7 @@
     "crates/perry-stdlib/src/pg/types.rs": 14,
     "crates/perry-stdlib/src/querystring.rs": 2,
     "crates/perry-stdlib/src/ratelimit.rs": 4,
-    "crates/perry-stdlib/src/readline/mod.rs": 5,
+    "crates/perry-stdlib/src/readline/mod.rs": 4,
     "crates/perry-stdlib/src/sqlite/backup.rs": 7,
     "crates/perry-stdlib/src/sqlite/better.rs": 18,
     "crates/perry-stdlib/src/sqlite/bind.rs": 4,
@@ -69,7 +68,7 @@
     "crates/perry-stdlib/src/streams/transform.rs": 8,
     "crates/perry-stdlib/src/streams/writable.rs": 2,
     "crates/perry-stdlib/src/string_decoder.rs": 4,
-    "crates/perry-stdlib/src/tls.rs": 4,
+    "crates/perry-stdlib/src/tls.rs": 3,
     "crates/perry-stdlib/src/webcrypto/aes.rs": 2,
     "crates/perry-stdlib/src/webcrypto/encapsulation.rs": 8,
     "crates/perry-stdlib/src/webcrypto/jwk.rs": 2,
@@ -82,5 +81,5 @@
     "crates/perry-stdlib/src/zlib.rs": 2
   },
   "schema_version": 2,
-  "total": 561
+  "total": 558
 }
