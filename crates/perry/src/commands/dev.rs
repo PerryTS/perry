@@ -282,6 +282,7 @@ fn build_once(
 ) -> Result<()> {
     let args = CompileArgs {
         define: Vec::new(),
+        package_aliases: Vec::new(),
         input: input.to_path_buf(),
         output: Some(output.to_path_buf()),
         keep_intermediates: false,

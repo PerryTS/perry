@@ -92,6 +92,17 @@ pub struct CompileArgs {
     #[arg(long, value_name = "NAME=EXPR")]
     pub define: Vec<String>,
 
+    /// Redirect imports of one package to another source (repeatable).
+    /// Each value is `FROM=TO`: every static or dynamic import of `FROM` is
+    /// compiled as if it imported `TO`. `TO` may be an npm package name
+    /// (resolved through node_modules like `perry.packageAliases`) or an
+    /// absolute path to a source file. Merged after the package.json
+    /// `perry.packageAliases` entries, so a CLI alias wins on a duplicate
+    /// `FROM`. `perry electron` uses this to redirect `electron` imports to
+    /// the in-repo compat shim.
+    #[arg(long, value_name = "FROM=TO")]
+    pub package_aliases: Vec<String>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
