@@ -222,7 +222,36 @@ pub fn check_escapes_in_expr(
                         escaped.insert(*id);
                         return;
                     }
-                    // Plain field read — safe, don't recurse into object.
+                    // #10689: a read of a key the class chain does not
+                    // DECLARE as a field is an INHERITED read — an
+                    // `Object.prototype` member (`toString`, `constructor`,
+                    // `hasOwnProperty`), a prototype method read as a value,
+                    // or a user-added `Object.prototype` property. Scalar
+                    // replacement allocates a slot per declared field only, so
+                    // `expr/property_get.rs`'s scalar arm finds none and folds
+                    // the read to the constant `undefined` — silently, and
+                    // only while the receiver happens not to escape, which is
+                    // why `JSON.stringify(o)` earlier in the function
+                    // "repaired" it. Escape the receiver so the read takes the
+                    // ordinary heap path, which resolves the prototype chain.
+                    //
+                    // This is the READ half of the rule the three WRITE arms
+                    // below already apply (#9024 `PropertySet`/`PutValueSet`,
+                    // #9460 `PropertyUpdate`), and the per-property form of
+                    // #6343's whole-class unmodeled-base escape.
+                    //
+                    // A fused method CALL (`o.m()`) is NOT this: its callee is
+                    // handled in the `Expr::Call` arm, which does not route the
+                    // callee through here, so `simple_scalar_method_summary`
+                    // receivers stay scalar-replaced.
+                    if !crate::collectors::class_accessors::class_chain_has_field(
+                        classes, class_name, property,
+                    ) {
+                        escaped.insert(*id);
+                        return;
+                    }
+                    // Plain declared-field read — safe, don't recurse into
+                    // object.
                     return;
                 }
             }
@@ -465,31 +494,37 @@ pub fn check_escapes_in_expr(
             // and fixed numeric params. That summary lets codegen inline the
             // body against scalar field slots instead of dispatching with a
             // heap receiver.
-            if let Expr::PropertyGet { object, .. } = callee.as_ref() {
+            // #10689: set when the callee IS the fused method-call form on a
+            // candidate receiver. That callee is a CALL target, not a value
+            // read of `property`, so it must not be sent through the
+            // `PropertyGet` arm — whose inherited-read rule would escape every
+            // receiver whose method the summary below deliberately keeps
+            // scalar-replaced. The receiver is `LocalGet(id)` itself, so
+            // skipping the recursion hides no nested candidate.
+            let mut callee_is_candidate_method_call = false;
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
                 if let Expr::LocalGet(id) = object.as_ref() {
-                    if candidates.contains_key(id) {
-                        let is_summarized = if let Expr::PropertyGet { property, .. } =
-                            callee.as_ref()
-                        {
-                            candidates.get(id).is_some_and(|class_name| {
-                                crate::collectors::simple_scalar_method_summary(
-                                    classes,
-                                    class_name,
-                                    property,
-                                    args.len(),
-                                )
-                                .is_some()
-                            })
-                        } else {
-                            false
-                        };
+                    if let Some(class_name) = candidates.get(id) {
+                        let is_summarized = crate::collectors::simple_scalar_method_summary(
+                            classes,
+                            class_name,
+                            property,
+                            args.len(),
+                        )
+                        .is_some();
                         if !is_summarized {
                             escaped.insert(*id);
                         }
+                        callee_is_candidate_method_call = true;
                     }
                 }
             }
-            check_escapes_in_expr(callee, candidates, classes, escaped);
+            if !callee_is_candidate_method_call {
+                check_escapes_in_expr(callee, candidates, classes, escaped);
+            }
             for a in args {
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
