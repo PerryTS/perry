@@ -302,9 +302,8 @@ bundled-validator = ["dep:perry-validation"]
 # Phase 4 step 2) toggles. Each sub-feature pulls in its own
 # optional dep + gates its own module so a wrapper port can strip
 # exactly one binding from perry-stdlib without affecting the other.
-ids = ["bundled-uuid", "bundled-nanoid"]
+ids = ["bundled-uuid"]
 bundled-uuid = ["dep:uuid"]
-bundled-nanoid = ["dep:nanoid"]
 
 # Async runtime (tokio) - internal feature
 async-runtime = ["dep:tokio"]
@@ -448,7 +447,6 @@ perry-validation = { workspace = true, optional = true }
 
 # IDs
 uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"], optional = true }
-nanoid = { version = "0.5", optional = true }
 
 # LRU Cache — optional from v0.5.539 so the well-known flip can
 # strip the perry-stdlib copy when `import 'lru-cache'` resolves

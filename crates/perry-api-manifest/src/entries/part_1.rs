@@ -1264,18 +1264,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method_sig(
-        "nanoid",
-        "nanoid",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "size",
-            ty: TypeSpec::Number,
-            optional: false,
-        }],
-        TypeSpec::String,
-    ),
-    method_sig(
         "validator",
         "isEmail",
         false,
