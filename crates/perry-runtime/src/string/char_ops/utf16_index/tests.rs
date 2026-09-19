@@ -148,10 +148,22 @@ fn cache_distinguishes_strings_and_invalidates_in_place_appends() {
     prune_dead_utf16_indexes(&|_| true);
 }
 
+/// #10688: the index used to live in a fixed four-slot array that evicted
+/// round-robin, so interleaving indexed access across more strings than that
+/// rebuilt from scratch on every access — 1,224x, as a step function at the
+/// fifth string. There is no capacity now, so this asserts the replacement
+/// guarantee: **an index survives no matter how many other strings are
+/// indexed alongside it.**
+///
+/// It also keeps the original invariant this test carried, which is unrelated
+/// to capacity and still load-bearing: consuming a one-character string
+/// produced by `char_at` must not disturb the source string's index.
 #[test]
-fn cache_eviction_is_bounded_and_short_strings_do_not_evict_sources() {
+fn indexes_survive_any_number_of_interleaved_strings() {
     prune_dead_utf16_indexes(&|_| true);
-    for i in 0..CACHE_ENTRIES * 3 {
+    const STRINGS: usize = 16; // comfortably past the old four-slot capacity
+    let mut sources = Vec::new();
+    for i in 0..STRINGS {
         let text = format!(
             "{}{}",
             "中".repeat(256),
@@ -162,10 +174,28 @@ fn cache_eviction_is_bounded_and_short_strings_do_not_evict_sources() {
         let before = test_utf16_index_entries();
         let ch = js_string_char_at(s, 256);
         assert_eq!(js_string_char_code_at(ch, 0), (0x400 + i) as f64);
-        assert_eq!(test_utf16_index_entries(), before);
-        assert!(before.len() <= CACHE_ENTRIES);
+        assert_eq!(
+            test_utf16_index_entries(),
+            before,
+            "a short string from char_at must not disturb the source's index"
+        );
+        sources.push((s, 0x400 + i));
+    }
+    // Every index is still resident: no eviction happened at any depth.
+    assert_eq!(
+        test_utf16_index_entries().len(),
+        STRINGS,
+        "all {STRINGS} indexes must survive; the old array held only four"
+    );
+    // And every one still answers correctly, cheaply, in a second pass.
+    for (s, expected) in &sources {
+        assert_eq!(js_string_char_code_at(*s, 256), *expected as f64);
     }
     prune_dead_utf16_indexes(&|_| true);
+    assert!(
+        test_utf16_index_entries().is_empty(),
+        "the collector's prune hook must reclaim them"
+    );
 }
 
 /// #10656: `codePointAt` used to walk the WTF-8 payload from byte 0 on every
