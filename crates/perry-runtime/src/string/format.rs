@@ -117,36 +117,63 @@ fn throw_if_bigint_digits(arg: f64) {
 #[no_mangle]
 pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
     // Fast path: small non-negative integers use a cached string table.
+    //
+    // The admission test is `fract() == 0.0` plus an in-range check written so
+    // LLVM can prove the `as u32` cannot overflow and emit a bare
+    // `cvttsd2si`. The old `value as usize` — on a value the same condition
+    // had already proven to be in `0..256` — lowered to Rust's full SATURATING
+    // `f64 -> u64` sequence: 14 instructions of `cmov` fixup, a quarter of
+    // what a cache hit cost. `-0.0` passes (`-0.0 >= 0.0`), converts to 0 and
+    // returns "0", which is the spec answer for `String(-0)`. NaN and
+    // +-Infinity fail `fract() == 0.0` (`fract` is `self - self.trunc()`,
+    // which is NaN for both).
     if value.fract() == 0.0 && value >= 0.0 && value < SMALL_INT_CACHE_SIZE as f64 {
-        let idx = value as usize;
-        let cached = SMALL_INT_CACHE.with(|c| unsafe { (*c.get())[idx] });
+        let idx = value as u32 as usize;
+        // SAFETY: the range test above proves `idx < SMALL_INT_CACHE_SIZE`.
+        let cached = SMALL_INT_CACHE.with(|c| unsafe { *(*c.get()).get_unchecked(idx) });
         if !cached.is_null() {
             return cached;
         }
-        // Allocate and cache
-        let s = format!("{}", value as u64);
-        let ptr = js_string_from_bytes_longlived(s.as_bytes().as_ptr(), s.len() as u32);
-        unsafe {
-            // Mark as shared so it's never mutated in-place
-            (*ptr).refcount = 0;
-            // Mark as pinned so GC keeps it live for the lifetime of this
-            // thread's arena. Longlived-space (see the allocation above), so
-            // this does not arm the young-pin latch (#7645).
-            let gc_header =
-                (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-            crate::gc::pin_object_non_young(gc_header);
-        }
-        SMALL_INT_CACHE.with(|c| unsafe {
-            // GC_STORE_AUDIT(ROOT): SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
-            crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[idx], ptr);
-        });
-        return ptr;
+        return small_int_cache_fill(idx);
     }
 
     // Format the number as a string per JS semantics, on the stack.
     let mut buf = [0u8; 32];
     let len = super::concat::format_number_into(value, &mut buf);
     js_string_from_bytes(buf.as_ptr(), len as u32)
+}
+
+/// Mint, pin and publish the canonical string for a small-int cache index.
+///
+/// Genuinely cold: it runs at most once per index per thread — 256 times in
+/// the entire life of a thread — yet inlined it put `format!`'s formatting
+/// machinery, the GC pin and the root store into [`js_number_to_string`],
+/// which cost every cached conversion six pushes and a 0x48-byte frame.
+/// Outlined here rather than around the whole uncached tail on purpose:
+/// wrapping the stack-buffer formatting path too MEASURED +11.7 instructions
+/// per conversion on the float fixture, because a miss then paid an extra
+/// call and re-ran the admission test.
+#[cold]
+#[inline(never)]
+fn small_int_cache_fill(idx: usize) -> *mut StringHeader {
+    debug_assert!(idx < SMALL_INT_CACHE_SIZE);
+    let s = format!("{}", idx);
+    let ptr = js_string_from_bytes_longlived(s.as_bytes().as_ptr(), s.len() as u32);
+    unsafe {
+        // Mark as shared so it's never mutated in-place
+        (*ptr).refcount = 0;
+        // Mark as pinned so GC keeps it live for the lifetime of this
+        // thread's arena. Longlived-space (see the allocation above), so
+        // this does not arm the young-pin latch (#7645).
+        let gc_header =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        crate::gc::pin_object_non_young(gc_header);
+    }
+    SMALL_INT_CACHE.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): SMALL_INT_CACHE is scanned by scan_small_int_cache_roots_mut.
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[idx], ptr);
+    });
+    ptr
 }
 
 /// ECMAScript `Number::toString` formatting, returning the Rust `String`.
