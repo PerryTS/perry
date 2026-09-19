@@ -137,7 +137,6 @@ Total: 3032 entries across 137 modules.
 - [`util/types`](#utiltypes)
 - [`uuid`](#uuid)
 - [`v8`](#v8)
-- [`validator`](#validator)
 - [`vm`](#vm)
 - [`wasi`](#wasi)
 - [`worker_threads`](#worker_threads)
@@ -3986,16 +3985,6 @@ Total: 3032 entries across 137 modules.
 
 - `promiseHooks`
 - `startupSnapshot`
-
-## `validator`
-
-### Methods
-
-- `isEmail` — module
-- `isEmpty` — module
-- `isJSON` — module
-- `isURL` — module
-- `isUUID` — module
 
 ## `vm`
 

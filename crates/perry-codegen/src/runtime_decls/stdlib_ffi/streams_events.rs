@@ -293,22 +293,4 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
     module.declare_function("js_ratelimit_new_from_options", I64, &[I64]);
     module.declare_function("js_ratelimit_penalty", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_ratelimit_reward", I64, &[I64, I64, DOUBLE]);
-
-    // ========== Validator ==========
-    module.declare_function("js_validator_contains", DOUBLE, &[I64, I64]);
-    module.declare_function("js_validator_equals", DOUBLE, &[I64, I64]);
-    module.declare_function("js_validator_is_alpha", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_alphanumeric", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_email", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_empty", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_float", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_hexadecimal", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_int", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_json", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_length", DOUBLE, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_validator_is_lowercase", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_numeric", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_uppercase", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_url", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_uuid", DOUBLE, &[I64]);
 }

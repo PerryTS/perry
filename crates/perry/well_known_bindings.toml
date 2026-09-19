@@ -131,18 +131,6 @@ repo = "https://github.com/ranisalt/node-argon2"
 ref = "786de7152f95881b0683aea1d2ca60ed0d6d9e2f"
 ported-at = "0.45.1"
 date = "2026-07-30"
-[bindings.validator]
-crate = "perry-ext-validator"
-lib = "perry_ext_validator"
-tracking = "#466"
-
-[bindings.validator.upstream]
-version = "13.15.35"
-sha256 = "f9a6b506bd9eda8df9d2a4120613426948d9f66cde1b6d5fad3406758d2f81f4"
-repo = "https://github.com/validatorjs/validator.js"
-ref = "7a8079709cd4cb27b2a1846e6f6508d68c9d928f"
-ported-at = "13.15.35"
-date = "2026-07-30"
 [bindings.lru-cache]
 crate = "perry-ext-lru-cache"
 lib = "perry_ext_lru_cache"

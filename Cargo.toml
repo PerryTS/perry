@@ -16,8 +16,6 @@ members = [
     "crates/perry-ext-uuid",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-argon2",
-    "crates/perry-ext-validator",
-    "crates/perry-validation",
     "crates/perry-perex",
     "crates/perry-ext-lru-cache",
     "crates/perry-ext-better-sqlite3",
@@ -481,8 +479,6 @@ perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-uuid = { path = "crates/perry-ext-uuid" }
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
-perry-ext-validator = { path = "crates/perry-ext-validator" }
-perry-validation = { path = "crates/perry-validation" }
 perry-perex = { path = "crates/perry-perex" }
 perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }

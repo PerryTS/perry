@@ -4428,19 +4428,6 @@ declare module "v8" {
   export function writeHeapSnapshot(...args: any[]): any;
 }
 
-declare module "validator" {
-  /** stdlib */
-  export function isEmail(s: string): boolean;
-  /** stdlib */
-  export function isEmpty(s: string): boolean;
-  /** stdlib */
-  export function isJSON(s: string): boolean;
-  /** stdlib */
-  export function isURL(s: string): boolean;
-  /** stdlib */
-  export function isUUID(s: string): boolean;
-}
-
 declare module "vm" {
   /** stdlib */
   export class Script { [key: string]: any; }

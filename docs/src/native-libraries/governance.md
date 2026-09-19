@@ -120,7 +120,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-typescript` | `typescript` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-undici` | `undici` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-uuid` | `uuid` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-validator` | `validator` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ws` | `ws` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-zlib` | `zlib` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 <!-- END GENERATED BINDING GOVERNANCE -->

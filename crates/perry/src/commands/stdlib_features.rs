@@ -151,11 +151,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // well-known flip can route to perry-ext-cron.
         "cron" | "node-cron" => &["bundled-cron"],
 
-        // ── Validation (validator.js) ─────────────────────────────────
-        // `validation` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-validator` (v0.5.538).
-        "validator" => &["bundled-validator"],
-
         // ── argon2 ────────────────────────────────────────────────────
         // argon2 split off into `bundled-argon2` (v0.5.537) — same
         // reason as bcrypt above. Note: NATIVE_MODULES doesn't list
