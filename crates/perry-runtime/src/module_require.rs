@@ -161,6 +161,20 @@ mod cjs_main_module_tests {
     }
 }
 
+/// Test-only accessors used from `gc::tests::cjs_main_module` (a sibling
+/// module tree that cannot see `cjs_main_module_tests`'s items, and needs
+/// its own file to reach the `CopyingNurseryTestGuard` apparatus a real
+/// forced-evacuation witness test requires -- see that file for why).
+#[cfg(test)]
+pub(crate) fn test_cjs_main_module_bits() -> Option<u64> {
+    CJS_MAIN_MODULE.with(|s| *s.borrow())
+}
+
+#[cfg(test)]
+pub(crate) fn test_cjs_main_module_rewrite_count() -> u64 {
+    CJS_MAIN_MODULE_REWRITES.with(std::cell::Cell::get)
+}
+
 fn null() -> f64 {
     f64::from_bits(TAG_NULL)
 }
