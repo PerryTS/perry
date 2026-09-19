@@ -28,7 +28,7 @@ fn cjs_wrap_body_offset_maps_back_to_original_line() {
     // line `L - prefix_line_count`.
     let original = "function f() {\n  return new Nope();\n}\nmodule.exports = f;\n";
     let path = PathBuf::from("/tmp/x/index.js");
-    let (wrapped, body_off) = wrap_commonjs_with_body_offset(original, &path, None);
+    let (wrapped, body_off) = wrap_commonjs_with_body_offset(original, &path, None, false);
     let body_off = body_off.expect("body should be locatable in wrapped output");
     // Prefix line count = newlines before the body in the wrapped output.
     let prefix_lines = wrapped.as_bytes()[..body_off]
@@ -748,6 +748,7 @@ exports.spawn = function spawn() { return terminalCtor; };
         src,
         &PathBuf::from("/tmp/node_modules/node-pty/lib/index.js"),
         Some("windows"),
+        false,
     );
     assert!(
         wrapped.contains("import _req_0 from './windowsTerminal';")
@@ -783,6 +784,7 @@ exports.spawn = function spawn() { return terminalCtor; };
         src,
         &PathBuf::from("/tmp/node_modules/node-pty/lib/index.js"),
         Some("linux"),
+        false,
     );
     assert!(
         wrapped.contains("from './unixTerminal'"),

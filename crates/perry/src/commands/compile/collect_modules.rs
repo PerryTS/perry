@@ -408,6 +408,14 @@ fn collect_module_one(
     // left untouched.
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
+    // #10735: this module's `require.main` (in the CJS preamble the wrap
+    // below emits) must resolve to the compile-time entry's `module` record,
+    // not to this module's own. Computed here — the same comparison
+    // `is_entry_module` below repeats for `import.meta.main` — because the
+    // wrap runs before that later computation. Bundle-extension entries
+    // don't update `entry_canonical`, so a non-user entry correctly reads as
+    // "not the entry" here too, matching `import.meta.main`'s treatment.
+    let cjs_is_entry_module = ctx.entry_canonical.as_ref() == Some(&canonical);
     // #5247 / #7036: when source locations are requested, capture where the
     // original module body lands inside the wrapped output so debug frames and
     // opt reports can map a wrapped-coordinate byte offset back to an
@@ -415,8 +423,12 @@ fn collect_module_one(
     let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
     let source = if was_cjs_wrapped {
         if ctx.debug_symbols {
-            let (wrapped, body_off) =
-                super::cjs_wrap::wrap_commonjs_with_body_offset(&raw_source, &canonical, target);
+            let (wrapped, body_off) = super::cjs_wrap::wrap_commonjs_with_body_offset(
+                &raw_source,
+                &canonical,
+                target,
+                cjs_is_entry_module,
+            );
             // Newlines before the original body in the wrapped output = the
             // wrapper prefix line count. Recorded only when the body was
             // located; otherwise we skip the skew correction (graceful
@@ -429,7 +441,12 @@ fn collect_module_one(
             });
             wrapped
         } else {
-            super::cjs_wrap::wrap_commonjs_for_target(&raw_source, &canonical, target)
+            super::cjs_wrap::wrap_commonjs_for_target(
+                &raw_source,
+                &canonical,
+                target,
+                cjs_is_entry_module,
+            )
         }
     } else {
         raw_source

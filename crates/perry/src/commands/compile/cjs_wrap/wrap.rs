@@ -100,15 +100,21 @@ fn is_global_value_builtin_name(name: &str) -> bool {
 /// peeking at re-export wrappers' transitive named exports.
 #[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Path) -> String {
-    wrap_commonjs_for_target(source, source_path, None)
+    // Not the process entry: every call site that does not know (or care)
+    // whether `source_path` is the compile-time entry module goes through
+    // here, which is correct for the overwhelming majority of CJS-wrapped
+    // files (dependencies). The real per-module entry status is threaded
+    // explicitly from `collect_modules.rs`, the only place that knows it.
+    wrap_commonjs_for_target(source, source_path, None, false)
 }
 
 pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     source: &str,
     source_path: &Path,
     target: Option<&str>,
+    is_entry_module: bool,
 ) -> String {
-    wrap_commonjs_with_body_offset(source, source_path, target).0
+    wrap_commonjs_with_body_offset(source, source_path, target, is_entry_module).0
 }
 
 /// Like [`wrap_commonjs_for_target`], but also returns the byte offset within
@@ -122,6 +128,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     source: &str,
     source_path: &Path,
     target: Option<&str>,
+    is_entry_module: bool,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -955,6 +962,20 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // `require(specifier)` for one of those fell through to compiled-module
     // resolution and raised `MODULE_NOT_FOUND` instead of routing through
     // `createRequire`. Each entry emits both the bare and `node:` spelling.
+    // #10735: `require.main` must be the process ENTRY module only. The
+    // entry publishes its own `module` record as the shared "main module"
+    // (read back by every OTHER CJS module via `__perry_get_cjs_main_module`)
+    // before its body runs any `require()` of its own — so by the time any
+    // dependency's preamble runs, the publication has already happened.
+    // Every non-entry CJS module instead reads that shared value, rather
+    // than assigning its own local `module` — the latter is what made
+    // `require.main === module` trivially true in every compiled CommonJS
+    // module, not just the true entry point (#10735).
+    let require_main_stmt = if is_entry_module {
+        "__perry_set_cjs_main_module(module);\n    require.main = module;"
+    } else {
+        "require.main = __perry_get_cjs_main_module();"
+    };
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -1135,7 +1156,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // ~2,200 CJS modules that is pure startup garbage.
     require.cache = __perry_cjs_base_require.cache;
     require.extensions = __perry_cjs_base_require.extensions;
-    require.main = module;"#
+    {require_main_stmt}"#
     );
     let cjs_preamble = format!(
         "{cjs_preamble}\n    module.require = function moduleRequire(specifier) {{ return require(specifier); }};"
