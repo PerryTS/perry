@@ -50,7 +50,7 @@ exports.compute = compute;
 
 fn wrap_and_lower(body: &str) -> perry_hir::Module {
     let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
-    let wrapped = wrap_commonjs_for_target(body, path, None);
+    let wrapped = wrap_commonjs_for_target(body, path, None, false);
     let ast = perry_parser::parse_typescript(&wrapped, "index.js")
         .expect("the wrap template must produce parseable ESM");
     perry_hir::lower_module(&ast, "dep", &path.to_string_lossy())
@@ -63,7 +63,7 @@ fn wrap_and_lower(body: &str) -> perry_hir::Module {
 #[test]
 fn cjs_preamble_does_not_arm_the_ptr_shape_module_barrier() {
     let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
-    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false);
 
     // Anti-vacuity, and the more precise failure of the two: assert the
     // preamble still HAS the site the recogniser is written for. Without this
@@ -129,7 +129,7 @@ const EXPECTED_PREAMBLE_ALLOC_STMTS: usize = 2;
 #[test]
 fn the_cjs_preamble_is_still_recognised_as_scaffolding_allocation() {
     let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
-    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false);
 
     // Anti-vacuity on the template, one assertion per recogniser conjunct, so
     // a template edit names the conjunct it broke rather than failing as an
@@ -197,7 +197,7 @@ fn a_module_that_was_never_cjs_wrapped_has_no_preamble() {
 fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() {
     let path = Path::new("/tmp/perry-canary/.next/server/chunks/lazy.js");
     let marker = "exports.ready = true;";
-    let wrapped = wrap_commonjs_for_target(marker, path, None);
+    let wrapped = wrap_commonjs_for_target(marker, path, None, false);
 
     let partial = wrapped
         .find("__perry_register_path_module_partial(")
@@ -247,7 +247,7 @@ fn path_module_wrap_publishes_partial_then_final_exports_and_tracks_undefined() 
 #[test]
 fn computed_relative_requires_are_joined_against_the_module_dir() {
     let path = Path::new("/tmp/perry-canary/.next/server/webpack-runtime.js");
-    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false);
 
     // Anti-vacuity: if the wrap stops consulting the registry at all, the
     // assertions below would be about a branch that no longer exists.
@@ -290,7 +290,7 @@ fn computed_relative_requires_are_joined_against_the_module_dir() {
 fn the_wrap_still_binds_the_local_the_cjs_entry_recogniser_keys_on() {
     let local = perry_codegen::cjs_wrap_create_require_local();
     let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
-    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None, false);
 
     // Anti-vacuity: the template must still emit the binding at all.
     assert!(

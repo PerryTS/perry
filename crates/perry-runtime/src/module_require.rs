@@ -23,6 +23,92 @@ fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+crate::perry_thread_local! {
+    /// The process ENTRY module's own CJS `module` record — Node's
+    /// `require.main` / `process.mainModule`. Set exactly once, by the entry
+    /// module's own preamble (see `cjs_wrap::wrap_commonjs_with_body_offset`
+    /// in the compiler), before that module's body runs any `require()` of
+    /// its own — so every dependency it (transitively) requires observes
+    /// this already published. Every OTHER CJS-wrapped module reads it back
+    /// via [`js_get_cjs_main_module`] instead of assigning its own local
+    /// `module`, which is the #10735 bug this replaces (`require.main ===
+    /// module` was trivially true in every compiled CommonJS module, not
+    /// just the real entry point).
+    ///
+    /// Stays `None` (JS `undefined`) for the lifetime of the heap when the
+    /// process entry is ESM — matching Node, where a CJS module reached only
+    /// via `import` from an ESM entry has `require.main === undefined`
+    /// (there is no CommonJS "main" in that process).
+    static CJS_MAIN_MODULE: std::cell::RefCell<Option<u64>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Codegen FFI: publish the process entry module's own CJS `module` record as
+/// the shared "main module". Emitted ONCE, in the entry module's preamble,
+/// before its body runs any `require()` of a dependency — so every later read
+/// on this heap sees it already set. First call wins (idempotent): there
+/// should never be a second, but a re-entrant load must not let a later
+/// module overwrite the true entry.
+#[no_mangle]
+pub extern "C" fn js_set_cjs_main_module(module_value: f64) {
+    CJS_MAIN_MODULE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(module_value.to_bits());
+        }
+    });
+}
+
+/// Codegen FFI: `require.main` for a NON-entry CJS module — the value
+/// [`js_set_cjs_main_module`] published, or JS `undefined` if this heap's
+/// process entry never called it (an ESM entry, or a heap whose entry point
+/// was never CommonJS-wrapped).
+#[no_mangle]
+pub extern "C" fn js_get_cjs_main_module() -> f64 {
+    CJS_MAIN_MODULE.with(|slot| slot.borrow().map(f64::from_bits).unwrap_or_else(undefined))
+}
+
+/// GC root scanner for [`CJS_MAIN_MODULE`]: a raw heap pointer cached outside
+/// any shadow frame, so a moving collection must mark and rewrite it like any
+/// other mutable root. Registered in `gc::gc_init` beside
+/// `scan_module_path_roots_mut`.
+pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CJS_MAIN_MODULE.with(|slot| {
+        if let Some(bits) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
+        }
+    });
+}
+
+#[cfg(test)]
+mod cjs_main_module_tests {
+    use super::*;
+
+    // Each `#[test]` fn runs on its own harness-spawned thread, so
+    // `CJS_MAIN_MODULE` (thread-local) starts fresh here regardless of test
+    // execution order — no explicit reset needed.
+
+    #[test]
+    fn defaults_to_undefined_when_no_entry_has_published() {
+        assert_eq!(js_get_cjs_main_module().to_bits(), TAG_UNDEFINED);
+    }
+
+    #[test]
+    fn published_value_reads_back_identically() {
+        let entry_module = string_value("entry-module-marker");
+        js_set_cjs_main_module(entry_module);
+        assert_eq!(js_get_cjs_main_module().to_bits(), entry_module.to_bits());
+    }
+
+    #[test]
+    fn first_publication_wins_a_later_call_cannot_overwrite_it() {
+        let first = string_value("first-entry");
+        let second = string_value("second-entry-should-be-ignored");
+        js_set_cjs_main_module(first);
+        js_set_cjs_main_module(second);
+        assert_eq!(js_get_cjs_main_module().to_bits(), first.to_bits());
+    }
+}
+
 fn null() -> f64 {
     f64::from_bits(TAG_NULL)
 }
