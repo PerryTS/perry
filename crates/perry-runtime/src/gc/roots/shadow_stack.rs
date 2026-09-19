@@ -207,11 +207,82 @@ impl ShadowStackState {
     }
 }
 
+// [`SHADOW`]'s storage mechanism is cfg-split by platform. Both arms are
+// `const`-initialized and drop-free, so neither pays a lazy-init or
+// destructor-registration check; the buffer is reserved lazily on the first
+// push instead of eagerly at thread start, and released by
+// [`ShadowBufferGuard`], on either arm.
+//
+// # Why `perry_thread_local!` only on Apple aarch64
+//
+// Until #10619, `SHADOW` was unconditionally a raw `thread_local!`: every
+// `try`/`catch` paid this exact resolution once per entry, through
+// `shadow_stack_savepoint()` — and `SHADOW_FRAMES` (the latch that lets most
+// other savepoint fields skip their own thread-local read, see
+// `crate::exception::savepoints`) is set by the FIRST shadow-frame push
+// anywhere in the process, which for real programs is essentially
+// "immediately" (any function with a pointer-typed local pushes one, and a
+// caught exception's own binding needs a slot). So the latch does not make
+// this read rare in practice, and profiling a `try`/`catch` loop
+// (`node --experimental-strip-types`-verified against `test-files/`) showed
+// it as a genuine leaf `_tlv_get_addr` call, ~6% of total instructions
+// retired per non-throwing `try` entry — the one savepoint field NOT already
+// routed through `tls_hot`'s cache (`EXCEPTION_STATE`, `CALL_METHOD_DEPTH`
+// and the named `runtime_handle_stack`/`temp_roots` fields all were).
+//
+// But that fast path is itself Darwin-aarch64-specific: `tls_hot.rs`'s own
+// module docs say the published-cache shortcut only exists there, and
+// everywhere else "resolving a thread-local is already a fixed offset and
+// the extra cache indirection has no demonstrated benefit." #10619 shipped
+// the swap unconditionally anyway, and CI's `cargo-test` job — Linux, debug
+// profile — hit a SIGSEGV that a plain `thread_local!` never produced
+// (`cargo-test` run 35374727647, job 105594641738). Local reproduction (macOS
+// on both the Darwin path and with it forced off, and a qemu-emulated Linux
+// x86_64 VM) never faulted, so causation was confirmed the direct way
+// instead: `cargo-test` on CI itself, gating `SHADOW` back to this cfg split,
+// came back green (run 35433215970, job 105871415920) at the same commit
+// that was red with the swap unconditional — so the PR *is* what caused it.
+// The internal mechanism is still not understood: this fixes it by removing
+// the change from every platform where it had no benefit anyway, not by
+// finding the fault inside `tls_hot.rs`'s resolution path. See #10709 for
+// the open half of the investigation (`fill()`'s `temp_roots`-last ordering
+// guards against a half-filled cache being *used* re-entrantly, not against
+// `fill()` being *called* re-entrantly, which remains a live suspect).
+//
+// Since the −8% `try`-entry win was only ever measured on Darwin
+// (`perry_thread_local!`'s whole premise doesn't apply anywhere the direct
+// TLS access is already a fixed offset — see `tls_hot.rs`), routing through
+// it off that platform was strictly more work for no measured benefit even
+// before the SIGSEGV: one more thread-local resolution (`HOT`) plus a
+// slot-array indirection, replacing the single direct TLS access a raw
+// `thread_local!` already was. So the fast path now ships only where it was
+// measured, and every other target keeps the original raw form — which
+// also means this file's `thread_local!` count goes back to what it was
+// before #10619 (see `scripts/thread_local_cold_allowlist.json`).
+#[cfg(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+))]
+crate::perry_thread_local! {
+    /// See the cfg-split rationale above this declaration.
+    pub(crate) static SHADOW: UnsafeCell<ShadowStackState> = const {
+        UnsafeCell::new(ShadowStackState {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+            frame_top: usize::MAX,
+        })
+    };
+}
+
+#[cfg(not(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+)))]
 thread_local! {
-    /// `const`-initialized and drop-free, so the access is a plain TLS address
-    /// computation with no lazy-init or destructor-registration check. The
-    /// buffer is reserved lazily on the first push instead of eagerly at thread
-    /// start, and released by [`ShadowBufferGuard`].
+    /// See the cfg-split rationale above this declaration's sibling arm.
     pub(crate) static SHADOW: UnsafeCell<ShadowStackState> = const {
         UnsafeCell::new(ShadowStackState {
             ptr: std::ptr::null_mut(),
