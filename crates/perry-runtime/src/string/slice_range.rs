@@ -33,7 +33,16 @@ pub(super) fn copy_utf16_range(s: *const StringHeader, start: u32, end: u32) -> 
         return string_copy_range(s, start as usize, end - start, end - start, 0);
     }
     let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
-    let first = advance(bytes, Boundary::default(), start as usize);
+    // #10685: resolve the start boundary through the cached UTF-16 index
+    // rather than walking from byte 0 on every call. Slicing a non-ASCII
+    // string at increasing offsets — TypeScript's scanner, and every other
+    // tokenizer — was O(n^2) because of that walk. `None` keeps the original
+    // behaviour for short payloads and `start == 0`, where the walk is already
+    // cheap and the cache should not be disturbed.
+    let first = match char_ops::utf16_boundary_at(s, start as usize) {
+        Some((byte, low)) => Boundary { byte, low },
+        None => advance(bytes, Boundary::default(), start as usize),
+    };
     // A suffix's end is already known: do not scan the entire remaining string.
     let last = if end == unsafe { (*s).utf16_len } {
         Boundary {

@@ -104,6 +104,14 @@ fn utf16_unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
     utf16_index::unit_at(s, idx)
 }
 
+/// Byte offset of the code point containing UTF-16 index `idx`, plus whether
+/// `idx` is its low surrogate half, resolved through the same cached index.
+/// `None` means the caller should fall back to its own walk (short payloads,
+/// `idx == 0`, or an index past the last decodable unit).
+pub(super) fn utf16_boundary_at(s: *const StringHeader, idx: usize) -> Option<(usize, bool)> {
+    utf16_index::boundary_at(s, idx)
+}
+
 /// SSO-safe `s[key]`: takes the receiver as a **NaN-boxed JSValue** rather than
 /// an already-unboxed `StringHeader*`.
 ///
