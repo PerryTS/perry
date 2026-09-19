@@ -244,3 +244,50 @@ fn code_point_at_is_order_independent() {
         assert_eq!(*value, forward[i], "index {i} differs by traversal order");
     }
 }
+
+/// #10685: `copy_utf16_range` resolved its start boundary by walking from byte
+/// 0 on every call, so slicing a non-ASCII string at increasing offsets was
+/// O(n^2). `boundary_at` must agree with that walk at every index — including
+/// the low half of a surrogate pair, where `low` selects the split copy path.
+#[test]
+fn boundary_at_matches_a_walk_from_zero() {
+    let mut text = String::new();
+    for _ in 0..80 {
+        text.push_str("\u{e9}abcdefghij0123456789");
+    }
+    text.push('\u{1F600}');
+    text.push_str("tail\u{e9}");
+    let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let bytes = unsafe {
+        std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize)
+    };
+    let n = text.encode_utf16().count();
+
+    for idx in 0..n {
+        let walked = crate::string::slice_range::advance(
+            bytes,
+            crate::string::slice_range::Boundary::default(),
+            idx,
+        );
+        if let Some((byte, low)) = super::boundary_at(s, idx) {
+            assert_eq!(byte, walked.byte, "byte offset at {idx}");
+            assert_eq!(low, walked.low, "low-surrogate flag at {idx}");
+        }
+    }
+}
+
+/// The cursor optimises forward seeks; a backward seek must not reuse it.
+#[test]
+fn boundary_at_is_order_independent() {
+    let mut text = String::new();
+    for _ in 0..80 {
+        text.push_str("x\u{e9}yz");
+    }
+    let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let n = text.encode_utf16().count();
+    let forward: Vec<_> = (0..n).map(|i| super::boundary_at(s, i)).collect();
+    let backward: Vec<_> = (0..n).rev().map(|i| super::boundary_at(s, i)).collect();
+    for (i, value) in backward.iter().rev().enumerate() {
+        assert_eq!(*value, forward[i], "index {i} differs by traversal order");
+    }
+}
