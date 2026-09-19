@@ -751,9 +751,8 @@ exports.spawn = function spawn() { return terminalCtor; };
         false,
     );
     assert!(
-        wrapped.contains("import _req_0 from './windowsTerminal';")
-            || wrapped.contains("import terminalCtor from './windowsTerminal';"),
-        "expected live Windows require to stay hoisted, got:\n{}",
+        wrapped.contains("import _lazyreq_0 from './windowsTerminal';"),
+        "expected live Windows require to remain collected and initialize in its branch, got:\n{}",
         wrapped
     );
     assert!(
