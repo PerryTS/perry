@@ -649,6 +649,18 @@
       "why": "#[cfg(test)] counter for repeated JSON output cache hits; absent from production builds and stores only a tally."
     },
     {
+      "file": "crates/perry-runtime/src/json/stringify_tojson_probe.rs",
+      "name": "CLASS_CHAIN_TOJSON_MEMO",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-class-id `toJSON` chain verdicts. Each entry is a u32 class id, three u64 generation counters (VTABLE_GEN, the semantic property epoch, CLASS_LOOKUP_SURFACE_GEN) and a bool. No field is an address or derived from one, and nothing is dereferenced from this table: a lookup re-reads the live generations and only compares. No managed allocation is reachable from it."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/stringify_tojson_probe.rs",
+      "name": "CLASS_CHAIN_TOJSON_RECOMPUTES",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] counter for per-class-id chain-verdict recomputes; absent from production builds and stores only a tally."
+    },
+    {
       "file": "crates/perry-runtime/src/json/traversal_feedback.rs",
       "name": "EAGER_RUN",
       "verdict": "not_a_gc_pointer",
