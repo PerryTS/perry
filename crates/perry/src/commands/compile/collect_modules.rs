@@ -408,13 +408,8 @@ fn collect_module_one(
     // left untouched.
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
-    // #10735: this module's `require.main` (in the CJS preamble the wrap
-    // below emits) must resolve to the compile-time entry's `module` record,
-    // not to this module's own. Computed here — the same comparison
-    // `is_entry_module` below repeats for `import.meta.main` — because the
-    // wrap runs before that later computation. Bundle-extension entries
-    // don't update `entry_canonical`, so a non-user entry correctly reads as
-    // "not the entry" here too, matching `import.meta.main`'s treatment.
+    // #10735: this module's `require.main` (CJS preamble below) must resolve
+    // to the compile-time entry -- same comparison as `is_entry_module` below.
     let cjs_is_entry_module = ctx.entry_canonical.as_ref() == Some(&canonical);
     // #5247 / #7036: when source locations are requested, capture where the
     // original module body lands inside the wrapped output so debug frames and

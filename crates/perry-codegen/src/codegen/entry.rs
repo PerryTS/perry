@@ -750,14 +750,10 @@ pub(super) fn compile_module_entry(
                 );
             }
             // #10735: publish the shared `require.main` placeholder before
-            // ANY module's `__init` runs — including modules below, which are
-            // this CJS entry's OWN static imports and therefore run BEFORE
-            // the entry's own preamble (ESM eval order: imports evaluate
-            // before the importing module's body). Only when the entry
-            // itself is CJS-wrapped: an ESM entry must leave `require.main`
-            // `undefined` for every CJS module it imports. See
-            // `js_bootstrap_cjs_main_module_placeholder`'s doc comment for
-            // why this can't just be the entry's own preamble running early.
+            // ANY module's `__init` below runs (those are this CJS entry's
+            // OWN static imports, which ESM eval order runs before the
+            // entry's own preamble). See the callee's doc comment. Skipped
+            // for an ESM entry, which must leave `require.main` `undefined`.
             if crate::collectors::is_cjs_wrapped_module(hir) {
                 blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
             }
