@@ -5915,14 +5915,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-dotenv"
-version = "0.5.1605"
-dependencies = [
- "perry-ffi",
- "serde_json",
-]
-
-[[package]]
 name = "perry-ext-ethers"
 version = "0.5.1605"
 dependencies = [

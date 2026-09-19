@@ -108,10 +108,6 @@ mod tests {
         let (root, binding) = lookup_well_known_for_import("mysql2/promise");
         assert_eq!(root, "mysql2");
         assert_eq!(binding.expect("subpath binding").package, "mysql2/promise");
-
-        let (root, binding) = lookup_well_known_for_import("dotenv/config");
-        assert_eq!(root, "dotenv");
-        assert_eq!(binding.expect("root fallback").package, "dotenv");
     }
 
     #[test]

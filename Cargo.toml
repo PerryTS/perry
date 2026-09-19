@@ -11,7 +11,6 @@ members = [
     "crates/perry-runtime",
     "crates/perry-ffi",
     "crates/perry-native-registration",
-    "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-argon2",
@@ -472,7 +471,6 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
-perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }

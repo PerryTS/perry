@@ -199,15 +199,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // commander: feature-gated v0.5.555 — well-known flip routes
         // to perry-ext-commander.
         "commander" => &["bundled-commander"],
-        // dotenv was always-on through v0.5.532; gated behind
-        // `bundled-dotenv` from v0.5.533 onwards so the well-known
-        // bindings flip (#466 Phase 4 step 2) can swap perry-stdlib's
-        // copy out for `perry-ext-dotenv` without duplicate
-        // `_js_dotenv_*` symbols at link time. The well-known path
-        // strips this feature from the set; the default path leaves
-        // it on so byte-identical behavior is preserved.
-        "dotenv" | "dotenv/config" => &["bundled-dotenv"],
-
         // readline (#347) — needs the async-runtime feature so the
         // event-loop pump tick drains its line / data / keypress
         // queues. Without async-runtime, `import readline` still
