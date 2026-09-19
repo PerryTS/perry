@@ -14,8 +14,8 @@ use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
-    lower_event_emitter_subclass_init, lower_expr, lower_lru_cache_subclass_init,
-    lower_node_stream_super_init, lower_stream_super_init, nanbox_pointer_inline, FnCtx,
+    lower_event_emitter_subclass_init, lower_expr, lower_node_stream_super_init,
+    lower_stream_super_init, nanbox_pointer_inline, FnCtx,
 };
 
 /// Enter one derived constructor's `super()` binding scope.
@@ -935,35 +935,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                    }
-                    // #10293: `class X extends LRUCache` (lru-cache).
-                    // `LRUCache` is lowered as a compile-time pattern on the
-                    // identifier and has no runtime value, so `extends` would
-                    // otherwise throw "Class extends value is not a
-                    // constructor". Same treatment as the node:stream bases:
-                    // create the native cache and install its surface on
-                    // `this`. path-scurry (via glob) is the case that needs it.
-                    if parent_name.as_str() == "LRUCache" {
-                        let operands: Vec<_> = super_args.iter().collect();
-                        return rooting::with_operands_rooted(ctx, &operands, |ctx, lowered| {
-                            let options = lowered.first().cloned().unwrap_or_else(|| {
-                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                            });
-                            let this_box = match ctx.this_stack.last().cloned() {
-                                Some(slot) => ctx.block().load(DOUBLE, &slot),
-                                None => {
-                                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                                }
-                            };
-                            lower_lru_cache_subclass_init(ctx, &this_box, &options);
-                            bind_derived_this_after_super(ctx);
-                            crate::lower_call::apply_field_initializers_recursive(
-                                ctx,
-                                &current_class_name,
-                                crate::lower_call::FieldInitMode::SelfOnly,
-                            )?;
-                            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-                        });
                     }
                     if parent_name.as_str() == "EventEmitterAsyncResource" {
                         let operands: Vec<_> = super_args.iter().collect();

@@ -23,16 +23,10 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
-
-# In-tree implementation of `lru-cache`. Default-on through
-# `default = ["full"]`; flipped to perry-ext-lru-cache by the
-# well-known table (#466 Phase 4). Pulls the `lru` crate dep so
-# both halves of the gate move in lockstep.
-bundled-lru-cache = ["dep:lru"]
 
 # Pure-Rust wrapper, no extra deps. Default-on through `full`.
 bundled-exponential-backoff = []
@@ -414,11 +408,6 @@ cron = { version = "0.17", optional = true }
 # never optional, regardless of the bundled-uuid npm-binding feature
 # (removed; see #10678/#466).
 uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"] }
-
-# LRU Cache — optional from v0.5.539 so the well-known flip can
-# strip the perry-stdlib copy when `import 'lru-cache'` resolves
-# to perry-ext-lru-cache instead.
-lru = { version = "0.18", optional = true }
 
 # Decimal math (Big.js / Decimal.js) — optional from v0.5.547 so
 # the well-known flip can strip perry-stdlib's copy when

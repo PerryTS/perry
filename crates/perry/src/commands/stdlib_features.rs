@@ -168,9 +168,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
             &["container"]
         }
 
-        // lru-cache: feature-gated v0.5.539; well-known flip
-        // routes to perry-ext-lru-cache.
-        "lru-cache" => &["bundled-lru-cache"],
         // exponential-backoff: feature-gated v0.5.542 alongside
         // the perry-ffi closure-invocation surface that powers
         // its `backOff(fn)` retry loop.

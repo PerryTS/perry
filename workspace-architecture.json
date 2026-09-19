@@ -225,11 +225,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-lru-cache": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-moment": {
       "category": "binding",
       "decision": "externalize",

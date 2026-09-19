@@ -60,7 +60,6 @@ Total: 2923 entries across 126 modules.
 - [`ioredis`](#ioredis)
 - [`iovalkey`](#iovalkey)
 - [`lodash`](#lodash)
-- [`lru-cache`](#lru-cache)
 - [`module`](#module)
 - [`moment`](#moment)
 - [`mongodb`](#mongodb)
@@ -1924,19 +1923,6 @@ Total: 2923 entries across 126 modules.
 - `take` — module
 - `times` — module
 - `uniq` — module
-
-## `lru-cache`
-
-### Methods
-
-- `clear` — instance
-- `default` — module
-- `delete` — instance
-- `get` — instance
-- `has` — instance
-- `peek` — instance
-- `set` — instance
-- `size` — instance
 
 ## `module`
 

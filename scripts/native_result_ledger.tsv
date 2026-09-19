@@ -116,8 +116,6 @@ js_lodash_tail	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_take	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_times	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_uniq	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lru_cache_new	NR_HANDLE_ID	crates/perry-ext-lru-cache/src/lib.rs	Handle
-js_lru_cache_set	NR_HANDLE_ID	crates/perry-ext-lru-cache/src/lib.rs	Handle
 js_mongodb_client_close	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
 js_mongodb_client_db	NR_HANDLE_ID	crates/perry-ext-mongodb/src/lib.rs	Handle
 js_mongodb_collection_count_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise

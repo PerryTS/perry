@@ -18,7 +18,6 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates
   "ids",
   "html-parser",
   "rate-limit",
-  "bundled-lru-cache",
   "bundled-exponential-backoff",
   "bundled-decimal",
   "bundled-dayjs",

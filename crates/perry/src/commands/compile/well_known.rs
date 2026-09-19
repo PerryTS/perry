@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 /// (see `is_native_module` + the resolver short-circuit). That is only
 /// safe-by-construction when the wrapper is a genuine drop-in. A wrapper
 /// that ports a *subset* of the surface (undici's dispatcher-only client,
-/// node-forge's PKI-only slice, lru-cache's numeric-only store) can
+/// node-forge's PKI-only slice, qs's array-limit-only parser) can
 /// silently diverge from the real package, so it is marked `Partial` and
 /// perry surfaces a diagnostic (and, under
 /// `PERRY_REQUIRE_FAITHFUL_BINDINGS=1`, refuses to auto-prefer it).
@@ -389,41 +389,6 @@ mod tests {
         assert!(lookup_well_known("definitely-not-a-real-package").is_none());
     }
 
-    /// `lru-cache` must stay `partial`, and for a reason that outlives the
-    /// comment in the toml.
-    ///
-    /// #7136 made the binding genuinely faithful for the surface it *does*
-    /// implement — JS-value keys and values, content-compared string keys, GC
-    /// rooting of cached values, `ttl`, `updateAgeOnGet` — which invites the
-    /// conclusion that the marker should be flipped. It should not. `full`
-    /// means an exhaustively audited drop-in for the package's ENTIRE public
-    /// API, and it licenses auto-preferring this wrapper over a user's
-    /// installed `node_modules/lru-cache`. Measured against npm
-    /// `lru-cache@11.5.2`, two of the wrapper's gaps fail SILENTLY rather
-    /// than loudly: `cache.forEach(...)` visits nothing where npm visits
-    /// every entry, and a `dispose` callback is never invoked where npm
-    /// invokes it on eviction. `maxSize`/`sizeCalculation`, `fetch`,
-    /// `allowStale`, per-call option objects, and the rest of the iterator
-    /// surface are absent too.
-    ///
-    /// Flipping this to `full` would therefore let Perry silently swap a
-    /// wrong implementation in for a correct installed one. Promote it only
-    /// once those surfaces exist and are conformance-tested — and update this
-    /// test with the evidence when you do.
-    #[test]
-    fn lru_cache_stays_partial_until_the_silent_gaps_are_closed() {
-        let binding =
-            lookup_well_known("lru-cache").expect("lru-cache must be a well-known binding");
-        assert_eq!(binding.krate, "perry-ext-lru-cache");
-        assert_eq!(
-            binding.compat,
-            BindingCompat::Partial,
-            "lru-cache's wrapper silently no-ops forEach/dispose — it cannot be \
-             auto-preferred over an installed copy"
-        );
-        assert!(!binding.is_faithful());
-    }
-
     #[test]
     fn compat_defaults_to_partial_when_absent() {
         let raw = r#"
@@ -466,7 +431,7 @@ mod tests {
     /// stay `Partial` and are never silently treated as complete drop-ins.
     #[test]
     fn shipped_subset_bindings_are_partial() {
-        for name in ["undici", "node-forge", "lru-cache"] {
+        for name in ["undici", "node-forge"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,

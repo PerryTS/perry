@@ -632,23 +632,6 @@ pub(super) fn lower_builtin_new<'a>(
             let result = ctx.block().call(DOUBLE, runtime_fn, &[(DOUBLE, &opts_box)]);
             Ok(Some(result))
         }
-        // lru-cache LRUCache — `new LRUCache({ max, ttl, updateAgeOnGet })`.
-        // The runtime parses the whole NaN-boxed options object itself
-        // (`js_lru_cache_new(options: f64)`), so we just lower the options
-        // argument and hand it through — no static field extraction, which
-        // means dynamic/variable options objects work too. A missing options
-        // argument passes `undefined`, which the runtime rejects with the
-        // same `TypeError` npm's constructor destructuring raises.
-        "LRUCache" => {
-            // npm's constructor ignores everything past the options object,
-            // but the arguments are still evaluated — the tail is lowered
-            // for its side effects so `new LRUCache(opts, f())` still calls
-            // `f`. #6986: `opts_val` was held across that lowering.
-            let opts_val = adopt_leading_arg_discard_rest(ctx, args, group)?;
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_lru_cache_new", &[(DOUBLE, &opts_val)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
-        }
         // (`WebSocketServer` is handled by an earlier branch lower in this
         // file — pre-existing from 2026-04-14. No new branch needed here.)
         // pg Client — `new Client(config)` matching npm pg's API: synchronous

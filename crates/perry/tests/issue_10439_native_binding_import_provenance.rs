@@ -291,26 +291,12 @@ console.log(program.constructor.name);
     );
 }
 
-/// Same legitimate-case guard for lru-cache: without `compilePackages`,
-/// `new LRUCache(...).set(...).get(...)` must still reach the native
-/// `js_lru_cache_*` handle path (which happens to compute the right answer
-/// for this simple, non-evicting case) rather than falling through to a
-/// nonexistent real source.
-#[test]
-fn lru_cache_default_name_still_uses_native_binding_without_compile_packages() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path();
-    std::fs::write(
-        root.join("main.ts"),
-        r#"
-import { LRUCache } from "lru-cache";
-console.log(new LRUCache<string, number>({ max: 3 }).set("a", 1).get("a"));
-"#,
-    )
-    .expect("write main.ts");
-    assert_eq!(
-        compile_and_run(root, "main.ts"),
-        "1\n",
-        "the native-binding path (no compilePackages) must be byte-for-byte unchanged"
-    );
-}
+// `lru_cache_default_name_still_uses_native_binding_without_compile_packages`
+// removed here -- it guarded the "legitimate native case" (no
+// compilePackages, native binding still handles `new LRUCache(...)`), which
+// no longer exists: #10685 deletes the native lru-cache binding entirely.
+// Without compilePackages AND without a real installed package, this shape
+// now falls through to the generic unresolved-import handling instead
+// (compiles, but throws at the first call that isn't actually there) --
+// correctly reflecting that there is no source of truth for `LRUCache`
+// left to reach, exactly as removing the binding intends.
