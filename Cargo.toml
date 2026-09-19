@@ -20,7 +20,6 @@ members = [
     "crates/perry-ext-validator",
     "crates/perry-validation",
     "crates/perry-perex",
-    "crates/perry-ext-lru-cache",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
     "crates/perry-ext-exponential-backoff",
@@ -486,7 +485,6 @@ perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }
 perry-ext-validator = { path = "crates/perry-ext-validator" }
 perry-validation = { path = "crates/perry-validation" }
 perry-perex = { path = "crates/perry-perex" }
-perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }

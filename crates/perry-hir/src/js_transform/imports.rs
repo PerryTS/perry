@@ -675,7 +675,7 @@ pub fn transform_expr(
             // even if imported from JS modules - the codegen handles them directly
             const NATIVE_CODEGEN_CLASSES: &[&str] = &[
                 "Redis", "Command", "Pool", "WebSocket", "WebSocketServer",
-                "LRUCache", "Big", "Decimal", "BigNumber", "URLSearchParams",
+                "Big", "Decimal", "BigNumber", "URLSearchParams",
             ];
             // Check if this is a JS class (but not one handled natively)
             if !NATIVE_CODEGEN_CLASSES.contains(&class_name.as_str()) && tracker.is_js_class(class_name) {

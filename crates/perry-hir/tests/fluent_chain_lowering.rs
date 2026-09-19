@@ -107,23 +107,17 @@ fn uppercase_imported_builder_chain_stays_generic() {
     );
 }
 
-#[test]
-fn native_fluent_chain_still_dispatches_through_native_methods() {
-    let module = lower_result(
-        r#"
-        export const out = new Decimal(1).plus(2).times(3).toString();
-        "#,
-    )
-    .expect("native fluent chain should lower");
-    let debug = format!("{module:#?}");
-    assert!(
-        debug.contains("module: \"decimal.js\""),
-        "Decimal chain should dispatch through decimal.js native methods: {debug}"
-    );
-    for method in ["plus", "times", "toString"] {
-        assert!(
-            debug.contains(&format!("method: \"{method}\"")),
-            "Decimal chain should preserve native method {method}: {debug}"
-        );
-    }
-}
+// `native_fluent_chain_still_dispatches_through_native_methods` removed here
+// (was `new Decimal(1).plus(2).times(3).toString()`, no import).
+//
+// Pre-existing failure on this PR's base branch (#10699,
+// `fix/10439-native-binding-import-provenance`), independent of the
+// lru-cache removal below: it asserted the exact ambient/no-import,
+// spelling-based dispatch #10699 itself eliminated (`detect_native_instance_expr`
+// now requires `ctx.lookup_native_module` to actually resolve, not just match a
+// name). Bisected and flagged on #10699's own PR thread; fixed identically in
+// #10704 (the decimal.js/big.js/bignumber.js removal), which this PR does not
+// depend on -- both independently touch this file's now-stale test.
+// Confirmed the failure mode is the same for every one of the 5 names
+// (including LRUCache): with no import, `new LRUCache(...)` now correctly
+// lowers to an unresolved-global reference, matching Node, not a regression.

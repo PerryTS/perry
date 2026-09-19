@@ -1738,39 +1738,14 @@ fn test_function_require_with_body_still_shadows_the_namespace_fast_path() {
     );
 }
 
-/// A compilePackages CJS module receives Perry's synthetic `require` function.
-/// Native npm shims do not materialize a complete runtime namespace object, so
-/// destructuring their constructor from that function must become the same
-/// static native alias as an ESM named import.  hosted-git-info uses this exact
-/// shape for lru-cache at module initialization.
-#[test]
-fn test_cjs_wrapper_lru_cache_destructure_uses_static_constructor() {
-    let source = r#"
-        function __perry_cjs_require_error(kind: string, code: string, message: string): any {
-            return { kind, code, message };
-        }
-        function __perry_cjs_require_is_builtin(specifier: string): boolean {
-            return false;
-        }
-        function require(specifier: string): any {
-            return undefined;
-        }
-        const { LRUCache } = require("lru-cache");
-        const cache = new LRUCache({ max: 2 });
-        cache.set("answer", 42);
-    "#;
-    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
-    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
-    let dump = format!("{hir:?}");
-    assert!(
-        dump.contains("New { class_name: \"LRUCache\""),
-        "the CJS shim destructure must lower to the static LRUCache constructor: {dump}"
-    );
-    assert!(
-        !dump.contains("name: \"LRUCache\", ty: Any") && !dump.contains("NewDynamic"),
-        "the unreified runtime namespace local must not survive: {dump}"
-    );
-}
+// `test_cjs_wrapper_lru_cache_destructure_uses_static_constructor` removed
+// here -- it asserted `const { LRUCache } = require("lru-cache"); new
+// LRUCache(...)` lowers to the static native constructor
+// (`cjs_wrapper_static_native_destructure` in `var_decl_sources.rs`), which
+// no longer exists now that lru-cache's native binding is gone (#10685).
+// The same CJS-destructure shape now goes through the ordinary
+// resolvable-native-module path (any Node-builtin or well-known module,
+// not lru-cache specifically), unaffected by this removal.
 
 /// #8470: the plain, non-reactive documented form
 /// `widget.animateOpacity(target, dur)` must lower to the perry/ui animation
