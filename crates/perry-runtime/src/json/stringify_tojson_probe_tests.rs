@@ -176,3 +176,247 @@ fn json_tojson_marker_comparisons_stop_before_guard_page() {
         assert_eq!(libc::munmap(raw, page * 2), 0);
     }
 }
+
+// ─── #10696: the invalidation funnel behind the per-`class_id` memo ──────────
+//
+// `class_chain_may_have_to_json` is memoized per class id under three
+// generations. The dangerous staleness direction is a cached `false` that
+// should have become `true`, so every writer that can flip it that way must be
+// IN the funnel. Each test below primes the memo with a `false`, performs one
+// such write, and requires the answer to flip — so deleting that writer's bump
+// makes exactly one test fail, by name.
+
+/// A unique-per-test class id that no other test or builtin claims.
+fn probe_test_class_id(n: u32) -> u32 {
+    0x7EEE_0000 | n
+}
+
+/// A non-pointer JS value: enough to make `lookup_prototype_method` answer
+/// `Some`, and safe for the root store's write barrier.
+fn probe_test_method_bits() -> u64 {
+    JSValue::int32(1).bits()
+}
+
+#[test]
+fn class_chain_tojson_memo_reuses_a_verdict_until_a_generation_moves() {
+    let class_id = probe_test_class_id(0x01);
+    super::test_reset_class_chain_tojson_recomputes();
+    let first = super::test_class_chain_may_have_to_json(class_id);
+    assert_eq!(super::test_class_chain_tojson_recomputes(), 1);
+    assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
+    assert_eq!(
+        super::test_class_chain_tojson_recomputes(),
+        1,
+        "an unchanged generation triple must reuse the recorded verdict"
+    );
+
+    crate::object::test_bump_vtable_generation();
+    assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
+    assert_eq!(
+        super::test_class_chain_tojson_recomputes(),
+        2,
+        "a vtable registration must retire the entry"
+    );
+
+    crate::object::prop_plan::prop_plan_epoch_bump();
+    assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
+    assert_eq!(
+        super::test_class_chain_tojson_recomputes(),
+        3,
+        "a semantic property mutation must retire the entry"
+    );
+
+    crate::object::class_lookup_surface_gen_bump();
+    assert_eq!(super::test_class_chain_may_have_to_json(class_id), first);
+    assert_eq!(
+        super::test_class_chain_tojson_recomputes(),
+        4,
+        "a class lookup-surface mutation must retire the entry"
+    );
+}
+
+#[test]
+fn class_chain_tojson_memo_never_disagrees_with_the_uncached_walk() {
+    for n in 0x10..0x18u32 {
+        let class_id = probe_test_class_id(n);
+        assert_eq!(
+            super::test_class_chain_may_have_to_json(class_id),
+            super::test_class_chain_may_have_to_json_uncached(class_id),
+        );
+    }
+}
+
+#[test]
+fn a_late_prototype_method_retires_the_cached_chain_verdict() {
+    let class_id = probe_test_class_id(0x21);
+    assert!(!super::test_class_chain_may_have_to_json(class_id));
+    crate::object::class_prototype_method_root_store(
+        class_id,
+        "toJSON".to_string(),
+        probe_test_method_bits(),
+    );
+    assert!(
+        super::test_class_chain_may_have_to_json(class_id),
+        "`C.prototype.toJSON = fn` after a first stringify must be observed"
+    );
+}
+
+#[test]
+fn a_late_class_prototype_object_retires_the_cached_chain_verdict() {
+    let class_id = probe_test_class_id(0x31);
+    assert!(!super::test_class_chain_may_have_to_json(class_id));
+    let proto = crate::object::js_object_alloc(0, 0);
+    assert!(!proto.is_null());
+    crate::object::class_prototype_object_root_store(class_id, proto);
+    assert!(
+        super::test_class_chain_may_have_to_json(class_id),
+        "a materialized `F.prototype` object can carry a later-added `toJSON`, \
+         so it must retire the cached verdict"
+    );
+}
+
+#[test]
+fn a_late_decl_prototype_object_retires_the_cached_chain_verdict() {
+    let class_id = probe_test_class_id(0x41);
+    assert!(!super::test_class_chain_may_have_to_json(class_id));
+    let proto = crate::object::js_object_alloc(0, 0);
+    assert!(!proto.is_null());
+    crate::object::class_decl_prototype_object_root_store(class_id, proto);
+    assert!(
+        super::test_class_chain_may_have_to_json(class_id),
+        "the first reflective `C.prototype` / `instanceof` / getPrototypeOf \
+         materializes a prototype OBJECT and must retire the cached verdict"
+    );
+}
+
+#[test]
+fn a_late_generic_origin_edge_retires_the_cached_chain_verdict() {
+    let generic = probe_test_class_id(0x51);
+    let specialization = probe_test_class_id(0x52);
+    let proto = crate::object::js_object_alloc(0, 0);
+    assert!(!proto.is_null());
+    crate::object::class_decl_prototype_object_root_store(generic, proto);
+    assert!(super::test_class_chain_may_have_to_json(generic));
+    assert!(!super::test_class_chain_may_have_to_json(specialization));
+    crate::object::js_register_class_generic_origin(specialization, generic);
+    assert!(
+        super::test_class_chain_may_have_to_json(specialization),
+        "a generic-origin edge redirects both prototype-object readers and \
+         `lookup_prototype_method`'s chain hop, so it must retire the entry"
+    );
+}
+
+#[test]
+fn un_marking_a_deleted_prototype_key_retires_the_cached_chain_verdict() {
+    let class_id = probe_test_class_id(0x61);
+    crate::object::class_prototype_method_root_store(
+        class_id,
+        "toJSON".to_string(),
+        probe_test_method_bits(),
+    );
+    assert!(super::test_class_chain_may_have_to_json(class_id));
+    crate::object::class_mark_key_deleted(class_id, "toJSON");
+    // `delete C.prototype.toJSON` reaches `class_mark_key_deleted` through
+    // `js_object_delete_field`, which bumps the semantic epoch; stand in for
+    // that here so the memo holds the post-delete `false` the runtime would.
+    crate::object::prop_plan::prop_plan_epoch_bump();
+    assert!(!super::test_class_chain_may_have_to_json(class_id));
+    // `CLASS_DELETED_KEYS` is shared between a class's prototype keys and its
+    // STATIC field keys (`class_registry/state.rs`), so a later `C.toJSON = 1`
+    // static store un-marks the key IN PLACE inside
+    // `class_dynamic_prop_root_store` and re-exposes the prototype method to
+    // `lookup_prototype_method` — with no vtable write and no descriptor
+    // install to move either of the other two generations.
+    crate::object::class_dynamic_prop_root_store(
+        class_id,
+        "toJSON",
+        f64::from_bits(probe_test_method_bits()),
+    );
+    assert!(
+        super::test_class_chain_may_have_to_json(class_id),
+        "un-marking a deleted key re-exposes the prototype method and must \
+         retire the cached verdict"
+    );
+}
+
+// ─── #10696: the cheap `Object.prototype` signature comparison ───────────────
+
+#[test]
+fn object_proto_signature_fast_match_agrees_with_the_validated_builder() {
+    unsafe {
+        super::invalidate_object_proto_tojson_state();
+        let first = super::object_proto_may_have_to_json();
+        let cached = super::OBJECT_PROTO_TOJSON_SIGNATURE
+            .with(std::cell::Cell::get)
+            .expect("a verdict was recorded under a signature");
+        assert_eq!(
+            super::object_proto_tojson_signature(),
+            Some(cached),
+            "the validated builder must reproduce the recorded signature"
+        );
+        assert!(
+            super::object_proto_tojson_signature_matches(&cached),
+            "the cheap comparison must agree with the validated builder"
+        );
+
+        super::test_reset_object_proto_tojson_recomputes();
+        for _ in 0..64 {
+            assert_eq!(super::object_proto_may_have_to_json(), first);
+        }
+        assert_eq!(
+            super::test_object_proto_tojson_recomputes(),
+            0,
+            "an unchanged signature must not recompute"
+        );
+
+        crate::object::prop_plan::prop_plan_epoch_bump();
+        assert!(
+            !super::object_proto_tojson_signature_matches(&cached),
+            "a semantic property mutation must be a signature miss"
+        );
+        assert_eq!(super::object_proto_may_have_to_json(), first);
+        assert_eq!(super::test_object_proto_tojson_recomputes(), 1);
+    }
+}
+
+#[test]
+fn object_proto_signature_fast_match_rejects_a_replaced_prototype_address() {
+    unsafe {
+        super::invalidate_object_proto_tojson_state();
+        let _ = super::object_proto_may_have_to_json();
+        let cached = super::OBJECT_PROTO_TOJSON_SIGNATURE
+            .with(std::cell::Cell::get)
+            .expect("a verdict was recorded under a signature");
+        // A relocation rewrites `CACHED_OBJECT_PROTO_BITS` (a GC mutable
+        // root), which is exactly what the comparison re-reads. Simulate the
+        // rewritten root and require a miss rather than a stale hit.
+        let saved = CACHED_OBJECT_PROTO_BITS.with(|c| c.get());
+        CACHED_OBJECT_PROTO_BITS.with(|c| c.set(saved ^ 0x40));
+        assert!(!super::object_proto_tojson_signature_matches(&cached));
+        CACHED_OBJECT_PROTO_BITS.with(|c| c.set(0));
+        assert!(!super::object_proto_tojson_signature_matches(&cached));
+        CACHED_OBJECT_PROTO_BITS.with(|c| c.set(saved));
+        assert!(super::object_proto_tojson_signature_matches(&cached));
+    }
+}
+
+#[test]
+fn class_chain_tojson_memo_holds_every_shape_of_one_nested_literal() {
+    // `{a:{b:{c:{d:{e:1}}}}}` is FIVE distinct object-literal shapes, hence
+    // five consecutive anon shape class ids, all live within a single
+    // serialization walk. A table that evicts any pair of them pays a full
+    // 448-instruction registry walk on EVERY operation — which is what a
+    // 16-slot table indexed by `>> 12` did (#10696).
+    let ids: Vec<u32> = (0..5).map(|n| probe_test_class_id(0x70 + n)).collect();
+    super::test_reset_class_chain_tojson_recomputes();
+    for _ in 0..50 {
+        for &id in &ids {
+            let _ = super::test_class_chain_may_have_to_json(id);
+        }
+    }
+    assert_eq!(
+        super::test_class_chain_tojson_recomputes(),
+        ids.len() as u64,
+        "consecutive shape ids of one walk must each keep their own slot"
+    );
+}

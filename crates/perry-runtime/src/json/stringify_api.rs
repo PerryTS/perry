@@ -291,9 +291,34 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
     // it can't leak across top-level calls.
     if prior_depth == 0 {
         super::SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
-        // Arbitrary user code ran since the last stringify, so the cached
-        // `Object.prototype`-has-`toJSON` verdict must be recomputed (#6009).
-        super::invalidate_object_proto_tojson_state();
+        // #10696: this entry used to force-invalidate the cached
+        // `Object.prototype`-has-`toJSON` verdict, on the grounds that
+        // arbitrary user code ran since the last stringify. That made the
+        // FIRST probe of every call a guaranteed recompute (a measured 245
+        // Ir/call in `compute_object_proto_tojson_state`, plus ~145 Ir/call
+        // re-recording the signature) — and it was redundant, because
+        // "arbitrary user code ran" is exactly what the live signature
+        // comparison in `object_proto_may_have_to_json` detects, on every
+        // probe rather than only at entry:
+        //
+        //   `Object.prototype.toJSON = fn`  -> `object/field_set_by_name.rs`
+        //       bumps the SEMANTIC property epoch for this one key by name,
+        //       and the new own key also changes the keys array's identity
+        //       or its length;
+        //   `Object.defineProperty`         -> descriptor install bumps the
+        //       semantic epoch, and registers the key in the keys array;
+        //   `delete Object.prototype.toJSON`-> `js_object_delete_field` bumps
+        //       the semantic epoch (and only makes the verdict MORE true);
+        //   `Object.setPrototypeOf(Object.prototype, x)` -> instance-override
+        //       recording bumps the semantic epoch;
+        //   a moving collection                 -> `CACHED_OBJECT_PROTO_BITS`
+        //       is a GC mutable root, so a relocation rewrites it and the
+        //       re-derived address stops matching the recorded one.
+        //
+        // The invalidations around user CALLBACKS (`object_get_to_json`,
+        // `array_get_to_json`, the replacer walk) stay: they are cold, and
+        // they keep a `toJSON` that rewrites `Object.prototype` mid-walk from
+        // ever being answered from a verdict computed before it ran.
         // A circular-ref `TypeError` longjmps past the `STRINGIFY_STACK`
         // pops (js_throw doesn't unwind Rust), so a caught throw can leave
         // stale ancestor pointers behind. Clear at the outermost entry so they
