@@ -38,6 +38,7 @@
 //!     switching; deeper indirection is rare and gets the no-op fallback.
 
 pub(crate) mod detect;
+mod deferred_requires;
 mod extract_exports;
 mod extract_requires;
 mod hoist_classes;
@@ -52,6 +53,7 @@ mod preamble_canary_tests;
 
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
 use detect::is_js_reserved_word;
+use deferred_requires::deferred_require_specs;
 use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
     extract_object_literal_exports_from_require, extract_single_module_exports_assignment,
@@ -60,7 +62,7 @@ use extract_exports::{
 // #8547: the stdlib-link decision needs the literal `require()` specifiers.
 pub(crate) use extract_requires::extract_require_specifiers;
 use extract_requires::{
-    extract_export_star_specs, extract_require_aliases_with_ranges, function_local_specs,
+    extract_export_star_specs, extract_require_aliases_with_ranges,
     identifier_is_declared_binding, identifier_is_reassigned,
 };
 use hoist_classes::{

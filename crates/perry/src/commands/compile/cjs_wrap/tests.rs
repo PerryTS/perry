@@ -750,9 +750,8 @@ exports.spawn = function spawn() { return terminalCtor; };
         Some("windows"),
     );
     assert!(
-        wrapped.contains("import _req_0 from './windowsTerminal';")
-            || wrapped.contains("import terminalCtor from './windowsTerminal';"),
-        "expected live Windows require to stay hoisted, got:\n{}",
+        wrapped.contains("import _lazyreq_0 from './windowsTerminal';"),
+        "expected live Windows require to remain collected and initialize in its branch, got:\n{}",
         wrapped
     );
     assert!(
@@ -1987,5 +1986,57 @@ fn cjs_wrap_builtin_require_not_hoisted_as_static_import() {
     assert!(
         !wrapped.contains("return _req_0;"),
         "the built-in require case must not reference the dropped import local; got:\n{wrapped}"
+    );
+}
+
+/// A deferred require must not re-enter the path registry on every call.
+///
+/// Deferring a conditional require routes it through
+/// `__perry_require_path_module`, which is a registry lookup plus a
+/// `globalThis` write pair inside a `try`/`finally`. That is needed only until
+/// the target is loaded; without the memo it ran on EVERY call and cost 3.4x on
+/// a hot require (1.43 B -> 4.86 B instructions over 300k calls).
+///
+/// Nothing else pins the memo — delete it and every other test still passes,
+/// the only symptom being that hot requires get slow again. So assert the
+/// emitted shape: the cache slot is declared, the case is fronted by the
+/// short-circuit, and the record is only cached once `loaded === true`.
+#[test]
+fn a_deferred_require_case_is_fronted_by_its_memo() {
+    let src = r#"
+function get(flag) {
+  if (flag) { return require("./dep.js").v; }
+  return 0;
+}
+module.exports = { get };
+"#;
+    // The target must RESOLVE: the memo lives in the runtime-record arm, which
+    // is only emitted for a specifier that resolves to a real file.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("dep.js"), "module.exports = { v: 1 };\n").unwrap();
+    let wrapped = wrap_commonjs(src, &dir.path().join("entry.js"));
+
+    for (needle, why) in [
+        ("__rec;", "the per-site memo slot declaration"),
+        ("__rec !== undefined) return ", "the short-circuit that skips the registry"),
+        (".loaded === true", "the guard that refuses to cache a half-loaded target"),
+    ] {
+        assert!(
+            wrapped.contains(needle),
+            "the deferred-require memo no longer emits `{needle}` ({why}).\n\
+             Without it every call to a deferred require re-enters \
+             `__perry_require_path_module`, which measured 3.4x slower on a hot \
+             require. If the memo moved, update this test; if it was removed on \
+             purpose, delete this test and say why in the PR.\n{wrapped}"
+        );
+    }
+
+    // The record, not the exports: a module that replaces `module.exports`
+    // after evaluation must still read through, as it does in Node.
+    assert!(
+        wrapped.contains("__rec.exports"),
+        "the memo must return `record.exports`, not a cached exports value, or a \
+         post-evaluation `module.exports = X` would be invisible to later \
+         requires.\n{wrapped}"
     );
 }
