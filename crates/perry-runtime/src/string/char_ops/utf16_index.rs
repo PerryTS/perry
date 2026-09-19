@@ -11,7 +11,6 @@ use super::*;
 use std::cell::RefCell;
 
 const CHECKPOINT_BYTES: usize = 128;
-const CACHE_ENTRIES: usize = 4;
 
 #[derive(Clone, Copy, Default)]
 struct Position {
@@ -98,24 +97,25 @@ fn decode_step(bytes: &[u8], i: usize) -> (usize, usize, u32) {
     wtf8_step(bytes, i)
 }
 
-struct IndexCache {
-    entries: [Index; CACHE_ENTRIES],
-    hot: usize,
-    next: usize,
-}
+/// #10688: an owner-keyed map rather than a fixed array of slots.
+///
+/// The array held `CACHE_ENTRIES` indexes and evicted round-robin, so a
+/// program interleaving indexed access across more strings than that evicted
+/// the entry it was about to need on every single access and rebuilt from
+/// scratch forever — measured at 1,224x once K exceeded the slot count, with
+/// no gradual degradation. Capacity is the defect, so there is no capacity:
+/// entries live until their string dies, and `prune_dead_utf16_indexes`
+/// (already driven by the collector) reclaims them.
+///
+/// The map is keyed by a string identity the GC *rewrites* when it relocates
+/// an object, so `scan_utf16_index_roots_mut` must rehash after the visitor
+/// runs — see there.
+type IndexCache = crate::fast_hash::PtrHashMap<usize, Index>;
 
-impl Default for IndexCache {
-    fn default() -> Self {
-        Self {
-            entries: std::array::from_fn(|_| Index::default()),
-            hot: 0,
-            next: 0,
-        }
-    }
-}
 
 crate::perry_thread_local! {
-    static UTF16_INDEX_CACHE: RefCell<IndexCache> = RefCell::new(IndexCache::default());
+    static UTF16_INDEX_CACHE: RefCell<IndexCache> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// Caller has validated the header and UTF-16 index. Small strings bypass the
@@ -138,19 +138,16 @@ pub(super) fn boundary_at(s: *const StringHeader, idx: usize) -> Option<(usize, 
     UTF16_INDEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let owner = s as usize;
-        let slot = if cache.entries[cache.hot].owner == owner {
-            cache.hot
-        } else if let Some(slot) = cache.entries.iter().position(|entry| entry.owner == owner) {
-            slot
-        } else {
-            let slot = cache.next;
-            cache.next = (slot + 1) % CACHE_ENTRIES;
-            slot
-        };
-        cache.hot = slot;
-        let entry = &mut cache.entries[slot];
         let utf16_len = unsafe { (*s).utf16_len };
-        if entry.owner != owner || entry.byte_len != byte_len || entry.utf16_len != utf16_len {
+        let entry = cache.entry(owner).or_insert_with(|| Index {
+            owner,
+            byte_len,
+            utf16_len,
+            ..Index::default()
+        });
+        // A uniquely owned string can be appended to in place, which
+        // invalidates every recorded offset.
+        if entry.byte_len != byte_len || entry.utf16_len != utf16_len {
             *entry = Index {
                 owner,
                 byte_len,
@@ -181,19 +178,16 @@ pub(super) fn unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
     UTF16_INDEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let owner = s as usize;
-        let slot = if cache.entries[cache.hot].owner == owner {
-            cache.hot
-        } else if let Some(slot) = cache.entries.iter().position(|entry| entry.owner == owner) {
-            slot
-        } else {
-            let slot = cache.next;
-            cache.next = (slot + 1) % CACHE_ENTRIES;
-            slot
-        };
-        cache.hot = slot;
-        let entry = &mut cache.entries[slot];
         let utf16_len = unsafe { (*s).utf16_len };
-        if entry.owner != owner || entry.byte_len != byte_len || entry.utf16_len != utf16_len {
+        let entry = cache.entry(owner).or_insert_with(|| Index {
+            owner,
+            byte_len,
+            utf16_len,
+            ..Index::default()
+        });
+        // A uniquely owned string can be appended to in place, which
+        // invalidates every recorded offset.
+        if entry.byte_len != byte_len || entry.utf16_len != utf16_len {
             *entry = Index {
                 owner,
                 byte_len,
@@ -207,19 +201,27 @@ pub(super) fn unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
 
 pub(crate) fn scan_utf16_index_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     UTF16_INDEX_CACHE.with(|cache| {
-        for entry in &mut cache.borrow_mut().entries {
-            visitor.visit_metadata_usize_slot(&mut entry.owner);
+        let mut cache = cache.borrow_mut();
+        // The visitor may relocate the string each entry describes, which
+        // changes the very address the map is keyed by. Drain first, let the
+        // owners be rewritten, then reinsert so the keys and the `owner`
+        // fields agree again.
+        let mut moved: Vec<(usize, Index)> = cache.drain().collect();
+        for (key, index) in &mut moved {
+            visitor.visit_metadata_usize_slot(key);
+            index.owner = *key;
+        }
+        for (key, index) in moved {
+            cache.insert(key, index);
         }
     });
 }
 
 pub(crate) fn prune_dead_utf16_indexes(is_dead_owner: &dyn Fn(usize) -> bool) {
     UTF16_INDEX_CACHE.with(|cache| {
-        for entry in &mut cache.borrow_mut().entries {
-            if entry.owner != 0 && is_dead_owner(entry.owner) {
-                *entry = Index::default();
-            }
-        }
+        cache
+            .borrow_mut()
+            .retain(|&owner, _| owner != 0 && !is_dead_owner(owner));
     });
 }
 
@@ -231,13 +233,15 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn test_utf16_index_entries() -> Vec<(usize, usize)> {
     UTF16_INDEX_CACHE.with(|cache| {
-        cache
+        let mut entries: Vec<(usize, usize)> = cache
             .borrow()
-            .entries
             .iter()
-            .filter(|entry| entry.owner != 0)
-            .map(|entry| (entry.owner, entry.checkpoints.len()))
-            .collect()
+            .filter(|(&owner, _)| owner != 0)
+            .map(|(&owner, index)| (owner, index.checkpoints.len()))
+            .collect();
+        // HashMap iteration order is not stable; callers compare snapshots.
+        entries.sort_unstable();
+        entries
     })
 }
 
