@@ -63,7 +63,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts" / "unrooted_local_shape_baseline.json"
-BASELINE_SCHEMA = 2
+BASELINE_SCHEMA = 3
+
+# (base, head) schema pairs across which the DETECTOR itself changed, so the two
+# sides were measured with different yardsticks and their numbers are not
+# comparable. Each entry is a deliberate, reviewed act: the ratchet cannot tell
+# "the detector got better" from "the debt got worse" by looking at the totals,
+# so a migration is the one place the recorded number is allowed to rise, and it
+# is named here rather than inferred. Every schema pair NOT listed is rejected.
+#
+#   1 -> 2  #8253's ordinary-use blind spot, plus NaN-box pointer sources.
+#   2 -> 3  #10715's wrapped-`let` fold. The line-oriented matcher did not see a
+#           binding rustfmt broke after its `=`, so the old ceilings were
+#           produced by a detector that could not count the surface the new one
+#           counts. 558 -> 581 on the same tree: 34 bindings that were invisible
+#           minus 11 that were reported against a dead identity.
+AUDITED_MIGRATIONS = frozenset({(1, 2), (2, 3)})
 
 # Crate families outside `raw_handle_debt.py`'s scope -- the whole point.
 SCAN_GLOBS = (
@@ -448,14 +463,15 @@ unsafe fn planted_inside_wrapped_closure() {
 def compare_baselines(base: dict, head: dict) -> list[str]:
     """Return recorded-debt increases from BASE to HEAD.
 
-    Schema 1 is the detector merged by #8253. Schema 2 fixes that detector's
-    ordinary-use blind spot and adds NaN-box pointer sources, so its initial
-    re-pin necessarily increases the measured surface. That one migration is
-    explicit; after it lands, both total and per-file ceilings only go down.
+    A detector change makes the re-pin necessarily raise the measured surface,
+    and the ratchet cannot distinguish that from real debt by reading totals. So
+    the schema pairs where it happened are enumerated in `AUDITED_MIGRATIONS`
+    and exempted by name; every other change of schema is rejected outright.
+    Between migrations, both total and per-file ceilings only go down.
     """
     base_schema = int(base.get("schema_version", 1))
     head_schema = int(head.get("schema_version", 1))
-    if (base_schema, head_schema) == (1, BASELINE_SCHEMA):
+    if (base_schema, head_schema) in AUDITED_MIGRATIONS:
         return []
     if base_schema != head_schema:
         return [f"baseline schema changed {base_schema} -> {head_schema} without an audited migration"]
@@ -560,23 +576,23 @@ def no_raise_vs(ref: str) -> int:
     head = json.loads(BASELINE.read_text(encoding="utf-8"))
     base_schema = int(base.get("schema_version", 1))
     head_schema = int(head.get("schema_version", 1))
-    migration = (base_schema, head_schema) == (1, BASELINE_SCHEMA)
+    migration = (base_schema, head_schema) in AUDITED_MIGRATIONS
     bad = compare_baselines(base, head)
 
     # Scan the worktree too. Without this the whole mode is recorded-vs-recorded
     # (#10713). Skipped only across the audited schema migration, where the two
     # sides were measured by different detectors and the numbers are not
     # comparable -- the same exemption `compare_baselines` already makes.
-    measured = "not measured (schema migration)"
+    measured = "worktree not scanned (different detectors either side)"
     if not migration:
         results = collect()
         total = sum(len(v) for v in results.values())
-        measured = str(total)
+        measured = f"measured {total}"
         bad += compare_measured(base, total, {k: len(v) for k, v in results.items()})
 
     where = (
         f"vs. {ref} ({resolved}): recorded {base['total']} -> {head['total']}, "
-        f"measured {measured}"
+        f"{measured}"
     )
     if bad:
         print(f"::error::unrooted-local debt rose {where}: {len(bad)} violation(s)")
@@ -646,7 +662,10 @@ def self_test() -> int:
             {"schema_version": 2, "total": 2, "per_file": {"a.rs": 1, "new.rs": 1}},
             "was not listed",
         ),
-        ({"schema_version": 3, "total": 2, "per_file": {"a.rs": 2}}, "schema changed"),
+        # An UNAUDITED schema pair is still rejected. 2 -> 4 rather than 2 -> 3,
+        # because 2 -> 3 is now a named migration: the exemption is a list, not
+        # a licence to renumber, and this asserts the rest of the space is shut.
+        ({"schema_version": 4, "total": 2, "per_file": {"a.rs": 2}}, "schema changed"),
     )
     for head, needle in comparisons:
         if not any(needle in violation for violation in compare_baselines(base, head)):
@@ -655,8 +674,21 @@ def self_test() -> int:
     if compare_baselines(base, base):
         print("SELF-TEST FAIL: unchanged baseline reported an increase", file=sys.stderr)
         ok = False
-    if compare_baselines({"total": 218, "per_file": {}}, {"schema_version": 2, "total": 999, "per_file": {}}):
-        print("SELF-TEST FAIL: audited schema-1 migration was rejected", file=sys.stderr)
+    for pair, head in (
+        ((1, 2), {"schema_version": 2, "total": 999, "per_file": {}}),
+        ((2, 3), {"schema_version": 3, "total": 999, "per_file": {"a.rs": 999}}),
+    ):
+        older = {"schema_version": pair[0], "total": 218, "per_file": {"a.rs": 218}}
+        if compare_baselines(older, head):
+            print(f"SELF-TEST FAIL: audited schema migration {pair} was rejected", file=sys.stderr)
+            ok = False
+    if BASELINE_SCHEMA != max(head for _, head in AUDITED_MIGRATIONS):
+        print(
+            f"SELF-TEST FAIL: BASELINE_SCHEMA is {BASELINE_SCHEMA} but the newest audited "
+            f"migration ends at {max(head for _, head in AUDITED_MIGRATIONS)}; a schema bump "
+            "must name its own migration or every PR is exempt from the ratchet",
+            file=sys.stderr,
+        )
         ok = False
 
     # #10713. Everything above this line passed on the day `--no-raise-vs`

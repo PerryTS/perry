@@ -43,15 +43,31 @@ bindings and collection points, and folding those into a single expression would
 trade this blind spot for a strictly larger one.
 
 **The measured surface rises from 558 to 581 findings across 85 files** (was 80), and
-the baseline is deliberately **not** re-pinned in this change — it still records 561,
-so `--check` and `--no-raise-vs` are both red until the count is re-audited and
-migrated. The number moved in both directions:
+the baseline is re-pinned at 581 under an audited **schema 2 → 3 migration**. This is
+not a loosened ratchet, and the distinction matters: *the old 561 was produced by a
+weaker detector*. Comparing 581 against it compares two different yardsticks, which is
+exactly why the script already carries the audited-migration exemption — the same
+situation as the 1 → 2 migration, for the same reason. The ratchet's job is unchanged:
+it still fails on finding 582, verified by planting one
+(`REGRESSION: 582 findings exceeds baseline 581`).
+
+The exemption is now an explicit `AUDITED_MIGRATIONS` list rather than a single
+hard-coded `(1, BASELINE_SCHEMA)` pair, so each migration is named with its reason and
+every unlisted schema change is still rejected. `--self-test` asserts both that 2 → 4
+is refused and that `BASELINE_SCHEMA` cannot be bumped without naming its own
+migration — otherwise a renumber would exempt every PR from the ratchet.
+
+The number moved in both directions:
 
 - **+34 newly visible**, led by `perry-stdlib/src/events.rs` (6 → 13),
   `perry-ext-node-forge` (20 → 24) and five files that recorded nothing at all.
-  `perry-ext-fastify/src/context.rs:750` is representative: `let obj: *mut ObjectHeader =`
+  **Two were inspected and are genuine unrooted-across-allocation shapes**;
+  `perry-ext-fastify/src/context.rs:750` is one: `let obj: *mut ObjectHeader =`
   wrapped by its own type annotation, with `obj` then held across `alloc_string` in
   the loop below it. Nothing about that code was safe; only its line breaks hid it.
+  The other 32 are **unaudited exposure surface, not known bugs** — the number has
+  always been a surface, not a bug count, and these 32 have simply never been looked
+  at because no instrument could see them.
 - **−11 false positives** in `perry-stdlib/src/ioredis.rs` (14 → 3), the same defect
   inverted: a wrapped *shadowing* `let err_str =` matched nothing either, so the dead
   identity from the earlier binding of that name stayed live and every use of the
@@ -74,4 +90,8 @@ it, verified by reverting each one in isolation:
   under the truthiness dispatch. Guarding inside `resolve_ref` alone does not cover
   this, because nothing called it, and `git rev-parse` rejects an empty ref anyway.
 
-Refs #10713, #10715.
+**Every previous green from the `--no-raise-vs` arm was vacuous**, including the one
+that ran on #10668. The gate's history is not evidence about the code it ran over.
+
+Closes #10713
+Closes #10715
