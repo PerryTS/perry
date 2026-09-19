@@ -427,30 +427,6 @@ pub(super) fn try_static_method_and_instance(
                             "eq" | "lt" | "lte" | "gt" | "gte" | "cmp" |
                             "isZero" | "isPositive" | "isNegative"
                 );
-                // commander Command — every fluent method either
-                // returns the same handle (name/version/description/
-                // option/requiredOption/action) or a sub-Command with
-                // the same module + class (.command(name)). Either way
-                // the next chained call must dispatch through the
-                // commander NativeModSig table, not the generic
-                // dynamic-property fallback. Without this branch
-                // `program.name(...).version(...)` only the first
-                // call landed as a NativeMethodCall and the rest
-                // silently no-op'd at codegen — issue #187.
-                let is_commander = module.as_str() == "commander";
-                let is_commander_method = matches!(
-                    method_name.as_str(),
-                    "name"
-                        | "version"
-                        | "description"
-                        | "option"
-                        | "requiredOption"
-                        | "action"
-                        | "command"
-                        | "parse"
-                        | "opts"
-                        | "argument"
-                );
                 // #1048 — fastify Reply chainable methods. `reply.code(201)
                 // .type("application/json").send(payload)` ships every method
                 // returning the same reply handle for chaining; without this
@@ -497,7 +473,6 @@ pub(super) fn try_static_method_and_instance(
                         | "end"
                 );
                 if (is_math_lib && is_math_method)
-                    || (is_commander && is_commander_method)
                     || (is_fastify_reply && is_fastify_reply_chain_method)
                     || (is_http_client_request && is_client_request_chain_method)
                 {

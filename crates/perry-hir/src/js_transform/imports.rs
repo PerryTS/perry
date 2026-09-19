@@ -674,7 +674,7 @@ pub fn transform_expr(
             // Classes with native codegen support should NOT be converted to JsNew
             // even if imported from JS modules - the codegen handles them directly
             const NATIVE_CODEGEN_CLASSES: &[&str] = &[
-                "Redis", "Command", "Pool", "WebSocket", "WebSocketServer",
+                "Redis", "Pool", "WebSocket", "WebSocketServer",
                 "LRUCache", "Big", "Decimal", "BigNumber", "URLSearchParams",
             ];
             // Check if this is a JS class (but not one handled natively)

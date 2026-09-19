@@ -35,7 +35,6 @@ Total: 3035 entries across 138 modules.
 - [`cheerio`](#cheerio)
 - [`child_process`](#child_process)
 - [`cluster`](#cluster)
-- [`commander`](#commander)
 - [`console`](#console)
 - [`constants`](#constants)
 - [`cron`](#cron)
@@ -595,26 +594,6 @@ Total: 3035 entries across 138 modules.
 - `schedulingPolicy`
 - `settings`
 - `workers`
-
-## `commander`
-
-### Methods
-
-- `action` — instance
-- `args` — instance
-- `argument` — instance
-- `command` — instance
-- `description` — instance
-- `name` — instance
-- `option` — instance
-- `opts` — instance
-- `parse` — instance
-- `requiredOption` — instance
-- `version` — instance
-
-### Properties
-
-- `args`
 
 ## `console`
 
