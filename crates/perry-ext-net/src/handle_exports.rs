@@ -54,9 +54,17 @@ pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) 
     entry.entry(event).or_default().push(cb);
 }
 
+/// #10442 — returns the socket handle so the TYPED `net.Socket` codegen
+/// table (`net_events.rs`'s `on`/`addListener` rows, which call this
+/// runtime symbol as their `ret: NR_HANDLE_ID` carrier) can chain
+/// `sock.on(...).on(...)` instead of reading back `undefined`. The
+/// underlying `js_net_socket_on` stays void — it is also the untyped
+/// dynamic-dispatch path's registration call in `dispatch.rs`, which
+/// already supplies its own handle return separately.
 #[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i64) {
-    js_net_socket_on(handle, event_ptr, cb)
+pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i64) -> i64 {
+    js_net_socket_on(handle, event_ptr, cb);
+    handle
 }
 
 #[no_mangle]

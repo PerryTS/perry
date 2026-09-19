@@ -767,6 +767,30 @@ fn reflect_value_is_symbol(value: f64) -> bool {
         && unsafe { crate::symbol::js_is_symbol(value) != 0 }
 }
 
+/// #6828/#10482: Annex B §B.3.1 `set __proto__` semantics — shared by the
+/// real accessor descriptor installed on `Object.prototype`
+/// (`object/global_this/proto_methods.rs`'s setter closure, reached via
+/// `own_set_descriptor` + `call_setter_with_receiver` above) and this
+/// function's own caller (the walk's defensive fallback for the same key).
+/// Both must behave identically, so both call this one implementation
+/// instead of keeping the logic written out twice.
+///
+/// Per spec: a non-object/non-null `value` or a non-object `receiver` is
+/// silently ignored (no throw, unlike `Object.setPrototypeOf`); a genuine
+/// `[[SetPrototypeOf]]` failure (cyclic / non-extensible) still throws via
+/// `js_object_set_prototype_of` itself, matching `Object.setPrototypeOf`'s
+/// failure behavior for that case.
+pub(crate) fn legacy_dunder_proto_set(receiver: f64, value: f64) {
+    let value_bits = value.to_bits();
+    let valid_proto = value_bits == TAG_NULL
+        || lookup(value).is_some()
+        || crate::object::class_ref_id(value).is_some()
+        || unsafe { crate::object::value_is_object_like(value) };
+    if valid_proto && reflect_value_is_object(receiver) {
+        crate::object::js_object_set_prototype_of(receiver, value);
+    }
+}
+
 /// Is `value` a Reflect-acceptable object? Heap objects, class refs (callable
 /// constructors), and proxies all count. Primitives / null / undefined do not.
 pub(crate) fn reflect_value_is_object(value: f64) -> bool {
@@ -2207,31 +2231,28 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 }
             };
         }
-        // #6828: `%Object.prototype%.__proto__` is a legacy accessor whose
-        // setter performs `SetPrototypeOf(Receiver, value)`. Perry exposes the
-        // getter intrinsically but does not materialize the built-in accessor
-        // in the ordinary descriptor table, so model it at the exact point in
-        // the [[Set]] walk where that descriptor would be found.
+        // #6828/#10482: `%Object.prototype%.__proto__` is a legacy accessor
+        // whose setter performs `SetPrototypeOf(Receiver, value)`.
+        // `object/global_this/proto_methods.rs` now materializes it as a
+        // REAL accessor descriptor on `Object.prototype` (#10482), so
+        // `own_set_descriptor` just above finds it and dispatches through
+        // `call_setter_with_receiver` before the walk ever reaches here —
+        // this arm is kept as a fallback for a walk that reaches
+        // `Object.prototype` without ever consulting the descriptor table
+        // (defensive; not known to be reachable). Both arms must behave
+        // identically, so both call the one shared implementation.
         //
         // Keep this AFTER `own_set_descriptor`: a user-installed own
         // `__proto__` data/accessor property on an object earlier in the chain
         // must win. A null-prototype receiver never reaches the canonical
         // Object.prototype and therefore still creates an ordinary own data
-        // property. Per Annex B, a primitive RHS is ignored rather than
-        // throwing (unlike `Object.setPrototypeOf`).
+        // property.
         let current_addr = extract_pointer(current.to_bits()) as usize;
         if current_addr != 0
             && current_addr == crate::array::object_prototype_addr()
             && key_to_rust_string(key).as_deref() == Some("__proto__")
         {
-            let value_bits = value.to_bits();
-            let valid_proto = value_bits == TAG_NULL
-                || lookup(value).is_some()
-                || crate::object::class_ref_id(value).is_some()
-                || unsafe { crate::object::value_is_object_like(value) };
-            if valid_proto && reflect_value_is_object(receiver) {
-                crate::object::js_object_set_prototype_of(receiver, value);
-            }
+            legacy_dunder_proto_set(receiver, value);
             return true;
         }
         if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {

@@ -110,7 +110,11 @@ fn latin1_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn utf16le_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
+/// #10426: made `pub(crate)` so `copy_write.rs`'s `js_buffer_write_len`
+/// can reuse it for the new `ucs2Write` method (and to close the same gap
+/// in the pre-existing generic `buf.write(str, offset, 'utf16le')` path,
+/// which silently wrote raw UTF-8 bytes instead of UTF-16LE before this).
+pub(crate) fn utf16le_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
     let decoded = String::from_utf8_lossy(str_bytes);
     let mut out = Vec::with_capacity(decoded.len() * 2);
     for unit in decoded.encode_utf16() {

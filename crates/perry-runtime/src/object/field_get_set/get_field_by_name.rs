@@ -22,6 +22,33 @@ fn handle_proto_inherited_field(
     }
 }
 
+/// #2846 Proxy-receiver forwarding for a generic property read. Split out and
+/// `#[inline(never)]` on purpose: `js_proxy_is_proxy` (via `lookup`) and
+/// `js_proxy_get` (via `RuntimeHandleScope::new`) each resolve their own
+/// `thread_local!` (the proxy registry, the transient-handle root stack).
+/// Both accessors are pure address computations from LLVM's point of view —
+/// `readnone`, no observable side effect — so once this code was inlined into
+/// `js_object_get_field_by_name` the optimizer hoisted BOTH out of the
+/// `is_proxy_id_band` guard above them and ran them unconditionally on every
+/// call, proxy receiver or not. Measured on an `o[k]` loop over a two-property
+/// plain object (never a Proxy): two `_tlv_get_addr` calls sitting directly in
+/// `js_object_get_field_by_name`'s prologue, 9.2% of the whole access.
+/// `#[inline(never)]` keeps the optimizer from seeing inside this function at
+/// the call site, so it cannot hoist anything out of it; `is_proxy_id_band`
+/// itself stays inline in the caller since it touches no thread-local.
+#[cold]
+#[inline(never)]
+fn proxy_receiver_get(raw_addr: u64, key: *const crate::StringHeader) -> Option<JSValue> {
+    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+    let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
+    if crate::proxy::js_proxy_is_proxy(boxed) == 0 {
+        return None;
+    }
+    let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+    let v = crate::proxy::js_proxy_get(boxed, key_f64);
+    Some(JSValue::from_bits(v.to_bits()))
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
@@ -105,12 +132,8 @@ pub extern "C" fn js_object_get_field_by_name(
             addr
         };
         if crate::value::addr_class::is_proxy_id_band(raw_addr as usize) && !key.is_null() {
-            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            let boxed = f64::from_bits(POINTER_TAG | (raw_addr & 0x0000_FFFF_FFFF_FFFF));
-            if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
-                let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-                let v = crate::proxy::js_proxy_get(boxed, key_f64);
-                return JSValue::from_bits(v.to_bits());
+            if let Some(value) = proxy_receiver_get(raw_addr, key) {
+                return value;
             }
         }
     }

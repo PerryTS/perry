@@ -23,7 +23,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "validation", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -290,10 +290,6 @@ bundled-cron = ["dep:cron", "async-runtime"]
 rate-limit = ["bundled-ratelimit"]
 bundled-ratelimit = ["dep:governor", "async-runtime"]
 
-# Validation — `validation` umbrella stays for backwards-compat;
-# v0.5.538's well-known flip toggles `bundled-validator` instead.
-validation = ["bundled-validator"]
-bundled-validator = ["dep:perry-validation"]
 
 # UUID/nanoid — `ids` stays as the umbrella for backwards compat;
 # from v0.5.534 onwards the per-binding split (`bundled-uuid` /
@@ -442,7 +438,6 @@ cron = { version = "0.17", optional = true }
 governor = { version = "0.10", optional = true }
 
 # Validation
-perry-validation = { workspace = true, optional = true }
 
 # IDs
 uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"], optional = true }

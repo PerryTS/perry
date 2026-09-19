@@ -44,6 +44,10 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: true,
+            has_opened: false,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -116,6 +120,10 @@ pub(crate) fn register_accepted_transport(
             remote_addr,
             raw: None,
             destroyed: false,
+            connecting: false,
+            has_opened: true,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -150,9 +158,14 @@ pub(crate) fn connect_existing(handle: i64, path: String) {
         let mut sockets = statics::sockets().lock().unwrap();
         match sockets
             .get_mut(&handle)
-            .and_then(|socket| socket.pending_rx.take())
+            .and_then(|socket| socket.pending_rx.take().map(|rx| (socket, rx)))
         {
-            Some(rx) => rx,
+            Some((socket, rx)) => {
+                // #10465 — `socket.connect(path)` on a `new net.Socket()`
+                // starts connecting synchronously, same as the TCP path.
+                socket.connecting = true;
+                rx
+            }
             None => {
                 push_event(PendingNetEvent::Error(
                     handle,
@@ -187,6 +200,8 @@ fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCo
             let raw_fd = transport.raw_fd();
             if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
                 socket.is_open = true;
+                socket.has_opened = true;
+                socket.connecting = false;
                 socket.raw_fd = raw_fd;
             }
             tokio::task::yield_now().await;

@@ -105,6 +105,12 @@ pub extern "C" fn js_buffer_write_len(
         let bytes_to_write = match encoding {
             1 => decode_hex(str_bytes),
             2 | 3 => decode_base64(str_bytes),
+            // #10426: encoding tag 6 (utf16le/ucs2) fell through to the
+            // default (raw UTF-8 bytes) arm — dormant in the pre-existing
+            // `buf.write(str, offset, 'utf16le')` path and would have made
+            // the new `ucs2Write` method equally wrong. `from::utf16le_string_bytes`
+            // is the same UTF-16LE encoder `Buffer.from(str, 'utf16le')` uses.
+            6 => super::from::utf16le_string_bytes(str_bytes),
             _ => str_bytes.to_vec(),
         };
 

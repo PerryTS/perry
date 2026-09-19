@@ -123,46 +123,168 @@ fn with_socket<T>(handle: i64, default: T, f: impl FnOnce(&crate::SocketState) -
 /// `handle` must be a registered socket id (raw, NOT NaN-boxed).
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_pending(handle: i64) -> f64 {
-    nanbox_bool(with_socket(handle, true, |s| !s.is_open && !s.destroyed))
+    // #10465 — Node's real getter is `!this._handle`: once there is no live
+    // handle (never connected, still connecting, OR fully closed/destroyed)
+    // `pending` reads `true` again — it is NOT simply the complement of
+    // `destroyed`. A handle already reaped from the registry (see the
+    // `'close'` teardown in `socket_events.rs`, which removes the
+    // `SocketState` entry once the `'close'` event has fired) falls through
+    // to the `true` default below, which is what we want for that case too.
+    //
+    // Deliberately keyed on `has_opened`/`destroyed`, NOT `is_open`:
+    // `is_open` flips false via `server_state::mark_socket_closed`, called
+    // from the tokio task thread as soon as teardown STARTS (before the main
+    // thread has processed the `'end'`/`'close'` events that same teardown
+    // just queued), while `destroyed` only flips at `'close'`-processing
+    // time — the one point that actually agrees with Node's own timing (see
+    // the `Close` arm in `socket_events.rs`). Once a socket has opened at
+    // least once, "does it have a live handle" reduces to "has it been
+    // destroyed yet", not to the (earlier-flipping) `is_open` flag.
+    nanbox_bool(with_socket(handle, true, |s| {
+        if s.has_opened {
+            s.destroyed
+        } else {
+            true
+        }
+    }))
 }
 
-/// `socket.connecting` — `true` only while a connection attempt is in flight.
-/// Perry resolves connects synchronously inside the tokio task, so from the
-/// JS side this is `false` before connect and `false` once open — matching
-/// Node for the construct-then-inspect path this getter targets.
+/// `socket.connecting` — `true` from `net.connect()`/`socket.connect()`
+/// until the attempt resolves (open, error, or destroy). Backed by
+/// `SocketState::connecting` (#10465); pre-fix this was hardcoded `false`,
+/// so `readyState` could never report `"opening"` and any caller polling
+/// `connecting` during the handshake window saw the wrong value.
 ///
 /// # Safety
 ///
 /// See [`js_net_socket_get_pending`].
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_get_connecting(_handle: i64) -> f64 {
-    nanbox_bool(false)
+pub unsafe extern "C" fn js_net_socket_get_connecting(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, false, |s| s.connecting))
 }
 
 /// `socket.destroyed` — `true` once `.destroy()` ran or the peer closed.
+/// Defaults to `true` for a handle with no live `SocketState` — the
+/// `'close'` teardown removes the entry once its listeners have run, and by
+/// then the socket is unambiguously destroyed (#10465; pre-fix this
+/// defaulted `false`, so `destroyed` read `false` again after `'close'`).
 ///
 /// # Safety
 ///
 /// See [`js_net_socket_get_pending`].
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_destroyed(handle: i64) -> f64 {
-    nanbox_bool(with_socket(handle, false, |s| s.destroyed))
+    nanbox_bool(with_socket(handle, true, |s| s.destroyed))
+}
+
+/// `socket.writable` — `true` until `.end()`/`.destroy()` flips
+/// `writable_ended`. Independent of connect state, matching Node (a fresh
+/// `new net.Socket()` is `writable` before it has ever connected). #10465 —
+/// pre-fix this property didn't exist at all (read `undefined`).
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_writable(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, false, |s| {
+        !s.destroyed && !s.writable_ended
+    }))
+}
+
+/// `socket.readable` — `true` until the peer's EOF has been observed (the
+/// `'end'` event) or the socket is destroyed. #10465 companion to
+/// [`js_net_socket_get_writable`].
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_readable(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, false, |s| {
+        !s.destroyed && !s.readable_ended
+    }))
+}
+
+/// `socket.writableEnded` — `true` immediately once `.end()` is called
+/// (before the FIN even flushes), matching Node's documented timing. #10465.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_writable_ended(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, true, |s| s.writable_ended))
+}
+
+/// `socket.readableEnded` — `true` once the `'end'` event has fired.
+/// #10465 companion to [`js_net_socket_get_writable_ended`].
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_readable_ended(handle: i64) -> f64 {
+    nanbox_bool(with_socket(handle, true, |s| s.readable_ended))
+}
+
+/// `socket._writableState` / `socket._readableState` — Node internals expose
+/// a full `WritableState`/`ReadableState` object; drivers that reach into it
+/// (pg, ioredis, `@redis/client`) mostly just check `typeof … === "object"`
+/// or a couple of scalar fields. #10465: this returns a minimal object
+/// carrying the two fields the audited drivers actually read
+/// (`ended`/`finished` mirror `writableEnded`, kept in sync with the same
+/// `SocketState` bit) rather than a full internal-stream-state shape.
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_writable_state(handle: i64) -> *mut StringHeader {
+    let ended = with_socket(handle, true, |s| s.writable_ended);
+    let json = format!("{{\"ended\":{ended},\"finished\":{ended}}}");
+    alloc_string(&json).as_raw()
+}
+
+/// See [`js_net_socket_get_writable_state`].
+///
+/// # Safety
+///
+/// See [`js_net_socket_get_pending`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_get_readable_state(handle: i64) -> *mut StringHeader {
+    let ended = with_socket(handle, true, |s| s.readable_ended);
+    let json = format!("{{\"ended\":{ended}}}");
+    alloc_string(&json).as_raw()
 }
 
 /// `socket.readyState` — one of `"opening" | "open" | "readOnly" |
-/// "writeOnly" | "closed"`. Node reports `"open"` for a freshly constructed
-/// socket and `"closed"` once destroyed.
+/// "writeOnly" | "closed"`. Mirrors Node's real getter (`connecting` ?
+/// `"opening"` : `readable && writable` ? `"open"` : `readable` ?
+/// `"readOnly"` : `writable` ? `"writeOnly"` : `"closed"`) instead of the
+/// pre-#10465 two-state `destroyed ? "closed" : "open"`, which could never
+/// report `"opening"` (mid-connect) or `"readOnly"` (after `.end()`, before
+/// the peer's FIN).
 ///
 /// # Safety
 ///
 /// See [`js_net_socket_get_pending`].
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_ready_state(handle: i64) -> *mut StringHeader {
-    let state = with_socket(
-        handle,
-        "open",
-        |s| if s.destroyed { "closed" } else { "open" },
-    );
+    let state = with_socket(handle, "closed", |s| {
+        if s.connecting {
+            "opening"
+        } else {
+            let writable = !s.destroyed && !s.writable_ended;
+            let readable = !s.destroyed && !s.readable_ended;
+            match (readable, writable) {
+                (true, true) => "open",
+                (true, false) => "readOnly",
+                (false, true) => "writeOnly",
+                (false, false) => "closed",
+            }
+        }
+    });
     alloc_string(state).as_raw()
 }
 
@@ -513,6 +635,9 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
                 }
             }
         }
+        // #10465 — `writableEnded` (and `writable`) flip as soon as `.end()`
+        // is CALLED, per Node's docs, not once the FIN actually flushes.
+        s.writable_ended = true;
         let _ = s.cmd_tx.send(crate::SocketCommand::End(0));
     }
 }
@@ -570,6 +695,8 @@ pub unsafe extern "C" fn js_ext_net_socket_end3(
                 socket.bytes_queued = socket.bytes_queued.saturating_add(byte_len);
             }
         }
+        // #10465 — see the sibling note in `js_ext_net_socket_end`.
+        socket.writable_ended = true;
         if socket
             .cmd_tx
             .send(crate::SocketCommand::End(completion))
@@ -670,18 +797,31 @@ pub(crate) fn event_name_from_ptr(event_ptr: i64) -> Option<String> {
 }
 
 fn register_listener_with_flag(handle: i64, event: String, cb: i64, once: bool) {
+    register_listener(handle, event, cb, once, false);
+}
+
+/// #10441 — shared by `on`/`once`/`prependListener`/`prependOnceListener`.
+/// `prepend` inserts at the FRONT of the listener vector instead of pushing
+/// at the back, which is the only difference Node's `prependListener` has
+/// from `addListener`/`on` (same once-flag bookkeeping, same pending-data
+/// release for a first `'data'` listener).
+fn register_listener(handle: i64, event: String, cb: i64, once: bool, prepend: bool) {
     if cb == 0 {
         return;
     }
     let releases_pending_data = event == "data";
     {
         let mut listeners = statics::listeners().lock().unwrap();
-        listeners
+        let vec = listeners
             .entry(handle)
             .or_default()
             .entry(event.clone())
-            .or_default()
-            .push(cb);
+            .or_default();
+        if prepend {
+            vec.insert(0, cb);
+        } else {
+            vec.push(cb);
+        }
     }
     if once {
         let mut flags = statics::once_flags().lock().unwrap();
@@ -881,6 +1021,50 @@ pub unsafe extern "C" fn js_net_socket_once(handle: i64, event_ptr: i64, cb: i64
     crate::ensure_gc_scanner_registered();
     if let Some(event) = read_event(event_ptr) {
         register_listener_with_flag(handle, event, cb, true);
+    }
+    handle
+}
+
+/// `socket.prependListener(event, cb)` — like `.on()`/`.addListener()` but
+/// inserts at the FRONT of the listener list, so this callback fires before
+/// any listener already registered for `event`. #10441: pre-fix, neither the
+/// dynamic (untyped-receiver) dispatch nor the typed `net.Socket` codegen
+/// table had an entry for this method at all — it silently read `undefined`
+/// and calling it was a no-op (ioredis/iovalkey's RESP parser attach via
+/// `stream.prependListener("data", …)` never saw a byte).
+///
+/// # Safety
+///
+/// Same as [`js_net_socket_once`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_prepend_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    crate::ensure_gc_scanner_registered();
+    if let Some(event) = read_event(event_ptr) {
+        register_listener(handle, event, cb, false, true);
+    }
+    handle
+}
+
+/// `socket.prependOnceListener(event, cb)` — the front-inserting, one-shot
+/// combination of [`js_net_socket_prepend_listener`] and
+/// [`js_net_socket_once`]. #10441.
+///
+/// # Safety
+///
+/// Same as [`js_net_socket_once`].
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_prepend_once_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    crate::ensure_gc_scanner_registered();
+    if let Some(event) = read_event(event_ptr) {
+        register_listener(handle, event, cb, true, true);
     }
     handle
 }

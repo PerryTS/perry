@@ -65,6 +65,9 @@ mod dispatch;
 mod dispatch_custody;
 mod gc_roots;
 mod ipc;
+// #10444 — `net.Socket.prototype.pipe()`/`.unpipe()` (split out; see the
+// module doc for why it doesn't reuse node:stream's own pipe machinery).
+mod pipe;
 pub(crate) use gc_roots::ensure_gc_scanner_registered;
 mod socket_emit;
 pub use socket_emit::{
@@ -271,6 +274,37 @@ pub(crate) struct SocketState {
     /// `socket.bytesRead`/`socket.bytesWritten`. `timeout` holds the value set
     /// via `setTimeout(ms)` (Node reports `undefined` until one is set).
     pub(crate) destroyed: bool,
+    /// #10465 — true from `net.connect()`/`socket.connect()` until the
+    /// attempt resolves (open, error, or destroy). `false` both before any
+    /// connect attempt (`new net.Socket()`) and once resolved — matches
+    /// Node's `socket.connecting`, which Perry previously hardcoded to
+    /// `false` unconditionally.
+    pub(crate) connecting: bool,
+    /// #10465 — true from the moment the socket FIRST became open (set
+    /// alongside every `is_open = true` transition, and at construction for
+    /// a socket that starts already open, e.g. a server-accepted
+    /// connection), never reset back to `false`. `socket.pending`'s real
+    /// Node formula is "no live handle", which — once a socket has ever
+    /// connected — reduces to `destroyed`, NOT `!is_open`: `is_open` itself
+    /// flips false earlier than `destroyed` does (via
+    /// `server_state::mark_socket_closed`, called from `mark_closed` on the
+    /// tokio task thread as soon as teardown starts, well before the main
+    /// thread has processed the `'end'`/`'close'` events those pushed). A
+    /// `pending` getter keyed on `is_open` directly read `true` from inside
+    /// the `'end'` listener, where Node still reports `false`. `destroyed`
+    /// doesn't have that problem — see `socket_events.rs`'s `Close` arm —
+    /// so `has_opened` lets the getter pick the RIGHT signal for each phase:
+    /// `!has_opened` (never connected / still connecting) or `destroyed`
+    /// (has connected at least once).
+    pub(crate) has_opened: bool,
+    /// #10465 — true as soon as `.end()`/`.destroy()` is called, independent
+    /// of whether the FIN has actually flushed. Drives `socket.writable` and
+    /// `socket.writableEnded`.
+    pub(crate) writable_ended: bool,
+    /// #10465 — true once the readable side has seen EOF (peer FIN) and the
+    /// `'end'` event has fired. Drives `socket.readable` and
+    /// `socket.readableEnded`.
+    pub(crate) readable_ended: bool,
     pub(crate) bytes_read: u64,
     pub(crate) bytes_written: u64,
     pub(crate) bytes_queued: u64,
@@ -299,6 +333,10 @@ impl SocketState {
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: false,
+            has_opened: true,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -425,6 +463,16 @@ fn mark_closed(id: i64) {
         socket.raw_fd = None;
     }
     server_state::mark_socket_closed(id);
+    // #10465 — `destroyed`/`is_open`/`connecting` are NOT flipped here on
+    // purpose. `mark_closed` runs on the tokio task thread immediately after
+    // queuing the `Close` (and, on this path, `End`) pending events — well
+    // before the main thread's `js_ext_net_drain_pending` has processed
+    // either. Flipping the fields here (an earlier version of this fix did)
+    // made them ALREADY read "destroyed" from inside the `'end'` listener,
+    // which fires first and, in real Node, still observes `destroyed:
+    // false`. `socket_events::js_ext_net_drain_pending`'s `Close` arm sets
+    // them instead, synchronously with firing `'close'` — the one point
+    // where Node's own timing and this runtime's actually agree.
 }
 
 // ─── FFI: net.createConnection / net.connect ─────────────────────────────────
@@ -553,6 +601,10 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: false,
+            has_opened: false,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -995,6 +1047,10 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     let connect_async_id = init_provider_with_trigger(b"TCPCONNECTWRAP", tcp_async_id);
     if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
         socket.connect_async_id = connect_async_id;
+        // #10465 — `socket.connect(...)` on a `new net.Socket()` starts
+        // connecting synchronously from the caller's point of view, same as
+        // the eager `net.connect()` factory.
+        socket.connecting = true;
     }
 
     let local_server = server_state::begin_local_connect(&host, port);
@@ -1020,6 +1076,8 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
             let remote = tcp.peer_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
+                s.has_opened = true;
+                s.connecting = false;
                 s.local_addr = local;
                 s.remote_addr = remote;
             }
@@ -1084,6 +1142,10 @@ where
             remote_addr: None,
             raw: None,
             destroyed: false,
+            connecting: true,
+            has_opened: false,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -1145,6 +1207,8 @@ where
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
+                s.has_opened = true;
+                s.connecting = false;
                 s.local_addr = local;
                 s.raw_fd = raw_fd;
                 s.remote_addr = remote;

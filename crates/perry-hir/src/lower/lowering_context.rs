@@ -275,6 +275,22 @@ pub struct LoweringContext {
     /// For namespace imports (import * as x), method_name is None
     /// For named imports (import { v4 as uuid }), method_name is Some("v4")
     pub(crate) native_modules: Vec<(String, String, Option<String>)>,
+    /// #10623: `const { Key } = require("<resolvable native module>")`
+    /// destructured bindings, keyed by the LOCAL binding name -> the
+    /// destructured export KEY (identity for the common unaliased case).
+    /// Recorded unconditionally, even inside a CJS-wrapped module where
+    /// `register_destructured_stream_ctors` deliberately skips the full
+    /// `native_modules` alias registration (#8342: the wrapper's synthetic
+    /// `require(...)` returns a real runtime value there, so the static
+    /// native-namespace fast path is not safe to use for ordinary property
+    /// reads/calls). Class-heritage resolution (`class_decl.rs`) is a
+    /// narrower consumer: it only needs "was this identifier bound FROM a
+    /// require() of a real native module", to avoid treating `class X
+    /// extends AsyncResource {}` as user-shadowed merely because the CJS
+    /// wrapper makes every top-level `const` a genuine local. Not itself a
+    /// module/value resolution table — do not use it for anything requiring
+    /// runtime-accurate native-module semantics.
+    pub(crate) require_destructured_native_locals: HashMap<String, String>,
     /// Built-in module aliases from require(): local_name -> module_name (e.g., "myFs" -> "fs")
     pub(crate) builtin_module_aliases: Vec<(String, String)>,
     /// Stack of type parameter scopes (for nested generics)

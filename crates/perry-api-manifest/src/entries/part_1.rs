@@ -1210,66 +1210,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         }],
         TypeSpec::String,
     ),
-    method_sig(
-        "validator",
-        "isEmail",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isURL",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isUUID",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isJSON",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isEmpty",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
     // #4917 — real retry semantics: options (numOfAttempts/startingDelay/
     // timeMultiple/maxDelay/delayFirstAttempt/jitter/retry) honored;
     // Promise-returning tasks retry on rejection via promise reactions.

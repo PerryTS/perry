@@ -426,6 +426,83 @@ extern "C" fn buffer_prototype_method_thunk(_closure: *const crate::closure::Clo
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// `this` for a `Buffer.prototype.offset`/`.parent` accessor read, resolved
+/// through `IMPLICIT_THIS` (the same mechanism `require_webcrypto_this` in
+/// `ctor_thunks.rs` uses for Web Crypto getters). `None` for a non-buffer
+/// receiver — Node's real getters answer `undefined` rather than throwing
+/// (`isInstance(this, Buffer) ? … : undefined`), and ordinary Buffer/typed-
+/// array instance reads never reach this getter at all (they resolve
+/// `.offset`/`.parent` directly — see `get_field_by_name_tail.rs`); this only
+/// matters for reflection (`Object.getOwnPropertyDescriptor(Buffer.prototype,
+/// "offset").get.call(x)`) and enumeration.
+fn buffer_prototype_this_addr() -> Option<usize> {
+    let this_bits = crate::object::IMPLICIT_THIS.with(|c| c.get());
+    let jv = crate::value::JSValue::from_bits(this_bits);
+    if !jv.is_pointer() {
+        return None;
+    }
+    let addr = (this_bits & crate::value::POINTER_MASK) as usize;
+    if addr == 0 || crate::buffer::js_buffer_is_buffer(addr as i64) == 0 {
+        return None;
+    }
+    Some(addr)
+}
+
+/// #10426: `Buffer.prototype.parent` — deprecated legacy alias for
+/// `.buffer` (the backing `ArrayBuffer`), still a real own accessor on
+/// Node's `Buffer.prototype`.
+extern "C" fn buffer_prototype_parent_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match buffer_prototype_this_addr() {
+        Some(addr) => {
+            crate::value::js_nanbox_pointer(crate::buffer::buffer_backing_array_buffer(addr) as i64)
+        }
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// #10426: `Buffer.prototype.offset` — deprecated legacy alias for
+/// `.byteOffset`, still a real own accessor on Node's `Buffer.prototype`.
+extern "C" fn buffer_prototype_offset_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    match buffer_prototype_this_addr() {
+        Some(addr) => crate::buffer::buffer_byte_offset(addr) as f64,
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// Install a `Buffer.prototype` accessor (`offset`/`parent`) — `{
+/// enumerable: true, configurable: false }`, matching Node's
+/// `ObjectDefineProperty(Buffer.prototype, name, { enumerable: true, get()
+/// {…} })` (no `configurable: true`, so it defaults false). Mirrors
+/// `install_webcrypto_proto_getter`'s shape for a `*mut ObjectHeader` proto.
+fn install_buffer_prototype_getter(proto_obj: *mut ObjectHeader, name: &str, func_ptr: *const u8) {
+    if proto_obj.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, 0);
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    let value = if closure.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        set_bound_native_closure_name(closure, &format!("get {name}"));
+        crate::value::js_nanbox_pointer(closure as i64)
+    };
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(proto_obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+    super::set_builtin_accessor_descriptor(
+        proto_obj as usize,
+        name.to_string(),
+        super::AccessorDescriptor {
+            get: value.to_bits(),
+            set: 0,
+        },
+        super::PropertyAttrs::new(true, true, false),
+    );
+}
+
 const BUFFER_STATIC_METHODS: &[&str] = &[
     "from",
     "alloc",
@@ -440,22 +517,40 @@ const BUFFER_STATIC_METHODS: &[&str] = &[
     "copyBytesFrom",
 ];
 
-/// Node exposes the WHOLE Buffer method surface on `Buffer.prototype`, and it is
-/// enumerable — `for (const k in Buffer.prototype)` yields ~93 names there.
-/// Perry used to install ELEVEN, which quietly broke any code that walks the
-/// prototype: mysql2 sizes every outgoing packet by no-op'ing the write methods
-/// of a zero-length Buffer
+/// Node's actual `Buffer.prototype` own-property surface — checked
+/// property-by-property against `Object.getOwnPropertyNames(Buffer.prototype)`
+/// on Node 26.5.1 (96 names there; 93 real callable methods here, plus
+/// `constructor` and the `offset`/`parent` accessors installed separately
+/// below = 96). Perry used to install ELEVEN, which quietly broke any code
+/// that walks the prototype: mysql2 sizes every outgoing packet by no-op'ing
+/// the write methods of a zero-length Buffer
 /// (`for (const k in Buffer.prototype) if (typeof mock[k] === "function") mock[k] = noop`),
 /// so `writeUInt32LE` — absent from the stub list — stayed live, wrote into the
 /// empty measuring buffer, and killed the MySQL handshake with
-/// RangeError [ERR_OUT_OF_RANGE]. Generated from the dispatcher's own
-/// `is_buffer_method_name` table so the two can't drift.
+/// RangeError [ERR_OUT_OF_RANGE].
+///
+/// #10426: this list is DELIBERATELY NOT the same as
+/// `buffer_dispatch::is_buffer_method_name` (a comment here used to say it
+/// was "generated from" that table "so the two can't drift" — that coupling
+/// was the bug). `is_buffer_method_name` answers a different question — "does
+/// a property read on a Buffer *instance* need to synthesize a bound-method
+/// closure" — and is deliberately broad: it also recognizes names Buffer
+/// instances answer only by INHERITANCE (`Uint8Array.prototype.at`/`set`/
+/// `entries`/`keys`/`values`/`copyWithin`/`toBase64`/`toHex`/`setFromBase64`/
+/// `setFromHex`), by DataView accessors on a DataView-marked buffer
+/// (`getInt32`/`setFloat64`/…), and by `Object.prototype`
+/// (`hasOwnProperty`/`isPrototypeOf`/`propertyIsEnumerable`/`valueOf`) so
+/// duck-type probes on an INSTANCE keep working (see that table's own
+/// comments). None of those belong on `Buffer.prototype` itself as OWN
+/// properties — Node inherits them further up the chain — so installing this
+/// list from that one copied 36 names Node never puts here (plus two bare
+/// string literals, `"function"` and `"undefined"`, that had drifted in from
+/// nearby prose/JS-idiom comments and were never real method names at all).
 const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "toString",
     "inspect",
     "slice",
     "subarray",
-    "set",
     "copy",
     "write",
     "toJSON",
@@ -465,18 +560,9 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "indexOf",
     "lastIndexOf",
     "includes",
-    "at",
     "swap16",
     "swap32",
     "swap64",
-    "values",
-    "keys",
-    "entries",
-    "undefined",
-    "hasOwnProperty",
-    "propertyIsEnumerable",
-    "valueOf",
-    "isPrototypeOf",
     "toLocaleString",
     "readUInt8",
     "readUint8",
@@ -540,32 +626,20 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "writeUintLE",
     "writeIntBE",
     "writeIntLE",
-    "toBase64",
-    "toHex",
-    "setFromBase64",
-    "setFromHex",
-    "copyWithin",
-    "function",
-    "getInt8",
-    "getUint8",
-    "getInt16",
-    "getUint16",
-    "getInt32",
-    "getUint32",
-    "getFloat32",
-    "getFloat64",
-    "setInt8",
-    "setUint8",
-    "setInt16",
-    "setUint16",
-    "setInt32",
-    "setUint32",
-    "setFloat32",
-    "setFloat64",
-    "getBigInt64",
-    "getBigUint64",
-    "setBigInt64",
-    "setBigUint64",
+    "asciiSlice",
+    "asciiWrite",
+    "base64Slice",
+    "base64Write",
+    "base64urlSlice",
+    "base64urlWrite",
+    "hexSlice",
+    "hexWrite",
+    "latin1Slice",
+    "latin1Write",
+    "ucs2Slice",
+    "ucs2Write",
+    "utf8Slice",
+    "utf8Write",
 ];
 
 const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
@@ -950,6 +1024,18 @@ pub(crate) fn buffer_constructor_value() -> f64 {
                     })
                 });
             }
+            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
+                install_buffer_prototype_getter(
+                    proto,
+                    "parent",
+                    buffer_prototype_parent_getter_thunk as *const u8,
+                );
+                install_buffer_prototype_getter(
+                    proto,
+                    "offset",
+                    buffer_prototype_offset_getter_thunk as *const u8,
+                );
+            });
             let proto_value = proto.with_mut_ptr(|proto: *mut ObjectHeader| {
                 crate::value::js_nanbox_pointer(proto as i64)
             });

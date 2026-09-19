@@ -256,6 +256,7 @@ pub(crate) unsafe fn handle_response_event(
     headers: Vec<(String, String)>,
     trailers: Vec<(String, String)>,
     body: Vec<u8>,
+    http_version: (u8, u8),
 ) {
     // #4909 — a destroyed request delivers nothing (Node tears the
     // exchange down); `completed` also suppresses any late timeout timer.
@@ -291,6 +292,10 @@ pub(crate) unsafe fn handle_response_event(
         pipes: Vec::new(),
         socket_handle,
         request_handle,
+        http_version,
+        // Whole body already fully received by construction time (this is
+        // the synchronous single-event path).
+        complete: true,
     });
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
@@ -391,6 +396,96 @@ pub(crate) unsafe fn handle_response_event(
     fire_request_close_once(request_handle);
 }
 
+/// Drain handler for `PendingHttpEvent::Upgrade` (#10468): build a
+/// lightweight client `IncomingMessage` (statusCode/headers only — the body
+/// is the upgraded protocol now, delivered over the adopted socket instead)
+/// and fire `req.on('upgrade', (res, socket, head) => ...)` with
+/// `(res, socket, head)`, Node's exact argument shape. `socket` is the
+/// `net.Socket` id `client_upgrade::dispatch_upgrade_http_request` already
+/// adopted via `perry_ext_net::adopt_upgraded_tcp_stream`; `head` is any
+/// bytes the peer sent past the header block, as a `Buffer` (never a lossy
+/// string — the write side of #10471 stays server-only, this is a fresh
+/// client-side implementation).
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_upgrade_event(
+    request_handle: Handle,
+    status: u16,
+    status_message: String,
+    headers: Vec<(String, String)>,
+    socket_handle: Handle,
+    head: Vec<u8>,
+) {
+    let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        let was = req.completed;
+        req.completed = true;
+        was
+    })
+    .unwrap_or(true);
+    if already_done {
+        return;
+    }
+    client_abort::cleanup_request_signal(request_handle);
+
+    // Main-thread companion of `adopt_upgraded_tcp_stream` (#4973) — must
+    // run before user code touches the socket.
+    if socket_handle != 0 {
+        perry_ext_net::ensure_adopted_socket_dispatch();
+    }
+
+    let incoming = register_handle(IncomingMessageHandle {
+        status_code: status,
+        status_message,
+        headers,
+        trailers: HashMap::new(),
+        body: Vec::new(),
+        listeners: HashMap::new(),
+        encoding: None,
+        decoder_pending: Vec::new(),
+        pipes: Vec::new(),
+        socket_handle,
+        request_handle,
+        http_version: (1, 1),
+        complete: true,
+    });
+
+    let upgrade_listeners = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        take_request_event_listeners(req, "upgrade")
+    })
+    .unwrap_or_default();
+
+    let res_arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
+    let socket_arg = if socket_handle == 0 {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(POINTER_TAG | (socket_handle as u64 & PTR_MASK))
+    };
+    // Node always hands the listener a Buffer here, even when the peer sent
+    // no bytes past the header block (`Buffer.isBuffer(head) === true` for a
+    // zero-length upgrade head) — never `undefined`.
+    let head_arg = {
+        let buf = perry_ffi::alloc_buffer(&head);
+        f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
+    };
+
+    let scope = perry_ffi::TransientRootScope::enter();
+    let res_arg = scope.root_nanbox(res_arg);
+    let socket_arg = scope.root_nanbox(socket_arg);
+    let head_arg = scope.root_nanbox(head_arg);
+    let listeners = scope.root_addrs(&upgrade_listeners);
+    for cb in listeners {
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+            let _ = closure.call3(res_arg.get(), socket_arg.get(), head_arg.get());
+        }
+    }
+
+    finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
+}
+
 /// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
 /// build the IncomingMessage handle with an empty body, remember it on the
 /// request, and fire the factory callback + `'response'` listeners. Body
@@ -404,6 +499,7 @@ pub(crate) unsafe fn handle_response_head_event(
     status: u16,
     status_message: String,
     headers: Vec<(String, String)>,
+    http_version: (u8, u8),
 ) {
     // A destroyed request delivers nothing.
     let destroyed =
@@ -428,6 +524,10 @@ pub(crate) unsafe fn handle_response_head_event(
         pipes: Vec::new(),
         socket_handle,
         request_handle,
+        http_version,
+        // The body streams in later (`ResponseChunk`/`ResponseEnd`); Node
+        // keeps `res.complete` false until the end edge.
+        complete: false,
     });
     let (response_callback, response_listeners) =
         with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
@@ -537,6 +637,11 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
         return;
     }
     client_abort::cleanup_request_signal(request_handle);
+    // #10467 — the body has now been fully received; flip `res.complete`
+    // before the `'end'` listeners below observe it.
+    if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
+        im.complete = true;
+    }
 
     let (data_listeners, encoding, buffered, pipes) =
         get_handle_mut::<IncomingMessageHandle>(incoming)

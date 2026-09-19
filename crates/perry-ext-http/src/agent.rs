@@ -478,6 +478,15 @@ unsafe fn read_closure_field(obj_f64: f64, field: &str) -> i64 {
     }
 }
 
+/// Extract `options.createConnection` (#10469) — the request-level socket
+/// override Node honors when the caller does not pass an explicit `agent`.
+/// Like `options.agent`, a closure doesn't survive the `options` JSON
+/// round-trip (`parse_options_object`), so this reads the NaN-boxed field
+/// straight off the original object instead.
+pub(crate) unsafe fn request_create_connection_from_options(options_f64: f64) -> i64 {
+    read_closure_field(options_f64, "createConnection")
+}
+
 /// Extract an `options.agent` handle from `options_f64`. Returns `None`
 /// when the field is missing, not a pointer, or doesn't resolve to an
 /// AgentHandle.
@@ -1675,9 +1684,43 @@ pub(crate) unsafe fn try_create_connection_socket(
     if cc == 0 {
         return None;
     }
+    invoke_create_connection_closure(cc, Some(handle), host, port, path)
+}
+
+/// #10469 — invoke the request option's own `createConnection` override
+/// (no explicit Agent involved, so there's no `AgentHandle` to pull
+/// `keepAlive` defaults from — Node's own default Agent has `keepAlive:
+/// false`, matched by `build_connect_options(None, ...)`).
+pub(crate) unsafe fn try_request_create_connection_socket(
+    closure_ptr: i64,
+    host: &str,
+    port: u16,
+    path: &str,
+) -> Option<i64> {
+    if closure_ptr == 0 {
+        return None;
+    }
+    invoke_create_connection_closure(closure_ptr, None, host, port, path)
+}
+
+/// Shared tail of both `createConnection` invocation paths: root
+/// `closure_ptr` *before* calling `build_connect_options` (it allocates —
+/// without rooting first, a GC during that allocation could move the
+/// closure out from under the raw `i64` copy, matching the ordering the
+/// original #2154 code used), call it with `{ host, port, path, keepAlive,
+/// keepAliveInitialDelay }`, and extract the `net.Socket` handle id it
+/// returns. Main thread only — JS closure calls must not run on a tokio
+/// worker.
+unsafe fn invoke_create_connection_closure(
+    closure_ptr: i64,
+    agent_handle: Option<Handle>,
+    host: &str,
+    port: u16,
+    path: &str,
+) -> Option<i64> {
     let scope = perry_ffi::TransientRootScope::enter();
-    let cc = scope.root_addr(cc);
-    let options = scope.root_nanbox(build_connect_options(handle, host, port, path));
+    let cc = scope.root_addr(closure_ptr);
+    let options = scope.root_nanbox(build_connect_options(agent_handle, host, port, path));
     let closure = JsClosure::from_raw(cc.get() as *const RawClosureHeader);
     let ret = closure.call1(options.get());
 
@@ -1711,7 +1754,7 @@ pub(crate) fn create_socket_override(handle: Handle) -> i64 {
 /// Returns a NaN-boxed object pointer as `f64`, or NaN-boxed `undefined` on
 /// allocation failure.
 pub(crate) unsafe fn build_connect_options(
-    handle: Handle,
+    handle: Option<Handle>,
     host: &str,
     port: u16,
     path: &str,
@@ -1750,9 +1793,12 @@ pub(crate) unsafe fn build_connect_options(
         2,
         JsValue::from_string_ptr(path_s.as_raw()),
     );
-    let (keep_alive, keep_alive_msecs) = agent_field(handle, (false, 1000.0), |agent| {
-        (agent.keep_alive, agent.keep_alive_msecs)
-    });
+    let (keep_alive, keep_alive_msecs) = match handle {
+        Some(h) => agent_field(h, (false, 1000.0), |agent| {
+            (agent.keep_alive, agent.keep_alive_msecs)
+        }),
+        None => (false, 1000.0),
+    };
     perry_ffi::js_object_set_field(
         JsValue::from_bits(obj.get().to_bits()).as_pointer(),
         3,

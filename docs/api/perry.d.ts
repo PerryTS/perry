@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2090 entries across 135 modules
+// Coverage: 2085 entries across 134 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -4426,19 +4426,6 @@ declare module "v8" {
   export function takeCoverage(...args: any[]): any;
   /** stdlib */
   export function writeHeapSnapshot(...args: any[]): any;
-}
-
-declare module "validator" {
-  /** stdlib */
-  export function isEmail(s: string): boolean;
-  /** stdlib */
-  export function isEmpty(s: string): boolean;
-  /** stdlib */
-  export function isJSON(s: string): boolean;
-  /** stdlib */
-  export function isURL(s: string): boolean;
-  /** stdlib */
-  export function isUUID(s: string): boolean;
 }
 
 declare module "vm" {
