@@ -371,6 +371,14 @@ pub extern "C" fn perry_ui_webview_set_on_error(handle: i64, closure: f64) {
     widgets::webview::set_on_error(handle, closure)
 }
 #[no_mangle]
+pub extern "C" fn perry_ui_webview_set_on_message(handle: i64, closure: f64) {
+    widgets::webview::set_on_message(handle, closure)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_webview_add_user_script(handle: i64, src_ptr: i64) {
+    widgets::webview::add_user_script(handle, src_ptr as *const u8)
+}
+#[no_mangle]
 pub extern "C" fn perry_ui_webview_load_url(handle: i64, url_ptr: i64) {
     widgets::webview::load_url(handle, url_ptr as *const u8)
 }

@@ -1,0 +1,7 @@
+{
+  "name": "system-explorer",
+  "version": "1.0.0",
+  "description": "Representative real-world Electron app running on Perry",
+  "main": "main.ts",
+  "license": "MIT"
+}

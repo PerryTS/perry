@@ -3,7 +3,7 @@
 use anyhow::Result;
 use clap::Args;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::OutputFormat;
 
@@ -80,13 +80,119 @@ const DEFAULT_TSCONFIG: &str = r#"{
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
+    "baseUrl": ".",
     "paths": {
-      "perry/*": ["./.perry/types/perry/*/index.d.ts"]
+{paths}
     }
   },
   "include": ["src", ".perry/types/stdlib/index.d.ts"]
 }
 "#;
+
+/// Read `perry.packageAliases` (npm package name → replacement package name)
+/// from the project's package.json, so the generated tsconfig can mirror what
+/// the Perry compiler resolves. Returns sorted (from, to) pairs.
+fn package_aliases(project_path: &Path) -> Vec<(String, String)> {
+    let pkg_path = project_path.join("package.json");
+    let Ok(content) = fs::read_to_string(&pkg_path) else {
+        return Vec::new();
+    };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Vec::new();
+    };
+    let Some(aliases) = pkg
+        .get("perry")
+        .and_then(|p| p.get("packageAliases"))
+        .and_then(|a| a.as_object())
+    else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = aliases
+        .iter()
+        .filter_map(|(from, to)| to.as_str().map(|to| (from.clone(), to.to_string())))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Build the `compilerOptions.paths` map the IDE's tsc needs to resolve the
+/// same module specifiers Perry resolves at compile time: the always-present
+/// `perry/*` type-stub mapping, plus one bare + one wildcard entry per
+/// `perry.packageAliases` alias (`"<from>": ["./node_modules/<to>"]`).
+fn tsconfig_paths(aliases: &[(String, String)]) -> serde_json::Map<String, serde_json::Value> {
+    let mut paths = serde_json::Map::new();
+    paths.insert(
+        "perry/*".to_string(),
+        serde_json::json!(["./.perry/types/perry/*/index.d.ts"]),
+    );
+    for (from, to) in aliases {
+        paths.insert(
+            from.clone(),
+            serde_json::json!([format!("./node_modules/{to}")]),
+        );
+        paths.insert(
+            format!("{from}/*"),
+            serde_json::json!([format!("./node_modules/{to}/*")]),
+        );
+    }
+    paths
+}
+
+/// Render the `paths` entries indented to sit inside the DEFAULT_TSCONFIG
+/// template's `"paths": { … }` block (6-space indent, comma-separated).
+fn render_paths_block(paths: &serde_json::Map<String, serde_json::Value>) -> String {
+    paths
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "      {}: {}",
+                serde_json::to_string(k).unwrap_or_else(|_| format!("\"{k}\"")),
+                serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",\n")
+}
+
+/// Merge alias paths into an existing tsconfig.json. Returns the rewritten
+/// contents if a change is needed and the file parses as JSON, `Ok(None)` if
+/// nothing changed, or `Err` with the block to paste if it can't be parsed
+/// (e.g. JSONC with comments/trailing commas).
+fn merge_paths_into_existing(
+    existing: &str,
+    paths: &serde_json::Map<String, serde_json::Value>,
+) -> std::result::Result<Option<String>, String> {
+    let mut root: serde_json::Value =
+        serde_json::from_str(existing).map_err(|_| render_paths_block(paths))?;
+    let obj = root
+        .as_object_mut()
+        .ok_or_else(|| render_paths_block(paths))?;
+    let co = obj
+        .entry("compilerOptions")
+        .or_insert_with(|| serde_json::json!({}));
+    let co = co
+        .as_object_mut()
+        .ok_or_else(|| render_paths_block(paths))?;
+    co.entry("baseUrl")
+        .or_insert_with(|| serde_json::json!("."));
+    let existing_paths = co.entry("paths").or_insert_with(|| serde_json::json!({}));
+    let existing_paths = existing_paths
+        .as_object_mut()
+        .ok_or_else(|| render_paths_block(paths))?;
+    let mut changed = false;
+    for (k, v) in paths {
+        if existing_paths.get(k) != Some(v) {
+            existing_paths.insert(k.clone(), v.clone());
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(None);
+    }
+    let mut out = serde_json::to_string_pretty(&root).map_err(|_| render_paths_block(paths))?;
+    out.push('\n');
+    Ok(Some(out))
+}
 
 pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()> {
     let project_path = args.path.canonicalize().unwrap_or(args.path.clone());
@@ -174,18 +280,56 @@ pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()>
         }
     }
 
-    // Create tsconfig.json
+    // Create / update tsconfig.json. The `paths` block mirrors
+    // `perry.packageAliases` from package.json so the IDE's tsc language
+    // server resolves aliased imports to the same target Perry uses at
+    // compile time (perry.packageAliases is otherwise compiler-only).
+    let aliases = package_aliases(&project_path);
+    let paths = tsconfig_paths(&aliases);
     let tsconfig_path = project_path.join("tsconfig.json");
     if !tsconfig_path.exists() {
-        fs::write(&tsconfig_path, DEFAULT_TSCONFIG)?;
+        let contents = DEFAULT_TSCONFIG.replace("{paths}", &render_paths_block(&paths));
+        fs::write(&tsconfig_path, contents)?;
         match format {
-            OutputFormat::Text => println!("  Created tsconfig.json"),
+            OutputFormat::Text => {
+                println!("  Created tsconfig.json");
+                if !aliases.is_empty() {
+                    println!(
+                        "    + {} packageAliases path(s) for IDE resolution",
+                        aliases.len()
+                    );
+                }
+            }
             OutputFormat::Json => {}
         }
-    } else {
+    } else if aliases.is_empty() {
         match format {
             OutputFormat::Text => println!("  Skipped tsconfig.json (already exists)"),
             OutputFormat::Json => {}
+        }
+    } else {
+        // tsconfig exists and there are aliases to sync — merge the paths in.
+        let existing = fs::read_to_string(&tsconfig_path)?;
+        match merge_paths_into_existing(&existing, &paths) {
+            Ok(Some(updated)) => {
+                fs::write(&tsconfig_path, updated)?;
+                if let OutputFormat::Text = format {
+                    println!("  Updated tsconfig.json (synced packageAliases paths)");
+                }
+            }
+            Ok(None) => {
+                if let OutputFormat::Text = format {
+                    println!("  Skipped tsconfig.json (packageAliases paths already in sync)");
+                }
+            }
+            Err(block) => {
+                if let OutputFormat::Text = format {
+                    println!(
+                        "  Skipped tsconfig.json (couldn't auto-merge — not plain JSON).\n\
+                         \x20   Add these to compilerOptions.paths so the IDE matches Perry:\n{block}"
+                    );
+                }
+            }
         }
     }
 

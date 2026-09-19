@@ -53,6 +53,10 @@ struct WebViewState {
     on_should_navigate: f64,
     on_loaded: f64,
     on_error: f64,
+    /// Electron-compat IPC: TS closure invoked with the JSON string the page
+    /// posts via `window.webkit.messageHandlers.perry.postMessage(...)`.
+    /// 0.0 means "not registered". (renderer → main half of the bridge).
+    on_message: f64,
     /// Hard navigation allowlist. Empty = no restriction. URLs whose host
     /// matches any entry pass; others are rejected without invoking the user
     /// closure (security: prevents hijacked OAuth pages from redirecting to
@@ -453,6 +457,51 @@ define_class!(
         ) {
             self.dispatch_error(error);
         }
+
+        /// `userContentController:didReceiveScriptMessage:` — the inbound half
+        /// of the Electron-compat IPC bridge (WKScriptMessageHandler). The page
+        /// calls `window.webkit.messageHandlers.perry.postMessage(jsonString)`;
+        /// we hand the JSON string to the registered `on_message` TS closure.
+        /// The main process (compiled TS) parses it and replies via
+        /// `webviewEvaluateJs(...)` (the main → renderer half).
+        #[unsafe(method(userContentController:didReceiveScriptMessage:))]
+        fn did_receive_script_message(
+            &self,
+            _ucc: *mut AnyObject,
+            message: *mut AnyObject,
+        ) {
+            let key = self.ivars().callback_key.get();
+            let on_message = WEBVIEW_STATES.with(|s| {
+                s.borrow().get(&key).map(|st| st.on_message).unwrap_or(0.0)
+            });
+            if on_message == 0.0 {
+                return;
+            }
+            crate::catch_callback_panic(
+                "webview onMessage",
+                std::panic::AssertUnwindSafe(|| unsafe {
+                    // The bridge always posts a JSON string, so `body` is an
+                    // NSString. `description` is a safe fallback for anything else.
+                    let body: *mut AnyObject = msg_send![message, body];
+                    let s = if !body.is_null() {
+                        let descr: *mut AnyObject = msg_send![body, description];
+                        if !descr.is_null() {
+                            let ns: &NSString = &*(descr as *const NSString);
+                            ns.to_string()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+                    let nb = nanbox_str(&s);
+                    let closure_ptr = js_nanbox_get_pointer(on_message) as *const u8;
+                    if !closure_ptr.is_null() {
+                        js_closure_call1(closure_ptr, nb);
+                    }
+                }),
+            );
+        }
     }
 );
 
@@ -522,7 +571,14 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
             ),
         );
 
-        // 1. WKWebViewConfiguration. v2-B: pass the ephemeral hint up
+        // 1. Delegate first — it doubles as the WKScriptMessageHandler, so it
+        //    must exist before we build the configuration's content controller.
+        //    The ivar key is the delegate's own address (stable for life).
+        let delegate = PerryWebViewDelegate::new();
+        let key = Retained::as_ptr(&delegate) as usize;
+        delegate.ivars().callback_key.set(key);
+
+        // 2. WKWebViewConfiguration. v2-B: pass the ephemeral hint up
         //    front so the websiteDataStore is correct from the first
         //    navigation onward. Default (1.0 = ephemeral) maps to
         //    nonPersistentDataStore; 0.0 → defaultDataStore.
@@ -537,23 +593,47 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
         };
         let _: () = msg_send![cfg, setWebsiteDataStore: store];
 
-        // 2. WKWebView.
+        // 2b. WKUserContentController — the Electron-compat IPC bridge.
+        //     Register the delegate as the "perry" script message handler so
+        //     `window.webkit.messageHandlers.perry.postMessage(json)` in the
+        //     page lands in `did_receive_script_message`. User scripts (the
+        //     bridge runtime + the app's preload) are injected later via
+        //     `add_user_script`. The content controller retains its handler
+        //     strongly, so the delegate stays alive for IPC even though
+        //     WKWebView only holds the nav/UI delegate weakly.
+        let ucc_cls = AnyClass::get(c"WKUserContentController")
+            .expect("WKUserContentController not found — link WebKit.framework");
+        let ucc: *mut AnyObject = msg_send![ucc_cls, new];
+        let handler_name = NSString::from_str("perry");
+        let _: () = msg_send![ucc, addScriptMessageHandler: &*delegate, name: &*handler_name];
+        let _: () = msg_send![cfg, setUserContentController: ucc];
+
+        // 2c. Allow a file:// document to load file:// subresources (its own
+        //     <script src>, <link href>, images). WKWebView blocks this by
+        //     default (separate from loadFileURL's navigation read-access),
+        //     which would break `BrowserWindow.loadFile(...)` apps that split
+        //     their renderer across files. These flags are KVC-settable on
+        //     WKPreferences / the configuration (stable since WebKit's early
+        //     WKWebView and what Electron's `webSecurity:false`-style file
+        //     loading relies on under the hood).
+        let nsnumber_cls = AnyClass::get(c"NSNumber").unwrap();
+        let yes_num: *mut AnyObject = msg_send![nsnumber_cls, numberWithBool: true];
+        let prefs: *mut AnyObject = msg_send![cfg, preferences];
+        if !prefs.is_null() {
+            let k = NSString::from_str("allowFileAccessFromFileURLs");
+            let _: () = msg_send![prefs, setValue: yes_num, forKey: &*k];
+        }
+        let k2 = NSString::from_str("allowUniversalAccessFromFileURLs");
+        let _: () = msg_send![cfg, setValue: yes_num, forKey: &*k2];
+
+        // 3. WKWebView.
         let wv_cls = AnyClass::get(c"WKWebView").expect("WKWebView not found");
         let wv: *mut AnyObject = msg_send![wv_cls, alloc];
         let wv: *mut AnyObject = msg_send![wv, initWithFrame: frame, configuration: cfg];
 
-        // 3. Delegate — single delegate object per widget; ivar key is the
-        //    delegate's own address.
-        let delegate = PerryWebViewDelegate::new();
-        let key = Retained::as_ptr(&delegate) as usize;
-        delegate.ivars().callback_key.set(key);
+        // 4. Wire the same delegate for navigation + UI events.
         let _: () = msg_send![wv, setNavigationDelegate: &*delegate];
         let _: () = msg_send![wv, setUIDelegate: &*delegate];
-
-        // 4. Initial load.
-        if !url.is_empty() {
-            load_url_on_webview(wv, &url);
-        }
 
         // 5. Register state. The webview_ptr is held weakly; we never deref
         //    after the widget is destroyed because we drop the entry on
@@ -568,6 +648,7 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
                     on_should_navigate: 0.0,
                     on_loaded: 0.0,
                     on_error: 0.0,
+                    on_message: 0.0,
                     allowed_domains: Vec::new(),
                 },
             );
@@ -580,9 +661,16 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
             m.borrow_mut().insert(handle, key);
         });
 
-        // 7. Leak the delegate Retained so it stays alive as long as the
-        //    WKWebView holds it as navigationDelegate (WKWebView holds delegates
-        //    weakly per the WKWebView docs).
+        // 7. Initial load — after widget registration so any document-start
+        //    user scripts added between create() and the first navigation
+        //    (e.g. the IPC bridge runtime) are already installed. Electron
+        //    apps load via `loadFile`/`loadURL` after construction anyway.
+        if !url.is_empty() {
+            load_url_on_webview(wv, &url);
+        }
+
+        // 8. Leak the delegate Retained — the content controller and WKWebView
+        //    both reference it (the former strongly), so it must outlive this fn.
         std::mem::forget(delegate);
 
         let _ = mtm;
@@ -606,6 +694,17 @@ unsafe fn load_url_on_webview(webview: *mut AnyObject, url: &str) {
     let url_str = NSString::from_str(url);
     let nsurl: *mut AnyObject = msg_send![url_cls, URLWithString: &*url_str];
     if nsurl.is_null() {
+        return;
+    }
+    // file:// URLs are blocked by the WKWebView sandbox under loadRequest:.
+    // The supported path is loadFileURL:allowingReadAccessToURL:, granting read
+    // access to the containing directory so sibling assets (css/js/img) resolve.
+    // This is what `BrowserWindow.loadFile(...)` needs.
+    if url.starts_with("file://") {
+        let dir: *mut AnyObject = msg_send![nsurl, URLByDeletingLastPathComponent];
+        let read_access = if dir.is_null() { nsurl } else { dir };
+        let _: *mut AnyObject =
+            msg_send![webview, loadFileURL: nsurl, allowingReadAccessToURL: read_access];
         return;
     }
     let req_cls = AnyClass::get(c"NSURLRequest").unwrap();
@@ -811,6 +910,54 @@ pub fn set_on_error(handle: i64, closure: f64) {
                 st.on_error = closure;
             }
         });
+    }
+}
+
+/// Electron-compat IPC: register the TS closure that receives JSON strings the
+/// page posts through the "perry" script message handler (renderer → main).
+pub fn set_on_message(handle: i64, closure: f64) {
+    if let Some(key) = HANDLE_TO_KEY.with(|m| m.borrow().get(&handle).copied()) {
+        WEBVIEW_STATES.with(|s| {
+            if let Some(st) = s.borrow_mut().get_mut(&key) {
+                st.on_message = closure;
+            }
+        });
+    }
+}
+
+/// Inject a document-start user script into the webview (all frames). Used to
+/// install the Electron-compat bridge runtime and the app's preload script
+/// before the page's own scripts run. Must be called before `loadUrl`/`loadFile`
+/// for the script to apply to that navigation.
+pub fn add_user_script(handle: i64, src_ptr: *const u8) {
+    let src = unsafe { str_from_header(src_ptr) }.to_string();
+    if src.is_empty() {
+        return;
+    }
+    if let Some(wv) = webview_for_handle(handle) {
+        unsafe {
+            let cfg: *mut AnyObject = msg_send![wv, configuration];
+            if cfg.is_null() {
+                return;
+            }
+            let ucc: *mut AnyObject = msg_send![cfg, userContentController];
+            if ucc.is_null() {
+                return;
+            }
+            let src_ns = NSString::from_str(&src);
+            let script_cls = AnyClass::get(c"WKUserScript")
+                .expect("WKUserScript not found — link WebKit.framework");
+            let script: *mut AnyObject = msg_send![script_cls, alloc];
+            // injectionTime 0 = WKUserScriptInjectionTimeAtDocumentStart;
+            // forMainFrameOnly: false so iframes used by some apps also get the bridge.
+            let script: *mut AnyObject = msg_send![
+                script,
+                initWithSource: &*src_ns,
+                injectionTime: 0i64,
+                forMainFrameOnly: false
+            ];
+            let _: () = msg_send![ucc, addUserScript: script];
+        }
     }
 }
 
