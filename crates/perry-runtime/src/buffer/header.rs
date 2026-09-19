@@ -227,6 +227,67 @@ static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 /// [`RegistryAddrWindow`] for the ordering rule that makes it so.
 static BUFFER_LIKE_ADDR_WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
 
+/// #10694: a 1024-bit, 3-hash Bloom filter over every address ever registered
+/// buffer-like, sitting in front of the hash sets.
+///
+/// `BUFFER_LIKE_ADDR_WINDOW` is a min/max bounding box, so it can only reject
+/// addresses outside the span the registrations happen to occupy. On a real
+/// workload that span is wide and the registered set is tiny: a
+/// `tsc --noEmit` measured **79,691,777 probes** against a set that never held
+/// more than **9** buffers, of which the window rejected 67% and the surviving
+/// **26,198,956** each paid a thread-local resolution, a `RefCell` borrow and a
+/// hash lookup to answer "no" **26,198,866** times. `PERRY_BUFFER_DIAG` sized
+/// this exact filter at **0.0% false-positive** on that admission set.
+///
+/// Soundness is the Bloom guarantee: bits are only ever set, never cleared, so
+/// there are no false negatives and a clear bit is a definitive "never
+/// registered". A false positive merely falls through to the authoritative
+/// sets below, which is what happens today for every probe. Unregistration
+/// does not clear bits — it cannot, and it must not — so the filter only
+/// loses precision over a process's lifetime, never correctness. Same
+/// monotonic contract as the window: every writer arms it before publishing.
+const BUFFER_BLOOM_BITS: usize = 1024;
+const BUFFER_BLOOM_WORDS: usize = BUFFER_BLOOM_BITS / 64;
+static BUFFER_LIKE_BLOOM: [std::sync::atomic::AtomicU64; BUFFER_BLOOM_WORDS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; BUFFER_BLOOM_WORDS];
+
+/// Three independent bit positions for `addr`. Addresses are pointer-aligned,
+/// so the low bits carry no entropy — mix before slicing.
+#[inline(always)]
+fn buffer_bloom_bits(addr: usize) -> [usize; 3] {
+    let mut h = addr as u64 >> 3;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    let a = h;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    h ^= h >> 33;
+    let b = h;
+    [
+        (a as usize) % BUFFER_BLOOM_BITS,
+        (b as usize) % BUFFER_BLOOM_BITS,
+        ((a ^ b) as usize) % BUFFER_BLOOM_BITS,
+    ]
+}
+
+#[inline(always)]
+fn buffer_bloom_arm(addr: usize) {
+    for bit in buffer_bloom_bits(addr) {
+        BUFFER_LIKE_BLOOM[bit / 64]
+            .fetch_or(1u64 << (bit % 64), std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// `false` is definitive: this address was never registered buffer-like.
+#[inline(always)]
+fn buffer_bloom_may_contain(addr: usize) -> bool {
+    buffer_bloom_bits(addr).into_iter().all(|bit| {
+        BUFFER_LIKE_BLOOM[bit / 64].load(std::sync::atomic::Ordering::Acquire)
+            & (1u64 << (bit % 64))
+            != 0
+    })
+}
+
 // The set filter that used to sit behind the window was REMOVED on 2026-09-12,
 // measured. Its own adoption note asked the capacity question and answered it
 // from a 400-character reply: 213 cumulative registrations, live_max 201, and
@@ -305,6 +366,7 @@ pub(crate) fn note_buffer_like_registered(addr: usize) {
     // checks the latch and then the window, so both must already cover this
     // address by the time it becomes findable.
     BUFFER_LIKE_ADDR_WINDOW.admit(addr);
+    buffer_bloom_arm(addr);
     BUFFER_LIKE_EVER_REGISTERED.arm();
 }
 
@@ -454,6 +516,7 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     // the idle fast path and denies it. See `crate::registry_latch`.
     let addr = ptr as usize;
     BUFFER_LIKE_ADDR_WINDOW.admit(addr);
+    buffer_bloom_arm(addr);
     BUFFER_LIKE_EVER_REGISTERED.arm();
     BUFFER_ADDR_RANGE.with(|r| {
         let (lo, hi) = r.get();
@@ -495,7 +558,7 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     // call, the thread-local resolution, the `RefCell` borrow or the hash.
     // Every writer widens the window before it publishes, which is what makes
     // rejecting sound; see `BUFFER_LIKE_ADDR_WINDOW`.
-    let admitted = BUFFER_LIKE_ADDR_WINDOW.may_contain(addr);
+    let admitted = BUFFER_LIKE_ADDR_WINDOW.may_contain(addr) && buffer_bloom_may_contain(addr);
     if crate::hot_diag::buffer_on() {
         crate::hot_diag::buffer_note_probe(addr, admitted, BUFFER_LIKE_ADDR_WINDOW.bounds());
     }
