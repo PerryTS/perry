@@ -47,7 +47,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
     "dotenv",         // .env file loader
     "dotenv/config",  // dotenv's auto-load-on-import subpath
-    "jsonwebtoken",   // JWT sign/verify
     "nanoid",         // compact URL-safe ID generation
     "validator",      // string validators/sanitizers
     "ethers",         // Ethereum library (utils/wallet/ABI)

@@ -340,14 +340,9 @@ pub mod argon2;
 #[cfg(feature = "bundled-argon2")]
 pub use argon2::*;
 
-// jsonwebtoken split out into `bundled-jsonwebtoken` (v0.5.538)
 // for the same reason as bcrypt/argon2 — well-known flip
 // independence. The `crypto` umbrella still pulls it in for
 // backwards compat.
-#[cfg(feature = "bundled-jsonwebtoken")]
-pub mod jsonwebtoken;
-#[cfg(feature = "bundled-jsonwebtoken")]
-pub use jsonwebtoken::*;
 
 #[cfg(feature = "crypto")]
 pub mod crypto_e2e;

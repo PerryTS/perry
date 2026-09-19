@@ -6027,17 +6027,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-jsonwebtoken"
-version = "0.5.1597"
-dependencies = [
- "base64 0.22.1",
- "jsonwebtoken",
- "perry-ffi",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "perry-ext-lru-cache"
 version = "0.5.1597"
 dependencies = [
@@ -6420,7 +6409,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "image",
- "jsonwebtoken",
  "lazy_static",
  "lettre",
  "libc",

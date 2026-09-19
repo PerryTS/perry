@@ -131,18 +131,6 @@ repo = "https://github.com/ranisalt/node-argon2"
 ref = "786de7152f95881b0683aea1d2ca60ed0d6d9e2f"
 ported-at = "0.45.1"
 date = "2026-07-30"
-[bindings.jsonwebtoken]
-crate = "perry-ext-jsonwebtoken"
-lib = "perry_ext_jsonwebtoken"
-tracking = "#466"
-
-[bindings.jsonwebtoken.upstream]
-version = "9.0.3"
-sha256 = "d9af2628a7a4dda25acf1e19c7ecc2468e1e9e8d4619fe2cae829e89d96f6b82"
-repo = "https://github.com/auth0/node-jsonwebtoken"
-ref = "ed59e76ea37a80f54b833668c02a5271984dcba3"
-ported-at = "9.0.3"
-date = "2026-07-30"
 [bindings.validator]
 crate = "perry-ext-validator"
 lib = "perry_ext_validator"

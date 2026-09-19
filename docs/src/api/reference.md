@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3035 entries across 138 modules.
+Total: 3032 entries across 137 modules.
 
 ## Modules
 
@@ -64,7 +64,6 @@ Total: 3035 entries across 138 modules.
 - [`inspector/promises`](#inspectorpromises)
 - [`ioredis`](#ioredis)
 - [`iovalkey`](#iovalkey)
-- [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
 - [`lru-cache`](#lru-cache)
 - [`module`](#module)
@@ -2011,14 +2010,6 @@ Total: 3035 entries across 138 modules.
 ### Methods
 
 - `createClient` — module
-
-## `jsonwebtoken`
-
-### Methods
-
-- `decode` — module
-- `sign` — module
-- `verify` — module
 
 ## `lodash`
 

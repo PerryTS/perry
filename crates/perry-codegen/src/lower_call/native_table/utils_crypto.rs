@@ -75,24 +75,6 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_F64,
     },
-    // ========== jsonwebtoken ==========
-    // `sign` and `verify` are intentionally handled in
-    // lower_call/native.rs — both need option-dependent runtime
-    // selection (HS256 / ES256 / RS256) that the generic table can't
-    // express. `decode` stays here because it has no algorithm options.
-    NativeModSig {
-        module: "jsonwebtoken",
-        has_receiver: false,
-        method: "decode",
-        class_filter: None,
-        runtime: "js_jwt_decode",
-        // js_jwt_decode(token_ptr) -> *mut StringHeader (JSON of payload).
-        // NR_OBJ_FROM_JSON_STR pipes the returned JSON through
-        // js_json_parse_or_null so user code sees an object (mirrors
-        // `verify`'s post-#927 contract). Issue #927.
-        args: &[NA_STR],
-        ret: NR_OBJ_FROM_JSON_STR,
-    },
     // ========== nodemailer ==========
     NativeModSig {
         module: "nodemailer",

@@ -917,26 +917,6 @@ pub extern "C" fn js_ioredis_setex() -> i64 {
 }
 // js_json_* — real implementations in json.rs
 #[no_mangle]
-pub extern "C" fn js_jwt_decode() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_jwt_sign() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_jwt_sign_es256() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_jwt_sign_rs256() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_jwt_verify() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_lodash_camel_case() -> i64 {
     0
 }

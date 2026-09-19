@@ -16,7 +16,6 @@ members = [
     "crates/perry-ext-uuid",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-argon2",
-    "crates/perry-ext-jsonwebtoken",
     "crates/perry-ext-validator",
     "crates/perry-validation",
     "crates/perry-perex",
@@ -482,7 +481,6 @@ perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-uuid = { path = "crates/perry-ext-uuid" }
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
-perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }
 perry-ext-validator = { path = "crates/perry-ext-validator" }
 perry-validation = { path = "crates/perry-validation" }
 perry-perex = { path = "crates/perry-perex" }

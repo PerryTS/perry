@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2093 entries across 136 modules
+// Coverage: 2090 entries across 135 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2094,15 +2094,6 @@ declare module "iovalkey" {
   export class Redis { [key: string]: any; }
   /** stdlib */
   export function createClient(...args: any[]): any;
-}
-
-declare module "jsonwebtoken" {
-  /** stdlib */
-  export function decode(token: string): any;
-  /** stdlib */
-  export function sign(payload: any, secret: string, options?: any, kid?: string): string;
-  /** stdlib */
-  export function verify(token: string, secret: string): any;
 }
 
 declare module "lodash" {

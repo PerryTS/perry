@@ -17,8 +17,6 @@
 //! Split into siblings:
 //! - `box_style.rs` — `apply_box_style` + `emit_dim_setter` (perry/tui
 //!   `Box(...)` inline-style destructure helpers).
-//! - `jsonwebtoken.rs` — `lower_jsonwebtoken_sign` / `_verify` (#1074
-//!   algorithm-aware routing).
 //! The giant `lower_native_method_call` dispatcher itself stays here.
 
 use anyhow::{bail, Result};
@@ -49,11 +47,9 @@ pub(super) use super::{
 };
 
 mod box_style;
-mod jsonwebtoken;
 mod perf_hooks;
 
 use box_style::apply_box_style;
-use jsonwebtoken::{lower_jsonwebtoken_sign, lower_jsonwebtoken_verify};
 
 fn util_types_arg_is_async_function_static(ctx: &FnCtx<'_>, expr: &Expr) -> Option<bool> {
     match expr {
