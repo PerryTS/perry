@@ -203,9 +203,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // rate-limiter-flexible: feature-gated v0.5.552 — well-known
         // flip routes to perry-ext-ratelimit.
         "rate-limiter-flexible" => &["bundled-ratelimit"],
-        // commander: feature-gated v0.5.555 — well-known flip routes
-        // to perry-ext-commander.
-        "commander" => &["bundled-commander"],
         // dotenv was always-on through v0.5.532; gated behind
         // `bundled-dotenv` from v0.5.533 onwards so the well-known
         // bindings flip (#466 Phase 4 step 2) can swap perry-stdlib's

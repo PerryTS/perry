@@ -165,7 +165,6 @@ pub(crate) fn register_native_fetch_and_streams(
                                 "decimal.js" => "Decimal",
                                 "bignumber.js" => "BigNumber",
                                 "lru-cache" => "LRUCache",
-                                "commander" => "Command",
                                 _ => "",
                             };
                             if !class_name.is_empty() {
