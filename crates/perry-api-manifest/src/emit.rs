@@ -880,18 +880,22 @@ mod tests {
         }
     }
 
-    /// uuid.v4() is no-args and returns a string — verify the renderer
-    /// emits an empty arg list instead of `(...args: any[])`.
+    /// perry/gc.minor() is no-args and returns a number — verify the
+    /// renderer emits an empty arg list instead of `(...args: any[])`.
+    /// (Formerly used uuid.v4() as the fixture; retargeted when the uuid
+    /// native binding was removed — see #10678/#466.)
     #[test]
-    fn dts_uuid_v4_has_no_args() {
+    fn dts_zero_arg_module_fn_has_no_args() {
         let dts = emit_dts("test");
-        let block_start = dts.find("declare module \"uuid\"").expect("uuid block");
+        let block_start = dts
+            .find("declare module \"perry/gc\"")
+            .expect("perry/gc block");
         let after = &dts[block_start..];
         let block_end = after.find("\n}\n").expect("block end");
         let block = &after[..block_end];
         assert!(
-            block.contains("export function v4(): string"),
-            "uuid.v4 should be (): string\nblock: {}",
+            block.contains("export function minor(): number"),
+            "perry/gc.minor should be (): number\nblock: {}",
             block
         );
     }

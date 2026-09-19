@@ -1446,30 +1446,6 @@ pub extern "C" fn js_sqlite_transaction_commit() -> i64 {
 pub extern "C" fn js_sqlite_transaction_rollback() -> i64 {
     0
 }
-#[no_mangle]
-pub extern "C" fn js_uuid_nil() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_v1() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_v4() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_v7() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_validate() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_uuid_version() -> i64 {
-    0
-}
 // readline (#347) — TUI use case isn't relevant on Android, so stubs
 // return inert values (handle 0, no-op for everything). The `_active`
 // stub returns 0 so the host event loop doesn't keep ticking.

@@ -166,7 +166,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // perry-stdlib/Cargo.toml as `bundled-uuid + bundled-nanoid`
         // for backwards compat, but feature-set computation goes
         // straight to the per-binding feature.
-        "uuid" => &["bundled-uuid"],
         "nanoid" => &["bundled-nanoid"],
 
         // ── Container ─────────────────────────────────────────────────
