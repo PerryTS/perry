@@ -19,7 +19,6 @@
     "crates/perry-ext-http/src/server/response.rs": 1,
     "crates/perry-ext-http/src/server/types.rs": 1,
     "crates/perry-ext-ioredis/src/lib.rs": 1,
-    "crates/perry-ext-jsonwebtoken/src/lib.rs": 1,
     "crates/perry-ext-mongodb/src/lib.rs": 2,
     "crates/perry-ext-mysql2/src/lib.rs": 9,
     "crates/perry-ext-net/src/classes.rs": 2,

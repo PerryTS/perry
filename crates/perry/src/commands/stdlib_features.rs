@@ -101,7 +101,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // bcrypt also typically use sha256/jwt/etc., which keeps the
         // umbrella worthwhile.
         "bcrypt" => &["bundled-bcrypt"],
-        "jsonwebtoken" => &["bundled-jsonwebtoken"],
         "crypto" => &["crypto"],
         // ethers ships utility functions (formatUnits, parseUnits,
         // getAddress, keccak256, …). The keccak256 implementation is

@@ -312,13 +312,6 @@
         }
     }
 
-    if module == "jsonwebtoken" && method == "sign" && object.is_none() {
-        return lower_jsonwebtoken_sign(ctx, args);
-    }
-    if module == "jsonwebtoken" && method == "verify" && object.is_none() {
-        return lower_jsonwebtoken_verify(ctx, args);
-    }
-
     // node:perf_hooks → native/perf_hooks.rs (performance.* + PerformanceObserver).
     if let Some(v) = perf_hooks::lower_perf_hooks_method(ctx, module, method, object, args)? {
         return Ok(v);
