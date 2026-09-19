@@ -400,6 +400,43 @@ fn object_proto_signature_fast_match_rejects_a_replaced_prototype_address() {
     }
 }
 
+/// Sabotage proof that the magnitude guard on the two header reads is live,
+/// not decoration. Every other miss in this comparison is decided by an
+/// equality test, so a root that is not an address AT ALL — a `POINTER_TAG`
+/// payload carrying a registry handle id — is the one shape that reaches the
+/// dereference. `try_read_gc_header` declines it before
+/// `addr - GC_HEADER_SIZE` is formed; the bare cast this replaced read
+/// unmapped low memory instead (segfaults on Linux, masked on macOS by
+/// mimalloc page retention — #4665/#4800).
+#[test]
+fn object_proto_signature_fast_match_declines_a_handle_band_root() {
+    unsafe {
+        let saved = CACHED_OBJECT_PROTO_BITS.with(|c| c.get());
+        let handle = crate::value::addr_class::HANDLE_BAND_MAX as u64 - 0x40;
+        CACHED_OBJECT_PROTO_BITS.with(|c| c.set(crate::value::POINTER_TAG | handle));
+        // Everything else in the signature is arranged to MATCH, so the
+        // guard is the only thing left that can decline it.
+        let cached = super::ObjectProtoToJsonSignature {
+            proto_addr: handle as usize,
+            keys_addr: 0,
+            keys_len: 0,
+            obj_flags: 0,
+            class_id: 0,
+            semantic_epoch: crate::object::prop_plan::prop_plan_semantic_epoch(),
+        };
+        assert!(
+            !crate::value::addr_class::is_plausible_heap_addr(cached.proto_addr),
+            "fixture must start with a NON-address root, or the verdict below is vacuous"
+        );
+        assert!(
+            !super::object_proto_tojson_signature_matches(&cached),
+            "a handle-band root must be declined by the magnitude guard"
+        );
+        CACHED_OBJECT_PROTO_BITS.with(|c| c.set(saved));
+        super::invalidate_object_proto_tojson_state();
+    }
+}
+
 #[test]
 fn class_chain_tojson_memo_holds_every_shape_of_one_nested_literal() {
     // `{a:{b:{c:{d:{e:1}}}}}` is FIVE distinct object-literal shapes, hence

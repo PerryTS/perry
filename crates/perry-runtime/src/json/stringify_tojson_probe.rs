@@ -251,7 +251,9 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
 /// compare them to `cached`, WITHOUT re-running `try_read_tracked_gc_header`'s
 /// allocator-ownership proof. It answers the identical question; only the
 /// *proof that the addresses are ours* is skipped, and only because a prior
-/// full validation already established it for these exact addresses.
+/// full validation already established it for these exact addresses. The
+/// cheap magnitude classification is NOT skipped: both header reads go
+/// through `addr_class::try_read_gc_header`.
 ///
 /// The ordering is the safety argument, and it is compare-then-dereference at
 /// every step:
@@ -271,9 +273,24 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
 ///   so no address is taken FROM the cache and dereferenced: every dereference
 ///   is of an address just re-derived from a live root, after that address
 ///   compared equal to a validated one.
+/// * that ordering establishes the addresses are the *validated* ones. It does
+///   not establish they are addresses at all if the root is corrupted or has
+///   been zeroed under us, which is why the magnitude classification stays:
+///   `try_read_gc_header` rejects the handle band and out-of-range garbage
+///   before `addr - GC_HEADER_SIZE` is formed, and it is the module-owned
+///   predicate rather than a re-typed literal
+///   (`scripts/addr_class_inventory.py` enforces that).
 ///
 /// Worth 584 instructions per object visited, 260 of them the two arena-range
-/// classifications this skips (#10696).
+/// classifications this skips (#10696). Keeping the magnitude guard costs 10
+/// of those back: the executed fast path is 49 instructions with a bare cast
+/// and 59 with `try_read_gc_header`, at `-C opt-level=3` for
+/// `aarch64-apple-darwin` — 0.7 % of the 1,472 Ir/object the memoised probe
+/// costs. `try_read_gc_header_known_plausible` is deliberately NOT used here:
+/// `buffer::is_small_buf_slab_addr` has been a constant `false` since the
+/// 2026-07-09 slab audit, so that spelling compiles to byte-identical code to
+/// the bare cast (LLVM folds the two into one symbol) — it would clear the
+/// ratchet while checking nothing.
 #[inline]
 unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignature) -> bool {
     let proto_bits = CACHED_OBJECT_PROTO_BITS.with(|c| c.get());
@@ -286,7 +303,9 @@ unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignat
     {
         return false;
     }
-    let header = &*((proto_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let Some(header) = crate::value::addr_class::try_read_gc_header(proto_addr) else {
+        return false;
+    };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved != cached.obj_flags
@@ -305,7 +324,9 @@ unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignat
     if keys_addr == 0 {
         return cached.keys_len == 0;
     }
-    let keys_header = &*((keys_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let Some(keys_header) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
+        return false;
+    };
     keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
         && keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && (*keys).length == cached.keys_len
