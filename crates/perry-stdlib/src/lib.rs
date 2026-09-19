@@ -67,10 +67,6 @@ pub mod lodash;
 // `_js_moment_*` symbols at link.
 #[cfg(feature = "bundled-moment")]
 pub mod moment;
-// lru_cache is feature-gated as of v0.5.539 so the well-known
-// flip can route `import 'lru-cache'` to perry-ext-lru-cache.
-#[cfg(feature = "bundled-lru-cache")]
-pub mod lru_cache;
 pub mod readline;
 // string_decoder — issue #848. Native StringDecoder with real `write` /
 // `end` methods + `lastNeed` / `lastTotal` / `lastChar` getters wired
@@ -108,8 +104,6 @@ pub use events::*;
 #[cfg(feature = "bundled-exponential-backoff")]
 pub use exponential_backoff::*;
 pub use lodash::*;
-#[cfg(feature = "bundled-lru-cache")]
-pub use lru_cache::*;
 #[cfg(feature = "bundled-moment")]
 pub use moment::*;
 pub use querystring::*;

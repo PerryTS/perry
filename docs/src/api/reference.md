@@ -66,7 +66,6 @@ Total: 3035 entries across 138 modules.
 - [`iovalkey`](#iovalkey)
 - [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
-- [`lru-cache`](#lru-cache)
 - [`module`](#module)
 - [`moment`](#moment)
 - [`mongodb`](#mongodb)
@@ -2053,19 +2052,6 @@ Total: 3035 entries across 138 modules.
 - `take` — module
 - `times` — module
 - `uniq` — module
-
-## `lru-cache`
-
-### Methods
-
-- `clear` — instance
-- `default` — module
-- `delete` — instance
-- `get` — instance
-- `has` — instance
-- `peek` — instance
-- `set` — instance
-- `size` — instance
 
 ## `module`
 

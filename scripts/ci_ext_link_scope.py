@@ -130,9 +130,10 @@ def _self_test() -> int:
         return 1
     # The five that actually failed in #7650 must be covered by the derived
     # list — if a rename drops one, this says so instead of quietly shrinking.
+    # #10685 removed perry-ext-lru-cache (native binding deleted); it was
+    # one of #7650's five and can never appear in the derived list again.
     for name in (
         "perry-ext-pdf",
-        "perry-ext-lru-cache",
         "perry-ext-node-forge",
         "perry-ext-mongodb",
         "perry-ext-http",

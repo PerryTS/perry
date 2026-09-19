@@ -1,6 +1,6 @@
 //! Utility-package stdlib FFI declarations (extracted from stdlib_ffi.rs):
 //! @perryts/pdf, commander, dotenv, date libs (dayjs/datefns/moment),
-//! decimal.js, ethers, lodash, lru-cache.
+//! decimal.js, ethers, lodash.
 
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I64, VOID};
@@ -221,15 +221,4 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_lodash_uniq", I64, &[I64]);
     module.declare_function("js_lodash_upper_case", I64, &[I64]);
     module.declare_function("js_lodash_upper_first", I64, &[I64]);
-
-    // ========== LRU Cache ==========
-    module.declare_function("js_lru_cache_clear", VOID, &[I64]);
-    module.declare_function("js_lru_cache_delete", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_lru_cache_get", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_lru_cache_has", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_lru_cache_new", I64, &[DOUBLE]);
-    module.declare_function("js_lru_cache_peek", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_lru_cache_set", I64, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_lru_cache_size", DOUBLE, &[I64]);
-    module.declare_function("js_lru_cache_subclass_init", DOUBLE, &[DOUBLE, DOUBLE]);
 }

@@ -23,8 +23,8 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # prose comments in fastify.rs, while one real row uses the positional `cr(...)`
 # helper, leaving 371 executable declarations. The scanner parses declarations,
 # not comments, and includes that helper row.
-EXPECTED_ROWS = 371
-EXPECTED_PROVIDERS = 322
+EXPECTED_ROWS = 369
+EXPECTED_PROVIDERS = 320
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

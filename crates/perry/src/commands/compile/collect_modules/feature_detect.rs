@@ -339,13 +339,7 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("module: \"bun\"") || hir_debug.contains("NativeModuleRef(\"bun\")") {
             ctx.native_module_imports.insert("bun".to_string());
         }
-        for native_module in [
-            "lru-cache",
-            "big.js",
-            "decimal.js",
-            "bignumber.js",
-            "commander",
-        ] {
+        for native_module in ["big.js", "decimal.js", "bignumber.js", "commander"] {
             if hir_debug.contains(&format!("module: \"{native_module}\"")) {
                 ctx.needs_stdlib = true;
                 ctx.native_module_imports.insert(native_module.to_string());
