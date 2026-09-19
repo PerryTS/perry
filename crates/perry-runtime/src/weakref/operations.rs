@@ -10,6 +10,11 @@ fn debug_weakmap_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("PERRY_DEBUG_WEAKMAP").is_ok())
 }
 
+fn debug_weakmap_seq() -> u64 {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 fn debug_weakmap_miss(op: &str, map: f64, key: f64, reason: &str) {
     if !debug_weakmap_enabled() {
         return;
@@ -17,12 +22,72 @@ fn debug_weakmap_miss(op: &str, map: f64, key: f64, reason: &str) {
     let map_ptr = js_nanbox_get_pointer(map);
     let key_ptr = js_nanbox_get_pointer(key);
     let map_class = if map_ptr != 0 {
-        unsafe { crate::object::js_object_get_class_id(map_ptr as *mut ObjectHeader) }
+        crate::object::js_object_get_class_id(map_ptr as *mut ObjectHeader)
     } else {
         0
     };
+    let key_class = if key_ptr != 0 {
+        crate::object::js_object_get_class_id(key_ptr as *mut ObjectHeader)
+    } else {
+        0
+    };
+    let (entries_len, entry_keys) = if map_ptr != 0 {
+        unsafe {
+            let entries = entries_array(map_ptr as *mut ObjectHeader);
+            if entries.is_null() {
+                (-1i64, String::new())
+            } else {
+                let len = crate::array::js_array_length(entries);
+                let mut keys = String::new();
+                for slot in 0..len.min(16) {
+                    let entry = weak_entry_at(entries, slot as usize);
+                    if entry.is_null() {
+                        keys.push_str("null,");
+                    } else {
+                        let kbits = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
+                        keys.push_str(&format!("{:#x},", kbits));
+                    }
+                }
+                (len as i64, keys)
+            }
+        }
+    } else {
+        (-2i64, String::new())
+    };
+    let seq = debug_weakmap_seq();
     eprintln!(
-        "[weakmap-debug] {op} MISS reason={reason} map_bits={:#x} map_ptr={:#x} map_class_id={map_class} key_bits={:#x} key_ptr={:#x}",
+        "[weakmap-debug] seq={seq} {op} MISS reason={reason} map_bits={:#x} map_ptr={:#x} map_class_id={map_class} key_bits={:#x} key_ptr={:#x} key_class_id={key_class} entries_len={entries_len} entry_keys=[{entry_keys}]",
+        map.to_bits(), map_ptr, key.to_bits(), key_ptr
+    );
+}
+
+fn debug_weakmap_set(map: f64, key: f64) {
+    if !debug_weakmap_enabled() {
+        return;
+    }
+    let map_ptr = js_nanbox_get_pointer(map);
+    let key_ptr = js_nanbox_get_pointer(key);
+    let key_class = if key_ptr != 0 {
+        crate::object::js_object_get_class_id(key_ptr as *mut ObjectHeader)
+    } else {
+        0
+    };
+    let seq = debug_weakmap_seq();
+    eprintln!(
+        "[weakmap-debug] seq={seq} SET map_bits={:#x} map_ptr={:#x} key_bits={:#x} key_ptr={:#x} key_class_id={key_class}",
+        map.to_bits(), map_ptr, key.to_bits(), key_ptr
+    );
+}
+
+fn debug_weakmap_hit(op: &str, map: f64, key: f64) {
+    if !debug_weakmap_enabled() {
+        return;
+    }
+    let map_ptr = js_nanbox_get_pointer(map);
+    let key_ptr = js_nanbox_get_pointer(key);
+    let seq = debug_weakmap_seq();
+    eprintln!(
+        "[weakmap-debug] seq={seq} {op} HIT map_bits={:#x} map_ptr={:#x} key_bits={:#x} key_ptr={:#x}",
         map.to_bits(), map_ptr, key.to_bits(), key_ptr
     );
 }
@@ -58,6 +123,7 @@ pub extern "C" fn js_weakmap_set(map: f64, key: f64, value: f64) -> f64 {
     if js_nanbox_get_pointer(map) == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    debug_weakmap_set(map, key);
     let scope = crate::gc::RuntimeHandleScope::new();
     let map = scope.root_nanbox_f64(map);
     let key = scope.root_nanbox_f64(key);
@@ -110,6 +176,7 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
         return v;
     }
     if js_nanbox_get_pointer(map) == 0 {
+        debug_weakmap_miss("get", map, key, "map_pointer_zero");
         return f64::from_bits(TAG_UNDEFINED);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -120,12 +187,14 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
             // #7900: keep the key alive through pending weak slices and shade
             // the value handed back to compiled code.
             read_barrier::weak_read_barrier(object_field_bits(entry, WEAK_ENTRY_KEY_FIELD));
+            debug_weakmap_hit("get", map.get_nanbox_f64(), key.get_nanbox_f64());
             return read_barrier::weak_read_barrier_f64(object_field_bits(
                 entry,
                 WEAK_ENTRY_VALUE_FIELD,
             ));
         }
     }
+    debug_weakmap_miss("get", map.get_nanbox_f64(), key.get_nanbox_f64(), "key_not_found");
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -147,6 +216,7 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
     unsafe {
         if let Some(entry) = find_entry(map, key) {
             read_barrier::weak_read_barrier(object_field_bits(entry, WEAK_ENTRY_KEY_FIELD));
+            debug_weakmap_hit("has", map.get_nanbox_f64(), key.get_nanbox_f64());
             return f64::from_bits(TAG_TRUE);
         }
     }
