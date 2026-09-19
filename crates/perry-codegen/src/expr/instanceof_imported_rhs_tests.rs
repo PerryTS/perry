@@ -49,6 +49,7 @@ fn imported_class(name: &str, class_id: u32) -> ImportedClass {
         namespace: None,
         source_prefix: "lib_ts".to_string(),
         constructor_param_count: 0,
+        constructor_has_synthetic_arguments: false,
         has_own_constructor: true,
         constructor_has_rest: false,
         has_instance_fields: false,

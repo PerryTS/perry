@@ -121,6 +121,7 @@ fn imported_class_of_the_same_name_already_shadowed_the_builtin() {
         namespace: None,
         source_prefix: "lib_ts".to_string(),
         constructor_param_count: 0,
+        constructor_has_synthetic_arguments: false,
         has_own_constructor: false,
         constructor_has_rest: false,
         has_instance_fields: false,
