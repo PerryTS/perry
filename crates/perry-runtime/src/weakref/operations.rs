@@ -1,6 +1,32 @@
 //! Indexed WeakMap operations, also shared by WeakSet.
 use super::*;
 
+/// TEMPORARY diagnostic for #10660 -- guarded by PERRY_DEBUG_WEAKMAP=1, prints
+/// to stderr whenever a WeakMap/WeakSet lookup misses, distinguishing a
+/// zero-pointer receiver (map itself isn't a real weak collection at this
+/// call site) from a genuine "key not present" miss. Remove before landing.
+fn debug_weakmap_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("PERRY_DEBUG_WEAKMAP").is_ok())
+}
+
+fn debug_weakmap_miss(op: &str, map: f64, key: f64, reason: &str) {
+    if !debug_weakmap_enabled() {
+        return;
+    }
+    let map_ptr = js_nanbox_get_pointer(map);
+    let key_ptr = js_nanbox_get_pointer(key);
+    let map_class = if map_ptr != 0 {
+        unsafe { crate::object::js_object_get_class_id(map_ptr as *mut ObjectHeader) }
+    } else {
+        0
+    };
+    eprintln!(
+        "[weakmap-debug] {op} MISS reason={reason} map_bits={:#x} map_ptr={:#x} map_class_id={map_class} key_bits={:#x} key_ptr={:#x}",
+        map.to_bits(), map_ptr, key.to_bits(), key_ptr
+    );
+}
+
 #[inline]
 fn map_pointer(map: crate::gc::RuntimeHandle<'_>) -> *mut ObjectHeader {
     js_nanbox_get_pointer(map.get_nanbox_f64()) as *mut ObjectHeader
@@ -106,9 +132,13 @@ pub extern "C" fn js_weakmap_get(map: f64, key: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
     if let Some(v) = crate::object::delegate_if_not_weak_collection(map, "has", &[key]) {
+        if debug_weakmap_enabled() {
+            eprintln!("[weakmap-debug] has DELEGATED (not a weak collection) map_bits={:#x}", map.to_bits());
+        }
         return v;
     }
     if js_nanbox_get_pointer(map) == 0 {
+        debug_weakmap_miss("has", map, key, "map_pointer_zero");
         return f64::from_bits(TAG_FALSE);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -120,6 +150,7 @@ pub extern "C" fn js_weakmap_has(map: f64, key: f64) -> f64 {
             return f64::from_bits(TAG_TRUE);
         }
     }
+    debug_weakmap_miss("has", map.get_nanbox_f64(), key.get_nanbox_f64(), "key_not_found");
     f64::from_bits(TAG_FALSE)
 }
 
