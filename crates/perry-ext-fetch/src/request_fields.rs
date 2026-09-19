@@ -88,7 +88,8 @@ pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
         .get(&id)
         .map(|r| r.headers.clone())
         .unwrap_or_default();
-    store_headers(headers) as f64
+    crate::dispatch::ensure_runtime_dispatch_registered();
+    crate::dispatch::box_handle(store_headers(headers))
 }
 
 #[no_mangle]

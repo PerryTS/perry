@@ -19,6 +19,7 @@ use std::sync::Mutex;
 
 // Web Fetch constructor validation helpers (#2640 / #2643) — split out to
 // keep lib.rs under the 2,000-line lint gate.
+mod dispatch;
 mod gc;
 mod validation;
 use validation::{
@@ -981,7 +982,13 @@ pub extern "C" fn js_fetch_stream_close(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_headers_new() -> f64 {
-    store_headers(HeadersStore::default()) as f64
+    // #10310: hand JS a NaN-boxed handle, not a bare id. A bare id is a JS
+    // *number*, so `headers.delete(k)` on an any-typed receiver never reaches
+    // the handle tower — "(number).delete is not a function". Registering the
+    // dispatch extension is the other half: without it the tower would answer
+    // from stdlib's registry while this handle lives in ours.
+    dispatch::ensure_runtime_dispatch_registered();
+    dispatch::box_handle(store_headers(HeadersStore::default()))
 }
 
 /// # Safety
@@ -1256,7 +1263,8 @@ pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
         .get(&id)
         .map(|r| r.headers.clone())
         .unwrap_or_default();
-    store_headers(headers) as f64
+    dispatch::ensure_runtime_dispatch_registered();
+    dispatch::box_handle(store_headers(headers))
 }
 
 #[no_mangle]
@@ -1264,7 +1272,10 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     let id = handle_id(handle);
     let cloned = FETCH_RESPONSES.lock().unwrap().get(&id).cloned();
     match cloned {
-        Some(r) => store_response(r) as f64,
+        Some(r) => {
+            dispatch::ensure_runtime_dispatch_registered();
+            dispatch::box_handle(store_response(r))
+        }
         None => 0.0,
     }
 }
@@ -1640,7 +1651,7 @@ pub unsafe extern "C" fn js_request_new(
     } else {
         HeadersStore::default()
     };
-    store_request(RequestData {
+    let data = RequestData {
         url,
         method,
         body,
@@ -1656,7 +1667,9 @@ pub unsafe extern "C" fn js_request_new(
         keepalive: bool_from_js(keepalive),
         duplex: read_str(duplex_ptr).unwrap_or_else(|| "half".to_string()),
         signal: signal_or_default(signal),
-    }) as f64
+    };
+    dispatch::ensure_runtime_dispatch_registered();
+    dispatch::box_handle(store_request(data))
 }
 
 #[no_mangle]
