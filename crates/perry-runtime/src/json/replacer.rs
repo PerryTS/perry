@@ -729,11 +729,17 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     });
     // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
     // entry so a throw during a prior stringify can't leak it across calls.
-    // Arbitrary user code ran since the last stringify, so the cached
-    // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
-        super::invalidate_object_proto_tojson_state();
+        // #10696: the `Object.prototype`-has-`toJSON` verdict is NOT force
+        // invalidated here any more. "Arbitrary user code ran since the last
+        // stringify" is exactly what the live signature comparison in
+        // `object_proto_may_have_to_json` detects, on every probe rather than
+        // only at entry; forcing it made the first probe of every call a
+        // guaranteed recompute. See the note at the matching entry in
+        // `stringify_api.rs` for the route-by-route argument. The
+        // invalidations around user CALLBACKS (`call_replacer`,
+        // `object_get_to_json`, `array_get_to_json`) stay.
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
@@ -1739,11 +1745,17 @@ pub unsafe extern "C" fn js_json_stringify_full(
     });
     // Defensive: clear the one-shot `toJSON` suppression guard at the outermost
     // entry so a throw during a prior stringify can't leak it across calls.
-    // Arbitrary user code ran since the last stringify, so the cached
-    // `Object.prototype`-has-`toJSON` verdict must be recomputed too (#6009).
     if prior_depth == 0 {
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
-        super::invalidate_object_proto_tojson_state();
+        // #10696: the `Object.prototype`-has-`toJSON` verdict is NOT force
+        // invalidated here any more. "Arbitrary user code ran since the last
+        // stringify" is exactly what the live signature comparison in
+        // `object_proto_may_have_to_json` detects, on every probe rather than
+        // only at entry; forcing it made the first probe of every call a
+        // guaranteed recompute. See the note at the matching entry in
+        // `stringify_api.rs` for the route-by-route argument. The
+        // invalidations around user CALLBACKS (`call_replacer`,
+        // `object_get_to_json`, `array_get_to_json`) stay.
     }
     let saved_cache = if prior_depth > 0 {
         Some(take_shape_cache())
