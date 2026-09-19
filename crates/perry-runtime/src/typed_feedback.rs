@@ -1480,7 +1480,14 @@ fn packed_f64_array_loop_range_guard(
         if min_idx < 0 || i64::from(max_idx_exclusive) > i64::from(len) {
             return false;
         }
-        crate::array::rebuild_array_numeric_raw_f64_allow_holes(arr)
+        if crate::array::rebuild_array_numeric_raw_f64_allow_holes(arr) {
+            return true;
+        }
+        // #10718: the array-wide invariant can fail on a slot this loop never
+        // touches. The clone reads only `[min_idx, max_idx_exclusive)`, so a
+        // window-scoped proof is the whole requirement; it records nothing, so
+        // the array-wide claim above stays the authority for everyone else.
+        crate::array::array_window_is_numeric_raw_f64_allow_holes(arr, min_idx, max_idx_exclusive)
     }
 }
 

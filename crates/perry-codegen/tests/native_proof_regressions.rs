@@ -2732,6 +2732,183 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
     );
 }
 
+/// `const a = new Array(400)` as HIR records it: an `Array` binding with NO
+/// type argument, i.e. `Array<any>`. The store tier admits exactly this
+/// ordinary untyped-JavaScript binding on the strength of its loop-entry
+/// guard; a declared `number[]` array literal is declined earlier, at
+/// `store_not_fact_eligible`, so it cannot carry this regression.
+fn untyped_array_let(id: u32, name: &str, len: i64) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Generic {
+            base: "Array".to_string(),
+            type_args: Vec::new(),
+        },
+        mutable: false,
+        init: Some(Expr::New {
+            class_name: "Array".to_string(),
+            args: vec![int(len)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+    }
+}
+
+/// #10743: `a[i] += 1` reaches the classic range tier.
+///
+/// HIR's `hoist_compound_member_assign` lowers a compound member assignment
+/// into two immutable alias `Let`s plus the store, so the base and the key are
+/// each evaluated exactly once and before the right-hand side. The classic
+/// range matcher admits exactly ONE statement, so the idiomatic spelling could
+/// never reach the tier that makes the expanded `a[i] = a[i] + 1` fast: 277
+/// instructions per element against 24 for the expanded form on the same
+/// array, and a `number[]` annotation changed nothing, because the obstacle is
+/// the statement count.
+///
+/// The temporaries cannot be removed in the lowering -- an RHS call can
+/// reassign the bindings they were read from, and the store must still land at
+/// the index evaluated before it ran -- so the fold lives in the matcher and
+/// applies to the GUARDED CLONES only.
+///
+/// This body is transcribed from a `--print-hir` dump of the source, not
+/// guessed.
+fn compound_alias_body(array_id: u32, counter_id: u32, base_temp: u32, key_temp: u32) -> Vec<Stmt> {
+    let alias = |id: u32, name: &str, init: Expr| Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Number,
+        mutable: false,
+        init: Some(init),
+    };
+    vec![
+        alias(base_temp, "__cmpd_base_5", local(array_id)),
+        alias(key_temp, "__cmpd_key_6", local(counter_id)),
+        Stmt::Expr(Expr::IndexSet {
+            object: Box::new(local(base_temp)),
+            index: Box::new(local(key_temp)),
+            value: Box::new(add(
+                Expr::IndexGet {
+                    object: Box::new(local(base_temp)),
+                    index: Box::new(local(key_temp)),
+                },
+                int(1),
+            )),
+        }),
+    ]
+}
+
+#[test]
+fn compound_assign_alias_body_reaches_the_range_tier() {
+    let module = module_with_classes_and_params(
+        "compound_alias_fold.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            untyped_array_let(1, "values", 400),
+            Stmt::For {
+                init: Some(Box::new(number_let(4, "i", true, int(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(local(4)),
+                    right: Box::new(int(400)),
+                }),
+                update: Some(increment(4)),
+                body: compound_alias_body(1, 4, 5, 6),
+            },
+            Stmt::Return(Some(index_get(1, int(0)))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_range_loop_guard("),
+        "the compound-assign body should earn the classic range guard:\n{ir}"
+    );
+    // Exactly one versioned loop exists in this module, so the clone below is
+    // unambiguously the compound-assign loop's. Counting the GUARD CALL, not
+    // the block label: every block of the fast copy carries the loop's label
+    // prefix, so a label count says four for one loop.
+    assert_eq!(
+        ir.matches("call i32 @js_typed_feedback_packed_f64_range_loop_guard(")
+            .count(),
+        1,
+        "expected exactly one versioned range loop in this module:\n{ir}"
+    );
+    let fast_start = ir
+        .find("\nfor.packed_f64_range_fast")
+        .map(|pos| pos + 1)
+        .expect("expected a range fast clone");
+    let fast_end = ir[fast_start..]
+        .find("\nfor.packed_f64_range_slow")
+        .map(|off| fast_start + off)
+        .expect("expected a range slow clone");
+    let fast_clone = &ir[fast_start..fast_end];
+    // The point of the whole exercise: the fast clone's read and write are the
+    // inline packed pair, not the generic OBJECT property path the compound
+    // spelling used to fall to.
+    for forbidden in [
+        "js_object_get_index_polymorphic",
+        "js_object_set_index_polymorphic",
+        "js_dyn_index_set_strict",
+    ] {
+        assert!(
+            !fast_clone.contains(forbidden),
+            "compound fast clone must not call {forbidden}:\n{fast_clone}"
+        );
+    }
+    assert!(
+        fast_clone.contains("store double"),
+        "compound fast clone should store a raw double inline:\n{fast_clone}"
+    );
+    // ... and the SLOW clone still lowers the statements as written, so a
+    // failed guard executes the specified evaluation order.
+    let slow = &ir[fast_end..];
+    assert!(
+        slow.contains("for.packed_f64_range_slow"),
+        "expected the slow clone to survive:\n{ir}"
+    );
+}
+
+#[test]
+fn a_mutable_leading_binding_is_not_folded() {
+    // The fold's argument is that these are the compiler's own immutable
+    // compound-assign spills. Flip `mutable` and the loop must stay on the
+    // generic path -- this is the test that goes red if that condition is
+    // deleted.
+    let mut body = compound_alias_body(1, 4, 5, 6);
+    if let Stmt::Let { mutable, .. } = &mut body[0] {
+        *mutable = true;
+    }
+    let module = module_with_classes_and_params(
+        "compound_alias_mutable.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            untyped_array_let(1, "values", 400),
+            Stmt::For {
+                init: Some(Box::new(number_let(4, "i", true, int(0)))),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(local(4)),
+                    right: Box::new(int(400)),
+                }),
+                update: Some(increment(4)),
+                body,
+            },
+            Stmt::Return(Some(index_get(1, int(0)))),
+        ],
+    );
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        !ir.contains("\nfor.packed_f64_range_fast"),
+        "a mutable leading binding must not reach the range tier:\n{ir}"
+    );
+}
+
 #[test]
 fn masked_window_dense_store_inlines_raw_store_without_calls() {
     // `for (let i = 0; i < 64; i++) a[i & 7] = i` — a masked static-window
