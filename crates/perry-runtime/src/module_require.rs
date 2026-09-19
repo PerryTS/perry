@@ -103,9 +103,32 @@ pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
 pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     CJS_MAIN_MODULE.with(|slot| {
         if let Some(bits) = slot.borrow_mut().as_mut() {
-            visitor.visit_nanbox_u64_slot(bits);
+            let rewritten = visitor.visit_nanbox_u64_slot(bits);
+            // #10735: `visit_nanbox_u64_slot` returns true only when it
+            // actually rewrote the slot (the cached object moved this
+            // cycle). A diagnostic-only counter distinguishing "the
+            // placeholder happened never to move" from "it moved and the
+            // cache followed it" -- the load-bearing question for this
+            // holder's identity guarantee, not visible from the generic
+            // per-cycle counters.
+            if rewritten && crate::gc::gc_diag_enabled() {
+                CJS_MAIN_MODULE_REWRITES.with(|c| c.set(c.get() + 1));
+                eprintln!(
+                    "[cjs-main-module] rewritten: new_bits={:#018x} total_rewrites={}",
+                    *bits,
+                    CJS_MAIN_MODULE_REWRITES.with(std::cell::Cell::get)
+                );
+            }
         }
     });
+}
+
+crate::perry_thread_local! {
+    /// Diagnostic-only (`PERRY_GC_DIAG=1`) count of how many times
+    /// [`scan_cjs_main_module_root_mut`] actually rewrote the cached
+    /// placeholder's bits (i.e. the object moved while cached). Never
+    /// read for behaviour.
+    static CJS_MAIN_MODULE_REWRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
