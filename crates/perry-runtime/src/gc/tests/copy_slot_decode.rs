@@ -130,6 +130,13 @@ fn an_old_parents_edge_is_remembered_from_the_child_the_visit_decoded() {
 /// runs, the same walk cross-checks the dirty scan's per-slot re-remembering
 /// and refuses the disagreement — that refusal is this twin's observable.
 #[test]
+// Debug-only by construction, as the doc comment above already states: in a
+// release build `restore_surviving_dirty_coverage` re-adds the page, so the
+// refusal this asserts never happens. Ignored rather than cfg'd out so the
+// release run still reports it by name. Do NOT "fix" the test: it is correct,
+// the profile changed what the code means. `[profile.gcaudit]` gives release
+// codegen with assertions live and is where to exercise this under release.
+#[cfg_attr(not(debug_assertions), ignore = "asserts a debug-only cross-check")]
 fn sabotaged_remembering_arm_is_refused_by_the_coverage_cross_check() {
     let outcome = old_edge_across_two_minors(true);
     assert!(

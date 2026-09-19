@@ -278,6 +278,13 @@ fn a_moving_realloc_advances_the_heap_generation() {
 }
 
 #[test]
+// `debug_assert_heap_change_open` is `#[cfg(debug_assertions)]`, so under a
+// release profile it cannot panic and this twin cannot pass. CI's cargo-test
+// builds debug and never sees it; `cargo test --release -p perry-runtime` did.
+// Do NOT "fix" the test instead: it is correct, the profile changed what the
+// code means. `[profile.gcaudit]` is the only profile giving release codegen
+// with assertions live, and is where this should be exercised under release.
+#[cfg_attr(not(debug_assertions), ignore = "asserts a debug_assert! fires")]
 fn a_free_or_move_outside_every_scope_is_caught_in_debug_builds() {
     let caught = std::panic::catch_unwind(|| {
         crate::gc::heap_generation::debug_assert_heap_change_open();
