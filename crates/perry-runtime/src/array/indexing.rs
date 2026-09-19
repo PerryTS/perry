@@ -86,8 +86,9 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
     if arr.is_null() {
         return false;
     }
-    if crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    if super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
+        && (crate::buffer::is_registered_buffer(arr as usize)
+            || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some())
     {
         return true;
     }
@@ -119,8 +120,9 @@ pub(crate) unsafe fn array_iteration_is_exotic_cleaned(
     arr: *const ArrayHeader,
     flags: u16,
 ) -> bool {
-    if crate::buffer::is_registered_buffer(arr as usize)
-        || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    if super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
+        && (crate::buffer::is_registered_buffer(arr as usize)
+            || crate::typedarray::lookup_typed_array_kind(arr as usize).is_some())
     {
         return true;
     }
@@ -606,18 +608,30 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         return f64::NAN;
     }
     let arr = cleaned;
-    // Check if this is actually a TypedArray — dispatch through typed array helper
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_get(
-            arr as *const crate::typedarray::TypedArrayHeader,
-            index as i32,
-        );
-    }
-    // Check if this is actually a buffer (Uint8Array) — read individual bytes
-    if crate::buffer::is_registered_buffer(arr as usize) {
-        let byte_val =
-            crate::buffer::js_buffer_get(arr as *const crate::buffer::BufferHeader, index as i32);
-        return byte_val as f64;
+    // #10694: a `GC_TYPE_ARRAY` header can never be a registered buffer or
+    // typed array — every registration carries its own GC object type — so a
+    // plain array must not pay the thread-local registry probes. The
+    // iteration helpers already gate on this; the indexing path did not, and
+    // on a `tsc --noEmit` of a two-line file that cost **79.7 M**
+    // `is_registered_buffer` probes for a process that registers **9**
+    // buffers, hitting 90 times. One already-warm GC-header byte read and an
+    // integer compare replace them.
+    if super::header::receiver_may_be_registered_exotic(arr) {
+        // Check if this is actually a TypedArray — dispatch through typed array helper
+        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+            return crate::typedarray::js_typed_array_get(
+                arr as *const crate::typedarray::TypedArrayHeader,
+                index as i32,
+            );
+        }
+        // Check if this is actually a buffer (Uint8Array) — read individual bytes
+        if crate::buffer::is_registered_buffer(arr as usize) {
+            let byte_val = crate::buffer::js_buffer_get(
+                arr as *const crate::buffer::BufferHeader,
+                index as i32,
+            );
+            return byte_val as f64;
+        }
     }
     // The usual case cleans to the same address, so reuse the header tag read
     // above. A forwarded Array resolves to a different address and needs its
@@ -794,23 +808,33 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
     if arr.is_null() {
         return;
     }
-    // Check if this is actually a buffer (Uint8Array) — write individual bytes
-    if crate::buffer::is_registered_buffer(arr as usize) {
-        crate::buffer::js_buffer_set(
-            arr as *mut crate::buffer::BufferHeader,
-            index as i32,
-            value as i32,
-        );
-        return;
-    }
-    // Check if this is a typed array — route through per-kind store.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        crate::typedarray::js_typed_array_set(
-            arr as *mut crate::typedarray::TypedArrayHeader,
-            index as i32,
-            value,
-        );
-        return;
+    // #10694: a `GC_TYPE_ARRAY` header can never be a registered buffer or
+    // typed array — every registration carries its own GC object type — so a
+    // plain array must not pay the thread-local registry probes. The
+    // iteration helpers already gate on this; the indexing path did not, and
+    // on a `tsc --noEmit` of a two-line file that cost **79.7 M**
+    // `is_registered_buffer` probes for a process that registers **9**
+    // buffers, hitting 90 times. One already-warm GC-header byte read and an
+    // integer compare replace them.
+    if super::header::receiver_may_be_registered_exotic(arr) {
+        // Check if this is actually a buffer (Uint8Array) — write individual bytes
+        if crate::buffer::is_registered_buffer(arr as usize) {
+            crate::buffer::js_buffer_set(
+                arr as *mut crate::buffer::BufferHeader,
+                index as i32,
+                value as i32,
+            );
+            return;
+        }
+        // Check if this is a typed array — route through per-kind store.
+        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+            crate::typedarray::js_typed_array_set(
+                arr as *mut crate::typedarray::TypedArrayHeader,
+                index as i32,
+                value,
+            );
+            return;
+        }
     }
     // SAFETY: the clean above resolved this exact plain-array head; the
     // Buffer/TypedArray exits precede this direct header read.
@@ -857,8 +881,9 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
 pub(crate) fn array_strict_index_write_guard(arr: *mut ArrayHeader, index: u32) {
     let clean = clean_arr_ptr_mut(arr);
     if clean.is_null()
-        || crate::buffer::is_registered_buffer(clean as usize)
-        || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()
+        || (super::header::receiver_may_be_registered_exotic(clean as *const ArrayHeader)
+            && (crate::buffer::is_registered_buffer(clean as usize)
+                || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()))
     {
         return;
     }
@@ -1236,8 +1261,9 @@ fn js_array_set_f64_extend_strict_impl(
     }
     let clean = clean_arr_ptr_mut(arr);
     if clean.is_null()
-        || crate::buffer::is_registered_buffer(clean as usize)
-        || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()
+        || (super::header::receiver_may_be_registered_exotic(clean as *const ArrayHeader)
+            && (crate::buffer::is_registered_buffer(clean as usize)
+                || crate::typedarray::lookup_typed_array_kind(clean as usize).is_some()))
     {
         // Preserve the existing polymorphic/subclass behavior on receivers
         // that are not live plain arrays. These are cold and cannot use the
@@ -1463,23 +1489,27 @@ pub extern "C" fn js_array_set_f64_extend(
         return js_array_alloc(0);
     }
     let arr = cleaned;
-    // Check if this is actually a buffer (Uint8Array) — write individual bytes
-    if crate::buffer::is_registered_buffer(arr as usize) {
-        crate::buffer::js_buffer_set(
-            arr as *mut crate::buffer::BufferHeader,
-            index as i32,
-            value as i32,
-        );
-        return arr;
-    }
-    // Check if this is a typed array — route through per-kind store (no extension).
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        crate::typedarray::js_typed_array_set(
-            arr as *mut crate::typedarray::TypedArrayHeader,
-            index as i32,
-            value,
-        );
-        return arr;
+    // #10694: skip both registry probes for a `GC_TYPE_ARRAY` header, which
+    // can never be a registered buffer or typed array.
+    if super::header::receiver_may_be_registered_exotic(arr) {
+        // Check if this is actually a buffer (Uint8Array) — write individual bytes
+        if crate::buffer::is_registered_buffer(arr as usize) {
+            crate::buffer::js_buffer_set(
+                arr as *mut crate::buffer::BufferHeader,
+                index as i32,
+                value as i32,
+            );
+            return arr;
+        }
+        // Check if this is a typed array — route through per-kind store (no extension).
+        if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+            crate::typedarray::js_typed_array_set(
+                arr as *mut crate::typedarray::TypedArrayHeader,
+                index as i32,
+                value,
+            );
+            return arr;
+        }
     }
     // SAFETY: the clean above resolved this live plain-array head, and the
     // compatible Buffer/TypedArray receivers have exited.
