@@ -1402,11 +1402,35 @@ pub(crate) fn hoist_compound_member_assign(
     let mut stmts: Vec<Stmt> = Vec::new();
     let spill =
         |ctx: &mut LoweringContext, stmts: &mut Vec<Stmt>, tag: &str, init: Expr| -> LocalId {
+            // #10718: carry the SOURCE binding's type onto the temp instead of
+            // erasing it to `Any`.
+            //
+            // The temp is an immutable snapshot of exactly one binding's value
+            // (`init` is a bare `LocalGet`), so its type is the source's type
+            // by construction — which is why the copy is restricted to that
+            // one shape. Erasing it cost the whole element-access tier stack:
+            // `a[i] += 1` on an ordinary array spilled `a` and `i` into two
+            // `Any` temps, which erased BOTH the receiver's array-ness and the
+            // index's integer-ness, so the read and the write fell all the way
+            // to `js_object_get_index_polymorphic` /
+            // `js_object_set_index_polymorphic` — the generic OBJECT property
+            // path, with per-element index stringification and shape/descriptor
+            // table work. Measured: 948 instructions per element for
+            // `a[i] += 1` against 16 for `a[i] = k + i` on the same array, and
+            // a `number[]` annotation did not help because this erasure
+            // happens before codegen ever sees it.
+            let ty = match &init {
+                Expr::LocalGet(src) => ctx
+                    .lookup_local_type_by_id(*src)
+                    .cloned()
+                    .unwrap_or(Type::Any),
+                _ => Type::Any,
+            };
             let id = ctx.fresh_local();
             stmts.push(Stmt::Let {
                 id,
                 name: format!("__cmpd_{}_{}", tag, id),
-                ty: Type::Any,
+                ty,
                 mutable: false,
                 init: Some(init),
             });

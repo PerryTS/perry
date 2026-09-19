@@ -507,11 +507,42 @@ fn idxset_recv_global_ir() -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(G_ID)),
-                    index: Box::new(Expr::LocalGet(IDX_ID)),
-                    value: Box::new(Expr::LocalGet(VAL_ID)),
-                })],
+                // #10718 store side: the body carries a SECOND statement, and
+                // that is load-bearing for this probe rather than incidental.
+                //
+                // Widening the packed-f64 range loop's STORE admission to
+                // element-type-erased array bindings (`Array<Any>` — which is
+                // exactly `g`'s type here) made this loop qualify for the
+                // versioned tier. The tier is correct on it — the fast copy
+                // stores only values its per-store check proved are genuine
+                // doubles, and everything else side-exits into a slow copy that
+                // keeps the full barriered store (`idxset.inbounds.barrier` ->
+                // `js_write_barrier_slot_validated_parent`, plus
+                // `js_write_barrier_slot` on both extend paths and the numeric
+                // note) — but the slow copy reaches the store through the
+                // `idxset.inbounds` receiver arm, not through `recv_global`.
+                // The stem would then have had NO live witness anywhere, which
+                // is the one thing this census exists to prevent.
+                //
+                // `packed_f64_range_loop_body_collect` admits exactly ONE
+                // statement, so a second one keeps this probe on the
+                // un-versioned receiver ladder it is here to cover, without
+                // touching what it asserts. If a future tier learns to admit
+                // multi-statement store bodies, this probe goes red again —
+                // deliberately — and must be re-shaped, not deleted.
+                body: vec![
+                    Stmt::Expr(Expr::IndexSet {
+                        object: Box::new(Expr::LocalGet(G_ID)),
+                        index: Box::new(Expr::LocalGet(IDX_ID)),
+                        value: Box::new(Expr::LocalGet(VAL_ID)),
+                    }),
+                    Stmt::Expr(Expr::Call {
+                        callee: Box::new(Expr::LocalGet(VAL_ID)),
+                        args: Vec::new(),
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                ],
             },
             Stmt::Return(Some(Expr::LocalGet(G_ID))),
         ],
