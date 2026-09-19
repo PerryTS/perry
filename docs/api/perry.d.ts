@@ -2071,11 +2071,6 @@ declare module "lodash" {
   export function uniq(p0: any): any;
 }
 
-declare module "lru-cache" {
-  /** stdlib */
-  export default function (p0: any): any;
-}
-
 declare module "module" {
   /** stdlib */
   export class Module { [key: string]: any; }
