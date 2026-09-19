@@ -962,19 +962,67 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // `require(specifier)` for one of those fell through to compiled-module
     // resolution and raised `MODULE_NOT_FOUND` instead of routing through
     // `createRequire`. Each entry emits both the bare and `node:` spelling.
-    // #10735: `require.main` must be the process ENTRY module only. The
-    // entry publishes its own `module` record as the shared "main module"
-    // (read back by every OTHER CJS module via `__perry_get_cjs_main_module`)
-    // before its body runs any `require()` of its own — so by the time any
-    // dependency's preamble runs, the publication has already happened.
-    // Every non-entry CJS module instead reads that shared value, rather
-    // than assigning its own local `module` — the latter is what made
-    // `require.main === module` trivially true in every compiled CommonJS
-    // module, not just the true entry point (#10735).
+    // #10735: `require.main` must be the process ENTRY module only —
+    // `module` there, unequal (or `undefined`, for an ESM entry) everywhere
+    // else. `codegen::entry::compile_module_entry` already published a
+    // placeholder object as the shared "main module" in `main()`, BEFORE any
+    // module ran — see `js_bootstrap_cjs_main_module_placeholder`'s doc
+    // comment for why that has to happen outside any module's own preamble
+    // (ESM eval order runs a CJS entry's own static-import dependencies
+    // before the entry's own top-level code, so a naive "entry publishes
+    // first thing in its own preamble" is too late for every hoisted
+    // `require('./relative')`).
+    //
+    // The entry module CLAIMS that placeholder (same object identity a
+    // dependency may already have captured as `require.main`) and fills in
+    // its real fields; every non-entry module just reads it back instead of
+    // building its own — the latter is what made `require.main === module`
+    // trivially true in every compiled CommonJS module, not just the true
+    // entry point (#10735).
     let require_main_stmt = if is_entry_module {
-        "__perry_set_cjs_main_module(module);\n    require.main = module;"
+        "require.main = module;"
     } else {
         "require.main = __perry_get_cjs_main_module();"
+    };
+    // #10735: entry-only. A non-entry module keeps the single-literal
+    // construction below unchanged (still recognised by
+    // `cjs_scaffolding.rs`'s `Ptr<Shape>` folding — see the comment on that
+    // literal). The entry instead mutates the ALREADY-PUBLISHED placeholder
+    // in place, field by field, so its identity matches what a dependency
+    // may have captured before this preamble ran. This is entry-only (one
+    // object per program), so it does not reintroduce the eleven-shape-
+    // transition cost the folded literal below exists to avoid.
+    let cjs_module_init_stmt = if is_entry_module {
+        format!(
+            r#"const __cjs_module = __perry_get_cjs_main_module();
+    __cjs_module.exports = {{}};
+    __cjs_module.__perry_cjs_record = true;
+    __cjs_module.__perry_cjs_factory = {cjs_factory_value};
+    __cjs_module.id = {module_filename_literal};
+    __cjs_module.path = {module_dir_literal};
+    __cjs_module.filename = {module_filename_literal};
+    __cjs_module.loaded = false;
+    __cjs_module.children = [];
+    __cjs_module.parent = globalThis.__perry_cjs_pending_parent;
+    __cjs_module.paths = [{module_dir_literal} + '/node_modules'];
+    __cjs_module.require = undefined;"#
+        )
+    } else {
+        format!(
+            r#"const __cjs_module = {{
+        exports: {{}},
+        __perry_cjs_record: true,
+        __perry_cjs_factory: {cjs_factory_value},
+        id: {module_filename_literal},
+        path: {module_dir_literal},
+        filename: {module_filename_literal},
+        loaded: false,
+        children: [],
+        parent: globalThis.__perry_cjs_pending_parent,
+        paths: [{module_dir_literal} + '/node_modules'],
+        require: undefined,
+    }};"#
+        )
     };
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
@@ -1001,19 +1049,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // positionally. Adding or reordering a field drops the record back to being
     // reported as a denied user candidate in the `Ptr<Shape>` report;
     // `preamble_canary_tests` is what catches that.
-    const __cjs_module = {{
-        exports: {{}},
-        __perry_cjs_record: true,
-        __perry_cjs_factory: {cjs_factory_value},
-        id: {module_filename_literal},
-        path: {module_dir_literal},
-        filename: {module_filename_literal},
-        loaded: false,
-        children: [],
-        parent: globalThis.__perry_cjs_pending_parent,
-        paths: [{module_dir_literal} + '/node_modules'],
-        require: undefined,
-    }};
+    {cjs_module_init_stmt}
     globalThis.__perry_cjs_pending_parent = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.

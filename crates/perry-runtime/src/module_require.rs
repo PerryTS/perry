@@ -67,6 +67,35 @@ pub extern "C" fn js_get_cjs_main_module() -> f64 {
     CJS_MAIN_MODULE.with(|slot| slot.borrow().map(f64::from_bits).unwrap_or_else(undefined))
 }
 
+/// Codegen FFI: emitted ONCE, in `main()`, before ANY module's `__init` runs
+/// — including the entry's own, since ESM's static-import evaluation order
+/// runs every hoisted dependency's top-level code before the importing
+/// module's (see `cjs_wrap`'s `require('./x')` -> `import` hoist). Node's
+/// loader sets up `require.main`/`process.mainModule` before invoking the
+/// entry's script body at all, so no CommonJS module - not even one loaded
+/// before the entry's own preamble textually runs - ever observes it unset.
+/// Perry can't replicate that ordering directly (the entry's real `module`
+/// record is built by JS the entry's own preamble emits, which necessarily
+/// runs LAST among a CJS entry's static imports), so this allocates a bare
+/// placeholder object and publishes THAT via [`js_set_cjs_main_module`]
+/// up front. Every non-entry module's `require.main` resolves to this same
+/// object from heap birth. When the entry's own preamble finally runs, it
+/// reclaims this exact object (via [`js_get_cjs_main_module`]) and fills in
+/// its real fields in place — same identity throughout, so a dependency that
+/// captured `require.main` before the entry ran still `===`-matches the
+/// entry's `module` afterward (JS identity survives mutation).
+///
+/// Codegen emits the call only when the entry module is itself CJS-wrapped
+/// (`collectors::is_cjs_wrapped_module`); an ESM entry never calls this, so
+/// [`js_get_cjs_main_module`] stays `undefined` for the lifetime of the heap
+/// — matching Node, where a CJS module reached only via `import` from an ESM
+/// entry has no CommonJS "main" at all.
+#[no_mangle]
+pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
+    let placeholder = object_value(js_object_alloc(0, 0));
+    js_set_cjs_main_module(placeholder);
+}
+
 /// GC root scanner for [`CJS_MAIN_MODULE`]: a raw heap pointer cached outside
 /// any shadow frame, so a moving collection must mark and rewrite it like any
 /// other mutable root. Registered in `gc::gc_init` beside
