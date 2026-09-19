@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3009 entries across 134 modules.
+Total: 3007 entries across 133 modules.
 
 ## Modules
 
@@ -47,7 +47,6 @@ Total: 3009 entries across 134 modules.
 - [`dns`](#dns)
 - [`dns/promises`](#dnspromises)
 - [`domain`](#domain)
-- [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
 - [`exponential-backoff`](#exponential-backoff)
@@ -1328,13 +1327,6 @@ Total: 3009 entries across 134 modules.
 - `_stack`
 - `active`
 - `members`
-
-## `dotenv`
-
-### Methods
-
-- `config` — module
-- `parse` — module
 
 ## `ethers`
 
