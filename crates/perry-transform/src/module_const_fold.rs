@@ -40,6 +40,12 @@ use perry_hir::{Expr, Function, Module, Stmt};
 use crate::closure_local_inline::{for_each_expr_in_stmt_mut, nested_stmt_lists};
 
 pub fn run(module: &mut Module) {
+    fold_module_consts(module);
+    // Phase 2 runs unconditionally — see `rewrite_literal_index_gets`.
+    rewrite_literal_index_gets(module);
+}
+
+fn fold_module_consts(module: &mut Module) {
     let mut consts: HashMap<LocalId, Expr> = HashMap::new();
     let mut decl_index: HashMap<LocalId, usize> = HashMap::new();
     for (index, stmt) in module.init.iter().enumerate() {
@@ -254,6 +260,97 @@ fn fold_expr(expr: &mut Expr, consts: &HashMap<LocalId, Expr>) {
     walk_expr_children_mut(expr, &mut |child| fold_expr(child, consts));
 }
 
+/// Phase 2 (#10761) — rewrite `o[<string literal>]` into `o.<name>`.
+///
+/// This is the SAME rewrite the AST→HIR member lowering already applies to a
+/// literal key written in source (`lower/expr_member/member_tail.rs`, the
+/// issue #529 fold), re-applied here because phase 1 above — and the inliner
+/// before it — *create* `IndexGet { _, String(_) }` nodes AFTER that matcher
+/// has run, and nothing re-ran it.
+///
+/// The gap is worth 7.3x. A hoisted `const K = "a"` is folded to its literal
+/// by phase 1, but the enclosing node stays an `IndexGet`, and codegen's
+/// `IndexGet` arm for a static string key
+/// (`expr/index_get.rs`, the `Expr::String(literal)` branch) calls
+/// `js_typed_feedback_object_get_field_by_name_f64` — a full by-name runtime
+/// resolution per read: UTF-8-validate the key, hash it for the accessor
+/// Bloom summary, classify the receiver, then scan the shape's key array.
+/// Measured on `O[K] + O[J]` over `{a:1,b:2,c:3}`: **618 instructions per
+/// read**, against **24** for the identical read spelled `O.a`, which reaches
+/// the per-site monomorphic inline cache in
+/// `expr/property_get/generic_dispatch.rs`. `O["a"]` written in source is
+/// already 24 — only the spelling that goes through a binding was stranded.
+///
+/// Numeric-index strings are excluded, exactly as the source-level fold
+/// excludes them: `arr["0"]` keeps `IndexGet` semantics (string-coerced
+/// element access on an array), and that is the disambiguator the spec itself
+/// uses between indexed and named properties.
+///
+/// Everything else about the read is unchanged, because the produced node is
+/// bit-identical to the one `o["name"]` produces in source: the same
+/// `PropertyGet`, the same receiver expression, the same key string. There is
+/// no new fast path here and no new guard — the rewrite moves a read onto a
+/// lowering the whole test suite already exercises.
+fn rewrite_literal_index_gets(module: &mut Module) {
+    for_each_function(module, &mut |f| rewrite_stmts(&mut f.body));
+    rewrite_stmts(&mut module.init);
+}
+
+/// A key that JavaScript resolves as an array index rather than a name.
+///
+/// Mirrors `member_tail.rs`'s test verbatim so the two folds admit exactly the
+/// same key set; if they ever diverge, `o["0"]` and a `const Z = "0"` spelling
+/// of it would compile to different lowerings.
+fn is_numeric_index_string(key: &str) -> bool {
+    !key.is_empty()
+        && key.chars().all(|c| c.is_ascii_digit())
+        && !(key.len() > 1 && key.starts_with('0'))
+}
+
+fn rewrite_stmts(stmts: &mut [Stmt]) {
+    for stmt in stmts.iter_mut() {
+        rewrite_stmt(stmt);
+    }
+}
+
+fn rewrite_stmt(stmt: &mut Stmt) {
+    for inner in nested_stmt_lists(stmt) {
+        rewrite_stmts(inner);
+    }
+    for_each_expr_in_stmt_mut(stmt, &mut rewrite_expr);
+}
+
+fn rewrite_expr(expr: &mut Expr) {
+    if let Expr::IndexGet { object, index } = expr {
+        let property = match index.as_ref() {
+            Expr::String(key) if !is_numeric_index_string(key) => Some(key.clone()),
+            _ => None,
+        };
+        if let Some(property) = property {
+            // The index is a literal, so there is no key expression to keep
+            // alive and no evaluation-order obligation: `o[k]` evaluates `o`
+            // then `k`, and a literal `k` is already a value.
+            let object = std::mem::replace(object.as_mut(), Expr::Integer(0));
+            *expr = Expr::PropertyGet {
+                // Synthesized: the literal was not written at a source span
+                // (phase 1 substituted it), so there is no member offset to
+                // carry. `0` is the established "no debug location" value on
+                // this node, and the `IndexGet` this replaces carried none
+                // either.
+                byte_offset: 0,
+                object: Box::new(object),
+                property,
+            };
+        }
+    }
+    // `walk_expr_children_mut` does not descend into a closure's STATEMENT
+    // body; phase 1 has the same explicit arm for the same reason.
+    if let Expr::Closure { body, .. } = expr {
+        rewrite_stmts(body);
+    }
+    walk_expr_children_mut(expr, &mut rewrite_expr);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +480,143 @@ mod tests {
         assert!(matches!(
             &body[0],
             Stmt::Return(Some(Expr::Compare { right, .. })) if matches!(right.as_ref(), Expr::Integer(5))
+        ));
+    }
+
+    // ---- phase 2 (#10761): the literal-index rewrite -------------------
+
+    /// The module-level fold substitutes the literal, and phase 2 then moves
+    /// the read onto the SAME node `o["a"]` produces in source. Without
+    /// phase 2 this stays an `IndexGet` and codegen resolves it by name at
+    /// runtime — 618 instructions per read against 24.
+    #[test]
+    fn a_const_string_key_read_becomes_a_property_get() {
+        let mut m = Module::new("k.ts");
+        m.init.push(Stmt::Let {
+            id: 3,
+            name: "K".to_string(),
+            ty: Type::String,
+            mutable: false,
+            init: Some(Expr::String("a".to_string())),
+        });
+        m.functions.push(func(
+            1,
+            vec![Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(8)),
+                index: Box::new(Expr::LocalGet(3)),
+            }))],
+        ));
+        run(&mut m);
+        let Stmt::Return(Some(Expr::PropertyGet {
+            object, property, ..
+        })) = &m.functions[0].body[0]
+        else {
+            panic!("expected a PropertyGet, got {:?}", m.functions[0].body[0]);
+        };
+        assert_eq!(property, "a");
+        assert!(matches!(object.as_ref(), Expr::LocalGet(8)));
+    }
+
+    /// GUARD WITNESS for `is_numeric_index_string`. An array index key must
+    /// keep `IndexGet` semantics; `arr["0"]` is a string-coerced ELEMENT read,
+    /// not a named one, and that is the disambiguator the spec itself uses.
+    /// Delete the guard in `rewrite_expr` and this assertion fails.
+    ///
+    /// Note honestly what this test is and is not: at RUNTIME both spellings
+    /// happen to resolve a numeric name on an Array, a TypedArray and a String
+    /// through the same ladder, so the removal is behaviour-neutral on every
+    /// receiver I could construct. What removing it does cost is measured —
+    /// `Int32Array[K]` with `const K = "1"` goes from 969 to 1343 instructions
+    /// per read (+38.5%), because the folded form leaves the element lane.
+    #[test]
+    fn an_array_index_key_is_not_folded() {
+        for key in ["0", "1", "42", "4294967294"] {
+            let mut m = Module::new("k.ts");
+            m.functions.push(func(
+                1,
+                vec![Stmt::Return(Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(8)),
+                    index: Box::new(Expr::String(key.to_string())),
+                }))],
+            ));
+            run(&mut m);
+            assert!(
+                matches!(
+                    &m.functions[0].body[0],
+                    Stmt::Return(Some(Expr::IndexGet { .. }))
+                ),
+                "key {key:?} must stay an IndexGet, got {:?}",
+                m.functions[0].body[0]
+            );
+        }
+    }
+
+    /// The keys the guard does NOT claim: a leading zero, a fraction, a sign
+    /// and the empty string are property NAMES, not indices, and must fold —
+    /// exactly as `member_tail.rs` folds them when written in source.
+    #[test]
+    fn a_non_index_numeric_looking_key_is_folded() {
+        for key in ["07", "1.5", "-1", "", "1e3", "NaN"] {
+            let mut m = Module::new("k.ts");
+            m.functions.push(func(
+                1,
+                vec![Stmt::Return(Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(8)),
+                    index: Box::new(Expr::String(key.to_string())),
+                }))],
+            ));
+            run(&mut m);
+            assert!(
+                matches!(
+                    &m.functions[0].body[0],
+                    Stmt::Return(Some(Expr::PropertyGet { property, .. })) if property == key
+                ),
+                "key {key:?} must fold, got {:?}",
+                m.functions[0].body[0]
+            );
+        }
+    }
+
+    /// Phase 2 runs even when phase 1 folded nothing: a literal index can be
+    /// put there by the inliner, and `run` early-returns out of phase 1 when
+    /// the module declares no foldable const.
+    #[test]
+    fn the_rewrite_runs_with_no_module_consts_at_all() {
+        let mut m = Module::new("k.ts");
+        m.init.push(Stmt::Expr(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(8)),
+            index: Box::new(Expr::String("name".to_string())),
+        }));
+        run(&mut m);
+        assert!(matches!(
+            &m.init[0],
+            Stmt::Expr(Expr::PropertyGet { property, .. }) if property == "name"
+        ));
+    }
+
+    /// The receiver subtree is moved, not dropped: a nested read rewrites at
+    /// both levels and keeps its inner object.
+    #[test]
+    fn a_nested_literal_index_rewrites_at_every_level() {
+        let mut m = Module::new("k.ts");
+        m.init.push(Stmt::Expr(Expr::IndexGet {
+            object: Box::new(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(8)),
+                index: Box::new(Expr::String("outer".to_string())),
+            }),
+            index: Box::new(Expr::String("inner".to_string())),
+        }));
+        run(&mut m);
+        let Stmt::Expr(Expr::PropertyGet {
+            object, property, ..
+        }) = &m.init[0]
+        else {
+            panic!("expected outer PropertyGet, got {:?}", m.init[0]);
+        };
+        assert_eq!(property, "inner");
+        assert!(matches!(
+            object.as_ref(),
+            Expr::PropertyGet { property, .. } if property == "outer"
         ));
     }
 }
