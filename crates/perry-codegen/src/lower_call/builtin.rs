@@ -396,19 +396,6 @@ pub(super) fn lower_builtin_new<'a>(
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
-        // commander Command — `new Command()` allocates a real CommanderHandle
-        // via the runtime constructor so subsequent `.command(...).action(...)
-        // .parse(...)` calls operate on a registered handle. Without this,
-        // `lower_new` falls back to an empty placeholder ObjectHeader and the
-        // entire fluent chain dispatches against junk (closes #187).
-        "Command" => {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_commander_new", &[]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
-        }
         // events.EventEmitter — `new EventEmitter()` produces a real
         // EventEmitterHandle so `.on(...)` / `.emit(...)` find their
         // registered handle (NATIVE_MODULE_TABLE wires those methods

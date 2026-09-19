@@ -165,11 +165,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-commander": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-cron": {
       "category": "binding",
       "decision": "externalize",

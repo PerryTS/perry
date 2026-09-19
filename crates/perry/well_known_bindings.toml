@@ -166,17 +166,6 @@ repo = "https://github.com/lovell/sharp"
 ref = "1018449164723ba0203c1beffaba0e21f7829c18"
 ported-at = "0.35.3"
 date = "2026-07-30"
-[bindings.commander]
-crate = "perry-ext-commander"
-lib = "perry_ext_commander"
-tracking = "#466"
-
-[bindings.commander.upstream]
-version = "15.0.0"
-sha256 = "632c1e039b31e98fa79c4fae5b10a5ffbbf9df0f21c9ffb3d74e95734b30696f"
-repo = "https://github.com/tj/commander.js"
-ref = "ba6d13ddb4243e5913367734f8c159089ffe7834"
-ported-at = "15.0.0"
 date = "2026-07-30"
 [bindings.ethers]
 crate = "perry-ext-ethers"

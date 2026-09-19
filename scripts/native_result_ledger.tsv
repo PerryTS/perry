@@ -28,17 +28,6 @@ js_cheerio_selection_find	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handl
 js_cheerio_selection_first	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
 js_cheerio_selection_last	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
 js_cheerio_selection_parent	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_commander_action	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_args_array	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_argument	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_command	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_description	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_name	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_option	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_opts	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_parse	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_required_option	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
-js_commander_version	NR_HANDLE_ID	crates/perry-ext-commander/src/lib.rs	Handle
 js_cron_schedule	NR_HANDLE_ID	crates/perry-ext-cron/src/lib.rs	Handle
 js_decimal_abs	NR_HANDLE_ID	crates/perry-ext-decimal/src/lib.rs	Handle
 js_decimal_ceil	NR_HANDLE_ID	crates/perry-ext-decimal/src/lib.rs	Handle
