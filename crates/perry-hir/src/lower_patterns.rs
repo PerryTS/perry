@@ -1403,6 +1403,28 @@ pub(crate) fn pre_scan_node_http_client_request_socket_params(
 /// the hardcoded library-name mapping — without that gate `class Big { f0=0; }
 /// const b = new Big(); b.f0` returned 0 because the value was routed through
 /// big.js's handle-based dispatch.
+///
+/// #10439: those two "is it a local class" checks are not the only way this
+/// name can mean something other than the native handle. `Big`/`Decimal`/
+/// `BigNumber`/`LRUCache`/`Command` are exactly the names commander,
+/// lru-cache, decimal.js and big.js/bignumber.js export themselves, so an
+/// import of the REAL package — resolved to real source because the user
+/// listed it in `perry.compilePackages` — hits this same match arm with
+/// nothing local to shadow it. Chasing the fix-lineage precedent (#10589/
+/// #10608 for an imported plain-function ctor, #10623/#10636 for a
+/// require()-destructured native base): decide by what the identifier
+/// resolves to, not by its spelling. `is_native_module` (consulted when this
+/// module's imports were lowered) already returns `false` for a
+/// compilePackages-compiled specifier, so a genuinely compiled `Decimal`/
+/// `Command`/`LRUCache` was never handed to `register_native_module`, and
+/// `lookup_native_module` reports that honestly — the same positive-evidence
+/// discipline `ident_may_start_native_method_call` and
+/// `native_class_from_factory_call` already apply for the sibling shapes
+/// just below in `expr_call/static_and_instance.rs`. A name with no native
+/// import at all (a bare same-named user function, or an import of an
+/// unrelated module) is rejected for the same reason: genuine Big / Decimal /
+/// BigNumber / LRUCache / Command usage is always reached through an import
+/// of the real package.
 pub(crate) fn detect_native_instance_expr(
     ctx: &LoweringContext,
     expr: &ast::Expr,
@@ -1417,12 +1439,16 @@ pub(crate) fn detect_native_instance_expr(
                 {
                     return None;
                 }
-                match class_name {
-                    "Big" => Some("big.js"),
-                    "Decimal" => Some("decimal.js"),
-                    "BigNumber" => Some("bignumber.js"),
-                    "LRUCache" => Some("lru-cache"),
-                    "Command" => Some("commander"),
+                let module = match class_name {
+                    "Big" => "big.js",
+                    "Decimal" => "decimal.js",
+                    "BigNumber" => "bignumber.js",
+                    "LRUCache" => "lru-cache",
+                    "Command" => "commander",
+                    _ => return None,
+                };
+                match ctx.lookup_native_module(class_name) {
+                    Some((m, _)) if m == module => Some(module),
                     _ => None,
                 }
             } else {
