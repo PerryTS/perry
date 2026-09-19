@@ -413,10 +413,6 @@ pub use ratelimit::*;
 // each binding independently. The umbrella stays as
 // `ids = ["bundled-uuid", "bundled-nanoid"]` so existing
 // `--features ids` callers keep working byte-identically.
-#[cfg(feature = "bundled-uuid")]
-pub mod uuid;
-#[cfg(feature = "bundled-uuid")]
-pub use uuid::*;
 
 #[cfg(feature = "bundled-nanoid")]
 pub mod nanoid;

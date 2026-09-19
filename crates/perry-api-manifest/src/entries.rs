@@ -32,7 +32,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "mysql2",         // MySQL/MariaDB client
     "mysql2/promise", // mysql2's promise-API subpath
     "pg",             // PostgreSQL client
-    "uuid",           // RFC-4122 UUID generation
     "qs",             // nested query-string parser/stringifier (Stripe dependency)
     "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
     "argon2",         // Argon2 password hashing (replaces the N-API addon)

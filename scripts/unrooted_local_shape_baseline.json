@@ -26,7 +26,6 @@
     "crates/perry-ext-pg/src/lib.rs": 7,
     "crates/perry-ext-ratelimit/src/lib.rs": 4,
     "crates/perry-ext-streams/src/lib.rs": 2,
-    "crates/perry-ext-uuid/src/lib.rs": 2,
     "crates/perry-ext-zlib/src/stream.rs": 3,
     "crates/perry-stdlib/src/cheerio.rs": 6,
     "crates/perry-stdlib/src/commander.rs": 3,

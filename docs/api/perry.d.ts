@@ -4362,23 +4362,6 @@ declare module "util/types" {
   export function isWeakSet(...args: any[]): any;
 }
 
-declare module "uuid" {
-  /** stdlib */
-  export function v1(): string;
-  /** stdlib */
-  export function v3(name: string, namespace: string): string;
-  /** stdlib */
-  export function v4(): string;
-  /** stdlib */
-  export function v5(name: string, namespace: string): string;
-  /** stdlib */
-  export function v7(): string;
-  /** stdlib */
-  export function validate(id: string): boolean;
-  /** stdlib */
-  export function version(id: string): number;
-}
-
 declare module "v8" {
   /** stdlib */
   export class DefaultDeserializer { [key: string]: any; }

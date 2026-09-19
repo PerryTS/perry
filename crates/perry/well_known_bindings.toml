@@ -76,21 +76,6 @@ repo = "https://github.com/ai/nanoid"
 ref = "4dacb107b54ffd0e1abfe91b7ef452e0fd5a8e12"
 ported-at = "6.0.0"
 date = "2026-07-30"
-[bindings.uuid]
-crate = "perry-ext-uuid"
-lib = "perry_ext_uuid"
-tracking = "#466"
-# Partial: several upstream exports and input forms are absent (including
-# parse/stringify and newer conversion/constants APIs).
-compat = "partial"
-
-[bindings.uuid.upstream]
-version = "14.0.1"
-sha256 = "e062c57ed120ea135478f305da04802bf69eab23fbc0ca2bae6989b6855390c4"
-repo = "https://github.com/uuidjs/uuid"
-ref = "70177807e9229dfacde2038dc1e722f1828f358a"
-ported-at = "14.0.1"
-date = "2026-07-30"
 [bindings.qs]
 crate = "perry-ext-qs"
 lib = "perry_ext_qs"

@@ -297,8 +297,7 @@ bundled-ratelimit = ["dep:governor", "async-runtime"]
 # Phase 4 step 2) toggles. Each sub-feature pulls in its own
 # optional dep + gates its own module so a wrapper port can strip
 # exactly one binding from perry-stdlib without affecting the other.
-ids = ["bundled-uuid", "bundled-nanoid"]
-bundled-uuid = ["dep:uuid"]
+ids = ["bundled-nanoid"]
 bundled-nanoid = ["dep:nanoid"]
 
 # Async runtime (tokio) - internal feature
@@ -440,7 +439,11 @@ governor = { version = "0.10", optional = true }
 # Validation
 
 # IDs
-uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"], optional = true }
+# Required unconditionally by crypto/random.rs (crypto.randomUUID /
+# randomUUID({ v7: true })), which has no feature gate of its own —
+# never optional, regardless of the bundled-uuid npm-binding feature
+# (removed; see #10678/#466).
+uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"] }
 nanoid = { version = "0.5", optional = true }
 
 # LRU Cache — optional from v0.5.539 so the well-known flip can

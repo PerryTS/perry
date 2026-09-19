@@ -135,7 +135,6 @@ Total: 3027 entries across 136 modules.
 - [`url`](#url)
 - [`util`](#util)
 - [`util/types`](#utiltypes)
-- [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`vm`](#vm)
 - [`wasi`](#wasi)
@@ -3915,18 +3914,6 @@ Total: 3027 entries across 136 modules.
 - `isUint8ClampedArray` — module
 - `isWeakMap` — module
 - `isWeakSet` — module
-
-## `uuid`
-
-### Methods
-
-- `v1` — module
-- `v3` — module
-- `v4` — module
-- `v5` — module
-- `v7` — module
-- `validate` — module
-- `version` — module
 
 ## `v8`
 
