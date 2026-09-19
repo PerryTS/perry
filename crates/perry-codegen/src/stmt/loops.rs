@@ -1889,15 +1889,19 @@ fn match_packed_f64_range_loop(
                 return range_loop_reject("store_not_fact_eligible");
             }
         } else if !local_is_number_array(ctx, arr_id)
-            && !(dense && local_is_untyped_candidate(ctx, arr_id))
+            && !local_is_guardable_untyped_array(ctx, arr_id)
         {
-            // #6750 follow-up: read-only DENSE accesses also admit bindings
-            // with no usable static type (`any` function parameters — the
-            // bcryptjs S-box shape). The entry guards/probes re-validate the
-            // ACTUAL runtime value, so a wrong hint costs one failed guard →
-            // slow loop, never correctness. Known non-array static types stay
-            // excluded so ordinary object/string index loops don't grow dead
-            // guard chains.
+            // #6750 follow-up: read-only accesses also admit bindings with no
+            // usable static ELEMENT type — an `any` parameter (the bcryptjs
+            // S-box shape) and, since #10718, the ordinary untyped-JavaScript
+            // `const a = new Array(n)` / `const a = []` binding, whose element
+            // type erases to `any`. The entry guards/probes re-validate the
+            // ACTUAL runtime value — plain-array shape, descriptors, prototype
+            // pollution, frozen/sealed, the whole index window, and raw-f64
+            // (hole-tolerant) packedness — so a wrong hint costs one failed
+            // guard → slow loop, never correctness. Known non-array and
+            // known-non-numeric static types stay excluded so ordinary
+            // object/string index loops don't grow dead guard chains.
             return range_loop_reject("array_static_type_excluded");
         }
     }
@@ -5966,6 +5970,73 @@ pub(super) fn local_is_untyped_candidate(ctx: &FnCtx<'_>, local_id: u32) -> bool
         ctx.stable_local_type_proof(&local_id),
         None | Some(perry_hir::types::Type::Any | perry_hir::types::Type::Unknown)
     )
+}
+
+/// #10718: a READ-only range-loop receiver whose static type carries no usable
+/// element proof, but which is not known to be a non-array or a non-numeric
+/// array.
+///
+/// Two shapes qualify, and the difference matters:
+///
+/// * [`local_is_untyped_candidate`] — no stable type proof at all, or
+///   `any`/`unknown`. This is #6750's population (an `any` parameter).
+/// * an ARRAY binding whose element type erases to `any`/`unknown`. This is
+///   what `const a = new Array(n)`, `const a = []` and every untyped
+///   JavaScript array infer, and it was the gate that kept ordinary JS off
+///   every hoisted element tier: annotating the identical program
+///   `const a: number[] = new Array(n)` cost 13.4 instructions per element
+///   against 87 for the same source without the annotation (#10718).
+///
+/// Admitting these is a hint, never a claim: `packed_f64_array_loop_range_guard`
+/// re-proves plain-array shape, forwarding, index descriptors, `Array.prototype`
+/// / `Object.prototype` index pollution, a recorded custom array prototype,
+/// frozen / sealed / non-extensible flags, the capacity/length sanity bounds,
+/// the whole index window against the LIVE length, and raw-f64-or-holes
+/// packedness of every slot, at every loop entry — and the matched body admits
+/// no call, closure or await, so nothing can invalidate that between the guard
+/// and the last iteration. A receiver that is not what the hint suggested fails
+/// the guard and runs the unchanged slow loop.
+///
+/// A declared non-numeric array (`string[]`, `Foo[]`) and every known non-array
+/// type stay excluded: their guard would be dead weight on every loop entry.
+fn local_is_guardable_untyped_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    local_is_untyped_candidate(ctx, local_id)
+        || local_array_binding_element_type_is_erased(ctx, local_id)
+}
+
+/// True when the binding's type says "an Array" but says nothing usable about
+/// its ELEMENT type.
+///
+/// `const a = new Array(n)` records `Generic { base: "Array", type_args: [] }`
+/// — an `Array` with no type argument, i.e. `Array<any>`. `[]`, `any[]`,
+/// `unknown[]`, `Array<any>` and `Array<unknown>` land here too. These are the
+/// ordinary untyped-JavaScript array bindings; before #10718 every one of them
+/// missed the hoisted element tiers, which is why `const a = new Array(400)`
+/// cost 87 instructions per element and `const a: number[] = new Array(400)`
+/// cost 13.4 on the identical program.
+///
+/// This reads `local_type_hint` rather than `stable_local_type_proof` on
+/// purpose, and the read is a DISPATCH HINT ONLY: it selects which loops are
+/// offered to the range tier, and every offered loop is admitted by
+/// `js_typed_feedback_packed_f64_range_loop_guard`, which re-proves the live
+/// receiver at loop entry (see [`local_is_guardable_untyped_array`]). A stale
+/// or reassigned binding therefore fails the guard and runs the unchanged slow
+/// loop; it can never produce a wrong element value.
+fn element_type_is_erased(ty: &perry_hir::types::Type) -> bool {
+    matches!(
+        ty,
+        perry_hir::types::Type::Any | perry_hir::types::Type::Unknown
+    )
+}
+
+fn local_array_binding_element_type_is_erased(ctx: &FnCtx<'_>, local_id: u32) -> bool {
+    match ctx.local_type_hint(&local_id) {
+        Some(perry_hir::types::Type::Array(elem)) => element_type_is_erased(elem.as_ref()),
+        Some(perry_hir::types::Type::Generic { base, type_args }) if base == "Array" => {
+            type_args.is_empty() || (type_args.len() == 1 && element_type_is_erased(&type_args[0]))
+        }
+        _ => false,
+    }
 }
 
 fn local_allows_packed_f64_loop_store(ctx: &FnCtx<'_>, local_id: u32) -> bool {
