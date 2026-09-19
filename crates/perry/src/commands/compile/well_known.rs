@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn shipped_unproven_bindings_are_partial() {
-        for name in ["dotenv", "nanoid", "uuid"] {
+        for name in ["dotenv", "nanoid"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,

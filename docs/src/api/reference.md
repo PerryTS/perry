@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3027 entries across 136 modules.
+Total: 3020 entries across 135 modules.
 
 ## Modules
 
@@ -135,7 +135,6 @@ Total: 3027 entries across 136 modules.
 - [`url`](#url)
 - [`util`](#util)
 - [`util/types`](#utiltypes)
-- [`uuid`](#uuid)
 - [`v8`](#v8)
 - [`vm`](#vm)
 - [`wasi`](#wasi)
@@ -3915,18 +3914,6 @@ Total: 3027 entries across 136 modules.
 - `isUint8ClampedArray` — module
 - `isWeakMap` — module
 - `isWeakSet` — module
-
-## `uuid`
-
-### Methods
-
-- `v1` — module
-- `v3` — module
-- `v4` — module
-- `v5` — module
-- `v7` — module
-- `validate` — module
-- `version` — module
 
 ## `v8`
 

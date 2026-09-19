@@ -6216,14 +6216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-uuid"
-version = "0.5.1603"
-dependencies = [
- "perry-ffi",
- "uuid",
-]
-
-[[package]]
 name = "perry-ext-ws"
 version = "0.5.1603"
 dependencies = [
