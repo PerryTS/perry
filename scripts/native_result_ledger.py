@@ -23,8 +23,17 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # prose comments in fastify.rs, while one real row uses the positional `cr(...)`
 # helper, leaving 371 executable declarations. The scanner parses declarations,
 # not comments, and includes that helper row.
-EXPECTED_ROWS = 371
-EXPECTED_PROVIDERS = 322
+#
+# +5 rows / +4 providers since then (#10738): #10658's `net.Socket` surface
+# cluster landed in merge train 221 and grew `native_table/net_events.rs` from
+# 53 to 58 typed rows, carrying four new runtime symbols —
+# `js_ext_net_socket_on` (two rows: `on` and `addListener` share the symbol),
+# `js_net_socket_prepend_listener`, `js_net_socket_prepend_once_listener` and
+# `js_net_socket_unpipe`. Each returns its `handle: i64` argument unchanged, a
+# `next_id_or_throw()` registry id rather than a heap address, so all four are
+# NR_HANDLE_ID.
+EXPECTED_ROWS = 376
+EXPECTED_PROVIDERS = 326
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

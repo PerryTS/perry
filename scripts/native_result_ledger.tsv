@@ -74,6 +74,7 @@ js_events_on	NR_GCPTR	crates/perry-ext-events/src/module_on.rs	*mut ArrayHeader
 js_events_once	NR_GCPTR	crates/perry-ext-events/src/lib.rs	*mut Promise
 js_ext_net_create_server	NR_HANDLE_ID	crates/perry-ext-net/src/lib.rs	i64
 js_ext_net_socket_connect	NR_HANDLE_ID	crates/perry-ext-net/src/lib.rs	i64
+js_ext_net_socket_on	NR_HANDLE_ID	crates/perry-ext-net/src/handle_exports.rs	i64
 js_ext_net_socket_once	NR_HANDLE_ID	crates/perry-ext-net/src/handle_exports.rs	i64
 js_ext_tls_connect	NR_HANDLE_ID	crates/perry-ext-net/src/tls.rs	i64
 js_fastify_app_server	NR_HANDLE_ID	crates/perry-ext-fastify/src/app.rs	Handle
@@ -161,6 +162,8 @@ js_net_socket_address_new	NR_HANDLE_ID	crates/perry-ext-net/src/classes.rs	i64
 js_net_socket_alloc	NR_HANDLE_ID	crates/perry-ext-net/src/lib.rs	i64
 js_net_socket_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_socket_noop_self	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
+js_net_socket_prepend_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
+js_net_socket_prepend_once_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_socket_raw_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_socket_ref	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_remove_all_listeners	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
@@ -169,6 +172,7 @@ js_net_socket_reset_and_destroy	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.
 js_net_socket_set_encoding	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_set_timeout	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_set_type_of_service	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
+js_net_socket_unpipe	NR_HANDLE_ID	crates/perry-ext-net/src/pipe.rs	i64
 js_net_socket_unref	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_node_forge_certificate_from_pem	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
 js_node_forge_create_certificate	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
