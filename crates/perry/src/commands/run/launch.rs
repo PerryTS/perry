@@ -113,7 +113,7 @@ pub fn launch_native(exe_path: &Path, program_args: &[String], format: OutputFor
     Ok(())
 }
 
-fn native_executable_path(output: &Path) -> Result<PathBuf> {
+pub(crate) fn native_executable_path(output: &Path) -> Result<PathBuf> {
     if !cfg!(target_os = "macos")
         || !output.is_dir()
         || output.extension().is_none_or(|ext| ext != "app")

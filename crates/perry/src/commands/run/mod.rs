@@ -12,7 +12,7 @@ use crate::{OutputFormat, Platform};
 mod android;
 mod devices;
 mod entry;
-mod launch;
+pub(crate) mod launch;
 mod metadata;
 mod remote;
 mod resign;
@@ -194,6 +194,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
     // Local compile path
     let compile_args = CompileArgs {
         define: Vec::new(),
+        package_aliases: Vec::new(),
         input: input.clone(),
         output: Some(PathBuf::from(&app_name)),
         keep_intermediates: false,

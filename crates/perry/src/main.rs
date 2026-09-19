@@ -144,6 +144,13 @@ enum Commands {
     /// Compile and run a TypeScript file in one step
     Run(commands::run::RunArgs),
 
+    /// Run an existing Electron app natively: locates the app's main entry
+    /// (a package.json directory, a packaged macOS .app bundle, or an .asar
+    /// archive), compiles the main process with `electron` imports
+    /// redirected to Perry's compat shim, and launches the native binary
+    /// (view rendered in the OS-native webview).
+    Electron(commands::electron::ElectronArgs),
+
     /// Watch TypeScript source and auto-recompile on changes
     #[cfg(feature = "watch-cli")]
     Dev(commands::dev::DevArgs),
@@ -235,6 +242,7 @@ fn is_legacy_invocation(args: &[String]) -> bool {
                 | "audit"
                 | "verify"
                 | "run"
+                | "electron"
                 | "dev"
                 | "appstore"
                 | "types"
@@ -487,6 +495,7 @@ fn main_inner() -> Result<()> {
         Commands::Doctor(_) => Some("doctor"),
         Commands::Update(_) => Some("update"),
         Commands::Run(_) => Some("run"),
+        Commands::Electron(_) => Some("electron"),
         _ => None, // check, explain, setup — no telemetry
     };
 
@@ -509,6 +518,9 @@ fn main_inner() -> Result<()> {
             r.map(|_| ())
         }
         Commands::Run(args) => commands::run::run(args, cli.format, use_color, cli.verbose),
+        Commands::Electron(args) => {
+            commands::electron::run(args, cli.format, use_color, cli.verbose)
+        }
         #[cfg(feature = "watch-cli")]
         Commands::Dev(args) => commands::dev::run(args, cli.format, use_color, cli.verbose),
         Commands::Check(args) => commands::check::run(args, cli.format, use_color, cli.verbose),
