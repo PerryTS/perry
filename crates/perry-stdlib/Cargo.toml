@@ -23,7 +23,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -54,11 +54,6 @@ bundled-dayjs = []
 # always-on). Default-on through `full`; flipped to perry-ext-moment
 # by the well-known table.
 bundled-moment = []
-
-# commander — pure-Rust, no extra deps. Default-on through `full`;
-# the well-known flip strips this when `import 'commander'` resolves
-# to perry-ext-commander instead.
-bundled-commander = []
 
 # HTTP server (hyper-based native framework)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.

@@ -5881,14 +5881,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-commander"
-version = "0.5.1606"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
-]
-
-[[package]]
 name = "perry-ext-cron"
 version = "0.5.1606"
 dependencies = [

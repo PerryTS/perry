@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3007 entries across 133 modules.
+Total: 2995 entries across 132 modules.
 
 ## Modules
 
@@ -34,7 +34,6 @@ Total: 3007 entries across 133 modules.
 - [`cheerio`](#cheerio)
 - [`child_process`](#child_process)
 - [`cluster`](#cluster)
-- [`commander`](#commander)
 - [`console`](#console)
 - [`constants`](#constants)
 - [`cron`](#cron)
@@ -574,26 +573,6 @@ Total: 3007 entries across 133 modules.
 - `schedulingPolicy`
 - `settings`
 - `workers`
-
-## `commander`
-
-### Methods
-
-- `action` — instance
-- `args` — instance
-- `argument` — instance
-- `command` — instance
-- `description` — instance
-- `name` — instance
-- `option` — instance
-- `opts` — instance
-- `parse` — instance
-- `requiredOption` — instance
-- `version` — instance
-
-### Properties
-
-- `args`
 
 ## `console`
 

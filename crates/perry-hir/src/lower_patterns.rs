@@ -1444,7 +1444,6 @@ pub(crate) fn detect_native_instance_expr(
                     "Decimal" => "decimal.js",
                     "BigNumber" => "bignumber.js",
                     "LRUCache" => "lru-cache",
-                    "Command" => "commander",
                     _ => return None,
                 };
                 match ctx.lookup_native_module(class_name) {

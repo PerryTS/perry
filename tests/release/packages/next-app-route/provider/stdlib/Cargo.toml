@@ -23,7 +23,6 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates
   "bundled-decimal",
   "bundled-dayjs",
   "bundled-moment",
-  "bundled-commander",
   "external-events-construct",
   "external-http-server-pump",
   "external-net-pump",

@@ -261,35 +261,10 @@ console.log(new Dec(1).dividedBy(4).toString());
     );
 }
 
-/// The legitimate case this issue explicitly warns against regressing: with
-/// NO `perry.compilePackages` entry (and no real package installed at all —
-/// there is nothing else it COULD mean), `new Command()...` must still route
-/// to the native binding exactly as before. Values asserted here are the
-/// native binding's own pre-existing (documented-limited) behavior, captured
-/// against this same commit's pre-fix binary — this test exists to prove the
-/// fix does not change them, not to bless them as correct.
-#[test]
-fn commander_default_name_still_uses_native_binding_without_compile_packages() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path();
-    // No package.json, no node_modules: "commander" can only resolve to
-    // Perry's bundled native shim.
-    std::fs::write(
-        root.join("main.ts"),
-        r#"
-import { Command } from "commander";
-const program = new Command();
-console.log(new Command().name("x").name());
-console.log(program.constructor.name);
-"#,
-    )
-    .expect("write main.ts");
-    assert_eq!(
-        compile_and_run(root, "main.ts"),
-        "{}\nundefined\n",
-        "the native-binding path (no compilePackages) must be byte-for-byte unchanged"
-    );
-}
+// `commander_default_name_still_uses_native_binding_without_compile_packages`
+// removed here -- it guarded the "legitimate native case" (no
+// compilePackages, native binding still handles `new Command(...)`), which
+// no longer exists: #10686 deletes the native commander binding entirely.
 
 /// Same legitimate-case guard for lru-cache: without `compilePackages`,
 /// `new LRUCache(...).set(...).get(...)` must still reach the native

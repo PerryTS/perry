@@ -4033,10 +4033,6 @@
       "name": "SESSION_STORE"
     },
     {
-      "file": "crates/perry-stdlib/src/commander.rs",
-      "name": "GC_REGISTERED"
-    },
-    {
       "file": "crates/perry-stdlib/src/common/async_bridge.rs",
       "name": "GC_SCANNER_REGISTERED"
     },

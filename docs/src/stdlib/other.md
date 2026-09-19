@@ -292,12 +292,6 @@ per path; unsupported or over-budget helpers emit a diagnostic and throw if the
 Worker is constructed. The original filename expression still runs at runtime.
 Static `file:` URLs are decoded before file lookup, including Bun embedded paths
 such as `file:///$bunfs/root/worker.js` mapped through `--bunfs-root`.
-## commander (CLI Parsing)
-
-```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:commander}}
-```
-
 ## lru-cache
 
 The wired constructor takes the npm v7+ options-object shape

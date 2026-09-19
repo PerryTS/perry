@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2065 entries across 131 modules
+// Coverage: 2064 entries across 130 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -490,11 +490,6 @@ declare module "cluster" {
   export function setupMaster(...args: any[]): any;
   /** stdlib */
   export function setupPrimary(...args: any[]): any;
-}
-
-declare module "commander" {
-  /** stdlib */
-  export const args: any;
 }
 
 declare module "console" {

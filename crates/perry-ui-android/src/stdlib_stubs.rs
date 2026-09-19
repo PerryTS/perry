@@ -148,58 +148,6 @@ pub extern "C" fn js_cheerio_selection_to_array() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_commander_action() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_command() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_description() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_get_option() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_get_option_bool() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_get_option_number() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_name() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_new() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_option() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_opts() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_parse() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_required_option() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_commander_version() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_create_callback() -> i64 {
     0
 }
