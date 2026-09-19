@@ -22,6 +22,21 @@
 # genuinely needs a new bare read in an unlisted file, the honest move is to
 # convert a pair elsewhere and say so in the PR, not to add a line here.
 #
+# RELOCATIONS (#10583). Rules 2 and 3 are per-path, and the 2000-line cap
+# regularly forces a listed module to be SPLIT. Moving debt-carrying code out
+# deletes the source's line (rule 3) and adds the destination's -- which
+# `--no-raise-vs` would otherwise reject as "was not listed at the merge base"
+# even though the total never moved. Declare it on the destination's own line:
+#
+#   4 crates/…/native_module/vtable_access.rs  # moved-from: crates/…/native_module.rs
+#
+# The destination is then credited with what the source ACTUALLY surrendered
+# between the merge base and head, and nothing more: a relocation cannot launder
+# new sites, two destinations splitting one source share one credit, and once
+# the move has landed the annotation is inert documentation. It is the ONLY
+# comment an entry may carry -- a malformed one is a build failure, not a
+# silently-ignored comment.
+#
 # ONE shape may join the list instead of converting: a LOOP whose collection
 # window is a user-visible trap/getter call (Proxy traps, accessors, valueOf)
 # re-reads every live handle at the top of each iteration. That re-read IS the
