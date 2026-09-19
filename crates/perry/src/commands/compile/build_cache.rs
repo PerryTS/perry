@@ -234,6 +234,9 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // returns `None` either way — the rejection is what the caller already got
     // without the flag, so the emitted code is identical. An input, rather than
     // an exclusion, would make every trace run miss the cache for nothing.
+    // #10743 added the positive twin, `range_loop_trace`, on the same terms: it
+    // prints which admission a matched loop took and returns nothing, so the
+    // emitted object is byte-identical with the flag on and off.
     "PERRY_PACKED_LOOP_TRACE",
     // Entry outlining report output is observational only.
     "PERRY_OUTLINE_ENTRY_REPORT",

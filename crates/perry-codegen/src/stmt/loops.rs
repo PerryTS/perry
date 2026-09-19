@@ -1581,6 +1581,13 @@ struct PackedF64RangeLoop {
     /// mid-iteration side exit could double-apply earlier statement effects
     /// on re-execution).
     dense: bool,
+    /// #10743: the body the GUARDED CLONES are lowered from, when it is not
+    /// the body as written. Set only by the compound-assignment alias fold
+    /// (`packed_f64_range_loop_compound_alias_fold`); `None` means both
+    /// clones lower the same statements. The slow clone always lowers the
+    /// original body, so a failed guard executes the specified evaluation
+    /// order.
+    fast_body: Option<Vec<Stmt>>,
 }
 
 /// #6011: range-preguarded packed-f64 versioned loop.
@@ -1615,6 +1622,20 @@ fn range_loop_reject(reason: &'static str) -> Option<PackedF64RangeLoop> {
     }
     None
 }
+/// Positive twin of [`range_loop_reject`]: the decline traces say which gate
+/// said no, and nothing said yes. A fixture that claims to exercise a guarded
+/// fast path needs to be able to show it REACHED it — #10746 shipped a GC
+/// stress whose fixtures were all declined at `body_not_admissible` before the
+/// guard under test ever ran, and the traces available at the time could not
+/// have revealed that.
+fn range_loop_trace(what: &str) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("PERRY_PACKED_LOOP_TRACE").as_deref() == Ok("1")) {
+        eprintln!("[range-loop] admitted: {what}");
+    }
+}
+
 fn match_packed_f64_range_loop(
     ctx: &FnCtx<'_>,
     init: Option<&Stmt>,
@@ -1729,6 +1750,7 @@ fn match_packed_f64_range_loop(
             && !ctx.boxed_vars.contains(&id)
             && !ctx.closure_captures.contains_key(&id)
     };
+    let mut fast_body: Option<Vec<Stmt>> = None;
     let dense = if packed_f64_range_loop_body_collect(
         body,
         counter_id,
@@ -1736,6 +1758,22 @@ fn match_packed_f64_range_loop(
         &mut accesses,
         Some(&affine_leaf_ok),
     ) {
+        false
+    } else if let Some(folded) = packed_f64_range_loop_compound_alias_fold(body).filter(|folded| {
+        // #10743: `a[i] += 1` is three statements only because of its
+        // spec-mandated alias temporaries. Retry the CLASSIC walk on the
+        // folded statement; everything else about the tier is unchanged.
+        accesses.clear();
+        packed_f64_range_loop_body_collect(
+            folded,
+            counter_id,
+            bound_local,
+            &mut accesses,
+            Some(&affine_leaf_ok),
+        )
+    }) {
+        range_loop_trace("compound_assign_alias_fold");
+        fast_body = Some(folded);
         false
     } else {
         // The classic shape (one statement, counter-offset indices, stores
@@ -1921,7 +1959,171 @@ fn match_packed_f64_range_loop(
         bound,
         arrays: accesses.into_values().collect(),
         dense,
+        fast_body,
     })
+}
+
+/// #10743: fold a compound member assignment's alias `Let`s into its store.
+///
+/// HIR's `hoist_compound_member_assign` lowers `a[i] += 1` into two immutable
+/// alias bindings followed by the store:
+///
+/// ```text
+/// Let __cmpd_base_7 = LocalGet(a)
+/// Let __cmpd_key_8  = LocalGet(i)
+/// Expr(IndexSet { object: LocalGet(7), index: LocalGet(8),
+///                 value: Binary { Add, IndexGet { LocalGet(7), LocalGet(8) }, 1 } })
+/// ```
+///
+/// Those temporaries are LOAD-BEARING in HIR and must not be removed there.
+/// The specification evaluates the base and the key exactly once and BEFORE
+/// the right-hand side, and an RHS call can reassign the very bindings they
+/// were read from — `a[i] += (() => { i = 1; return 5; })()` must store at the
+/// index `i` held before the arrow ran. Deleting the spill in the lowering is
+/// a spec violation, not an optimisation, which is why this lives in the
+/// matcher instead.
+///
+/// Inside the matched subset the aliases are provably redundant.
+/// [`packed_f64_range_loop_pure_expr_collect`] is a WHITELIST walk: it admits
+/// no call, no closure, no `await`, no `Update` and no assignment anywhere in
+/// the statement, and [`packed_f64_range_loop_store_collect`] routes every
+/// part of the store through it. So nothing between the alias binding and the
+/// store can write the locals the aliases read, and the folded statement has
+/// exactly the semantics of the three it replaces.
+///
+/// The fold is used ONLY for the guarded fast clones. The slow clone keeps
+/// the statements as written, so a failed guard — and every side exit — still
+/// executes the specified evaluation order.
+///
+/// Why it is worth a pass of its own: `a[i] += 1` measured 277 instructions
+/// per element against 24 for the byte-identical `a[i] = a[i] + 1`, purely
+/// because the lowering hands the matcher three statements and the matcher
+/// takes one. Unlike the general multi-statement tier (#10741) this needs no
+/// mid-iteration side-exit discipline, because the folded-away statements
+/// perform no stores: there is nothing to un-do when a guard fails partway.
+pub(super) fn packed_f64_range_loop_compound_alias_fold(body: &[Stmt]) -> Option<Vec<Stmt>> {
+    use perry_hir::Expr;
+    // A computed key spills two temps, a static property (`o.f += 1`) one.
+    // Anything longer is not this shape.
+    if body.len() < 2 || body.len() > 3 {
+        return None;
+    }
+    let (aliases, last) = body.split_at(body.len() - 1);
+    let mut map: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
+    for stmt in aliases {
+        let Stmt::Let {
+            id,
+            name,
+            mutable: false,
+            init: Some(init),
+            ..
+        } = stmt
+        else {
+            return None;
+        };
+        // The compiler's own compound-assign spills only. A user `const` in
+        // the loop body is the general multi-statement tier's problem, not
+        // this one, and admitting it here would widen the claim above beyond
+        // what the name guarantees (these temps are read only by the one
+        // statement they were minted for).
+        if !name.starts_with("__cmpd_") {
+            return None;
+        }
+        if !packed_f64_range_loop_alias_init_is_stable(init) {
+            return None;
+        }
+        // Fold through the aliases bound earlier, so the replacement stored
+        // here is itself alias-free; a repeated id would make that untrue.
+        let mut init = init.clone();
+        packed_f64_range_loop_substitute_locals(&mut init, &map);
+        if map.insert(*id, init).is_some() {
+            return None;
+        }
+    }
+    if map.is_empty() {
+        return None;
+    }
+    let [Stmt::Expr(expr)] = last else {
+        return None;
+    };
+    let mut folded = expr.clone();
+    packed_f64_range_loop_substitute_locals(&mut folded, &map);
+    // Defence in depth rather than a witnessed guard, and labelled as such:
+    // a WRITE to an alias (`LocalSet`/`Update`) carries its target in a field
+    // the substitution above does not visit, so a surviving mention would
+    // mean the fold was partial. No shape reaching here from source can
+    // produce one — `pure_expr_collect` rejects both nodes outright — so this
+    // cannot be made to fail by a fixture, and it is a structural assertion,
+    // not a check the differential suite witnesses.
+    if map
+        .keys()
+        .any(|id| packed_f64_range_loop_expr_touches_local(&folded, *id))
+    {
+        return None;
+    }
+    Some(vec![Stmt::Expr(folded)])
+}
+
+/// The grammar an alias initialiser may take for
+/// [`packed_f64_range_loop_compound_alias_fold`]: local reads, numeric
+/// literals, and `+`/`-`/`*` over them.
+///
+/// Two properties are needed and both follow from the grammar. The tree is
+/// side-effect-free, so the folded statement may evaluate a key twice — once
+/// for the read index, once for the store index — where the original
+/// evaluated it once. And its value cannot change between those two
+/// evaluations, because the admitted statement writes no local at all.
+fn packed_f64_range_loop_alias_init_is_stable(init: &perry_hir::Expr) -> bool {
+    use perry_hir::{BinaryOp, Expr};
+    match init {
+        Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::Binary { op, left, right } => {
+            matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+                && packed_f64_range_loop_alias_init_is_stable(left)
+                && packed_f64_range_loop_alias_init_is_stable(right)
+        }
+        _ => false,
+    }
+}
+
+/// Replace every `LocalGet(id)` in `expr` with `map[id]`. Replacements are
+/// alias-free by construction, so a substituted subtree is not re-walked.
+fn packed_f64_range_loop_substitute_locals(
+    expr: &mut perry_hir::Expr,
+    map: &std::collections::HashMap<u32, perry_hir::Expr>,
+) {
+    use perry_hir::Expr;
+    if let Expr::LocalGet(id) = expr {
+        if let Some(replacement) = map.get(id) {
+            *expr = replacement.clone();
+            return;
+        }
+    }
+    perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+        packed_f64_range_loop_substitute_locals(child, map);
+    });
+}
+
+/// Does `expr` mention `id` in ANY position — read, write, or update?
+/// Wider than [`expr_mentions_local`], which only sees reads.
+fn packed_f64_range_loop_expr_touches_local(expr: &perry_hir::Expr, id: u32) -> bool {
+    use perry_hir::Expr;
+    let hit = match expr {
+        Expr::LocalGet(found) | Expr::LocalSet(found, _) | Expr::Update { id: found, .. } => {
+            *found == id
+        }
+        _ => false,
+    };
+    if hit {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found {
+            found = packed_f64_range_loop_expr_touches_local(child, id);
+        }
+    });
+    found
 }
 
 /// #9253: is `index` an integer-producing expression over the loop counter and
@@ -2122,7 +2324,7 @@ fn packed_f64_range_loop_index_offset(index: &perry_hir::Expr, counter_id: u32) 
 
 /// Body walk for [`match_packed_f64_range_loop`]: exactly one expression
 /// statement whose single side effect happens after all potential side exits.
-fn packed_f64_range_loop_body_collect(
+pub(super) fn packed_f64_range_loop_body_collect(
     body: &[Stmt],
     counter_id: u32,
     bound_local: Option<u32>,
@@ -3211,12 +3413,21 @@ fn lower_packed_f64_range_versioned_for(
     // is exact for the whole loop — and, unlike a `@perry_global_*` load,
     // a non-escaping alloca is promotable to a register even with the fast
     // loop's raw inttoptr element stores in the way.
-    let written_local = match body {
+    //
+    // #10743: the GUARDED CLONES lower `fast_body` — the body as written
+    // unless the compound-assignment alias fold rewrote it. The SLOW clone
+    // always lowers `body`, so a failed guard executes the evaluation order
+    // the specification requires. Caching a module global is shared by both
+    // copies, which stays correct for the folded shape by the same argument
+    // as for every other matched body: it contains no call, closure or await,
+    // so nothing can write the global between the two loop entries.
+    let fast_body: &[Stmt] = matched.fast_body.as_deref().unwrap_or(body);
+    let written_local = match fast_body {
         [Stmt::Expr(perry_hir::Expr::LocalSet(id, _))] => Some(*id),
         _ => None,
     };
     let mut global_override_ids: Vec<u32> = Vec::new();
-    for gid in packed_f64_range_loop_invariant_global_reads(ctx, body, written_local) {
+    for gid in packed_f64_range_loop_invariant_global_reads(ctx, fast_body, written_local) {
         let Some(global_name) = ctx.module_globals.get(&gid).cloned() else {
             continue;
         };
@@ -3348,7 +3559,7 @@ fn lower_packed_f64_range_versioned_for(
                 init,
                 condition,
                 update,
-                body,
+                fast_body,
                 "masked_window_ta_i32",
                 "for.packed_f64_range_fast_ta_i32",
                 true,
@@ -3363,7 +3574,7 @@ fn lower_packed_f64_range_versioned_for(
                 init,
                 condition,
                 update,
-                body,
+                fast_body,
                 "masked_window_ta_u32",
                 "for.packed_f64_range_fast_ta_u32",
                 false,
@@ -3378,7 +3589,7 @@ fn lower_packed_f64_range_versioned_for(
                 init,
                 condition,
                 update,
-                body,
+                fast_body,
                 "masked_window_ta_f64",
                 "for.packed_f64_range_fast_ta_f64",
                 false,
@@ -3441,7 +3652,7 @@ fn lower_packed_f64_range_versioned_for(
             let mut acc_scope = emit_range_loop_accumulator_admission(
                 ctx,
                 &matched,
-                body,
+                fast_body,
                 &slow_pre_label,
                 "packed_f64_range.fast_i32",
             );
@@ -3470,7 +3681,7 @@ fn lower_packed_f64_range_versioned_for(
                 init,
                 condition,
                 update,
-                body,
+                fast_body,
                 "for.packed_f64_range_fast_i32",
                 Some((matched.counter_id, bound_i32.clone())),
             )?;
@@ -3487,7 +3698,7 @@ fn lower_packed_f64_range_versioned_for(
         let mut acc_scope = emit_range_loop_accumulator_admission(
             ctx,
             &matched,
-            body,
+            fast_body,
             &slow_pre_label,
             "packed_f64_range.fast",
         );
@@ -3516,7 +3727,7 @@ fn lower_packed_f64_range_versioned_for(
             init,
             condition,
             update,
-            body,
+            fast_body,
             "for.packed_f64_range_fast",
             Some((matched.counter_id, bound_i32.clone())),
         )?;
@@ -3543,7 +3754,7 @@ fn lower_packed_f64_range_versioned_for(
         let mut acc_scope = emit_range_loop_accumulator_admission(
             ctx,
             &matched,
-            body,
+            fast_body,
             &slow_pre_label,
             "packed_f64_range.classic",
         );
@@ -3572,7 +3783,7 @@ fn lower_packed_f64_range_versioned_for(
             init,
             condition,
             update,
-            body,
+            fast_body,
             "for.packed_f64_range_fast",
             Some((matched.counter_id, bound_i32.clone())),
         )?;
