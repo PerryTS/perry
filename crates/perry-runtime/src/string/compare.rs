@@ -2,6 +2,7 @@
 //! normalization / locale-compare.
 
 use super::*;
+use crate::string::wtf8::{self, Wtf8Str};
 
 /// Lexicographic comparison of two UTF-8 byte slices by **UTF-16 code unit**,
 /// matching ECMAScript string relational comparison (`<`/`>` and the default
@@ -675,35 +676,42 @@ pub extern "C" fn js_string_normalize(
             crate::builtins::reject_symbol_to_string(form_value);
             let form_ptr = crate::value::js_jsvalue_to_string(form_value);
             if is_valid_string_ptr(form_ptr) {
-                string_as_str(form_ptr).to_string()
+                // The *form* is user-controlled too, so it can be WTF-8:
+                // `"x".normalize("\u{D800}")` must not build a `&str` from a
+                // lone surrogate. A payload that is not valid UTF-8 cannot
+                // equal any of the four form names, so `None` falls through
+                // to the same `RangeError` Node throws. (#10692)
+                unsafe { wtf8::Wtf8Str::from_header(form_ptr) }
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
             } else {
                 String::new()
             }
         }
     });
-    let str_data = string_as_str(s);
-
-    #[cfg(feature = "string-normalize")]
-    let normalized: String = {
-        use unicode_normalization::UnicodeNormalization;
-        match form_owned.as_str() {
-            "NFC" => str_data.nfc().collect(),
-            "NFD" => str_data.nfd().collect(),
-            "NFKC" => str_data.nfkc().collect(),
-            "NFKD" => str_data.nfkd().collect(),
-            _ => throw_invalid_normalize_form(),
-        }
+    // Validate the form before touching the payload — an invalid form throws
+    // the spec `RangeError` whether or not the normalizer is linked in.
+    let form = match wtf8::NormalizeForm::parse(&form_owned) {
+        Some(form) => form,
+        None => throw_invalid_normalize_form(),
     };
-    // Normalize engine gated off: still validate the form (so a bad form throws
-    // the spec RangeError), but pass the string through unchanged for the four
-    // valid forms (no Unicode decomposition tables linked).
-    #[cfg(not(feature = "string-normalize"))]
-    let normalized: String = match form_owned.as_str() {
-        "NFC" | "NFD" | "NFKC" | "NFKD" => str_data.to_string(),
-        _ => throw_invalid_normalize_form(),
-    };
-    let bytes = normalized.as_bytes();
-    js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    // Perry payloads are WTF-8, so `s` may hold a lone surrogate — three bytes
+    // no `&str` may ever contain. `Wtf8Str` hands out a `&str` only when the
+    // header's `STRING_FLAG_HAS_LONE_SURROGATES` bit is clear (the guard
+    // `js_string_is_well_formed`/`js_string_to_well_formed` already use) and
+    // otherwise normalizes the well-formed runs, passing surrogates through
+    // untouched. (#10692)
+    let normalized = wtf8::normalize(unsafe { wtf8::Wtf8Str::from_header(s) }, form);
+    // `js_string_from_bytes` does NOT derive `STRING_FLAG_HAS_LONE_SURROGATES`,
+    // so returning through it left a normalized payload that still carries a
+    // surrogate flagged as well-formed: `"\u{D800}".normalize().isWellFormed()`
+    // answered `true` where Node answers `false`. Worse for this change, a
+    // header whose flag lies defeats the guard above one step downstream —
+    // `Wtf8Str::as_str` would hand out that payload as a `&str`. The builder
+    // constructor derives the flag while it counts UTF-16 units, which is what
+    // every other surrogate-preserving producer in this crate uses. (#10692)
+    js_string_from_builder_bytes(&normalized)
 }
 
 fn throw_invalid_normalize_form() -> ! {
@@ -716,13 +724,17 @@ fn throw_invalid_normalize_form() -> ! {
 /// Apply the canonical-equivalence requirement shared by all locale-aware
 /// comparison modes before their approximate collation. NFC is sufficient:
 /// canonically equivalent strings have the same NFC representation.
-fn locale_compare_canonical(a: &str, b: &str, compare: fn(&str, &str) -> f64) -> f64 {
-    if a == b {
+fn locale_compare_canonical(
+    a: Wtf8Str<'_>,
+    b: Wtf8Str<'_>,
+    compare: fn(Wtf8Str<'_>, Wtf8Str<'_>) -> f64,
+) -> f64 {
+    if a.bytes() == b.bytes() {
         return 0.0;
     }
     // ASCII is already NFC, which keeps the overwhelmingly common path
     // allocation-free.
-    if a.is_ascii() && b.is_ascii() {
+    if a.bytes().is_ascii() && b.bytes().is_ascii() {
         return compare(a, b);
     }
     #[cfg(feature = "string-normalize")]
@@ -734,14 +746,25 @@ fn locale_compare_canonical(a: &str, b: &str, compare: fn(&str, &str) -> f64) ->
         // allocates nothing, so only text that genuinely needs rewriting pays
         // for the two `String`s. (#10094: this ran on every comparison, and a
         // sort pays it O(n log n) times.)
-        if is_nfc_quick(a.chars()) == IsNormalized::Yes
-            && is_nfc_quick(b.chars()) == IsNormalized::Yes
-        {
-            return compare(a, b);
+        if let (Some(a_str), Some(b_str)) = (a.as_str(), b.as_str()) {
+            if is_nfc_quick(a_str.chars()) == IsNormalized::Yes
+                && is_nfc_quick(b_str.chars()) == IsNormalized::Yes
+            {
+                return compare(a, b);
+            }
+            let a_nfc: String = a_str.nfc().collect();
+            let b_nfc: String = b_str.nfc().collect();
+            return compare(Wtf8Str::from_str(&a_nfc), Wtf8Str::from_str(&b_nfc));
         }
-        let a_nfc: String = a.nfc().collect();
-        let b_nfc: String = b.nfc().collect();
-        compare(&a_nfc, &b_nfc)
+        // A WTF-8 payload: `is_nfc_quick` takes `char`s, so there is no quick
+        // check to take, and the run-splitting normalizer does the work
+        // instead. (#10692)
+        let a_nfc = wtf8::normalize(a, wtf8::NormalizeForm::Nfc);
+        let b_nfc = wtf8::normalize(b, wtf8::NormalizeForm::Nfc);
+        compare(
+            Wtf8Str::from_wtf8_bytes(&a_nfc),
+            Wtf8Str::from_wtf8_bytes(&b_nfc),
+        )
     }
     #[cfg(not(feature = "string-normalize"))]
     compare(a, b)
@@ -751,8 +774,10 @@ fn locale_compare_canonical(a: &str, b: &str, compare: fn(&str, &str) -> f64) ->
 /// walks instead of materializing `str::to_lowercase`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum LowerStep {
-    /// The next scalar of the lowercased form.
-    Char(char),
+    /// The next code point of the lowercased form. A `u32` rather than a
+    /// `char` because a WTF-8 payload can carry a lone surrogate, which
+    /// `char` may never hold (#10692).
+    Cp(u32),
     /// Input exhausted.
     End,
     /// U+03A3 GREEK CAPITAL LETTER SIGMA — the one *contextual* (but
@@ -772,7 +797,7 @@ enum LowerStep {
 /// string — and, because the walk stops at the first difference, usually
 /// without case-mapping more than the first scalar or two.
 struct LowerChars<'a> {
-    rest: std::str::Chars<'a>,
+    rest: wtf8::CodePoints<'a>,
     /// Tail of a one-to-many expansion. U+0130 (`İ` → `i` + U+0307) is the
     /// only unconditional one, but `char::to_lowercase` is allowed up to
     /// three scalars and this holds whatever it yields.
@@ -780,9 +805,9 @@ struct LowerChars<'a> {
 }
 
 impl<'a> LowerChars<'a> {
-    fn new(s: &'a str) -> Self {
+    fn new(s: Wtf8Str<'a>) -> Self {
         LowerChars {
-            rest: s.chars(),
+            rest: s.code_points(),
             pending: None,
         }
     }
@@ -790,30 +815,36 @@ impl<'a> LowerChars<'a> {
     fn next(&mut self) -> LowerStep {
         if let Some(pending) = self.pending.as_mut() {
             if let Some(c) = pending.next() {
-                return LowerStep::Char(c);
+                return LowerStep::Cp(u32::from(c));
             }
             self.pending = None;
         }
-        let c = match self.rest.next() {
+        let code_point = match self.rest.next() {
             Some(c) => c,
             None => return LowerStep::End,
         };
         // ASCII is one-to-one and needs no case table.
-        if c.is_ascii() {
-            return LowerStep::Char(c.to_ascii_lowercase());
+        if code_point < 0x80 {
+            return LowerStep::Cp(u32::from((code_point as u8).to_ascii_lowercase()));
         }
-        if c == GREEK_CAPITAL_SIGMA {
+        if code_point == GREEK_CAPITAL_SIGMA {
             return LowerStep::Contextual;
         }
+        // A lone surrogate is unassigned, hence uncased: it lowercases to
+        // itself, which is exactly what `char::to_lowercase` answered for the
+        // out-of-range `char` this replaces.
+        let Some(c) = char::from_u32(code_point) else {
+            return LowerStep::Cp(code_point);
+        };
         let mut expansion = c.to_lowercase();
         let first = expansion.next().unwrap_or(c);
         self.pending = Some(expansion);
-        LowerStep::Char(first)
+        LowerStep::Cp(u32::from(first))
     }
 }
 
 /// U+03A3, the only scalar whose lowercase mapping depends on its context.
-const GREEK_CAPITAL_SIGMA: char = '\u{03A3}';
+const GREEK_CAPITAL_SIGMA: u32 = 0x03A3;
 
 /// Primary (case-insensitive) collation pass: order the two inputs exactly as
 /// `a.to_lowercase().cmp(&b.to_lowercase())` would, without allocating either
@@ -826,11 +857,11 @@ const GREEK_CAPITAL_SIGMA: char = '\u{03A3}';
 /// Returns `None` when a context-dependent mapping is reached before the
 /// answer is decided — the caller's signal to fall back to the allocating
 /// comparison, which resolves the final-sigma rule properly.
-fn locale_primary_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+fn locale_primary_cmp(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> Option<std::cmp::Ordering> {
     // ASCII maps one-to-one under `to_lowercase`, so while both sides are
     // ASCII the lowercased streams stay byte-aligned with the inputs and a
     // plain byte walk decides the comparison without decoding anything.
-    let (a_bytes, b_bytes) = (a.as_bytes(), b.as_bytes());
+    let (a_bytes, b_bytes) = (a.bytes(), b.bytes());
     let common = a_bytes.len().min(b_bytes.len());
     let mut i = 0;
     while i < common && a_bytes[i].is_ascii() && b_bytes[i].is_ascii() {
@@ -841,12 +872,13 @@ fn locale_primary_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
         }
         i += 1;
     }
-    // Everything before `i` was ASCII on both sides, so `i` is a scalar
-    // boundary in both strings and both lowercased streams are `i` scalars in.
-    locale_primary_cmp_scalars(&a[i..], &b[i..])
+    // Everything before `i` was ASCII on both sides, so `i` is a code-point
+    // boundary in both payloads and both lowercased streams are `i` code
+    // points in.
+    locale_primary_cmp_scalars(a.slice_from(i), b.slice_from(i))
 }
 
-fn locale_primary_cmp_scalars(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+fn locale_primary_cmp_scalars(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> Option<std::cmp::Ordering> {
     use std::cmp::Ordering;
     let mut ai = LowerChars::new(a);
     let mut bi = LowerChars::new(b);
@@ -854,9 +886,9 @@ fn locale_primary_cmp_scalars(a: &str, b: &str) -> Option<std::cmp::Ordering> {
         match (ai.next(), bi.next()) {
             (LowerStep::Contextual, _) | (_, LowerStep::Contextual) => return None,
             (LowerStep::End, LowerStep::End) => return Some(Ordering::Equal),
-            (LowerStep::End, LowerStep::Char(_)) => return Some(Ordering::Less),
-            (LowerStep::Char(_), LowerStep::End) => return Some(Ordering::Greater),
-            (LowerStep::Char(x), LowerStep::Char(y)) => {
+            (LowerStep::End, LowerStep::Cp(_)) => return Some(Ordering::Less),
+            (LowerStep::Cp(_), LowerStep::End) => return Some(Ordering::Greater),
+            (LowerStep::Cp(x), LowerStep::Cp(y)) => {
                 if x != y {
                     return Some(x.cmp(&y));
                 }
@@ -873,16 +905,18 @@ fn locale_primary_cmp_scalars(a: &str, b: &str) -> Option<std::cmp::Ordering> {
 /// Both passes are allocation-free and short-circuit at the first difference;
 /// see [`locale_primary_cmp`]. The ordering is deliberately unchanged from the
 /// allocating formulation it replaced (#10094).
-fn locale_compare_default(a_str: &str, b_str: &str) -> f64 {
+fn locale_compare_default(a_str: Wtf8Str<'_>, b_str: Wtf8Str<'_>) -> f64 {
     // Case-insensitive primary comparison.
     let primary = match locale_primary_cmp(a_str, b_str) {
         Some(ordering) => ordering,
         None => {
             // Final sigma reached before the answer was decided. Rare enough
             // to be worth two allocations rather than a second, divergent copy
-            // of the Final_Sigma rule here.
-            let a_lower = a_str.to_lowercase();
-            let b_lower = b_str.to_lowercase();
+            // of the Final_Sigma rule here. Comparing the lowercased forms as
+            // bytes is the same order as comparing them as code points —
+            // WTF-8 byte order and code point order agree.
+            let a_lower = wtf8::to_lowercase(a_str);
+            let b_lower = wtf8::to_lowercase(b_str);
             a_lower.cmp(&b_lower)
         }
     };
@@ -893,8 +927,8 @@ fn locale_compare_default(a_str: &str, b_str: &str) -> f64 {
     }
     // Same letters ignoring case — order by case (lowercase < uppercase
     // per the default Unicode collation tertiary weight).
-    let mut ai = a_str.chars();
-    let mut bi = b_str.chars();
+    let mut ai = a_str.code_points();
+    let mut bi = b_str.code_points();
     loop {
         match (ai.next(), bi.next()) {
             (None, None) => return 0.0,
@@ -904,15 +938,15 @@ fn locale_compare_default(a_str: &str, b_str: &str) -> f64 {
                 if ca == cb {
                     continue;
                 }
-                let a_lower = ca.is_lowercase();
-                let b_lower = cb.is_lowercase();
+                let a_lower = wtf8::code_point_is_lowercase(ca);
+                let b_lower = wtf8::code_point_is_lowercase(cb);
                 if a_lower && !b_lower {
                     return -1.0;
                 }
                 if !a_lower && b_lower {
                     return 1.0;
                 }
-                return if (ca as u32) < (cb as u32) { -1.0 } else { 1.0 };
+                return if ca < cb { -1.0 } else { 1.0 };
             }
         }
     }
@@ -963,7 +997,10 @@ pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const Str
     if !b_valid {
         return 1.0;
     }
-    locale_compare_canonical(string_as_str(a), string_as_str(b), locale_compare_default)
+    // SAFETY: both pointers were just validated; the borrows do not outlive
+    // the comparison, which allocates only its own scratch buffers.
+    let (a, b) = unsafe { (Wtf8Str::from_header(a), Wtf8Str::from_header(b)) };
+    locale_compare_canonical(a, b, locale_compare_default)
 }
 
 /// Natural-order collation for `localeCompare(other, locales, { numeric: true })`:
@@ -971,37 +1008,37 @@ pub extern "C" fn js_string_locale_compare(a: *const StringHeader, b: *const Str
 /// ignored, then by digit-count and lexicographically), and non-digit runs
 /// compare with the same case-insensitive primary / case tertiary rule as
 /// `js_string_locale_compare`. So `"10" > "9"` and `"file10" > "file9"`.
-fn locale_compare_numeric_raw(a: &str, b: &str) -> f64 {
-    let mut ai = a.chars().peekable();
-    let mut bi = b.chars().peekable();
+fn locale_compare_numeric_raw(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> f64 {
+    /// `char::is_ascii_digit` over a code point.
+    fn is_digit(code_point: u32) -> bool {
+        (0x30..=0x39).contains(&code_point)
+    }
+    /// Consume the maximal ASCII-digit run at the cursor.
+    fn digit_run(iter: &mut std::iter::Peekable<wtf8::CodePoints<'_>>) -> Vec<u8> {
+        let mut run = Vec::new();
+        while let Some(&c) = iter.peek() {
+            if !is_digit(c) {
+                break;
+            }
+            run.push(c as u8);
+            iter.next();
+        }
+        run
+    }
+    let mut ai = a.code_points().peekable();
+    let mut bi = b.code_points().peekable();
     loop {
         match (ai.peek().copied(), bi.peek().copied()) {
             (None, None) => return 0.0,
             (None, Some(_)) => return -1.0,
             (Some(_), None) => return 1.0,
-            (Some(ca), Some(cb)) if ca.is_ascii_digit() && cb.is_ascii_digit() => {
-                let mut da = String::new();
-                while let Some(&c) = ai.peek() {
-                    if c.is_ascii_digit() {
-                        da.push(c);
-                        ai.next();
-                    } else {
-                        break;
-                    }
-                }
-                let mut db = String::new();
-                while let Some(&c) = bi.peek() {
-                    if c.is_ascii_digit() {
-                        db.push(c);
-                        bi.next();
-                    } else {
-                        break;
-                    }
-                }
+            (Some(ca), Some(cb)) if is_digit(ca) && is_digit(cb) => {
+                let da = digit_run(&mut ai);
+                let db = digit_run(&mut bi);
                 // Compare by numeric value: strip leading zeros, then longer
                 // run wins, then lexicographically among equal lengths.
-                let na = da.trim_start_matches('0');
-                let nb = db.trim_start_matches('0');
+                let na = &da[da.iter().position(|&d| d != b'0').unwrap_or(da.len())..];
+                let nb = &db[db.iter().position(|&d| d != b'0').unwrap_or(db.len())..];
                 match na.len().cmp(&nb.len()).then_with(|| na.cmp(nb)) {
                     std::cmp::Ordering::Less => return -1.0,
                     std::cmp::Ordering::Greater => return 1.0,
@@ -1014,24 +1051,24 @@ fn locale_compare_numeric_raw(a: &str, b: &str) -> f64 {
                 if ca == cb {
                     continue;
                 }
-                let la = ca.to_lowercase().next().unwrap_or(ca);
-                let lb = cb.to_lowercase().next().unwrap_or(cb);
+                let la = wtf8::code_point_to_lowercase_first(ca);
+                let lb = wtf8::code_point_to_lowercase_first(cb);
                 if la != lb {
                     return if la < lb { -1.0 } else { 1.0 };
                 }
                 // Same letter, different case: lowercase sorts before uppercase.
-                let a_lower = ca.is_lowercase();
-                let b_lower = cb.is_lowercase();
+                let a_lower = wtf8::code_point_is_lowercase(ca);
+                let b_lower = wtf8::code_point_is_lowercase(cb);
                 if a_lower != b_lower {
                     return if a_lower { -1.0 } else { 1.0 };
                 }
-                return if (ca as u32) < (cb as u32) { -1.0 } else { 1.0 };
+                return if ca < cb { -1.0 } else { 1.0 };
             }
         }
     }
 }
 
-fn locale_compare_numeric(a: &str, b: &str) -> f64 {
+fn locale_compare_numeric(a: Wtf8Str<'_>, b: Wtf8Str<'_>) -> f64 {
     locale_compare_canonical(a, b, locale_compare_numeric_raw)
 }
 
@@ -1064,7 +1101,10 @@ pub extern "C" fn js_string_locale_compare_opts(
         // Match the validity edge-cases of the default path.
         return js_string_locale_compare(a, b);
     }
-    locale_compare_numeric(string_as_str(a), string_as_str(b))
+    // SAFETY: both pointers were just validated above; see
+    // `js_string_locale_compare`.
+    let (a, b) = unsafe { (Wtf8Str::from_header(a), Wtf8Str::from_header(b)) };
+    locale_compare_numeric(a, b)
 }
 
 /// String.prototype.isWellFormed() — returns NaN-boxed boolean.
@@ -1407,7 +1447,23 @@ mod utf16_cmp_ascii_fast_path_tests {
 
 #[cfg(test)]
 mod numeric_collation_tests {
-    use super::{locale_compare_default, locale_compare_numeric};
+    use super::Wtf8Str;
+
+    /// `&str` shim: the production comparators take a [`Wtf8Str`] borrow so a
+    /// WTF-8 payload can reach them without a `&str` that may not exist
+    /// (#10692). These tests are about the ordering, not the borrow.
+    fn locale_compare_numeric(a: &str, b: &str) -> f64 {
+        super::locale_compare_numeric(Wtf8Str::from_str(a), Wtf8Str::from_str(b))
+    }
+
+    #[cfg(feature = "string-normalize")]
+    fn locale_compare_canonical_default(a: &str, b: &str) -> f64 {
+        super::locale_compare_canonical(
+            Wtf8Str::from_str(a),
+            Wtf8Str::from_str(b),
+            super::locale_compare_default,
+        )
+    }
 
     #[test]
     fn natural_order_compares_digit_runs_numerically() {
@@ -1437,10 +1493,7 @@ mod numeric_collation_tests {
             ("\u{1111}\u{1171}\u{11b6}", "퓛"),
             ("Å", "A\u{030a}"),
         ] {
-            assert_eq!(
-                super::locale_compare_canonical(a, b, locale_compare_default),
-                0.0
-            );
+            assert_eq!(locale_compare_canonical_default(a, b), 0.0);
             assert_eq!(locale_compare_numeric(a, b), 0.0);
         }
     }
@@ -1453,8 +1506,28 @@ mod numeric_collation_tests {
 /// `Array.prototype.sort` stays well-defined.
 #[cfg(test)]
 mod locale_collation_tests {
-    use super::{locale_compare_canonical, locale_compare_default, locale_primary_cmp};
+    use super::Wtf8Str;
     use std::cmp::Ordering;
+
+    /// `&str` shims over the [`Wtf8Str`]-borrowing production comparators
+    /// (#10692). Every assertion below is about the ordering, which is
+    /// unchanged; the borrow type only decides whether a lone surrogate can
+    /// reach them at all.
+    fn locale_compare_default(a: &str, b: &str) -> f64 {
+        super::locale_compare_default(Wtf8Str::from_str(a), Wtf8Str::from_str(b))
+    }
+
+    fn locale_primary_cmp(a: &str, b: &str) -> Option<Ordering> {
+        super::locale_primary_cmp(Wtf8Str::from_str(a), Wtf8Str::from_str(b))
+    }
+
+    fn locale_compare_canonical(
+        a: &str,
+        b: &str,
+        compare: fn(Wtf8Str<'_>, Wtf8Str<'_>) -> f64,
+    ) -> f64 {
+        super::locale_compare_canonical(Wtf8Str::from_str(a), Wtf8Str::from_str(b), compare)
+    }
 
     /// The formulation this replaced, kept verbatim as the oracle: lowercase
     /// both sides with `str::to_lowercase` and compare the results. If the
@@ -1663,7 +1736,7 @@ mod locale_collation_tests {
     fn locale_compare_is_a_strict_weak_ordering() {
         let corpus = corpus();
         let cmp = |a: &str, b: &str| {
-            let v = locale_compare_canonical(a, b, locale_compare_default);
+            let v = locale_compare_canonical(a, b, super::locale_compare_default);
             if v < 0.0 {
                 Ordering::Less
             } else if v > 0.0 {
@@ -1713,7 +1786,7 @@ mod locale_collation_tests {
     /// assertions so a future rewrite has to face them.
     #[test]
     fn documented_guarantees_hold() {
-        let cmp = |a: &str, b: &str| locale_compare_canonical(a, b, locale_compare_default);
+        let cmp = |a: &str, b: &str| locale_compare_canonical(a, b, super::locale_compare_default);
         // Identical, empty, and prefix pairs.
         assert_eq!(cmp("", ""), 0.0);
         assert_eq!(cmp("abc", "abc"), 0.0);
@@ -1754,14 +1827,14 @@ mod locale_collation_tests {
             ("ä中😀Öa", "a\u{308}中😀O\u{308}a"),
         ] {
             assert_eq!(
-                locale_compare_canonical(a, b, locale_compare_default),
+                locale_compare_canonical(a, b, super::locale_compare_default),
                 0.0,
                 "{a:?} vs {b:?}"
             );
             // …and the case tiebreak still applies across spellings.
             let upper_a = a.to_uppercase();
             assert!(
-                locale_compare_canonical(a, &upper_a, locale_compare_default) <= 0.0,
+                locale_compare_canonical(a, &upper_a, super::locale_compare_default) <= 0.0,
                 "{a:?} vs {upper_a:?}"
             );
         }
