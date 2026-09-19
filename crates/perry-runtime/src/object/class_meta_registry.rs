@@ -169,11 +169,18 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
         return;
     }
     GENERIC_ORIGIN_LATCH.arm();
-    let mut g = CLASS_GENERIC_ORIGIN.write().unwrap();
-    if g.is_none() {
-        *g = Some(new_ptr_hash_map());
+    {
+        let mut g = CLASS_GENERIC_ORIGIN.write().unwrap();
+        if g.is_none() {
+            *g = Some(new_ptr_hash_map());
+        }
+        g.as_mut().unwrap().insert(class_id, generic_id);
     }
-    g.as_mut().unwrap().insert(class_id, generic_id);
+    // Arming the latch and adding the edge redirect BOTH prototype-object
+    // readers (`class_prototype_object`, `class_decl_prototype_object`) and
+    // `lookup_prototype_method`'s chain hop to the generic's id, so a cached
+    // per-class-id chain verdict must retire (#10696).
+    crate::object::class_lookup_surface_gen_bump();
 }
 
 /// Keepalive anchor: emitted only from generated module-init code, so the

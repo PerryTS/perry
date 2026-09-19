@@ -111,11 +111,16 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f6
             return;
         }
     } else {
+        // Un-marking re-exposes a previously `delete`d prototype key to
+        // `class_instance_has_member` / `lookup_prototype_method` — the one
+        // direction a cached "this chain resolves nothing" verdict must not
+        // survive (#10696).
         CLASS_DELETED_KEYS.with(|m| {
             if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
                 keys.remove(name);
             }
         });
+        super::class_lookup_surface_gen_bump();
     }
     CLASS_DYNAMIC_PROPS.with(|m| {
         let created = m
@@ -634,6 +639,13 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
     });
     class_prototype_object_addr_index_rekey(old.unwrap_or(0), proto_ptr as usize);
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+    // A materialized prototype object can carry arbitrary later-added
+    // properties, so every cache that answered "this class chain resolves
+    // nothing" must retire. Bumped HERE rather than at the call sites: five
+    // of them (`ensure_function_prototype_object`, `js_object_create`,
+    // the per-evaluation class-object heritage path, and the lazy
+    // tls/tty/wasi installers) bump nothing of their own (#10696).
+    super::class_lookup_surface_gen_bump();
 }
 
 pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
@@ -720,6 +732,11 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
             .insert(class_id, proto_ptr as usize);
     });
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+    // Its sole caller, `class_decl_prototype_value`, argues at length against
+    // bumping VTABLE_GEN here (it would disarm dispatch speculation for a
+    // whole class hierarchy). The lookup-surface generation is the separate
+    // counter that exists for exactly this store (#10696).
+    super::class_lookup_surface_gen_bump();
 }
 
 pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {
