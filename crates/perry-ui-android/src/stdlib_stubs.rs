@@ -448,66 +448,6 @@ pub extern "C" fn js_dayjs_year() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_decimal_abs() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_div() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_eq() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_from_number() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_from_string() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_gt() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_lt() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_minus() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_plus() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_plus_number() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_sqrt() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_times() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_to_fixed() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_to_number() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_decimal_to_string() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_dotenv_config() -> i64 {
     0
 }

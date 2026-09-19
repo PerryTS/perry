@@ -122,7 +122,6 @@ pub(super) fn lower_builtin_new<'a>(
         "DatabaseSync" | "Session" | "StatementSync" => Some(&["sqlite", "node:sqlite"]),
         "Redis" => Some(&["ioredis", "redis", "iovalkey"]),
         "MongoClient" => Some(&["mongodb"]),
-        "Decimal" => Some(&["decimal.js"]),
         "RateLimiterMemory" => Some(&["rate-limiter-flexible"]),
         "CronJob" => Some(&["cron", "node-cron"]),
         "Transpiler" => Some(&["bun"]),
@@ -1020,23 +1019,6 @@ pub(super) fn lower_builtin_new<'a>(
                 "js_suppressed_error_new",
                 &[(DOUBLE, &error), (DOUBLE, &suppressed), (DOUBLE, &message)],
             )))
-        }
-        // decimal.js Decimal — `new Decimal(value)` where value is a number,
-        // string, or another Decimal. Routes through `js_decimal_coerce_to_handle`
-        // which NaN-decodes the JSValue and dispatches to `from_number` /
-        // `from_string` / passthrough for an existing Decimal handle. Without
-        // this, `new Decimal("0.1")` falls into the empty-placeholder branch
-        // and every chained method dispatches against a junk receiver.
-        "Decimal" => {
-            let val = if let Some(arg) = args.first() {
-                lower_expr(ctx, arg)?
-            } else {
-                // `new Decimal()` with no args — coerce undefined → 0.
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_decimal_coerce_to_handle", &[(DOUBLE, &val)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         "Array" => {
             // `new Array()` → empty array, `new Array(n)` → length-n sparse

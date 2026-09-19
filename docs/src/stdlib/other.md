@@ -117,15 +117,6 @@ const result = await backOff(() => fetchUnstableEndpoint(), {
 });
 ```
 
-## decimal.js / bignumber.js (Arbitrary Precision)
-
-Native bindings via `perry-ext-decimal` (v0.5.547). Both package names route
-to the same backend — `Decimal` and `BigNumber` are both exposed.
-
-```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:decimal}}
-```
-
 ## dayjs / date-fns (Date Manipulation)
 
 Native bindings via `perry-ext-dayjs` (v0.5.548). Both package names route to

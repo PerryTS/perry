@@ -92,7 +92,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-commander` | `commander` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-cron` | `cron`<br>`node-cron` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-dayjs` | `date-fns`<br>`dayjs` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-decimal` | `bignumber.js`<br>`decimal.js` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-dotenv` | `dotenv` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-events` | `events` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |

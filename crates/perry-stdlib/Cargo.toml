@@ -23,7 +23,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -47,10 +47,6 @@ bundled-exponential-backoff = []
 
 # EventEmitter — pure Rust, no extra deps. Default-on through `full`.
 bundled-events = []
-
-# decimal.js / bignumber.js — needs `rust_decimal`. Default-on
-# through `full`.
-bundled-decimal = ["dep:rust_decimal"]
 
 # dayjs / date-fns — chrono is always-on (used by lots of stdlib),
 # so this gate just toggles whether perry-stdlib's dayjs module is
@@ -449,11 +445,6 @@ nanoid = { version = "0.5", optional = true }
 # strip the perry-stdlib copy when `import 'lru-cache'` resolves
 # to perry-ext-lru-cache instead.
 lru = { version = "0.18", optional = true }
-
-# Decimal math (Big.js / Decimal.js) — optional from v0.5.547 so
-# the well-known flip can strip perry-stdlib's copy when
-# `import 'decimal.js'` resolves to perry-ext-decimal instead.
-rust_decimal = { version = "1.33", features = ["maths"], optional = true }
 
 # libc — termios for readline's raw-mode toggle (#347 Phase 2). The
 # Unix path uses tcsetattr/cfmakeraw; Windows uses SetConsoleMode via

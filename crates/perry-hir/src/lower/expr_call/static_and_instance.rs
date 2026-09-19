@@ -358,8 +358,8 @@ pub(super) fn try_static_method_and_instance(
             }
         }
 
-        // Check for method calls on new Big/Decimal/BigNumber() expressions
-        // e.g., new Big("100").div(2)
+        // Check for method calls on new LRUCache/Command() expressions
+        // e.g., new LRUCache({max:3}).set("a", 1)
         if let Some(module_name) = detect_native_instance_expr(ctx, &member.obj) {
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.to_string();
@@ -412,21 +412,6 @@ pub(super) fn try_static_method_and_instance(
                 ..
             } = &object_expr
             {
-                // Methods that return the same type (builder pattern)
-                let is_math_lib =
-                    matches!(module.as_str(), "big.js" | "decimal.js" | "bignumber.js");
-                let is_math_method = matches!(
-                    method_name.as_str(),
-                    // arithmetic + chainable rounding/formatting
-                    "plus" | "minus" | "times" | "div" | "mod" |
-                            "pow" | "sqrt" | "abs" | "neg" | "round" | "floor" | "ceil" | "toFixed" |
-                            // decimal.js: terminal-shape methods that still need
-                            // NativeMethodCall dispatch (so a.plus(b).eq(c) etc.
-                            // doesn't fall back to the generic Call+PropertyGet path).
-                            "toString" | "toNumber" | "valueOf" |
-                            "eq" | "lt" | "lte" | "gt" | "gte" | "cmp" |
-                            "isZero" | "isPositive" | "isNegative"
-                );
                 // commander Command — every fluent method either
                 // returns the same handle (name/version/description/
                 // option/requiredOption/action) or a sub-Command with
@@ -496,8 +481,7 @@ pub(super) fn try_static_method_and_instance(
                         | "destroy"
                         | "end"
                 );
-                if (is_math_lib && is_math_method)
-                    || (is_commander && is_commander_method)
+                if (is_commander && is_commander_method)
                     || (is_fastify_reply && is_fastify_reply_chain_method)
                     || (is_http_client_request && is_client_request_chain_method)
                 {
