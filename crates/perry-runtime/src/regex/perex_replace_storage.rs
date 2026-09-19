@@ -214,6 +214,23 @@ pub(super) fn call_native(
     result
 }
 
+/// How many units of output a `Pieces::finish` pass may read between GC
+/// safepoint polls.
+///
+/// The passes walk the output's pieces, and a piece is usually a handful of
+/// units, so polling per piece ran the whole budgeted trigger ladder (~436
+/// instructions, no cheap "nothing is due" precheck) thousands of times per
+/// QUANTUM of real reading. But these passes are downstream of the replacement's
+/// traced pieces and its replacer's strings, so unlike the collection loop in
+/// `perex_replace_direct` they DO produce garbage, and polling far less often
+/// costs peak RSS: at `api::QUANTUM` (4096) it was +13.2% median on an
+/// allocating replace at n=1,000,000, over the accepted +10% budget.
+///
+/// This value is therefore a measured trade rather than a bound inherited from
+/// elsewhere: small enough to keep the collector's openings, large enough that
+/// a piece of two or three units no longer buys a poll of its own.
+const POLL_UNITS: usize = 512;
+
 /// A reusable original-input reader. A read retains only Perex offsets across
 /// collection, and adjacent reads do not repeat the initial Unicode seek.
 pub(super) struct Units<'a, 's> {
@@ -524,13 +541,17 @@ impl<'a> Pieces<'a> {
             u32::MAX as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<StringHeader>() - 7,
         );
         let mut measured = Encoder::default();
+        let mut measured_polled_at = 0usize;
         self.walk(original, template, budget, |reader, budget| loop {
             let p = reader
                 .try_fold(api::QUANTUM, budget, |u| {
                     measured.push(u, limit, &mut |_| Ok(()))
                 })
                 .map_err(|e| read_error(e, |e| e))?;
-            host::poll()?;
+            if measured.units.saturating_sub(measured_polled_at) >= POLL_UNITS {
+                measured_polled_at = measured.units;
+                host::poll()?;
+            }
             if p == ReadProgress::Complete {
                 return Ok(());
             }
@@ -550,6 +571,7 @@ impl<'a> Pieces<'a> {
         let output = scope.root_string_ptr(output);
         let mut encoded = Encoder::default();
         let mut written = 0usize;
+        let mut encoded_polled_at = 0usize;
         self.walk(original, template, budget, |reader, budget| loop {
             let p = output.with_mut_ptr::<StringHeader, _>(|header| {
                 let mut emit = |bytes: &[u8]| {
@@ -582,7 +604,10 @@ impl<'a> Pieces<'a> {
                 }
                 p
             })?;
-            host::poll()?;
+            if encoded.units.saturating_sub(encoded_polled_at) >= POLL_UNITS {
+                encoded_polled_at = encoded.units;
+                host::poll()?;
+            }
             if p == ReadProgress::Complete {
                 return Ok(());
             }
