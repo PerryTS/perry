@@ -25,3 +25,65 @@ existing exception/rooting fixtures ran under five GC-schedule seeds at
 RATE=1 with from-space protection, all byte-identical to node, with
 forced_collections=2566 / copying_minors=2566 / moved_objects=37000 confirming
 the instrument was live.
+
+**Follow-up: CI's `cargo-test` job (Linux, debug profile) SIGSEGV'd on this
+change** (run 35374727647, job 105594641738) — no `FAILED` line survived
+(libtest's stdout is block-buffered under CI), so the crashing test was never
+named. Confirmed this PR's own regression: `cargo-test` was clean on #10644,
+#10647, #10650, #10651 against the same base.
+
+Reproduction, in the exact failing configuration
+(`RUST_TEST_THREADS=1 cargo test -p perry-runtime --lib`, debug, no
+`--release`), across every environment tried, came back clean:
+- macOS arm64, the shipped Darwin `perry_thread_local!` path: 4013 passed.
+- macOS arm64 with the Darwin `pthread`-TSD path forced off (`hot()` forced
+  onto the generic `hot_via_tls()` route every non-Darwin-aarch64 target
+  already uses): 4013 passed, 0 failed — this weakens, though doesn't
+  disprove, a re-entrancy theory in the generic path itself.
+- Linux x86_64 (qemu-emulated Ubuntu VM on the CI-pinned
+  `nightly-2026-08-20` toolchain, matching `ubuntu-latest`'s triple): ran
+  clean through 1968+ of ~4013 tests in alphabetical order, well past the
+  async_hooks region where CI's log cuts off, before a later, unrelated
+  regex-replace stress test stalled under emulation (not a crash — verified
+  it runs in well under a second natively; almost certainly a qemu-specific
+  slowdown, not tied to this change).
+
+The SIGSEGV's mechanism was never pinned down — see #10709 for the full
+writeup, including the two open hypotheses (re-entrancy in `tls_hot.rs`'s
+`fill()`, which writes its last field specifically to guard against a
+half-filled cache being *used* re-entrantly but does not stop `fill()` being
+*called* again re-entrantly; and plain debug-profile stack depth on CI's
+default thread, a signature this repo has hit before). Rather than let it
+evaporate, it's tracked there and the change is narrowed instead:
+
+`SHADOW`'s declaration is now cfg-split —
+`crate::perry_thread_local!` only under
+`all(target_vendor = "apple", target_arch = "aarch64", target_pointer_width = "64")`,
+a plain `thread_local!` (the pre-#10619 form) everywhere else. This isn't
+only a hedge against the unconfirmed SIGSEGV: `tls_hot.rs`'s own module docs
+already say the published-cache shortcut is Darwin-aarch64-specific, and
+everywhere else "resolving a thread-local is already a fixed offset and the
+extra cache indirection has no demonstrated benefit" — so routing `SHADOW`
+through it unconditionally was strictly more work (one extra `HOT`
+resolution plus a slot-array indirection) on every other target for a win
+that was only ever measured on Darwin. `scripts/thread_local_cold_allowlist.json`'s
+`shadow_stack.rs` count goes back to 2 (its pre-#10619 value) to match.
+
+Re-verified on this Darwin host post-split, differential probe (own builds,
+base = this PR's parent 9df5075fbe, arm = this fix, both
+`PERRY_NO_AUTO_OPTIMIZE=1`, median of 7, N=20000/40000): try-entry marginal
+cost 162.2 -> 152.0 instructions/entry (-10.2, ~6.3%), bare-loop control
+~1.0 instructions in both arms (noise floor relative to the ~150-instruction
+signal) — the win the original commit measured (-8.1%) survives, because the
+fix does not touch the Darwin code path at all.
+
+Also re-ran: debug and release `cargo test -p perry-runtime --lib` (release:
+4010 passed, the same 2 pre-existing `debug_assert!`-gated failures noted
+above); the gap fixture plus GC-stress (seeds 1 and 42,
+`PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1
+PERRY_GC_VERIFY_EVACUATION=1 PERRY_GC_FROMSPACE_SCAN_ABORT=1`) both
+byte-identical to node with non-zero copying minors
+(`copying_minors=76 moved_objects=35258`) and a live
+`[gc-fromspace-protect] retired_set=#75` line; `cargo fmt --all -- --check`;
+`scripts/run_lint_gates.sh` (the only failure is the pre-existing, known-red
+public-baseline step); `scripts/check_thread_locals.py`/`--self-test`.
