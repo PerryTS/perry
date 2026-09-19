@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2067 entries across 132 modules
+// Coverage: 2066 entries across 131 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -267,11 +267,6 @@ declare module "bcrypt" {
 declare module "better-sqlite3" {
   /** stdlib */
   export default function (p0: string): any;
-}
-
-declare module "bignumber.js" {
-  /** stdlib */
-  export class BigNumber { [key: string]: any; }
 }
 
 declare module "buffer" {

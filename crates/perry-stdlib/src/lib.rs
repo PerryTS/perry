@@ -42,10 +42,6 @@ pub mod domain;
 // perry-ext-dayjs without duplicate `_js_dayjs_*` symbols at link.
 #[cfg(feature = "bundled-dayjs")]
 pub mod dayjs;
-// decimal feature-gated as of v0.5.547 — well-known flip routes
-// to perry-ext-decimal.
-#[cfg(feature = "bundled-decimal")]
-pub mod decimal;
 // dotenv is feature-gated as of v0.5.533 so the well-known bindings
 // table (#466 Phase 4) can route `import 'dotenv'` to perry-ext-dotenv
 // without duplicate _js_dotenv_* symbols at link time. Default-on
@@ -98,8 +94,6 @@ pub use commander::*;
 pub use common::*;
 #[cfg(feature = "bundled-dayjs")]
 pub use dayjs::*;
-#[cfg(feature = "bundled-decimal")]
-pub use decimal::*;
 pub use domain::*;
 #[cfg(feature = "bundled-dotenv")]
 pub use dotenv::*;

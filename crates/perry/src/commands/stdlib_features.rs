@@ -184,9 +184,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // GC-root-scanner surface that keeps EventEmitter
         // listener closures alive between .on() and .emit().
         "events" => &["bundled-events"],
-        // decimal.js / bignumber.js: feature-gated v0.5.547 —
-        // well-known flip routes to perry-ext-decimal.
-        "decimal.js" | "bignumber.js" => &["bundled-decimal"],
         // dayjs / date-fns: feature-gated v0.5.548 — well-known
         // flip routes to perry-ext-dayjs.
         "dayjs" | "date-fns" => &["bundled-dayjs"],

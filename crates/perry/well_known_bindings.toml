@@ -209,30 +209,6 @@ lib = "perry_ext_events"
 tracking = "#466"
 node-builtin = true
 
-[bindings."decimal.js"]
-crate = "perry-ext-decimal"
-lib = "perry_ext_decimal"
-tracking = "#466"
-
-[bindings."decimal.js".upstream]
-version = "10.6.0"
-sha256 = "433210122e8149972f64054c54b0ce0872e5f15a3c5835aab57ff1a8e6d071b1"
-repo = "https://github.com/MikeMcl/decimal.js"
-ref = "f1ee2f404d6bf96d59c04db80c1f404742afa3fa"
-ported-at = "10.6.0"
-date = "2026-07-30"
-[bindings."bignumber.js"]
-crate = "perry-ext-decimal"
-lib = "perry_ext_decimal"
-tracking = "#466"
-
-[bindings."bignumber.js".upstream]
-version = "11.1.5"
-sha256 = "b98a3d093fdbd8854b32a631229dfb68366f29ad5496c680434a64f762aad321"
-repo = "https://github.com/MikeMcl/bignumber.js"
-ref = "275cd85181041d7b6bebf8ef9b70ee0b1bf056b0"
-ported-at = "11.1.5"
-date = "2026-07-30"
 [bindings.dayjs]
 crate = "perry-ext-dayjs"
 lib = "perry_ext_dayjs"

@@ -118,50 +118,6 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_moment_value_of", DOUBLE, &[I64]);
     module.declare_function("js_moment_year", DOUBLE, &[I64]);
 
-    // ========== Decimal.js ==========
-    module.declare_function("js_decimal_abs", I64, &[I64]);
-    module.declare_function("js_decimal_ceil", I64, &[I64]);
-    module.declare_function("js_decimal_cmp", DOUBLE, &[I64, I64]);
-    module.declare_function("js_decimal_cmp_value", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_coerce_to_handle", I64, &[DOUBLE]);
-    module.declare_function("js_decimal_div", I64, &[I64, I64]);
-    module.declare_function("js_decimal_div_number", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_div_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_eq", DOUBLE, &[I64, I64]);
-    module.declare_function("js_decimal_eq_value", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_floor", I64, &[I64]);
-    module.declare_function("js_decimal_from_number", I64, &[DOUBLE]);
-    module.declare_function("js_decimal_from_string", I64, &[I64]);
-    module.declare_function("js_decimal_gt", DOUBLE, &[I64, I64]);
-    module.declare_function("js_decimal_gt_value", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_gte", DOUBLE, &[I64, I64]);
-    module.declare_function("js_decimal_gte_value", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_is_negative", DOUBLE, &[I64]);
-    module.declare_function("js_decimal_is_positive", DOUBLE, &[I64]);
-    module.declare_function("js_decimal_is_zero", DOUBLE, &[I64]);
-    module.declare_function("js_decimal_lt", DOUBLE, &[I64, I64]);
-    module.declare_function("js_decimal_lt_value", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_lte", DOUBLE, &[I64, I64]);
-    module.declare_function("js_decimal_lte_value", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_minus", I64, &[I64, I64]);
-    module.declare_function("js_decimal_minus_number", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_minus_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_mod", I64, &[I64, I64]);
-    module.declare_function("js_decimal_mod_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_neg", I64, &[I64]);
-    module.declare_function("js_decimal_plus", I64, &[I64, I64]);
-    module.declare_function("js_decimal_plus_number", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_plus_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_pow", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_round", I64, &[I64]);
-    module.declare_function("js_decimal_sqrt", I64, &[I64]);
-    module.declare_function("js_decimal_times", I64, &[I64, I64]);
-    module.declare_function("js_decimal_times_number", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_times_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_to_fixed", I64, &[I64, DOUBLE]);
-    module.declare_function("js_decimal_to_number", DOUBLE, &[I64]);
-    module.declare_function("js_decimal_to_string", I64, &[I64]);
-
     // ========== Ethers / blockchain ==========
     module.declare_function("js_ethers_format_ether", I64, &[I64]);
     module.declare_function("js_ethers_format_units", I64, &[I64, DOUBLE]);

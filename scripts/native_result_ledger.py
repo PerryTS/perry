@@ -32,8 +32,8 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `js_net_socket_unpipe`. Each returns its `handle: i64` argument unchanged, a
 # `next_id_or_throw()` registry id rather than a heap address, so all four are
 # NR_HANDLE_ID.
-EXPECTED_ROWS = 376
-EXPECTED_PROVIDERS = 326
+EXPECTED_ROWS = 364
+EXPECTED_PROVIDERS = 314
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

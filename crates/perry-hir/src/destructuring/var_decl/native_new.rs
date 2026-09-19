@@ -91,9 +91,6 @@ pub(crate) fn register_native_from_new_and_calls(
                         "Redis" => Some("ioredis".to_string()),
                         "LRUCache" => Some("lru-cache".to_string()),
                         "Command" => Some("commander".to_string()),
-                        "Big" => Some("big.js".to_string()),
-                        "Decimal" => Some("decimal.js".to_string()),
-                        "BigNumber" => Some("bignumber.js".to_string()),
                         _ => None,
                     }
                 };
@@ -225,9 +222,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                 "Redis" => Some("ioredis".to_string()),
                                 "LRUCache" => Some("lru-cache".to_string()),
                                 "Command" => Some("commander".to_string()),
-                                "Big" => Some("big.js".to_string()),
-                                "Decimal" => Some("decimal.js".to_string()),
-                                "BigNumber" => Some("bignumber.js".to_string()),
                                 _ => None,
                             }
                         };

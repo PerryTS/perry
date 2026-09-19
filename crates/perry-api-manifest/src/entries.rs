@@ -94,8 +94,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     // ── More third-party npm packages ──
     "lru-cache",           // LRU cache
     "commander",           // CLI argument parser
-    "decimal.js",          // arbitrary-precision decimals
-    "bignumber.js",        // arbitrary-precision big numbers
     "exponential-backoff", // retry-with-backoff helper
     "lodash",              // general utility library
     "dayjs",               // date/time library

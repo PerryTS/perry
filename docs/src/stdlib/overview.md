@@ -55,8 +55,6 @@ for compatibility guarantees.
 
 ### CLI & Data
 - **commander** — CLI argument parsing
-- **decimal.js** — Arbitrary precision decimals
-- **bignumber.js** — Big number math
 - **lru-cache** — LRU caching
 
 ### Other
