@@ -236,15 +236,18 @@ impl ShadowStackState {
 // the extra cache indirection has no demonstrated benefit." #10619 shipped
 // the swap unconditionally anyway, and CI's `cargo-test` job — Linux, debug
 // profile — hit a SIGSEGV that a plain `thread_local!` never produced
-// (`cargo-test` run 35374727647, job 105594641738). The cause was never
-// isolated to a specific line: the same debug suite ran clean on macOS
-// through the Darwin `perry_thread_local!` path, and also ran clean on
-// macOS with the Darwin `pthread`-TSD path forced off (so `hot()` took the
-// generic `hot_via_tls()` route `perry_thread_local!` uses on every
-// non-Darwin-aarch64 target) — only actual Linux/x86_64 reproduced it, and
-// under qemu-emulated Linux the debug suite is roughly an order of
-// magnitude slower than native, which made pinning the exact crashing test
-// impractical here. See #10709 for the open investigation.
+// (`cargo-test` run 35374727647, job 105594641738). Local reproduction (macOS
+// on both the Darwin path and with it forced off, and a qemu-emulated Linux
+// x86_64 VM) never faulted, so causation was confirmed the direct way
+// instead: `cargo-test` on CI itself, gating `SHADOW` back to this cfg split,
+// came back green (run 35433215970, job 105871415920) at the same commit
+// that was red with the swap unconditional — so the PR *is* what caused it.
+// The internal mechanism is still not understood: this fixes it by removing
+// the change from every platform where it had no benefit anyway, not by
+// finding the fault inside `tls_hot.rs`'s resolution path. See #10709 for
+// the open half of the investigation (`fill()`'s `temp_roots`-last ordering
+// guards against a half-filled cache being *used* re-entrantly, not against
+// `fill()` being *called* re-entrantly, which remains a live suspect).
 //
 // Since the −8% `try`-entry win was only ever measured on Darwin
 // (`perry_thread_local!`'s whole premise doesn't apply anywhere the direct

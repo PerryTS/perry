@@ -29,32 +29,43 @@ the instrument was live.
 **Follow-up: CI's `cargo-test` job (Linux, debug profile) SIGSEGV'd on this
 change** (run 35374727647, job 105594641738) — no `FAILED` line survived
 (libtest's stdout is block-buffered under CI), so the crashing test was never
-named. Confirmed this PR's own regression: `cargo-test` was clean on #10644,
-#10647, #10650, #10651 against the same base.
+named. `cargo-test` was clean on #10644, #10647, #10650, #10651 against the
+same base — not a contradiction, once checked: none of those four PRs touch
+`shadow_stack.rs`, and this PR was never merged to `main`, so their
+`cargo-test` runs (branch merged with `main`) never contained this change to
+begin with. Only this branch's own run ever exercised it, and that run was
+red.
 
 Reproduction, in the exact failing configuration
 (`RUST_TEST_THREADS=1 cargo test -p perry-runtime --lib`, debug, no
-`--release`), across every environment tried, came back clean:
+`--release`), across every environment tried locally, came back clean and was
+ultimately inconclusive:
 - macOS arm64, the shipped Darwin `perry_thread_local!` path: 4013 passed.
 - macOS arm64 with the Darwin `pthread`-TSD path forced off (`hot()` forced
   onto the generic `hot_via_tls()` route every non-Darwin-aarch64 target
-  already uses): 4013 passed, 0 failed — this weakens, though doesn't
-  disprove, a re-entrancy theory in the generic path itself.
+  already uses): 4013 passed, 0 failed.
 - Linux x86_64 (qemu-emulated Ubuntu VM on the CI-pinned
   `nightly-2026-08-20` toolchain, matching `ubuntu-latest`'s triple): ran
   clean through 1968+ of ~4013 tests in alphabetical order, well past the
-  async_hooks region where CI's log cuts off, before a later, unrelated
-  regex-replace stress test stalled under emulation (not a crash — verified
-  it runs in well under a second natively; almost certainly a qemu-specific
-  slowdown, not tied to this change).
+  async_hooks region where CI's log cuts off. qemu turned out to be unusable
+  as an instrument beyond that: one specific unrelated regex-replace stress
+  test is pathologically slow under emulation (fast natively), and an
+  attempted A/B there produced two SIGKILLs that were first misread as a
+  reproduced crash — they were an operator `pkill -f` self-matching its own
+  remote shell (a documented pitfall), not a fault.
 
-The SIGSEGV's mechanism was never pinned down — see #10709 for the full
-writeup, including the two open hypotheses (re-entrancy in `tls_hot.rs`'s
-`fill()`, which writes its last field specifically to guard against a
-half-filled cache being *used* re-entrantly but does not stop `fill()` being
-*called* again re-entrantly; and plain debug-profile stack depth on CI's
-default thread, a signature this repo has hit before). Rather than let it
-evaporate, it's tracked there and the change is narrowed instead:
+So local reproduction never settled it either way. Causation was confirmed
+the direct way instead: pushing this cfg-gated fix and reading CI's own
+`cargo-test` job on the exact failing runner — green (run 35433215970, job
+105871415920), where the unconditional swap was red. The PR *is* what caused
+the SIGSEGV; gating it off Linux/non-Darwin is what fixed it. The internal
+mechanism inside `tls_hot.rs`'s resolution path is still not understood —
+this is a fix by removing the exposure, not by finding the fault. See #10709
+for the open half of the investigation (`fill()`'s `temp_roots`-last
+ordering guards against a half-filled cache being *used* re-entrantly, not
+against `fill()` being *called* again re-entrantly, which remains a live
+suspect). The change is narrowed rather than left as a mystery with no
+mitigation:
 
 `SHADOW`'s declaration is now cfg-split —
 `crate::perry_thread_local!` only under
