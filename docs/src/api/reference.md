@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3007 entries across 133 modules.
+Total: 3006 entries across 132 modules.
 
 ## Modules
 
@@ -69,7 +69,6 @@ Total: 3007 entries across 133 modules.
 - [`mongodb`](#mongodb)
 - [`mysql2`](#mysql2)
 - [`mysql2/promise`](#mysql2promise)
-- [`nanoid`](#nanoid)
 - [`net`](#net)
 - [`node-cron`](#node-cron)
 - [`node-fetch`](#node-fetch)
@@ -2173,12 +2172,6 @@ Total: 3007 entries across 133 modules.
 - `query` — instance
 - `release` — instance
 - `rollback` — instance
-
-## `nanoid`
-
-### Methods
-
-- `nanoid` — module
 
 ## `net`
 

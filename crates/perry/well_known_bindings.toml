@@ -36,21 +36,6 @@
 # requires every ext crate and package mapping to have an explicit decision
 # (#5716).
 
-[bindings.nanoid]
-crate = "perry-ext-nanoid"
-lib = "perry_ext_nanoid"
-tracking = "#466"
-# Partial: the wrapper covers nanoid + custom alphabets, but not the complete
-# upstream export set and flattens the curried customAlphabet contract.
-compat = "partial"
-
-[bindings.nanoid.upstream]
-version = "6.0.0"
-sha256 = "5cade80a39ccf4fd174c8e412eca13accfce36c9c2a0982b4ea23403d729a8d8"
-repo = "https://github.com/ai/nanoid"
-ref = "4dacb107b54ffd0e1abfe91b7ef452e0fd5a8e12"
-ported-at = "6.0.0"
-date = "2026-07-30"
 [bindings.qs]
 crate = "perry-ext-qs"
 lib = "perry_ext_qs"

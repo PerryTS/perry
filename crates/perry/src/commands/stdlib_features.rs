@@ -160,13 +160,12 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "argon2" => &["bundled-argon2"],
 
         // ── IDs (uuid / nanoid) ───────────────────────────────────────
-        // Per-binding split as of v0.5.534 (#466 Phase 4 step 2)
-        // so the well-known flip can swap each one out
-        // independently. The `ids` umbrella stays in
-        // perry-stdlib/Cargo.toml as `bundled-uuid + bundled-nanoid`
-        // for backwards compat, but feature-set computation goes
-        // straight to the per-binding feature.
-        "nanoid" => &["bundled-nanoid"],
+        // No entries: the uuid binding (#10701) and the nanoid
+        // binding (#10693) are gone, so `import "uuid"` /
+        // `import "nanoid"` compile the real npm packages from
+        // source and need no perry-stdlib feature. The `ids`
+        // umbrella survives (empty) in perry-stdlib/Cargo.toml
+        // for backwards compat only.
 
         // ── Container ─────────────────────────────────────────────────
         "perry/container" | "perry/container-compose" | "perry/compose" | "perry/workloads" => {

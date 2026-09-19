@@ -29,18 +29,6 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_GCPTR,
     },
-    // ========== nanoid ==========
-    // js_nanoid_sized(NaN) → size=0 → falls back to js_nanoid() (21-char default),
-    // so nanoid() and nanoid(N) both route through the same entry safely.
-    NativeModSig {
-        module: "nanoid",
-        has_receiver: false,
-        method: "nanoid",
-        class_filter: None,
-        runtime: "js_nanoid_sized",
-        args: &[NA_F64],
-        ret: NR_STR,
-    },
     // ========== exponential-backoff ==========
     NativeModSig {
         module: "exponential-backoff",

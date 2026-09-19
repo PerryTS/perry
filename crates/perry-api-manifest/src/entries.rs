@@ -43,7 +43,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "ws",             // WebSocket client/server
     "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
     "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
-    "nanoid",         // compact URL-safe ID generation
     "ethers",         // Ethereum library (utils/wallet/ABI)
     "mongodb",        // MongoDB driver
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
