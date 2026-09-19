@@ -145,18 +145,6 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         args: &[NA_STR],
         ret: NR_OBJ_FROM_JSON_STR,
     },
-    // ========== nanoid ==========
-    // js_nanoid_sized(NaN) → size=0 → falls back to js_nanoid() (21-char default),
-    // so nanoid() and nanoid(N) both route through the same entry safely.
-    NativeModSig {
-        module: "nanoid",
-        has_receiver: false,
-        method: "nanoid",
-        class_filter: None,
-        runtime: "js_nanoid_sized",
-        args: &[NA_F64],
-        ret: NR_STR,
-    },
     // ========== validator ==========
     NativeModSig {
         module: "validator",

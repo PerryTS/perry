@@ -173,7 +173,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // for backwards compat, but feature-set computation goes
         // straight to the per-binding feature.
         "uuid" => &["bundled-uuid"],
-        "nanoid" => &["bundled-nanoid"],
 
         // ── Container ─────────────────────────────────────────────────
         "perry/container" | "perry/container-compose" | "perry/compose" | "perry/workloads" => {
