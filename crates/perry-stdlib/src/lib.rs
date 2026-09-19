@@ -398,16 +398,11 @@ pub mod ratelimit;
 pub use ratelimit::*;
 
 // === IDs ===
-// `bundled-uuid` / `bundled-nanoid` (v0.5.534) replace the old
-// `ids` umbrella so the well-known flip (#466 Phase 4) can toggle
-// each binding independently. The umbrella stays as
-// `ids = ["bundled-uuid", "bundled-nanoid"]` so existing
-// `--features ids` callers keep working byte-identically.
-
-#[cfg(feature = "bundled-nanoid")]
-pub mod nanoid;
-#[cfg(feature = "bundled-nanoid")]
-pub use nanoid::*;
+// Nothing left to gate: `bundled-uuid` went with the uuid binding
+// (#10701) and `bundled-nanoid` with the nanoid binding (#10693);
+// real `uuid` / `nanoid` now compile from npm source. The `ids`
+// umbrella stays (empty) in Cargo.toml so existing
+// `--features ids` callers keep working.
 
 // === Container Module ===
 #[cfg(feature = "container")]

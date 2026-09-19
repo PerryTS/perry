@@ -1267,14 +1267,6 @@ pub extern "C" fn js_mysql2_pool_query() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_nanoid() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_nanoid_custom() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_new_instance() -> i64 {
     0
 }

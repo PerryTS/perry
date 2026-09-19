@@ -104,7 +104,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-moment` | `moment` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mongodb` | `mongodb` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mysql2` | `mysql2`<br>`mysql2/promise` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-nanoid` | `nanoid` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-net` | `net` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-node-forge` | `node-forge` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-nodemailer` | `nodemailer` | Source package | Compile the upstream package source | Bundled; migration pending |

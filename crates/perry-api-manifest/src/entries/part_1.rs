@@ -1111,18 +1111,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     ),
     method("nodemailer", "sendMail", true, None),
     method("nodemailer", "verify", true, None),
-    method_sig(
-        "nanoid",
-        "nanoid",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "size",
-            ty: TypeSpec::Number,
-            optional: false,
-        }],
-        TypeSpec::String,
-    ),
     // #4917 — real retry semantics: options (numOfAttempts/startingDelay/
     // timeMultiple/maxDelay/delayFirstAttempt/jitter/retry) honored;
     // Promise-returning tasks retry on rejection via promise reactions.

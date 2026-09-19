@@ -477,18 +477,6 @@ mod tests {
     }
 
     #[test]
-    fn shipped_unproven_bindings_are_partial() {
-        for name in ["nanoid"] {
-            let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
-            assert_eq!(
-                b.compat,
-                BindingCompat::Partial,
-                "{name} omits upstream API/behavior and must stay partial"
-            );
-        }
-    }
-
-    #[test]
     fn aliases_inherit_target_compat_and_cycles_fail_closed() {
         let raw = r#"
             [bindings.full]
