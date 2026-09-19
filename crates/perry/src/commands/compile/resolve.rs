@@ -146,8 +146,7 @@ mod tests;
 // without the guard, a deep import reached through another package's
 // compiled JS would make the walker read undici's real sources (llhttp
 // wasm) instead of routing to perry-ext-undici.
-const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] =
-    &["ioredis", "ethers", "mysql2", "ws", "dotenv", "undici"];
+const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] = &["ioredis", "ethers", "mysql2", "ws", "undici"];
 
 /// Absolute virtual prefix used by files extracted from a Bun standalone
 /// executable. `--bunfs-root` maps the suffix below this prefix to a real

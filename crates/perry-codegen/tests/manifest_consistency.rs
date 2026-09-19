@@ -199,7 +199,7 @@ fn every_native_module_has_at_least_one_manifest_entry() {
     /// allowed list documents the exception so a future module that
     /// genuinely lacks coverage doesn't sneak past CI by being added
     /// here.
-    const SIDE_EFFECT_ONLY: &[&str] = &["dotenv/config"];
+    const SIDE_EFFECT_ONLY: &[&str] = &[];
 
     let mut missing: Vec<&'static str> = Vec::new();
     for &module in perry_api_manifest::NATIVE_MODULES {
@@ -267,7 +267,7 @@ fn cjs_style_node_builtins_have_default_entries() {
 /// the sibling test above and excluded here too.
 #[test]
 fn every_well_known_binding_has_manifest_entry() {
-    const SIDE_EFFECT_ONLY: &[&str] = &["dotenv/config"];
+    const SIDE_EFFECT_ONLY: &[&str] = &[];
 
     // Inline parse of well_known_bindings.toml — small enough that
     // pulling in `toml` as a dev-dep just for this test would be

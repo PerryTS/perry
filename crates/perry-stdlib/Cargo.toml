@@ -23,18 +23,10 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-dotenv", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
-
-# In-tree implementation of the npm `dotenv` package (#466 Phase 4
-# step 2). Default-on; turned off by the compiler when the
-# well-known bindings table (`well_known_bindings.toml`) routes
-# `import 'dotenv'` to `perry-ext-dotenv` so the link line doesn't
-# end up with two copies of `_js_dotenv_*` symbols. Programs that
-# don't import dotenv pay nothing for this either way.
-bundled-dotenv = []
 
 # In-tree implementation of `lru-cache`. Default-on through
 # `default = ["full"]`; flipped to perry-ext-lru-cache by the

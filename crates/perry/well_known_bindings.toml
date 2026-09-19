@@ -36,31 +36,6 @@
 # requires every ext crate and package mapping to have an explicit decision
 # (#5716).
 
-[bindings.dotenv]
-crate = "perry-ext-dotenv"
-# Library file name without the `lib` prefix or `.a` extension.
-# Cargo derives this from the crate name by replacing `-` with `_`,
-# but stating it explicitly here is documentation for humans
-# inspecting the table.
-lib = "perry_ext_dotenv"
-# Tracking issue for the migration; surfaced in error messages
-# when the bundled .a is missing at link time.
-tracking = "#466"
-# `compat` — how faithful this wrapper is to the npm package's public
-# API (see `BindingCompat` in well_known.rs). `full` = audited complete
-# drop-in, safe to auto-prefer over an on-disk node_modules copy.
-# ABSENT ⇒ conservative `partial` default. dotenv remains partial: this
-# wrapper has `config()` / `parse()`, but not the upstream decrypt/populate/
-# configDotenv surface and option/error semantics.
-compat = "partial"
-
-[bindings.dotenv.upstream]
-version = "17.4.2"
-sha256 = "8648852be8209110b34dca75dcc3ed12ce7fae9fcc8edd1ef9e180e708af1398"
-repo = "https://github.com/motdotla/dotenv"
-ref = "a61f616a3160bb6e6f22ff55f08b7eba3a3fab68"
-ported-at = "17.4.2"
-date = "2026-07-30"
 [bindings.nanoid]
 crate = "perry-ext-nanoid"
 lib = "perry_ext_nanoid"

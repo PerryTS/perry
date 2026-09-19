@@ -370,13 +370,6 @@ mod tests {
     }
 
     #[test]
-    fn dotenv_is_registered() {
-        let binding = lookup_well_known("dotenv").expect("dotenv must be a well-known binding");
-        assert_eq!(binding.krate, "perry-ext-dotenv");
-        assert_eq!(binding.lib, "perry_ext_dotenv");
-    }
-
-    #[test]
     fn undici_is_registered() {
         let binding = lookup_well_known("undici").expect("undici must be a well-known binding");
         assert_eq!(binding.krate, "perry-ext-undici");
@@ -385,8 +378,8 @@ mod tests {
 
     #[test]
     fn node_prefix_stripped_on_lookup() {
-        let bare = lookup_well_known("dotenv");
-        let prefixed = lookup_well_known("node:dotenv");
+        let bare = lookup_well_known("bcrypt");
+        let prefixed = lookup_well_known("node:bcrypt");
         assert!(bare.is_some());
         assert!(prefixed.is_some());
     }
@@ -485,7 +478,7 @@ mod tests {
 
     #[test]
     fn shipped_unproven_bindings_are_partial() {
-        for name in ["dotenv", "nanoid"] {
+        for name in ["nanoid"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,

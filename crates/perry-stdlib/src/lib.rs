@@ -51,8 +51,6 @@ pub mod decimal;
 // without duplicate _js_dotenv_* symbols at link time. Default-on
 // preserves byte-identical behavior for programs that don't opt into
 // the well-known path.
-#[cfg(feature = "bundled-dotenv")]
-pub mod dotenv;
 // events feature-gated as of v0.5.546 so the well-known flip
 // can route to perry-ext-events.
 #[cfg(feature = "bundled-events")]
@@ -101,8 +99,6 @@ pub use dayjs::*;
 #[cfg(feature = "bundled-decimal")]
 pub use decimal::*;
 pub use domain::*;
-#[cfg(feature = "bundled-dotenv")]
-pub use dotenv::*;
 #[cfg(feature = "bundled-events")]
 pub use events::*;
 #[cfg(feature = "bundled-exponential-backoff")]
