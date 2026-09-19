@@ -164,7 +164,6 @@ pub(crate) fn register_native_fetch_and_streams(
                                 "big.js" => "Big",
                                 "decimal.js" => "Decimal",
                                 "bignumber.js" => "BigNumber",
-                                "commander" => "Command",
                                 _ => "",
                             };
                             if !class_name.is_empty() {

@@ -182,9 +182,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // moment: feature-gated v0.5.549 — well-known flip routes
         // to perry-ext-moment.
         "moment" => &["bundled-moment"],
-        // commander: feature-gated v0.5.555 — well-known flip routes
-        // to perry-ext-commander.
-        "commander" => &["bundled-commander"],
         // readline (#347) — needs the async-runtime feature so the
         // event-loop pump tick drains its line / data / keypress
         // queues. Without async-runtime, `import readline` still

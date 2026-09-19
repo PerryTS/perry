@@ -1,5 +1,5 @@
 //! Utility-package stdlib FFI declarations (extracted from stdlib_ffi.rs):
-//! @perryts/pdf, commander, date libs (moment),
+//! @perryts/pdf, date libs (moment),
 //! decimal.js, ethers, lodash.
 
 use crate::module::LlModule;
@@ -19,21 +19,6 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     );
     module.declare_function("js_pdf_new_page", VOID, &[I64]);
     module.declare_function("js_pdf_save", VOID, &[I64]);
-
-    // ========== Commander CLI ==========
-    module.declare_function("js_commander_action", I64, &[I64, I64]);
-    module.declare_function("js_commander_command", I64, &[I64, I64]);
-    module.declare_function("js_commander_description", I64, &[I64, I64]);
-    module.declare_function("js_commander_get_option", I64, &[I64, I64]);
-    module.declare_function("js_commander_get_option_bool", DOUBLE, &[I64, I64]);
-    module.declare_function("js_commander_get_option_number", DOUBLE, &[I64, I64]);
-    module.declare_function("js_commander_name", I64, &[I64, I64]);
-    module.declare_function("js_commander_new", I64, &[]);
-    module.declare_function("js_commander_option", I64, &[I64, I64, I64, I64]);
-    module.declare_function("js_commander_opts", I64, &[I64]);
-    module.declare_function("js_commander_parse", I64, &[I64, DOUBLE]);
-    module.declare_function("js_commander_required_option", I64, &[I64, I64, I64, I64]);
-    module.declare_function("js_commander_version", I64, &[I64, I64]);
 
     // ========== Date libs (moment) ==========
     // moment: same handle scheme as dayjs — the factory returns the

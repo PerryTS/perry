@@ -492,11 +492,6 @@ declare module "cluster" {
   export function setupPrimary(...args: any[]): any;
 }
 
-declare module "commander" {
-  /** stdlib */
-  export const args: any;
-}
-
 declare module "console" {
   /** stdlib */
   export class Console { [key: string]: any; }

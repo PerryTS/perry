@@ -22,7 +22,6 @@ members = [
     "crates/perry-ext-moment",
     "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
-    "crates/perry-ext-commander",
     "crates/perry-ext-ethers",
     "crates/perry-ext-nodemailer",
     "crates/perry-ext-cron",
@@ -472,7 +471,6 @@ perry-ext-decimal = { path = "crates/perry-ext-decimal" }
 perry-ext-moment = { path = "crates/perry-ext-moment" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
-perry-ext-commander = { path = "crates/perry-ext-commander" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
 perry-ext-cron = { path = "crates/perry-ext-cron" }

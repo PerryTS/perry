@@ -949,24 +949,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("domain", "remove", true, None),
     method("domain", "enter", true, None),
     method("domain", "exit", true, None),
-    method("commander", "name", true, None),
-    method("commander", "description", true, None),
-    method("commander", "version", true, None),
-    method("commander", "command", true, None),
-    method("commander", "option", true, None),
-    method("commander", "requiredOption", true, None),
-    method("commander", "action", true, None),
-    method("commander", "parse", true, None),
-    method("commander", "opts", true, None),
-    method("commander", "argument", true, None),
-    // `program.args` is a bare member read modeled as a property for the
-    // `.d.ts` surface (`export const args`), but the dispatch table lowers
-    // it to a 0-arg instance getter row (`commander::args`, has_receiver).
-    // The drift gate (every_dispatch_entry_has_manifest_counterpart) wants
-    // a Method counterpart for that row; keep both — the has_receiver
-    // method isn't emitted as a module export, so docs are unchanged (#5137).
-    method("commander", "args", true, None),
-    property("commander", "args"),
     property("async_hooks", "default"),
     property("async_hooks", "asyncWrapProviders"),
     method("async_hooks", "createHook", false, None),
