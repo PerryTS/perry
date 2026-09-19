@@ -9,6 +9,41 @@ API is Electron's, so existing app code runs **unmodified**.
 > Result: Electron's DX (all-TypeScript, `app`/`BrowserWindow`/`ipcMain`), Tauri's
 > footprint (~5 MB binary, no Chromium), and **no Rust to write**.
 
+## Quick start: `perry electron`
+
+With the Perry CLI installed, run an existing Electron app as-is — no npm
+install, no config, no code changes:
+
+```bash
+perry electron ./my-electron-app     # a directory with a package.json
+perry electron ./dist/MyApp.app      # a packaged macOS bundle
+perry electron ./app.asar            # a packed asar archive
+```
+
+What happens:
+
+- The app's main entry is located from the package.json `main` field
+  (default `index.js`). Packaged `.app` bundles resolve
+  `Contents/Resources/app.asar` first, then the unpacked
+  `Contents/Resources/app/` directory.
+- `.asar` archives are unpacked to a cache directory (Perry's cache-dir
+  convention, falling back to the system temp dir) and reused while the
+  archive is unchanged.
+- `require('electron')` / `import … from "electron"` is redirected to this
+  compat package via a compile-time package alias, so the app's own
+  `node_modules` never needs the real Electron.
+- The main process compiles to a native binary; the view renders in the
+  OS-native webview. The binary is launched with the app directory as its
+  working directory, so relative renderer-asset paths keep working.
+
+The shim itself is found automatically next to the Perry checkout
+(`packages/electron`); override with `PERRY_ELECTRON_SHIM=<path>` when your
+layout differs.
+
+The npm-install flow below remains the library-level alternative — use it
+when you compile with `perry compile`/`perry run` yourself and want your
+IDE's tsc to resolve `electron` too.
+
 ## Status
 
 Experimental. macOS first. The genuinely-new native piece — the bidirectional
