@@ -167,23 +167,28 @@ unsafe fn assert_names_the_literal(
     );
 }
 
-/// The `'static` literal the lookup under test answers for `key`. Never write
-/// the literal locally — see [`assert_names_the_literal`].
-fn timer_literal(key: &[u8]) -> &'static [u8] {
-    crate::object::timer_handle_method_name_static(key).expect("a timer-handle method")
-}
-
-/// A live `Timeout` handle id. `is_known_timer_id` gates every arm under test,
-/// so without a registered timer they all decline and the tests would be
-/// vacuous — `assert!(is_known_timer_id(..))` below is what says they are not.
+/// A live `Timeout` handle. #340/#341: this is an ORDINARY OBJECT now, not a
+/// registry id, so the assertion that keeps the tests below from going vacuous
+/// changed with it — it used to be `is_known_timer_id(id)` (the gate on the
+/// arms under test); it is now "this really is a timer handle, and the timer it
+/// names is live". Both halves matter: the first says the read has a branded
+/// receiver to resolve, the second that the family's own registry agrees.
 fn live_timer() -> i64 {
-    let id = crate::timer::js_set_timeout_callback(0, 10_000.0);
+    let handle = crate::timer::js_set_timeout_callback(0, 10_000.0);
+    let value = crate::value::js_nanbox_pointer(handle);
+    let (id, is_immediate) = crate::timer::timer_handle_parts(value)
+        .expect("setTimeout must return a branded Timeout handle");
+    assert!(!is_immediate, "setTimeout is a Timeout, not an Immediate");
     assert!(
         crate::timer::is_known_timer_id(id),
-        "the arms under test are gated on `is_known_timer_id`; without a live \
-         timer every assertion below would pass by never running"
+        "the handle must name a LIVE timer, or the methods under test would be \
+         resolving against a dead id"
     );
-    id
+    assert!(
+        !crate::value::addr_class::is_handle_band(handle as usize),
+        "gate B: the producer must not hand back a small band id ({handle:#x})"
+    );
+    handle
 }
 
 /// ★ The regression, NaN-boxed small-handle receiver
@@ -197,7 +202,7 @@ fn a_bound_timer_method_never_captures_the_key_strings_interior() {
         let boxed = crate::value::js_nanbox_pointer(id).to_bits() as *const crate::ObjectHeader;
 
         let bound = crate::object::js_object_get_field_by_name(boxed, key);
-        assert_names_the_literal(bound, timer_literal(b"ref"), key_interior, "timer.ref");
+        assert_names_the_installed_method(bound, "ref", key_interior, "timer.ref");
     }
 }
 
@@ -212,12 +217,7 @@ fn a_bound_timer_method_from_a_raw_handle_never_captures_the_key() {
 
         let bound =
             crate::object::js_object_get_field_by_name(id as *const crate::ObjectHeader, key);
-        assert_names_the_literal(
-            bound,
-            timer_literal(b"unref"),
-            key_interior,
-            "timer.unref (raw handle)",
-        );
+        assert_names_the_installed_method(bound, "unref", key_interior, "timer.unref (raw handle)");
     }
 }
 
@@ -237,9 +237,9 @@ fn a_bound_timer_method_from_the_ic_miss_path_never_captures_the_key() {
             key,
             &mut cache_slot,
         );
-        assert_names_the_literal(
+        assert_names_the_installed_method(
             crate::value::JSValue::from_bits(bits.to_bits()),
-            timer_literal(b"hasRef"),
+            "hasRef",
             key_interior,
             "timer.hasRef (IC miss)",
         );
@@ -308,48 +308,13 @@ fn a_bound_primitive_method_never_captures_the_key_strings_interior() {
 fn the_static_name_lookups_do_not_borrow_their_argument() {
     let _guard = GcTestIsolationGuard::new();
 
-    let owned = String::from("refresh");
-    let found = crate::object::timer_handle_method_name_static(owned.as_bytes())
-        .expect("refresh is a timer-handle method");
-    assert_ne!(
-        found.as_ptr(),
-        owned.as_bytes().as_ptr(),
-        "the lookup must answer the LITERAL, not a borrow of its argument"
-    );
-
-    // Same literal for every caller, whatever storage the caller used.
-    let second = String::from("refresh");
-    assert_eq!(
-        crate::object::timer_handle_method_name_static(second.as_bytes())
-            .unwrap()
-            .as_ptr(),
-        found.as_ptr(),
-        "every call must answer the same 'static address"
-    );
-
-    assert!(
-        crate::object::timer_handle_method_name_static(b"notATimerMethod").is_none(),
-        "a non-method key must not resolve"
-    );
-    // The list must not have shrunk while being rewritten: #8133 replaced the
-    // `is_timer_handle_method_key` predicate with this lookup, and a dropped
-    // name would silently stop binding that method rather than fail loudly.
-    for name in [
-        &b"ref"[..],
-        b"unref",
-        b"hasRef",
-        b"refresh",
-        b"close",
-        b"__perry_dispose__",
-        b"@@__perry_wk_dispose",
-        b"@@__perry_wk_toPrimitive",
-    ] {
-        assert_eq!(
-            crate::object::timer_handle_method_name_static(name),
-            Some(name),
-            "every pre-#8133 timer-handle method must still resolve"
-        );
-    }
+    // #340/#341: the timer half of this test is gone with the lookup it pinned.
+    // A timer handle is an ordinary object whose prototype owns `ref` / `unref`
+    // / `hasRef` / `refresh` / `close` / `[Symbol.dispose]` /
+    // `[Symbol.toPrimitive]` as real installed methods, so there is no
+    // per-read name to borrow and nothing left to get wrong — the timer tests
+    // above now assert the installed method instead. The primitive half below
+    // is untouched and still pins its own lookup.
 
     let owned = String::from("propertyIsEnumerable");
     let found = crate::object::primitive_proto_method_name_static(owned.as_bytes())

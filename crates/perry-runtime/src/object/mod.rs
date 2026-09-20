@@ -140,7 +140,9 @@ pub(crate) mod map_set_subclass;
 mod namespace_create;
 mod native_call_method;
 pub(crate) mod native_get;
-mod native_module;
+// `pub(crate)` since #340/#341: a family that owns its prototypes outside this
+// module (`timer.rs`) installs their method names and `.length` through here.
+pub(crate) mod native_module;
 mod nm_namespace_hooks;
 pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
@@ -337,7 +339,9 @@ pub(crate) struct RealmAtomicI64 {
 }
 
 impl RealmAtomicI64 {
-    const fn new(slot: &'static crate::tls_hot::HotKey<AtomicI64>) -> Self {
+    // `pub(crate)` so a family that owns its own prototype singletons can
+    // declare them in its own module (`timer.rs`) instead of parking them here.
+    pub(crate) const fn new(slot: &'static crate::tls_hot::HotKey<AtomicI64>) -> Self {
         Self { slot }
     }
 
@@ -1327,6 +1331,11 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
         });
     }
+    // #340/#341: `Timeout.prototype` / `Immediate.prototype`. Every timer
+    // handle's `[[Prototype]]` points at one of these, so they must stay live
+    // and be rewritten when they move — the same contract as the iterator
+    // tower above.
+    crate::timer::scan_timer_prototype_roots_mut(visitor);
     #[cfg(feature = "regex-engine")]
     regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }

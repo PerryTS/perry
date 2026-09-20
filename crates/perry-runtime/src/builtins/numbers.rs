@@ -567,12 +567,10 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // conversion in Node and must fall through to the generic
         // toPrimitive/toString path below (which yields NaN, matching
         // `+setImmediate(...)`).
-        if crate::value::addr_class::is_small_handle(id as usize)
-            && crate::timer::is_known_timer_id(id)
-            && !crate::timer::is_immediate_timer_id(id)
-        {
-            return id as f64;
-        }
+        // #340/#341: `+timeout` no longer needs an arm here. A Timeout is an
+        // ordinary object whose prototype carries `Symbol.toPrimitive`, so the
+        // generic ToPrimitive path below converts it — and an Immediate, whose
+        // prototype deliberately carries none, still yields `NaN` (#10542).
         // Array → ToPrimitive(number) finds no `valueOf` override, so it
         // falls to `Array.prototype.toString` = `join(",")`, then ToNumber on
         // that string: `Number([]) === 0`, `Number([5]) === 5`,

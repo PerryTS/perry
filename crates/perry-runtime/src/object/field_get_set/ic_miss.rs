@@ -204,21 +204,6 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
 /// predicate left, a caller has nothing to pair with its own pointer, so the
 /// bug cannot be reintroduced by writing the obvious code. Same shape as
 /// `set_method_value_name` above and `buffer_method_name_static` (#7747).
-pub(crate) fn timer_handle_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
-    match key {
-        b"ref" => Some(b"ref"),
-        b"unref" => Some(b"unref"),
-        b"hasRef" => Some(b"hasRef"),
-        b"refresh" => Some(b"refresh"),
-        b"close" => Some(b"close"),
-        b"__perry_dispose__" => Some(b"__perry_dispose__"),
-        // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the well-known
-        // dispose symbol lowers to this key. (#1213)
-        b"@@__perry_wk_dispose" => Some(b"@@__perry_wk_dispose"),
-        b"@@__perry_wk_toPrimitive" => Some(b"@@__perry_wk_toPrimitive"),
-        _ => None,
-    }
-}
 
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
 /// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's
@@ -832,35 +817,10 @@ pub(super) fn get_field_ic_miss_impl(
                 return crate::proxy::js_proxy_get(boxed, key_f64);
             }
         }
-        // #1213: Timeout/Immediate handle methods (ref/unref/hasRef/refresh/
-        // close) read as bound-method function values so `typeof t.ref ===
-        // "function"` holds (the call form already works via
-        // js_native_call_method). The IC fast path funnels small handles here,
-        // bypassing the identical block in `js_object_get_field_by_name`, so it
-        // must be mirrored.
-        unsafe {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if key_bytes == b"constructor" {
-                if let Some(value) = crate::timer::timer_constructor_value(obj as i64) {
-                    return value;
-                }
-            }
-            if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                if crate::timer::is_known_timer_id(obj as i64) {
-                    let this_f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    // #8133: the `'static` literal, NOT `key_ptr` — that is the
-                    // interior of a movable heap string this read does not own.
-                    return super::super::js_class_method_bind(
-                        this_f64,
-                        method.as_ptr(),
-                        method.len(),
-                    );
-                }
-            }
-        }
+        // #340/#341: the Timeout/Immediate arm that used to reify `ref` /
+        // `unref` / `hasRef` / `refresh` / `close` for a small registry id is
+        // gone — a timer handle is an ordinary object whose prototype carries
+        // those methods, so this read resolves them the ordinary way.
         // Drizzle-sqlite blocker: synth `data.constructor` for small-handle
         // receivers — IC-miss path mirror of the constructor intercept in
         // `js_object_get_field_by_name`. Refs #645 deeper followup.
