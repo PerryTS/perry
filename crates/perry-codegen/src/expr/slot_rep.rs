@@ -159,17 +159,29 @@ pub(crate) enum SlotRep {
 ///   `register_module_globals_as_gc_roots`) reads `@perry_global_*` cells and
 ///   never `ctx.locals`.
 ///
-/// ## What is still excluded, and why
+/// ## What was also excluded, and no longer is (#10769)
 ///
-/// `Ptr<Shape>` receiver proofs. Phase 5a reused
+/// `Ptr<Shape>` receiver proofs used to be excluded here too. Phase 5a reused
 /// `repsel_context_allows_canonical_i32` as its context gate, so lifting that
-/// flag would silently have enabled guard-free `this.field` / `obj.field`
-/// lowering in entry bodies as a side effect of an unrelated phase. That is not
-/// a representation this issue measured, and #6991 is an open rooting bug in
-/// exactly that position: a compiled receiver goes stale across the
-/// `globalThis`-population collection, which runs around module init. So the
-/// flag is split (`repsel_context_allows_ptr_shape`) and entry bodies keep
-/// `Ptr<Shape>` off, still naming this rule in `--opt-report`.
+/// flag would have enabled guard-free `this.field` / `obj.field` lowering in
+/// entry bodies as a side effect of an unrelated phase; the flag was split
+/// (`repsel_context_allows_ptr_shape`) and `Entry` pinned its own arm off,
+/// citing #6991 — "a compiled receiver goes stale across the
+/// `globalThis`-population collection, which runs around module init".
+///
+/// **#6991 is closed.** It was fixed by #7249 (`64c1f56fb`) in the runtime, not
+/// by this gate: `populate_global_this_builtins` now runs inside a
+/// `GcSuppressScope`, because it builds an immortal object graph through raw
+/// `*mut ObjectHeader` locals held across its own ~1.15 MB of allocations, so
+/// under an 8 MB heap limit minor #0 landed in the middle of it. The closing
+/// comment re-verified `test_gap_repsel_ptr_shape_locals` at 10/10 on the
+/// evacuating arm and 3/3 under `PERRY_GC_ZEAL=1`, at 3.4x the movement level
+/// the crash was observed at. The entry arm now derives `allows_ptr_shape` from
+/// its knob like every other body (`expr/repsel_gates.rs`).
+///
+/// `MODULE_INIT_CONTEXT` is retained: it is still a rule name the
+/// `--opt-report` renderer resolves, and removing a denial string would break
+/// reports archived from older builds.
 pub(crate) const MODULE_INIT_CONTEXT: &str = "module_init_context";
 
 /// Why an ordinary body context forbids canonical (i32/u32/Str) selection, or

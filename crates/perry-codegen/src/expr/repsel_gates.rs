@@ -63,7 +63,6 @@
 
 use super::slot_rep::{
     body_context_denial, canonical_i32_locals_enabled, canonical_str_locals_enabled,
-    MODULE_INIT_CONTEXT,
 };
 
 /// `PERRY_STATIC_STRING_LOWERING` gate. Enabled by default; `=0`/`off`/`false`
@@ -184,16 +183,33 @@ impl RepselContextFlags {
                     ptr_shape_denial: denial,
                 }
             }
+            // #10769: the entry body now derives all three flags exactly as an
+            // ordinary body does. It carries no structural denial of its own —
+            // module init is never rewritten into a generator state machine
+            // (see the `slot_rep::MODULE_INIT_CONTEXT` audit), so
+            // `body_context_denial`'s three reasons cannot arise here.
+            //
+            // The `Ptr<Shape>` literal `false` that stood here was justified by
+            // #6991, "a compiled receiver goes stale across the
+            // globalThis-population collection". **#6991 is closed**, fixed by
+            // #7249 (`64c1f56fb`) in the RUNTIME, not here:
+            // `populate_global_this_builtins` now runs inside a
+            // `GcSuppressScope` because it builds an immortal graph through raw
+            // `*mut ObjectHeader` locals across its own ~1.15 MB of
+            // allocations. Its closing comment re-verified
+            // `test_gap_repsel_ptr_shape_locals` at 10/10 on the evacuating arm
+            // and 3/3 under `PERRY_GC_ZEAL=1`, at 3.4x the movement level the
+            // crash was observed at.
+            //
+            // A gate whose stated reason is a closed bug reads as a live
+            // constraint to the next person. It was read that way twice before
+            // it was removed.
             RepselBody::Entry => Self {
                 allows_canonical_i32: gates.canonical_i32,
                 allows_canonical_str: gates.canonical_str,
-                // Unconditionally off, regardless of `gates.ptr_shape`: the
-                // exclusion is structural (#6991), not a knob. Written as a
-                // literal so a future reader cannot mistake it for something
-                // `PERRY_PTR_SHAPE_LOCALS=1` could turn back on.
-                allows_ptr_shape: false,
+                allows_ptr_shape: gates.ptr_shape,
                 canonical_denial: None,
-                ptr_shape_denial: Some(MODULE_INIT_CONTEXT),
+                ptr_shape_denial: None,
             },
         }
     }
@@ -300,16 +316,21 @@ mod tests {
         }
     }
 
-    /// The same property for the entry context, where `Ptr<Shape>` is off for a
-    /// structural reason: the two canonical knobs must still move only
-    /// themselves, and the `Ptr<Shape>` knob must move nothing (it is already
-    /// off).
+    /// #10769: the entry context now derives all three flags like any other
+    /// body. Each knob still moves exactly one flag — that is #7128's property,
+    /// restated for `Entry` — and no flag carries a structural denial, because
+    /// the entry body has none.
+    ///
+    /// GUARD WITNESS. Restore the literal `allows_ptr_shape: false` in the
+    /// `Entry` arm and the first assertion fails with
+    /// `(true, true, false) != (true, true, true)`; restore
+    /// `ptr_shape_denial: Some(MODULE_INIT_CONTEXT)` and the third fails.
     #[test]
-    fn entry_context_keeps_ptr_shape_off_and_names_the_rule() {
+    fn entry_context_derives_every_flag_like_an_ordinary_body() {
         let entry = RepselContextFlags::derive(ALL_ON, RepselBody::Entry);
-        assert_eq!(allows(&entry), (true, true, false));
+        assert_eq!(allows(&entry), (true, true, true));
         assert_eq!(entry.canonical_denial, None);
-        assert_eq!(entry.ptr_shape_denial, Some(MODULE_INIT_CONTEXT));
+        assert_eq!(entry.ptr_shape_denial, None);
 
         for gates in [
             RepselGates {
@@ -326,10 +347,10 @@ mod tests {
             },
         ] {
             let got = RepselContextFlags::derive(gates, RepselBody::Entry);
-            assert!(!got.allows_ptr_shape);
-            assert_eq!(got.ptr_shape_denial, Some(MODULE_INIT_CONTEXT));
             assert_eq!(got.allows_canonical_i32, gates.canonical_i32);
             assert_eq!(got.allows_canonical_str, gates.canonical_str);
+            assert_eq!(got.allows_ptr_shape, gates.ptr_shape);
+            assert_eq!(got.ptr_shape_denial, None);
         }
     }
 
