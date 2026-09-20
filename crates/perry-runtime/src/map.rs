@@ -1572,6 +1572,7 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
 
         // Initialize header
         (*ptr).size = 0;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word("MapHeader::capacity", cap);
         (*ptr).capacity = cap;
         // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
         (*ptr).entries = entries;
@@ -2048,6 +2049,10 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
 
     // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
     (*map).entries = new_entries;
+    crate::object::shape_rule3::debug_assert_not_shape_id_word(
+        "MapHeader::capacity (grow)",
+        new_capacity,
+    );
     (*map).capacity = new_capacity;
     MAP_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();

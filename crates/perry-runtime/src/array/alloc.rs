@@ -46,6 +46,10 @@ pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     unsafe {
         // Initialize header
         (*ptr).length = 0;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "ArrayHeader::capacity",
+            actual_capacity,
+        );
         (*ptr).capacity = actual_capacity;
         // HOLE-initialize the whole capacity so the unused [length, capacity)
         // slack never holds stale arena bits that the whole-heap from-space
@@ -88,6 +92,10 @@ pub(crate) fn js_array_alloc_named_props_reserved(
     ) as *mut ArrayHeader;
     unsafe {
         (*ptr).length = 0;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "ArrayHeader::capacity",
+            actual_capacity,
+        );
         (*ptr).capacity = actual_capacity;
         let front = ptr.add(1) as *mut u64;
         // GC_STORE_AUDIT(INIT): the header word is an INT32 box on a
@@ -129,6 +137,10 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
 
     unsafe {
         (*ptr).length = 0;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "ArrayHeader::capacity",
+            actual_capacity,
+        );
         (*ptr).capacity = actual_capacity;
         // Arena slots can be reused after a raw-f64 array. The all-pointer
         // layout owns the same header, so clear numeric representation flags
@@ -173,6 +185,10 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
 
     unsafe {
         (*ptr).length = capacity; // Set length = requested capacity
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "ArrayHeader::capacity",
+            actual_capacity,
+        );
         (*ptr).capacity = actual_capacity;
         let elements_ptr = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
         for i in 0..capacity as usize {

@@ -862,6 +862,8 @@ struct SiteStat {
     /// cache held the right answer in a way and the read came back to the miss
     /// handler regardless. See [`IcDiag::prime_in_ways`].
     prime_in_ways: u64,
+    /// Per-site hit count; see [`IcDiag::hits`].
+    hits: u64,
 }
 
 #[derive(Default)]
@@ -908,10 +910,64 @@ pub struct IcDiag {
     /// * `new_token` + not `in_ways` — a shape neither the MRU entry nor the
     ///   ways had (genuine polymorphism, or a first sighting).
     pub prime_in_ways: u64,
+    /// The HIT side of the property-get IC, so a hit rate can be quoted
+    /// instead of a miss count.
+    ///
+    /// Everything else in this group is recorded from the runtime miss
+    /// handler, because that is the only part of a property read the runtime
+    /// sees: a hit is served entirely by the emitted diamond and never calls
+    /// in. Counting hits therefore needs an emitted probe, which is what
+    /// [`js_ic_diag_note_hit`] is — one `#[cold]`-guarded call on the hit
+    /// edge, behind the same `PERRY_IC_DIAG` arming as the misses, so an
+    /// unarmed run pays one relaxed load.
+    ///
+    /// This matters for the single-path object-model work: a fast path that
+    /// stops being taken is correct-but-slow and invisible in program output.
+    /// `hits` next to `misses` is the only way to tell "the guard was removed
+    /// and reads now hit" from "the guard was removed and every read falls to
+    /// the miss handler, still producing the right answer".
+    pub hits: u64,
+    /// Hits served from the MRU packed word versus one of the four ways.
+    pub hits_in_ways: u64,
 }
 
 crate::perry_thread_local! {
     static IC_DIAG: RefCell<IcDiag> = RefCell::new(IcDiag::default());
+}
+
+/// Record one property-get IC HIT. See [`IcDiag::hits`].
+///
+/// Callers must gate on [`ic_on`] first — emitted code should load the
+/// arming byte and branch, never call unconditionally.
+pub fn ic_note_hit(site: usize, in_ways: bool) {
+    IC_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.started.is_none() {
+            d.started = Some(Instant::now());
+            d.last_dump = d.started;
+        }
+        d.hits += 1;
+        if in_ways {
+            d.hits_in_ways += 1;
+        }
+        let s = d.sites.entry(site).or_default();
+        s.hits += 1;
+    });
+}
+
+/// Emitted-code entry point for [`ic_note_hit`]: `site` is the per-site cache
+/// address the hit path already holds, `in_ways` is 0 for an MRU hit and 1 for
+/// a polymorphic-way hit.
+///
+/// Diagnostic only — nothing may branch on the counters, and the call must sit
+/// behind an `ic_on()` test in the emitted code so an unarmed run never
+/// reaches it.
+#[no_mangle]
+pub extern "C" fn js_ic_diag_note_hit(site: i64, in_ways: i32) {
+    if !ic_on() {
+        return;
+    }
+    ic_note_hit(site as usize, in_ways != 0);
 }
 
 /// Record one `pic_prime_get`, splitting it by whether the token the site is
@@ -997,10 +1053,19 @@ impl IcDiag {
         use std::fmt::Write as _;
         let mut out = String::with_capacity(4096);
         let secs = self.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let reads = self.hits + self.misses;
         let _ = write!(
             out,
-            "[ic-diag] t={secs:.1}s misses={} sites={}",
+            "[ic-diag] t={secs:.1}s misses={} hits={} ({:.1} % of {reads} reads, \
+             {} via ways) sites={}",
             self.misses,
+            self.hits,
+            if reads == 0 {
+                0.0
+            } else {
+                100.0 * self.hits as f64 / reads as f64
+            },
+            self.hits_in_ways,
             self.sites.len()
         );
         for (i, name) in IC_REASON_NAMES.iter().enumerate() {
@@ -1034,7 +1099,7 @@ impl IcDiag {
         rows.sort_by_key(|s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
             out,
-            "  misses   same/new/inways   fresh/armed/mega   key  reasons"
+            "  misses   hits   same/new/inways   fresh/armed/mega   key  reasons"
         );
         for s in rows.iter().take(40) {
             let mut reasons = String::new();
@@ -1047,8 +1112,9 @@ impl IcDiag {
             }
             let _ = writeln!(
                 out,
-                "  {:6}  {:>8}/{}/{:<8}  {:>7}/{}/{:<8}  {:<24}{reasons}",
+                "  {:6}  {:6}  {:>8}/{}/{:<8}  {:>7}/{}/{:<8}  {:<24}{reasons}",
                 s.misses,
+                s.hits,
                 s.prime_same_token,
                 s.prime_new_token,
                 s.prime_in_ways,

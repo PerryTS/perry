@@ -147,16 +147,80 @@ pub(crate) fn ensure_function_prototype_object(
 }
 
 /// Floor of the synthetic class-id range (see [`NEXT_SYNTHETIC_CLASS_ID`]).
-pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 = 0x8000_0000;
+///
+/// RULE 2 (single-path object model): a class id must never land inside the
+/// ShapeId range `[SHAPE_ID_BASE, SHAPE_ID_END)`. The read path tells a
+/// STAMPED object from an UNSTAMPED one by range alone — the `+4` word holds
+/// `parent_class_id` until a shape is stamped over it, and
+/// `shapes::object_shape_stamp` answers with that word exactly when
+/// `shapes::is_shape_id` accepts it. This counter used to start at
+/// `0x8000_0000`, the ShapeId floor, so synthetic id *n* and ShapeId *n* were
+/// the same u32: an instance born with a synthetic PARENT id
+/// (`class X extends someFunction`, resolved through
+/// `dynamic_value_class_id` -> `function_class_id`, then written to `+4` by
+/// `js_object_alloc_class_dynamic_parent`) claimed a live, unrelated shape,
+/// whose ordered keys and live-inline-slot bound then described its layout.
+/// The band above the ShapeId range is unused: codegen ids start at 1, the
+/// builtin bands are `0x7FFF_FF00..=0x7FFF_FFFF` and `0xFFFF_0000..`.
+pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 = 0xC000_0000;
+/// Exclusive end of the synthetic range: the first reserved builtin id.
+pub(crate) const SYNTHETIC_CLASS_ID_END: u32 = 0xFFFF_0000;
+
+const _: () = assert!(
+    SYNTHETIC_CLASS_ID_BASE >= crate::object::shapes::SHAPE_ID_END,
+    "rule 2: synthetic class ids must not overlap the ShapeId range"
+);
+const _: () = assert!(
+    SYNTHETIC_CLASS_ID_END > SYNTHETIC_CLASS_ID_BASE,
+    "the synthetic class-id range must be non-empty"
+);
 
 per_test_global! {
-    /// Synthetic class id allocator for prototype-object classes. High bit
-    /// set (0x8000_0000+) to keep them separate from codegen-assigned ids
-    /// (which start from 1 and grow by module). u32 wraparound is not a
-    /// concern in practice — would require ~2 billion `Function.prototype = X`
-    /// statements at module init.
+    /// Synthetic class id allocator for prototype-object classes. Allocated
+    /// from `[SYNTHETIC_CLASS_ID_BASE, SYNTHETIC_CLASS_ID_END)` so the ids
+    /// stay separate from codegen-assigned ids (which start from 1 and grow
+    /// by module), from the reserved builtin bands, AND from the ShapeId
+    /// range. Mint through [`alloc_synthetic_class_id`], never by a bare
+    /// `fetch_add` — the bound is the invariant.
     pub static NEXT_SYNTHETIC_CLASS_ID: std::sync::atomic::AtomicU32 =
         std::sync::atomic::AtomicU32::new(SYNTHETIC_CLASS_ID_BASE);
+}
+
+/// Mint the next synthetic class id, parked at the end of the range rather
+/// than wrapped.
+///
+/// A bare `fetch_add` could walk out of the range in two ways, both of which
+/// break a rule the read path depends on: past `SYNTHETIC_CLASS_ID_END` it
+/// collides with the reserved builtin ids (`0xFFFF_0000..`), and on u32 wrap
+/// it lands back in — among others — the ShapeId range. Exhaustion is
+/// unreachable in practice (2^30 ids, one per distinct
+/// `Object.create(proto)` / `F.prototype = X` FUNCTION, not per call), so
+/// saturating is the conservative answer: `0` means "no synthetic id", which
+/// every caller already handles as "stays parentless".
+pub(crate) fn alloc_synthetic_class_id() -> u32 {
+    use std::sync::atomic::Ordering;
+    loop {
+        let id = NEXT_SYNTHETIC_CLASS_ID.load(Ordering::Relaxed);
+        if id >= SYNTHETIC_CLASS_ID_END {
+            NEXT_SYNTHETIC_CLASS_ID.store(SYNTHETIC_CLASS_ID_END, Ordering::Relaxed);
+            return 0;
+        }
+        if NEXT_SYNTHETIC_CLASS_ID
+            .compare_exchange_weak(id, id + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            debug_assert!(
+                !crate::object::shapes::is_shape_id(id),
+                "rule 2: a synthetic class id must never be readable as a ShapeId"
+            );
+            return id;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_alloc_synthetic_class_id() -> u32 {
+    alloc_synthetic_class_id()
 }
 
 /// The `[[Prototype]]` object recorded for a SYNTHETIC class id — one of the
@@ -360,7 +424,7 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         crate::typed_feedback::invalidate_method_change(existing);
         return existing;
     }
-    let new_cid = NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let new_cid = alloc_synthetic_class_id();
     FUNCTION_CLASS_IDS.with(|table| {
         let mut write = table.write().unwrap();
         if write.is_none() {

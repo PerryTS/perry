@@ -118,8 +118,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                 || crate::regex::is_regex_pointer(proto_ptr as *const u8));
             let valid = modellable && is_valid_obj_ptr(proto_ptr as *const u8);
             if valid {
-                let cid =
-                    NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let cid = crate::object::class_registry::alloc_synthetic_class_id();
                 class_prototype_object_root_store(cid, proto_ptr);
                 unsafe { js_register_class_id(cid) };
                 // #1805: link the synthetic class_id into the original class's

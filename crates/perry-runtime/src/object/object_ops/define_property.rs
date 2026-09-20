@@ -241,11 +241,7 @@ unsafe fn define_property_on_handle(
         // (`{ enumerable: true }` alone). Drop any accessor that used to occupy
         // the key so the store can't fire a stale setter.
         if had_accessor {
-            crate::state::state()
-                .descriptors
-                .accessor_descriptors
-                .borrow_mut()
-                .remove(&(hid as usize, key.clone()));
+            clear_accessor_descriptor(hid as usize, &key);
         }
         // [[Value]] is the descriptor's when present; otherwise it defaults to
         // `undefined` for a BRAND-NEW key or an accessor→data conversion (neither
@@ -1133,11 +1129,7 @@ pub extern "C" fn js_object_define_property(
                 let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
                 let value_field =
                     js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
-                crate::state::state()
-                    .descriptors
-                    .accessor_descriptors
-                    .borrow_mut()
-                    .remove(&(closure_ptr, key_rust.clone()));
+                clear_accessor_descriptor(closure_ptr, &key_rust);
                 if !value_field.is_undefined() {
                     crate::closure::closure_set_dynamic_prop(
                         closure_ptr,
@@ -1667,11 +1659,7 @@ pub extern "C" fn js_object_define_property(
                 // `writable: false` doesn't reject the forced store below. The
                 // final attributes are (re)applied a few lines down.
                 if let Some(ref k) = key_rust {
-                    crate::state::state()
-                        .descriptors
-                        .accessor_descriptors
-                        .borrow_mut()
-                        .remove(&(obj as usize, k.clone()));
+                    clear_accessor_descriptor(obj as usize, k);
                     clear_property_attrs(obj as usize, k);
                 }
                 // Ensure the key exists; store the (possibly `undefined`) value

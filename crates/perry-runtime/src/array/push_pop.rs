@@ -195,6 +195,10 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         let shifted = array_front_offset(arr) != reserve;
         (*new_ptr).length = (*arr).length;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "ArrayHeader::capacity (grow)",
+            new_capacity,
+        );
         (*new_ptr).capacity = new_capacity;
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the logical backing
         // range, transfers its layout, and replays its write barriers below.

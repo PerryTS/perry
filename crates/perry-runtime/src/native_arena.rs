@@ -323,6 +323,10 @@ pub extern "C" fn js_native_arena_view(
             crate::gc::GC_TYPE_NATIVE_TYPED_VIEW,
         ) as *mut NativeTypedViewHeader;
         (*view).length = length as u32;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "NativeTypedViewHeader::capacity",
+            length as u32,
+        );
         (*view).capacity = length as u32;
         (*view).kind = kind;
         (*view).elem_size = elem_size as u8;

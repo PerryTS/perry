@@ -644,6 +644,7 @@ fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
                     ptr as *mut crate::promise::Promise,
                     crate::promise::Promise {
                         native_pinned: 0,
+                        _shape_word_pad: [0; 6],
                         state: crate::promise::PromiseState::Pending,
                         value: 0.0,
                         reason: 0.0,

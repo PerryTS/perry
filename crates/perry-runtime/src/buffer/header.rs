@@ -989,6 +989,10 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
         let header = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*ptr).length = 0;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "BufferHeader::capacity",
+            capacity,
+        );
         (*ptr).capacity = capacity;
     }
     register_buffer(ptr);
