@@ -1,5 +1,4 @@
 # runtime_symbol	result_kind	provider_source	provider_return
-backOff	NR_GCPTR	crates/perry-ext-exponential-backoff/src/lib.rs	*mut Promise
 js_argon2_hash	NR_GCPTR	crates/perry-ext-argon2/src/lib.rs	*mut Promise
 js_argon2_verify	NR_GCPTR	crates/perry-ext-argon2/src/lib.rs	*mut Promise
 js_async_hook_disable	NR_FOREIGN_PTR	crates/perry-runtime/src/async_hooks.rs	i64
@@ -28,7 +27,6 @@ js_cheerio_selection_find	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handl
 js_cheerio_selection_first	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
 js_cheerio_selection_last	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
 js_cheerio_selection_parent	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cron_schedule	NR_HANDLE_ID	crates/perry-ext-cron/src/lib.rs	Handle
 js_decimal_abs	NR_HANDLE_ID	crates/perry-ext-decimal/src/lib.rs	Handle
 js_decimal_ceil	NR_HANDLE_ID	crates/perry-ext-decimal/src/lib.rs	Handle
 js_decimal_div_value	NR_HANDLE_ID	crates/perry-stdlib/src/decimal.rs	Handle
@@ -155,11 +153,6 @@ js_net_socket_set_timeout	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.r
 js_net_socket_set_type_of_service	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_unpipe	NR_HANDLE_ID	crates/perry-ext-net/src/pipe.rs	i64
 js_net_socket_unref	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
-js_node_forge_certificate_from_pem	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
-js_node_forge_create_certificate	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
-js_node_forge_generate_key_pair	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
-js_node_forge_md_sha256_create	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
-js_node_forge_private_key_from_pem	NR_JS_VALUE	crates/perry-ext-node-forge/src/lib.rs	JsValue
 js_node_http2_connect	NR_HANDLE_ID	crates/perry-ext-http/src/server/http2_server/session.rs	i64
 js_node_http2_create_secure_server	NR_HANDLE_ID	crates/perry-ext-http/src/server/http2_server.rs	i64
 js_node_http2_create_server	NR_HANDLE_ID	crates/perry-ext-http/src/server/http2_server.rs	i64

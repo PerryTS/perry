@@ -143,10 +143,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // `scheduler` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-cron` (v0.5.564) so the
         // well-known flip can route to perry-ext-cron. `node-cron`'s own
-        // binding was removed (#466) — it now compiles from real npm
-        // source, so only the `cron` package still needs this gate.
-        "cron" => &["bundled-cron"],
-
         // ── argon2 ────────────────────────────────────────────────────
         // argon2 split off into `bundled-argon2` (v0.5.537) — same
         // reason as bcrypt above. Note: NATIVE_MODULES doesn't list
@@ -168,10 +164,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
             &["container"]
         }
 
-        // exponential-backoff: feature-gated v0.5.542 alongside
-        // the perry-ffi closure-invocation surface that powers
-        // its `backOff(fn)` retry loop.
-        "exponential-backoff" => &["bundled-exponential-backoff"],
         // events: feature-gated v0.5.546 alongside perry-ffi's
         // GC-root-scanner surface that keeps EventEmitter
         // listener closures alive between .on() and .emit().
@@ -179,9 +171,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // decimal.js / bignumber.js: feature-gated v0.5.547 —
         // well-known flip routes to perry-ext-decimal.
         "decimal.js" | "bignumber.js" => &["bundled-decimal"],
-        // moment: feature-gated v0.5.549 — well-known flip routes
-        // to perry-ext-moment.
-        "moment" => &["bundled-moment"],
         // readline (#347) — needs the async-runtime feature so the
         // event-loop pump tick drains its line / data / keypress
         // queues. Without async-runtime, `import readline` still

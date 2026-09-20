@@ -1026,17 +1026,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     ),
     method("nodemailer", "sendMail", true, None),
     method("nodemailer", "verify", true, None),
-    // #4917 — real retry semantics: options (numOfAttempts/startingDelay/
-    // timeMultiple/maxDelay/delayFirstAttempt/jitter/retry) honored;
-    // Promise-returning tasks retry on rejection via promise reactions.
-    method_sig(
-        "exponential-backoff",
-        "backOff",
-        false,
-        None,
-        &[p_any("p0"), p_any("p1")],
-        TypeSpec::Any,
-    ),
     method_sig(
         "argon2",
         "hash",

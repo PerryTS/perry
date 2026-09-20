@@ -123,7 +123,6 @@ pub(super) fn lower_builtin_new<'a>(
         "Redis" => Some(&["ioredis", "redis", "iovalkey"]),
         "MongoClient" => Some(&["mongodb"]),
         "Decimal" => Some(&["decimal.js"]),
-        "CronJob" => Some(&["cron"]),
         "Transpiler" => Some(&["bun"]),
         _ => None,
     };
@@ -795,72 +794,6 @@ pub(super) fn lower_builtin_new<'a>(
             // The runtime sig takes one i64 (currently *const c_void, ignored).
             // Pass 0 — semantically "use env-var defaults".
             let handle = blk.call(I64, "js_ioredis_new", &[(I64, "0")]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
-        }
-        // npm `cron` package: `new CronJob(cronTime, onTick, onComplete?,
-        // start?)`. Gated on the import source above. Unlike node-cron's
-        // `schedule()` factory (which auto-starts), a CronJob only begins
-        // firing when the 4th argument is truthy or `job.start()` is
-        // called — `js_cron_job_new` implements that. The onTick closure
-        // is UNBOXED to a raw ClosureHeader pointer (unbox_to_i64): the
-        // cron tick calls it via js_closure_call0 on the raw pointer, so
-        // tagged NaN-box bits would throw "value is not a function" on
-        // the first fire. onComplete is lowered for side effects only.
-        // start/stop/isRunning/nextDate dispatch via the existing
-        // ("cron", true, …) NATIVE_MODULE_TABLE rows.
-        "CronJob" => {
-            // #6986: `expr_ptr` (via `get_raw_string_ptr`, itself a
-            // lower_expr + immediate derive with no window of its own) and
-            // `on_tick` were both held across every later argument's
-            // lowering. Adopt each boxed operand into `group` as it is
-            // produced — argument order preserved — then re-read right
-            // before use. `expr_ptr`'s derivation (`js_get_string_pointer_unified`)
-            // can itself allocate (SSO materialize, nanbox.rs), so it runs
-            // FIRST among the final derivations: `on_tick`'s `unbox_to_i64`
-            // is pure bitwise (no collect) and `start` needs no further
-            // derivation, so re-reading them after is safe.
-            let cron_time_idx = adopt_optional_arg(ctx, args, 0, group)?;
-            let on_tick_idx = adopt_optional_arg(ctx, args, 1, group)?;
-            if let Some(arg) = args.get(2) {
-                let _ = lower_expr(ctx, arg)?;
-            }
-            let start_idx = adopt_optional_arg(ctx, args, 3, group)?;
-            for arg in args.iter().skip(4) {
-                let _ = lower_expr(ctx, arg)?;
-            }
-            let expr_ptr = match cron_time_idx {
-                Some(i) => {
-                    let cron_time = group.reread(ctx, i)?;
-                    ctx.block().call(
-                        I64,
-                        "js_get_string_pointer_unified",
-                        &[(DOUBLE, &cron_time)],
-                    )
-                }
-                None => "0".to_string(),
-            };
-            let cb_ptr = match on_tick_idx {
-                Some(i) => {
-                    let on_tick = group.reread(ctx, i)?;
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &on_tick)
-                }
-                None => {
-                    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                    let blk = ctx.block();
-                    unbox_to_i64(blk, &undef)
-                }
-            };
-            let start = match start_idx {
-                Some(i) => group.reread(ctx, i)?,
-                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-            };
-            let blk = ctx.block();
-            let handle = blk.call(
-                I64,
-                "js_cron_job_new",
-                &[(I64, &expr_ptr), (I64, &cb_ptr), (DOUBLE, &start)],
-            );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // async_hooks.AsyncLocalStorage — `new AsyncLocalStorage()` produces a

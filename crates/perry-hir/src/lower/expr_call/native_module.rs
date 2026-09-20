@@ -232,32 +232,6 @@ fn detect_bundled_mysql2_create(
     mysql2_config_signature(method_name, &keys)
 }
 
-/// Return the complete static member path whose root identifier resolves to
-/// `module_name` as a whole-module reference. Computed properties are not
-/// accepted because they are not a statically known namespace path.
-fn native_module_member_path(
-    ctx: &LoweringContext,
-    expr: &ast::Expr,
-    module_name: &str,
-) -> Option<Vec<String>> {
-    match unwrap_ts_wrappers(expr) {
-        ast::Expr::Ident(ident) => matches!(
-            ctx.lookup_native_module(ident.sym.as_ref()),
-            Some((m, None)) if m == module_name
-        )
-        .then(Vec::new),
-        ast::Expr::Member(member) => {
-            let ast::MemberProp::Ident(prop) = &member.prop else {
-                return None;
-            };
-            let mut path = native_module_member_path(ctx, member.obj.as_ref(), module_name)?;
-            path.push(prop.sym.to_string());
-            Some(path)
-        }
-        _ => None,
-    }
-}
-
 fn is_node_core(module: &str) -> bool {
     crate::ir::is_node_builtin_module(module.strip_prefix("node:").unwrap_or(module))
 }
@@ -299,7 +273,7 @@ fn is_submodule_export(module: &str, export: &str) -> bool {
 /// export of one (`import { posix } from "node:path"`), or a `require()` alias?
 ///
 /// Deliberately node-core ONLY: an ext/npm native module (`mysql2`, `redis`,
-/// `node-forge`) is served by codegen-wired `NativeMethodCall` rows with no
+/// `undici`) is served by codegen-wired `NativeMethodCall` rows with no
 /// by-name runtime dispatcher behind them, so declining its fast path would
 /// trade a wrong answer for no answer. Every name this returns `true` for
 /// resolves through `dispatch_native_module_method` in the runtime.
@@ -427,57 +401,6 @@ pub(super) fn named_import_call_needs_esm_binding(
         module.strip_prefix("node:").unwrap_or(module) == "module"
             && method.as_deref() == Some("syncBuiltinESMExports")
     })
-}
-
-/// node-forge sub-namespace flattening. Unlike the single-level `ns.method()`
-/// shape the other arms match, forge's API is deeply nested:
-/// `forge.pki.rsa.generateKeyPair(...)`, `forge.pki.createCertificate()`,
-/// `forge.md.sha256.create()`. The call's receiver is therefore a CHAIN of
-/// `Member`s (not a bare native-module `Ident`), so none of them fire — and
-/// worse, an intermediate read like `forge.pki` otherwise reaches the
-/// unimplemented-API gate in `expr_member` (no `node-forge` symbol named
-/// `pki`) and defers a throw. Collapse any member chain rooted at the
-/// node-forge default import down to its LAST segment, which is exactly the
-/// method key the codegen `NATIVE_MODULE_TABLE` rows use (`generateKeyPair`,
-/// `createCertificate`, `create`, `privateKeyToPem`, …). Only the exact
-/// implemented paths are flattened; in particular, `forge.md.md5.create()`
-/// must not accidentally dispatch to the SHA-256 marker just because its final
-/// segment is also `create`. `createCertificate` is typed
-/// back to a `Certificate` instance by the factory map in
-/// `js_transform/local_natives.rs`, so `cert.setSubject(...)` etc. dispatch
-/// through the normal single-level instance path.
-///
-/// Runs BEFORE the generic namespace/`module.Class.staticMethod` dispatch so it
-/// wins for the 2-level `forge.pki.createCertificate()` shape that
-/// `try_module_class_static` would otherwise claim (reading `forge.pki` as
-/// `module.Class` and hitting the gate).
-pub(super) fn try_node_forge_namespace(
-    ctx: &LoweringContext,
-    expr: &ast::Expr,
-    args: Vec<Expr>,
-) -> Result<Expr, Vec<Expr>> {
-    let Some(path) = native_module_member_path(ctx, expr, "node-forge") else {
-        return Err(args);
-    };
-    let method = match path
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        ["pki", "rsa", "generateKeyPair"] => "generateKeyPair",
-        ["pki", method @ ("createCertificate" | "certificateFromPem" | "certificateToPem"
-        | "privateKeyFromPem" | "privateKeyToPem" | "publicKeyToPem")] => method,
-        ["md", "sha256", "create"] => "create",
-        _ => return Err(args),
-    };
-    return Ok(Expr::NativeMethodCall {
-        module: "node-forge".to_string(),
-        class_name: None,
-        object: None,
-        method: method.to_string(),
-        args,
-    });
 }
 
 pub(super) fn try_native_module_methods(

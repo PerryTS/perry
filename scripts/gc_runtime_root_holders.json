@@ -34,12 +34,6 @@
   ],
   "holders": [
     {
-      "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
-      "name": "NEXT_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
-    },
-    {
       "file": "crates/perry-ext-fetch/src/lib.rs",
       "name": "REQUEST_HANDLES",
       "verdict": "covered_elsewhere",
@@ -4049,10 +4043,6 @@
       "name": "GC_SCANNER_REGISTERED"
     },
     {
-      "file": "crates/perry-stdlib/src/cron.rs",
-      "name": "CRON_GC_REGISTERED"
-    },
-    {
       "file": "crates/perry-stdlib/src/crypto/hash_handles.rs",
       "name": "CRYPTO_STREAM_GC_REGISTERED"
     },
@@ -4083,10 +4073,6 @@
     {
       "file": "crates/perry-stdlib/src/events.rs",
       "name": "EVENTS_GC_REGISTERED"
-    },
-    {
-      "file": "crates/perry-stdlib/src/exponential_backoff.rs",
-      "name": "GC_REGISTERED"
     },
     {
       "file": "crates/perry-stdlib/src/fetch/gc.rs",

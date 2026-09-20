@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2041 entries across 122 modules
+// Coverage: 2026 entries across 118 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -1023,17 +1023,6 @@ declare module "constants" {
   export const defaultCoreCipherList: any;
 }
 
-declare module "cron" {
-  /** stdlib */
-  export class CronJob { [key: string]: any; }
-  /** stdlib */
-  export function describe(expr: string): string;
-  /** stdlib */
-  export function schedule(expr: string, handler: any): any;
-  /** stdlib */
-  export function validate(expr: string): boolean;
-}
-
 declare module "crypto" {
   /** stdlib */
   export class Cipheriv { [key: string]: any; }
@@ -1537,11 +1526,6 @@ declare module "events" {
   export function once(...args: any[]): any;
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
-}
-
-declare module "exponential-backoff" {
-  /** stdlib */
-  export function backOff(p0: any, p1: any): any;
 }
 
 declare module "fetch" {
@@ -2136,13 +2120,6 @@ declare module "module" {
   export function syncBuiltinESMExports(...args: any[]): any;
 }
 
-declare module "moment" {
-  /** stdlib */
-  export default function (input?: any): any;
-  /** stdlib */
-  export function moment(input?: any): any;
-}
-
 declare module "mongodb" {
   /** stdlib */
   export function connect(p0: any): any;
@@ -2226,25 +2203,6 @@ declare module "node-fetch" {
   export class Response { [key: string]: any; }
   /** stdlib */
   export default function (...args: any[]): any;
-}
-
-declare module "node-forge" {
-  /** stdlib */
-  export function certificateFromPem(...args: any[]): any;
-  /** stdlib */
-  export function certificateToPem(...args: any[]): any;
-  /** stdlib */
-  export function create(...args: any[]): any;
-  /** stdlib */
-  export function createCertificate(...args: any[]): any;
-  /** stdlib */
-  export function generateKeyPair(...args: any[]): any;
-  /** stdlib */
-  export function privateKeyFromPem(...args: any[]): any;
-  /** stdlib */
-  export function privateKeyToPem(...args: any[]): any;
-  /** stdlib */
-  export function publicKeyToPem(...args: any[]): any;
 }
 
 declare module "node-pty" {

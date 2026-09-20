@@ -52,7 +52,7 @@
 //! (`js_node_http_*` → `http`). But a large family of data-store / client
 //! wrappers name every symbol `js_<binding>_*` 1:1 with the binding key
 //! (`js_ioredis_*` → `perry-ext-ioredis`). Those are routed generically by
-//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `iovalkey`/`undici`/`node-forge`
+//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `iovalkey`/`undici`/`typescript`
 //! (a `perry.compilePackages` member that never appears in any import set)
 //! still flips its wrapper onto the link line off the emitted FFI alone.
 
@@ -655,9 +655,6 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("js_ioredis_",    "ioredis"),
     // undici HTTP/1.1 client + Agent/ProxyAgent (perry-ext-undici).
     ("js_undici_",     "undici"),
-    // node-forge PKI subset — RSA keygen, X.509 build/sign, PEM
-    // (perry-ext-node-forge). Hyphenated package → underscored prefix.
-    ("js_node_forge_", "node-forge"),
     // Native runtime TypeScript transpilation subset (#8511).
     ("js_typescript_", "typescript"),
     // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
@@ -798,7 +795,7 @@ pub(crate) fn record_ffi_call(symbol: &str) {
 
     // Ext-binding prefix net: an emitted `js_<binding>_*` symbol flips its
     // well-known wrapper onto the link line off codegen provenance alone. This
-    // is what lets an AOT-compiled `iovalkey` / `undici` / `node-forge` (in
+    // is what lets an AOT-compiled `iovalkey` / `undici` / `typescript` (in
     // `perry.compilePackages`, so never in any import set) still link its
     // `perry-ext-*` staticlib. The MODULE_CAPTURE marker is the matched prefix
     // itself: replaying it (object-cache manifest, #6439) re-enters this arm
@@ -1257,8 +1254,6 @@ mod tests {
             ("js_ioredis_hgetall", "ioredis"),
             ("js_undici_request", "undici"),
             ("js_undici_proxy_agent_new", "undici"),
-            ("js_node_forge_generate_key_pair", "node-forge"),
-            ("js_node_forge_create_certificate", "node-forge"),
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
             ("js_typescript_transpile_module", "typescript"),

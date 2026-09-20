@@ -2,7 +2,6 @@
   "per_file": {
     "crates/perry-ext-better-sqlite3/src/lib.rs": 13,
     "crates/perry-ext-cheerio/src/lib.rs": 7,
-    "crates/perry-ext-cron/src/lib.rs": 2,
     "crates/perry-ext-decimal/src/lib.rs": 1,
     "crates/perry-ext-events/src/lib.rs": 12,
     "crates/perry-ext-events/src/module_iterators.rs": 2,
@@ -22,13 +21,11 @@
     "crates/perry-ext-net/src/classes.rs": 2,
     "crates/perry-ext-net/src/jsvalue.rs": 1,
     "crates/perry-ext-net/src/lifecycle.rs": 1,
-    "crates/perry-ext-node-forge/src/lib.rs": 24,
     "crates/perry-ext-pg/src/lib.rs": 7,
     "crates/perry-ext-streams/src/lib.rs": 4,
     "crates/perry-ext-ws/src/server.rs": 3,
     "crates/perry-ext-zlib/src/stream.rs": 3,
     "crates/perry-stdlib/src/cheerio.rs": 6,
-    "crates/perry-stdlib/src/cron.rs": 2,
     "crates/perry-stdlib/src/crypto/kdf.rs": 9,
     "crates/perry-stdlib/src/crypto/keys.rs": 1,
     "crates/perry-stdlib/src/crypto/sign.rs": 22,
@@ -79,5 +76,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 555
+  "total": 527
 }

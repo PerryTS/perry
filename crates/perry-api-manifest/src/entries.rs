@@ -87,14 +87,11 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dns/promises",       // (duplicate — kept for parity)
     "url",                // URL / URLSearchParams
     // ── More third-party npm packages ──
-    "decimal.js",          // arbitrary-precision decimals
-    "bignumber.js",        // arbitrary-precision big numbers
-    "exponential-backoff", // retry-with-backoff helper
-    "lodash",              // general utility library
-    "moment",              // (legacy) date/time library
-    "sharp",               // image processing (replaces the N-API addon)
-    "cheerio",             // server-side jQuery-style HTML parsing
-    "cron",                // cron scheduler (aliases node-cron)
+    "decimal.js",   // arbitrary-precision decimals
+    "bignumber.js", // arbitrary-precision big numbers
+    "lodash",       // general utility library
+    "sharp",        // image processing (replaces the N-API addon)
+    "cheerio",      // server-side jQuery-style HTML parsing
     // ── Node.js builtins (cont.) ──
     "async_hooks", // async context tracking
     // #2875: internal module backing DisposableStack/AsyncDisposableStack
@@ -169,11 +166,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "node-pty",
     "bun-pty",
     "@lydell/node-pty", // API-identical node-pty fork (see above)
-    // #466: node-forge PKI subset (RSA keygen, X.509 build/sign, PEM).
-    // Bundled wrapper at `crates/perry-ext-node-forge`; served natively
-    // for Socket Firewall's TLS-MITM CA so forge's pure-JS crypto isn't
-    // AOT-compiled.
-    "node-forge",
     // @parcel/watcher's root binding and the eight published Node-API
     // sidecars. HIR canonicalizes sidecars to the root dispatch table.
     "@parcel/watcher",

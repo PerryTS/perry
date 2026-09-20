@@ -791,15 +791,6 @@
       "linux"
     ]
   },
-  "test_parity_moment": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "Node runs; Perry's native moment shim stops at moment.utc with an unimplemented-call error. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_parity_nanoid": {
     "issue": "8271",
     "added": "2026-08-17",

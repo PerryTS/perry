@@ -476,16 +476,15 @@ fn undici_needs_shared_tokio() {
 }
 
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
-/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` /
-/// `js_node_forge_*` to these binding keys; each must exist in the shipped
-/// `well_known_bindings.toml` and map to its `perry-ext-*` crate, or the
-/// driver's routing loop would silently drop the flip.
+/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` to these
+/// binding keys; each must exist in the shipped `well_known_bindings.toml`
+/// and map to its `perry-ext-*` crate, or the driver's routing loop would
+/// silently drop the flip.
 #[test]
 fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
     for (key, krate) in [
         ("ioredis", "perry-ext-ioredis"),
         ("undici", "perry-ext-undici"),
-        ("node-forge", "perry-ext-node-forge"),
     ] {
         let binding = super::super::well_known::lookup_well_known(key)
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
@@ -501,10 +500,6 @@ fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
 fn ext_binding_build_routing_split() {
     assert!(binding_needs_shared_tokio("ioredis"));
     assert!(binding_needs_shared_tokio("undici"));
-    assert!(
-        !binding_needs_shared_tokio("node-forge"),
-        "node-forge is CPU-only and must not ride the shared-tokio invocation"
-    );
 }
 
 #[test]

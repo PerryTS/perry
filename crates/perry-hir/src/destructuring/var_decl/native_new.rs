@@ -496,16 +496,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                     ("better-sqlite3", "prepare") => Some("Statement"),
                                     ("sqlite", "prepare") => Some("StatementSync"),
                                     ("sqlite", "createSession") => Some("Session"),
-                                    // moment manipulation methods return a
-                                    // NEW date handle — without re-registering the
-                                    // binding, `const d2 = d.add(7, 'day');
-                                    // d2.format(...)` fell to generic dispatch
-                                    // (undefined). "App" matches the factory-result
-                                    // registration class.
-                                    (
-                                        "moment",
-                                        "add" | "subtract" | "startOf" | "endOf" | "clone",
-                                    ) => Some("App"),
                                     _ => None,
                                 };
                                 if let Some(class_name) = returns_handle {

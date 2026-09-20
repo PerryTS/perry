@@ -62,21 +62,6 @@ const decompressed = zlib.gunzipSync(compressed);
 console.log(decompressed.toString()); // "Hello, World!"
 ```
 
-## cron (Job Scheduling)
-
-Native bindings via `perry-ext-cron` (v0.5.564). The npm `node-cron` binding
-that used to share this backend was removed (#466) — `import ... from
-"node-cron"` now compiles the real npm package from source.
-
-```typescript,no-test
-import { CronJob } from "cron";
-
-const job = new CronJob("*/5 * * * *", () => {
-  console.log("Runs every 5 minutes");
-});
-job.start();
-```
-
 ## ethers (Ethereum)
 
 Native bindings via `perry-ext-ethers` (v0.5.556) — backed by
@@ -104,20 +89,6 @@ ee.on("data", (chunk) => console.log("got:", chunk));
 ee.emit("data", "hello");
 ```
 
-## exponential-backoff (Retry Logic)
-
-Native bindings via `perry-ext-exponential-backoff` (v0.5.542).
-
-```typescript,no-test
-import { backOff } from "exponential-backoff";
-
-const result = await backOff(() => fetchUnstableEndpoint(), {
-  numOfAttempts: 5,
-  startingDelay: 200,
-  timeMultiple: 2,
-});
-```
-
 ## decimal.js / bignumber.js (Arbitrary Precision)
 
 Native bindings via `perry-ext-decimal` (v0.5.547). Both package names route
@@ -125,19 +96,6 @@ to the same backend — `Decimal` and `BigNumber` are both exposed.
 
 ```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:decimal}}
-```
-
-## moment (Legacy Date)
-
-Native bindings via `perry-ext-moment` (v0.5.549). `moment` is in maintenance
-mode upstream — prefer `dayjs` for new code, but Perry supports both for
-existing codebases.
-
-```typescript,no-test
-import moment from "moment";
-
-const m = moment().add(7, "days");
-console.log(m.format());
 ```
 
 ## worker_threads

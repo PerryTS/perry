@@ -239,57 +239,6 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         &[p_any("p0"), p_any("p1")],
         TypeSpec::Number,
     ),
-    // moment factory + instance methods (wired to the same handle-based
-    // date runtime as dayjs; see native_table/dates.rs moment rows).
-    method_sig(
-        "moment",
-        "default",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "input",
-            ty: TypeSpec::Any,
-            optional: true,
-        }],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "moment",
-        "moment",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "input",
-            ty: TypeSpec::Any,
-            optional: true,
-        }],
-        TypeSpec::Any,
-    ),
-    method("moment", "format", true, None),
-    method("moment", "toISOString", true, None),
-    method("moment", "valueOf", true, None),
-    method("moment", "unix", true, None),
-    method("moment", "year", true, None),
-    method("moment", "month", true, None),
-    method("moment", "date", true, None),
-    method("moment", "day", true, None),
-    method("moment", "hour", true, None),
-    method("moment", "minute", true, None),
-    method("moment", "second", true, None),
-    method("moment", "millisecond", true, None),
-    method("moment", "add", true, None),
-    method("moment", "subtract", true, None),
-    method("moment", "startOf", true, None),
-    method("moment", "endOf", true, None),
-    method("moment", "diff", true, None),
-    method("moment", "isBefore", true, None),
-    method("moment", "isAfter", true, None),
-    method("moment", "isSame", true, None),
-    method("moment", "isBetween", true, None),
-    method("moment", "isValid", true, None),
-    method("moment", "clone", true, None),
-    method("moment", "fromNow", true, None),
-    method("moment", "toDate", true, None),
     method_sig(
         "sharp",
         "default",
@@ -590,58 +539,6 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     zlib_params_factory("createBrotliDecompress"),
     zlib_params_factory("createZstdCompress"),
     zlib_params_factory("createZstdDecompress"),
-    method_sig(
-        "cron",
-        "validate",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "expr",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "cron",
-        "schedule",
-        false,
-        None,
-        &[
-            ParamSpec::Named {
-                name: "expr",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-            ParamSpec::Named {
-                name: "handler",
-                ty: TypeSpec::Any,
-                optional: false,
-            },
-        ],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "cron",
-        "describe",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "expr",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::String,
-    ),
-    method("cron", "start", true, None),
-    method("cron", "stop", true, None),
-    method("cron", "isRunning", true, None),
-    method("cron", "nextDate", true, None),
-    // npm `cron` package class form: `new CronJob(cronTime, onTick,
-    // onComplete?, start?)` — constructed by the lower_builtin_new arm
-    // (js_cron_job_new; no auto-start, matching the npm package). The
-    // instance methods reuse the ("cron", true, …) rows above.
-    class("cron", "CronJob"),
     method_sig(
         "perry/tui",
         "Text",
@@ -1257,24 +1154,6 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
         TypeSpec::BigInt,
     ),
     method("ethers", "createRandom", false, Some("Wallet")),
-    // node-forge PKI subset (perry-ext-node-forge). Declared with the
-    // arity-agnostic `method(...)` form (params &[], returns Any) so the
-    // #512 dispatch↔manifest drift gate is satisfied by name while the
-    // real argument shapes live in the wrapper. Namespaced call sites
-    // (`forge.pki.rsa.generateKeyPair`, `forge.md.sha256.create`)
-    // dispatch once perry-hir flattens the sub-namespace member chains.
-    method("node-forge", "generateKeyPair", false, None),
-    method("node-forge", "createCertificate", false, None),
-    method("node-forge", "certificateFromPem", false, None),
-    method("node-forge", "certificateToPem", false, None),
-    method("node-forge", "privateKeyFromPem", false, None),
-    method("node-forge", "privateKeyToPem", false, None),
-    method("node-forge", "publicKeyToPem", false, None),
-    method("node-forge", "create", false, None),
-    method("node-forge", "setSubject", true, Some("Certificate")),
-    method("node-forge", "setIssuer", true, Some("Certificate")),
-    method("node-forge", "setExtensions", true, Some("Certificate")),
-    method("node-forge", "sign", true, Some("Certificate")),
     // ===========================================================
     // Methods dispatched via custom Expr::* variants
     // (perry-hir/src/lower/expr_call.rs and expr_member.rs)
