@@ -56,8 +56,8 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # section from native_table/databases.rs and its provider rows; the counts
 # below are what the scanner reports on the resolved tree post-rebase, not
 # arithmetic carried over from either parent.
-EXPECTED_ROWS = 0  # placeholder, recomputed below after conflict resolution
-EXPECTED_PROVIDERS = 0  # placeholder, recomputed below after conflict resolution
+EXPECTED_ROWS = 328
+EXPECTED_PROVIDERS = 293
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
