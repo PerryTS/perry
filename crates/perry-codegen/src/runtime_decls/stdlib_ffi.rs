@@ -24,7 +24,7 @@ use utilities::declare_utilities;
 use web::declare_web;
 
 /// Stdlib / FFI runtime functions. Without these declarations, user code
-/// that touches any of the third-party stdlib modules (http, mysql2, pg,
+/// that touches any of the third-party stdlib modules (http, mongodb,
 /// redis, mongodb, bcrypt, jsonwebtoken, sharp, cron, WebSocket,
 /// zlib, etc.) emits `use of undefined value '@js_*'` at clang -c time
 /// because the IR references the name without a preceding `declare`.

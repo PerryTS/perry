@@ -26,7 +26,7 @@ cd "$REPO_ROOT"
 # no-auto linker correctly refuses that unsafe archive pair.
 cargo build --release \
     -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-doc-tests \
-    -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-pg -p perry-ext-nodemailer
+    -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-nodemailer
 
 # Disable per-test auto-optimize for HOST runs only. With this set,
 # `perry compile` short-circuits the cargo-rebuild step in
