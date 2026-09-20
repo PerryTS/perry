@@ -981,3 +981,95 @@ fn a_bare_return_is_still_a_return_position_and_still_served() {
     assert_eq!(rows[0].alloc_context.as_deref(), Some("return"));
     assert_eq!(rows[0].tier, Some(crate::opt_report::Tier::Served));
 }
+
+/// #10793. A `Ptr<Shape>` proof that no property access can ever spend must say
+/// so, and the recorder must NOT fire for a proof that has one.
+///
+/// This is the pair, not the positive alone. The check it answers —
+/// `repsel_census.check_unconsumed_is_explained` — is satisfied by ANY named
+/// mechanism, so a recorder that fired on every selected local would turn the
+/// census permanently green while naming a reason that is false for most of
+/// them. The second half is what makes the first half worth anything.
+///
+/// `return <local>` is the shape that gets a local past rule 2 with no access
+/// site at all (#7034 §4 exempts a bare return), which is the corpus shape too:
+/// `buildRows`'s `row` in `benchmarks/app-patterns/kernels/batch.ts` survives
+/// on a contained `rows.push(row)` and never reads a field.
+#[test]
+fn a_selected_promotion_with_no_access_site_names_its_mechanism() {
+    let c = class_with_fields("C", &["x"]);
+    let mut classes = HashMap::new();
+    classes.insert("C".to_string(), &c);
+
+    // Proven, and nothing in the body reads or writes a field of it.
+    let session = Session::start();
+    let facts = run(
+        &[let_c(1, "idle"), Stmt::Return(Some(Expr::LocalGet(1)))],
+        &classes,
+    );
+    let entries = session.entries();
+    drop(session);
+
+    assert!(
+        facts.contains_key(&1),
+        "the recording must be observational: the local is still promoted"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.name == "idle" && e.outcome == Outcome::Selected),
+        "the win must still be counted, or there is no wasted promotion to explain"
+    );
+    let dropped = entries
+        .iter()
+        .find(|e| e.name == "idle" && e.outcome == Outcome::Unconsumed)
+        .expect("a promotion with no access site must name a mechanism");
+    assert_eq!(dropped.rule.as_deref(), Some("no_access_site"));
+    assert_eq!(dropped.analysis, crate::opt_report::Analysis::PtrShape);
+    assert_eq!(dropped.local_id, Some(1));
+    assert!(
+        dropped
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("never itself the object of a property access"),
+        "the reason must state the mechanism, not a neighbouring one: {:?}",
+        dropped.reason
+    );
+
+    // The discriminating half: one declared-field store is enough, and the
+    // recorder must stay silent.
+    let session = Session::start();
+    let facts = run(
+        &[
+            let_c(2, "used"),
+            store_x(2),
+            Stmt::Return(Some(Expr::LocalGet(2))),
+        ],
+        &classes,
+    );
+    let entries = session.entries();
+    drop(session);
+
+    assert!(
+        facts.contains_key(&2),
+        "the accessed local is still promoted"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e.name == "used" && e.outcome == Outcome::Selected),
+        "…and still counted as a win"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e.name == "used" && e.outcome == Outcome::Unconsumed),
+        "a local with an access site must NOT be reported as having none: {:?}",
+        entries
+            .iter()
+            .filter(|e| e.name == "used")
+            .map(|e| (e.outcome, e.rule.clone()))
+            .collect::<Vec<_>>()
+    );
+}

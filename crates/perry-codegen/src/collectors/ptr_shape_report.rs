@@ -35,6 +35,81 @@ use perry_hir::{Class, Expr, Stmt};
 use super::cjs_scaffolding::CjsPreamble;
 use crate::opt_report::{self, Analysis, Denial, Position, Tier};
 
+/// Record every candidate the collector will not even reach, on an
+/// early-bail path (env gate off, or the rule-5 module-wide barrier).
+///
+/// Runs only under `--opt-report`; it re-derives the candidate seeds purely
+/// to name them, and returns nothing the collector consumes — the bail-out
+/// itself is unchanged.
+pub(super) fn early_bail(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    preamble: &CjsPreamble,
+    denial: ShapeDenial,
+) {
+    if !opt_report::enabled() {
+        return;
+    }
+    let names = local_names(stmts);
+    let depths = loop_depths(stmts);
+    let seeds = candidate_seeds(stmts, boxed_vars, module_globals, preamble);
+    for (id, class_name) in &seeds {
+        deny_local(*id, &names, &depths, Some(class_name), denial);
+    }
+    for site in unbound_new_sites(stmts, preamble) {
+        deny_alloc_site(&site);
+    }
+}
+
+/// Record that a SELECTED `Ptr<Shape>` local has no access site to spend its
+/// proof at (#10793), so its promotion is wasted for a nameable reason.
+///
+/// Report-only, and the counterpart of `ptr_shape::note_ptr_shape_local`
+/// rather than a second opinion about it: the same loop iteration that counts
+/// the win records that nothing will consume it. The alternative — inferring it
+/// at render time from `selected` minus `consumed` — would fabricate a
+/// mechanism for every gap and permanently disarm
+/// `repsel_census.check_unconsumed_is_explained`, which is the check this
+/// exists to answer honestly.
+///
+/// `accessed` is the caller's verdict over the walk's OWN bookkeeping: a
+/// declared-field read (`UseWalk::field_reads`), a store of any of the three
+/// writing shapes (`field_stores`), or a chain-resolved method call
+/// (`method_calls`). Reading what the containment proof already had to collect
+/// is what keeps this from drifting into a second, disagreeing definition of
+/// "access site".
+///
+/// The other two `Ptr<Shape>` drop mechanisms are disjoint from this one by
+/// construction, so one value cannot be counted twice: `MODULE_INIT_CONTEXT`
+/// fires from `FnCtx::ptr_shape_receiver_fact`, which only runs AT an access
+/// site, and [`crate::expr::PTR_SHAPE_SCALAR_REPLACED`] fires for objects whose
+/// HIR field accesses are exactly what scalar replacement rewrites.
+pub(super) fn note_no_access_site(id: u32, fact: &super::ptr_shape::PtrShapeLocal, accessed: bool) {
+    // Same `SuppressScope` guard as `note_ptr_shape_local`: the return-shape
+    // pre-pass re-runs this proof speculatively (#7034 §4).
+    if accessed || suppressed() || !opt_report::enabled() {
+        return;
+    }
+    let (reason, issue) =
+        crate::expr::ptr_shape_context_rule_text(crate::expr::PTR_SHAPE_NO_ACCESS_SITE);
+    opt_report::unconsumed(opt_report::Unconsumed {
+        position: Position::Local,
+        name: fact.report_name.as_deref().unwrap_or("<local>"),
+        local_id: Some(id),
+        analysis: Analysis::PtrShape,
+        rep: "Ptr<Shape>",
+        rule: crate::expr::PTR_SHAPE_NO_ACCESS_SITE,
+        reason,
+        tier: Tier::CompilerLimitation,
+        issue: Some(issue),
+        detail: Some(format!(
+            "proven Ptr<Shape> of class {}; the local has no property access in this body",
+            fact.class_name
+        )),
+    });
+}
+
 /// A named denial: the rule as the collector numbers it, a human expansion,
 /// the actionability tier, and the tracking issue when the fix is ours.
 #[derive(Debug, Clone, Copy)]
