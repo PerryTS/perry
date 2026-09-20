@@ -3136,11 +3136,6 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
-]
 
 [[package]]
 name = "hashlink"
@@ -4424,15 +4419,6 @@ dependencies = [
  "time",
  "ttf-parser",
  "weezl",
-]
-
-[[package]]
-name = "lru"
-version = "0.18.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff9840bcc50b71349309900da0ce7279aa336ae71d73250b07998932c7d97c25"
-dependencies = [
- "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -5837,14 +5823,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-commander"
-version = "0.5.1611"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
-]
-
-[[package]]
 name = "perry-ext-cron"
 version = "0.5.1611"
 dependencies = [
@@ -5938,15 +5916,6 @@ dependencies = [
  "perry-ffi",
  "redis",
  "tokio",
-]
-
-[[package]]
-name = "perry-ext-lru-cache"
-version = "0.5.1611"
-dependencies = [
- "lru",
- "perry-ffi",
- "perry-runtime",
 ]
 
 [[package]]
@@ -6282,7 +6251,6 @@ dependencies = [
  "lazy_static",
  "lettre",
  "libc",
- "lru",
  "md-5 0.11.0",
  "ml-kem",
  "mongodb",
