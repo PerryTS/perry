@@ -600,6 +600,149 @@ entry:
         )
         self.assertEqual(report["status"], "pass", report["errors"])
 
+    # ---- #10784: no_dynamic_property_runtime is function-scoped -------------
+    #
+    # It used to be a raw substring sweep of the whole module. Two things it
+    # was never meant to police tripped it: a module-scope `declare` for a
+    # helper nothing calls, and the cold arm of a guarded access inside a
+    # fixture function that exists precisely to RECORD a fallback. The sweep
+    # now walks function bodies and exempts a function whose own native-rep
+    # record declares a fallback the workload listed in
+    # `native_rep_checks.allow_materialization_reasons`.
+
+    DYNAMIC_PROPERTY_SCOPE_IR = """
+declare double @js_dyn_index_set_strict(double, double, double, i32)
+
+define double @perry_fn_mod_ts__provenPath() {
+entry:
+  %v = load double, ptr %p
+  ret double %v
+}
+
+define double @perry_fn_mod_ts__declaredFallback() {
+entry:
+  br i1 %guard, label %tav.set.fast.1, label %tav.set.slow.2
+
+tav.set.fast.1:
+  store double 3.5, ptr %p
+  br label %tav.set.merge.3
+
+tav.set.slow.2:
+  %r = call double @js_dyn_index_set_strict(double %v, double 0.0, double 3.5, i32 1)
+  br label %tav.set.merge.3
+
+tav.set.merge.3:
+  ret double 0.0
+}
+"""
+
+    @staticmethod
+    def _dynamic_property_scope_workloads(allowed_reasons):
+        return {
+            "dyn_scope": {
+                "native_rep_checks": {
+                    "allow_materialization_reasons": list(allowed_reasons),
+                }
+            }
+        }
+
+    @staticmethod
+    def _dynamic_property_scope_reps(function):
+        return [
+            {
+                "records": [
+                    {
+                        "function": function,
+                        "source_function": "declaredFallback",
+                        "expr_kind": "TypedArraySet",
+                        "consumer": "TypedArraySet.slow_path",
+                        "access_mode": "dynamic_fallback",
+                        "materialization_reason": "mutable_alias",
+                        "fallback_reason": "mutable_alias",
+                    }
+                ]
+            }
+        ]
+
+    def _dynamic_property_check(self, ir, workloads, native_reps):
+        report = HARNESS.verify_artifacts(
+            workload="dyn_scope",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_reason_kinds": {}},
+            native_reps=native_reps,
+            workloads=workloads,
+        )
+        return next(
+            check
+            for check in report["checks"]
+            if check["name"] == "no_dynamic_property_runtime"
+        )
+
+    def test_dynamic_property_helper_in_a_declared_fallback_is_allowed(self):
+        check = self._dynamic_property_check(
+            self.DYNAMIC_PROPERTY_SCOPE_IR,
+            self._dynamic_property_scope_workloads(["mutable_alias"]),
+            self._dynamic_property_scope_reps("perry_fn_mod_ts__declaredFallback"),
+        )
+        self.assertEqual(check["status"], "pass", check["detail"])
+
+    def test_dynamic_property_helper_without_a_declared_fallback_still_fails(self):
+        # The whole point of the check: the SAME helper, in a function that
+        # records no fallback, is still an error. Without this the refreshed
+        # expectation would be unable to fail.
+        ir = self.DYNAMIC_PROPERTY_SCOPE_IR.replace(
+            "  %v = load double, ptr %p",
+            "  %v = call double @js_dyn_index_set_strict(double 0.0, double 0.0,"
+            " double 0.0, i32 1)",
+        )
+        check = self._dynamic_property_check(
+            ir,
+            self._dynamic_property_scope_workloads(["mutable_alias"]),
+            self._dynamic_property_scope_reps("perry_fn_mod_ts__declaredFallback"),
+        )
+        self.assertEqual(check["status"], "fail", check["detail"])
+        self.assertIn("perry_fn_mod_ts__provenPath", check["detail"])
+
+    def test_dynamic_property_exemption_follows_the_declared_reason_list(self):
+        # Withdraw the reason the record carries and the exemption goes with
+        # it -- the licence comes from the workload's own written allowance,
+        # not from the helper's name or its block label.
+        check = self._dynamic_property_check(
+            self.DYNAMIC_PROPERTY_SCOPE_IR,
+            self._dynamic_property_scope_workloads(["runtime_api"]),
+            self._dynamic_property_scope_reps("perry_fn_mod_ts__declaredFallback"),
+        )
+        self.assertEqual(check["status"], "fail", check["detail"])
+        self.assertIn("perry_fn_mod_ts__declaredFallback", check["detail"])
+
+    def test_dynamic_property_declare_line_alone_is_not_a_call(self):
+        ir = """
+declare double @js_dyn_index_set_strict(double, double, double, i32)
+
+define double @perry_fn_mod_ts__provenPath() {
+entry:
+  ret double 0.0
+}
+"""
+        check = self._dynamic_property_check(ir, {"dyn_scope": {}}, None)
+        self.assertEqual(check["status"], "pass", check["detail"])
+
+    def test_dynamic_property_helper_in_an_unlabelled_entry_block_is_seen(self):
+        # Optimized IR routinely leaves the entry block unlabelled; a sweep
+        # keyed on label lines silently drops it.
+        ir = """
+define double @perry_fn_mod_ts__provenPath() {
+  %v = call double @js_dyn_index_set_strict(double 0.0, double 0.0, double 0.0, i32 1)
+  ret double %v
+}
+"""
+        check = self._dynamic_property_check(ir, {"dyn_scope": {}}, None)
+        self.assertEqual(check["status"], "fail", check["detail"])
+        self.assertIn("perry_fn_mod_ts__provenPath", check["detail"])
+
     def test_function_scoped_ir_check_does_not_include_callers(self):
         ir = """
 define void @target_function() {
