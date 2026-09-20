@@ -1058,6 +1058,11 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
+    // Lane 3: the inherited-read cache records a holder ADDRESS per entry and
+    // a hit LOADS through it, so the slots are STRONG roots: marked, so the
+    // address cannot be recycled under the entry, and rewritten, so a
+    // compacting or copying pass leaves it pointing at the same object.
+    reg_scanner!(crate::object::inherited_read_cache::scan_inherited_read_cache_roots_mut);
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);

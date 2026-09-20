@@ -1030,6 +1030,22 @@ impl IcDiag {
                 self.prime_while_megamorphic
             );
         }
+        // Lane 3's inherited-read cache, on the SAME arming rather than an
+        // env var of its own. A cache that primes and then declines every
+        // lookup returns exactly the values the chain walk would and is
+        // invisible in a program's output; this row is what tells a real
+        // program's run apart from that.
+        let inh_hits = crate::object::inherited_read_cache::inherited_read_cache_hits();
+        let inh_primes = crate::object::inherited_read_cache::inherited_read_cache_primes();
+        let inh_declines = crate::object::inherited_read_cache::inherited_read_cache_declines();
+        let inh_neg = crate::object::inherited_read_cache::inherited_read_cache_neg_served();
+        if (inh_hits | inh_primes | inh_declines | inh_neg) != 0 {
+            let _ = writeln!(
+                out,
+                "  inherited: hits={inh_hits} primes={inh_primes} \
+                 declines={inh_declines} declines_cached={inh_neg}"
+            );
+        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
