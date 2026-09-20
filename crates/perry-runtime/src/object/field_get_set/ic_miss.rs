@@ -239,6 +239,77 @@ pub const PIC_CACHE_WORDS: usize = 12;
 /// | 11 | round-robin victim index for the ways |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
 
+/// The value a per-site compact MRU word (`@perry_ic_N_packed_get`) holds
+/// before anything primes it.
+///
+/// **Must equal `PACKED_GET_EMPTY` in perry-codegen's
+/// `expr/property_get/generic_dispatch.rs`** — `packed_get_sentinels_match_codegen`
+/// below and `pic_cache_layout_matches_runtime` there hold the pair.
+///
+/// It is deliberately NOT zero. The emitted hit path compares the receiver's
+/// ShapeId word at `+4` against this word's low half; an object that was never
+/// shape-stamped carries `parent_class_id` there, which is 0 for an anonymous
+/// object literal, so a zero sentinel would let such a receiver MATCH an
+/// unprimed site and take the raw load at slot 0. That is why the tower used
+/// to spend a `test`/`je` on every read proving the word was filled. A
+/// sentinel no receiver word can equal makes the ShapeId compare prove both
+/// facts at once.
+///
+/// `0xFFFF_FFFF`. The u32 at `+4` is a ShapeId ([0x8000_0000, 0xC000_0000)),
+/// a synthetic class id, or an ordinary HIR class id (a counter from 1).
+/// Synthetic ids sit at or above 0x8000_0000 today and move to
+/// [0xC000_0000, 0xFFFF_0000) under #10824, so `0xFFFF_FFFF` is above every
+/// one of them under BOTH schemes, and an ordinary id would need ~2^32
+/// classes to reach it.
+pub(crate) const PACKED_GET_EMPTY: u64 = 0xFFFF_FFFF;
+
+/// Bit flipped into the ShapeId a compact MRU word publishes when the key is
+/// SPILL-located. **Must equal `PACKED_SPILL_FLIP` in perry-codegen.**
+///
+/// ShapeIds live in [0x8000_0000, 0xC000_0000), so flipping the TOP TWO bits
+/// lands a spill entry in [0x4000_0000, 0x8000_0000) — the one u32 band that
+/// is neither a ShapeId, nor a synthetic class id (at or above 0x8000_0000
+/// today, [0xC000_0000, 0xFFFF_0000) under #10824), nor reachable by an
+/// ordinary HIR class id without ~2^30 classes. Flipping only bit 30 would
+/// land it in [0xC000_0000, 2^32), which #10824 turns into the synthetic
+/// class-id range — a receiver carrying one would then take the inline load
+/// with a spill index, silently.
+/// The emitted hit path's plain compare therefore declines a spill entry for
+/// free, which is what let the overflow-bit test (a 10-byte `movabs`, a `test`
+/// and a branch) leave the hit path of every site, including the ones whose
+/// field is inline and could never see the bit.
+pub(crate) const PACKED_SPILL_FLIP: u32 = 0xC000_0000;
+
+/// Decode a compact MRU word into `(ShapeId, index, is_spill)`.
+///
+/// `None` for the unprimed sentinel. The inverse of the encoding in
+/// [`packed_get::prime_get`]; the emitted code open-codes the two compares
+/// this performs, so any change here is a change there.
+#[inline]
+pub(crate) fn packed_get_decode(word: u64) -> Option<(u32, u32, bool)> {
+    use crate::object::shapes::{SHAPE_ID_BASE, SHAPE_ID_END};
+    // The overwhelmingly common word on a cold site, and the one the
+    // emitted global is born holding. Named rather than range-derived so
+    // this stays visibly paired with the perry-codegen copy of it.
+    if word == PACKED_GET_EMPTY {
+        return None;
+    }
+    let key32 = word as u32;
+    let index = (word >> 32) as u32;
+    if (SHAPE_ID_BASE..SHAPE_ID_END).contains(&key32) {
+        return Some((key32, index, false));
+    }
+    // The spill band is the ShapeId range with [`PACKED_SPILL_FLIP`] flipped
+    // in, and the flip is an involution, so this recognises exactly the words
+    // [`packed_get::prime_get`] can publish for a spill-located key.
+    let unflipped = key32 ^ PACKED_SPILL_FLIP;
+    if (SHAPE_ID_BASE..SHAPE_ID_END).contains(&unflipped) {
+        return Some((unflipped, index, true));
+    }
+    // [`PACKED_GET_EMPTY`], and anything else no prime can publish.
+    None
+}
+
 /// The per-site slot codegen emits for a property-read cache — `@perry_ic_N =
 /// private global ptr null` — holding null until the site's first priming
 /// miss, then the arena cache `pic_slot_resolve` published (#9708). The
