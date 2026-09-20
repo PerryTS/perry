@@ -31,7 +31,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     // ── Third-party npm packages (native wrappers; see well_known_bindings.toml) ──
     "mysql2",         // MySQL/MariaDB client
     "mysql2/promise", // mysql2's promise-API subpath
-    "pg",             // PostgreSQL client
     "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
     "argon2",         // Argon2 password hashing (replaces the N-API addon)
     "ioredis",        // Redis/Valkey client

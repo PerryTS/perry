@@ -71,13 +71,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("mysql2/promise", "beginTransaction", true, None),
     method("mysql2/promise", "commit", true, None),
     method("mysql2/promise", "rollback", true, None),
-    method_sig("pg", "connect", false, None, &[p_any("p0")], TypeSpec::Any),
-    method_sig("pg", "Pool", false, None, &[p_any("p0")], TypeSpec::Any),
-    method("pg", "connect", true, Some("Client")),
-    method("pg", "query", true, Some("Pool")),
-    method("pg", "end", true, Some("Pool")),
-    method("pg", "query", true, None),
-    method("pg", "end", true, None),
     method_sig(
         "ioredis",
         "createClient",

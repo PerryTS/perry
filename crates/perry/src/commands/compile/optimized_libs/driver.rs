@@ -315,7 +315,6 @@ pub(crate) fn build_optimized_libs(
                         | "bundled-argon2"
                         | "bundled-nodemailer"
                         | "bundled-ioredis"
-                        | "bundled-pg"
                         | "bundled-mysql2"
                         | "bundled-mongodb"
                         | "bundled-ws"

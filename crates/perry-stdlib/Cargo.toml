@@ -168,11 +168,7 @@ external-tls-server = [
 ]
 
 # Databases
-database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
-# `database-postgres` umbrella retained for backwards-compat;
-# v0.5.566's well-known flip toggles `bundled-pg` instead.
-database-postgres = ["bundled-pg"]
-bundled-pg = ["dep:sqlx", "async-runtime"]
+database = ["database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
 # `database-mysql` umbrella retained for backwards-compat;
 # v0.5.567's well-known flip toggles `bundled-mysql2` instead.
 database-mysql = ["bundled-mysql2"]
@@ -323,7 +319,7 @@ rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { workspace = true, optional = true }
 
 # Database
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "postgres", "chrono"], optional = true }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "chrono"], optional = true }
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"], optional = true }
 mongodb = { version = "3.7", default-features = false, features = ["bson-3", "compat-3-3-0", "rustls-tls", "dns-resolver"], optional = true }
 bson = { version = "3.1", optional = true, features = ["serde"] }
