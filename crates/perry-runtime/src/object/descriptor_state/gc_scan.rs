@@ -3,6 +3,7 @@
 //! Split out of `descriptor_state.rs` to keep that file under the 2000-line
 //! size gate. `scan_descriptor_roots_mut` is registered in `gc/mod.rs`.
 
+use super::owner_lifecycle::rewrite_descriptor_owner;
 use super::*;
 
 /// GC scanner for the string-keyed descriptor side tables (2026-07-02 audit
