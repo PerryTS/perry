@@ -356,10 +356,6 @@ mod owner_index_tests {
     fn clear_object_descriptors_empties_the_index_too() {
         let _lock = crate::gc::global_side_table_test_lock();
         let obj = crate::object::js_object_alloc(0, 0) as usize;
-        // `clear_object_descriptors` early-returns unless a handle-band owner
-        // has ever taken a descriptor; set the latch so the body actually runs.
-        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
-
         set_property_attrs(obj, "p".to_string(), PropertyAttrs::new(true, true, true));
         set_accessor_descriptor(obj, "acc".to_string(), AccessorDescriptor::default());
         assert_mirrors(obj, "before clear");

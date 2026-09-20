@@ -88,7 +88,7 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
         // Positive membership, rather than a blacklist of native class ids.
         // Synthetic function/Object.create ids occupy the allocated prefix
         // of this counter's range; reserved native ids are outside it.
-        let synthetic = class_id >= 0x8000_0000
+        let synthetic = class_id >= super::class_registry::SYNTHETIC_CLASS_ID_BASE
             && class_id < super::NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed);
         if class_id != 0 && !synthetic && !super::is_anon_shape_class_id(class_id) {
             return None;

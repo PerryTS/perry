@@ -584,13 +584,6 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 /// `GLOBAL_DESCRIPTORS_IN_USE`, neither is poisoned by the runtime
 /// installing attrs on unrelated builtins (RegExp prototype etc.), so the
 /// dynamic-write fast path stays precise.
-/// #6710: set once a native HANDLE-band owner (small id, not a heap object)
-/// gets a property-attr / accessor descriptor. Heap owners record this on their
-/// GC header (`OBJ_FLAG_HAS_DESCRIPTORS`) but a handle id has no header, so
-/// `clear_object_descriptors` uses this flag to skip the O(N) `retain` scans on
-/// the common path where no handle was ever `defineProperty`'d.
-static HANDLE_HAS_DESCRIPTORS: AtomicBool = AtomicBool::new(false);
-
 pub(crate) fn note_descriptor_target(obj: usize) {
     note_descriptor_target_keyed(obj, None);
 }
@@ -623,10 +616,31 @@ pub(crate) fn note_accessor_descriptor_target(obj: usize, key: &str, acc: &Acces
     note_descriptor_target_keyed(obj, Some((key.as_bytes(), shape)));
 }
 
+/// The ONE funnel every descriptor install goes through, and therefore the
+/// one place RULE 1 ("every descriptor change changes the ShapeId of an
+/// ordinary object") is implemented.
+///
+/// What it covers, and what it deliberately does not — this is the exact
+/// scope any shape-only read guard inherits:
+///
+/// * `GC_TYPE_OBJECT`: sets `OBJ_FLAG_HAS_DESCRIPTORS` **and**, when the
+///   receiver is shaped, transitions the shape. A cache entry keyed on the
+///   old ShapeId can no longer match, so for these receivers the shape
+///   compare subsumes the flag test.
+/// * **typed arrays**: early return, before either. A small typed array is
+///   plain-alloc'd without a `GcHeader`, so there is no flag bit to set and
+///   no `ObjectHeader` to stamp.
+/// * **every other cell kind** (array, closure, Map/Set, RegExp, Error,
+///   Promise, native handles, handle-band ids): the `obj_type` test below
+///   rejects them, so they get neither the flag nor a shape transition.
+///
+/// Consequence for the emitted read path: for a non-`GC_TYPE_OBJECT`
+/// receiver the descriptor flag is *never set*, so dropping the flag test
+/// loses nothing — but the SHAPE is equally uninformative, so such receivers
+/// must still be rejected by KIND. Removing the GC-header load from the read
+/// path needs their descriptor state carried in the shape word first
+/// (`rule1_funnel_does_not_cover_non_object_receivers` pins this).
 fn note_descriptor_target_keyed(obj: usize, data_install: Option<(&[u8], u8)>) {
-    if crate::value::addr_class::is_handle_band(obj) {
-        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
-    }
     if crate::array::object_prototype_addr_matches(obj) {
         OBJECT_PROTO_DESCRIPTORS.store(true, Ordering::Relaxed);
     }
@@ -1857,31 +1871,48 @@ fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize
 /// only reaps entries whose owner is a dead *heap* object, so a recycled handle
 /// id's descriptors survive into the next owner. Called from
 /// `handle_expando_clear` when perry-ffi hands a freed handle id back out.
+///
+/// RULE 1: this is a BULK descriptor removal — after it every key of the
+/// receiver is an ordinary `{writable, enumerable, configurable}` data
+/// property again — so a shaped ordinary receiver must transition, exactly as
+/// the per-key [`clear_property_attrs`] / [`clear_accessor_descriptor`] do.
+/// It used to make no shape call at all, so a cache primed while the object
+/// was frozen kept serving the frozen answer. Today's only production caller
+/// passes a handle-band id, which has no header and no shape (the transition
+/// is then skipped by `object_is_shaped`), but nothing in the signature says
+/// so and the function is reachable from anywhere in the crate.
+///
+/// The removal itself goes through the owner index rather than two O(table)
+/// `retain` scans. That index is authoritative — every insert in this file
+/// calls `owner_index_add`/`owner_index_push_proven_new` first, and
+/// `gc_scan.rs` keeps it in step across evacuation — so it is both complete
+/// and O(this owner's keys). It also removes the need for the
+/// `HANDLE_HAS_DESCRIPTORS` latch that existed only to skip those scans, and
+/// with it the silent no-op this function performed for a HEAP owner while no
+/// handle had ever taken a descriptor.
 pub(crate) fn clear_object_descriptors(obj: usize) {
-    // Fast path: if no handle-band owner ever received a descriptor, these
-    // tables hold only heap owners — none of whose keys can match `obj` (a
-    // handle id) — so the O(N) `retain` scans would remove nothing. Skip them.
-    if !HANDLE_HAS_DESCRIPTORS.load(Ordering::Relaxed) {
+    let st = state();
+    let owned_any = st
+        .descriptors
+        .attr_keys_by_owner
+        .borrow()
+        .contains_key(&obj)
+        || st
+            .descriptors
+            .accessor_keys_by_owner
+            .borrow()
+            .contains_key(&obj);
+    if !owned_any {
         return;
     }
-    let st = state();
-    {
-        let mut m = st.descriptors.property_descriptors.borrow_mut();
-        if !m.is_empty() {
-            m.retain(|(owner, _), _| *owner != obj);
+    remove_descriptor_owner_entries(st, obj);
+    super::prop_plan::prop_plan_epoch_bump();
+    unsafe {
+        let object = obj as *mut crate::object::ObjectHeader;
+        if crate::object::object_is_shaped(object) {
+            crate::object::shapes::transition_object_shape_semantics(object);
         }
     }
-    {
-        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
-        if !m.is_empty() {
-            m.retain(|(owner, _), _| *owner != obj);
-        }
-    }
-    st.descriptors.attr_keys_by_owner.borrow_mut().remove(&obj);
-    st.descriptors
-        .accessor_keys_by_owner
-        .borrow_mut()
-        .remove(&obj);
 }
 
 /// Move string-keyed descriptor ownership when `ArrayHeader` growth replaces
@@ -1889,6 +1920,27 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
 /// the metadata-rewrite scanner below does not run; without this explicit
 /// transfer, descriptors installed before a later grow remain keyed to the
 /// forwarding stub and disappear from reads through the canonical array head.
+///
+/// RULE 1: this makes NO shape call, and that is correct. It is not a
+/// descriptor CHANGE — it is a RE-KEY of one logical object whose allocation
+/// moved. The descriptor set, the attributes and the accessors are all
+/// identical either side; only the address the tables index them under
+/// changes. A shape transition here would be actively wrong: it would retire
+/// every cache entry for a shape the object still has.
+///
+/// The contract that makes it correct is the CALLER's: the replacement cell
+/// must already carry the original's identity — `js_array_grow` copies the
+/// `GcHeader` (`_reserved`, hence `OBJ_FLAG_HAS_DESCRIPTORS`) verbatim before
+/// calling here, and an array never carries the flag in the first place
+/// (`note_descriptor_target_keyed` only sets it for `GC_TYPE_OBJECT`).
+///
+/// Where that contract is NOT met — any caller handing the entries to a cell
+/// that is not already the same object — the moved descriptors would land on
+/// a receiver whose header and shape both still say "no descriptors", which
+/// is precisely what rule 1 forbids. Repair it rather than assert it: route
+/// the new owner through the funnel, which sets the flag and transitions a
+/// shaped ordinary receiver. Free on the array-growth path, where the
+/// condition is false.
 pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
     if old_owner == new_owner {
         return;
@@ -1963,6 +2015,13 @@ pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
     }
     for key in &moved_acc {
         note_meta_descriptor_key(new_owner, key, true);
+    }
+
+    // Rule 1 repair (see the doc comment): a new owner that did not already
+    // carry the source's descriptor state must not silently acquire
+    // descriptors behind an unchanged header and shape.
+    if object_has_descriptors(old_owner) && !object_has_descriptors(new_owner) {
+        note_descriptor_target(new_owner);
     }
 }
 

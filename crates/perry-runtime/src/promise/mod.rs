@@ -548,6 +548,14 @@ pub struct Promise {
     /// paths (`js_promise_resolve` / `js_promise_reject`) and by
     /// `remove_token_from_registry` for a token dropped without settling.
     pub(crate) native_pinned: u8,
+    /// RULE 3 (single-path object model): the six bytes between
+    /// `native_pinned` and `value` are struct padding, and payload `+4` — the
+    /// word the emitted read path loads as a ShapeId — falls inside them.
+    /// Neither `gc_malloc` nor the arena zeroes reused memory and Rust does
+    /// not guarantee writing implicit padding, so a Promise born at a dead
+    /// shaped object's address inherited that object's LIVE ShapeId there.
+    /// Naming the padding makes `ptr::write(p, Promise::new())` zero it.
+    pub(crate) _shape_word_pad: [u8; 6],
     /// The resolved value (if fulfilled)
     pub(crate) value: f64,
     /// The rejection reason (if rejected)
@@ -582,6 +590,7 @@ impl Promise {
         Promise {
             state: PromiseState::Pending,
             native_pinned: 0,
+            _shape_word_pad: [0; 6],
             value: 0.0,
             reason: 0.0,
             on_fulfilled: ptr::null(),

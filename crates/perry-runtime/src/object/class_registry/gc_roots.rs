@@ -718,7 +718,10 @@ pub(crate) fn test_clear_class_side_table_roots() {
     // it lives in the calling thread's class image (`object/class_image.rs`)
     // rather than a `per_test_global!`, where a clear from a guard on another
     // libtest thread would be the #7672 hazard this helper exists to avoid.
-    NEXT_SYNTHETIC_CLASS_ID.store(0x8000_0000, std::sync::atomic::Ordering::Relaxed);
+    NEXT_SYNTHETIC_CLASS_ID.store(
+        super::prototype_objects::SYNTHETIC_CLASS_ID_BASE,
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 #[cfg(test)]

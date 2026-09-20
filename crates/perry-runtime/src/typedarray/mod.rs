@@ -851,13 +851,23 @@ pub(crate) fn typed_array_length_or_throw(val: f64) -> u32 {
         throw_range_error(format!("Invalid typed array length: {shown}").as_bytes());
     }
     // #5067 — Perry stores the element count in a `u32` capacity field, so a
-    // length above `u32::MAX` cannot be represented (and the backing block
-    // could never be allocated anyway). Node passes the `<= 2**53-1` length
-    // check for these and then fails the actual allocation, so match its
+    // length above the cap cannot be represented (and the backing block could
+    // never be allocated anyway). Node passes the `<= 2**53-1` length check
+    // for these and then fails the actual allocation, so match its
     // `RangeError: Array buffer allocation failed` rather than silently
-    // saturating the cast to `u32::MAX` (which produced a wrong-size array
-    // or aborted the process in the allocator).
-    if integer > u32::MAX as f64 {
+    // saturating the cast (which produced a wrong-size array or aborted the
+    // process in the allocator).
+    //
+    // RULE 3 (single-path object model): the cap is `i32::MAX`, not
+    // `u32::MAX`, because `TypedArrayHeader::capacity` sits at payload `+4` —
+    // the word the emitted read path loads as a ShapeId. `new Int8Array(2**31)`
+    // wrote `capacity = 0x8000_0000`, which is not merely inside the ShapeId
+    // range but is the FIRST id the process ever mints. This lowers no
+    // documented maximum: `new Uint8Array(n)`, `new ArrayBuffer(n)` and
+    // `Buffer.alloc(n)` already stop at `i32::MAX`
+    // (`buffer/from.rs`), so this only makes the remaining element types
+    // agree with their siblings.
+    if integer > i32::MAX as f64 {
         throw_range_error(b"Array buffer allocation failed");
     }
     integer as u32
@@ -1027,6 +1037,10 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
         let header = (p as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*p).length = length;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "TypedArrayHeader::capacity",
+            capacity,
+        );
         (*p).capacity = capacity;
         (*p).kind = kind;
         (*p).elem_size = elem_size as u8;

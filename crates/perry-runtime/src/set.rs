@@ -1203,6 +1203,10 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
 
     // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
     (*set).elements = new_elements;
+    crate::object::shape_rule3::debug_assert_not_shape_id_word(
+        "SetHeader::capacity (grow)",
+        new_capacity,
+    );
     (*set).capacity = new_capacity;
     SET_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
@@ -1238,6 +1242,7 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
 
         // Initialize header
         (*ptr).size = 0;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word("SetHeader::capacity", cap);
         (*ptr).capacity = cap;
         // GC_STORE_AUDIT(INIT): set elements buffer is external storage; element stores are barriered separately.
         (*ptr).elements = elements;

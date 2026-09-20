@@ -523,7 +523,7 @@ pub(crate) fn synthetic_class_id_for_function(func_value: f64) -> u32 {
     if let Some(existing) = existing {
         return existing;
     }
-    let new_cid = NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let new_cid = super::prototype_objects::alloc_synthetic_class_id();
     FUNCTION_CLASS_IDS.with(|table| {
         let mut write = table.write().unwrap();
         if write.is_none() {
