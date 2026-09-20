@@ -1367,6 +1367,9 @@ mod ladder_skip_tests {
         let mut slot: PicCacheSlot = &mut cache;
         let packed = AtomicU64::new(super::PACKED_GET_EMPTY);
 
+        // The OWN-key miss — the read every megamorphic site takes, and the
+        // one the ladder skip was measured on. It resolves in the keys scan
+        // and returns before the handler's by-name tail.
         let before = crate::typedarray::test_typed_array_registry_probe_count();
         let hit = obj.with_mut_ptr(|o: *mut ObjectHeader| {
             present.with_const_ptr(|k| {
@@ -1374,16 +1377,20 @@ mod ladder_skip_tests {
             })
         });
         assert_eq!(hit, 3.0, "test premise: the own key is answered");
-        let missing = obj.with_mut_ptr(|o: *mut ObjectHeader| {
-            absent.with_const_ptr(|k| super::get_field_ic_miss_impl(o, k, &mut slot, &packed))
-        });
-        assert_eq!(missing.to_bits(), crate::value::TAG_UNDEFINED);
         assert_eq!(
             crate::typedarray::test_typed_array_registry_probe_count(),
             before,
             "a GC_TYPE_OBJECT receiver must skip the closure/buffer/typed-array \
              ladder: its kind byte already rules all three out (#10828, rule 3)"
         );
+        // An ABSENT key falls through to `js_object_get_field_by_name`, whose
+        // own dispatch still probes the registries for an object receiver (8
+        // probes, measured) — a separate ladder this change does not touch,
+        // so its count is deliberately not asserted here.
+        let missing = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            absent.with_const_ptr(|k| super::get_field_ic_miss_impl(o, k, &mut slot, &packed))
+        });
+        assert_eq!(missing.to_bits(), crate::value::TAG_UNDEFINED);
 
         // The ladder still runs for a receiver that is not an object: a dense
         // array asked for a non-`length` key reaches the typed-array probe.
