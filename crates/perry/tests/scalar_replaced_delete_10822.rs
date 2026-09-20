@@ -250,6 +250,25 @@ console.log(String(a.length));
     );
 }
 
+/// The same defect with the receiver spelled `this`: `delete this.k` inside a
+/// constructor. The gate that decides whether a class can be scalar-replaced
+/// (`collectors/this_as_value.rs`) answered "safe, scalar replacement
+/// intercepts it" for a declared field, exactly as the `LocalGet` receivers
+/// did. Printed `3` before the fix.
+#[test]
+fn delete_this_property_in_constructor() {
+    assert_eq!(
+        run(r#"
+class C {
+  constructor() { this.a = 1; this.c = 3; delete this.c; }
+}
+const o = new C();
+console.log(String(o.c));
+"#),
+        "undefined\n"
+    );
+}
+
 /// The masking programs. These were ALREADY correct before the fix — a run
 /// that only checked the broken shapes could not tell a real fix from a
 /// change that merely forces every object onto the heap path, and these are
