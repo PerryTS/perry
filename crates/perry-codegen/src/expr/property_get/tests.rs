@@ -598,20 +598,20 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         "the small-handle sentinel select only existed because an invalid \
          receiver could reach the way compares; it must be gone:\n{ir}"
     );
-    // The header predicates: each load/compare pair must appear exactly once.
-    // `icmp eq i32 %` is three: the packed kind/descriptor compare, the
-    // ShapeId identity compare on the hit path, and the spill compare in
-    // `pic.token.miss` that replaced the hit path's overflow-bit test. A
-    // fourth would mean the miss block is re-deriving the header.
-    for (needle, what, bound) in [
-        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 2),
-        ("icmp eq i32 %", "the ShapeId identity compare", 3),
+    // The receiver predicates, exactly once each. `icmp eq i32 %` is two: the
+    // ShapeId identity compare on the hit path and the spill compare in
+    // `pic.token.miss` that replaced the hit path's overflow-bit test. There
+    // is no GC-kind compare at all any more (#10828), so a single `icmp eq
+    // i8` would mean the header load has crept back somewhere.
+    for (needle, what, expect) in [
+        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 0),
+        ("icmp eq i32 %", "the ShapeId identity compare", 2),
     ] {
         let n = main.matches(needle).count();
-        assert!(
-            n <= bound,
-            "{what} appears {n} times — the miss block is re-deriving the \
-             receiver header again:\n{ir}"
+        assert_eq!(
+            n, expect,
+            "{what} appears {n} times, expected {expect} — a receiver \
+             predicate is being re-derived or has crept back:\n{ir}"
         );
     }
 }
@@ -971,31 +971,37 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
          entry is refused by the ShapeId compare itself:\n{chain}"
     );
 
-    // The GC-kind test is a BYTE compare now, on every target, and the
-    // descriptor-flag test is gone from the hit path: every descriptor change
-    // on an ordinary object transitions its ShapeId (#10824), so the ShapeId
-    // compare subsumes it. The packed `i32` header word (`and ..., 0x080000ff`)
-    // and the native-endian `i16` reserved-halfword load with its `2048`
-    // (`OBJ_FLAG_HAS_DESCRIPTORS`) mask must both be absent from the whole
-    // function — not merely off the chain — or the flag is being tested
-    // somewhere the walk does not see.
-    let kind_cmp = defs
-        .values()
-        .find(|rhs| rhs.starts_with("icmp eq i8 %") && rhs.ends_with(", 2"))
-        .expect("the GC_TYPE_OBJECT byte compare");
+    // The GC header is not read on the way to the slot load at all: neither
+    // the kind byte (#10828 closed rule 3 — a `+4` word equal to a live
+    // ShapeId proves `GC_TYPE_OBJECT`) nor the descriptor flag (#10824 closed
+    // rule 1 — every descriptor change transitions the ShapeId). The chain is
+    // therefore EXACTLY three branches: the receiver-tag test, the
+    // small-handle test and the ShapeId compare. Each retired predicate is
+    // asserted absent from the WHOLE function, not merely off the chain, or
+    // it could be tested somewhere the walk does not see.
+    assert_eq!(
+        conds.len(),
+        3,
+        "the guard chain must be exactly tag test, small-handle test and \
+         ShapeId compare, found {conds:?}\n{func}"
+    );
     assert!(
-        chain.contains(kind_cmp.as_str()),
-        "the GC_TYPE_OBJECT byte compare must gate the slot load: {chain}"
+        !defs
+            .values()
+            .any(|rhs| rhs.starts_with("icmp eq i8 %") && rhs.ends_with(", 2")),
+        "the GC_TYPE_OBJECT kind compare must not be emitted — the ShapeId \
+         compare proves the kind since #10828:\n{func}"
     );
     for (gone, what) in [
         (", 134217983", "the packed kind+descriptor mask"),
         (", 2048", "the OBJ_FLAG_HAS_DESCRIPTORS mask"),
         ("load i16", "the reserved-halfword load"),
+        ("load i8", "the GC-kind byte load"),
     ] {
         assert!(
             !func.contains(gone),
-            "{what} must not be emitted any more — the descriptor flag is \
-             shape-carried since #10824 (found `{gone}`):\n{func}"
+            "{what} must not be emitted any more — kind and descriptor state \
+             are shape-carried since #10824/#10828 (found `{gone}`):\n{func}"
         );
     }
 
@@ -1178,7 +1184,7 @@ fn generic_size_read_serves_native_collections_inline() {
 fn generic_non_size_read_has_no_collection_layout_load() {
     let ir = emit_read("other");
     assert!(
-        !ir.contains("pget.collection_size") && !ir.contains("pic.recv_object_check"),
+        !ir.contains("pget.collection_size") && !ir.contains("pget.collection_kind"),
         "only `.size` may grow the native collection fast path:\n{ir}"
     );
 }
@@ -1206,18 +1212,18 @@ fn the_length_tier_probes_the_elements_store_before_the_shape_ic() {
     );
 }
 
-/// The descriptor-flag test has left the hit path on EVERY target, and with
-/// it the only reason the tower ever cared about endianness: the packed
-/// `i32` header word (kind byte + `OBJ_FLAG_HAS_DESCRIPTORS` in one mask) on
-/// little-endian targets, and the byte + `i16` reserved-halfword pair on the
-/// rest. What remains is a single `obj_type` BYTE compare, which sits at
-/// offset 0 of `GcHeader` regardless of byte order.
+/// The GC header is not read by a generic property read on ANY target: the
+/// kind byte is proved by the ShapeId compare (#10828, rule 3) and the
+/// descriptor flag is shape-carried (#10824, rule 1). With the header load
+/// went the only reason this tower ever cared about endianness — the packed
+/// `i32` kind+descriptor word on little-endian targets versus the byte +
+/// `i16` reserved-halfword pair elsewhere.
 ///
 /// Renamed from `packed_pic_header_guard_is_endianness_aware`: that test
 /// pinned the packed mask's PRESENCE on x86-64/aarch64, which is now the
 /// regression this one exists to catch.
 #[test]
-fn gc_kind_guard_is_one_byte_compare_on_every_target() {
+fn no_gc_header_load_on_any_target() {
     for target in [
         "aarch64-apple-darwin",
         "x86_64-unknown-linux-gnu",
@@ -1227,27 +1233,29 @@ fn gc_kind_guard_is_one_byte_compare_on_every_target() {
         opts.target = Some(target.to_string());
         let ir =
             String::from_utf8(compile_module(&module_with_nullish_read(), opts).unwrap()).unwrap();
+        let main = ir
+            .split("\ndefine ")
+            .find(|f| f.contains("\npic.token"))
+            .unwrap_or_else(|| panic!("{target}: no function contains the tower:\n{ir}"));
         for (gone, what) in [
             (", 134217983", "the packed kind+descriptor mask"),
             (", 2048", "the OBJ_FLAG_HAS_DESCRIPTORS mask"),
             ("load i16", "the reserved-halfword load"),
+            ("load i8", "the GC-kind byte load"),
+            ("icmp eq i8", "the GC-kind compare"),
         ] {
             assert!(
-                !ir.contains(gone),
-                "{target}: {what} must not be emitted (found `{gone}`):\n{ir}"
+                !main.contains(gone),
+                "{target}: {what} must not be emitted (found `{gone}`):\n{main}"
             );
         }
+        // The tower still ends in the one exit: a receiver that is not a
+        // shaped ordinary object, or one whose descriptor install transitioned
+        // its ShapeId, reaches it by FAILING THE SHAPE COMPARE, and the runtime
+        // keeps the Array-subclass named-prefix exception behind it.
         assert!(
-            ir.contains("load i8") && ir.contains("icmp eq i8 %"),
-            "{target}: the GC-kind test must be a byte load and compare:\n{ir}"
-        );
-        // T1: the descriptor-bearing fallback is the one exit. A descriptor-
-        // bearing receiver reaches it by FAILING THE SHAPE COMPARE (its
-        // descriptor install transitioned its ShapeId), and the runtime keeps
-        // the Array-subclass named-prefix exception behind it.
-        assert!(
-            ir.contains("@js_object_get_field_ic_slow(") && ir.contains("\npic.miss.call"),
-            "{target}: the slow exit must remain:\n{ir}"
+            main.contains("@js_object_get_field_ic_slow(") && main.contains("\npic.miss.call"),
+            "{target}: the slow exit must remain:\n{main}"
         );
     }
 }
@@ -1386,7 +1394,9 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         "pget.recv_ok",
         // the non-pointer exit, off the tag test's false edge
         "pget.recv_other",
-        "pic.recv_hdr",
+        // `pic.recv_hdr` is GONE: it existed to load the GC header word, and
+        // the ShapeId compare in `pic.token` now proves the kind (#10828) and
+        // the descriptor state (#10824) that word was loaded for.
         "pic.token",
         "pic.token.miss",
         // The spill entry's landing block. `pic.token.miss` recognises a
