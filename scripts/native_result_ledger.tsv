@@ -117,20 +117,6 @@ js_mongodb_collection_insert_one_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib
 js_mongodb_collection_update_many_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
 js_mongodb_collection_update_one_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
 js_mongodb_db_collection	NR_HANDLE_ID	crates/perry-ext-mongodb/src/lib.rs	Handle
-js_mysql2_connection_begin_transaction	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_connection_commit	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_connection_end	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_connection_execute	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_connection_query	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_connection_rollback	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_create_connection	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_create_pool	NR_HANDLE_ID	crates/perry-ext-mysql2/src/lib.rs	Handle
-js_mysql2_pool_connection_execute	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_pool_connection_query	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_pool_end	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_pool_execute	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_pool_get_connection	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
-js_mysql2_pool_query	NR_GCPTR	crates/perry-ext-mysql2/src/lib.rs	*mut Promise
 js_net_block_list_new	NR_HANDLE_ID	crates/perry-ext-net/src/classes.rs	i64
 js_net_block_list_rules	NR_GCPTR	crates/perry-ext-net/src/classes.rs	*mut ArrayHeader
 js_net_server_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64

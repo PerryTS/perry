@@ -72,6 +72,14 @@ passing the governance check.
   with Node across transliteration, replacement, strict/trim options, locale,
   regular-expression removal, and `slugify.extend`. Its former
   `perry-ext-slugify` and `perry-stdlib` implementations have been removed.
+- `mysql2@3.23.2` compiles from its installed CommonJS source through the
+  default automatic package-routing path, including the `generate-function`
+  row-parser factories it builds with `new Function` at runtime — handled by
+  the `dyn_eval` interpreter's class-expression support (#10661/#10675). A
+  real local-MySQL round trip (`CREATE TABLE`/`INSERT`/`SELECT`/`DELETE`/
+  `DROP`) passed with no `perry.compilePackages` entry for `mysql2` at all.
+  Its former `perry-ext-mysql2` crate and `perry-stdlib` implementation have
+  been removed.
 
 ## Current inventory
 

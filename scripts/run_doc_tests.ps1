@@ -24,7 +24,6 @@ cargo build --release `
     -p perry-doc-tests `
     -p perry-ext-ioredis `
     -p perry-ext-mongodb `
-    -p perry-ext-mysql2 `
     -p perry-ext-pg `
     -p perry-ext-nodemailer
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

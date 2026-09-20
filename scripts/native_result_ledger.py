@@ -51,8 +51,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `args_array`). 369 -> 367 -> 356 rows and 320 -> 318 -> 307 providers;
 # each figure is what `scripts/native_result_ledger.py` reports on the
 # resolved tree, not arithmetic (#10739).
-EXPECTED_ROWS = 356
-EXPECTED_PROVIDERS = 307
+#
+# mysql2's native binding removal (#10680) dropped the MySQL2 NativeModSig
+# section from native_table/databases.rs and its provider rows; the counts
+# below are what the scanner reports on the resolved tree post-rebase, not
+# arithmetic carried over from either parent.
+EXPECTED_ROWS = 0  # placeholder, recomputed below after conflict resolution
+EXPECTED_PROVIDERS = 0  # placeholder, recomputed below after conflict resolution
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

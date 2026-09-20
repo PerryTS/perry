@@ -3026,7 +3026,7 @@ jobs:
         # a "no reactor running" panic. `test_issue_414_mysql_query_params`
         # was the single compile-smoke failure this caused. Same set the
         # doc-tests job already builds together.
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-pg -p perry-ext-nodemailer
 
       - name: Issue #945 scalar method IR guard
         run: |
@@ -3878,7 +3878,7 @@ jobs:
         # Build them in this SAME Cargo graph as perry-stdlib: otherwise each
         # no-auto fallback build bundles a distinct tokio TLS/runtime and the
         # linker rejects the unsafe pair (#507, #7629).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer -p perry-ext-net
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-pg -p perry-ext-nodemailer -p perry-ext-net
 
       - name: Verify macOS application bundle packaging
         if: matrix.os == 'macos-14'
