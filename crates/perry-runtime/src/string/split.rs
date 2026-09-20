@@ -587,6 +587,11 @@ pub extern "C" fn js_string_split_value(
     limit: f64,
 ) -> *mut ArrayHeader {
     use crate::value::JSValue;
+    // Only the regex-engine arm below reads this; binding it unconditionally
+    // makes `cargo check -p perry --bins` warn, and fail under -D warnings, in
+    // a build without that feature. A whole-workspace build unifies the feature
+    // and hides it, which is why it survived review.
+    #[cfg(feature = "regex-engine")]
     let sep_jv = JSValue::from_bits(separator.to_bits());
     let lim_jv = JSValue::from_bits(limit.to_bits());
     let scope = crate::gc::RuntimeHandleScope::new();
