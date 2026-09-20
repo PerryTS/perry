@@ -22,7 +22,6 @@ members = [
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
     "crates/perry-ext-events",
-    "crates/perry-ext-decimal",
     "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
     "crates/perry-ext-ethers",
@@ -548,7 +547,6 @@ perry-perex = { path = "crates/perry-perex" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
 perry-ext-events = { path = "crates/perry-ext-events" }
-perry-ext-decimal = { path = "crates/perry-ext-decimal" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }

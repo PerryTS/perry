@@ -24,7 +24,6 @@ Total: 2842 entries across 117 modules.
 - [`async_hooks`](#async_hooks)
 - [`bcrypt`](#bcrypt)
 - [`better-sqlite3`](#better-sqlite3)
-- [`bignumber.js`](#bignumberjs)
 - [`buffer`](#buffer)
 - [`bun`](#bun)
 - [`bun-pty`](#bun-pty)
@@ -348,12 +347,6 @@ Total: 2842 entries across 117 modules.
 - `raw` — instance
 - `run` — instance
 - `transaction` — instance
-
-## `bignumber.js`
-
-### Classes
-
-- `BigNumber`
 
 ## `buffer`
 

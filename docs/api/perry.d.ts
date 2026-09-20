@@ -269,11 +269,6 @@ declare module "better-sqlite3" {
   export default function (p0: string): any;
 }
 
-declare module "bignumber.js" {
-  /** stdlib */
-  export class BigNumber { [key: string]: any; }
-}
-
 declare module "buffer" {
   /** stdlib */
   export class Blob { [key: string]: any; }

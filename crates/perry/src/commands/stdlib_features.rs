@@ -177,9 +177,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // GC-root-scanner surface that keeps EventEmitter
         // listener closures alive between .on() and .emit().
         "events" => &["bundled-events"],
-        // decimal.js / bignumber.js: feature-gated v0.5.547 —
-        // well-known flip routes to perry-ext-decimal.
-        "decimal.js" | "bignumber.js" => &["bundled-decimal"],
         // readline (#347) — needs the async-runtime feature so the
         // event-loop pump tick drains its line / data / keypress
         // queues. Without async-runtime, `import readline` still
