@@ -89,15 +89,6 @@ ee.on("data", (chunk) => console.log("got:", chunk));
 ee.emit("data", "hello");
 ```
 
-## decimal.js / bignumber.js (Arbitrary Precision)
-
-Native bindings via `perry-ext-decimal` (v0.5.547). Both package names route
-to the same backend — `Decimal` and `BigNumber` are both exposed.
-
-```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:decimal}}
-```
-
 ## worker_threads
 
 Perry compiles statically resolvable worker entry files as separate native

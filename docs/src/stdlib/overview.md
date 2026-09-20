@@ -53,10 +53,6 @@ for compatibility guarantees.
 - **nanoid** — ID generation
 - **validator** — String validation
 
-### CLI & Data
-- **decimal.js** — Arbitrary precision decimals
-- **bignumber.js** — Big number math
-
 ### Other
 - **sharp** — Image processing
 - **cheerio** — HTML parsing

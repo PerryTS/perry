@@ -665,7 +665,7 @@ pub(crate) fn lower_module_decl(
                                     // method dispatch (returning 0 for every
                                     // unknown property), so reads of any field
                                     // returned 0. Same shadowing logic applies
-                                    // to `Decimal`, `BigNumber`, etc.
+                                    // to the other hardcoded names below.
                                     let user_class_defined = module
                                         .classes
                                         .iter()
@@ -688,9 +688,6 @@ pub(crate) fn lower_module_decl(
                                                 Some("ws".to_string())
                                             }
                                             "Redis" => Some("ioredis".to_string()),
-                                            "Big" => Some("big.js".to_string()),
-                                            "Decimal" => Some("decimal.js".to_string()),
-                                            "BigNumber" => Some("bignumber.js".to_string()),
                                             _ => None,
                                         }
                                     };
@@ -754,9 +751,6 @@ pub(crate) fn lower_module_decl(
                                                     Some("ws".to_string())
                                                 }
                                                 "Redis" => Some("ioredis".to_string()),
-                                                "Big" => Some("big.js".to_string()),
-                                                "Decimal" => Some("decimal.js".to_string()),
-                                                "BigNumber" => Some("bignumber.js".to_string()),
                                                 _ => None,
                                             }
                                         };

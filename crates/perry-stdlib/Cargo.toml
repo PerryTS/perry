@@ -23,7 +23,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-decimal", "bundled-streams", "turnloop-smtp-client"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "turnloop-smtp-client"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -31,9 +31,6 @@ core = []
 # EventEmitter — pure Rust, no extra deps. Default-on through `full`.
 bundled-events = []
 
-# decimal.js / bignumber.js — needs `rust_decimal`. Default-on
-# through `full`.
-bundled-decimal = ["dep:rust_decimal"]
 
 # HTTP server (the native framework's own server)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.
@@ -430,11 +427,6 @@ scraper = { version = "0.27", optional = true }
 # never optional, regardless of the bundled-uuid npm-binding feature
 # (removed; see #10678/#466).
 uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"] }
-
-# Decimal math (Big.js / Decimal.js) — optional from v0.5.547 so
-# the well-known flip can strip perry-stdlib's copy when
-# `import 'decimal.js'` resolves to perry-ext-decimal instead.
-rust_decimal = { version = "1.33", features = ["maths"], optional = true }
 
 # libc — termios for readline's raw-mode toggle (#347 Phase 2). The
 # Unix path uses tcsetattr/cfmakeraw; Windows uses SetConsoleMode via
