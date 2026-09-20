@@ -77,11 +77,6 @@ lib = "perry_ext_zlib"
 tracking = "#466"
 node-builtin = true
 
-[bindings.exponential-backoff]
-crate = "perry-ext-exponential-backoff"
-lib = "perry_ext_exponential_backoff"
-tracking = "#466"
-
 # NOTE: tursodb (#424) and iroh (#425) lived here through v0.5.556 but
 # were moved out to standalone third-party repositories in v0.5.557:
 #   - https://github.com/PerryTS/tursodb-bindings  → `bun add @perryts/tursodb`
@@ -94,13 +89,6 @@ tracking = "#466"
 # its job: bundling the wrappers that *port* perry-stdlib's existing
 # in-tree implementations, not net-new functionality.
 
-[bindings.exponential-backoff.upstream]
-version = "3.1.3"
-sha256 = "2ede00f3e458fa991d304dd8a1fed812d686ac5d213c1d6704963c3674913526"
-repo = "https://github.com/coveooss/exponential-backoff"
-ref = "5622170828bd91dc149585bfa3d82c8972a75ac5"
-ported-at = "3.1.3"
-date = "2026-07-30"
 [bindings.events]
 crate = "perry-ext-events"
 lib = "perry_ext_events"
@@ -130,17 +118,6 @@ sha256 = "b98a3d093fdbd8854b32a631229dfb68366f29ad5496c680434a64f762aad321"
 repo = "https://github.com/MikeMcl/bignumber.js"
 ref = "275cd85181041d7b6bebf8ef9b70ee0b1bf056b0"
 ported-at = "11.1.5"
-date = "2026-07-30"
-[bindings.moment]
-crate = "perry-ext-moment"
-lib = "perry_ext_moment"
-tracking = "#466"
-
-[bindings.moment.upstream]
-version = "2.30.1"
-sha256 = "52219a9fee5e1faade4c72536c173c54cedd5e2619272dd0c251a30aeafcde8c"
-repo = "https://github.com/moment/moment"
-ported-at = "2.30.1"
 date = "2026-07-30"
 [bindings.cheerio]
 crate = "perry-ext-cheerio"
@@ -177,18 +154,6 @@ sha256 = "17355f81284ba8431953c77af803b122baf4670cdbf84907adf7cafcd745052b"
 repo = "https://github.com/ethers-io/ethers.js"
 ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
 ported-at = "6.17.0"
-date = "2026-07-30"
-[bindings.cron]
-crate = "perry-ext-cron"
-lib = "perry_ext_cron"
-tracking = "#466"
-
-[bindings.cron.upstream]
-version = "4.4.0"
-sha256 = "868d5acfd1ff068de40d25a8d78cc1678305c7bc9192edd7e2b0d083346bcbdf"
-repo = "https://github.com/kelektiv/node-cron"
-ref = "d2f18cf7c56721913607c8159abe9f18c72decba"
-ported-at = "4.4.0"
 date = "2026-07-30"
 [bindings.ioredis]
 crate = "perry-ext-ioredis"
@@ -374,30 +339,6 @@ tracking = "#516"
 crate = "perry-ext-ads"
 lib = "perry_ext_ads"
 tracking = "#867"
-
-# `node-forge` — the PKI subset (RSA keygen, X.509 build/sign, PEM
-# round-trips) that Socket Firewall's TLS-MITM CA uses. Ports the pure-JS
-# bignum/crypto/ASN.1 stack to native RustCrypto (`rsa` + `x509-cert`) so
-# apps stop AOT-compiling forge's enormous JS. Hyphenated package name →
-# `js_node_forge_*` symbol prefix + `perry_ext_node_forge` lib (same
-# convention as `date-fns`/`lru-cache`). CPU-only: not in
-# `binding_needs_shared_tokio`.
-[bindings.node-forge]
-crate = "perry-ext-node-forge"
-lib = "perry_ext_node_forge"
-tracking = "#466"
-# PARTIAL (explicit): only the PKI subset (RSA keygen, X.509 build/sign,
-# PEM round-trips) is ported — forge's cipher/md/util/asn1 surface is not.
-compat = "partial"
-
-# Upstream provenance pin (see PR #7031 / docs upstream-pins.md).
-[bindings.node-forge.upstream]
-version = "1.4.0"
-sha256 = "bf9d7ca0d774235354697bd4b5e642af6505e7ce2066762c3b855138cf870820"
-repo = "https://github.com/digitalbazaar/forge"
-ref = "fa385f92440879601240020f158bed68e444e83a"
-ported-at = "1.4.0"
-date = "2026-07-30"
 
 # `undici` — Node's HTTP client library, served by perry's NATIVE
 # fetch/http stack instead of AOT-compiling undici's ~50k lines of JS.

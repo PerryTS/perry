@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2903 entries across 124 modules.
+Total: 2855 entries across 120 modules.
 
 ## Modules
 
@@ -36,7 +36,6 @@ Total: 2903 entries across 124 modules.
 - [`cluster`](#cluster)
 - [`console`](#console)
 - [`constants`](#constants)
-- [`cron`](#cron)
 - [`crypto`](#crypto)
 - [`decimal.js`](#decimaljs)
 - [`dgram`](#dgram)
@@ -46,7 +45,6 @@ Total: 2903 entries across 124 modules.
 - [`domain`](#domain)
 - [`ethers`](#ethers)
 - [`events`](#events)
-- [`exponential-backoff`](#exponential-backoff)
 - [`fetch`](#fetch)
 - [`ffi`](#ffi)
 - [`fs`](#fs)
@@ -60,13 +58,11 @@ Total: 2903 entries across 124 modules.
 - [`iovalkey`](#iovalkey)
 - [`lodash`](#lodash)
 - [`module`](#module)
-- [`moment`](#moment)
 - [`mongodb`](#mongodb)
 - [`mysql2`](#mysql2)
 - [`mysql2/promise`](#mysql2promise)
 - [`net`](#net)
 - [`node-fetch`](#node-fetch)
-- [`node-forge`](#node-forge)
 - [`node-pty`](#node-pty)
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
@@ -841,22 +837,6 @@ Total: 2903 entries across 124 modules.
 - `default`
 - `defaultCoreCipherList`
 
-## `cron`
-
-### Classes
-
-- `CronJob`
-
-### Methods
-
-- `describe` — module
-- `isRunning` — instance
-- `nextDate` — instance
-- `schedule` — module
-- `start` — instance
-- `stop` — instance
-- `validate` — module
-
 ## `crypto`
 
 ### Classes
@@ -1312,12 +1292,6 @@ Total: 2903 entries across 124 modules.
 - `defaultMaxListeners`
 - `errorMonitor`
 - `usingDomains`
-
-## `exponential-backoff`
-
-### Methods
-
-- `backOff` — module
 
 ## `fetch`
 
@@ -1947,38 +1921,6 @@ Total: 2903 entries across 124 modules.
 - `default`
 - `globalPaths`
 
-## `moment`
-
-### Methods
-
-- `add` — instance
-- `clone` — instance
-- `date` — instance
-- `day` — instance
-- `default` — module
-- `diff` — instance
-- `endOf` — instance
-- `format` — instance
-- `fromNow` — instance
-- `hour` — instance
-- `isAfter` — instance
-- `isBefore` — instance
-- `isBetween` — instance
-- `isSame` — instance
-- `isValid` — instance
-- `millisecond` — instance
-- `minute` — instance
-- `moment` — module
-- `month` — instance
-- `second` — instance
-- `startOf` — instance
-- `subtract` — instance
-- `toDate` — instance
-- `toISOString` — instance
-- `unix` — instance
-- `valueOf` — instance
-- `year` — instance
-
 ## `mongodb`
 
 ### Methods
@@ -2180,23 +2122,6 @@ Total: 2903 entries across 124 modules.
 ### Methods
 
 - `default` — module
-
-## `node-forge`
-
-### Methods
-
-- `certificateFromPem` — module
-- `certificateToPem` — module
-- `create` — module
-- `createCertificate` — module
-- `generateKeyPair` — module
-- `privateKeyFromPem` — module
-- `privateKeyToPem` — module
-- `publicKeyToPem` — module
-- `setExtensions` — instance *(class: `Certificate`)*
-- `setIssuer` — instance *(class: `Certificate`)*
-- `setSubject` — instance *(class: `Certificate`)*
-- `sign` — instance *(class: `Certificate`)*
 
 ## `node-pty`
 

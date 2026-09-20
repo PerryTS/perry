@@ -89,19 +89,15 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-bcrypt` | `bcrypt` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-better-sqlite3` | `better-sqlite3` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-cheerio` | `cheerio` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-cron` | `cron` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-decimal` | `bignumber.js`<br>`decimal.js` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-events` | `events` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
-| `perry-ext-exponential-backoff` | `exponential-backoff` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-fetch` | `node-fetch` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-ioredis` | `ioredis`<br>`iovalkey`<br>`redis` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-moment` | `moment` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mongodb` | `mongodb` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mysql2` | `mysql2`<br>`mysql2/promise` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-net` | `net` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
-| `perry-ext-node-forge` | `node-forge` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-nodemailer` | `nodemailer` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-parcel-watcher` | `@parcel/watcher`<br>`@parcel/watcher-darwin-arm64`<br>`@parcel/watcher-darwin-x64`<br>`@parcel/watcher-linux-arm64-glibc`<br>`@parcel/watcher-linux-arm64-musl`<br>`@parcel/watcher-linux-x64-glibc`<br>`@parcel/watcher-linux-x64-musl`<br>`@parcel/watcher-win32-arm64`<br>`@parcel/watcher-win32-x64` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-pdf` | `@perryts/pdf` | External integration | Move to an external native package | Bundled; migration pending |

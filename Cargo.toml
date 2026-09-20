@@ -16,15 +16,12 @@ members = [
     "crates/perry-perex",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
-    "crates/perry-ext-exponential-backoff",
     "crates/perry-ext-events",
     "crates/perry-ext-decimal",
-    "crates/perry-ext-moment",
     "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
     "crates/perry-ext-ethers",
     "crates/perry-ext-nodemailer",
-    "crates/perry-ext-cron",
     "crates/perry-ext-ioredis",
     "crates/perry-ext-pg",
     "crates/perry-ext-mysql2",
@@ -37,7 +34,6 @@ members = [
     "crates/perry-ext-streams",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
-    "crates/perry-ext-node-forge",
     "crates/perry-ext-parcel-watcher",
     "crates/perry-ext-typescript",
     "crates/perry-wasm-host",
@@ -465,15 +461,12 @@ perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
 perry-perex = { path = "crates/perry-perex" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
-perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }
 perry-ext-events = { path = "crates/perry-ext-events" }
 perry-ext-decimal = { path = "crates/perry-ext-decimal" }
-perry-ext-moment = { path = "crates/perry-ext-moment" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
-perry-ext-cron = { path = "crates/perry-ext-cron" }
 perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
 perry-ext-pg = { path = "crates/perry-ext-pg" }
 perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
@@ -486,7 +479,6 @@ perry-ext-http = { path = "crates/perry-ext-http" }
 perry-ext-streams = { path = "crates/perry-ext-streams" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
-perry-ext-node-forge = { path = "crates/perry-ext-node-forge" }
 perry-ext-parcel-watcher = { path = "crates/perry-ext-parcel-watcher" }
 perry-ext-typescript = { path = "crates/perry-ext-typescript" }
 perry-stdlib = { path = "crates/perry-stdlib" }

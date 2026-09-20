@@ -15,7 +15,6 @@ use std::sync::LazyLock;
 mod async_decimal;
 mod bun;
 mod databases;
-mod dates;
 mod events_dispatch_parity_tests;
 mod extras;
 mod http_client;
@@ -187,7 +186,6 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(async_decimal::ASYNC_DECIMAL_ROWS);
     v.extend_from_slice(utils_crypto::UTILS_CRYPTO_ROWS);
     v.extend_from_slice(thread_lodash::THREAD_LODASH_ROWS);
-    v.extend_from_slice(dates::DATES_ROWS);
     v.extend_from_slice(media::MEDIA_ROWS);
     v.extend_from_slice(native_profile::NATIVE_PROFILE_ROWS);
     v.extend_from_slice(parcel_watcher::PARCEL_WATCHER_ROWS);

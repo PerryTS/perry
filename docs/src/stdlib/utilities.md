@@ -43,21 +43,6 @@ const diff = dayjs("2025-12-31").diff(now, "day");
 console.log(`${diff} days until end of year`);
 ```
 
-## moment
-
-`moment` uses the same native handle model as `dayjs`. Its factory and instance
-methods are wired, including formatting, date component getters, arithmetic,
-comparisons, `diff`, `clone`, `fromNow`, and `toDate`.
-
-```typescript,no-test
-import moment from "moment";
-
-const now = moment();
-console.log(now.format("MMMM Do YYYY"));
-console.log(now.fromNow());
-console.log(moment("2025-01-01").isBefore(now));
-```
-
 ## uuid
 
 ```typescript

@@ -5,7 +5,6 @@
     "perry-container-compose"
   ],
   "allowed_binding_runtime_dependencies": [
-    "perry-ext-node-forge",
     "perry-ext-undici"
   ],
   "ci": {
@@ -25,7 +24,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 70,
+    "workspace_members": 66,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -68,7 +67,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 21,
+      "externalize": 17,
       "keep": 44,
       "merge": 1,
       "remove": 1,
@@ -165,11 +164,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-cron": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-decimal": {
       "category": "binding",
       "decision": "externalize",
@@ -185,17 +179,7 @@
       "decision": "keep",
       "migration": "core-runtime"
     },
-    "perry-ext-exponential-backoff": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-fetch": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-node-forge": {
       "category": "binding",
       "decision": "externalize",
       "migration": "compile-source"
@@ -216,11 +200,6 @@
       "migration": "core-runtime"
     },
     "perry-ext-ioredis": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-moment": {
       "category": "binding",
       "decision": "externalize",
       "migration": "compile-source"

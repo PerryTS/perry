@@ -51,8 +51,18 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `args_array`). 369 -> 367 -> 356 rows and 320 -> 318 -> 307 providers;
 # each figure is what `scripts/native_result_ledger.py` reports on the
 # resolved tree, not arithmetic (#10739).
-EXPECTED_ROWS = 356
-EXPECTED_PROVIDERS = 307
+#
+# -7 rows / -7 providers (9-package binding-audit batch): removing
+# `node-forge` dropped 5 pointer-kind rows (`js_node_forge_certificate_
+# from_pem`/`create_certificate`/`generate_key_pair`/`md_sha256_create`/
+# `private_key_from_pem`), removing `cron` dropped 1
+# (`js_cron_schedule`), and removing `exponential-backoff` dropped 1
+# (`backOff`). `moment` had no rows in this ledger to begin with (its
+# NR_STR/NR_F64/NR_VOID-returning FFI never counted here). 356 -> 349
+# rows and 307 -> 300 providers; each figure is what the script reports
+# on the resolved tree, not arithmetic.
+EXPECTED_ROWS = 349
+EXPECTED_PROVIDERS = 300
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

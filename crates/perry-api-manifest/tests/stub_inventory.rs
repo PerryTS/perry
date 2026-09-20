@@ -90,8 +90,7 @@ fn stub_inventory_matches_known_clusters() {
         // Intentionally absent now: zlib decompressor factories (level
         // honored; a missing dictionary fails loudly), Agent.destroy
         // (drops the per-agent reqwest pool), worker ref/unref (real
-        // event-loop refcount), mongodb.findOne (parsed document),
-        // exponential-backoff options (honored, incl. retry predicate).
+        // event-loop refcount), mongodb.findOne (parsed document).
         ("#4917", 9),
         ("#10100", 1),
     ];
@@ -118,7 +117,6 @@ fn stubs_only_appear_in_allowlisted_modules() {
         "https",
         "worker_threads",
         "mongodb",
-        "exponential-backoff",
         "inspector",
         "repl",
     ];
@@ -158,7 +156,6 @@ fn keystone_apis_are_flagged() {
         ("v8", "getHeapSnapshot"),
         ("v8", "writeHeapSnapshot"),
         ("mongodb", "findOne"),
-        ("exponential-backoff", "backOff"),
         ("worker_threads", "ref"),
         ("worker_threads", "unref"),
         ("http", "destroy"),

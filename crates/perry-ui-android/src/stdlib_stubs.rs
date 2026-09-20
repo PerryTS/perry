@@ -152,54 +152,6 @@ pub extern "C" fn js_create_callback() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_cron_clear_interval() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_clear_timeout() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_describe() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_job_is_running() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_job_start() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_job_stop() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_next_date() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_next_dates() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_schedule() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_set_interval() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_set_timeout() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_cron_validate() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_cron_timer_tick() -> i32 {
     0
 }

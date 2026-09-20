@@ -95,23 +95,12 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_sharp_to_format", I64, &[I64, I64]);
 
     // ========== cron / scheduler ==========
-    module.declare_function("js_cron_clear_interval", VOID, &[I64]);
-    module.declare_function("js_cron_clear_timeout", VOID, &[I64]);
-    module.declare_function("js_cron_describe", I64, &[I64]);
-    module.declare_function("js_cron_job_is_running", DOUBLE, &[I64]);
-    // npm `cron` CronJob ctor arm in lower_call/builtin.rs —
-    // (expr StringHeader, onTick closure bits, NaN-boxed start flag).
-    module.declare_function("js_cron_job_new", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_cron_job_start", VOID, &[I64]);
-    module.declare_function("js_cron_job_stop", VOID, &[I64]);
-    module.declare_function("js_cron_next_date", I64, &[I64]);
-    module.declare_function("js_cron_next_dates", I64, &[I64, DOUBLE]);
-    module.declare_function("js_cron_schedule", I64, &[I64, I64]);
-    module.declare_function("js_cron_set_interval", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_cron_set_timeout", I64, &[DOUBLE, DOUBLE]);
+    // The `cron` native binding was removed (real npm `cron` source now
+    // compiles via `perry.compilePackages`); only the two unconditional
+    // event-loop liveness symbols remain (see perry-stdlib/src/lib.rs and
+    // perry-runtime/src/stdlib_stubs.rs — always a 0-returning stub now).
     module.declare_function("js_cron_timer_has_pending", I32, &[]);
     module.declare_function("js_cron_timer_tick", I32, &[]);
-    module.declare_function("js_cron_validate", DOUBLE, &[I64]);
 
     // ========== async_hooks / AsyncLocalStorage ==========
     module.declare_function("js_async_hooks_create_hook", I64, &[DOUBLE]);

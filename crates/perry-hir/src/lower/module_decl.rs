@@ -1147,14 +1147,6 @@ pub(crate) fn lower_module_decl(
                                                             ("sqlite", "createSession") => {
                                                                 Some("Session")
                                                             }
-                                                            // moment manipulation
-                                                            // methods return a NEW date
-                                                            // handle (see native_new.rs).
-                                                            (
-                                                                "moment",
-                                                                "add" | "subtract" | "startOf"
-                                                                | "endOf" | "clone",
-                                                            ) => Some("App"),
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = returns_handle {
