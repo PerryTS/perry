@@ -853,6 +853,26 @@ fn detect_shared_in_body(
     // A `var x = v` re-declaration that runs after a class captured `x` writes
     // the captured binding just like `x = v` does.
     assigned.extend(shared.census.late_redeclared.iter().copied());
+    // Memoized across every (class_name, id) pair checked below (#10757): a
+    // class whose own methods construct fresh instances of itself
+    // (`new Point(...)` inside a `Point` method, forwarding its own captured
+    // context) makes `for_each_nested_capture` report `Point` as "nested
+    // inside" `Point`, so `class_mutates_capture` recurses back into the SAME
+    // class it started from. That is ordinary self-referential-class code
+    // (arithmetic/builder classes returning `new Self(...)`), not a bug in
+    // the input — every method of a real point/vector/list class does it.
+    // Recomputing the identical (class, id) subproblem at every recursion
+    // depth made lowering exponential in the class's method count (bounded
+    // only by `MAX_NESTED_CLASS_DEPTH`, so 3-4 self-referencing methods per
+    // level already means minutes, not a true non-terminating loop).
+    // `mutates_memo` caches a completed (class, id) answer for reuse across
+    // every other id/registration that asks the same question;
+    // `mutates_visiting` breaks the cycle itself — a (class, id) pair
+    // re-entered while still being computed cannot supply new mutation
+    // evidence beyond the direct-assignment check already run for it, so a
+    // re-entrant call returns `false` without recursing further.
+    let mut mutates_memo: HashMap<(String, LocalId), bool> = HashMap::new();
+    let mut mutates_visiting: HashSet<(String, LocalId)> = HashSet::new();
     for (class_name, ids) in &regs {
         for id in ids {
             // Declaring-function-side mutation (`c = 99` after `new T()`).
@@ -862,7 +882,8 @@ fn detect_shared_in_body(
             }
             // Class-side mutation: a member assigns rebind local `__perry_cap_<id>`.
             if let Some(c) = classes.get(class_name.as_str()) {
-                if class_mutates_capture(classes, c, *id, 0) {
+                if class_mutates_capture(classes, c, *id, &mut mutates_memo, &mut mutates_visiting)
+                {
                     shared.ids.insert(*id);
                 }
             }
@@ -893,12 +914,39 @@ fn detect_shared_in_body(
 /// REBIND local instead, and its write lands one level deeper — invisible to a
 /// walk of `c` alone, because a nested class's members live in their own
 /// `module.classes` entry, not inside the method body (#10489).
+///
+/// `for_each_nested_capture` (below) also fires for a class that constructs a
+/// fresh instance of ITSELF from inside one of its own methods (`new
+/// Point(...)` inside `Point`, forwarding the same captured context) — an
+/// everyday shape for arithmetic/builder classes, not an actual nested
+/// declaration. That makes `c` reachable from itself, so `memo`/`visiting`
+/// (owned by the caller, threaded through every recursive call and shared
+/// across every `(class, id)` pair `detect_shared_in_body` asks about) are
+/// required for termination in bounded time, not just an optimization: a
+/// class whose methods each self-construct turns every recursive step into a
+/// full re-scan of `c`, making the naive walk exponential in `c`'s method
+/// count (#10757 — a real `weierstrassPoints()`-shaped elliptic-curve `Point`
+/// class from `@noble/curves` took over a minute to lower a single module).
+/// `visiting` also replaces the old hardcoded recursion-depth cap: a
+/// `(class, id)` pair re-entered while its own computation is still on the
+/// stack cannot supply mutation evidence beyond the direct-assignment check
+/// already running for it, so re-entry returns `false` immediately instead of
+/// recursing — correct for a genuine cycle (mutual self/sibling construction)
+/// and, unlike a depth cap, never bounds out on a long-but-acyclic chain.
 fn class_mutates_capture(
     classes: &HashMap<&str, &Class>,
     c: &Class,
     id: LocalId,
-    depth: u32,
+    memo: &mut HashMap<(String, LocalId), bool>,
+    visiting: &mut HashSet<(String, LocalId)>,
 ) -> bool {
+    let key = (c.name.clone(), id);
+    if let Some(&cached) = memo.get(&key) {
+        return cached;
+    }
+    if !visiting.insert(key.clone()) {
+        return false;
+    }
     let id_name = collect_class_names(c);
     let assigned = collect_class_assigned(c);
     let names_id = |aid: &LocalId| {
@@ -906,23 +954,24 @@ fn class_mutates_capture(
             .get(aid)
             .is_some_and(|n| crate::cap_fields::cap_field_outer_id(n) == Some(id))
     };
-    if assigned.iter().any(names_id) {
-        return true;
-    }
-    // Bounded: each level is one class nesting, and the chain is finite.
-    if depth >= MAX_NESTED_CLASS_DEPTH {
-        return false;
-    }
-    for_each_nested_capture(c, &HashSet::from([id]), |nested_name, outer_id| {
-        classes
-            .get(nested_name)
-            .is_some_and(|nested| class_mutates_capture(classes, nested, outer_id, depth + 1))
-    })
+    let result = if assigned.iter().any(names_id) {
+        true
+    } else {
+        for_each_nested_capture(c, &HashSet::from([id]), |nested_name, outer_id| {
+            classes.get(nested_name).is_some_and(|nested| {
+                class_mutates_capture(classes, nested, outer_id, &mut *memo, &mut *visiting)
+            })
+        })
+    };
+    visiting.remove(&key);
+    memo.insert(key, result);
+    result
 }
 
-/// How far the nested-class walks descend (`class` inside a member body, whose
-/// member body declares another class, …). Deep enough for real code, bounded
-/// so a cyclic registration cannot loop.
+/// How far `propagate_cells_to_nested_classes`'s fixpoint iterates (each round
+/// is one class-nesting level; unrelated to `class_mutates_capture`, which
+/// terminates via `memo`/`visiting` instead of a depth bound). Deep enough for
+/// real code, bounded so a cyclic registration cannot loop.
 const MAX_NESTED_CLASS_DEPTH: u32 = 8;
 
 /// Call `visit(nested_class_name, outer_id)` for every class registered inside
