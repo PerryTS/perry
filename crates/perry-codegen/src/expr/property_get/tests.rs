@@ -381,7 +381,16 @@ fn pic_cache_layout_matches_runtime() {
     );
     for def in &ic_defs {
         if def.contains("_packed_get =") {
-            assert!(def.ends_with(" = private global i64 0, align 8"), "{def}");
+            // NOT zero — see `PACKED_GET_EMPTY`. A zero word would be matched
+            // by an unstamped receiver's `parent_class_id`, which is why the
+            // hit path used to carry a separate "is this site primed?" test.
+            assert!(
+                def.ends_with(&format!(
+                    " = private global i64 {}, align 8",
+                    crate::expr::property_get::generic_dispatch::PACKED_GET_EMPTY
+                )),
+                "{def}"
+            );
             continue;
         }
         assert!(
@@ -590,13 +599,17 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
          receiver could reach the way compares; it must be gone:\n{ir}"
     );
     // The header predicates: each load/compare pair must appear exactly once.
-    for (needle, what) in [
-        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare"),
-        ("icmp eq i32 %", "the ShapeId identity compare"),
+    // `icmp eq i32 %` is three: the packed kind/descriptor compare, the
+    // ShapeId identity compare on the hit path, and the spill compare in
+    // `pic.token.miss` that replaced the hit path's overflow-bit test. A
+    // fourth would mean the miss block is re-deriving the header.
+    for (needle, what, bound) in [
+        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 2),
+        ("icmp eq i32 %", "the ShapeId identity compare", 3),
     ] {
         let n = main.matches(needle).count();
         assert!(
-            n <= 2,
+            n <= bound,
             "{what} appears {n} times — the miss block is re-deriving the \
              receiver header again:\n{ir}"
         );
@@ -764,6 +777,7 @@ mod nested_namespace_members {
 ///      with a constant, or deleting a predicate, turns it red).
 #[test]
 fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
+    use crate::expr::property_get::generic_dispatch::{PACKED_GET_EMPTY, PACKED_SPILL_FLIP};
     let ir = emit(false, None);
 
     // Register names restart at %r1 in every function, so the walk MUST be
@@ -906,13 +920,55 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         .find(|(_, rhs)| rhs.starts_with("load atomic i64") && rhs.contains("_packed_get"))
         .map(|(reg, _)| reg)
         .expect("compact MRU load");
+    // "Has this site primed?" is answered BY the ShapeId compare, not by a
+    // test of its own: the site's word is born holding `PACKED_GET_EMPTY`, a
+    // value the word at `+4` of a receiver cannot hold. That word is either a
+    // ShapeId ([0x8000_0000, 0xC000_0000)), a synthetic class id (at or above
+    // 0x8000_0000 today, [0xC000_0000, 0xFFFF_0000) under #10824) or an
+    // ordinary HIR class id, which is a counter from 1 — so 0xFFFF_FFFF is
+    // above every one of them under BOTH id schemes.
+    //
+    // This replaces the old `icmp ne i64 %packed, 0` assertion. It is not a
+    // weakening: that assertion proved a guard existed, and these three prove
+    // the guard is UNNECESSARY — the sentinel is emitted, it is out of range,
+    // and the compare that subsumes it still gates the load. Re-introducing a
+    // zero initializer turns the first one red.
     assert!(
-        chain.contains(&format!("icmp ne i64 {packed}, 0")),
-        "the initial zero cache must not reach a field load: {chain}"
+        ir.contains(&format!(
+            "_packed_get = private global i64 {PACKED_GET_EMPTY}, align 8"
+        )),
+        "the compact MRU must be born holding PACKED_GET_EMPTY, not zero:\n{ir}"
+    );
+    assert!(
+        !(0x8000_0000..0xC000_0000).contains(&PACKED_GET_EMPTY),
+        "PACKED_GET_EMPTY must sit outside the ShapeId range so no stamped \
+         receiver's shape word can equal an unprimed site"
+    );
+    assert!(
+        !(0x4000_0000..0x8000_0000).contains(&PACKED_GET_EMPTY),
+        "and outside the band a SPILL entry is flipped into, or an unprimed \
+         site would be decoded as one"
+    );
+    assert_eq!(
+        PACKED_GET_EMPTY, 0xFFFF_FFFF,
+        "and above every class id: synthetic ids are at or above 0x8000_0000 \
+         today and [0xC000_0000, 0xFFFF_0000) under #10824, and an ordinary \
+         HIR class id is a counter from 1"
     );
     assert!(
         chain.contains(&format!("trunc i64 {packed} to i32")),
         "the exact packed ShapeId must gate the field load: {chain}"
+    );
+    // The overflow-bit test is no longer a guard on the inline load: a
+    // SPILL-located key publishes its ShapeId with PACKED_SPILL_FLIP flipped
+    // in, which lands it in [0x4000_0000, 0x8000_0000) — neither a ShapeId nor
+    // any class id — so the compare above refuses it without a question of its
+    // own. If the bit test comes back it is 10 bytes of `movabs`, a `test` and
+    // a branch on every read.
+    assert!(
+        !chain.contains(&PACKED_SPILL_FLIP.to_string()),
+        "the overflow-bit test must not gate the inline slot load — a spill \
+         entry is refused by the ShapeId compare itself:\n{chain}"
     );
 
     if func.contains(", 134217983") {
@@ -1174,9 +1230,12 @@ fn packed_pic_header_guard_is_endianness_aware() {
 
 #[test]
 fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
+    use crate::expr::property_get::generic_dispatch::PACKED_GET_EMPTY;
     let ir = emit(false, None);
     assert!(
-        ir.contains("_packed_get = private global i64 0, align 8"),
+        ir.contains(&format!(
+            "_packed_get = private global i64 {PACKED_GET_EMPTY}, align 8"
+        )),
         "{ir}"
     );
     assert!(
@@ -1184,8 +1243,11 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
         "{ir}"
     );
     assert!(ir.contains("@js_object_get_field_ic_slow("), "{ir}");
+    // The `trunc` is the ShapeId half of the compact word. There is no
+    // `icmp ne i64 %packed, 0` beside it any more: the sentinel above makes
+    // the ShapeId compare prove the site is primed as well.
     assert!(
-        ir.contains("trunc i64") && ir.contains("icmp ne i64"),
+        ir.contains("trunc i64") && !ir.contains("icmp ne i64"),
         "{ir}"
     );
     assert!(
@@ -1212,6 +1274,49 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
 /// instructions on every HIT (measured). The separate non-pointer callee is
 /// what keeps that guard chain branchy, so the count below is 2 — and a change
 /// that makes it 1 is a hit-path regression, not a size win.
+/// A SPILL-located key must still be RECOGNISED — just not on the hit path.
+///
+/// Taking the overflow-bit test off the hit path is only sound if the entry it
+/// used to catch is caught somewhere else. `pic.token.miss` un-flips
+/// `PACKED_SPILL_FLIP` and branches straight to the one exit, skipping the
+/// full cache's resolution and the ways (neither can hold an encoded slot).
+/// Without this test, deleting the spill compare would leave every spill read
+/// correct-but-slow — it would walk the ways, miss, call out, and re-scan the
+/// keys array on every read, which is invisible in program output.
+#[test]
+fn a_spill_entry_is_recognised_in_the_token_miss_block_and_nowhere_else() {
+    use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
+    let ir = emit(false, None);
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\npic.token.miss"))
+        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
+
+    // Split the function into blocks and find `pic.token.miss`'s body.
+    let mut body: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in func.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            inside = line.trim_end_matches(':').starts_with("pic.token.miss");
+            continue;
+        }
+        if inside {
+            body.push(line);
+        }
+    }
+    let body = body.join("\n");
+    assert!(
+        body.contains(&format!("xor i32 ")) && body.contains(&PACKED_SPILL_FLIP.to_string()),
+        "`pic.token.miss` must un-flip PACKED_SPILL_FLIP to recognise a spill \
+         entry:\n{body}"
+    );
+    assert!(
+        body.contains("pic.miss.call"),
+        "a recognised spill entry must branch straight to the one exit, not \
+         walk the ways:\n{body}"
+    );
+}
+
 #[test]
 fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
     let ir = emit(false, None);
@@ -1260,8 +1365,14 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         "pic.recv_hdr",
         "pic.token",
         "pic.token.miss",
+        // The spill entry's landing block. `pic.token.miss` recognises a
+        // SPILL-located key by un-flipping PACKED_SPILL_FLIP and branches
+        // straight to the one exit; everything else continues here to the full
+        // cache and the ways. `pic.hit.inline` is GONE: with spill entries
+        // refused by the ShapeId compare itself, the hit block has nothing to
+        // decide between and the load sits directly in `pic.hit`.
+        "pic.token.ways",
         "pic.hit",
-        "pic.hit.inline",
         // The hit's hole edge keeps its own landing block so its tail is not
         // congruent with `pic.way.load`'s; `pic.hit.live` exists only when
         // typed feedback has something to record on the live edge.

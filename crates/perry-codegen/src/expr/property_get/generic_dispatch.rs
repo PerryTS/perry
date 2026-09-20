@@ -33,6 +33,41 @@ pub(crate) const PIC_WAY_BASE: usize = 4;
 /// `(token, slot)` ways beyond the MRU entry; a site resolves `PIC_WAYS + 1`
 /// shapes inline. Mirrors the runtime's `PIC_WAYS`.
 pub(crate) const PIC_WAYS: usize = 4;
+/// The value a per-site compact MRU word (`@perry_ic_N_packed_get`) holds
+/// before anything has primed it.
+///
+/// **Must equal `perry_runtime::object::field_get_set::PACKED_GET_EMPTY`.**
+///
+/// It is NOT zero, and that is the whole point. The hit path compares the
+/// receiver's ShapeId word against this word's low half; an object that was
+/// never shape-stamped carries `parent_class_id` at +4, which is 0 for an
+/// anonymous object literal, so a zero sentinel would let such a receiver
+/// MATCH a site that has never primed and take the raw load at slot 0. That
+/// is why the tower used to spend a separate `test`/`je` proving the word was
+/// filled. A sentinel that no receiver word can equal makes the ShapeId
+/// compare prove BOTH facts, and the extra test leaves every read.
+///
+/// `0xFFFF_FFFF` sits above every value the word at `+4` can hold: a ShapeId
+/// ([`0x8000_0000`, `0xC000_0000`)), a synthetic class id (at or above
+/// 0x8000_0000 today, [`0xC000_0000`, `0xFFFF_0000`) under #10824), or an
+/// ordinary HIR class id, which is a counter from 1.
+pub(crate) const PACKED_GET_EMPTY: i64 = 0xFFFF_FFFF;
+/// A SPILL-located key publishes its ShapeId into the compact word with this
+/// bit flipped. **Must equal `PACKED_SPILL_FLIP` in the runtime.**
+///
+/// ShapeIds live in [`0x8000_0000`, `0xC000_0000`), so flipping the top two
+/// bits maps them into [`0x4000_0000`, `0x8000_0000`) — the one u32 band that
+/// is neither a ShapeId nor any class id. (Flipping bit 30 alone would land
+/// them in [`0xC000_0000`, `2^32`), which #10824 turns into the synthetic
+/// class-id range.)
+/// The hit path's compare therefore REFUSES a spill entry without asking a
+/// question of its own, which is what lets the overflow-bit test (a 10-byte
+/// `movabs`, a `test` and a branch, on every read of every site) leave the hit
+/// path entirely. The spill entry is still served: `pic.token.miss` un-flips
+/// the bit, and a match branches straight to the slow entry, which decodes the
+/// same word. See the design note at the head of this function.
+pub(crate) const PACKED_SPILL_FLIP: i64 = 0xC000_0000;
+
 /// Way-state word: `> 0` means at least one way is populated and the compares
 /// are worth running; `0` (fresh) and a negative megamorphic countdown
 /// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
@@ -202,9 +237,52 @@ pub(crate) fn lower_generic_property_get(
     // silently corrupting FFI args and pure-TS field compares.
     // Tag check is platform-independent: same two LLVM ops
     // (`lshr` + `and`) + one `icmp`, branch-predicted taken.
+    // `.length` on a receiver whose static type is not a proven string, and
+    // `.size` on one that may be a native Map/Set, are the only two keys this
+    // tower serves from a cell that is not a `GC_TYPE_OBJECT`. Both decisions
+    // are made from the property name alone, and `inline_string_length`
+    // decides WHICH receiver-tag test to emit, so both are hoisted above it.
+    let inline_string_length = property == "length";
+    let inline_collection_size = property == "size";
+
+    // The receiver-tag test, in the cheapest form the key allows.
+    //
+    // `.length` is the one key with a heap-STRING arm below, so it is the one
+    // key whose test must admit BOTH pointer-ish tags — POINTER (0x7FFD) and
+    // STRING (0x7FFF). Collapsing them costs real instructions: LLVM folds
+    // `(bits >> 48) & 0xFFFD == 0x7FFD` back into a 64-bit mask and a 64-bit
+    // compare, so the emitted test is two 10-byte `movabs`, a `mov`, an `and`,
+    // a `cmp` and the branch — SIX instructions and 20 bytes of immediates,
+    // measured on the k1 fixture at v0.5.1618.
+    //
+    // Every OTHER key gets the exact POINTER test. A heap string that fails it
+    // now reaches `js_object_get_field_ic_nonptr`, whose heap-string arm masks
+    // the tag off and calls the same by-name helper the object exit used to
+    // reach — the same answer, one branch earlier instead of four loads later.
+    //
+    // MEASURED: this is worth ZERO instructions today, and it is still the
+    // right test. InstCombine canonicalises `(x >> 48) == 0x7FFD` straight
+    // back into `x & 0xFFFF_0000_0000_0000 == 0x7FFD_0000_0000_0000`, so the
+    // emitted code is the same `mov`/`and`/`cmp` pair of 10-byte `movabs`
+    // either way — only the mask constant changes, 0xFFFD to 0xFFFF. Writing
+    // the compare on a TRUNCATED tag (`trunc i64 ... to i32`) does not defeat
+    // the fold either; both forms were checked in the k1 fixture's
+    // disassembly. Getting the `shr $0x30` + imm32 `cmp` form needs something
+    // the IR builder cannot express today.
+    //
+    // It is kept because it is a PREREQUISITE, not a micro-optimisation. The
+    // collapsed test admits STRING-tagged receivers onto the pointer path, and
+    // the only thing that stops one having its `StringHeader` word at +4 read
+    // as a ShapeId is the GC-kind guard below — the guard #10828 is about to
+    // make removable. #10828's guarantee is stated over POINTER-tagged values;
+    // this is what makes the emitted test match that statement.
     let obj_tag = ctx.block().lshr(I64, &obj_bits, "48");
-    let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
-    let is_valid = ctx.block().icmp_eq(I64, &obj_tag_masked, "32765"); // 0x7FFD
+    let is_valid = if inline_string_length {
+        let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
+        ctx.block().icmp_eq(I64, &obj_tag_masked, "32765") // 0x7FFD
+    } else {
+        ctx.block().icmp_eq(I64, &obj_tag, "32765") // POINTER_TAG exactly
+    };
 
     // `.length` on a receiver whose static type is not a proven string.
     //
@@ -224,7 +302,6 @@ pub(crate) fn lower_generic_property_get(
     // a pure short-circuit: a primitive string's `length` is non-writable and
     // non-configurable, cannot be shadowed by an own property, and is exactly
     // what the runtime ladder computes. Everything else keeps the tower.
-    let inline_string_length = property == "length";
     // A dynamically typed `receiver.size` can still be served without the
     // object PIC when the live receiver is a native Map or Set. Both payloads
     // start with the same `u32 size` field, and their distinct GcHeader kinds
@@ -232,7 +309,6 @@ pub(crate) fn lower_generic_property_get(
     // check rather than a TypeScript-type claim: nested structural reads such
     // as `this.ctx.hooks.size` commonly lose their static Set type, while an
     // erased annotation alone must never authorize a native-layout load.
-    let inline_collection_size = property == "size";
 
     // A compact per-site word holds the exact ShapeId and slot for the last
     // cacheable receiver. The lazily allocated full cache retains bounded
@@ -250,8 +326,9 @@ pub(crate) fn lower_generic_property_get(
         "{}_packed_get",
         crate::expr::inline_cache_global_name(ctx, packed_site)
     );
-    ctx.typed_parse_rodata
-        .push(format!("@{packed_name} = private global i64 0, align 8"));
+    ctx.typed_parse_rodata.push(format!(
+        "@{packed_name} = private global i64 {PACKED_GET_EMPTY}, align 8"
+    ));
     let packed_ref = format!("@{packed_name}");
 
     let pic_idx = ctx.new_block("pget.recv_ok");
@@ -431,7 +508,6 @@ pub(crate) fn lower_generic_property_get(
     // The compact cache is a permanently valid scalar global. Load it before
     // receiver-dependent shape probing so its latency overlaps header reads.
     let packed_word = ctx.block().load_atomic_monotonic(I64, &packed_ref, 8);
-    let packed_present = ctx.block().icmp_ne(I64, &packed_word, "0");
 
     // GcHeader starts with obj_type:u8, gc_flags:u8, reserved:u16. On
     // known little-endian targets one load tests both kind and descriptors;
@@ -507,12 +583,15 @@ pub(crate) fn lower_generic_property_get(
         let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
         ctx.block().and(I1, &is_object_kind, &no_desc)
     };
-    let is_plain_object = ctx.block().and(I1, &is_plain_kind, &packed_present);
-
-    // Validate kind, descriptor policy, and initialized MRU before reading
-    // ObjectHeader's ShapeId.
-    ctx.block()
-        .cond_br(&is_plain_object, &tok_label, &cold_label);
+    // Validate kind and descriptor policy before reading ObjectHeader's
+    // ShapeId. "Is this site primed?" is NOT asked here any more: the compact
+    // word's unprimed value is `PACKED_GET_EMPTY`, which no receiver ShapeId
+    // word can equal, so the ShapeId compare below answers it. Folding the old
+    // `packed != 0` test in here also violated this tower's own rule — it was
+    // the one place where two guards were AND-ed into a flat predicate instead
+    // of branching out on the first failure (#7883), and it cost the `test`
+    // and the branch on every hit.
+    ctx.block().cond_br(&is_plain_kind, &tok_label, &cold_label);
     ctx.current_block = tok_idx;
 
     // The receiver token is derived solely from its authoritative ShapeId.
@@ -539,10 +618,39 @@ pub(crate) fn lower_generic_property_get(
     ctx.block()
         .cond_br(&token_eq, &hit_label, &token_miss_label);
 
+    ctx.current_block = token_miss_idx;
+    // The SPILL entry — tested HERE, and nowhere on the hit path.
+    //
+    // A key past the object's inline region used to publish its slot into the
+    // compact word with `IC_SLOT_OVERFLOW_BIT` set, and every read of every
+    // site paid to ask whether the bit was there: LLVM folds
+    // `((packed >> 32) & (1 << 30)) == 0` into `packed & (1 << 62)`, which is
+    // a 10-byte `movabs`, a `test` and a branch on the hit path of sites whose
+    // field is inline and can never see the bit.
+    //
+    // Now a spill entry publishes the SAME ShapeId with `PACKED_SPILL_FLIP`
+    // flipped into it, which lands it outside the ShapeId range, so the hit
+    // path's compare refuses it for free. Un-flipping the bit here recognises
+    // it in three instructions ON THE MISS PATH ONLY, and a match branches
+    // straight to the slow entry — skipping the full cache's resolution and
+    // the polymorphic ways, neither of which can serve a spill key anyway
+    // (`pic_prime_get` refuses to cascade an encoded slot into a way). The
+    // slow entry decodes the same word and reads the spill buffer, so a spill
+    // read pays the same three instructions it paid before, just in a block
+    // the inline hit never enters.
+    let spill_stamp = ctx
+        .block()
+        .xor(I32, &packed_stamp, &PACKED_SPILL_FLIP.to_string());
+    let is_spill = ctx.block().icmp_eq(I32, &pcid, &spill_stamp);
+    let ways_entry_idx = ctx.new_block("pic.token.ways");
+    let ways_entry_label = ctx.block_label(ways_entry_idx);
+    ctx.block()
+        .cond_br(&is_spill, &call_label, &ways_entry_label);
+
     // Every way load still requires a resolved full cache. A site that has
     // never primed has no cache, so there is nothing to compare against and
     // the read goes straight out.
-    ctx.current_block = token_miss_idx;
+    ctx.current_block = ways_entry_idx;
     let token_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
     ctx.block()
         .cond_br(&token_cache.present, &miss_label, &cold_label);
@@ -552,35 +660,12 @@ pub(crate) fn lower_generic_property_get(
     // token hit permanently proves that the cached slot remains live and
     // makes the raw load below safe without a compatibility-header bound.
     ctx.current_block = hit_idx;
+    // A matched compact word is now, by construction, an INLINE slot: a
+    // spill-located key publishes its ShapeId flipped by `PACKED_SPILL_FLIP`
+    // and is recognised in `pic.token.miss` instead. The overflow-bit test
+    // that used to stand between this shift and the load is gone from the hit
+    // path — see the note there for what it cost and where it went.
     let slot = ctx.block().lshr(I64, &packed_word, "32");
-
-    // #9287: the primed slot word may carry IC_SLOT_OVERFLOW_BIT (1 << 30) —
-    // the field lives past the inline region, in the object's spill buffer,
-    // and the inline `obj + header + slot*8` arithmetic below must not run on
-    // it. Such hits leave for the slow entry, which re-derives the same MRU
-    // pair and performs `js_object_get_field_ic_overflow_load`'s `overflow_get`
-    // (falling back to the full miss handler on a tombstoned slot, without the
-    // packed republication that helper also did not do). Sites whose field is
-    // inline never see the bit, so this branch predicts perfectly for them.
-    // The polymorphic WAYS never hold an encoded slot (`pic_prime_get` refuses
-    // to cascade one), so only this MRU path needs the check.
-    //
-    // Tested as `== 0` rather than `!= 0` so the guard-PASSING edge is the TRUE
-    // edge, exactly like every other link in this chain. That is not cosmetic:
-    // `generic_property_get_slot_load_is_reached_only_through_every_guard`
-    // walks the CFG backwards from the slot load and requires every edge on the
-    // way to be a true edge, which is what makes a swapped `cond_br` — running
-    // the raw load when a guard FAILS — turn it red. Before T1 the walk reached
-    // the load through `pic.hit.overflow` (whose key-handle load also matched
-    // "load double") and never evaluated this branch's polarity at all.
-    let inline_hit_idx = ctx.new_block("pic.hit.inline");
-    let inline_hit_label = ctx.block_label(inline_hit_idx);
-    let ovf_bits = ctx.block().and(I64, &slot, "1073741824"); // 1 << 30
-    let is_inline_slot = ctx.block().icmp_eq(I64, &ovf_bits, "0");
-    ctx.block()
-        .cond_br(&is_inline_slot, &inline_hit_label, &call_label);
-
-    ctx.current_block = inline_hit_idx;
     // arm64_32 watchOS: the object fields region begins at
     // `size_of::<ObjectHeader>()` past the user pointer — 16 on LP64 and
     // padded ILP32 since #8047. Derive it from the target triple.

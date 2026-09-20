@@ -43,10 +43,29 @@ pub(super) unsafe fn prime_get(
     {
         return;
     }
-    // Low 32 bits: exact nonzero ShapeId. High 32: slot, including the
-    // overflow flag. Generated code rejects the zero-initialized word.
+    // Low 32 bits: the exact ShapeId for an INLINE slot, or that ShapeId with
+    // [`super::PACKED_SPILL_FLIP`] flipped into it for a SPILL-located one.
+    // High 32: the slot or spill index, with no flag bit of its own.
+    //
+    // The flip is what took the overflow-bit test off the emitted hit path.
+    // ShapeIds live in [0x8000_0000, 0xC000_0000), so flipping the top two
+    // bits lands a spill entry in [0x4000_0000, 0x8000_0000) — the one u32
+    // band that is neither a ShapeId nor any class id — and the emitted
+    // compare refuses it without asking a question of its own.
+    // `pic.token.miss` un-flips the bits and routes the read to the slow
+    // entry, which decodes the same word.
+    //
     // Relaxed suffices: this publishes a numeric layout fact, not an object.
-    (*packed).store((slot as u64) << 32 | stamp as u64, Ordering::Relaxed);
+    let raw = slot as u32;
+    let (key32, index) = if raw & crate::proxy::IC_SLOT_OVERFLOW_BIT != 0 {
+        (
+            stamp ^ super::PACKED_SPILL_FLIP,
+            raw & !crate::proxy::IC_SLOT_OVERFLOW_BIT,
+        )
+    } else {
+        (stamp, raw)
+    };
+    (*packed).store((index as u64) << 32 | key32 as u64, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -55,13 +74,16 @@ mod tests {
 
     #[test]
     fn packed_pair_preserves_identity_overflow_and_empty_site() {
-        let packed = AtomicU64::new(0);
+        let packed = AtomicU64::new(crate::object::field_get_set::ic_miss::PACKED_GET_EMPTY);
         let mut cache = [0; super::super::PIC_CACHE_WORDS];
         let bit = crate::object::shapes::PIC_ID_TOKEN_BIT;
         unsafe {
             prime_get(&mut cache, bit as i64, 0, &packed);
         }
-        assert_eq!(packed.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            packed.load(Ordering::Relaxed),
+            crate::object::field_get_set::ic_miss::PACKED_GET_EMPTY
+        );
         for stamp in [
             crate::object::shapes::SHAPE_ID_BASE,
             crate::object::shapes::SHAPE_ID_END - 1,
@@ -71,8 +93,41 @@ mod tests {
                     prime_get(&mut cache, (bit | stamp as u64) as i64, slot, &packed);
                 }
                 let word = packed.load(Ordering::Relaxed);
-                assert_eq!(word & 0xffff_ffff, stamp as u64);
-                assert_eq!(word >> 32, slot as u64);
+                let raw = slot as u32;
+                let spill = raw & crate::proxy::IC_SLOT_OVERFLOW_BIT != 0;
+                let want_key32 = if spill {
+                    stamp ^ crate::object::field_get_set::ic_miss::PACKED_SPILL_FLIP
+                } else {
+                    stamp
+                };
+                assert_eq!(word & 0xffff_ffff, want_key32 as u64);
+                assert_eq!(
+                    word >> 32,
+                    (raw & !crate::proxy::IC_SLOT_OVERFLOW_BIT) as u64
+                );
+                // A spill entry must be UNMATCHABLE by the emitted hit path:
+                // its low half has to sit outside the ShapeId range so the
+                // plain compare declines it with no test of its own, and
+                // outside every class-id range so no UNSTAMPED receiver can
+                // match it either.
+                if spill {
+                    assert!(
+                        (0x4000_0000..crate::object::shapes::SHAPE_ID_BASE)
+                            .contains(&(word as u32)),
+                        "a spill entry must land in the one u32 band that is \
+                         neither a ShapeId nor any class id"
+                    );
+                    assert_eq!(
+                        super::super::packed_get_decode(word),
+                        Some((stamp, raw & !crate::proxy::IC_SLOT_OVERFLOW_BIT, true)),
+                        "and the runtime must decode it back to the same pair"
+                    );
+                } else {
+                    assert_eq!(
+                        super::super::packed_get_decode(word),
+                        Some((stamp, raw, false))
+                    );
+                }
                 let before = word;
                 unsafe {
                     prime_get(&mut cache, bit as i64, 0, &packed);
