@@ -196,18 +196,6 @@ repo = "https://github.com/redis/node-redis"
 ref = "d400bc9c1e7b17013c53015f098274a25aa70640"
 ported-at = "6.1.0"
 date = "2026-07-30"
-[bindings.pg]
-crate = "perry-ext-pg"
-lib = "perry_ext_pg"
-tracking = "#466"
-
-[bindings.pg.upstream]
-version = "8.22.0"
-sha256 = "2f8b273b9b93b8712251cbe2b0f05378f4da2187eab5348c3c6c34d02622a55e"
-repo = "https://github.com/brianc/node-postgres"
-ref = "b617619f9fb6fbd231731823e2732a2927ded4be"
-ported-at = "8.22.0"
-date = "2026-07-30"
 [bindings.mysql2]
 crate = "perry-ext-mysql2"
 lib = "perry_ext_mysql2"
