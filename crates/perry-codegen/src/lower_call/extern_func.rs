@@ -1769,6 +1769,10 @@ pub fn try_lower_extern_func_call(
         } else if returns_f32 {
             ctx.pending_declares.push((name.clone(), F32, arg_types));
             let raw = ctx.block().call(F32, name, &arg_slices);
+            // #10779: a C `float` return is raw native bits; an f32 NaN
+            // widens KEEPING its payload (0x7FFFFFFF -> a forged
+            // StringHeader*). Canonicalise before `materialize_js_value`.
+            let raw = crate::expr::nanbox_inline::canonicalize_lane_f32(ctx.block(), &raw);
             let lowered = LoweredValue::f32(raw.clone());
             if let Some(descriptor) = manifest_ret {
                 record_native_abi_return(ctx, descriptor, &lowered, name);
@@ -1812,6 +1816,16 @@ pub fn try_lower_extern_func_call(
             // return value directly (no sitofp needed).
             ctx.pending_declares.push((name.clone(), DOUBLE, arg_types));
             let raw = ctx.block().call(DOUBLE, name, &arg_slices);
+            // #10779: this arm serves BOTH a C `double` return (raw native
+            // bits) and Perry's own double ABI (already a NaN box, whose tags
+            // canonicalising would destroy). Gate strictly on the manifest
+            // saying `F64`; `JsValue` or no descriptor is left untouched.
+            let is_native_f64 = matches!(manifest_ret, Some(NativeAbiType::F64));
+            let raw = if is_native_f64 {
+                crate::expr::nanbox_inline::canonicalize_lane_f64(ctx.block(), &raw)
+            } else {
+                raw
+            };
             if let Some(descriptor) = manifest_ret {
                 let lowered = if matches!(descriptor, NativeAbiType::JsValue) {
                     LoweredValue::js_value(raw.clone())
