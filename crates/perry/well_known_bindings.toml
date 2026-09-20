@@ -243,26 +243,6 @@ repo = "https://github.com/brianc/node-postgres"
 ref = "b617619f9fb6fbd231731823e2732a2927ded4be"
 ported-at = "8.22.0"
 date = "2026-07-30"
-[bindings.mysql2]
-crate = "perry-ext-mysql2"
-lib = "perry_ext_mysql2"
-tracking = "#466"
-
-[bindings.mysql2.upstream]
-version = "3.23.2"
-sha256 = "5ebc7c22dd90fe3c7c69b9b1343208d71cc8e9395b433d16eb8be63306218a78"
-repo = "https://github.com/sidorares/node-mysql2"
-ref = "a98730277381005777f70aabfcefa017c1b970a3"
-ported-at = "3.23.2"
-date = "2026-07-30"
-[bindings."mysql2/promise"]
-crate = "perry-ext-mysql2"
-lib = "perry_ext_mysql2"
-tracking = "#466"
-# Subpath of the mysql2 package — not separately published, so it carries no
-# pin of its own; its provenance is mysql2's.
-alias-of = "mysql2"
-
 [bindings.nodemailer]
 crate = "perry-ext-nodemailer"
 lib = "perry_ext_nodemailer"

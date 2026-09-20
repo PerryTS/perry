@@ -27,7 +27,6 @@ members = [
     "crates/perry-ext-cron",
     "crates/perry-ext-ioredis",
     "crates/perry-ext-pg",
-    "crates/perry-ext-mysql2",
     "crates/perry-ext-fetch",
     "crates/perry-ext-undici",
     "crates/perry-ext-mongodb",
@@ -476,7 +475,6 @@ perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
 perry-ext-cron = { path = "crates/perry-ext-cron" }
 perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
 perry-ext-pg = { path = "crates/perry-ext-pg" }
-perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
 perry-ext-fetch = { path = "crates/perry-ext-fetch" }
 perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }

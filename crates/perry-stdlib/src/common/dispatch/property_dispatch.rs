@@ -1,8 +1,4 @@
-#[cfg(any(
-    feature = "crypto",
-    feature = "http-client",
-    feature = "bundled-mysql2"
-))]
+#[cfg(any(feature = "crypto", feature = "http-client"))]
 use super::super::handle::with_handle;
 use super::*;
 
@@ -41,11 +37,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     }
 
     if let Some(value) = dispatch_async_local_storage_property(handle, property_name) {
-        return value;
-    }
-
-    #[cfg(feature = "bundled-mysql2")]
-    if let Some(value) = crate::mysql2::dispatch_mysql2_property(handle, property_name) {
         return value;
     }
 

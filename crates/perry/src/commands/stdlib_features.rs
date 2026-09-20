@@ -63,9 +63,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "tls" => &["tls"],
 
         // ── Databases ─────────────────────────────────────────────────
-        // `database-mysql` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-mysql2` (v0.5.567).
-        "mysql2" | "mysql2/promise" => &["bundled-mysql2"],
         // `database-postgres` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-pg` (v0.5.566) so the
         // well-known flip can route to perry-ext-pg.

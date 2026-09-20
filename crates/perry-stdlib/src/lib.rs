@@ -205,24 +205,15 @@ pub mod tls;
 pub use tls::*;
 
 // === Databases ===
-// pg lives behind `bundled-pg` (v0.5.566); mysql2 lives behind
-// `bundled-mysql2` (v0.5.567). Either feature pulls in sqlx, so
-// the modules' `#[cfg(any(...))]` covers both bundled gates plus
-// the legacy `database-postgres`/`database-mysql` umbrellas (kept
-// for backwards-compat).
-#[cfg(any(feature = "bundled-pg", feature = "bundled-mysql2"))]
+// pg lives behind `bundled-pg` (v0.5.566). mysql2's own bundled
+// implementation (formerly gated the same way) was removed; mysql2
+// now compiles from its real npm source like other source packages.
+#[cfg(feature = "bundled-pg")]
 pub mod pg;
-#[cfg(any(feature = "bundled-pg", feature = "bundled-mysql2"))]
+#[cfg(feature = "bundled-pg")]
 pub use pg::connection::*;
-#[cfg(any(feature = "bundled-pg", feature = "bundled-mysql2"))]
+#[cfg(feature = "bundled-pg")]
 pub use pg::pool::*;
-
-#[cfg(any(feature = "bundled-pg", feature = "bundled-mysql2"))]
-pub mod mysql2;
-#[cfg(any(feature = "bundled-pg", feature = "bundled-mysql2"))]
-pub use mysql2::connection::*;
-#[cfg(any(feature = "bundled-pg", feature = "bundled-mysql2"))]
-pub use mysql2::pool::*;
 
 #[cfg(feature = "database-sqlite")]
 pub mod sqlite;

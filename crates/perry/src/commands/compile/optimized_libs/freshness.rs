@@ -759,8 +759,6 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         // Database drivers (mongodb, sqlx, redis)
         | "mongodb"
         | "pg"
-        | "mysql2"
-        | "mysql2/promise"
         | "ioredis"
         | "redis"
         // Mail (lettre)
