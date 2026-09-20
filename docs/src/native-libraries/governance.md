@@ -80,6 +80,12 @@ passing the governance check.
   `DROP`) passed with no `perry.compilePackages` entry for `mysql2` at all.
   Its former `perry-ext-mysql2` crate and `perry-stdlib` implementation have
   been removed.
+- `pg@8.22.0` compiles from its installed CommonJS source through the default
+  automatic package-routing path. A real local-PostgreSQL round trip
+  (`CREATE TABLE`/parameterized `INSERT`/`SELECT`/parameterized `DELETE`/
+  `DROP`) on a `Client`, plus a `Pool` query, passed with no
+  `perry.compilePackages` entry for `pg` at all. Its former `perry-ext-pg`
+  crate and `perry-stdlib` implementation have been removed.
 
 ## Current inventory
 

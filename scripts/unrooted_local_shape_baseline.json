@@ -17,11 +17,9 @@
     "crates/perry-ext-http/src/server/types.rs": 1,
     "crates/perry-ext-ioredis/src/lib.rs": 1,
     "crates/perry-ext-mongodb/src/lib.rs": 2,
-    "crates/perry-ext-mysql2/src/lib.rs": 9,
     "crates/perry-ext-net/src/classes.rs": 2,
     "crates/perry-ext-net/src/jsvalue.rs": 1,
     "crates/perry-ext-net/src/lifecycle.rs": 1,
-    "crates/perry-ext-pg/src/lib.rs": 7,
     "crates/perry-ext-streams/src/lib.rs": 4,
     "crates/perry-ext-ws/src/server.rs": 3,
     "crates/perry-ext-zlib/src/stream.rs": 3,
@@ -42,11 +40,7 @@
     "crates/perry-stdlib/src/ioredis.rs": 3,
     "crates/perry-stdlib/src/lodash.rs": 21,
     "crates/perry-stdlib/src/mongodb.rs": 4,
-    "crates/perry-stdlib/src/mysql2/result.rs": 39,
-    "crates/perry-stdlib/src/mysql2/types.rs": 16,
     "crates/perry-stdlib/src/nodemailer.rs": 3,
-    "crates/perry-stdlib/src/pg/result.rs": 14,
-    "crates/perry-stdlib/src/pg/types.rs": 14,
     "crates/perry-stdlib/src/querystring.rs": 2,
     "crates/perry-stdlib/src/readline/mod.rs": 4,
     "crates/perry-stdlib/src/sqlite/backup.rs": 8,
@@ -76,5 +70,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 527
+  "total": 428
 }

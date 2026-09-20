@@ -24,8 +24,21 @@ Regenerated `docs/api/perry.d.ts`, `docs/src/api/reference.md`, and
 `docs/src/native-libraries/governance.md`'s generated table; updated
 `docs/src/native-libraries/overview.md`'s well-known-binding description.
 
-Verified end to end without forcing `compilePackages`: a from-scratch
-`node_modules` with a plain `"pg": "^8"` dependency and no
-`perry.compilePackages` key compiles, links (24.7 MB binary), and reaches a
-genuine `net.connect()` — `Connection refused` against a port with nothing
-listening. No live Postgres was available to test a real query round-trip.
+The removal also had to reach the call sites that still named the deleted
+symbols, which the first pass missed: `lower_call/builtin.rs` lowered
+`new Client(cfg)` / `new Pool(cfg)` from an `import ... from "pg"` straight to
+`js_pg_client_new` / `js_pg_pool_new` (undefined at link time once the
+providers are gone — and the real `pg` package constructs `new Client`), the
+ten `js_pg_*` externs in `runtime_decls/stdlib_ffi/data_stores.rs`, the seven
+`js_pg_*` stubs in `perry-ui-android/src/stdlib_stubs.rs`, `"pg"` in
+perry-codegen-js's browser-throw list, and `-p perry-ext-pg` in
+`scripts/run_doc_tests.sh` / `.ps1`. Dropping the `"Client" | "Pool" =>
+Some(&["pg"])` import gate together with the two arms leaves a user-defined
+`Pool`/`Client` on the generic path, which is what #536 wanted anyway.
+
+Verified end to end against a live PostgreSQL 16.13 server, with the pinned
+`pg@8.22.0` as the only dependency of a throwaway fixture and no
+`perry.compilePackages` key: `CREATE TABLE` / parameterized `INSERT` /
+`SELECT` (rows, `rowCount`, `command`, field names) / parameterized `DELETE` /
+`DROP TABLE` on a `Client`, plus a `Pool` query — byte-for-byte identical
+output to `node --experimental-strip-types` on the pinned Node 26.5.1.

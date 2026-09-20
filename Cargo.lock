@@ -1473,7 +1473,6 @@ dependencies = [
  "hybrid-array",
  "num-traits",
  "rand_core 0.10.1",
- "serdect",
  "subtle",
  "zeroize",
 ]
@@ -1497,16 +1496,6 @@ checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "getrandom 0.4.2",
  "hybrid-array",
- "rand_core 0.10.1",
-]
-
-[[package]]
-name = "crypto-primes"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3633a51a39c69ebbaa4feaa694bd83d241e4093901c84a0963b19d9bb3f0cf8f"
-dependencies = [
- "crypto-bigint 0.7.5",
  "rand_core 0.10.1",
 ]
 
@@ -4086,7 +4075,7 @@ dependencies = [
  "p384",
  "pem",
  "rand 0.8.7",
- "rsa 0.9.10",
+ "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5892,18 +5881,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-mysql2"
-version = "0.5.1623"
-dependencies = [
- "chrono",
- "perry-ffi",
- "perry-runtime",
- "serde_json",
- "sqlx",
- "tokio",
-]
-
-[[package]]
 name = "perry-ext-net"
 version = "0.5.1623"
 dependencies = [
@@ -5946,15 +5923,6 @@ version = "0.5.1623"
 dependencies = [
  "perry-ffi",
  "printpdf",
-]
-
-[[package]]
-name = "perry-ext-pg"
-version = "0.5.1623"
-dependencies = [
- "perry-ffi",
- "sqlx",
- "tokio",
 ]
 
 [[package]]
@@ -6201,7 +6169,7 @@ dependencies = [
  "rand_core 0.6.4",
  "redis",
  "reqwest",
- "rsa 0.9.10",
+ "rsa",
  "rusqlite",
  "rust_decimal",
  "rustls",
@@ -6586,16 +6554,6 @@ dependencies = [
  "der 0.7.10",
  "pkcs8 0.10.2",
  "spki 0.7.3",
-]
-
-[[package]]
-name = "pkcs1"
-version = "0.8.0-rc.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "986d2e952779af96ea048f160fd9194e1751b4faea78bcf3ceb456efe008088e"
-dependencies = [
- "der 0.8.2",
- "spki 0.8.0",
 ]
 
 [[package]]
@@ -7364,31 +7322,13 @@ dependencies = [
  "num-bigint-dig",
  "num-integer",
  "num-traits",
- "pkcs1 0.7.5",
+ "pkcs1",
  "pkcs8 0.10.2",
  "rand_core 0.6.4",
  "sha2 0.10.9",
  "signature 2.2.0",
  "spki 0.7.3",
  "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "rsa"
-version = "0.10.0-rc.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30b2aa4ba0d89f73d1e332df05be0eeab8840351c36ca5654341dfdb57bb3caf"
-dependencies = [
- "const-oid 0.10.2",
- "crypto-bigint 0.7.5",
- "crypto-primes",
- "digest 0.11.3",
- "pkcs1 0.8.0-rc.4",
- "pkcs8 0.11.0",
- "rand_core 0.10.1",
- "signature 3.0.0",
- "spki 0.8.0",
  "zeroize",
 ]
 
@@ -7767,7 +7707,6 @@ version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
- "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -8297,8 +8236,6 @@ dependencies = [
  "generic-array",
  "log",
  "percent-encoding",
- "rand 0.10.2",
- "rsa 0.10.0-rc.18",
  "serde",
  "sha1 0.11.0",
  "sha2 0.11.0",

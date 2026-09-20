@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2026 entries across 118 modules
+// Coverage: 2016 entries across 115 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2125,24 +2125,6 @@ declare module "mongodb" {
   export function connect(p0: any): any;
 }
 
-declare module "mysql2" {
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function createConnection(p0: any): any;
-  /** stdlib */
-  export function createPool(p0: any): any;
-}
-
-declare module "mysql2/promise" {
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function createConnection(p0: any): any;
-  /** stdlib */
-  export function createPool(p0: any): any;
-}
-
 declare module "net" {
   /** stdlib */
   export class BlockList { [key: string]: any; }
@@ -3291,17 +3273,6 @@ declare module "perry/yoga" {
   export function setNumber(...args: any[]): any;
   /** stdlib */
   export function unsetMeasureFunc(...args: any[]): any;
-}
-
-declare module "pg" {
-  /** stdlib */
-  export class Client { [key: string]: any; }
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function Pool(p0: any): any;
-  /** stdlib */
-  export function connect(p0: any): any;
 }
 
 declare module "process" {

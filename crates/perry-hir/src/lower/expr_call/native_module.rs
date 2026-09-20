@@ -166,8 +166,6 @@ fn lower_os_module_method_call(
     }
 }
 
-}
-
 fn is_node_core(module: &str) -> bool {
     crate::ir::is_node_builtin_module(module.strip_prefix("node:").unwrap_or(module))
 }

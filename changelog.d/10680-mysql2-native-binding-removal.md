@@ -36,19 +36,15 @@ would otherwise fail with "no such package". Regenerated
 "Completed source migrations" entry for mysql2 matching the existing
 `slugify` entry.
 
-Validated with a real query round trip against a local MySQL 8.0.46 server:
-`CREATE TABLE`/`INSERT`/`SELECT`/`DROP TABLE` all passed using the real
-`mysql2` npm package with **no `perry.compilePackages` entry at all** —
-Perry's default automatic package-routing path (`Compile package wildcard:
-expanded to 60 installed package(s)`) compiled mysql2 and its full dependency
-tree from source, with the `generate-function` row-parser factory handled at
-runtime via `dyn_eval` (#6559 notice). `cargo test -p perry-api-manifest -p
-perry-hir` and `cargo test -p perry-codegen --test manifest_consistency`
-(all 5 tests, including `every_dispatch_entry_has_manifest_counterpart`) pass;
-`scripts/run_lint_gates.sh` (`SKIP_COMPILE_GATES=1`) is 76 of 77 green — the
-one red gate, "Public benchmark evidence freshness", is pre-existing on every
-PR in this repo.
+The `dyn_eval` class-expression support this depends on (#10661/#10675)
+is already on `main`.
 
-Must not merge before #10675 (`wip/10661-dyn-eval-class-expr`) — mysql2's
-real source does not compile without that PR's `dyn_eval` class-expression
-support.
+Validated with a real query round trip against a live MySQL 9.6.0 server, with the
+pinned `mysql2@3.23.2` as the only dependency of a throwaway fixture and **no
+`perry.compilePackages` entry at all** — Perry's default automatic
+package-routing path compiles mysql2 and its full dependency tree from
+source, with the `generate-function` row-parser factories handled at runtime
+via `dyn_eval`. `CREATE TABLE` / prepared `INSERT` / `SELECT` (rows and field
+names) / prepared `DELETE` (`affectedRows`) / `DROP TABLE` on a connection,
+plus a pool query — byte-for-byte identical output to
+`node --experimental-strip-types` on the pinned Node 26.5.1.

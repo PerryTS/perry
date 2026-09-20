@@ -24,7 +24,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 66,
+    "workspace_members": 64,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -67,7 +67,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 17,
+      "externalize": 15,
       "keep": 44,
       "merge": 1,
       "remove": 1,
@@ -209,11 +209,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-mysql2": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-net": {
       "category": "binding",
       "decision": "keep",
@@ -228,11 +223,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "external-package"
-    },
-    "perry-ext-pg": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-sharp": {
       "category": "binding",

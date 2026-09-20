@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2870 entries across 120 modules.
+Total: 2829 entries across 117 modules.
 
 ## Modules
 
@@ -59,8 +59,6 @@ Total: 2870 entries across 120 modules.
 - [`lodash`](#lodash)
 - [`module`](#module)
 - [`mongodb`](#mongodb)
-- [`mysql2`](#mysql2)
-- [`mysql2/promise`](#mysql2promise)
 - [`net`](#net)
 - [`node-fetch`](#node-fetch)
 - [`node-pty`](#node-pty)
@@ -91,7 +89,6 @@ Total: 2870 entries across 120 modules.
 - [`perry/widget`](#perrywidget)
 - [`perry/workloads`](#perryworkloads)
 - [`perry/yoga`](#perryyoga)
-- [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
 - [`querystring`](#querystring)
@@ -1945,54 +1942,6 @@ Total: 2870 entries across 120 modules.
 - `updateMany` — instance
 - `updateOne` — instance
 
-## `mysql2`
-
-### Classes
-
-- `Pool`
-
-### Methods
-
-- `beginTransaction` — instance
-- `commit` — instance
-- `createConnection` — module
-- `createPool` — module
-- `end` — instance *(class: `Pool`)*
-- `end` — instance
-- `execute` — instance *(class: `Pool`)*
-- `execute` — instance *(class: `PoolConnection`)*
-- `execute` — instance
-- `getConnection` — instance
-- `query` — instance *(class: `Pool`)*
-- `query` — instance *(class: `PoolConnection`)*
-- `query` — instance
-- `release` — instance
-- `rollback` — instance
-
-## `mysql2/promise`
-
-### Classes
-
-- `Pool`
-
-### Methods
-
-- `beginTransaction` — instance
-- `commit` — instance
-- `createConnection` — module
-- `createPool` — module
-- `end` — instance *(class: `Pool`)*
-- `end` — instance
-- `execute` — instance *(class: `Pool`)*
-- `execute` — instance *(class: `PoolConnection`)*
-- `execute` — instance
-- `getConnection` — instance
-- `query` — instance *(class: `Pool`)*
-- `query` — instance *(class: `PoolConnection`)*
-- `query` — instance
-- `release` — instance
-- `rollback` — instance
-
 ## `net`
 
 ### Classes
@@ -2826,23 +2775,6 @@ Total: 2870 entries across 120 modules.
 - `setMeasureFunc` — module
 - `setNumber` — module
 - `unsetMeasureFunc` — module
-
-## `pg`
-
-### Classes
-
-- `Client`
-- `Pool`
-
-### Methods
-
-- `Pool` — module
-- `connect` — module
-- `connect` — instance *(class: `Client`)*
-- `end` — instance *(class: `Pool`)*
-- `end` — instance
-- `query` — instance *(class: `Pool`)*
-- `query` — instance
 
 ## `process`
 
