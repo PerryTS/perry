@@ -177,7 +177,14 @@ pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
     }
     let n = (key_count as usize).min(slot_len);
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    for i in 0..n {
+    // #10595: back-to-front, like [`keys_find_slot_by_bytes`] above — a
+    // subclass field that re-declares an ancestor's name holds two entries
+    // in the packed keys array and only the LAST (most-derived) slot is ever
+    // written. This resolved twin scanned FORWARD, so the one caller that
+    // reaches it (`native_get::try_data_get_bytes`, the inherited/prototype
+    // read) returned the never-initialised ancestor slot for exactly the
+    // receiver #10595 fixed everywhere else.
+    for i in (0..n).rev() {
         let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
             if stored == key_bytes {
@@ -298,6 +305,16 @@ mod tests_10595 {
                 keys_find_slot_by_bytes(keys, 2, b"tag"),
                 Some(1),
                 "byte-slice lookup must agree with the pointer-key lookup"
+            );
+            // The RESOLVED twin — the one `native_get::try_data_get_bytes`
+            // reaches for an inherited read — scanned forward until it was
+            // brought in line with the other two. Pinned separately because
+            // its fast arm is a separate loop, not a delegation.
+            assert_eq!(
+                keys_find_slot_by_bytes_resolved(keys, 2, b"tag"),
+                Some(1),
+                "the resolved lookup must agree: most-derived slot (index 1), \
+                 not the ancestor's (index 0)"
             );
         }
     }

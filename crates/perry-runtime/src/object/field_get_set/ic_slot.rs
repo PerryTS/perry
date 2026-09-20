@@ -100,6 +100,23 @@ fn pic_arena_alloc(bytes: usize) -> *mut u8 {
 /// function (or any live `T`). All-zero bytes must be a valid `T`.
 #[inline]
 pub unsafe fn pic_slot_resolve<T>(slot: *mut *mut T) -> *mut T {
+    pic_slot_resolve_init(slot, |_| {})
+}
+
+/// [`pic_slot_resolve`] for a cache whose all-zero state is NOT its correct
+/// unarmed state.
+///
+/// `init` runs on the fresh, zeroed cache BEFORE it is published into the
+/// slot, so no thread can observe the cache without the initialisation; a
+/// thread that loses the publication race gets the winner's cache, which the
+/// winner initialised the same way. The `in`-presence cache needs this: its
+/// emitted guard compares a receiver word against word 0 with no "armed" test
+/// of its own, and 0 is a value an unstamped receiver can carry.
+///
+/// # Safety
+/// As [`pic_slot_resolve`]; `init` is handed a zeroed `T` it may write.
+#[inline]
+pub unsafe fn pic_slot_resolve_init<T>(slot: *mut *mut T, init: impl FnOnce(*mut T)) -> *mut T {
     if slot.is_null() {
         return null_mut();
     }
@@ -108,7 +125,7 @@ pub unsafe fn pic_slot_resolve<T>(slot: *mut *mut T) -> *mut T {
     if !cur.is_null() {
         return cur;
     }
-    pic_slot_publish(atomic)
+    pic_slot_publish(atomic, init)
 }
 
 /// The cache `slot` currently holds, without allocating: null for a site
@@ -129,8 +146,11 @@ pub unsafe fn pic_slot_peek<T>(slot: *mut *mut T) -> *mut T {
 
 #[cold]
 #[inline(never)]
-unsafe fn pic_slot_publish<T>(atomic: &AtomicPtr<T>) -> *mut T {
+unsafe fn pic_slot_publish<T>(atomic: &AtomicPtr<T>, init: impl FnOnce(*mut T)) -> *mut T {
     let fresh = pic_arena_alloc(std::mem::size_of::<T>()) as *mut T;
+    // Before the CAS: the `AcqRel` publication orders these writes ahead of
+    // any reader's `Acquire` load of the slot.
+    init(fresh);
     match atomic.compare_exchange(null_mut(), fresh, Ordering::AcqRel, Ordering::Acquire) {
         Ok(_) => {
             PIC_SLOTS_RESOLVED.fetch_add(1, Ordering::Relaxed);
