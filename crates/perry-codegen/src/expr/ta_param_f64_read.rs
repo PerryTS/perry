@@ -299,9 +299,15 @@ fn lower_checked_typed_array_f64_load(
         let addr = blk.add(I64, &data_base, &off);
         let ptr = blk.inttoptr(I64, &addr);
         let raw_elem = blk.load(elem_ty, &ptr);
+        // #10779: the float kinds are the only ones whose lane can be a NaN,
+        // and an ArrayBuffer lane is arbitrary user bytes — canonicalise so the
+        // value cannot alias a NaN-box tag downstream.
         let val = match conv {
-            F64Conv::F64 => raw_elem,
-            F64Conv::F32 => blk.fpext(F32, &raw_elem, DOUBLE),
+            F64Conv::F64 => crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &raw_elem),
+            F64Conv::F32 => {
+                let widened = blk.fpext(F32, &raw_elem, DOUBLE);
+                crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &widened)
+            }
             F64Conv::SInt => blk.sitofp(elem_ty, &raw_elem, DOUBLE),
             F64Conv::UInt => blk.uitofp(elem_ty, &raw_elem, DOUBLE),
         };

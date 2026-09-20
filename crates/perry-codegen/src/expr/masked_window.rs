@@ -104,7 +104,13 @@ fn emit_window_load_f64(
         }
         MaskedWindowElem::TaF64 { data_ptr } => {
             let data_ptr = data_ptr.clone();
-            emit_ta_window_load(ctx, &data_ptr, idx_i32, "3", DOUBLE)
+            let lane = emit_ta_window_load(ctx, &data_ptr, idx_i32, "3", DOUBLE);
+            // #10779: unlike `PlainF64` above — a JS `Array<number>` raw-f64
+            // slot, canonical by the store-side invariant
+            // (`js_array_numeric_value_to_raw_f64`) — this lane is
+            // ArrayBuffer-backed and holds whatever bytes the program wrote
+            // through any view of the buffer. Canonicalise it.
+            crate::expr::nanbox_inline::canonicalize_lane_f64(ctx.block(), &lane)
         }
     }
 }
