@@ -213,15 +213,16 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
         "{builtin_name}.prototype is missing: the instance would have no methods"
     );
     if crate::value::JSValue::from_bits(proto_value.to_bits()).is_pointer() {
-        crate::object::prototype_chain::object_link_class_default_prototype(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            proto_value.to_bits(),
-        );
+        obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            crate::object::prototype_chain::object_link_class_default_prototype(
+                obj as usize,
+                proto_value.to_bits(),
+            );
+        });
     }
     if state != 0 {
-        unsafe {
-            let meta =
-                crate::object::object_meta_ensure(obj_handle.get_raw_mut_ptr::<ObjectHeader>());
+        obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+            let meta = crate::object::object_meta_ensure(obj);
             // A decoder whose state word never landed would read back as the
             // lenient utf-8 default -- wrong label, wrong `fatal` -- rather than
             // fail, so the only way this stays honest is that the meta exists.
@@ -229,9 +230,9 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
             if !meta.is_null() {
                 (*meta).native_state = state;
             }
-        }
+        });
     }
-    obj_handle.get_raw_mut_ptr::<ObjectHeader>() as i64
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| obj as i64)
 }
 
 /// Map a user-supplied encoding label to (enum, canonical-name).
