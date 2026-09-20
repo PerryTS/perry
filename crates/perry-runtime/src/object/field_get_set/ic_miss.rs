@@ -474,16 +474,6 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     c[ti + 1] = prev_slot;
 }
 
-/// The receiver's GC object type, or `None` when the address does not carry a
-/// readable `GcHeader`.
-///
-/// # Safety
-/// `obj` is only *inspected*; `try_read_gc_header` validates the address first.
-#[inline]
-unsafe fn gc_type_of(obj: *const ObjectHeader) -> Option<u8> {
-    crate::value::addr_class::try_read_gc_header(obj as usize).map(|h| h.obj_type)
-}
-
 /// Does this heap property key have exactly these bytes?
 ///
 /// Length first, so a mismatched key costs one `u32` load and a compare — the
@@ -678,6 +668,14 @@ pub(super) fn get_field_ic_miss_impl(
     // walk per read — measured at +424 instructions per read for an accessor
     // on the prototype, a regression against no cache at all.
     let mut inherited_declined = false;
+    // ONE validated header read classifies the receiver for everything below.
+    // `try_read_gc_header` rejects the handle band and implausible addresses
+    // without touching memory, so `None` here is "not a heap cell" and the
+    // small-handle routing further down still sees it. The object path used
+    // to read the same header three more times (kind, descriptor flag,
+    // forwarding flag); it now takes all three from this one read.
+    let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) };
+    let gc_kind = gc_header.map(|h| h.obj_type);
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
         // Lane 3 hook A: an INHERITED read that this site has already resolved
         // once. Placed before the ladder rather than after it because the
@@ -696,98 +694,124 @@ pub(super) fn get_field_ic_miss_impl(
             crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
             crate::object::inherited_read_cache::Lookup::Unknown => {}
         }
-        // #7753: `arr.length` on a receiver codegen could not prove is an array.
+        // # The receiver-classification ladder runs only for NON-object kinds
         //
-        // The inline cache can never serve this read — it requires a
-        // GC_TYPE_OBJECT receiver by construction (#72, so an Array's
-        // `element[1]` is never mistaken for `keys_array`) — so EVERY dynamic
-        // `.length` lands here, and then walks a ladder built for objects: a
-        // closure-magic deref, two side-table registry probes behind
-        // thread-locals, then `js_object_get_field_by_name`'s own dispatch,
-        // which repeats the registry probes before finally reaching the array
-        // arm. On a tree-walking interpreter whose variable lookup is
-        // `for (i = 0; i < names.length; i++)`, that one read was 22% of total
-        // run time — more than the entire polymorphic-dispatch fix above saved.
+        // A miss used to walk, for EVERY heap receiver, the closure probe
+        // (`is_closure_ptr`'s magic read plus `closure_get_dynamic_prop`'s
+        // accessor side-table lookup), the buffer registry and the typed-array
+        // registry before it ever reached the object path — and on a read
+        // site that sees many shapes, where the ways cannot help and every
+        // read is a miss, that ladder was 33% of the read (`is_closure_ptr` +
+        // `closure_dynamic_prop_by_key` + `closure_get_dynamic_prop`, measured
+        // with `perf` on a 64-shape `o.kind` site by #10833), against 3% for
+        // the key scan the ladder was assumed to be protecting.
         //
-        // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays, lazy
-        // arrays, Sets and Maps all carry their own distinct `obj_type`. A
-        // `class X extends Array` instance instead uses `GC_TYPE_OBJECT`, but
-        // the exact-ShapeId dense-layout proof can read its live own `length`
-        // slot without repeating generic object dispatch. Both arms retain
-        // their established helpers, making this a dispatch short-circuit
-        // rather than a second implementation of either representation.
-        // An elements-backed Array-subclass instance answers its indices and
-        // `length` from its store; an absent index falls through to the ordinary
-        // lookup, which reaches the prototype chain (the shape has no index keys).
-        if let Some((_, elements)) =
-            unsafe { crate::array::subclass_elements::backed(obj as usize) }
-        {
+        // The ladder never answered for a `GC_TYPE_OBJECT`: closures are
+        // `GC_TYPE_CLOSURE`, buffers `GC_TYPE_BUFFER`, typed arrays
+        // `GC_TYPE_TYPED_ARRAY` — distinct kinds, and the registries the two
+        // probes consult are populated only from allocations of those kinds
+        // (the one `GC_TYPE_OBJECT` ever registered as a buffer is a test's
+        // forgery, which that test asserts is REJECTED). `object/shape_rule3.rs`
+        // classifies all 21 kinds. So the kind byte decides the ladder in one
+        // compare, and an ordinary object goes straight to the object path.
+        //
+        // What an object receiver keeps here is the two arms that genuinely
+        // apply to a `GC_TYPE_OBJECT`: an elements-backed Array subclass
+        // answering an INDEX or `length` key from its store, and `length` on an
+        // object-backed Array subclass through its exact-ShapeId layout proof.
+        // Both are gated on the KEY first — the store probe used to read the
+        // meta record for every key, and a named property can never be an
+        // elements key (`key_of_header` rejects it on its first byte).
+        if gc_kind == Some(crate::gc::GC_TYPE_OBJECT) {
+            // An elements-backed Array-subclass instance answers its indices
+            // and `length` from its store; an absent index falls through to
+            // the ordinary lookup, which reaches the prototype chain (the
+            // shape has no index keys).
             if let Some(elements_key) =
                 unsafe { crate::array::subclass_elements::key_of_header(key) }
             {
-                if let Some(value) =
-                    unsafe { crate::array::subclass_elements::get_by_key(elements, elements_key) }
+                if let Some((_, elements)) =
+                    unsafe { crate::array::subclass_elements::backed(obj as usize) }
                 {
-                    if diag {
-                        ic_diag_note(cache_slot, key, R::SubclassElements);
+                    if let Some(value) = unsafe {
+                        crate::array::subclass_elements::get_by_key(elements, elements_key)
+                    } {
+                        if diag {
+                            ic_diag_note(cache_slot, key, R::SubclassElements);
+                        }
+                        return value;
                     }
-                    return value;
                 }
             }
-        }
-        if unsafe { key_bytes_are(key, b"length") } {
-            match unsafe { gc_type_of(obj) } {
-                Some(crate::gc::GC_TYPE_ARRAY) => {
+            // Wolf ECS's Query and Archetype are `class ... extends Array`
+            // instances. They use ObjectHeader storage, so the Array arm in
+            // the other branch cannot recognize them and a megamorphic
+            // `.length` site otherwise repeats the full object lookup on every
+            // loop entry. Reuse the exact ShapeId-backed subclass layout proof
+            // already used by packed numeric reads. It declines accessor,
+            // prototype-override, sparse, and non-Array-subclass receivers,
+            // preserving the generic lookup below for every case it cannot
+            // prove.
+            if unsafe { key_bytes_are(key, b"length") } {
+                let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                if let Some(length) = crate::array::array_subclass_fast_length(receiver) {
                     if diag {
                         ic_diag_note(cache_slot, key, R::ArrayLength);
                     }
-                    let arr = obj as *const crate::array::ArrayHeader;
-                    return crate::array::js_array_length(arr) as f64;
+                    return length;
                 }
-                Some(crate::gc::GC_TYPE_OBJECT) => {
-                    // Wolf ECS's Query and Archetype are `class ... extends
-                    // Array` instances. They use ObjectHeader storage, so the
-                    // Array arm above cannot recognize them and a megamorphic
-                    // `.length` site otherwise repeats the full object lookup
-                    // on every loop entry. Reuse the exact ShapeId-backed
-                    // subclass layout proof already used by packed numeric
-                    // reads. It declines accessor, prototype-override, sparse,
-                    // and non-Array-subclass receivers, preserving the generic
-                    // lookup below for every case it cannot prove.
-                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                    if let Some(length) = crate::array::array_subclass_fast_length(receiver) {
-                        if diag {
-                            ic_diag_note(cache_slot, key, R::ArrayLength);
-                        }
-                        return length;
+            }
+        } else {
+            // #7753: `arr.length` on a receiver codegen could not prove is an
+            // array.
+            //
+            // The inline cache can never serve this read — it requires a
+            // GC_TYPE_OBJECT receiver by construction (#72, so an Array's
+            // `element[1]` is never mistaken for `keys_array`) — so EVERY
+            // dynamic `.length` lands here, and then walks a ladder built for
+            // objects: a closure-magic deref, two side-table registry probes
+            // behind thread-locals, then `js_object_get_field_by_name`'s own
+            // dispatch, which repeats the registry probes before finally
+            // reaching the array arm. On a tree-walking interpreter whose
+            // variable lookup is `for (i = 0; i < names.length; i++)`, that
+            // one read was 22% of total run time — more than the entire
+            // polymorphic-dispatch fix above saved.
+            //
+            // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays,
+            // lazy arrays, Sets and Maps all carry their own distinct
+            // `obj_type`.
+            if gc_kind == Some(crate::gc::GC_TYPE_ARRAY) && unsafe { key_bytes_are(key, b"length") }
+            {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::ArrayLength);
+                }
+                let arr = obj as *const crate::array::ArrayHeader;
+                return crate::array::js_array_length(arr) as f64;
+            }
+            unsafe {
+                if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::ClosureProp);
                     }
+                    return val;
                 }
-                _ => {}
-            }
-        }
-        unsafe {
-            if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::ClosureProp);
+                // The generic IC-miss object path below may inspect GC/object
+                // metadata, so mirror js_object_get_field_by_name's
+                // buffer-first dispatch here.
+                if crate::buffer::is_registered_buffer(obj as usize) {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::Buffer);
+                    }
+                    let value = js_object_get_field_by_name(obj, key);
+                    return f64::from_bits(value.bits());
                 }
-                return val;
-            }
-            // Buffers have no GcHeader. The generic IC-miss object path below may
-            // inspect GC/object metadata, so mirror js_object_get_field_by_name's
-            // buffer-first dispatch here.
-            if crate::buffer::is_registered_buffer(obj as usize) {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::Buffer);
+                if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::TypedArray);
+                    }
+                    let value = js_object_get_field_by_name(obj, key);
+                    return f64::from_bits(value.bits());
                 }
-                let value = js_object_get_field_by_name(obj, key);
-                return f64::from_bits(value.bits());
-            }
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::TypedArray);
-                }
-                let value = js_object_get_field_by_name(obj, key);
-                return f64::from_bits(value.bits());
             }
         }
     }
@@ -881,28 +905,26 @@ pub(super) fn get_field_ic_miss_impl(
         // The codegen guard funnels non-OBJECT receivers here too, so this
         // belt-and-braces check keeps the cache from being primed with
         // values that would survive into the inline hot path.
-        let is_object = (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
-            && is_valid_obj_ptr(obj as *const u8)
-            && {
-                let gc_header =
-                    (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
-            };
-        let has_own_descriptors = is_object && super::super::object_has_descriptors(obj as usize);
+        // The kind, the descriptor flag and the forwarding flag all come from
+        // the ONE validated header read at the top of this function
+        // (`try_read_gc_header` already required an address above the handle
+        // band and inside the platform heap range, which is stricter than the
+        // `>= GC_HEADER_SIZE + 0x1000 && is_valid_obj_ptr` pair this used to
+        // re-derive).
+        let is_object = gc_kind == Some(crate::gc::GC_TYPE_OBJECT);
+        let has_own_descriptors = is_object
+            && gc_header
+                .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0);
         // #8122: ONE shape-table probe. `object_is_regular` is `GC_TYPE_OBJECT
         // && !FORWARDED && descriptor.object_kind == Ordinary`; the kind test
         // was already `GC_TYPE_OBJECT` above, so read the descriptor once and
         // take the kind, the keys edge, the key count and the live bound from
         // it — this path used to probe three times (regularity, the
         // descriptor, then `object_shape_id` for the PIC token).
-        let shape = if is_object {
-            let gc_header =
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
-                crate::object::shapes::object_shape_descriptor(obj)
-            } else {
-                None
-            }
+        let shape = if is_object
+            && gc_header.is_some_and(|h| h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
+        {
+            crate::object::shapes::object_shape_descriptor(obj)
         } else {
             None
         };
@@ -1148,15 +1170,23 @@ fn outlined_mru_hit_enabled() -> bool {
 ///
 /// # The guards are the emitted diamond's, one for one
 ///
-/// Receiver is a real heap pointer (`>= HANDLE_BAND_MAX`), a `GC_TYPE_OBJECT`
-/// with `OBJ_FLAG_HAS_DESCRIPTORS` clear, its shape stamp is non-zero and
-/// equal to the cached token, and the cached slot carries no
+/// Receiver is a real heap pointer (`>= HANDLE_BAND_MAX`), its shape stamp is
+/// non-zero and equal to the cached token, and the cached slot carries no
 /// `IC_SLOT_OVERFLOW_BIT`. Those are exactly the predicates
 /// `lower_generic_property_get` emits before `pic.hit`, evaluated in the same
-/// order, and the raw header loads are the same ones it emits — the caller has
-/// already established the pointer tag, which is what licenses them there and
-/// here. A `TAG_HOLE` in the slot is a deleted field and misses, as it does
-/// there.
+/// order — the caller has already established the POINTER tag, which is what
+/// licenses the `+4` load there and here.
+///
+/// Three predicates this twin used to evaluate are gone from BOTH copies, for
+/// the same reasons, so the two stay behaviourally identical: the GC-kind
+/// test (#10828: a `+4` word equal to a live ShapeId proves `GC_TYPE_OBJECT`),
+/// the `OBJ_FLAG_HAS_DESCRIPTORS` test (#10824: every descriptor change
+/// transitions the ShapeId) and the `TAG_HOLE` compare after the load
+/// (#10826: every delete transitions the ShapeId, so a stamp hit proves the
+/// slot live). Keeping any of them here while the emitted hit dropped it
+/// would make the outlined and inline programs answer differently in exactly
+/// the situation the invariant is meant to rule out — which is the opposite
+/// of what a behavioural twin is for.
 ///
 /// Word 2 (the Array-subclass named-prefix token) and the polymorphic ways are
 /// deliberately NOT served here: they are 2.5 % of primes between them and
@@ -1164,8 +1194,8 @@ fn outlined_mru_hit_enabled() -> bool {
 ///
 /// # Safety
 /// `obj_handle` is the receiver with the NaN-box tag already masked off, and
-/// the caller has established that the tag was `POINTER`/`STRING`. `cache_slot`
-/// is the codegen-emitted per-site slot or null.
+/// the caller has established that the tag was `POINTER`. `cache_slot` is the
+/// codegen-emitted per-site slot or null.
 #[inline]
 unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
@@ -1184,15 +1214,12 @@ unsafe fn pic_outlined_mru_hit(
     if cache.is_null() {
         return None;
     }
-    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-    {
-        return None;
-    }
     // `object_shape_stamp` answers 0 for a receiver whose `parent_class_id` is
     // not a ShapeId, which is what keeps a keyless receiver out of an empty
-    // cache slot (#809).
+    // cache slot (#809). The emitted copy has no such range test: its cache
+    // word is born holding `PACKED_GET_EMPTY`, so equality alone proves the
+    // site primed; here the full cache's word 0 is born 0, and this is the
+    // test that keeps a 0 stamp from matching it.
     let stamp = crate::object::shapes::object_shape_stamp(obj_handle);
     if stamp == 0 {
         return None;
@@ -1205,13 +1232,10 @@ unsafe fn pic_outlined_mru_hit(
     if (slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0 {
         return None;
     }
-    let field = *((obj_handle as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-        as *const f64);
-    if field.to_bits() == crate::value::TAG_HOLE {
-        return None;
-    }
-    Some(field)
+    Some(
+        *((obj_handle as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+            as *const f64),
+    )
 }
 
 #[no_mangle]
@@ -1256,9 +1280,19 @@ pub extern "C" fn js_object_get_field_ic(
         // The monomorphic hit the emitted diamond does inline. Everything it
         // declines still reaches the handler below, so this only ever removes
         // work. See `pic_outlined_mru_hit`.
-        if let Some(value) = unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
-            crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
-            return value;
+        //
+        // POINTER tag only, exactly as the emitted tower tests it (#10833):
+        // the hit compares the receiver's `+4` word against a ShapeId with no
+        // GC-kind test in front of it any more, and #10828's guarantee that
+        // such a word proves a `GC_TYPE_OBJECT` is stated over POINTER-tagged
+        // values — a heap STRING's `+4` is a `StringHeader` field that rule 3
+        // deliberately does not bound. The kind test used to be what turned a
+        // string away here; the tag does it now, one compare earlier.
+        if tag == 0x7FFD {
+            if let Some(value) = unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
+                crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
+                return value;
+            }
         }
         return js_object_get_field_ic_miss(obj_handle, key, cache_slot);
     }
@@ -1285,6 +1319,69 @@ pub extern "C" fn js_object_get_field_ic(
 // than touching object field storage directly, so they were split out
 // of this module. See `polymorphic_index.rs` for the implementations
 // and the #471 fix notes.
+
+#[cfg(test)]
+mod ladder_skip_tests {
+    //! The receiver-classification ladder (closure / buffer / typed-array
+    //! probes) runs only for receivers that are NOT `GC_TYPE_OBJECT`. The
+    //! typed-array registry counts its probes per thread, so "the ladder was
+    //! skipped" is directly observable — and the Array receiver case pins that
+    //! the counter still moves when the ladder does run, so this cannot pass
+    //! by the counter having stopped counting.
+    use crate::object::{ObjectHeader, PicCache, PicCacheSlot, PIC_CACHE_WORDS};
+    use std::sync::atomic::AtomicU64;
+
+    fn key_of(bytes: &[u8]) -> *const crate::StringHeader {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    #[test]
+    fn an_object_miss_does_not_consult_the_typed_array_registry() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+        let present = scope.root_string_ptr(key_of(b"ladder_present"));
+        let absent = scope.root_string_ptr(key_of(b"ladder_absent"));
+        obj.with_mut_ptr(|o| {
+            present.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 3.0))
+        });
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(super::PACKED_GET_EMPTY);
+
+        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let hit = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            present.with_const_ptr(|k| {
+                super::get_field_ic_miss_impl(o, k, &mut slot, &packed)
+            })
+        });
+        assert_eq!(hit, 3.0, "test premise: the own key is answered");
+        let missing = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            absent.with_const_ptr(|k| super::get_field_ic_miss_impl(o, k, &mut slot, &packed))
+        });
+        assert_eq!(missing.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(
+            crate::typedarray::test_typed_array_registry_probe_count(),
+            before,
+            "a GC_TYPE_OBJECT receiver must skip the closure/buffer/typed-array \
+             ladder: its kind byte already rules all three out (#10828, rule 3)"
+        );
+
+        // The ladder still runs for a receiver that is not an object: a dense
+        // array asked for a non-`length` key reaches the typed-array probe.
+        let arr = crate::array::js_array_alloc(2);
+        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let v = absent.with_const_ptr(|k| {
+            super::get_field_ic_miss_impl(arr as *const ObjectHeader, k, &mut slot, &packed)
+        });
+        assert_eq!(v.to_bits(), crate::value::TAG_UNDEFINED);
+        assert!(
+            crate::typedarray::test_typed_array_registry_probe_count() > before,
+            "test premise: a non-object receiver still walks the ladder, so the \
+             counter this test reads is live"
+        );
+    }
+}
 
 #[cfg(test)]
 mod sso_tests_1781 {

@@ -317,7 +317,7 @@ pub(crate) use ic_miss::{primitive_proto_method_name_static, test_push_catch_pri
 #[path = "field_get_set/ic_miss/ic_slow.rs"]
 mod ic_slow;
 pub(crate) use ic_slot::pic_slot_census;
-pub use ic_slot::{pic_arena_bytes, pic_slot_peek, pic_slot_resolve, pic_slots_resolved};
+pub use ic_slot::{pic_arena_bytes, pic_slot_peek, pic_slot_resolve, pic_slot_resolve_init, pic_slots_resolved};
 pub use ic_slow::{js_object_get_field_ic_nonptr, js_object_get_field_ic_slow};
 
 #[cfg(test)]

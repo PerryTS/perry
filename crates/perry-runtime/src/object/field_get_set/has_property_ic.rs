@@ -92,7 +92,13 @@ pub unsafe extern "C" fn js_in_operator_presence_ic(
         // negative is not cacheable (see the module header).
         return answer;
     }
-    let cache = crate::object::pic_slot_resolve(slot);
+    // Resolved with word 0 already holding [`IN_PRESENCE_UNARMED`]: a `true`
+    // from the prototype chain resolves the slot (the attempt budget lives in
+    // the cache) but cannot arm it, and a zero word 0 is not "unarmed" to the
+    // emitted guard — see the constant.
+    let cache = crate::object::pic_slot_resolve_init(slot, |c| {
+        (*c).shape = IN_PRESENCE_UNARMED;
+    });
     if cache.is_null() {
         return answer;
     }
@@ -105,6 +111,20 @@ pub unsafe extern "C" fn js_in_operator_presence_ic(
     }
     answer
 }
+
+/// Word 0 of a presence cache that has been resolved but not armed.
+///
+/// The emitted guard (`perry-codegen/src/expr/in_presence_ic.rs`) compares the
+/// receiver's zero-extended `+4` word against word 0 and has no "is this site
+/// armed?" test of its own, on the assumption that no stamped receiver's
+/// ShapeId can be 0. That is true, and beside the point: a receiver that was
+/// never shape-stamped carries `parent_class_id` at `+4`, which is 0 for an
+/// anonymous object literal. So at a site whose cache had been resolved by a
+/// prototype-chain `true` (which resolves, spends an attempt, and cannot arm),
+/// `"k" in {}` read word 0 == 0 == the receiver's word and answered `true`.
+/// The same zero-sentinel flaw was taken off the property-read tower in
+/// #10833; `1 << 32` is above every zero-extended `u32`, so it matches nothing.
+pub(crate) const IN_PRESENCE_UNARMED: u64 = 1 << 32;
 
 /// The receiver's ShapeId, when a site may answer `true` for `key` from it
 /// alone: an ordinary, shape-stamped, descriptor-free, tombstone-free heap
@@ -190,5 +210,49 @@ mod tests {
     #[test]
     fn the_attempt_budget_is_small_and_nonzero() {
         assert!(IN_PRESENCE_ATTEMPT_BUDGET > 0 && IN_PRESENCE_ATTEMPT_BUDGET <= 16);
+    }
+
+    /// A `true` the site cannot arm on (here: the key sits under a descriptor)
+    /// resolves the cache to count the attempt, and used to leave word 0 at
+    /// its zeroed birth value — which the emitted guard then matched against
+    /// any receiver whose `+4` word is 0, i.e. every unstamped anonymous
+    /// object literal: `"k" in {}` answered `true`. Word 0 must be resolved
+    /// holding a value no zero-extended `u32` can equal.
+    #[test]
+    fn a_resolved_but_unarmed_site_cannot_be_matched_by_an_unstamped_receiver() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"k".as_ptr(), 1));
+        obj.with_mut_ptr(|o| {
+            key.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 1.0))
+        });
+        // A descriptor makes the receiver unarmable while `in` still says true.
+        obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            super::super::super::descriptor_state::set_property_attrs(
+                o as usize,
+                "k".to_string(),
+                crate::object::PropertyAttrs::new(false, true, false),
+            );
+        });
+        let mut slot: *mut InPresenceCache = std::ptr::null_mut();
+        let answer = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            key.with_const_ptr(|k| unsafe {
+                js_in_operator_presence_ic(
+                    f64::from_bits(crate::value::js_nanbox_pointer(o as i64).to_bits()),
+                    f64::from_bits(crate::value::js_nanbox_string(k as i64).to_bits()),
+                    &mut slot,
+                )
+            })
+        });
+        assert_eq!(answer.to_bits(), 0x7FFC_0000_0000_0004, "test premise: `in` is true");
+        assert!(!slot.is_null(), "test premise: the attempt resolved the cache");
+        let word0 = unsafe { (*slot).shape };
+        assert_eq!(word0, IN_PRESENCE_UNARMED);
+        assert!(
+            word0 > u64::from(u32::MAX),
+            "an unarmed word must be unmatchable by any zero-extended +4 word, got {word0:#x}"
+        );
+        assert_ne!(word0, 0, "0 is what an unstamped `{{}}` carries at +4");
     }
 }
