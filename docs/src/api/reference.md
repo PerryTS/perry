@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3006 entries across 132 modules.
+Total: 2923 entries across 126 modules.
 
 ## Modules
 
@@ -39,8 +39,6 @@ Total: 3006 entries across 132 modules.
 - [`constants`](#constants)
 - [`cron`](#cron)
 - [`crypto`](#crypto)
-- [`date-fns`](#date-fns)
-- [`dayjs`](#dayjs)
 - [`decimal.js`](#decimaljs)
 - [`dgram`](#dgram)
 - [`diagnostics_channel`](#diagnostics_channel)
@@ -50,7 +48,6 @@ Total: 3006 entries across 132 modules.
 - [`ethers`](#ethers)
 - [`events`](#events)
 - [`exponential-backoff`](#exponential-backoff)
-- [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`ffi`](#ffi)
 - [`fs`](#fs)
@@ -70,7 +67,6 @@ Total: 3006 entries across 132 modules.
 - [`mysql2`](#mysql2)
 - [`mysql2/promise`](#mysql2promise)
 - [`net`](#net)
-- [`node-cron`](#node-cron)
 - [`node-fetch`](#node-fetch)
 - [`node-forge`](#node-forge)
 - [`node-pty`](#node-pty)
@@ -104,9 +100,7 @@ Total: 3006 entries across 132 modules.
 - [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
-- [`qs`](#qs)
 - [`querystring`](#querystring)
-- [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
 - [`readline/promises`](#readlinepromises)
 - [`redis`](#redis)
@@ -968,52 +962,6 @@ Total: 3006 entries across 132 modules.
 - `subtle`
 - `webcrypto`
 
-## `date-fns`
-
-### Methods
-
-- `addDays` — module
-- `addMonths` — module
-- `addYears` — module
-- `differenceInDays` — module
-- `differenceInHours` — module
-- `differenceInMinutes` — module
-- `endOfDay` — module
-- `format` — module
-- `isAfter` — module
-- `isBefore` — module
-- `parseISO` — module
-- `startOfDay` — module
-
-## `dayjs`
-
-### Methods
-
-- `add` — instance
-- `clone` — instance
-- `date` — instance
-- `day` — instance
-- `dayjs` — module
-- `default` — module
-- `diff` — instance
-- `endOf` — instance
-- `format` — instance
-- `hour` — instance
-- `isAfter` — instance
-- `isBefore` — instance
-- `isSame` — instance
-- `isValid` — instance
-- `millisecond` — instance
-- `minute` — instance
-- `month` — instance
-- `second` — instance
-- `startOf` — instance
-- `subtract` — instance
-- `toISOString` — instance
-- `unix` — instance
-- `valueOf` — instance
-- `year` — instance
-
 ## `decimal.js`
 
 ### Methods
@@ -1392,46 +1340,6 @@ Total: 3006 entries across 132 modules.
 ### Methods
 
 - `backOff` — module
-
-## `fastify`
-
-### Methods
-
-- `addHook` — instance
-- `all` — instance
-- `body` — instance
-- `close` — instance
-- `code` — instance
-- `default` — module
-- `delete` — instance
-- `get` — instance
-- `head` — instance
-- `header` — instance
-- `headers` — instance
-- `html` — instance
-- `json` — instance
-- `listen` — instance
-- `method` — instance
-- `on` — instance
-- `options` — instance
-- `param` — instance
-- `params` — instance
-- `patch` — instance
-- `post` — instance
-- `put` — instance
-- `query` — instance
-- `rawBody` — instance
-- `redirect` — instance
-- `register` — instance
-- `route` — instance
-- `send` — instance
-- `server` — instance
-- `setErrorHandler` — instance
-- `status` — instance
-- `text` — instance
-- `type` — instance
-- `url` — instance
-- `user` — instance
 
 ## `fetch`
 
@@ -2294,13 +2202,6 @@ Total: 3006 entries across 132 modules.
 - `upgradeToTLS` — instance *(class: `Socket`)*
 - `write` — instance *(class: `Socket`)*
 
-## `node-cron`
-
-### Methods
-
-- `schedule` — module
-- `validate` — module
-
 ## `node-fetch`
 
 ### Classes
@@ -3147,13 +3048,6 @@ Total: 3006 entries across 132 modules.
 - `ucs2`
 - `version`
 
-## `qs`
-
-### Methods
-
-- `parse` — module
-- `stringify` — module
-
 ## `querystring`
 
 ### Methods
@@ -3169,22 +3063,6 @@ Total: 3006 entries across 132 modules.
 ### Properties
 
 - `default`
-
-## `rate-limiter-flexible`
-
-### Classes
-
-- `RateLimiterAbstract`
-- `RateLimiterMemory`
-
-### Methods
-
-- `block` — instance
-- `consume` — instance
-- `delete` — instance
-- `get` — instance
-- `penalty` — instance
-- `reward` — instance
 
 ## `readline`
 

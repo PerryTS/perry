@@ -291,14 +291,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("tls", "createServer" | "Server") => Some("Server"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
-                                    // node-cron's `cron.schedule(expr, cb)` returns a job
-                                    // handle whose `start()`/`stop()`/`isRunning()` methods
-                                    // dispatch via the ("node-cron", true, METHOD) entries
-                                    // in expr.rs's native_module dispatch table. Without
-                                    // registering the result as a "CronJob" native instance,
-                                    // `job.stop()` falls through to dynamic dispatch and the
-                                    // call never reaches js_cron_job_stop.
-                                    ("node-cron", "schedule") => Some("CronJob"),
                                     // readline.createInterface() returns a singleton
                                     // handle whose .question/.on/.close methods
                                     // dispatch via the ("readline", true, METHOD)
@@ -508,15 +500,12 @@ pub(crate) fn register_native_from_new_and_calls(
                                     ("better-sqlite3", "prepare") => Some("Statement"),
                                     ("sqlite", "prepare") => Some("StatementSync"),
                                     ("sqlite", "createSession") => Some("Session"),
-                                    // dayjs / moment manipulation methods return a
+                                    // moment manipulation methods return a
                                     // NEW date handle — without re-registering the
                                     // binding, `const d2 = d.add(7, 'day');
                                     // d2.format(...)` fell to generic dispatch
                                     // (undefined). "App" matches the factory-result
                                     // registration class.
-                                    ("dayjs", "add" | "subtract" | "startOf" | "endOf") => {
-                                        Some("App")
-                                    }
                                     (
                                         "moment",
                                         "add" | "subtract" | "startOf" | "endOf" | "clone",

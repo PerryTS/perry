@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2064 entries across 130 modules
+// Coverage: 2043 entries across 124 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -1178,40 +1178,6 @@ declare module "crypto" {
   export function verify(...args: any[]): any;
 }
 
-declare module "date-fns" {
-  /** stdlib */
-  export function addDays(...args: any[]): any;
-  /** stdlib */
-  export function addMonths(...args: any[]): any;
-  /** stdlib */
-  export function addYears(...args: any[]): any;
-  /** stdlib */
-  export function differenceInDays(...args: any[]): any;
-  /** stdlib */
-  export function differenceInHours(...args: any[]): any;
-  /** stdlib */
-  export function differenceInMinutes(...args: any[]): any;
-  /** stdlib */
-  export function endOfDay(...args: any[]): any;
-  /** stdlib */
-  export function format(...args: any[]): any;
-  /** stdlib */
-  export function isAfter(...args: any[]): any;
-  /** stdlib */
-  export function isBefore(...args: any[]): any;
-  /** stdlib */
-  export function parseISO(...args: any[]): any;
-  /** stdlib */
-  export function startOfDay(...args: any[]): any;
-}
-
-declare module "dayjs" {
-  /** stdlib */
-  export function dayjs(input?: any): any;
-  /** stdlib */
-  export default function (input?: any): any;
-}
-
 declare module "dgram" {
   /** stdlib */
   export class Socket { [key: string]: any; }
@@ -1581,11 +1547,6 @@ declare module "events" {
 declare module "exponential-backoff" {
   /** stdlib */
   export function backOff(p0: any, p1: any): any;
-}
-
-declare module "fastify" {
-  /** stdlib */
-  export default function (p0: any): any;
 }
 
 declare module "fetch" {
@@ -2260,13 +2221,6 @@ declare module "net" {
   export function setDefaultAutoSelectFamily(...args: any[]): any;
   /** stdlib */
   export function setDefaultAutoSelectFamilyAttemptTimeout(...args: any[]): any;
-}
-
-declare module "node-cron" {
-  /** stdlib */
-  export function schedule(...args: any[]): any;
-  /** stdlib */
-  export function validate(...args: any[]): any;
 }
 
 declare module "node-fetch" {
@@ -3591,13 +3545,6 @@ declare module "punycode" {
   export function toUnicode(...args: any[]): any;
 }
 
-declare module "qs" {
-  /** stdlib */
-  export function parse(input: string, options: any): any;
-  /** stdlib */
-  export function stringify(value: any, options: any): string;
-}
-
 declare module "querystring" {
   /** stdlib */
   const _default: any;
@@ -3616,13 +3563,6 @@ declare module "querystring" {
   export function unescape(...args: any[]): any;
   /** stdlib */
   export function unescapeBuffer(...args: any[]): any;
-}
-
-declare module "rate-limiter-flexible" {
-  /** stdlib */
-  export class RateLimiterAbstract { [key: string]: any; }
-  /** stdlib */
-  export class RateLimiterMemory { [key: string]: any; }
 }
 
 declare module "readline" {

@@ -37,11 +37,6 @@ pub mod async_local_storage;
 pub mod commander;
 pub mod common;
 pub mod domain;
-// dayjs / date-fns — feature-gated as of v0.5.548 so the well-known
-// flip can route `import 'dayjs'` / `import 'date-fns'` to
-// perry-ext-dayjs without duplicate `_js_dayjs_*` symbols at link.
-#[cfg(feature = "bundled-dayjs")]
-pub mod dayjs;
 // decimal feature-gated as of v0.5.547 — well-known flip routes
 // to perry-ext-decimal.
 #[cfg(feature = "bundled-decimal")]
@@ -94,8 +89,6 @@ pub use async_local_storage::*;
 #[cfg(feature = "bundled-commander")]
 pub use commander::*;
 pub use common::*;
-#[cfg(feature = "bundled-dayjs")]
-pub use dayjs::*;
 #[cfg(feature = "bundled-decimal")]
 pub use decimal::*;
 pub use domain::*;
@@ -120,12 +113,10 @@ pub mod framework;
 #[cfg(feature = "http-server")]
 pub use framework::*;
 
-// === Fastify-Compatible Framework ===
-// The in-stdlib fastify adapter was removed: `import 'fastify'` is served
-// exclusively by the external `perry-ext-fastify` crate via the well-known
-// flip (see `well_known_bindings.toml` + `optimized_libs.rs`). perry-stdlib's
-// per-tick bridge into the external crate lives behind the
-// `external-fastify-pump` feature (drained from `async_bridge`).
+// === Fastify ===
+// The npm `fastify` binding was removed (#466): `import 'fastify'` now
+// compiles the real npm package from source, same as any other package
+// under the wildcard resolution.
 
 // === Web Fetch API (fetch / Headers / Request / Response / Blob) ===
 // #5174: gated on `web-fetch`, not `http-client`, so Web Fetch stays
@@ -392,10 +383,6 @@ pub extern "C" fn js_cron_timer_has_pending() -> i32 {
 }
 
 // === Rate Limiting ===
-#[cfg(feature = "bundled-ratelimit")]
-pub mod ratelimit;
-#[cfg(feature = "bundled-ratelimit")]
-pub use ratelimit::*;
 
 // === IDs ===
 // Nothing left to gate: `bundled-uuid` went with the uuid binding

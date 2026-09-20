@@ -933,8 +933,6 @@ mod tests {
             "js_ext_http_client_inflight",
             "js_ext_zlib_process_pending",
             "js_ext_zlib_has_active_handles",
-            "js_fastify_process_pending",
-            "js_fastify_has_active",
         ];
 
         for symbol in extension_symbols {

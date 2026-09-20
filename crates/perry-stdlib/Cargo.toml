@@ -23,7 +23,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "rate-limit", "net", "tls", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-dayjs", "bundled-moment", "bundled-commander", "bundled-streams"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-lru-cache", "bundled-exponential-backoff", "bundled-events", "bundled-decimal", "bundled-moment", "bundled-commander", "bundled-streams"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -44,12 +44,6 @@ bundled-events = []
 # through `full`.
 bundled-decimal = ["dep:rust_decimal"]
 
-# dayjs / date-fns — chrono is always-on (used by lots of stdlib),
-# so this gate just toggles whether perry-stdlib's dayjs module is
-# compiled in. Default-on through `full`; the well-known flip
-# strips it when `import 'dayjs'` resolves to perry-ext-dayjs.
-bundled-dayjs = []
-
 # moment — same gating contract as bundled-dayjs (chrono is
 # always-on). Default-on through `full`; flipped to perry-ext-moment
 # by the well-known table.
@@ -62,10 +56,9 @@ bundled-commander = []
 
 # HTTP server (hyper-based native framework)
 # Note: dashmap is now always-on (used by core handle registry), no longer listed here.
-# Gates the `framework` module (non-fastify hyper plumbing) only. fastify is no
-# longer in-stdlib — `import 'fastify'` is served exclusively by the external
-# perry-ext-fastify crate via the well-known flip (see well_known_bindings.toml);
-# perry-stdlib's per-tick bridge into it lives behind `external-fastify-pump`.
+# Gates the `framework` module (unrelated hyper plumbing) only. The npm
+# `fastify` binding was removed (#466); `import 'fastify'` now compiles the
+# real npm package from source.
 http-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "async-runtime"]
 
 # Web Fetch compatibility surface. The well-known flip can strip this
@@ -139,12 +132,6 @@ external-http-server-pump = ["async-runtime"]
 # code calls `http.request` / `http.get`. Selects client dispatch adapters
 # and the shared async runtime; perry-ext-http registers its own callbacks.
 external-http-client-pump = ["async-runtime"]
-
-# Activated by `optimized_libs::build_optimized_libs` whenever the well-known
-# flip routes `import 'fastify'` to perry-ext-fastify (the only fastify path —
-# the in-stdlib adapter was removed). Selects Fastify dispatch adapters and the
-# shared async runtime. perry-ext-fastify owns pump/keepalive registration.
-external-fastify-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the well-known
 # flip routes `node:events` to perry-ext-events. Makes
@@ -275,11 +262,6 @@ bundled-cheerio = ["dep:scraper"]
 # `bundled-cron` instead.
 scheduler = ["bundled-cron"]
 bundled-cron = ["dep:cron", "async-runtime"]
-
-# Rate limiting — `rate-limit` umbrella stays for backwards-compat;
-# v0.5.552's well-known flip toggles `bundled-ratelimit` instead.
-rate-limit = ["bundled-ratelimit"]
-bundled-ratelimit = ["dep:governor", "async-runtime"]
 
 
 # `ids` is now an empty umbrella kept only for backwards compat:
@@ -423,7 +405,6 @@ scraper = { version = "0.27", optional = true }
 cron = { version = "0.17", optional = true }
 
 # Rate limiting
-governor = { version = "0.10", optional = true }
 
 # Validation
 

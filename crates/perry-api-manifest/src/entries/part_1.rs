@@ -14,57 +14,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     //  drift guarded by perry-codegen's manifest_consistency test)
     // ===========================================================
     method_sig(
-        "fastify",
-        "default",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("fastify", "get", true, None),
-    method("fastify", "post", true, None),
-    method("fastify", "put", true, None),
-    method("fastify", "delete", true, None),
-    method("fastify", "patch", true, None),
-    method("fastify", "head", true, None),
-    method("fastify", "options", true, None),
-    method("fastify", "all", true, None),
-    method("fastify", "route", true, None),
-    method("fastify", "addHook", true, None),
-    method("fastify", "setErrorHandler", true, None),
-    method("fastify", "register", true, None),
-    method("fastify", "listen", true, None),
-    method("fastify", "close", true, None),
-    // #1113 — `app.server` is a Node-compatible getter returning the
-    // FastifyApp handle (pointer-tagged) so `typeof app.server ===
-    // "object"`. Lowered as a zero-arg NativeMethodCall by the HIR
-    // property-as-method path; the runtime side is
-    // `js_fastify_app_server`. `app.server.on(event, cb)` then
-    // dispatches against the same handle (the `"on"` arm below).
-    // Today only `"upgrade"` is stored; bidirectional WebSocket
-    // upgrade through hyper is the tracked follow-up.
-    method("fastify", "server", true, None),
-    method("fastify", "on", true, None),
-    method("fastify", "method", true, None),
-    method("fastify", "url", true, None),
-    // Manifest-consistency catch-up (release-sweep gate).
-    method("fastify", "type", true, None),
-    method("fastify", "params", true, None),
-    method("fastify", "param", true, None),
-    method("fastify", "query", true, None),
-    method("fastify", "rawBody", true, None),
-    method("fastify", "headers", true, None),
-    method("fastify", "header", true, None),
-    method("fastify", "user", true, None),
-    method("fastify", "status", true, None),
-    method("fastify", "code", true, None),
-    method("fastify", "send", true, None),
-    method("fastify", "text", true, None),
-    method("fastify", "html", true, None),
-    method("fastify", "redirect", true, None),
-    method("fastify", "json", true, None),
-    method("fastify", "body", true, None),
-    method_sig(
         "mysql2",
         "createConnection",
         false,

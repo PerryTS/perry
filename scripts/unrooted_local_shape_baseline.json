@@ -9,8 +9,6 @@
     "crates/perry-ext-events/src/module_iterators.rs": 2,
     "crates/perry-ext-events/src/module_on.rs": 3,
     "crates/perry-ext-events/src/tests.rs": 2,
-    "crates/perry-ext-fastify/src/context.rs": 2,
-    "crates/perry-ext-fastify/src/upgrade.rs": 6,
     "crates/perry-ext-fetch/src/lib.rs": 14,
     "crates/perry-ext-fetch/src/tests.rs": 14,
     "crates/perry-ext-http/src/agent.rs": 3,
@@ -27,7 +25,6 @@
     "crates/perry-ext-net/src/lifecycle.rs": 1,
     "crates/perry-ext-node-forge/src/lib.rs": 24,
     "crates/perry-ext-pg/src/lib.rs": 7,
-    "crates/perry-ext-ratelimit/src/lib.rs": 4,
     "crates/perry-ext-streams/src/lib.rs": 4,
     "crates/perry-ext-ws/src/server.rs": 3,
     "crates/perry-ext-zlib/src/stream.rs": 3,
@@ -56,7 +53,6 @@
     "crates/perry-stdlib/src/pg/result.rs": 14,
     "crates/perry-stdlib/src/pg/types.rs": 14,
     "crates/perry-stdlib/src/querystring.rs": 2,
-    "crates/perry-stdlib/src/ratelimit.rs": 4,
     "crates/perry-stdlib/src/readline/mod.rs": 4,
     "crates/perry-stdlib/src/sqlite/backup.rs": 8,
     "crates/perry-stdlib/src/sqlite/better.rs": 18,
@@ -85,5 +81,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 578
+  "total": 562
 }

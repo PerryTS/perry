@@ -90,13 +90,11 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-better-sqlite3` | `better-sqlite3` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-cheerio` | `cheerio` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-commander` | `commander` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-cron` | `cron`<br>`node-cron` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-dayjs` | `date-fns`<br>`dayjs` | Source package | Compile the upstream package source | Bundled; migration pending |
+| `perry-ext-cron` | `cron` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-decimal` | `bignumber.js`<br>`decimal.js` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-events` | `events` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-exponential-backoff` | `exponential-backoff` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-fastify` | `fastify` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-fetch` | `node-fetch` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-ioredis` | `ioredis`<br>`iovalkey`<br>`redis` | Source package | Compile the upstream package source | Bundled; migration pending |
@@ -110,8 +108,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-parcel-watcher` | `@parcel/watcher`<br>`@parcel/watcher-darwin-arm64`<br>`@parcel/watcher-darwin-x64`<br>`@parcel/watcher-linux-arm64-glibc`<br>`@parcel/watcher-linux-arm64-musl`<br>`@parcel/watcher-linux-x64-glibc`<br>`@parcel/watcher-linux-x64-musl`<br>`@parcel/watcher-win32-arm64`<br>`@parcel/watcher-win32-x64` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-pdf` | `@perryts/pdf` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-pg` | `pg` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-qs` | `qs` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-ratelimit` | `rate-limiter-flexible` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-sharp` | `sharp` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-streams` | `streams` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-typescript` | `typescript` | Source package | Compile the upstream package source | Bundled; migration pending |

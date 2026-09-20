@@ -123,8 +123,7 @@ pub(super) fn lower_builtin_new<'a>(
         "Redis" => Some(&["ioredis", "redis", "iovalkey"]),
         "MongoClient" => Some(&["mongodb"]),
         "Decimal" => Some(&["decimal.js"]),
-        "RateLimiterMemory" => Some(&["rate-limiter-flexible"]),
-        "CronJob" => Some(&["cron", "node-cron"]),
+        "CronJob" => Some(&["cron"]),
         "Transpiler" => Some(&["bun"]),
         _ => None,
     };
@@ -826,26 +825,6 @@ pub(super) fn lower_builtin_new<'a>(
             // The runtime sig takes one i64 (currently *const c_void, ignored).
             // Pass 0 — semantically "use env-var defaults".
             let handle = blk.call(I64, "js_ioredis_new", &[(I64, "0")]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
-        }
-        // rate-limiter-flexible `new RateLimiterMemory({ points, duration })`.
-        // Gated on the import source above. The options object crosses as
-        // raw NaN-box bits (i64) so the runtime parses `points`/`duration`
-        // by name; missing arg → TAG_UNDEFINED → npm defaults (4 points /
-        // 1 s). Pre-fix this fell to the js_object_alloc(0,0) placeholder
-        // and every method call dispatched against `{}`. Instance methods
-        // (consume/get/delete/block/penalty/reward) are wired in
-        // NATIVE_MODULE_TABLE for module "rate-limiter-flexible".
-        "RateLimiterMemory" => {
-            // #6986: `options` was held across the discard loop's lowering.
-            let options = adopt_leading_arg_discard_rest(ctx, args, group)?;
-            let blk = ctx.block();
-            let options_bits = blk.bitcast_double_to_i64(&options);
-            let handle = blk.call(
-                I64,
-                "js_ratelimit_new_from_options",
-                &[(I64, &options_bits)],
-            );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // npm `cron` package: `new CronJob(cronTime, onTick, onComplete?,

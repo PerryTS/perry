@@ -62,10 +62,11 @@ const decompressed = zlib.gunzipSync(compressed);
 console.log(decompressed.toString()); // "Hello, World!"
 ```
 
-## cron / node-cron (Job Scheduling)
+## cron (Job Scheduling)
 
-Native bindings via `perry-ext-cron` (v0.5.564). Both `cron` and `node-cron`
-package names route to the same backend.
+Native bindings via `perry-ext-cron` (v0.5.564). The npm `node-cron` binding
+that used to share this backend was removed (#466) — `import ... from
+"node-cron"` now compiles the real npm package from source.
 
 ```typescript,no-test
 import { CronJob } from "cron";
@@ -126,19 +127,6 @@ to the same backend — `Decimal` and `BigNumber` are both exposed.
 {{#include ../../examples/stdlib/other/snippets.ts:decimal}}
 ```
 
-## dayjs / date-fns (Date Manipulation)
-
-Native bindings via `perry-ext-dayjs` (v0.5.548). Both package names route to
-the same Rust backend — same parse/format/diff surface.
-
-```typescript,no-test
-import dayjs from "dayjs";
-
-const now = dayjs();
-const tomorrow = now.add(1, "day");
-console.log(tomorrow.format("YYYY-MM-DD"));
-```
-
 ## moment (Legacy Date)
 
 Native bindings via `perry-ext-moment` (v0.5.549). `moment` is in maintenance
@@ -150,22 +138,6 @@ import moment from "moment";
 
 const m = moment().add(7, "days");
 console.log(m.format());
-```
-
-## rate-limiter-flexible
-
-Native bindings via `perry-ext-ratelimit` (v0.5.552). In-memory limiter is
-wired; Redis / cluster backing stores are follow-ups.
-
-```typescript,no-test
-import { RateLimiterMemory } from "rate-limiter-flexible";
-
-const limiter = new RateLimiterMemory({ points: 5, duration: 1 });
-try {
-  await limiter.consume("ip-1.2.3.4");
-} catch (rateLimitErr) {
-  console.warn("blocked:", rateLimitErr);
-}
 ```
 
 ## worker_threads

@@ -663,7 +663,6 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
     ("js_bun_transpiler_", "typescript"),
     ("js_bun_build", "typescript"),
-    ("js_qs_",         "qs"),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.
@@ -1262,8 +1261,9 @@ mod tests {
             ("js_node_forge_create_certificate", "node-forge"),
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
-            ("js_qs_stringify", "qs"),
-            ("js_qs_parse", "qs"),
+            ("js_typescript_transpile_module", "typescript"),
+            ("js_bun_transpiler_new", "typescript"),
+            ("js_bun_build", "typescript"),
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
         }
