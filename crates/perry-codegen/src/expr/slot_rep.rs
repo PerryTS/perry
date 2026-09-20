@@ -450,7 +450,15 @@ pub(crate) fn deny_canonical_i32(ctx: &FnCtx<'_>, id: u32, name: &str, denial: C
 }
 
 /// Tracking issue for "a module-level binding can never take a canonical slot".
-const MODULE_GLOBAL_ISSUE: &str = "#7109";
+///
+/// This pointed at #7109 until #10803. #7109 is a *different* mechanism — the
+/// module-init / program-entry context gate, which `MODULE_INIT_CONTEXT` below
+/// still cites correctly — and it is closed, as is #10774 which lifted that
+/// gate. A reader who followed this denial's own pointer therefore landed on a
+/// closed issue about something else and could reasonably conclude the
+/// module-global class was already handled; that is how one optimisation pass
+/// came to record module-global storage as "less important".
+const MODULE_GLOBAL_ISSUE: &str = "#10803";
 /// Tracking issue for the index-use / i32-bound precondition.
 const NOT_BOUNDED_ISSUE: &str = "#7123";
 /// Tracking issue for the profitability refusal — the one denial in this list
