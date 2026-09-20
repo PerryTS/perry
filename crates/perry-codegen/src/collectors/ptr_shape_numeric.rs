@@ -626,9 +626,26 @@ pub(super) fn expr_numeric_by_construction(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => true,
         Expr::Unary { op, operand } => match op {
-            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot => {
-                rec(operand)
-            }
+            // Unary `+` is ToNumber, and ToNumber either COMPLETES with a
+            // Number or THROWS — there is no input for which `+x` finishes
+            // holding something else. A BigInt and a Symbol both throw a
+            // TypeError, an object goes through ToPrimitive and then ToNumber
+            // again (so a `valueOf` returning a string yields a Number, and
+            // one returning a BigInt throws), `undefined` is NaN, and NaN is
+            // a Number. A throw stores no value, so the store-universe
+            // question this fixpoint asks is vacuous on that path.
+            //
+            // So `Pos` needs no operand condition at all. Requiring
+            // `rec(operand)` here was not a soundness guard, it was a missed
+            // proof: `const v = +o.a; for (…) h += v` left the ACCUMULATOR
+            // unproven, and `h`'s add kept a per-iteration tag test — 20
+            // Ir/iteration where `o.a * 1` and `o.a - 0` reach 9 (#10777).
+            // `const v = +a[0]` on a Float64Array is the same 20 -> 9.
+            perry_hir::UnaryOp::Pos => true,
+            // `-x` and `~x` are ToNumeric, which is BigInt-preserving:
+            // `-1n` is `-1n` and `~1n` is `-2n`, both BigInts, neither a
+            // Number. They therefore keep their operand condition unchanged.
+            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => rec(operand),
             _ => false,
         },
         Expr::Binary { op, left, right } => match op {
