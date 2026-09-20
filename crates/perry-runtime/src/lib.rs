@@ -106,6 +106,8 @@ pub mod eh;
 #[cfg(windows)]
 #[path = "eh_windows.rs"]
 pub mod eh;
+/// The GCC-format LSDA decoder both personalities share (#7354).
+pub(crate) mod eh_lsda;
 #[cfg(not(windows))]
 pub(crate) mod eh_walker;
 pub mod embedded;

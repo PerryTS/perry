@@ -34,58 +34,100 @@ fn host_port(url: &str) -> (String, Option<u16>) {
 
 /// Platform errno (libuv-negative) for a code, used only when no concrete
 /// `std::io::Error` surfaced in the source chain to read `raw_os_error()`.
+///
+/// Three platforms, not two. This table used to be a macOS-vs-else pair, which
+/// silently handed Windows the LINUX numbers (`ECONNABORTED` as -103 rather
+/// than -4079) — libuv on Windows uses its own `-4xxx` space, unrelated to the
+/// host errno, so no value here was right. Windows values read from the pinned
+/// oracle: `node -e "require('util').getSystemErrorMap()"` on 26.5.1.
 fn fallback_errno(code: &str) -> i64 {
-    match code {
-        "ECONNREFUSED" => {
-            if cfg!(target_os = "macos") {
-                -61
-            } else {
-                -111
+    #[cfg(windows)]
+    {
+        return match code {
+            "ECONNREFUSED" => -4078,
+            "ETIMEDOUT" => -4039,
+            "ECONNABORTED" => -4079,
+            "ECONNRESET" => -4077,
+            "EADDRNOTAVAIL" => -4090,
+            "EHOSTUNREACH" => -4073,
+            "ENETUNREACH" => -4062,
+            _ => 0,
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        match code {
+            "ECONNREFUSED" => {
+                if cfg!(target_os = "macos") {
+                    -61
+                } else {
+                    -111
+                }
             }
-        }
-        "ETIMEDOUT" => {
-            if cfg!(target_os = "macos") {
-                -60
-            } else {
-                -110
+            "ETIMEDOUT" => {
+                if cfg!(target_os = "macos") {
+                    -60
+                } else {
+                    -110
+                }
             }
-        }
-        "ECONNABORTED" => {
-            if cfg!(target_os = "macos") {
-                -53
-            } else {
-                -103
+            "ECONNABORTED" => {
+                if cfg!(target_os = "macos") {
+                    -53
+                } else {
+                    -103
+                }
             }
-        }
-        "ECONNRESET" => {
-            if cfg!(target_os = "macos") {
-                -54
-            } else {
-                -104
+            "ECONNRESET" => {
+                if cfg!(target_os = "macos") {
+                    -54
+                } else {
+                    -104
+                }
             }
-        }
-        "EADDRNOTAVAIL" => {
-            if cfg!(target_os = "macos") {
-                -49
-            } else {
-                -99
+            "EADDRNOTAVAIL" => {
+                if cfg!(target_os = "macos") {
+                    -49
+                } else {
+                    -99
+                }
             }
-        }
-        "EHOSTUNREACH" => {
-            if cfg!(target_os = "macos") {
-                -65
-            } else {
-                -113
+            "EHOSTUNREACH" => {
+                if cfg!(target_os = "macos") {
+                    -65
+                } else {
+                    -113
+                }
             }
-        }
-        "ENETUNREACH" => {
-            if cfg!(target_os = "macos") {
-                -51
-            } else {
-                -101
+            "ENETUNREACH" => {
+                if cfg!(target_os = "macos") {
+                    -51
+                } else {
+                    -101
+                }
             }
+            _ => 0,
         }
-        _ => 0,
+    }
+}
+
+/// libuv's errno for a code, given whatever raw OS errno was recovered.
+///
+/// Negating the raw OS errno is correct on Linux/macOS, where libuv's errno IS
+/// the negated host errno. On Windows it is never correct — libuv uses its own
+/// `-4xxx` space — so there the code name is authoritative and the raw Winsock
+/// number is discarded.
+fn libuv_errno(code: &str, raw: Option<i32>) -> i64 {
+    #[cfg(windows)]
+    {
+        let _ = raw;
+        return fallback_errno(code);
+    }
+    #[cfg(not(windows))]
+    {
+        raw.map(|n| -(n as i64))
+            .filter(|n| *n != 0)
+            .unwrap_or_else(|| fallback_errno(code))
     }
 }
 
@@ -147,19 +189,13 @@ pub(crate) fn classify_reqwest(e: &reqwest::Error, url: &str) -> Option<Classifi
             "socket hang up".to_string(),
             "ECONNRESET".to_string(),
             "read".to_string(),
-            io_errno
-                .map(|n| -(n as i64))
-                .filter(|n| *n != 0)
-                .unwrap_or_else(|| fallback_errno("ECONNRESET")),
+            libuv_errno("ECONNRESET", io_errno),
         ));
     }
 
     // Concrete OS connect error (the common case): exact code + errno.
     if let Some((code, syscall)) = io_kind.and_then(kind_to_code) {
-        let errno = io_errno
-            .map(|n| -(n as i64))
-            .filter(|n| *n != 0)
-            .unwrap_or_else(|| fallback_errno(code));
+        let errno = libuv_errno(code, io_errno);
         return Some((
             connect_message(code, &host, port),
             code.to_string(),
