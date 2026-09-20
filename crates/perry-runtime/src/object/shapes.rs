@@ -42,7 +42,7 @@ mod shapes_store;
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
 pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
 pub(crate) use shapes_slot_list::{
-    object_shape_hole_count, publish_object_shape_holes,
+    object_shape_hole_count, publish_object_shape_delete_transition, publish_object_shape_holes,
     rekey_stable_tombstone_shape_after_squeeze, retire_owned_shape_history,
     shape_index_migrate_after_delete, shape_index_shift_in_place,
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotIndex,
@@ -552,6 +552,17 @@ fn alloc_shape_id_from(next: &std::sync::atomic::AtomicU32) -> Result<u32, Shape
 
 fn alloc_shape_id() -> Result<u32, ShapeIdExhausted> {
     alloc_shape_id_from(&SHAPE_ID_NEXT)
+}
+
+/// The next ShapeId this process would hand out.
+///
+/// Tests assert the DELTA across a workload, because ids come from a 2^30
+/// counter that is never reused and parks (fail-stop) at the end: a path that
+/// mints one id per operation is a process-LIFETIME bug, not merely a memory
+/// cost, and nothing in the program's output ever reveals it.
+#[cfg(test)]
+pub(crate) fn test_shape_id_counter() -> u32 {
+    SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Get or create the exact structural descriptor. The public allocation and
@@ -1633,19 +1644,6 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     debug_assert_object_shape_parity(obj);
     id
 }
-
-/// Publish the successor shape for an O(1) hole-delete on `obj`'s CURRENT
-/// keys array: same address, same surviving slots, one more tombstone.
-///
-/// Modeled on [`transition_object_shape_semantics`]: the structural facts are
-/// unchanged except `hole_count`, and the fresh process-unique generation is
-/// what retires every cached `(token, key)` pair for this receiver — a
-/// deleted key must stop hitting even though the array address and every
-/// surviving slot are byte-identical, or a stale IC hit would return the
-/// cleared slot instead of walking the prototype chain.
-///
-/// Returns the successor id, or 0 when the object is not stamped/shaped —
-/// the caller falls back to the compacting delete.
 
 /// #10287: a DATA-descriptor install reuses one generation per
 /// `(predecessor facts, key, attributes)`, so two receivers built the same way
