@@ -860,13 +860,6 @@ pub(super) fn get_field_ic_miss_impl(
                     );
                 }
             }
-            // TextDecoder/TextEncoder registry handles — IC-miss mirror of
-            // the arms in `js_object_get_field_by_name` /
-            // `get_field_by_name_object_tail`; static-name reads (`td.decode`,
-            // `td.encoding`) funnel here. See `text_handle_property`.
-            if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
-                return f64::from_bits(v.bits());
-            }
         }
         // Drizzle-sqlite blocker: synth `data.constructor` for small-handle
         // receivers — IC-miss path mirror of the constructor intercept in

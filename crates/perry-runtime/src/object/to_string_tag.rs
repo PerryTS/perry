@@ -54,15 +54,10 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
                 _ => {}
             }
         }
-        // `TextEncoder` is a single stateless sentinel id; `TextDecoder`
-        // instances are `DECODER_REGISTRY` members. Neither overlaps the
-        // Web Fetch band (`FETCH_HANDLE_BAND_START` starts well above 2).
-        if addr == crate::text::TEXT_ENCODER_SENTINEL_ID as usize {
-            return Some("TextEncoder");
-        }
-        if crate::text::is_known_text_decoder_id(addr as i64) {
-            return Some("TextDecoder");
-        }
+        // #340/#341: TextEncoder/TextDecoder used to be sentinel ids handled
+        // here. They are ordinary objects linked to their prototypes now, so
+        // the generic own/inherited walk finds the `Symbol.toStringTag`
+        // installed there and no arm is needed.
         return None;
     }
     // #10555 lint: `is_valid_obj_ptr` alone is not a sufficient handle-band

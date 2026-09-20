@@ -1042,11 +1042,6 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                             return JSValue::from_bits(result.to_bits());
                         }
                     }
-                    // TextDecoder/TextEncoder registry handles — see
-                    // `text_handle_property` (text.rs).
-                    if let Some(v) = crate::text::text_handle_property(raw, key_bytes) {
-                        return v;
-                    }
                     if key_bytes == b"constructor" {
                         let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                         return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());

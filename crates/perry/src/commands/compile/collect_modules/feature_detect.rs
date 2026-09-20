@@ -448,7 +448,23 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("\"URL") {
             ctx.uses_global_url = true;
         }
-        if hir_debug.contains("\"Text") {
+        // Both spellings, and the second one is load-bearing since #340/#341:
+        // a quoted type name (`(globalThis as any).TextDecoder`, `"TextDecoder"`)
+        // AND the HIR nodes the text lowering folds a construction into
+        // (`TextEncoderNew`, `TextDecoderNew`, `TextDecoderDecode`, …), which
+        // carry no quotes at all. A text instance is now an ordinary object
+        // linked to `TextEncoder.prototype` / `TextDecoder.prototype`, and those
+        // prototypes — carrying the family's methods and accessors — are built
+        // by `populate_builtin_prototype_methods` only under this feature. So a
+        // program that constructs a decoder without ever naming the type in
+        // quotes used to get an instance with no prototype, and every
+        // `d.decode` / `d.encoding` read on it answered `undefined`. Measured;
+        // `crates/perry/tests/text_decoder_dynamic_surface.rs` is exactly that
+        // program shape.
+        if hir_debug.contains("\"Text")
+            || hir_debug.contains("TextEncoder")
+            || hir_debug.contains("TextDecoder")
+        {
             ctx.uses_global_text = true;
         }
         if hir_debug.contains("\"WebSocket\"") {

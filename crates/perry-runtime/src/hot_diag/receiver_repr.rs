@@ -202,11 +202,11 @@ fn observe_pointer(addr: usize) {
     if crate::timer::is_known_timer_id(addr as i64) {
         mark_old(ReceiverReprFamily::Timer);
     }
-    if addr as i64 == crate::text::TEXT_ENCODER_SENTINEL_ID
-        || crate::text::is_known_text_decoder_id(addr as i64)
-    {
-        mark_old(ReceiverReprFamily::Text);
-    }
+    // #340/#341 GATE A: `text` has migrated to ordinary objects, so no text
+    // receiver can be a small band id any more and this family can never be
+    // marked old again. The fixture below asserts `observed_old == 0` for it;
+    // that inversion is the per-family record that the migration landed.
+    // Each remaining family deletes its arm here as it moves.
     if crate::tui::is_known_handle(addr as i64) {
         mark_old(ReceiverReprFamily::Tui);
     }
@@ -364,6 +364,42 @@ mod tests {
         assert_eq!(wrapped, 0, "PR 1 must not create wrappers");
     }
 
+    /// #340/#341 GATE A. A family that has migrated to ordinary objects can no
+    /// longer hand a small band id to any funnel, so its `observed_old` bucket
+    /// must stay 0 while `constructed` keeps moving. This is the per-family
+    /// record that the migration landed, and it cannot pass by accident: on an
+    /// unmigrated tree `observe_pointer` still marks the family old and the
+    /// `assert_eq!(observed, 0)` fails; if a producer ever returns a small id
+    /// again, the band assertion fails first.
+    ///
+    /// It is a gate only from HERE, because the fixture calls the funnels
+    /// directly. A compiled program's `observed_old` proves nothing for this
+    /// family — a statically lowered `d.encoding` (codegen's
+    /// `Expr::TextDecoderEncoding`) never reaches an instrumented funnel, so
+    /// the counter read 0 before the migration too. Gate B (the producer-side
+    /// band assertion in `text.rs`'s own tests) covers those reads.
+    fn assert_fixture_migrated(family: ReceiverReprFamily, construct: impl FnOnce() -> usize) {
+        receiver_repr_test_reset();
+        receiver_repr_test_arm(true);
+        let value = construct();
+        assert!(
+            !crate::value::addr_class::is_handle_band(value),
+            "{family:?} producer still returns a small band id ({value:#x})"
+        );
+        receiver_repr_note_decoded_pointer(value);
+        let (constructed, observed, wrapped) = receiver_repr_test_snapshot(family);
+        assert!(
+            constructed > 0,
+            "{family:?} constructor did not move its bucket"
+        );
+        assert_eq!(
+            observed, 0,
+            "{family:?} has migrated to ordinary objects: no receiver of it can \
+             be a band id any more"
+        );
+        assert_eq!(wrapped, 0, "PR 1 must not create wrappers");
+    }
+
     #[test]
     fn receiver_repr_family_fixtures_move_constructed_and_observed_old() {
         // These three producers live in perry-stdlib, below perry-runtime in
@@ -397,8 +433,10 @@ mod tests {
                 false,
             )
         });
-        assert_fixture(ReceiverReprFamily::Text, || {
-            (crate::text::js_text_encoder_new() as usize, false)
+        // #340/#341: `text` is migrated — gate A, inverted. Every other family
+        // still asserts the old representation above and below.
+        assert_fixture_migrated(ReceiverReprFamily::Text, || {
+            crate::text::js_text_encoder_new() as usize
         });
         assert_fixture(ReceiverReprFamily::Tui, || {
             let mut handle = crate::tui::state::js_perry_tui_state_alloc(0.0);
