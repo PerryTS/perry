@@ -61,8 +61,18 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # NR_STR/NR_F64/NR_VOID-returning FFI never counted here). 356 -> 349
 # rows and 307 -> 300 providers; each figure is what the script reports
 # on the resolved tree, not arithmetic.
-EXPECTED_ROWS = 349
-EXPECTED_PROVIDERS = 300
+#
+# -35 rows / -21 providers (#10677 + #10680, same campaign): removing the
+# `pg` binding dropped 7 pointer-kind rows / 7 providers (`js_pg_connect`/
+# `create_pool`/`client_connect`/`client_query`/`client_end`/`pool_query`/
+# `pool_end`), and removing `mysql2` dropped 28 rows across the `mysql2`
+# and `mysql2/promise` specifiers / 14 providers (the two `release` rows
+# were NR_VOID and never counted here, and each mysql2 provider serves both
+# specifiers, so rows fall by twice the provider count). 349 -> 314 rows and
+# 300 -> 279 providers; each figure is what the script reports on the
+# resolved tree, not arithmetic (#10739).
+EXPECTED_ROWS = 314
+EXPECTED_PROVIDERS = 279
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
