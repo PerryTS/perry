@@ -454,6 +454,12 @@ mod dense_parent_tests {
     /// cached store plan in the program.
     #[test]
     fn re_registering_the_same_edge_flushes_nothing() {
+        // The epoch this asserts on is PROCESS-global, so any other test
+        // thread installing a descriptor or registering a class inside the
+        // window below moves it and fails this test for reasons that have
+        // nothing to do with re-registration. Serialize against the tests
+        // that do (they all take this lock).
+        let _lock = crate::gc::global_side_table_test_lock();
         const CHILD: u32 = 60_020;
         const PARENT: u32 = 60_021;
         crate::object::class_registry::register_class(CHILD, PARENT);
