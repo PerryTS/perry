@@ -147,7 +147,22 @@ pub(crate) fn lower_generic_property_get(
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+    // The receiver handle. For every key but `.length` the tag test below is
+    // the EXACT `POINTER_TAG` test, and then the handle is `bits ^ POINTER_TAG`
+    // rather than `bits & POINTER_MASK`: the two are the same value on the
+    // pointer path (the xor clears exactly the sixteen tag bits the test just
+    // proved equal to the tag) and the xor is the value the tag test is
+    // computed FROM, so the unmask costs nothing on top of it — where the
+    // `and` form was a `mov $0x30, %al; bzhi` pair after the compare, on
+    // every read. Every use of the handle is dominated by the tag test's true
+    // edge, which is what makes the xor a valid unmask. `.length` keeps the
+    // mask: its test admits STRING-tagged receivers too, and for those the
+    // xor would leave the tag's low bits set.
+    let obj_handle = if property == "length" {
+        blk.and(I64, &obj_bits, POINTER_MASK_I64)
+    } else {
+        blk.xor(I64, &obj_bits, crate::nanbox::POINTER_TAG_I64)
+    };
     // The key handle is materialised per consumer (see `emit_key_handle`), all
     // of which are cold. The one exception is the typed-feedback OBSERVE call,
     // which sits in the hot `pget.pic` block — so under `--typed-feedback` the
@@ -284,7 +299,11 @@ pub(crate) fn lower_generic_property_get(
         let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
         ctx.block().icmp_eq(I64, &obj_tag_masked, "32765") // 0x7FFD
     } else {
-        ctx.block().icmp_eq(I64, &obj_tag, "32765") // POINTER_TAG exactly
+        // `(bits ^ POINTER_TAG) >> 48 == 0` is `bits >> 48 == 0x7FFD`, spelled
+        // on the value the pointer path then uses as its handle (see
+        // `obj_handle` above), so the unmask is folded into the test.
+        let xor_tag = ctx.block().lshr(I64, &obj_handle, "48");
+        ctx.block().icmp_eq(I64, &xor_tag, "0")
     };
 
     // `.length` on a receiver whose static type is not a proven string.
@@ -568,14 +587,16 @@ pub(crate) fn lower_generic_property_get(
     // #8113: the ShapeId word moved from header offset 8 to 4.
     let pcid_addr = ctx.block().add(I64, &obj_handle, "4");
     let pcid_ptr = ctx.block().inttoptr(I64, &pcid_addr);
+    // The hot ShapeId load has exactly ONE use: the compare. The two cold
+    // consumers of the same word — the spill compare in `pic.token.miss` and
+    // the way token in `pic.ways` — read it AGAIN there, through an atomic
+    // load that GVN will not merge with this one. That is a deliberate
+    // re-derivation on the miss path (one load, on a path that is about to
+    // spend hundreds), and it is what lets isel fold this load into the
+    // compare itself: `cmp %ecx, 4(%rdi)` instead of a `mov` and a `cmp`,
+    // one instruction fewer on every hit. With the word live into the cold
+    // blocks it had to sit in a register.
     let pcid = ctx.block().load(I32, &pcid_ptr);
-    let pcid64 = ctx.block().zext(I32, &pcid, I64);
-    // pic_prime_get is the only production writer of get-cache tokens and
-    // refuses the zero-ShapeId token. All remaining tokens carry a valid,
-    // never-reused ShapeId; vacant entries are zero. Equality therefore
-    // proves a nonzero stamp without another check on every property read.
-    // Keyless Object.create(proto) receivers still miss and walk prototypes.
-    let token = ctx.block().or(I64, &pcid64, "4611686018427387904");
 
     // A nonzero packed word contains a valid ShapeId and its slot. The
     // header guard above rejects a fresh site; matching the low 32 bits then
@@ -588,6 +609,15 @@ pub(crate) fn lower_generic_property_get(
         .cond_br(&token_eq, &hit_label, &token_miss_label);
 
     ctx.current_block = token_miss_idx;
+    // The cold re-read of the ShapeId word — see the hot load above.
+    let pcid = ctx.block().load_atomic_monotonic(I32, &pcid_ptr, 4);
+    let pcid64 = ctx.block().zext(I32, &pcid, I64);
+    // pic_prime_get is the only production writer of get-cache tokens and
+    // refuses the zero-ShapeId token. All remaining tokens carry a valid,
+    // never-reused ShapeId; vacant entries are zero. Equality therefore
+    // proves a nonzero stamp without another check on every property read.
+    // Keyless Object.create(proto) receivers still miss and walk prototypes.
+    let token = ctx.block().or(I64, &pcid64, "4611686018427387904");
     // The SPILL entry — tested HERE, and nowhere on the hit path.
     //
     // A key past the object's inline region used to publish its slot into the

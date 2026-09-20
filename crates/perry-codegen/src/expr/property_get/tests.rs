@@ -614,6 +614,24 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
              predicate is being re-derived or has crept back:\n{ir}"
         );
     }
+    // The ONE re-derivation that is deliberate: `pic.token.miss` re-reads the
+    // ShapeId word through an atomic load rather than reusing the hot load's
+    // value, so that the hot load has a single use and isel folds it into
+    // the compare (`cmp %ecx, 4(%rdi)`). A plain second load would be merged
+    // back into the first by GVN and the hot word would be live into the
+    // cold blocks again.
+    let token_miss = main
+        .find("\npic.token.miss")
+        .unwrap_or_else(|| panic!("expected a pic.token.miss block:\n{ir}"));
+    let token_miss_body = &main[token_miss..main[token_miss + 1..]
+        .find("\npic.")
+        .map(|o| o + token_miss + 1)
+        .unwrap_or(main.len())];
+    assert!(
+        token_miss_body.contains("load atomic i32"),
+        "pic.token.miss must re-read the ShapeId word atomically so the hot \
+         load stays single-use:\n{token_miss_body}"
+    );
 }
 
 /// #8067: an exact ShapeId match proves the cached slot's descriptor facts, so
@@ -1006,7 +1024,10 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     }
 
     for (needle, what) in [
-        ("32765", "the POINTER/STRING receiver-tag test"),
+        // The exact POINTER test is `(bits ^ POINTER_TAG) >> 48 == 0`, on the
+        // value the pointer path then uses as its handle; the tag constant is
+        // the xor's operand.
+        (crate::nanbox::POINTER_TAG_I64, "the POINTER receiver-tag test"),
         ("1048575", "the small-handle (native registry id) test"),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
@@ -1153,23 +1174,35 @@ fn generic_non_length_read_keeps_the_whole_tower() {
             "only `.length` may grow an inline string arm, found `{gone}`:\n{ir}"
         );
     }
-    // 32765 = (STRING_TAG|POINTER_TAG) & 0xFFFD: the one test that decides
-    // whether the receiver may be dereferenced at all. Its false edge must be
-    // the NON-POINTER exit — a distinct block with a distinct callee, which is
-    // what stops SimplifyCFG folding this guard into the next one.
-    let tag_branch = ir
-        .lines()
-        .find(|l| l.contains("icmp eq i64") && l.contains("32765"))
-        .unwrap_or_else(|| panic!("expected the receiver-tag test:\n{ir}"));
-    let cond = tag_branch
-        .trim()
-        .split_once(" = ")
-        .map(|(lhs, _)| lhs.to_string())
-        .unwrap_or_else(|| panic!("malformed tag test: {tag_branch}"));
+    // The receiver-tag test is the one test that decides whether the receiver
+    // may be dereferenced at all, and for every key but `.length` it is the
+    // EXACT POINTER test, spelled `(bits ^ POINTER_TAG) >> 48 == 0` on the
+    // value that becomes the handle. Its false edge must be the NON-POINTER
+    // exit — a distinct block with a distinct callee, which is what stops
+    // SimplifyCFG folding this guard into the next one.
     let branch = ir
         .lines()
-        .find(|l| l.trim_start().starts_with(&format!("br i1 {cond},")))
-        .unwrap_or_else(|| panic!("expected a branch on the receiver tag:\n{ir}"));
+        .find(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %pget.recv_other"))
+        .unwrap_or_else(|| panic!("expected a branch to the non-pointer exit:\n{ir}"));
+    let cond = branch
+        .trim()
+        .strip_prefix("br i1 ")
+        .and_then(|rest| rest.split_once(','))
+        .map(|(c, _)| c.to_string())
+        .unwrap_or_else(|| panic!("malformed branch: {branch}"));
+    let tag_test = ir
+        .lines()
+        .find(|l| l.trim().starts_with(&format!("{cond} = ")))
+        .unwrap_or_else(|| panic!("expected the receiver-tag test defining {cond}:\n{ir}"));
+    assert!(
+        tag_test.contains("icmp eq i64 ") && tag_test.trim_end().ends_with(", 0"),
+        "the exact POINTER test compares the xor-ed tag half-word to zero:\n{tag_test}"
+    );
+    assert!(
+        ir.contains(&format!("xor i64 %")) && ir.contains(crate::nanbox::POINTER_TAG_I64),
+        "the handle must be `bits ^ POINTER_TAG`, the value the tag test is \
+         computed from:\n{ir}"
+    );
     assert!(
         branch.contains("label %pget.recv_other") && !branch.contains("label %pic.miss.call"),
         "a non-pointer receiver must leave for its OWN exit — sharing the \
