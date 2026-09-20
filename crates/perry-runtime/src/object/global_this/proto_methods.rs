@@ -803,6 +803,59 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 );
             }
         }
+        // #10759: `URLSearchParams` previously had ONLY the `#10555` arm
+        // below (moved here): `install_web_builtin_to_string_tag` and
+        // nothing else, because its methods dispatch through type-directed
+        // static dispatch / the small-int/handle dispatch tables and never
+        // needed reified closures for ordinary `x.method()` calls. That
+        // design has no answer for a method read AS A VALUE --
+        // `URLSearchParams.prototype.append`, `.prototype["has"]`, or
+        // through a Proxy `get` trap indirection -- which returned
+        // `undefined` instead of a callable closure. node-fetch's
+        // `Headers extends URLSearchParams` -- whose constructor returns
+        // `new Proxy(this, { get(target, p, receiver) { ... return
+        // (...)=> URLSearchParams.prototype[p].call(target, ...); } })` --
+        // then threw "Function.prototype.call was called on a value that is
+        // not a function" on the very first `headers.has(...)`, reached by
+        // every `fetch()` call before the request is even sent. Same
+        // mechanism as the `Stream.prototype`/`Object.hasOwnProperty`/
+        // `Function.toString` fixes elsewhere (`install_static.rs`,
+        // `node_stream_dispatch.rs`): install the no-op-backed reified
+        // closures so a value read resolves to a real (name-carrying)
+        // function, which `Function.prototype.call`/`.apply`'s
+        // `try_dispatch_value_called_proto_method` re-dispatches by name
+        // through `try_url_search_params_dynamic_dispatch` using the
+        // caller-supplied receiver. Method set + arities verified against
+        // `node --experimental-strip-types` (v26.5.1). The
+        // `install_web_builtin_to_string_tag` call is retained so
+        // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
+        // Symbol.toStringTag)` keeps reflecting a real descriptor -- see
+        // that function's doc comment. The other six members of the
+        // `#10555` group below (`URL`, `AbortController`, `AbortSignal`,
+        // `EventTarget`, `Event`, `CustomEvent`) have the same
+        // "toStringTag-only arm" shape and have NOT been audited for this
+        // same value-read gap; see #10759's PR body for what was checked.
+        "URLSearchParams" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getAll", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("sort", 0),
+                    ("toString", 0),
+                    ("values", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
+        }
         "Promise" => {
             install_proto_method(
                 proto_obj,
@@ -1088,11 +1141,15 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         // is either type-directed static dispatch or the small-int/handle
         // dispatch tables), but each still needs its `.prototype`'s own
         // `Symbol.toStringTag` descriptor for reflection -- see
-        // `install_web_builtin_to_string_tag`'s doc comment.
+        // `install_web_builtin_to_string_tag`'s doc comment. `URLSearchParams`
+        // used to be listed here too; #10759 moved it to its own arm above
+        // (still calling `install_web_builtin_to_string_tag`) once a VALUE
+        // read of one of its prototype methods turned out to need real
+        // reified closures, not just the toStringTag descriptor. The other
+        // six members of this group (`URL`, `AbortController`,
+        // `AbortSignal`, `EventTarget`, `Event`, `CustomEvent`) have not been
+        // audited for the same "read as a value" gap -- see #10759's PR body.
         "URL" => unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") },
-        "URLSearchParams" => unsafe {
-            install_web_builtin_to_string_tag(proto_obj, "URLSearchParams")
-        },
         "AbortController" => unsafe {
             install_web_builtin_to_string_tag(proto_obj, "AbortController")
         },
