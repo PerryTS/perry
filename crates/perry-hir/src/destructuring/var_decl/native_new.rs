@@ -89,9 +89,6 @@ pub(crate) fn register_native_from_new_and_calls(
                         }
                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                         "Redis" => Some("ioredis".to_string()),
-                        "Big" => Some("big.js".to_string()),
-                        "Decimal" => Some("decimal.js".to_string()),
-                        "BigNumber" => Some("bignumber.js".to_string()),
                         _ => None,
                     }
                 };
@@ -221,9 +218,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                 "AsyncResource" => Some("async_hooks".to_string()),
                                 "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                                 "Redis" => Some("ioredis".to_string()),
-                                "Big" => Some("big.js".to_string()),
-                                "Decimal" => Some("decimal.js".to_string()),
-                                "BigNumber" => Some("bignumber.js".to_string()),
                                 _ => None,
                             }
                         };

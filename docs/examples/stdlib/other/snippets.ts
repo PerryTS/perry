@@ -14,7 +14,7 @@
 // process, neither hermetic in CI. Compile + link is the contract here.
 //
 // Only packages with wired NativeModSig dispatch (nodemailer,
-// decimal.js, child_process) are anchored. sharp / cheerio /
+// child_process) are anchored. sharp / cheerio /
 // zlib / cron / worker_threads have runtime declarations but no dispatch
 // path from user-visible imports yet, so the markdown page keeps those
 // snippets as `,no-test` with a clear status note above each fence.
@@ -38,23 +38,6 @@ async function nodemailerExample(): Promise<void> {
 }
 // ANCHOR_END: nodemailer
 
-// ANCHOR: decimal
-import Decimal from "decimal.js"
-
-function decimalExample(): void {
-    const a = new Decimal("0.1")
-    const b = new Decimal("0.2")
-    const sum = a.plus(b) // Exactly 0.3 (no floating point errors)
-
-    console.log(sum.toFixed(2))      // "0.30"
-    console.log(sum.toNumber())      // 0.3
-    console.log(a.times(b).toFixed(2)) // "0.02"
-    console.log(a.div(b).toFixed(1))   // "0.5"
-    console.log(a.pow(10).toString())  // 1e-10
-    console.log(a.sqrt().toFixed(3))   // "0.316"
-}
-// ANCHOR_END: decimal
-
 // ANCHOR: child-process
 // `spawnBackground` / `getProcessStatus` / `killProcess` are Perry EXTENSIONS —
 // Node's `child_process` has no such named exports, so importing them by name
@@ -76,5 +59,5 @@ function childProcessExample(): void {
 // ANCHOR_END: child-process
 
 // Reference everything so unused-import elimination doesn't strip it.
-const _keep = [nodemailerExample, decimalExample, lruCacheExample, childProcessExample]
+const _keep = [nodemailerExample, lruCacheExample, childProcessExample]
 console.log(`other-snippets: ${_keep.length}`)

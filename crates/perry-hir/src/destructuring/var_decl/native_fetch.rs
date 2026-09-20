@@ -109,61 +109,23 @@ pub(crate) fn register_native_fetch_and_streams(
         }
     }
 
-    // Check if this is assigning the result of a native method call that returns the same type
-    // e.g., const sum = d1.plus(d2) where d1 is a Decimal -> sum should also be tracked as Decimal
-    // Also handles: const r1 = new Big(...).div(...) patterns
+    // Check if this is assigning the result of a chained native-fluent-chain
+    // constructor call, e.g. `const r1 = new LRUCache(...).set(...)`.
+    //
+    // (This used to also handle `const sum = d1.plus(d2)` where `d1` is a
+    // pre-bound Decimal/Big/BigNumber builder-pattern receiver — removed
+    // along with the decimal.js/big.js/bignumber.js native binding, #10684;
+    // that generic "first try" path was always false for every OTHER class
+    // too, so removing it changes nothing else.)
     if let Some(init_expr) = &decl.init {
         if let ast::Expr::Call(call_expr) = init_expr.as_ref() {
             if let ast::Callee::Expr(callee_expr) = &call_expr.callee {
                 if let ast::Expr::Member(member_expr) = callee_expr.as_ref() {
-                    let mut handled = false;
-                    // First try: object is an ident that's a known native instance
-                    if let ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref() {
-                        let obj_name = obj_ident.sym.as_ref();
-                        // Check if object is a native instance
-                        if let Some((module, class)) = ctx.lookup_native_instance(obj_name) {
-                            // Check if this method returns the same type (builder pattern)
-                            if let ast::MemberProp::Ident(method_ident) = &member_expr.prop {
-                                let method_name = method_ident.sym.as_ref();
-                                // Methods that return the same type (Decimal, etc.)
-                                let returns_same_type = match class {
-                                    "Decimal" | "Big" | "BigNumber" => matches!(
-                                        method_name,
-                                        "plus"
-                                            | "minus"
-                                            | "times"
-                                            | "div"
-                                            | "mod"
-                                            | "pow"
-                                            | "sqrt"
-                                            | "abs"
-                                            | "neg"
-                                            | "round"
-                                            | "floor"
-                                            | "ceil"
-                                    ),
-                                    _ => false,
-                                };
-                                if returns_same_type {
-                                    ctx.register_native_instance(
-                                        name.to_string(),
-                                        module.to_string(),
-                                        class.to_string(),
-                                    );
-                                    handled = true;
-                                }
-                            }
-                        }
-                    }
-                    // Second try: object is new Big(...) or a chained call like new Big(...).div(...)
-                    if !handled {
+                    {
                         if let Some(module_name) =
                             detect_native_instance_expr(ctx, &member_expr.obj)
                         {
                             let class_name = match module_name {
-                                "big.js" => "Big",
-                                "decimal.js" => "Decimal",
-                                "bignumber.js" => "BigNumber",
                                 _ => "",
                             };
                             if !class_name.is_empty() {
