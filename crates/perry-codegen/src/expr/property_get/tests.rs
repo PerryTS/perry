@@ -1017,6 +1017,40 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
              conditions: {conds:?}\nreached def chain:\n{chain}\n\nIR:\n{func}"
         );
     }
+
+    // The loaded value is the answer: no `TAG_HOLE` compare follows the slot
+    // load in the hit block. #10826 made every successful delete a shape
+    // transition, so a ShapeId hit proves the slot it names is live, and the
+    // four-instruction hole check was the patch for exactly that operation.
+    // The compare is asserted PRESENT on the way path, which keeps it: that
+    // pins that the constant did not merely vanish from the IR, and that the
+    // way path's removal is the separate, measured change the emitter says
+    // it is.
+    let hit_body = blocks
+        .iter()
+        .find(|(l, _)| *l == load_label)
+        .map(|(_, body)| body.join("\n"))
+        .expect("the hit block was found above");
+    assert!(
+        !hit_body.contains(crate::nanbox::TAG_HOLE_I64),
+        "the hit block must not compare the loaded slot against TAG_HOLE — a \
+         ShapeId hit proves the slot live since #10826:\n{hit_body}"
+    );
+    assert!(
+        hit_body.contains("load double") && hit_body.contains("br label %"),
+        "the hit block must end in the slot load and an unconditional branch \
+         to the merge:\n{hit_body}"
+    );
+    let way_body = blocks
+        .iter()
+        .find(|(l, _)| l.starts_with("pic.way.load"))
+        .map(|(_, body)| body.join("\n"))
+        .expect("the way load block");
+    assert!(
+        way_body.contains(crate::nanbox::TAG_HOLE_I64),
+        "the way path keeps its TAG_HOLE compare (removing it is a separate \
+         change):\n{way_body}"
+    );
 }
 
 /// A module whose init reads `o.<property>` where `o` is an `Any` local — the
@@ -1406,11 +1440,12 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         // refused by the ShapeId compare itself, the hit block has nothing to
         // decide between and the load sits directly in `pic.hit`.
         "pic.token.ways",
+        // The hit block ends in the slot load and a branch to the merge:
+        // `pic.hit.deleted` is GONE with the `TAG_HOLE` compare (#10826 made
+        // delete a shape transition, so a ShapeId hit proves the slot live);
+        // `pic.hit.live` exists only when typed feedback has something to
+        // record on the live edge.
         "pic.hit",
-        // The hit's hole edge keeps its own landing block so its tail is not
-        // congruent with `pic.way.load`'s; `pic.hit.live` exists only when
-        // typed feedback has something to record on the live edge.
-        "pic.hit.deleted",
         // the polymorphic ways, deliberately still inline (#7753)
         "pic.miss",
         "pic.ways",

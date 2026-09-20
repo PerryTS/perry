@@ -192,31 +192,34 @@ pub(crate) fn lower_generic_property_get(
         return Ok(val);
     }
 
-    // # Inline hit, two exits (T1)
+    // # Inline hit, two exits (T1); the hit is tag test -> shape compare -> load
     //
     // What stays inline below is exactly the hit: the receiver-tag test, the
-    // small-handle test, the packed header kind/descriptor word, the compact
-    // MRU compare, the overflow-bit test, the raw slot load with its hole
-    // check, and the bounded polymorphic ways. EVERY other arm this tower used
-    // to expand — the SSO receiver, the INT32 class ref, the nullish throw, the
-    // non-object receiver, the overflow load, the deleted-slot miss, the two
-    // Array-subclass named-prefix ladders, and the miss+prime — is now a branch
-    // to one of TWO calls that reproduce them in the same order:
-    // `js_object_get_field_ic_nonptr` for a receiver that is not a heap
-    // pointer, `js_object_get_field_ic_slow` for one that is. The split is not
-    // cosmetic — see `pget.recv_other` below for the +4 instructions per HIT
-    // that a single shared exit cost.
+    // small-handle test, the compact MRU word compared against the receiver's
+    // ShapeId, the raw slot load, and the bounded polymorphic ways. EVERY
+    // other arm this tower used to expand — the SSO receiver, the INT32 class
+    // ref, the nullish throw, the non-object receiver, the overflow load, the
+    // deleted-slot miss, the two Array-subclass named-prefix ladders, and the
+    // miss+prime — is now a branch to one of TWO calls that reproduce them in
+    // the same order: `js_object_get_field_ic_nonptr` for a receiver that is
+    // not a heap pointer, `js_object_get_field_ic_slow` for one that is. The
+    // split is not cosmetic — see `pget.recv_other` below for the +4
+    // instructions per HIT that a single shared exit cost.
+    //
+    // The ShapeId compare is the whole receiver classification. Five guards
+    // that used to sit between the small-handle test and the load are gone
+    // because the fact each one tested is now a function of the ShapeId word:
+    // "is this site primed?" and the overflow-bit test (#10833: an unprimed
+    // word is `PACKED_GET_EMPTY`, a spill entry is flipped out of the ShapeId
+    // range), the GC-kind load (#10828, rule 3), the descriptor flag (#10824,
+    // rule 1) and the `TAG_HOLE` compare (#10826: delete is a shape
+    // transition). Each is argued at the point where it used to be emitted.
     //
     // The arms were not cheap to keep: ~37 basic blocks, ~177 pre-RS4GC IR
     // instructions and 6-7 call sites per site, each call a statepoint whose
     // live GC values are written into `.perry_gcmap`. On @babel/parser the
-    // tower was 29% of all emitted IR across 6,487 sites. It is also not a
-    // trade against the fast path: the hit sequence below is instruction for
-    // instruction what it was, with ONE deliberate difference — the
-    // overflow-bit test is spelled `== 0` with its successors swapped, so the
-    // guard-passing edge is the true edge like every other link in the chain
-    // (see `pic.hit` below) — and the ways still resolve `PIC_WAYS + 1` shapes
-    // without a call.
+    // tower was 29% of all emitted IR across 6,487 sites. The ways still
+    // resolve `PIC_WAYS + 1` shapes without a call.
     //
     // Issue #70/#73/#128: guard against non-pointer receivers
     // before the PIC deref. Tag-based check on the unmasked
@@ -479,21 +482,8 @@ pub(crate) fn lower_generic_property_get(
     // the hit path pays a `jmp` to the survivor instead of falling through.
     let hit_live_idx =
         crate::expr::typed_feedback_emission_enabled().then(|| ctx.new_block("pic.hit.live"));
-    // The hole edge gets its own landing block, as it did before T1. Note what
-    // that does and does not buy, measured: `pic.hit.inline` and `pic.way.load`
-    // end in the same three instructions (bitcast, TAG_HOLE compare, branch),
-    // and SimplifyCFG folds this block and `pic.way.live` away, so the two
-    // tails end up congruent and get merged anyway — the hit still reaches the
-    // shared tail by a `jmp`, and removing this block changed the 10M-read
-    // monomorphic loop by exactly 0 instructions. It is kept because it keeps
-    // the emitted hole edge structurally distinct from the way path's, which is
-    // the shape every reader of this tower since #9287 expects; the remaining
-    // jump needs branch weights (`!prof`) to fix, which the IR builder has no
-    // way to emit today.
-    let deleted_idx = ctx.new_block("pic.hit.deleted");
     let miss_idx = ctx.new_block("pic.miss");
     let hit_label = ctx.block_label(hit_idx);
-    let deleted_label = ctx.block_label(deleted_idx);
     let miss_label = ctx.block_label(miss_idx);
     // Small-handle receivers (native-module registry ids) must never be
     // dereferenced. Pre-#7883 they were kept out of the loads by selecting a
@@ -661,23 +651,40 @@ pub(crate) fn lower_generic_property_get(
     // `shr` only because its overflow block consumed the same value).
     let field_ptr = ctx.block().gep(DOUBLE, &base_ptr, &[(I64, &slot)]);
     let val_hit = ctx.block().load(DOUBLE, &field_ptr);
-    let val_hit_bits = ctx.block().bitcast_double_to_i64(&val_hit);
-    let hit_deleted = ctx
-        .block()
-        .icmp_eq(I64, &val_hit_bits, crate::nanbox::TAG_HOLE_I64);
-    // A hole is a field deleted since priming. It took the ordinary miss
-    // before (via `pic.miss`, whose way compares can never match a token the
-    // MRU entry still holds — `pic_prime_get` evicts a duplicate before it
-    // writes one), and it takes the same ordinary miss now, recording the same
-    // guard-fail/fallback-call pair on the way.
-    let hit_live_label = hit_live_idx
-        .map(|idx| ctx.block_label(idx))
-        .unwrap_or_else(|| merge_label.clone());
-    ctx.block()
-        .cond_br(&hit_deleted, &deleted_label, &hit_live_label);
+    // The loaded value is the answer. The `TAG_HOLE` compare that used to
+    // stand here (four instructions on every read: bitcast, 10-byte `movabs`
+    // or a stack reload of the constant, `cmp`, branch) was the patch for one
+    // operation — `delete` — which under #9064's stable tombstones kept the
+    // receiver's ShapeId and marked the slot instead. #10826 made every
+    // successful delete a shape transition: the receiver's `+4` word ALWAYS
+    // changes, and when the keys array is owned the predecessor id is retired
+    // (`shape_descriptor_by_id` -> `None`), so a compact word primed before a
+    // delete cannot match after it, and a ShapeId hit proves the slot it names
+    // is live. Every inline slot is born `TAG_UNDEFINED` (`object/alloc.rs`),
+    // so nothing but a delete ever writes a hole into one.
+    //
+    // The hole stays in the SLOT, so every path that reaches a slot WITHOUT a
+    // shape-hit proof — the spill arm, a keys-array scan, `object_field_at`,
+    // every walker — must still treat it as absent, and does. The way path
+    // below keeps its compare too: a way hit is also an exact-ShapeId proof,
+    // so it is redundant there by the same argument, but it sits on the
+    // polymorphic path and not on the hit this tower is sized by; removing it
+    // is a separate, measured change.
+    //
+    // #10826 keeps `PERRY_DELETE_SHAPE_TRANSITION=0` as a kill switch that
+    // restores the id-preserving publish. With this compare gone that switch
+    // is no longer a performance knob: under it a shape-gated hit CAN address
+    // a deleted slot and return the raw hole word. It must be retired with
+    // that PR, not kept.
     let hit_end_label = match hit_live_idx {
-        None => ctx.block().label.clone(),
+        None => {
+            let label = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            label
+        }
         Some(idx) => {
+            let live_label = ctx.block_label(idx);
+            ctx.block().br(&live_label);
             ctx.current_block = idx;
             crate::expr::emit_typed_feedback_record_call(
                 ctx.block(),
@@ -689,11 +696,6 @@ pub(crate) fn lower_generic_property_get(
             label
         }
     };
-
-    // The hit's hole lands here rather than on the shared exit — see the
-    // congruence note where the block is minted.
-    ctx.current_block = deleted_idx;
-    ctx.block().br(&cold_label);
 
     // PIC miss on the MRU entry — before paying for the call, try the
     // polymorphic ways (#7753).
