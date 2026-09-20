@@ -8,7 +8,6 @@ inline-offset | perry-ext-http | 1
 inline-offset | perry-ext-mysql2 | 1
 inline-offset | perry-ext-net | 1
 inline-offset | perry-ext-nodemailer | 1
-inline-offset | perry-ext-pg | 2
 inline-offset | perry-ext-zlib | 3
 inline-offset | perry-ffi | 3
 inline-offset | perry-runtime | 350
