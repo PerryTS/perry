@@ -1401,18 +1401,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
-name = "cron"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5dcd6f69605c2956916ce24e8af637b754964c9a83f4662d3a2361654cdba09"
-dependencies = [
- "chrono",
- "once_cell",
- "phf 0.11.3",
- "winnow 0.7.15",
-]
-
-[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4096,7 +4084,7 @@ dependencies = [
  "js-sys",
  "p256",
  "p384",
- "pem 3.0.6",
+ "pem",
  "rand 0.8.7",
  "rsa 0.9.10",
  "serde",
@@ -5524,16 +5512,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pem"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
-dependencies = [
- "base64 0.23.1",
- "serde_core",
-]
-
-[[package]]
 name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5823,16 +5801,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-cron"
-version = "0.5.1618"
-dependencies = [
- "chrono",
- "cron",
- "perry-ffi",
- "perry-runtime",
-]
-
-[[package]]
 name = "perry-ext-decimal"
 version = "0.5.1618"
 dependencies = [
@@ -5854,13 +5822,6 @@ version = "0.5.1618"
 dependencies = [
  "perry-ffi",
  "perry-runtime",
-]
-
-[[package]]
-name = "perry-ext-exponential-backoff"
-version = "0.5.1618"
-dependencies = [
- "perry-ffi",
 ]
 
 [[package]]
@@ -5919,14 +5880,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-moment"
-version = "0.5.1618"
-dependencies = [
- "chrono",
- "perry-ffi",
-]
-
-[[package]]
 name = "perry-ext-mongodb"
 version = "0.5.1618"
 dependencies = [
@@ -5963,25 +5916,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-rustls",
-]
-
-[[package]]
-name = "perry-ext-node-forge"
-version = "0.5.1618"
-dependencies = [
- "const-oid 0.10.2",
- "der 0.8.2",
- "pem 4.0.0",
- "perry-ffi",
- "perry-runtime",
- "rand 0.10.2",
- "rsa 0.10.0-rc.18",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "spki 0.8.0",
- "time",
- "x509-cert",
 ]
 
 [[package]]
@@ -6232,7 +6166,6 @@ dependencies = [
  "cbc 0.2.1",
  "chacha20poly1305",
  "chrono",
- "cron",
  "ctr",
  "dashmap 6.2.1",
  "ecb 0.2.1",
@@ -7454,7 +7387,6 @@ dependencies = [
  "pkcs1 0.8.0-rc.4",
  "pkcs8 0.11.0",
  "rand_core 0.10.1",
- "sha2 0.11.0",
  "signature 3.0.0",
  "spki 0.8.0",
  "zeroize",
@@ -9254,27 +9186,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
-name = "tls_codec"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0de2e01245e2bb89d6f05801c564fa27624dbd7b1846859876c7dad82e90bf6b"
-dependencies = [
- "tls_codec_derive",
- "zeroize",
-]
-
-[[package]]
-name = "tls_codec_derive"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d2e76690929402faae40aebdda620a2c0e25dd6d3b9afe48867dfd95991f4bd"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "tokio"
 version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9367,7 +9278,7 @@ dependencies = [
  "toml_datetime",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -9388,7 +9299,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -9397,7 +9308,7 @@ version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
 dependencies = [
- "winnow 1.0.3",
+ "winnow",
 ]
 
 [[package]]
@@ -10742,15 +10653,6 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "winnow"
-version = "0.7.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "winnow"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
@@ -10910,10 +10812,7 @@ checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
  "const-oid 0.10.2",
  "der 0.8.2",
- "sha1 0.11.0",
- "signature 3.0.0",
  "spki 0.8.0",
- "tls_codec",
 ]
 
 [[package]]
@@ -10997,7 +10896,7 @@ dependencies = [
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
- "winnow 1.0.3",
+ "winnow",
  "zbus_macros",
  "zbus_names",
  "zvariant",
@@ -11025,7 +10924,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7074f3e50b894eac91750142016d30d0a89be8e67dbfd9704fb875825760e52d"
 dependencies = [
  "serde",
- "winnow 1.0.3",
+ "winnow",
  "zvariant",
 ]
 
@@ -11237,7 +11136,7 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
- "winnow 1.0.3",
+ "winnow",
  "zvariant_derive",
  "zvariant_utils",
 ]
@@ -11265,5 +11164,5 @@ dependencies = [
  "quote",
  "serde",
  "syn 2.0.117",
- "winnow 1.0.3",
+ "winnow",
 ]
