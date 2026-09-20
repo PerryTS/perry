@@ -343,6 +343,12 @@
       "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
     },
     {
+      "file": "crates/perry-runtime/src/gc/collection_points.rs",
+      "name": "ARMED_SITE",
+      "verdict": "test_only",
+      "why": "Cell<Option<&'static str>>: a static string-literal site NAME an armed rooting-regression test compares against, never a GC heap pointer. Declared under #[cfg(test)] only (collection_points.rs:15); the whole module compiles to an empty inline no-op outside cfg(test), so this storage never exists in a shipped binary."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/copying.rs",
       "name": "LAST_COHORT_SPLIT",
       "verdict": "test_only",
@@ -805,6 +811,12 @@
       "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
     },
     {
+      "file": "crates/perry-runtime/src/object/delete_rest.rs",
+      "name": "DELETE_TRANSITION_TEST_OVERRIDE",
+      "verdict": "test_only",
+      "why": "Cell<Option<bool>> holding a tri-state force/suppress flag for the delete-as-shape-transition path (#10826). The type cannot hold a heap pointer at all -- Option<bool> is a two-bit value, not a NaN box and not a *mut -- so there is nothing for a scanner to reach. Set only from #[cfg(test)] helpers; the shipping path reads it and finds None."
+    },
+    {
       "file": "crates/perry-runtime/src/object/descriptor_state.rs",
       "name": "TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE",
       "verdict": "not_a_gc_pointer",
@@ -1128,6 +1140,12 @@
       "name": "ACTIVE_THREAD_JOBS",
       "verdict": "not_a_gc_pointer",
       "why": "In-flight job counter for perry/thread."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer/tests_inline.rs",
+      "name": "SELF_ID",
+      "verdict": "test_only",
+      "why": "AtomicI64 holding a scheduled mock timer's id (an i64 returned by schedule_mock_callback_timer, never a GC heap pointer) so the timer's own extern \"C\" callback can look itself up in the ref-state registry mid-dispatch. Declared under #[cfg(test)] only (tests_inline.rs, mock_dispatch_own_pin_tests), never live in a shipped binary."
     },
     {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
@@ -2541,18 +2559,6 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/collection_points.rs",
-      "name": "ARMED_SITE",
-      "verdict": "test_only",
-      "why": "Cell<Option<&'static str>>: a static string-literal site NAME an armed rooting-regression test compares against, never a GC heap pointer. Declared under #[cfg(test)] only (collection_points.rs:15); the whole module compiles to an empty inline no-op outside cfg(test), so this storage never exists in a shipped binary."
-    },
-    {
-      "file": "crates/perry-runtime/src/timer/tests_inline.rs",
-      "name": "SELF_ID",
-      "verdict": "test_only",
-      "why": "AtomicI64 holding a scheduled mock timer's id (an i64 returned by schedule_mock_callback_timer, never a GC heap pointer) so the timer's own extern \"C\" callback can look itself up in the ref-state registry mid-dispatch. Declared under #[cfg(test)] only (tests_inline.rs, mock_dispatch_own_pin_tests), never live in a shipped binary."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

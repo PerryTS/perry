@@ -207,6 +207,19 @@ def function_body(source: str, name: str) -> str:
     raise CensusError(f"missing closing brace: {name}")
 
 
+def require_match(body: str, pattern: str, what: str) -> str:
+    """Like require_code, but returns the first capture group.
+
+    Used where the census must reason about a VALUE (a constant's magnitude),
+    not merely assert that a line exists. Asserting a value relationship
+    survives an encoding change; asserting an instruction does not.
+    """
+    m = re.search(pattern, body)
+    if m is None:
+        raise CensusError(f"missing: {what}")
+    return m.group(1)
+
+
 def require_code(source: str, pattern: str, label: str) -> None:
     if not re.search(pattern, source, re.MULTILINE | re.DOTALL):
         raise CensusError(f"shape descriptor authority surface missing: {label}")
@@ -721,19 +734,49 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         r"add\s*\(\s*I64\s*,\s*&obj_handle\s*,\s*\"4\"\s*\)",
         "generic read PIC reads the authoritative ShapeId at header offset 4",
     )
-    require_code(
-        generic_body,
-        r"icmp_ne\s*\(\s*I64\s*,\s*&packed_word\s*,\s*\"0\"\s*\)",
-        "generic read PIC empty compact-cache rejection",
+    # #10833 changed the ENCODING, not the invariant. The unprimed compact word
+    # was `0`, so `packed != 0` was the emptiness test; it is now
+    # PACKED_GET_EMPTY. The invariant that must still hold is that an UNPRIMED
+    # word cannot be mistaken for a hit — and it now holds structurally rather
+    # than by an extra test: PACKED_GET_EMPTY lies outside
+    # [SHAPE_ID_BASE, SHAPE_ID_END), so the token compare below can never match
+    # it. Assert that range relationship, which is strictly stronger than
+    # asserting one instruction survives.
+    empty = int(
+        require_match(
+            raw_generic_pic,
+            r"const\s+PACKED_GET_EMPTY\s*:\s*i64\s*=\s*(0x[0-9A-Fa-f_]+)\s*;",
+            "codegen declares the compact-cache empty sentinel",
+        ).replace("_", ""),
+        16,
     )
+    base = int(
+        require_match(
+            shapes,
+            r"const\s+SHAPE_ID_BASE\s*:\s*u32\s*=\s*(0x[0-9A-Fa-f_]+)\s*;",
+            "shapes declares SHAPE_ID_BASE",
+        ).replace("_", ""),
+        16,
+    )
+    end = int(
+        require_match(
+            shapes,
+            r"const\s+SHAPE_ID_END\s*:\s*u32\s*=\s*(0x[0-9A-Fa-f_]+)\s*;",
+            "shapes declares SHAPE_ID_END",
+        ).replace("_", ""),
+        16,
+    )
+    if base <= empty < end:
+        raise CensusError(
+            f"compact-cache empty sentinel {empty:#x} is INSIDE the valid ShapeId "
+            f"range [{base:#x}, {end:#x}) — an unprimed site could be read as a hit"
+        )
     # Invalid ShapeIds now fail closed at publication and exact cache matching.
     # Keep both halves of that proof: the emitted guard consumes a nonempty
     # packed word's exact stamp, and neither cache writer admits a zero stamp.
     compact_guard = re.sub(r"\s+", "", generic_body)
     for fragment in (
-        'letpacked_present=ctx.block().icmp_ne(I64,&packed_word,"0");',
-        'letis_plain_object=ctx.block().and(I1,&is_plain_kind,&packed_present);',
-        'cond_br(&is_plain_object,&tok_label,&cold_label)',
+        'cond_br(&is_plain_kind,&tok_label,&cold_label)',
         'letpacked_stamp=ctx.block().trunc(I64,&packed_word,I32);',
         'lettoken_eq=ctx.block().icmp_eq(I32,&pcid,&packed_stamp);',
         'cond_br(&token_eq,&hit_label,&token_miss_label)',
@@ -1063,7 +1106,11 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     # #8665: the generic read PIC's invalid-id proof must not go missing.
-    # Its nonzero check now applies to the packed cache word. Plant a
+    # #10833 replaced that test with an ENCODING property: the unprimed
+    # sentinel sits outside the valid ShapeId range, so the token compare
+    # rejects it. Sabotage the property, not the instruction -- move the
+    # sentinel INTO the range, the exact mistake that would let an unprimed
+    # site read as a hit.
     # regression that changes the rejected sentinel, and
     # prove the census still catches it -- this is what stands between the
     # check above and a vacuous pass, per #6942/#6946/#7024's precedent that
@@ -1071,8 +1118,8 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     dropped_fail_closed = dict(sources)
     path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
     sabotaged_body, substitutions = re.subn(
-        r'icmp_ne\(I64, &packed_word, "0"\)',
-        'icmp_ne(I64, &packed_word, "-1")',
+        r"const PACKED_GET_EMPTY: i64 = 0xFFFF_FFFF;",
+        "const PACKED_GET_EMPTY: i64 = 0x9000_0000;",
         dropped_fail_closed[path],
         count=1,
     )
