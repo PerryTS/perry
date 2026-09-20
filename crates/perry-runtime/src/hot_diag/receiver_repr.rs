@@ -199,9 +199,9 @@ fn observe_pointer(addr: usize) {
             mark_old(ReceiverReprFamily::Proxy);
         }
     }
-    if crate::timer::is_known_timer_id(addr as i64) {
-        mark_old(ReceiverReprFamily::Timer);
-    }
+    // #340/#341 GATE A: `timer` has migrated to ordinary objects, so no timer
+    // receiver can be a small band id any more and this family can never be
+    // marked old again. The fixture asserts `observed_old == 0` for it.
     // #340/#341 GATE A: `text` has migrated to ordinary objects, so no text
     // receiver can be a small band id any more and this family can never be
     // marked old again. The fixture below asserts `observed_old == 0` for it;
@@ -427,11 +427,9 @@ mod tests {
                 true,
             )
         });
-        assert_fixture(ReceiverReprFamily::Timer, || {
-            (
-                crate::timer::js_set_timeout_callback(0, 60_000.0) as usize,
-                false,
-            )
+        // #340/#341: `timer` is migrated — gate A, inverted (see `text`).
+        assert_fixture_migrated(ReceiverReprFamily::Timer, || {
+            crate::timer::js_set_timeout_callback(0, 60_000.0) as usize
         });
         // #340/#341: `text` is migrated — gate A, inverted. Every other family
         // still asserts the old representation above and below.

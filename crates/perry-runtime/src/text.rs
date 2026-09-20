@@ -789,9 +789,10 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341). A contiguous range so the
-/// remaining handle families join it without touching the transfer path again.
+/// remaining handle families join it without touching the transfer path again
+/// — `timer.rs` adds `Timeout`/`Immediate` at `0x2409/A` by extending the end.
 pub(crate) fn is_native_backed_class_id(class_id: u32) -> bool {
-    (TEXT_ENCODER_CLASS_ID..=TEXT_DECODER_CLASS_ID).contains(&class_id)
+    (TEXT_ENCODER_CLASS_ID..=crate::timer::IMMEDIATE_CLASS_ID).contains(&class_id)
 }
 
 #[cfg(feature = "global-text")]

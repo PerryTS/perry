@@ -48,34 +48,13 @@ pub(crate) fn get_field_by_name_object_tail(
             // this, every property access on those handles silently
             // returned undefined.
             if crate::value::addr_class::is_small_handle(raw as usize) {
+                // #340/#341: a timer handle is an ordinary object linked to
+                // `Timeout.prototype` / `Immediate.prototype`, so its
+                // `constructor` and its method surface resolve through the
+                // generic prototype walk. The arms that used to reify them for
+                // a small registry id are gone, and with them this block's
+                // reason to decode the key.
                 if !key.is_null() {
-                    unsafe {
-                        let key_ptr =
-                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                        let key_len = (*key).byte_len as usize;
-                        let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                        if key_bytes == b"constructor" {
-                            if let Some(value) = crate::timer::timer_constructor_value(raw as i64) {
-                                return JSValue::from_bits(value.to_bits());
-                            }
-                        }
-                        if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                            if crate::timer::is_known_timer_id(raw as i64) {
-                                let this_f64 = f64::from_bits(
-                                    crate::value::js_nanbox_pointer(raw as i64).to_bits(),
-                                );
-                                // #8133: the `'static` literal, NOT `key_ptr` —
-                                // that is the interior of a movable heap string
-                                // this read does not own.
-                                let result = super::super::js_class_method_bind(
-                                    this_f64,
-                                    method.as_ptr(),
-                                    method.len(),
-                                );
-                                return JSValue::from_bits(result.to_bits());
-                            }
-                        }
-                    }
                     // Drizzle-sqlite blocker: synth `data.constructor` for
                     // small-handle native instances so drizzle's
                     // `isConfig(data)` duck-type via
@@ -131,29 +110,8 @@ pub(crate) fn get_field_by_name_object_tail(
     // when the codegen passes a raw i64 handle through the slow path.
     if crate::value::addr_class::is_handle_band(obj as usize) {
         if !key.is_null() {
-            unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"constructor" {
-                    if let Some(value) = crate::timer::timer_constructor_value(obj as i64) {
-                        return JSValue::from_bits(value.to_bits());
-                    }
-                }
-                if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                    if crate::timer::is_known_timer_id(obj as i64) {
-                        let this_f64 =
-                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                        // #8133: see the sibling arm above.
-                        let result = super::super::js_class_method_bind(
-                            this_f64,
-                            method.as_ptr(),
-                            method.len(),
-                        );
-                        return JSValue::from_bits(result.to_bits());
-                    }
-                }
-            }
+            // #340/#341: the timer arm that decoded the key here is gone; the
+            // handle dispatcher below decodes its own.
             if let Some(dispatch) = handle_property_dispatch() {
                 unsafe {
                     let key_ptr =

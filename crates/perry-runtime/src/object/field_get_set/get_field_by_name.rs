@@ -1000,25 +1000,6 @@ pub extern "C" fn js_object_get_field_by_name(
                     let key_len = (*key).byte_len as usize;
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                     if key_bytes == b"constructor" {
-                        if let Some(value) = crate::timer::timer_constructor_value(raw as i64) {
-                            return JSValue::from_bits(value.to_bits());
-                        }
-                    }
-                    if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                        if crate::timer::is_known_timer_id(raw as i64) {
-                            let this_f64 = f64::from_bits(
-                                crate::value::js_nanbox_pointer(raw as i64).to_bits(),
-                            );
-                            // #8133: the `'static` literal, NOT `key_ptr`.
-                            let result = super::super::js_class_method_bind(
-                                this_f64,
-                                method.as_ptr(),
-                                method.len(),
-                            );
-                            return JSValue::from_bits(result.to_bits());
-                        }
-                    }
-                    if key_bytes == b"constructor" {
                         let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
                         return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
                     }

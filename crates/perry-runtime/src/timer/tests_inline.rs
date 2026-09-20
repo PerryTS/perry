@@ -265,7 +265,14 @@ mod mock_dispatch_own_pin_tests {
     extern "C" fn churn_then_check_self(_closure: *const crate::closure::ClosureHeader) -> f64 {
         let id = SELF_ID.load(Ordering::SeqCst);
         for _ in 0..(ref_states::TIMER_REF_STATES_CAP + 2_000) {
-            clearTimeout(js_set_timeout_callback(0, 1_000.0));
+            // #340/#341: the producer returns the handle object; `clearTimeout`
+            // takes the id it carries.
+            let handle = js_set_timeout_callback(0, 1_000.0);
+            clearTimeout(
+                crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(handle))
+                    .expect("a timer producer must return a branded handle")
+                    .0,
+            );
         }
         SAW_KNOWN.store(is_known_timer_id(id), Ordering::SeqCst);
         SAW_HAS_REF.store(js_timer_has_ref(id) != 0, Ordering::SeqCst);
@@ -319,6 +326,16 @@ mod mock_dispatch_own_pin_tests {
 mod refresh_and_immediate_primitive_tests {
     use super::*;
 
+    /// #340/#341: a producer hands back the JS-visible handle OBJECT while the
+    /// `js_timer_*` entry points below still speak registry ids. Resolving once
+    /// here keeps these tests about what they were about (ref state, eviction,
+    /// kind) instead of about the representation.
+    fn handle_id(handle: i64) -> i64 {
+        crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(handle))
+            .expect("a timer producer must return a branded handle")
+            .0
+    }
+
     /// #10541: `refresh()` reschedules a timer but must not touch its ref
     /// state -- neither re-ref an unref'd timer/interval nor unref a ref'd
     /// one. Before the fix `js_timer_refresh` unconditionally called
@@ -328,7 +345,7 @@ mod refresh_and_immediate_primitive_tests {
         let _serial = crate::gc::global_side_table_test_lock();
         test_clear_all_timer_scanner_roots();
 
-        let unrefd = js_set_timeout_callback(0, 50_000.0);
+        let unrefd = handle_id(js_set_timeout_callback(0, 50_000.0));
         js_timer_unref(unrefd);
         assert_eq!(js_timer_has_ref(unrefd), 0, "setup: unref() didn't take");
         js_timer_refresh(unrefd);
@@ -338,7 +355,7 @@ mod refresh_and_immediate_primitive_tests {
             "refresh() re-ref'd an unref'd timeout"
         );
 
-        let refd = js_set_timeout_callback(0, 50_000.0);
+        let refd = handle_id(js_set_timeout_callback(0, 50_000.0));
         assert_eq!(js_timer_has_ref(refd), 1, "setup: new timer isn't ref'd");
         js_timer_refresh(refd);
         assert_eq!(
@@ -347,7 +364,7 @@ mod refresh_and_immediate_primitive_tests {
             "refresh() unref'd a ref'd timeout"
         );
 
-        let unrefd_interval = setInterval(0, 50_000.0);
+        let unrefd_interval = handle_id(setInterval(0, 50_000.0));
         js_timer_unref(unrefd_interval);
         js_timer_refresh(unrefd_interval);
         assert_eq!(
@@ -361,9 +378,14 @@ mod refresh_and_immediate_primitive_tests {
         clearInterval(unrefd_interval);
     }
 
-    /// #10542: a `setImmediate` handle is distinguished from a
-    /// `setTimeout`/`setInterval` handle by kind, so `js_number_coerce` can
-    /// gate its Timeout-only numeric shortcut on it.
+    /// #10542 / #340 / #341: a `setImmediate` handle is distinguished from a
+    /// `setTimeout`/`setInterval` handle by kind. The kind used to live in the
+    /// id-keyed ref-state registry so `js_number_coerce` could gate a
+    /// Timeout-only numeric shortcut on it; it is a bit in the handle OBJECT's
+    /// own state word now, and that shortcut is gone — `Symbol.toPrimitive` is
+    /// installed on `Timeout.prototype` only, which is how node draws the same
+    /// line. The distinction still has to be readable off the handle, and this
+    /// is where that is asserted.
     #[test]
     fn immediate_kind_is_distinguished_from_timeout() {
         let _serial = crate::gc::global_side_table_test_lock();
@@ -373,15 +395,174 @@ mod refresh_and_immediate_primitive_tests {
         let interval = setInterval(0, 50_000.0);
         let immediate = js_set_immediate_callback(0);
 
-        assert!(!is_immediate_timer_id(timeout), "setTimeout is a Timeout");
-        assert!(!is_immediate_timer_id(interval), "setInterval is a Timeout");
-        assert!(
-            is_immediate_timer_id(immediate),
-            "setImmediate is an Immediate"
-        );
+        let is_immediate = |handle: i64| {
+            crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(handle))
+                .expect("a timer producer must return a branded handle")
+                .1
+        };
+        assert!(!is_immediate(timeout), "setTimeout is a Timeout");
+        assert!(!is_immediate(interval), "setInterval is a Timeout");
+        assert!(is_immediate(immediate), "setImmediate is an Immediate");
 
-        clearTimeout(timeout);
-        clearInterval(interval);
-        clearImmediate(immediate);
+        clearTimeout(handle_id(timeout));
+        clearInterval(handle_id(interval));
+        clearImmediate(handle_id(immediate));
+    }
+}
+
+
+/// #340/#341 — the representation itself. Everything else in this file is
+/// about timer behaviour; these are about what a timer handle IS.
+#[cfg(test)]
+mod honest_tag_tests {
+    use super::*;
+
+    fn handle_value(handle: i64) -> f64 {
+        crate::value::js_nanbox_pointer(handle)
+    }
+
+    /// GATE B, and the invariant the whole migration is for: the value JS
+    /// receives is a real heap object with the family class id, ABOVE the
+    /// small-handle band, carrying zero own keys. The band assertion is what
+    /// covers statically lowered reads, which the receiver-repr ledger (gate A)
+    /// cannot see.
+    #[test]
+    fn a_timer_handle_is_an_ordinary_object_outside_the_handle_band() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        test_clear_all_timer_scanner_roots();
+
+        for (handle, class_id, immediate) in [
+            (
+                js_set_timeout_callback(0, 50_000.0),
+                crate::timer::TIMEOUT_CLASS_ID,
+                false,
+            ),
+            (
+                setInterval(0, 50_000.0),
+                crate::timer::TIMEOUT_CLASS_ID,
+                false,
+            ),
+            (
+                js_set_immediate_callback(0),
+                crate::timer::IMMEDIATE_CLASS_ID,
+                true,
+            ),
+        ] {
+            let addr = handle as usize;
+            assert!(
+                !crate::value::addr_class::is_handle_band(addr),
+                "gate B: a producer handed back a small band id ({addr:#x})"
+            );
+            let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+                .expect("a timer handle carries a GcHeader");
+            assert_eq!(header.obj_type, crate::gc::GC_TYPE_OBJECT);
+            let obj = addr as *mut crate::object::ObjectHeader;
+            assert_eq!(unsafe { (*obj).class_id }, class_id);
+            let keys = unsafe { crate::object::object_keys_array(obj) };
+            let key_count = if keys.is_null() {
+                0
+            } else {
+                unsafe { (*keys).length }
+            };
+            assert_eq!(key_count, 0, "a timer handle must have no own keys");
+            let (id, is_immediate) = crate::timer::timer_handle_parts(handle_value(handle))
+                .expect("a timer handle must be branded");
+            assert_eq!(is_immediate, immediate);
+            assert!(is_known_timer_id(id), "the handle must name a live timer");
+            clearTimeout(id);
+            clearInterval(id);
+            clearImmediate(id);
+        }
+    }
+
+    /// Two timers are two objects, and each names its own id. Under the old
+    /// representation this held by accident (two ids are two values); it holds
+    /// by construction now, and it is what `Map`/`Set`/`WeakMap` keys need.
+    #[test]
+    fn two_timers_are_two_objects() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        test_clear_all_timer_scanner_roots();
+
+        let a = js_set_timeout_callback(0, 50_000.0);
+        let b = js_set_timeout_callback(0, 50_000.0);
+        assert_ne!(a, b, "two constructions must be two objects");
+        let (ida, _) = crate::timer::timer_handle_parts(handle_value(a)).expect("branded");
+        let (idb, _) = crate::timer::timer_handle_parts(handle_value(b)).expect("branded");
+        assert_ne!(ida, idb, "two timers must be two ids");
+        clearTimeout(ida);
+        clearTimeout(idb);
+    }
+
+    /// `clearTimeout(t)` takes the HANDLE — the dual-accepting resolver in
+    /// `arg_to_timer_id`. Asserted by behaviour (the timer stops being
+    /// pending), not by the resolver's return value.
+    #[test]
+    fn clear_accepts_the_handle_object() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        test_clear_all_timer_scanner_roots();
+
+        let handle = js_set_timeout_callback(0, 50_000.0);
+        assert_eq!(
+            js_callback_timer_has_pending(),
+            1,
+            "setup: the timer must be pending"
+        );
+        js_clear_timeout_value(handle_value(handle));
+        assert_eq!(
+            js_callback_timer_has_pending(),
+            0,
+            "clearTimeout(handleObject) did not clear the timer"
+        );
+    }
+
+    /// The COMPILED read path. An emitted `t.unref` value read is a per-site
+    /// inline cache whose miss edge calls `js_object_get_field_ic_slow` with the
+    /// receiver's 48-bit payload — not `js_object_get_field_by_name`. The
+    /// prototype method has to resolve through THAT entry too; measured on the
+    /// text family, a program whose reads took this edge answered `undefined`
+    /// while every by-name test passed.
+    #[test]
+    fn a_method_value_read_resolves_through_the_ic_miss_entry() {
+        use crate::object::{PicCache, PicCacheSlot, PIC_CACHE_WORDS};
+        use std::sync::atomic::AtomicU64;
+
+        let _serial = crate::gc::global_side_table_test_lock();
+        test_clear_all_timer_scanner_roots();
+
+        let handle = js_set_timeout_callback(0, 50_000.0);
+        for name in ["ref", "unref", "hasRef", "refresh", "close"] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+            let mut slot: PicCacheSlot = &mut cache;
+            let packed = AtomicU64::new(0);
+            let value = crate::object::js_object_get_field_ic_slow(
+                (handle as u64 & crate::value::POINTER_MASK) as i64,
+                key,
+                &mut slot,
+                &packed,
+            );
+            let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+            assert!(
+                crate::value::JSValue::from_bits(value.to_bits()).is_pointer()
+                    && crate::closure::is_closure_ptr(ptr),
+                "{name}: the IC miss edge must answer the prototype method, got {:#018x}",
+                value.to_bits()
+            );
+        }
+        let (id, _) = crate::timer::timer_handle_parts(handle_value(handle)).expect("branded");
+        clearTimeout(id);
+    }
+
+    /// A foreign receiver is refused rather than misread — the brand check the
+    /// prototype thunks make, matching node's
+    /// `Timeout.prototype.unref.call({})`.
+    #[test]
+    fn a_foreign_receiver_is_not_a_timer_handle() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        let plain = crate::object::js_object_alloc(0, 0);
+        assert!(crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(plain as i64))
+            .is_none());
+        // …and a bare small id, the OLD representation, is not one either.
+        assert!(crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(1)).is_none());
     }
 }

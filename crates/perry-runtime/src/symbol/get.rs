@@ -772,30 +772,10 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     if let Some(v) = web_builtin_to_string_tag_symbol_property(obj_f64, sym_f64) {
         return v;
     }
-    // #1213: Timeout/Immediate handles expose `Symbol.dispose` so
-    // `using t = setTimeout(...)` and `t[Symbol.dispose]()` clear the timer.
-    // The handle is a small id NaN-boxed as POINTER; the symbol-keyed read
-    // otherwise misses the side table and returns undefined.
-    if (bits >> 48) == 0x7FFD {
-        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-        if crate::value::addr_class::is_small_handle(id as usize)
-            && crate::timer::is_known_timer_id(id)
-        {
-            let dispose = well_known_symbol("dispose");
-            if !dispose.is_null() {
-                let dispose_f64 =
-                    f64::from_bits(crate::value::JSValue::pointer(dispose as *const u8).bits());
-                if sym_key_from_f64(sym_f64) == sym_key_from_f64(dispose_f64) {
-                    let mname = b"@@__perry_wk_dispose";
-                    return crate::object::js_class_method_bind(
-                        obj_f64,
-                        mname.as_ptr(),
-                        mname.len(),
-                    );
-                }
-            }
-        }
-    }
+    // #340/#341: the Timeout/Immediate `Symbol.dispose` arm is gone — the
+    // timer prototypes carry a real symbol-keyed method, so `using t =
+    // setTimeout(...)` (#1213) resolves it through the ordinary symbol-property
+    // walk instead of a small-id special case.
     // Generic small-handle `Symbol.dispose` support. Subsystems that expose
     // a dispose method through HANDLE_PROPERTY_DISPATCH can bind it here
     // without adding a runtime-specific special case.

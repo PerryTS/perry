@@ -1,8 +1,11 @@
-//! #6084 / #10447: bounded id→handle-state registry for scheduled timers (ref
-//! state and `Timeout`/`Immediate` kind), extracted from `timer.rs` to keep that
-//! file under the 2000-line lint cap.
+//! #6084 / #10447: bounded id→ref-state registry for scheduled timers,
+//! extracted from `timer.rs` to keep that file under the 2000-line lint cap.
+//!
+//! #340/#341 took the `Timeout`/`Immediate` KIND out of this record: the JS
+//! handle is an ordinary object that carries its own kind, so the only thing
+//! the registry still has to remember per id is whether it is ref'd and whether
+//! it is still scheduled.
 
-use super::CallbackTimerKind;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -10,9 +13,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 #[derive(Clone, Copy)]
 struct TimerHandleState {
     has_ref: bool,
-    /// `Timeout`/`Immediate` for `.constructor`; `None` for an id that only
-    /// ever reached `ref()`/`unref()`.
-    kind: Option<CallbackTimerKind>,
     /// Still has a queue entry: not fired, not cleared. Never evicted.
     scheduled: bool,
 }
@@ -40,10 +40,9 @@ pub(super) const TIMER_REF_STATES_CAP: usize = 65_536;
 
 impl TimerRefStates {
     /// A newly scheduled timer: ref'd, pinned until [`Self::retire`].
-    fn schedule(&mut self, id: i64, kind: CallbackTimerKind) {
+    fn schedule(&mut self, id: i64) {
         let state = TimerHandleState {
             has_ref: true,
-            kind: Some(kind),
             scheduled: true,
         };
         self.states.insert(id, state);
@@ -58,7 +57,6 @@ impl TimerRefStates {
         }
         let state = TimerHandleState {
             has_ref,
-            kind: None,
             scheduled: false,
         };
         self.states.insert(id, state);
@@ -131,13 +129,13 @@ impl ScheduledTimerId {
     }
 }
 
-/// Register a timer id as scheduled (ref'd, with its handle kind). Runs before
-/// the id is observable — the async_hooks `init` hook already sees the handle.
-pub(super) fn register_scheduled_timer(id: i64, kind: CallbackTimerKind) -> ScheduledTimerId {
+/// Register a timer id as scheduled (ref'd). Runs before the id is observable —
+/// the async_hooks `init` hook already sees the handle.
+pub(super) fn register_scheduled_timer(id: i64) -> ScheduledTimerId {
     TIMER_IDS_NONEMPTY.arm();
     lock_states()
         .get_or_insert_with(TimerRefStates::default)
-        .schedule(id, kind);
+        .schedule(id);
     ScheduledTimerId(id)
 }
 
@@ -156,10 +154,6 @@ fn timer_handle_state(id: i64) -> Option<TimerHandleState> {
 /// reads as ref'd. A scheduled timer's id is always held (#10447).
 pub(super) fn timer_has_ref_state(id: i64) -> bool {
     timer_handle_state(id).map_or(true, |state| state.has_ref)
-}
-
-pub(super) fn timer_handle_kind(id: i64) -> Option<CallbackTimerKind> {
-    timer_handle_state(id).and_then(|state| state.kind)
 }
 
 /// Read-only view for a whole-queue liveness scan, under ONE registry lock
@@ -201,7 +195,7 @@ pub(crate) fn test_ref_state_counts() -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallbackTimerKind, TimerRefStates, TIMER_REF_STATES_CAP};
+    use super::{TimerRefStates, TIMER_REF_STATES_CAP};
 
     fn scheduled_then_retired(
         s: &mut TimerRefStates,
@@ -209,7 +203,7 @@ mod tests {
         cap: usize,
     ) {
         for id in ids {
-            s.schedule(id, CallbackTimerKind::Timeout);
+            s.schedule(id);
             s.retire(id, cap);
         }
     }
@@ -222,7 +216,7 @@ mod tests {
         let mut s = TimerRefStates::default();
         let cap = 4;
         for id in 1..=10i64 {
-            s.schedule(id, CallbackTimerKind::Timeout);
+            s.schedule(id);
             s.set_ref(id, id % 2 == 0, cap);
             s.retire(id, cap);
         }
@@ -237,22 +231,18 @@ mod tests {
     }
 
     /// #10447: a still-scheduled id is never an eviction candidate, however
-    /// many later timers come and go — its `unref()` and its kind survive.
+    /// many later timers come and go — its `unref()` survives.
     #[test]
     fn a_scheduled_id_survives_any_number_of_later_timers() {
         let mut s = TimerRefStates::default();
         let cap = 16;
-        s.schedule(1, CallbackTimerKind::Timeout);
+        s.schedule(1);
         s.set_ref(1, false, cap);
-        s.schedule(2, CallbackTimerKind::Immediate);
+        s.schedule(2);
         scheduled_then_retired(&mut s, 3..=10_000, cap);
         let keep = s.get(1).expect("scheduled id 1 was evicted");
         assert!(!keep.has_ref, "id 1's unref() was forgotten");
-        assert!(matches!(keep.kind, Some(CallbackTimerKind::Timeout)));
-        assert!(matches!(
-            s.get(2).and_then(|st| st.kind),
-            Some(CallbackTimerKind::Immediate)
-        ));
+        assert!(s.get(2).is_some(), "scheduled id 2 was evicted");
         assert_eq!(s.states.len(), cap + 2);
         // Once it retires it is an ordinary eviction candidate again.
         s.retire(1, cap);
@@ -269,7 +259,7 @@ mod tests {
         let mut s = TimerRefStates::default();
         let cap = 8;
         for id in 1..=100i64 {
-            s.schedule(id, CallbackTimerKind::Timeout);
+            s.schedule(id);
         }
         scheduled_then_retired(&mut s, 101..=1_000, cap);
         assert!((1..=100i64).all(|id| s.get(id).is_some()));
@@ -298,7 +288,7 @@ mod tests {
     fn ref_unref_and_repeated_retire_do_not_grow_the_queue() {
         let mut s = TimerRefStates::default();
         let cap = 100;
-        s.schedule(42, CallbackTimerKind::Timeout);
+        s.schedule(42);
         s.set_ref(42, false, cap);
         s.set_ref(42, true, cap);
         assert_eq!(
@@ -326,20 +316,29 @@ mod tests {
         use crate::timer::*;
         let _serial = crate::gc::global_side_table_test_lock();
         test_clear_all_timer_scanner_roots();
-        let timeout = js_set_timeout_callback(0, 50_000.0);
+        // #340/#341: the producers hand back the JS-visible handle OBJECT
+        // while this registry still speaks ids, so resolve once here. That
+        // split IS the migration: the object is what JS holds, the id stays
+        // what the runtime's own tables key on.
+        fn id_of(handle: i64) -> i64 {
+            crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(handle))
+                .expect("a timer producer must return a branded handle")
+                .0
+        }
+        let timeout = id_of(js_set_timeout_callback(0, 50_000.0));
         js_timer_unref(timeout);
-        let interval = setInterval(0, 50_000.0);
+        let interval = id_of(setInterval(0, 50_000.0));
         js_timer_unref(interval);
-        let immediate = js_set_immediate_callback(0);
-        let recent = js_set_timeout_callback(0, 50_000.0);
+        let immediate = id_of(js_set_immediate_callback(0));
+        let recent = id_of(js_set_timeout_callback(0, 50_000.0));
         js_timer_unref(recent);
 
         for _ in 0..TIMER_REF_STATES_CAP + 1_000 {
-            clearTimeout(js_set_timeout_callback(0, 1_000.0));
+            clearTimeout(id_of(js_set_timeout_callback(0, 1_000.0)));
         }
         clearTimeout(recent);
         for _ in 0..1_000 {
-            clearTimeout(js_set_timeout_callback(0, 1_000.0));
+            clearTimeout(id_of(js_set_timeout_callback(0, 1_000.0)));
         }
 
         for id in [timeout, interval, immediate, recent] {
@@ -356,18 +355,9 @@ mod tests {
             0,
             "post-clear hasRef of a recent handle"
         );
-        assert!(matches!(
-            super::timer_handle_kind(timeout),
-            Some(CallbackTimerKind::Timeout)
-        ));
-        assert!(matches!(
-            super::timer_handle_kind(interval),
-            Some(CallbackTimerKind::Timeout)
-        ));
-        assert!(matches!(
-            super::timer_handle_kind(immediate),
-            Some(CallbackTimerKind::Immediate)
-        ));
+        // #340/#341: the kind assertions that stood here moved to where the
+        // kind now lives — the handle object itself (`timer_handle_parts`), in
+        // `timer.rs`'s own tests.
         assert_eq!(
             js_interval_timer_has_pending(),
             0,

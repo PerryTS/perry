@@ -445,7 +445,22 @@ pub(super) fn detect_optional_feature_usage(
         // value types additionally ride `uses_fetch`, because a `fetch()`
         // result is a `Response` whose methods the source may reach without
         // ever naming the type. Over-approximate by construction.
-        if hir_debug.contains("\"URL") {
+        if hir_debug.contains("\"URL")
+            // …and the nodes the URL lowering folds a construction into, which
+            // carry no quoted type name: the same matcher gap #340/#341 found
+            // in the text arm below, and the shape the fetch fallback above
+            // already guards against ("the rule is zero false negatives").
+            // Latent today, because a URL instance's methods are OWN FIELDS
+            // (#10823) rather than prototype members — and load-bearing the
+            // moment that family moves onto `URL.prototype`, since
+            // `populate_builtin_prototype_methods` builds it only under this
+            // feature. Over-matching costs size, never correctness.
+            || hir_debug.contains("UrlNew")
+            || hir_debug.contains("UrlParse")
+            || hir_debug.contains("UrlCanParse")
+            || hir_debug.contains("UrlPatternNew")
+            || hir_debug.contains("UrlSearchParams")
+        {
             ctx.uses_global_url = true;
         }
         // Both spellings, and the second one is load-bearing since #340/#341:

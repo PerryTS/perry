@@ -301,7 +301,7 @@ pub(crate) use ic_miss::{
     private_member_access_hints_restore, private_member_access_hints_savepoint,
     private_member_call_by_name, private_member_get_by_name, private_member_set_by_name,
     scan_private_lexical_brand_roots_mut, set_method_value_name, stamp_private_evaluation_brand,
-    take_private_method_call_hint, take_private_method_owner_hint, timer_handle_method_name_static,
+    take_private_method_call_hint, take_private_method_owner_hint,
 };
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,

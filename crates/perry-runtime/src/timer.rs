@@ -13,7 +13,7 @@ use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use async_lifecycle::{enqueue_destroy_ids, IntervalCallback};
 use std::any::Any;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     Mutex,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -409,7 +409,7 @@ pub(crate) use ownership::{purge_agent_timers, timer_phase_work_pending};
 
 pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 use ref_states::{
-    register_scheduled_timer, set_timer_ref_state, timer_handle_kind, timer_has_ref_state,
+    register_scheduled_timer, set_timer_ref_state, timer_has_ref_state,
     ScheduledTimerId,
 };
 
@@ -599,51 +599,415 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
     }
 }
 
-/// Synthetic constructor object for `Timeout`/`Immediate` native handles.
-/// Timer ids outlive queue removal, so the registry retains recent entries
-/// after clear/fire just as Node retains the wrapper's prototype. The bounded
-/// inventory avoids unbounded growth in long-running processes.
-pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
-    let kind = timer_handle_kind(id)?;
-    let name = match kind {
-        CallbackTimerKind::Timeout => b"Timeout".as_slice(),
-        CallbackTimerKind::Immediate => b"Immediate".as_slice(),
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
-    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"name".as_ptr(), 4));
-    let value = scope.root_string_ptr(crate::string::js_string_from_bytes(
-        name.as_ptr(),
-        name.len() as u32,
-    ));
-    let (_, obj_ptr) = obj.across_mut::<crate::object::ObjectHeader, _>(|| {
-        obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
-            key.with_mut_ptr::<crate::StringHeader, _>(|key_ptr| {
-                value.with_mut_ptr::<crate::StringHeader, _>(|value_ptr| {
-                    crate::object::js_object_set_field_by_name(
-                        obj_ptr,
-                        key_ptr,
-                        f64::from_bits(crate::value::JSValue::string_ptr(value_ptr).bits()),
-                    );
-                });
-            });
+// #340/#341: `timer_constructor_value` stood here. It fabricated a fresh
+// `{ name: "Timeout" }` object on EVERY `t.constructor` read, because a small
+// registry id has no prototype to carry one. The handle is an ordinary object
+// now and its prototype owns a real `constructor`, so that read is an ordinary
+// property lookup and the per-read allocation is gone with it.
+
+// ===========================================================================
+// Honest tags (#340/#341): a `Timeout` / `Immediate` handed to JS is an
+// ORDINARY object.
+//
+// `setTimeout` used to return its registry id NaN-boxed with `POINTER_TAG`,
+// so a timer was a small integer pretending to be a pointer. That id is not
+// even unambiguous: `primitive_methods.rs` had to document that "timer ids and
+// perry-ffi registry handles share the pointer-tagged small-integer band and
+// both count from 1", so a live HTTP/2 server handle 1 and a `setTimeout` id 1
+// were the same value and the method dispatch had to guess between them.
+//
+// The value JS receives is now a `GC_TYPE_OBJECT` with a family class id, a
+// real ShapeId and a per-family prototype carrying `ref` / `unref` / `hasRef` /
+// `refresh` / `close`, `Symbol.dispose` and (Timeout only, matching node)
+// `Symbol.toPrimitive`. The registry id rides in `ObjectMeta.native_state`, so
+// the id stays the runtime's internal currency and only the JS-visible handle
+// changes. Seven dispatch arms keyed on `is_known_timer_id` go away with it.
+//
+// State word: bit 0 present, bit 1 immediate, bits 8.. the timer id.
+// ===========================================================================
+
+/// Class ids in the web-builtin block. `0x2401..=0x2406` are
+/// AbortController/AbortSignal/Event/CustomEvent/DOMException/EventTarget and
+/// `0x2407/8` are TextEncoder/TextDecoder.
+pub(crate) const TIMEOUT_CLASS_ID: u32 = 0xFFFF_2409;
+pub(crate) const IMMEDIATE_CLASS_ID: u32 = 0xFFFF_240A;
+
+const TIMER_STATE_PRESENT: u64 = 1;
+const TIMER_STATE_IMMEDIATE: u64 = 1 << 1;
+const TIMER_STATE_ID_SHIFT: u32 = 8;
+
+crate::perry_thread_local! {
+    static TIMEOUT_PROTOTYPE_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static IMMEDIATE_PROTOTYPE_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+}
+
+/// The two prototype singletons, one per realm. Every timer handle's
+/// `[[Prototype]]` points at one of them, so they must outlive every timer —
+/// the same rooting contract as the `%IteratorPrototype%` tower, and scanned
+/// from the same place (`object::scan_object_cache_roots_mut`).
+pub(crate) static TIMEOUT_PROTOTYPE_PTR: crate::object::RealmAtomicI64 =
+    crate::object::RealmAtomicI64::new(&TIMEOUT_PROTOTYPE_SLOT);
+pub(crate) static IMMEDIATE_PROTOTYPE_PTR: crate::object::RealmAtomicI64 =
+    crate::object::RealmAtomicI64::new(&IMMEDIATE_PROTOTYPE_SLOT);
+
+/// GC roots for the prototype singletons. Called from
+/// `object::scan_object_cache_roots_mut`, beside the iterator tower.
+pub(crate) fn scan_timer_prototype_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    for slot in [&TIMEOUT_PROTOTYPE_PTR, &IMMEDIATE_PROTOTYPE_PTR] {
+        slot.with_slot(|slot| {
+            visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
         });
-    });
-    Some(crate::value::js_nanbox_pointer(obj_ptr as i64))
+    }
+}
+
+fn timer_state_word(id: i64, kind: CallbackTimerKind) -> u64 {
+    let mut word = TIMER_STATE_PRESENT | ((id as u64) << TIMER_STATE_ID_SHIFT);
+    if matches!(kind, CallbackTimerKind::Immediate) {
+        word |= TIMER_STATE_IMMEDIATE;
+    }
+    word
+}
+
+/// `(id, is_immediate)` for a timer handle, or `None` for anything else.
+/// Gated on the class id in the object header, so a foreign receiver
+/// (`Timeout.prototype.ref.call({})`) is refused rather than misread.
+pub(crate) fn timer_handle_parts(value: f64) -> Option<(i64, bool)> {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj = addr as *mut crate::object::ObjectHeader;
+    unsafe {
+        let class_id = (*obj).class_id;
+        if class_id != TIMEOUT_CLASS_ID && class_id != IMMEDIATE_CLASS_ID {
+            return None;
+        }
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return None;
+        }
+        let word = (*meta).native_state;
+        if word & TIMER_STATE_PRESENT == 0 {
+            return None;
+        }
+        Some((
+            (word >> TIMER_STATE_ID_SHIFT) as i64,
+            word & TIMER_STATE_IMMEDIATE != 0,
+        ))
+    }
+}
+
+/// The timer id behind a JS value, for `clearTimeout` and friends.
+pub(crate) fn timer_handle_id(value: f64) -> Option<i64> {
+    timer_handle_parts(value).map(|(id, _)| id)
+}
+
+fn throw_timer_type_error(message: &[u8]) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_typeerror_new(msg);
+    let bits = crate::value::JSValue::pointer(err as *const u8).bits();
+    crate::exception::js_throw(f64::from_bits(bits))
+}
+
+/// The receiver of a prototype method and, when it is one of ours, its id.
+///
+/// Measured against node 26.8.1 rather than assumed, because these methods are
+/// NOT WebIDL and node does not brand-check them:
+///
+/// ```text
+/// Timeout.prototype.ref.call({})      -> the receiver  (no throw)
+/// Timeout.prototype.unref.call({})    -> the receiver
+/// Timeout.prototype.refresh.call({})  -> the receiver
+/// Timeout.prototype.close.call({})    -> the receiver
+/// Timeout.prototype.hasRef.call({})   -> undefined     (not `false`)
+/// t[Symbol.toPrimitive].call({})      -> undefined
+/// t[Symbol.dispose].call({})          -> undefined
+/// ```
+///
+/// So a foreign receiver is answered, not refused — the opposite of the text
+/// family, whose WebIDL accessors throw. Each thunk below returns node's answer
+/// for `None` and never touches timer state in that case.
+fn timer_receiver() -> (f64, Option<i64>) {
+    let this = crate::object::js_implicit_this_get();
+    let id = timer_handle_id(this);
+    (this, id)
+}
+
+extern "C" fn timer_proto_ref_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let (this, id) = timer_receiver();
+    if let Some(id) = id {
+        js_timer_ref(id);
+    }
+    this
+}
+
+extern "C" fn timer_proto_unref_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let (this, id) = timer_receiver();
+    if let Some(id) = id {
+        js_timer_unref(id);
+    }
+    this
+}
+
+extern "C" fn timer_proto_has_ref_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let (_, id) = timer_receiver();
+    match id {
+        Some(id) if js_timer_has_ref(id) != 0 => {
+            f64::from_bits(crate::value::JSValue::bool(true).bits())
+        }
+        Some(_) => f64::from_bits(crate::value::JSValue::bool(false).bits()),
+        // node answers `undefined`, not `false`, for a foreign receiver.
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+extern "C" fn timer_proto_refresh_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let (this, id) = timer_receiver();
+    if let Some(id) = id {
+        js_timer_refresh(id);
+    }
+    this
+}
+
+fn clear_every_kind(id: i64) {
+    clearTimeout(id);
+    clearInterval(id);
+    clearImmediate(id);
+}
+
+extern "C" fn timer_proto_close_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let (this, id) = timer_receiver();
+    if let Some(id) = id {
+        clear_every_kind(id);
+    }
+    this
+}
+
+/// `t[Symbol.dispose]()` — `using t = setTimeout(...)` clears the timer (#1213).
+extern "C" fn timer_proto_dispose_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+    let (_, id) = timer_receiver();
+    if let Some(id) = id {
+        clear_every_kind(id);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `+timeout` — node's `Timeout[Symbol.toPrimitive]` yields the timer id.
+/// Installed on `Timeout.prototype` ONLY: node's `Immediate` has no numeric
+/// conversion, so `+setImmediate(...)` must stay `NaN` (#10542).
+extern "C" fn timer_proto_to_primitive_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _hint: f64,
+) -> f64 {
+    let (_, id) = timer_receiver();
+    match id {
+        Some(id) => id as f64,
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// `t.constructor` names `Timeout` / `Immediate` in node, and the constructor
+/// is not usable directly. This stands in for it so `t.constructor.name` is
+/// answered by an ordinary prototype property instead of the fabricated
+/// `{ name }` object the handle path had to synthesize per read.
+extern "C" fn timer_ctor_thunk(_c: *const crate::closure::ClosureHeader, _a: f64) -> f64 {
+    throw_timer_type_error(b"Timeout is not a constructor")
+}
+
+fn install_timer_symbol_method(
+    proto: *mut crate::object::ObjectHeader,
+    symbol_name: &str,
+    display_name: &str,
+    func_ptr: *const u8,
+    arity: u32,
+) {
+    let sym = crate::symbol::well_known_symbol(symbol_name);
+    if sym.is_null() {
+        return;
+    }
+    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(func_ptr, arity);
+    crate::object::native_module::set_bound_native_closure_name(closure, display_name);
+    crate::object::native_module::set_builtin_closure_length(closure as usize, arity);
+    crate::object::native_module::set_builtin_closure_non_constructable(closure as usize);
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            crate::value::js_nanbox_pointer(proto as i64),
+            f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits()),
+            crate::value::js_nanbox_pointer(closure as i64),
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        proto as usize,
+        sym as usize,
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+fn install_timer_constructor(proto: *mut crate::object::ObjectHeader, name: &str) {
+    let closure = crate::closure::js_closure_alloc(timer_ctor_thunk as *const u8, 0);
+    if closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(timer_ctor_thunk as *const u8, 0);
+    crate::object::native_module::set_bound_native_closure_name(closure, name);
+    crate::object::native_module::set_builtin_closure_length(closure as usize, 0);
+    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    crate::object::js_object_set_field_by_name(
+        proto,
+        key,
+        crate::value::js_nanbox_pointer(closure as i64),
+    );
+    // Spec shape for a `constructor` property: writable, NOT enumerable,
+    // configurable — so it stays out of `Object.keys(proto)` and `for...in`.
+    crate::object::set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+/// Build both prototypes into their rooted slots. Idempotent; lazy, because a
+/// timer-free program must not pay for them.
+fn build_timer_prototypes() {
+    // Raw locals stay stable across the allocating installs below, exactly as
+    // the iterator tower does (#7251).
+    let _no_move = crate::gc::GcSuppressScope::new();
+    for (name, slot, is_immediate) in [
+        ("Timeout", &TIMEOUT_PROTOTYPE_PTR, false),
+        ("Immediate", &IMMEDIATE_PROTOTYPE_PTR, true),
+    ] {
+        if slot.load(Ordering::Acquire) != 0 {
+            continue;
+        }
+        let proto = crate::object::js_object_alloc(0, 0);
+        if proto.is_null() {
+            return;
+        }
+        crate::object::install_proto_method(proto, "ref", timer_proto_ref_thunk as *const u8, 0);
+        crate::object::install_proto_method(
+            proto,
+            "unref",
+            timer_proto_unref_thunk as *const u8,
+            0,
+        );
+        crate::object::install_proto_method(
+            proto,
+            "hasRef",
+            timer_proto_has_ref_thunk as *const u8,
+            0,
+        );
+        // Measured against node 26.8.1: `Timeout.prototype` owns exactly
+        // `close, constructor, hasRef, ref, refresh, unref`, while
+        // `Immediate.prototype` owns only `constructor, hasRef, ref, unref` —
+        // an Immediate has no `refresh` and no `close`, and no
+        // `Symbol.toPrimitive` either (`+setImmediate(...)` is NaN, #10542).
+        // Both carry `Symbol.dispose`.
+        if !is_immediate {
+            crate::object::install_proto_method(
+                proto,
+                "refresh",
+                timer_proto_refresh_thunk as *const u8,
+                0,
+            );
+            crate::object::install_proto_method(
+                proto,
+                "close",
+                timer_proto_close_thunk as *const u8,
+                0,
+            );
+        }
+        install_timer_constructor(proto, name);
+        install_timer_symbol_method(
+            proto,
+            "dispose",
+            "[Symbol.dispose]",
+            timer_proto_dispose_thunk as *const u8,
+            0,
+        );
+        if !is_immediate {
+            install_timer_symbol_method(
+                proto,
+                "toPrimitive",
+                "[Symbol.toPrimitive]",
+                timer_proto_to_primitive_thunk as *const u8,
+                1,
+            );
+        }
+        // No `Symbol.toStringTag`: node brands both as `[object Object]`.
+        slot.store(proto as i64, Ordering::Release);
+    }
+}
+
+fn timer_prototype(kind: CallbackTimerKind) -> *mut crate::object::ObjectHeader {
+    let slot = match kind {
+        CallbackTimerKind::Immediate => &IMMEDIATE_PROTOTYPE_PTR,
+        _ => &TIMEOUT_PROTOTYPE_PTR,
+    };
+    let existing = slot.load(Ordering::Acquire);
+    if existing != 0 {
+        return existing as *mut crate::object::ObjectHeader;
+    }
+    build_timer_prototypes();
+    slot.load(Ordering::Acquire) as *mut crate::object::ObjectHeader
+}
+
+/// Wrap a freshly scheduled timer id in the JS-visible handle object. The id
+/// itself stays the runtime's internal currency (every `CallbackTimer` record,
+/// every `js_timer_*` entry point and every internal `unref` still speaks ids);
+/// only what crosses into JS changes.
+fn timer_object(id: i64, kind: CallbackTimerKind) -> i64 {
+    let class_id = match kind {
+        CallbackTimerKind::Immediate => IMMEDIATE_CLASS_ID,
+        _ => TIMEOUT_CLASS_ID,
+    };
+    let obj = crate::object::js_object_alloc(class_id, 0);
+    if obj.is_null() {
+        return 0;
+    }
+    // Building the prototype allocates (lazily, on the first timer of a
+    // program) and `GC_TYPE_OBJECT` is movable, so the instance is re-read
+    // through its handle after each allocating step.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(obj);
+    let proto = timer_prototype(kind);
+    debug_assert!(
+        !proto.is_null(),
+        "a timer handle must carry its prototype, or it has no methods"
+    );
+    if !proto.is_null() {
+        crate::object::prototype_chain::object_link_class_default_prototype(
+            handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
+            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+        );
+    }
+    unsafe {
+        let meta = crate::object::object_meta_ensure(
+            handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        );
+        debug_assert!(!meta.is_null(), "a timer handle must carry its meta");
+        if !meta.is_null() {
+            (*meta).native_state = timer_state_word(id, kind);
+        }
+    }
+    handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
 }
 
 pub use ref_states::is_known_timer_id;
 
-/// Whether `id` is specifically a `setImmediate` handle, as opposed to a
-/// `Timeout` (`setTimeout`/`setInterval`, which Node also names `Timeout`).
-/// #10542: Node's `Timeout` has a numeric conversion (`+setTimeout(...)` is
-/// its internal id) but `Immediate` does not (`+setImmediate(...)` is
-/// `NaN`) -- `js_number_coerce` gates its Timeout-only numeric shortcut on
-/// this so an Immediate falls through to the generic (object-shaped)
-/// ToPrimitive path instead.
-pub(crate) fn is_immediate_timer_id(id: i64) -> bool {
-    matches!(timer_handle_kind(id), Some(CallbackTimerKind::Immediate))
-}
+// #340/#341: `is_immediate_timer_id` stood here for the one caller that had to
+// tell a Timeout from an Immediate by id (`+setImmediate(...)` must be `NaN`,
+// #10542). The kind is a bit in the handle object's own state word now, and the
+// distinction is expressed where node expresses it: `Symbol.toPrimitive` is
+// installed on `Timeout.prototype` only.
 
 fn throw_mock_timer_invalid_state(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -750,7 +1114,7 @@ fn schedule_mock_callback_timer(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay = normalize_timer_delay(delay_ms);
     let id = next_timer_id();
-    let scheduled = register_scheduled_timer(id, kind);
+    let scheduled = register_scheduled_timer(id);
     let due_ms = state.current_ms + delay as f64;
     state.callbacks.push(MockCallbackTimer {
         id,
@@ -776,7 +1140,7 @@ fn schedule_mock_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>)
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let interval = normalize_timer_delay(interval_ms);
     let id = next_timer_id();
-    let scheduled = register_scheduled_timer(id, CallbackTimerKind::Timeout);
+    let scheduled = register_scheduled_timer(id);
     let next_ms = state.current_ms + interval as f64;
     state.intervals.push(MockIntervalTimer {
         id,
@@ -1054,26 +1418,28 @@ fn raw_closure_pointer(bits: u64) -> Option<usize> {
 /// Returns a timer ID
 #[no_mangle]
 pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         delay_ms,
         Vec::new(),
         "Timeout",
         CallbackTimerKind::Timeout,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         0.0,
         Vec::new(),
         "Immediate",
         CallbackTimerKind::Immediate,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Immediate)
 }
 
 fn schedule_callback_timer(
@@ -1098,7 +1464,7 @@ fn schedule_callback_timer(
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
-    let scheduled = register_scheduled_timer(id, kind);
+    let scheduled = register_scheduled_timer(id);
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
@@ -1157,14 +1523,15 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         delay_ms,
         args,
         "Timeout",
         CallbackTimerKind::Timeout,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 #[no_mangle]
@@ -1178,14 +1545,15 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         0.0,
         args,
         "Immediate",
         CallbackTimerKind::Immediate,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Immediate)
 }
 
 /// Schedule a native Node-style completion callback as its own async-hooks
@@ -1515,6 +1883,12 @@ pub extern "C" fn clearImmediate(timer_id: i64) {
 /// primitive numeric id (`+timeout`), so `clearTimeout(+t)` works (#1213).
 /// Returns `None` for nullish/other values (a no-op clear, matching Node).
 fn arg_to_timer_id(arg: f64) -> Option<i64> {
+    // #340/#341: the handle is an ordinary object carrying its id, so resolve
+    // that first. The raw-id arms below stay for `clearTimeout(+t)` (#1213) and
+    // for any value minted before this family migrated.
+    if let Some(id) = timer_handle_id(arg) {
+        return Some(id);
+    }
     let v = crate::value::JSValue::from_bits(arg.to_bits());
     if v.is_int32() {
         Some(v.as_int32() as i64)
@@ -1597,7 +1971,10 @@ per_test_global!(static INTERVAL_TIMERS: Mutex<Vec<IntervalTimer>> = Mutex::new(
 /// Returns an interval ID that can be used with clearInterval
 #[no_mangle]
 pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
-    schedule_interval_timer(callback, interval_ms, Vec::new())
+    let id = schedule_interval_timer(callback, interval_ms, Vec::new());
+    // node names an interval handle `Timeout` too, and `clearTimeout` /
+    // `clearInterval` are interchangeable on it.
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i64 {
@@ -1615,7 +1992,7 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
     let next_deadline = Instant::now() + Duration::from_millis(interval);
 
     let id = next_timer_id();
-    let scheduled = register_scheduled_timer(id, CallbackTimerKind::Timeout);
+    let scheduled = register_scheduled_timer(id);
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
@@ -1652,7 +2029,8 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
     } else {
         std::slice::from_raw_parts(args_ptr, n_args as usize).to_vec()
     };
-    schedule_interval_timer(callback, interval_ms, args)
+    let id = schedule_interval_timer(callback, interval_ms, args);
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 /// Clear an interval timer by ID. Also clears Timeout callback timers so
