@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1416,6 +1417,95 @@ idxset.bounded_numeric_merge.5:
         env = CAPTURE_MODULE._compile_env("clang", enable_gc_trace=True)
         self.assertEqual(env["PERRY_GC_TRACE"], "1")
         self.assertNotIn("PERRY_GC_TRACE", CAPTURE_MODULE._compile_env("clang"))
+
+    def test_compile_env_suppresses_auto_optimize_only_when_asked(self):
+        # #10782: the knob is opt-in per call site, so a new `perry compile`
+        # subprocess inherits the SAFE default (auto-optimize on) and has to
+        # argue for suppression rather than acquire it by accident.
+        with unittest.mock.patch.dict(CAPTURE_MODULE.os.environ):
+            CAPTURE_MODULE.os.environ.pop("PERRY_NO_AUTO_OPTIMIZE", None)
+            self.assertNotIn(
+                "PERRY_NO_AUTO_OPTIMIZE", CAPTURE_MODULE._compile_env("clang")
+            )
+            self.assertEqual(
+                CAPTURE_MODULE._compile_env(
+                    "clang", suppress_auto_optimize=True
+                )["PERRY_NO_AUTO_OPTIMIZE"],
+                "1",
+            )
+
+    def test_only_the_no_link_hir_probe_suppresses_auto_optimize(self):
+        """#10782: the HIR probe opts out of auto-optimize; the linker does not.
+
+        Auto-optimize rebuilds the runtime from source, which does not fit in
+        `--compile-timeout`, so the `--no-link` probe must not trigger it. The
+        linking compile must still trigger it: it produces the binary whose
+        `PERRY_GC_TRACE` output backs the `*_traced` runtime budgets, and
+        `optimized_libs/freshness.rs` adds `perry-runtime/diagnostics` to the
+        rebuild only on the auto-optimize path. Those budgets are maxima, so a
+        trace-less runtime would pass all of them vacuously -- this test is
+        what stops the two call sites being "simplified" into one.
+        """
+        calls: list[tuple[list[str], dict[str, str]]] = []
+
+        class _StopAfterSecondCompile(Exception):
+            pass
+
+        class _FakeResult:
+            def to_json(self):
+                return {}
+
+        def fake_run_command(argv, *, cwd, env=None, timeout=None, **kwargs):
+            calls.append((list(argv), dict(env or {})))
+            if len(calls) == 2:
+                raise _StopAfterSecondCompile
+            return _FakeResult()
+
+        original = CAPTURE_MODULE.run_command
+        CAPTURE_MODULE.run_command = fake_run_command
+        try:
+            with unittest.mock.patch.dict(CAPTURE_MODULE.os.environ):
+                CAPTURE_MODULE.os.environ.pop("PERRY_NO_AUTO_OPTIMIZE", None)
+                with tempfile.TemporaryDirectory() as temp:
+                    args = SimpleNamespace(
+                        workload="h1_native_rep_equivalence",
+                        out_dir=temp,
+                        perry="/nonexistent/perry",
+                        clang="/nonexistent/clang",
+                        target=None,
+                        clang_arg=None,
+                        runs=1,
+                        benchmark_mode="smoke",
+                        compile_timeout=300,
+                        run_timeout=300,
+                        skip_run=True,
+                        no_gc_trace=False,
+                        fast_math=False,
+                        fp_contract=None,
+                        verify_native_regions=True,
+                        expect_fma="auto",
+                        perf_counters="off",
+                        gate=False,
+                        print_summary=False,
+                    )
+                    with self.assertRaises(_StopAfterSecondCompile):
+                        CAPTURE_MODULE.capture(args)
+        finally:
+            CAPTURE_MODULE.run_command = original
+
+        self.assertEqual(len(calls), 2, "expected the HIR probe then the link")
+        hir_argv, hir_env = calls[0]
+        link_argv, link_env = calls[1]
+
+        # Assert the subjects are the steps we think they are, so this cannot
+        # pass by classifying the wrong two commands.
+        self.assertIn("--no-link", hir_argv)
+        self.assertIn("--print-hir", hir_argv)
+        self.assertNotIn("--no-link", link_argv)
+        self.assertNotIn("--print-hir", link_argv)
+
+        self.assertEqual(hir_env.get("PERRY_NO_AUTO_OPTIMIZE"), "1")
+        self.assertNotIn("PERRY_NO_AUTO_OPTIMIZE", link_env)
 
     def test_auto_optimize_enables_diagnostics_for_gc_trace_evidence(self):
         # The PERRY_GC_TRACE -> perry-runtime/diagnostics wiring lives in the
