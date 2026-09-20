@@ -823,34 +823,6 @@ pub extern "C" fn js_nodemailer_verify() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_pg_client_end() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_pg_client_query() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_pg_client_query_params() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_pg_connect() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_pg_create_pool() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_pg_pool_end() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_pg_pool_query() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_runtime_init() -> i64 {
     0
 }
