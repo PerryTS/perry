@@ -160,11 +160,7 @@ external-tls-server = [
 ]
 
 # Databases
-database = ["database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
-# `database-mysql` umbrella retained for backwards-compat;
-# v0.5.567's well-known flip toggles `bundled-mysql2` instead.
-database-mysql = ["bundled-mysql2"]
-bundled-mysql2 = ["dep:sqlx", "async-runtime"]
+database = ["database-sqlite", "database-redis", "database-mongodb"]
 database-sqlite = ["dep:rusqlite"]
 # `database-redis` umbrella retained for backwards-compat;
 # v0.5.565's well-known flip toggles `bundled-ioredis` instead.

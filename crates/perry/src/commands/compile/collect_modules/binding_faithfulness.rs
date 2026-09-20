@@ -104,13 +104,6 @@ mod tests {
     }
 
     #[test]
-    fn lookup_preserves_registered_subpaths_before_falling_back() {
-        let (root, binding) = lookup_well_known_for_import("mysql2/promise");
-        assert_eq!(root, "mysql2");
-        assert_eq!(binding.expect("subpath binding").package, "mysql2/promise");
-    }
-
-    #[test]
     fn installed_copy_probe_uses_root_package_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let entry = dir.path().join("src/main.ts");

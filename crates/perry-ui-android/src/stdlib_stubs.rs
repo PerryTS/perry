@@ -807,66 +807,6 @@ pub extern "C" fn js_mongodb_db_collection() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_mysql2_connection_begin_transaction() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_connection_commit() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_connection_end() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_connection_execute() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_connection_query() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_connection_rollback() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_create_connection() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_create_pool() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_connection_execute() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_connection_query() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_connection_release() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_end() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_execute() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_get_connection() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mysql2_pool_query() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_new_instance() -> i64 {
     0
 }
