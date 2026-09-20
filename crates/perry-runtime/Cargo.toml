@@ -133,7 +133,13 @@ bun-cli-utils = [
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
 # (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8
 # heap-snapshot builder (`v8.getHeapSnapshot`/`writeHeapSnapshot`), and
-# `process.report`. None are on a hot path. The env-driven dev diagnostics
+# `process.report`. None of THOSE are on a hot path. Note this feature does
+# NOT gate `hot_diag`, which is declared unconditionally (`pub mod hot_diag;`
+# in lib.rs, no cfg) and whose `enum_on()` runs per string concat
+# (`string/concat.rs`) and per property enumeration in every build, shipped
+# included. Measured at under 0.4% of a short concat, i.e. below probe
+# resolution -- so this is a scope correction to the comment, not a
+# performance claim. The env-driven dev diagnostics
 # degrade gracefully when off (auto-optimize leaves this off unless the program
 # uses a heap-snapshot / `process.report` API, which the compiler detects).
 diagnostics = []
