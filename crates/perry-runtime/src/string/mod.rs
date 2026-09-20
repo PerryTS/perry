@@ -247,6 +247,10 @@ pub use slice_ops::{
     js_string_trim_start,
 };
 pub use split::js_string_split;
+/// The engine-free `String.prototype.split`, for the engine path to delegate to
+/// once it has ruled out `@@split`.
+#[cfg(feature = "regex-engine")]
+pub(crate) use split::js_string_split_js as js_string_split_plain;
 #[cfg(not(feature = "regex-engine"))]
 pub use split::{js_string_split_js, js_string_split_n};
 
