@@ -9,7 +9,6 @@ use crate::array::ArrayHeader;
 /// a per-element layout-map update. The write barrier remains necessary if a
 /// collection has promoted the rooted result array while it is being built.
 #[inline]
-#[cfg(not(feature = "regex-engine"))]
 unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut StringHeader) {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -298,8 +297,12 @@ pub extern "C" fn js_string_to_upper_case_split_part_utf16_length(
 /// `limit < 0` → no limit (matches `js_string_split`).
 /// `limit == 0` → empty array.
 /// `limit > 0` → at most `limit` substrings.
-#[cfg(not(feature = "regex-engine"))]
-#[no_mangle]
+// Compiled in both builds. Linking `regex-engine` re-exports the engine's
+// `split` from `crate::string` instead of this one (see `string::mod`), but the
+// engine path delegates back here once it has ruled out `@@split`, so the
+// implementation must exist either way. Only the exported C symbols are
+// conditional -- they would collide with the engine's.
+#[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_n(
     s: *const StringHeader,
     delimiter: *const StringHeader,
@@ -539,7 +542,6 @@ pub extern "C" fn js_string_split_n(
 /// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`
 /// (so a boxed `{ valueOf }` / `{ toString }` argument is coerced and may
 /// throw), then reduces mod 2^32. `NaN`/`±Infinity`/`0` → 0.
-#[cfg(not(feature = "regex-engine"))]
 fn split_limit_to_uint32(boxed: f64) -> u32 {
     let n = crate::builtins::js_number_coerce(boxed);
     if !n.is_finite() || n == 0.0 {
@@ -550,7 +552,6 @@ fn split_limit_to_uint32(boxed: f64) -> u32 {
 
 /// Build the single-element array `[S]` (the `separator === undefined` result
 /// of `String.prototype.split`).
-#[cfg(not(feature = "regex-engine"))]
 fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -579,15 +580,13 @@ fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
 ///   - `limit === 0` ⇒ empty array;
 ///   - `separator === undefined` ⇒ single-element `[S]`;
 ///   - otherwise split by `ToString(separator)`, capped at `lim`.
-#[cfg(not(feature = "regex-engine"))]
-#[no_mangle]
+#[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_value(
     s: *const StringHeader,
     separator: f64,
     limit: f64,
 ) -> *mut ArrayHeader {
     use crate::value::JSValue;
-    #[cfg(feature = "regex-engine")]
     let sep_jv = JSValue::from_bits(separator.to_bits());
     let lim_jv = JSValue::from_bits(limit.to_bits());
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -661,8 +660,7 @@ pub extern "C" fn js_string_split_value(
     js_string_split_n(s, r_str, limit_i32)
 }
 
-#[cfg(not(feature = "regex-engine"))]
-#[no_mangle]
+#[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);

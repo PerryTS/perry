@@ -319,6 +319,45 @@ pub(crate) fn regexp(receiver: f64, argument: f64, limit_value: f64) -> Result<f
     Ok(output.value())
 }
 
+/// Is this `limit` free of a coercion that can run user code or throw?
+///
+/// The plain algorithm raises by throwing where this module returns `Err`, so
+/// any input whose coercion can fail is left to the engine path rather than
+/// having its exception translated.
+fn limit_is_plain(limit_value: &RuntimeHandle<'_>) -> bool {
+    let bits = limit_value.get_nanbox_f64().to_bits();
+    bits == TAG_UNDEFINED || crate::value::JSValue::from_bits(bits).is_number()
+}
+
+/// Is this separator already a string with no lone surrogate in it?
+///
+/// The plain algorithm scans WTF-8 bytes where the engine reads UTF-16 units,
+/// so it cannot match a separator that is one half of a valid pair --
+/// `"\u{1F600}\u{1F600}".split(lowHalf)` is three parts to the engine and one
+/// to a byte scan. WTF-8 spells a surrogate `ED A0..BF xx`, so this test is
+/// exact rather than conservative. A separator that is not already a string is
+/// excluded too: its `ToString` can run user code, and a Symbol must throw.
+fn separator_is_plain(
+    scope: &RuntimeHandleScope,
+    separator: &RuntimeHandle<'_>,
+) -> Result<bool, EngineError> {
+    let jv = crate::value::JSValue::from_bits(separator.get_nanbox_f64().to_bits());
+    if !jv.is_string() && !jv.is_short_string() {
+        return Ok(false);
+    }
+    // Already a string, so this coercion runs no user code; it only puts the
+    // value in the one representation whose bytes can be read.
+    let sep = text(scope, separator)?;
+    // SAFETY: a rooted string handle; the borrow spans no allocation or call.
+    Ok(unsafe {
+        sep.with_string_bytes(|bytes| {
+            !bytes
+                .windows(2)
+                .any(|w| w[0] == 0xED && (0xA0..=0xBF).contains(&w[1]))
+        })
+    })
+}
+
 pub(crate) fn string(receiver: f64, separator: f64, limit_value: f64) -> Result<f64, EngineError> {
     if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
         return Err(EngineError::Type(
@@ -343,6 +382,56 @@ pub(crate) fn string(receiver: f64, separator: f64, limit_value: f64) -> Result<
             return call(&method, &separator, &args, &memory);
         }
     }
+    // No `@@split`, so the plain string algorithm applies and the engine has
+    // nothing to contribute. Hand it to the implementation a build without the
+    // engine uses.
+    //
+    // Linking `regex-engine` replaces `String.prototype.split` with this module
+    // wholesale, so a program using a regex *anywhere* ran every split through
+    // the engine's per-unit subject reader: 35,826 instructions for
+    // `"alpha beta gamma delta eps0".split(" ")` against 3,662 without the
+    // engine, and 2,729 in Node 26.5.1. Both arms auto-optimized, so that is the
+    // implementation swap rather than the build mode.
+    //
+    // The plain algorithm agrees with Node on 27 cases where a byte scan and a
+    // UTF-16 unit scan can disagree -- empty separator, separator longer than
+    // the subject, every `limit` form, lone surrogates, an astral pair split by
+    // units, a separator that is a prefix of itself at the tail -- and on every
+    // non-string separator form. The one thing it does not implement is
+    // `@@split`, which is why this sits below that check.
+    // The two implementations report failure differently: this one returns
+    // `Err(EngineError)` for `api::finish` to raise at the ABI boundary, while
+    // the plain algorithm throws directly (its own boundary is the ABI). A
+    // coercion that throws -- `ToNumber` on a BigInt `limit`, say -- would
+    // otherwise escape as an uncaught exception, so the throw is captured here
+    // and re-raised by `finish` like any other engine error.
+    if limit_is_plain(&limit_value) && separator_is_plain(&scope, &separator)? {
+        // The plain algorithm reports failure by throwing, where this one
+        // returns `Err` for `api::finish` to raise; `delegable` has already
+        // excluded every input whose coercion can throw, so nothing escapes.
+        return api::caught(|| {
+            crate::string::js_string_split_plain(
+                receiver.get_nanbox_f64(),
+                separator.get_nanbox_f64(),
+                limit_value.get_nanbox_f64(),
+            )
+        });
+    }
+    string_via_engine(
+        receiver.get_nanbox_f64(),
+        separator.get_nanbox_f64(),
+        limit_value.get_nanbox_f64(),
+    )
+}
+
+/// The engine's split, for inputs `delegable` excludes.
+fn string_via_engine(receiver: f64, separator: f64, limit_value: f64) -> Result<f64, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let separator = scope.root_nanbox_f64(separator);
+    let limit_value = scope.root_nanbox_f64(limit_value);
+    let mut budget = Budget::new(api::WORK);
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     let input = text(&scope, &receiver)?;
     let lim = limit(&limit_value)?;
     let needle = text(&scope, &separator)?;
