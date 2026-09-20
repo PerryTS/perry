@@ -69,11 +69,11 @@ pub struct LlFunction {
     /// used to widen `inline_hint`, whose anti-bloat cap is the whole reason
     /// the two sets are separate.
     pub alloc_hot: bool,
-    /// Invoke-EH (#7302): this function contains landing pads (Itanium) or
-    /// funclet pads (SEH), so its `define` line must carry
-    /// `personality ptr @<name>` — `perry_eh_personality` on Mach-O/ELF,
-    /// `__C_specific_handler` on windows-msvc. Set by the try/async-boundary
-    /// dispatch (which knows the target triple).
+    /// Invoke-EH (#7302): this function contains landing pads, so its
+    /// `define` line must carry `personality ptr @perry_eh_personality`. Set
+    /// by the try/async-boundary dispatch. Always Perry's own personality
+    /// since #7354 — windows-msvc used to name `__C_specific_handler` here,
+    /// which forced funclet EH and locked Windows out of statepoints.
     pub personality: Option<&'static str>,
     blocks: Vec<LlBlock>,
     block_counter: u32,
