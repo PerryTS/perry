@@ -19,12 +19,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
     let normalized = module.strip_prefix("node:").unwrap_or(module);
     match normalized {
         // ── HTTP server (Hyper) ───────────────────────────────────────
-        // fastify needs no perry-stdlib feature: the in-stdlib adapter was
-        // removed, so `import 'fastify'` is served entirely by the external
-        // perry-ext-fastify crate via the well-known flip (which links the
-        // wrapper and enables `external-fastify-pump`). See optimized_libs.rs.
-        "fastify" => &[],
-
         // ── Web Streams API ──────────────────────────────────────────
         // Per-binding gate `bundled-streams` (v0.5.572) — the
         // well-known flip routes `import 'streams'` to perry-ext-streams.
@@ -148,8 +142,10 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // ── Scheduler (cron) ──────────────────────────────────────────
         // `scheduler` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-cron` (v0.5.564) so the
-        // well-known flip can route to perry-ext-cron.
-        "cron" | "node-cron" => &["bundled-cron"],
+        // well-known flip can route to perry-ext-cron. `node-cron`'s own
+        // binding was removed (#466) — it now compiles from real npm
+        // source, so only the `cron` package still needs this gate.
+        "cron" => &["bundled-cron"],
 
         // ── argon2 ────────────────────────────────────────────────────
         // argon2 split off into `bundled-argon2` (v0.5.537) — same
@@ -186,15 +182,9 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // decimal.js / bignumber.js: feature-gated v0.5.547 —
         // well-known flip routes to perry-ext-decimal.
         "decimal.js" | "bignumber.js" => &["bundled-decimal"],
-        // dayjs / date-fns: feature-gated v0.5.548 — well-known
-        // flip routes to perry-ext-dayjs.
-        "dayjs" | "date-fns" => &["bundled-dayjs"],
         // moment: feature-gated v0.5.549 — well-known flip routes
         // to perry-ext-moment.
         "moment" => &["bundled-moment"],
-        // rate-limiter-flexible: feature-gated v0.5.552 — well-known
-        // flip routes to perry-ext-ratelimit.
-        "rate-limiter-flexible" => &["bundled-ratelimit"],
         // commander: feature-gated v0.5.555 — well-known flip routes
         // to perry-ext-commander.
         "commander" => &["bundled-commander"],

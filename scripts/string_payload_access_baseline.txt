@@ -4,7 +4,6 @@
 # Counts may only decrease; a new crate starts at zero.
 
 inline-offset | perry-ext-ethers | 2
-inline-offset | perry-ext-fastify | 3
 inline-offset | perry-ext-http | 1
 inline-offset | perry-ext-mysql2 | 1
 inline-offset | perry-ext-net | 1

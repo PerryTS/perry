@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 76,
+    "workspace_members": 72,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -68,7 +68,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 27,
+      "externalize": 23,
       "keep": 44,
       "merge": 1,
       "remove": 1,
@@ -175,11 +175,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-dayjs": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-decimal": {
       "category": "binding",
       "decision": "externalize",
@@ -196,11 +191,6 @@
       "migration": "core-runtime"
     },
     "perry-ext-exponential-backoff": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-fastify": {
       "category": "binding",
       "decision": "externalize",
       "migration": "compile-source"
@@ -271,16 +261,6 @@
       "migration": "external-package"
     },
     "perry-ext-pg": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-qs": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-ratelimit": {
       "category": "binding",
       "decision": "externalize",
       "migration": "compile-source"

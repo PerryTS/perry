@@ -32,8 +32,17 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `js_net_socket_unpipe`. Each returns its `handle: i64` argument unchanged, a
 # `next_id_or_throw()` registry id rather than a heap address, so all four are
 # NR_HANDLE_ID.
-EXPECTED_ROWS = 376
-EXPECTED_PROVIDERS = 326
+#
+# -7 rows / -6 providers (native-binding removal campaign): the `fastify`
+# npm binding was removed (#466) — its six pointer-kind rows
+# (`js_fastify_app_server`/`create_with_opts`/`reply_header`/`reply_status`/
+# `reply_type`/`req_headers`) and their `native_table/fastify.rs` rows are
+# gone. The npm `typescript` binding is NOT removed in this PR (see #10765):
+# real `typescript.js` hits a compiler defect, so the binding stays until
+# that is fixed, and `js_typescript_*` plus Bun's `js_bun_transpiler_new`/
+# `js_bun_build` all remain classified.
+EXPECTED_ROWS = 369
+EXPECTED_PROVIDERS = 320
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

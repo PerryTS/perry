@@ -244,10 +244,6 @@ pub extern "C" fn js_await_js_promise(_promise: f64) -> f64 {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn js_ratelimit_create() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_lodash_ends_with() -> f64 {
     0.0
 }

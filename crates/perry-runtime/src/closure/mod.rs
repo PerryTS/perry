@@ -105,8 +105,8 @@ pub use v8_stubs::{
 pub use v8_stubs::{
     js_argon2_hash_options, js_lodash_ends_with, js_lodash_escape, js_lodash_includes,
     js_lodash_lower_first, js_lodash_replace, js_lodash_split, js_lodash_start_case,
-    js_lodash_starts_with, js_lodash_unescape, js_lodash_upper_first, js_ratelimit_create,
-    js_sharp_negate, js_sharp_quality, js_sharp_to_format,
+    js_lodash_starts_with, js_lodash_unescape, js_lodash_upper_first, js_sharp_negate,
+    js_sharp_quality, js_sharp_to_format,
 };
 
 #[cfg(test)]

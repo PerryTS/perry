@@ -665,8 +665,7 @@ pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
         ("pg", "connect") => Some("PoolClient"),
         ("ioredis", "duplicate") => Some("Redis"),
-        // dayjs / moment manipulation methods return a NEW date handle.
-        ("dayjs", "add" | "subtract" | "startOf" | "endOf") => Some("App"),
+        // moment manipulation methods return a NEW date handle.
         ("moment", "add" | "subtract" | "startOf" | "endOf" | "clone") => Some("App"),
         _ => None,
     }
@@ -1351,7 +1350,6 @@ pub fn detect_native_instance_creation_with_context(
                 ("http", "createServer") => "HttpServer",
                 ("https", "createServer") => "HttpsServer",
                 ("http2", "createSecureServer") => "Http2SecureServer",
-                ("node-cron", "schedule") => "CronJob",
                 ("readline", "createInterface") => "Interface",
                 ("bun", "Transpiler") => "Transpiler",
                 // Issue #1193: `const $ = load(html)` / `loadFragment(html)`

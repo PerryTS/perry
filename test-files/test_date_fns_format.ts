@@ -28,8 +28,8 @@ console.log("aabbbccdd".match(g));
 // No-match returns null
 console.log("xyz".match(/(\w)\1+/));
 
-// End-to-end: format(date, pattern). Uses the native runtime path
-// (date-fns is well-known-aliased to perry-ext-dayjs).
+// End-to-end: format(date, pattern). date-fns is compiled from its real
+// npm source (the native binding was removed, #466).
 import { format } from "date-fns";
 const d = new Date(2020, 0, 6);
 console.log(format(d, "yyyy-MM-dd"));

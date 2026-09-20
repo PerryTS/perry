@@ -1,5 +1,5 @@
 //! Utility-package stdlib FFI declarations (extracted from stdlib_ffi.rs):
-//! @perryts/pdf, commander, dotenv, date libs (dayjs/datefns/moment),
+//! @perryts/pdf, commander, date libs (moment),
 //! decimal.js, ethers, lodash, lru-cache.
 
 use crate::module::LlModule;
@@ -35,48 +35,7 @@ pub(crate) fn declare_utilities(module: &mut LlModule) {
     module.declare_function("js_commander_required_option", I64, &[I64, I64, I64, I64]);
     module.declare_function("js_commander_version", I64, &[I64, I64]);
 
-    // ========== Date libs (dayjs/datefns/moment) ==========
-    module.declare_function("js_datefns_add_days", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_add_months", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_add_years", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_difference_in_days", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_difference_in_hours", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function(
-        "js_datefns_difference_in_minutes",
-        DOUBLE,
-        &[DOUBLE, DOUBLE],
-    );
-    module.declare_function("js_datefns_end_of_day", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_datefns_format", I64, &[DOUBLE, I64]);
-    module.declare_function("js_datefns_is_after", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_is_before", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_datefns_parse_iso", DOUBLE, &[I64]);
-    module.declare_function("js_datefns_start_of_day", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_dayjs_add", DOUBLE, &[I64, DOUBLE, I64]);
-    module.declare_function("js_dayjs_date", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_day", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_diff", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_dayjs_end_of", DOUBLE, &[I64, I64]);
-    module.declare_function("js_dayjs_factory", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_format", I64, &[I64, I64]);
-    module.declare_function("js_dayjs_from_timestamp", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_dayjs_hour", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_is_after", DOUBLE, &[I64, I64]);
-    module.declare_function("js_dayjs_is_before", DOUBLE, &[I64, I64]);
-    module.declare_function("js_dayjs_is_same", DOUBLE, &[I64, I64]);
-    module.declare_function("js_dayjs_is_valid", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_millisecond", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_minute", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_month", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_now", DOUBLE, &[]);
-    module.declare_function("js_dayjs_parse", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_second", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_start_of", DOUBLE, &[I64, I64]);
-    module.declare_function("js_dayjs_subtract", DOUBLE, &[I64, DOUBLE, I64]);
-    module.declare_function("js_dayjs_to_iso_string", I64, &[I64]);
-    module.declare_function("js_dayjs_unix", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_value_of", DOUBLE, &[I64]);
-    module.declare_function("js_dayjs_year", DOUBLE, &[I64]);
+    // ========== Date libs (moment) ==========
     // moment: same handle scheme as dayjs — the factory returns the
     // handle as f64 bits (DOUBLE), instance methods take the handle as
     // an I64 first arg. Methods returning a new moment return DOUBLE

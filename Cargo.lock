@@ -2506,12 +2506,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
 
 [[package]]
-name = "futures-timer"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af43fadb8a98512d547e37b4e92e0ced13e205c061b87b4623eff01d918d6968"
-
-[[package]]
 name = "futures-util"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2844,29 +2838,6 @@ dependencies = [
  "glib-sys 0.22.6",
  "libc",
  "system-deps",
-]
-
-[[package]]
-name = "governor"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9efcab3c1958580ff1f25a2a41be1668f7603d849bb63af523b208a3cc1223b8"
-dependencies = [
- "cfg-if",
- "dashmap 6.2.1",
- "futures-sink",
- "futures-timer",
- "futures-util",
- "getrandom 0.3.4",
- "hashbrown 0.16.1",
- "nonzero_ext",
- "parking_lot",
- "portable-atomic",
- "quanta",
- "rand 0.9.4",
- "smallvec",
- "spinning_top",
- "web-time",
 ]
 
 [[package]]
@@ -4940,12 +4911,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nonzero_ext"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38bf9645c8b145698bb0b18a4637dcacbc421ea49bef2317e4fd8065a387cf21"
-
-[[package]]
 name = "noop_proc_macro"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5890,14 +5855,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-dayjs"
-version = "0.5.1609"
-dependencies = [
- "chrono",
- "perry-ffi",
-]
-
-[[package]]
 name = "perry-ext-decimal"
 version = "0.5.1609"
 dependencies = [
@@ -5926,23 +5883,6 @@ name = "perry-ext-exponential-backoff"
 version = "0.5.1609"
 dependencies = [
  "perry-ffi",
-]
-
-[[package]]
-name = "perry-ext-fastify"
-version = "0.5.1609"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper",
- "hyper-util",
- "perry-ext-ws",
- "perry-ffi",
- "perry-runtime",
- "serde_json",
- "socket2",
- "tokio",
- "tokio-tungstenite",
 ]
 
 [[package]]
@@ -6112,23 +6052,6 @@ dependencies = [
  "perry-ffi",
  "sqlx",
  "tokio",
-]
-
-[[package]]
-name = "perry-ext-qs"
-version = "0.5.1609"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
- "serde_json",
-]
-
-[[package]]
-name = "perry-ext-ratelimit"
-version = "0.5.1609"
-dependencies = [
- "governor",
- "perry-ffi",
 ]
 
 [[package]]
@@ -6349,7 +6272,6 @@ dependencies = [
  "flate2",
  "futures-util",
  "ghash 0.6.0",
- "governor",
  "hex",
  "hkdf 0.13.0",
  "hmac 0.13.0",
@@ -7085,21 +7007,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
 
 [[package]]
-name = "quanta"
-version = "0.12.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3ab5a9d756f0d97bdc89019bd2e4ea098cf9cde50ee7564dde6b81ccc8f06c7"
-dependencies = [
- "crossbeam-utils",
- "libc",
- "once_cell",
- "raw-cpuid",
- "wasi",
- "web-sys",
- "winapi",
-]
-
-[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7344,15 +7251,6 @@ dependencies = [
  "rav1e",
  "rayon",
  "rgb",
-]
-
-[[package]]
-name = "raw-cpuid"
-version = "11.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
-dependencies = [
- "bitflags 2.12.1",
 ]
 
 [[package]]
@@ -8352,15 +8250,6 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
-name = "spinning_top"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
 dependencies = [
  "lock_api",
 ]

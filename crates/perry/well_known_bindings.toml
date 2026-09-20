@@ -36,23 +36,6 @@
 # requires every ext crate and package mapping to have an explicit decision
 # (#5716).
 
-[bindings.qs]
-crate = "perry-ext-qs"
-lib = "perry_ext_qs"
-tracking = "#8751"
-# Partial: stringify covers qs' ordinary scalar/object/array surface and the
-# callback/options used by Stripe. parse covers the safe nested-query subset.
-# Regex delimiters and the full decoder/filter extension-hook contracts remain
-# intentionally outside this shim.
-compat = "partial"
-
-[bindings.qs.upstream]
-version = "6.15.3"
-sha256 = "c0278b636e7a016d6e835cd8f194a63c276dff430620e4a04344a4ba8892c0f9"
-repo = "https://github.com/ljharb/qs.git"
-ref = "18d085e919dae70c8f1b200ab99323058edab2c2"
-ported-at = "6.15.3"
-date = "2026-08-25"
 [bindings.bcrypt]
 crate = "perry-ext-bcrypt"
 lib = "perry_ext_bcrypt"
@@ -193,29 +176,6 @@ repo = "https://github.com/MikeMcl/bignumber.js"
 ref = "275cd85181041d7b6bebf8ef9b70ee0b1bf056b0"
 ported-at = "11.1.5"
 date = "2026-07-30"
-[bindings.dayjs]
-crate = "perry-ext-dayjs"
-lib = "perry_ext_dayjs"
-tracking = "#466"
-
-[bindings.dayjs.upstream]
-version = "1.11.21"
-sha256 = "290ec8bf81878ae4927581d9be74125f07722ea8bbea2ff77a2226dce12df876"
-repo = "https://github.com/iamkun/dayjs"
-ref = "a25f01e8154290b203ab480ffeedc60c80bd0710"
-ported-at = "1.11.21"
-date = "2026-07-30"
-[bindings."date-fns"]
-crate = "perry-ext-dayjs"
-lib = "perry_ext_dayjs"
-tracking = "#466"
-
-[bindings.date-fns.upstream]
-version = "4.4.0"
-sha256 = "eb106d1e9276213d6144b221c103e4abb7d92186734f7505f5a3860427b41a06"
-repo = "https://github.com/date-fns/date-fns"
-ported-at = "4.4.0"
-date = "2026-07-30"
 [bindings.moment]
 crate = "perry-ext-moment"
 lib = "perry_ext_moment"
@@ -250,18 +210,6 @@ sha256 = "53637f5503f81d10b02097eca6f94c44e69d92ba7ef759f268a0c4ea1d06ae54"
 repo = "https://github.com/lovell/sharp"
 ref = "1018449164723ba0203c1beffaba0e21f7829c18"
 ported-at = "0.35.3"
-date = "2026-07-30"
-[bindings."rate-limiter-flexible"]
-crate = "perry-ext-ratelimit"
-lib = "perry_ext_ratelimit"
-tracking = "#466"
-
-[bindings.rate-limiter-flexible.upstream]
-version = "11.2.0"
-sha256 = "db92ca4b73bea8ccac0ed67b37b6970170dea15a063f539a5b354bb2a36661d0"
-repo = "https://github.com/animir/node-rate-limiter-flexible"
-ref = "2c12f60043c4bc2d0a7b7d05392824027d810b75"
-ported-at = "11.2.0"
 date = "2026-07-30"
 [bindings.commander]
 crate = "perry-ext-commander"
@@ -298,18 +246,6 @@ sha256 = "868d5acfd1ff068de40d25a8d78cc1678305c7bc9192edd7e2b0d083346bcbdf"
 repo = "https://github.com/kelektiv/node-cron"
 ref = "d2f18cf7c56721913607c8159abe9f18c72decba"
 ported-at = "4.4.0"
-date = "2026-07-30"
-[bindings."node-cron"]
-crate = "perry-ext-cron"
-lib = "perry_ext_cron"
-tracking = "#466"
-
-[bindings.node-cron.upstream]
-version = "4.6.0"
-sha256 = "78766bf4f4de32b009259e4e780a9ac8cd7155da970052427e68518cbeecfd32"
-repo = "https://github.com/node-cron/node-cron"
-ref = "0be2ca03ffebc79fa823081b8a44bff6f731a583"
-ported-at = "4.6.0"
 date = "2026-07-30"
 [bindings.ioredis]
 crate = "perry-ext-ioredis"
@@ -464,11 +400,6 @@ lib = "perry_ext_streams"
 tracking = "#466"
 node-builtin = true
 
-[bindings.fastify]
-crate = "perry-ext-fastify"
-lib = "perry_ext_fastify"
-tracking = "#466"
-
 # `@perryts/google-auth` is no longer bundled — extracted to a
 # standalone repo (https://github.com/PerryTS/google-auth) and
 # published as an npm package starting v0.5.1015. The previous
@@ -484,14 +415,6 @@ tracking = "#466"
 # function FFI: createPdf / pdfAddText / pdfAddLine / pdfNewPage /
 # pdfSave. Page units = PDF points (1/72"), origin = bottom-left
 # per the PDF standard.
-
-[bindings.fastify.upstream]
-version = "5.10.0"
-sha256 = "765b9bbdc03029d65b2fc544306ce950029c3470806d2ddee47a454dec0a67dc"
-repo = "https://github.com/fastify/fastify"
-ref = "c47975e8a4c0cb1cb066749b948c0e6e22c97663"
-ported-at = "5.10.0"
-date = "2026-07-30"
 [bindings."@perryts/pdf"]
 crate = "perry-ext-pdf"
 lib = "perry_ext_pdf"

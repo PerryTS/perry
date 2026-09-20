@@ -833,16 +833,6 @@ pub(crate) fn lower_module_decl(
                                                             Some("Socket")
                                                         }
                                                         ("dgram", "createSocket") => Some("Socket"),
-                                                        // node-cron's `cron.schedule(expr, cb)` returns a job
-                                                        // handle whose `start()`/`stop()`/`isRunning()` etc.
-                                                        // dispatch via the ("node-cron", true, METHOD) entries
-                                                        // in expr.rs's native_module dispatch table. Without
-                                                        // registering the handle as a "CronJob" native instance,
-                                                        // `job.stop()` falls through to dynamic dispatch and the
-                                                        // stop never reaches js_cron_job_stop.
-                                                        ("node-cron", "schedule") => {
-                                                            Some("CronJob")
-                                                        }
                                                         // node:http server (issue #577) — `http.createServer(...)`
                                                         // returns an HttpServer handle whose `.listen(...)` /
                                                         // `.close()` / `.address()` / `.on(...)` dispatches via
@@ -1161,14 +1151,9 @@ pub(crate) fn lower_module_decl(
                                                             ("sqlite", "createSession") => {
                                                                 Some("Session")
                                                             }
-                                                            // dayjs / moment manipulation
+                                                            // moment manipulation
                                                             // methods return a NEW date
                                                             // handle (see native_new.rs).
-                                                            (
-                                                                "dayjs",
-                                                                "add" | "subtract" | "startOf"
-                                                                | "endOf",
-                                                            ) => Some("App"),
                                                             (
                                                                 "moment",
                                                                 "add" | "subtract" | "startOf"
