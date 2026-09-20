@@ -492,9 +492,37 @@ pub extern "C" fn js_object_delete_field(
                 if stable_candidate {
                     (*obj_gc)._reserved |= crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
                 }
-                let successor = super::shapes::publish_object_shape_holes(obj, holes + 1);
+                // A delete is a SHAPE TRANSITION: the successor is a pure
+                // function of (predecessor ShapeId, deleted key, vacated
+                // slot), and it is never the predecessor. That is what stops a
+                // `(shape, key)` cache entry primed for the deleted key from
+                // hitting afterwards, and therefore what makes a shape hit
+                // prove the slot it names is live — the fact the emitted read
+                // path currently establishes with a per-read `TAG_HOLE`
+                // compare instead. #9064 kept the id here and paid that
+                // compare on every read of every object, forever.
+                //
+                // `PERRY_DELETE_SHAPE_TRANSITION=0` restores #9064's
+                // id-preserving publish for A/B and attribution.
+                let transition = object_delete_shape_transition_enabled();
+                let successor = if transition {
+                    super::shapes::publish_object_shape_delete_transition(
+                        obj,
+                        crate::object::key_content_hash(key),
+                        i as u32,
+                        holes + 1,
+                    )
+                } else {
+                    super::shapes::publish_object_shape_holes(obj, holes + 1)
+                };
                 if successor != 0 {
-                    let stable = stable_candidate && successor == predecessor;
+                    // The marker certifies the SLOT REPRESENTATION (this
+                    // receiver's inline slots may hold `TAG_HOLE`, and a
+                    // re-add appends into its private array in place), not the
+                    // shape identity. Under the transition it is no longer
+                    // conditional on the publish having kept the id, because
+                    // the publish never keeps it.
+                    let stable = stable_candidate && (transition || successor == predecessor);
                     if !stable {
                         (*obj_gc)._reserved &= !crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
                     }
@@ -589,7 +617,7 @@ pub extern "C" fn js_object_delete_field(
             // ObjectHeader facts". `publish_object_shape_from` versions a
             // same-pointer change internally, and `keys_changed` is false here
             // so the typed layout is preserved rather than marked unknown.
-            set_object_keys_array(obj, keys as *mut crate::ArrayHeader);
+            set_object_keys_array(obj, keys);
             super::shapes::shape_index_shift_in_place(keys as usize, i as u32, key_count as u32)
         } else {
             let keys_cloned = crate::array::js_array_alloc(new_count.max(1) as u32 + 4);
@@ -958,28 +986,42 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     }
 
     super::prop_plan::prop_plan_epoch_bump();
-    // This narrower helper cannot mint a descriptor or allocate, so `obj`
-    // and `keys` remain valid across the structural update below.
-    if super::shapes::try_update_stable_tombstone_shape_cached(
-        obj,
-        shape,
-        shape.logical_key_count,
-        shape.live_inline_slot_count,
-        next_holes,
-    )
-    .or_else(|| {
-        super::shapes::try_update_stable_tombstone_shape(
+    // A delete MOVES the shape word, exactly as in `js_object_delete_field`:
+    // keeping the id here would leave this lane — the SSO dynamic-key delete
+    // — as the one hole in that guarantee, and a `(shape, key)` entry primed
+    // for the deleted key would still match the receiver afterwards.
+    //
+    // The publish mints/rekeys a DESCRIPTOR, which is a Rust-side table
+    // update, not a heap allocation: it cannot collect, so `obj` and `keys`
+    // remain valid across the structural update below, which is what the
+    // id-preserving helpers were relied on for.
+    let published = if object_delete_shape_transition_enabled() {
+        let id = super::shapes::publish_object_shape_delete_transition(
             obj,
-            keys,
+            crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len()),
+            slot,
+            next_holes,
+        );
+        (id != 0).then_some(id)
+    } else {
+        super::shapes::try_update_stable_tombstone_shape_cached(
+            obj,
+            shape,
             shape.logical_key_count,
             shape.live_inline_slot_count,
             next_holes,
         )
-    })
-    .is_none()
-    {
-        return None;
-    }
+        .or_else(|| {
+            super::shapes::try_update_stable_tombstone_shape(
+                obj,
+                keys,
+                shape.logical_key_count,
+                shape.live_inline_slot_count,
+                next_holes,
+            )
+        })
+    };
+    published?;
     crate::gc::runtime_store_external_jsvalue_slot(
         keys as usize,
         elements.add(slot as usize) as usize,
@@ -1514,6 +1556,34 @@ mod sso_tests_1781 {
     }
 }
 
+/// Is `delete` a SHAPE TRANSITION (successor != predecessor, memoized on
+/// `(predecessor ShapeId, key, slot)`), or #9064's id-preserving publish?
+///
+/// Default ON. The transition is what lets the emitted read path stop
+/// comparing every loaded slot against `TAG_HOLE`: with the id preserved, a
+/// `(shape, key)` cache entry primed before a delete still matches the
+/// receiver afterwards, so only the slot's own contents can reveal the delete.
+///
+/// `PERRY_DELETE_SHAPE_TRANSITION=0` restores the #9064 publish, so the two
+/// can be A/B'd in ONE binary — the arms then differ only in this decision,
+/// with no compiler/runtime source-hash pairing to drift.
+fn object_delete_shape_transition_enabled() -> bool {
+    // Same reason as `object_tombstone_deletes_enabled`'s override: the
+    // `OnceLock` latches at the first delete anywhere in the test process,
+    // long before a test's own `set_var`.
+    #[cfg(test)]
+    if let Some(forced) = DELETE_TRANSITION_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return forced;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_DELETE_SHAPE_TRANSITION").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 /// Gate for O(1) tombstone deletes (`PERRY_OBJECT_TOMBSTONES`).
 /// The default and its rationale live beside the environment parsing below.
 fn object_tombstone_deletes_enabled() -> bool {
@@ -1547,6 +1617,25 @@ fn object_tombstone_deletes_enabled() -> bool {
 thread_local! {
     static TOMBSTONE_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
+    static DELETE_TRANSITION_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// [`test_scope_tombstone_deletes`] for the delete-shape-transition flag, so a
+/// test can pin #9064's id-preserving publish or the transition explicitly
+/// rather than inheriting whatever the env latched.
+#[cfg(test)]
+pub(crate) fn test_scope_delete_shape_transition(forced: bool) -> impl Drop {
+    struct Restore(Option<bool>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DELETE_TRANSITION_TEST_OVERRIDE.with(|cell| cell.set(self.0));
+        }
+    }
+
+    let previous = DELETE_TRANSITION_TEST_OVERRIDE.with(|cell| cell.replace(Some(forced)));
+    Restore(previous)
 }
 
 /// Force the tombstone-delete flag for the CURRENT THREAD's asserts,
