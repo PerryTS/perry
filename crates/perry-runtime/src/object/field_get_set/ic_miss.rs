@@ -686,7 +686,31 @@ pub(super) fn get_field_ic_miss_impl(
             }
         }
     }
+    // Lane 3 hook A's answer, carried to hook B at the bottom of this
+    // function: `Declined` means the chain walk has already been tried for
+    // this (receiver shape, key) and refused, so hook B must not try it again.
+    // Without that, every read the cache CANNOT serve pays for a full chain
+    // walk per read — measured at +424 instructions per read for an accessor
+    // on the prototype, a regression against no cache at all.
+    let mut inherited_declined = false;
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
+        // Lane 3 hook A: an INHERITED read that this site has already resolved
+        // once. Placed before the ladder rather than after it because the
+        // whole point is the ladder: an inherited read otherwise re-walks the
+        // chain on every read (~1300 instructions, measured). The guard proves
+        // the receiver is a GC_TYPE_OBJECT itself, so nothing below has been
+        // skipped on its behalf; see `object::inherited_read_cache`.
+        match unsafe { crate::object::inherited_read_cache::inherited_read_cache_lookup(obj, key) }
+        {
+            crate::object::inherited_read_cache::Lookup::Hit(value) => {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::NotOwn);
+                }
+                return f64::from_bits(value.bits());
+            }
+            crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
+            crate::object::inherited_read_cache::Lookup::Unknown => {}
+        }
         // #7753: `arr.length` on a receiver codegen could not prove is an array.
         //
         // The inline cache can never serve this read — it requires a
@@ -1064,7 +1088,21 @@ pub(super) fn get_field_ic_miss_impl(
     if diag {
         ic_diag_note(cache_slot, key, miss_reason);
     }
-    let value = js_object_get_field_by_name(obj, key);
+    // Lane 3 hook B: the own-key search above has failed, so this is the one
+    // place in the runtime that KNOWS the key is not an own property without
+    // paying for a second search. Walk the chain once and record the answer.
+    // A decline leaves the generic getter below untouched, which is today's
+    // behaviour for every case the cache refuses.
+    if matches!(miss_reason, R::NotOwn) && !inherited_declined {
+        if let Some(value) =
+            unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key) }
+        {
+            return f64::from_bits(value.bits());
+        }
+    }
+    // Past the cache, not through it: hook A above has already asked, and for
+    // the reads this cache refuses that question is the whole added cost.
+    let value = super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
     f64::from_bits(value.bits())
 }
 

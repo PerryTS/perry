@@ -54,6 +54,30 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // Lane 3 hook C: the same inherited-read entry, for the callers that do
+    // not come through a per-site cache (the recursive prototype hop, native
+    // callers, `js_object_get_field_by_name_f64`). It goes BEFORE
+    // `try_data_get_by_name` because that is the walk it replaces; a decline
+    // costs an epoch load and one failed compare.
+    if let Some(value) =
+        unsafe { crate::object::inherited_read_cache::inherited_read_cache_hit(obj, key) }
+    {
+        return value;
+    }
+    get_field_by_name_past_inherited_cache(obj, key)
+}
+
+/// The same read for a caller that has ALREADY asked the inherited-read cache
+/// and been refused.
+///
+/// `get_field_ic_miss_impl` is exactly that caller: it consults the cache at
+/// the top and falls through to here at the bottom. Asking twice is not free —
+/// a read the cache refuses (an accessor on the prototype is the common one)
+/// would pay two lookups per read for two answers that are the same.
+pub(crate) fn get_field_by_name_past_inherited_cache(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> JSValue {
     if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
         return value;
     }

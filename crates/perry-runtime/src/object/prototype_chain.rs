@@ -24,6 +24,35 @@
 //! `proto_bits` for an explicit `Object.setPrototypeOf(obj, null)` is
 //! `TAG_NULL`, so a recorded-null entry is distinguishable from "no entry
 //! recorded" (default prototype); in the meta record, 0 means unset.
+//!
+//! # What the residual registry costs an inherited read: nothing (measured)
+//!
+//! The 2026-09-20 object-model design note proposed deleting `OBJECT_PROTOTYPES`
+//! on the theory that its `Mutex` plus a hash probe per chain level was "likely
+//! part of the 950 ns inherited read". Callgrind says otherwise. On
+//! `const P={a:1}; const O=Object.create(P); O.a` at 200 k reads (v0.5.1619,
+//! `--debug-symbols`, x86-64-v3), ~1300 instructions per inherited read split
+//! as: `native_get::try_data_get_bytes` self 344; `class_prototype_object` 192,
+//! of which 118 is the SipHash of the `CLASS_PROTOTYPE_OBJECTS` probe;
+//! `keys_find_slot_by_bytes_resolved` 180 (twice — receiver, then holder);
+//! `get_field_ic_miss_impl` self 153; `closure_dynamic_prop_by_key` 90;
+//! `shape_descriptor_by_id` 70; `is_anon_shape_class_id` 54;
+//! `class_decl_prototype_object` 41; `from_utf8` 38; `is_arguments_object` 28.
+//! Neither `get_object_prototypes` nor `pthread_mutex_lock` appears at all,
+//! because #6759 phase B already took every `GC_TYPE_OBJECT` off this table —
+//! the prototype of an `Object.create` receiver comes from the class registry,
+//! not from here.
+//!
+//! So the table is not a duplicate of `ObjectMeta.prototype` waiting to be
+//! deleted; it is the ONLY storage the kinds below have. Removing it means
+//! giving each of them a prototype slot of its own, kind by kind: arrays and
+//! lazy arrays (an `ArrayHeader` slot — the #6759 tranche this module's header
+//! already names), typed arrays, `ArrayBuffer`/`SharedArrayBuffer`/`DataView`
+//! (`BufferHeader`), `GC_TYPE_REGEXP`, `Map`/`Set`/`Error`/`Promise`/`Date`/
+//! `Temporal` cells, closures (`dyn_eval`), and native handle-band ids, which
+//! are integers with no cell at all (the Express `res`/`req` case in
+//! `object_ops::define_properties`) and so need a different answer entirely.
+//! None of that work makes an inherited property read faster.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
