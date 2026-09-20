@@ -60,6 +60,18 @@ if [[ ! "$PERRY_RUN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_RUN_TIMEOUT '$PERRY_RUN_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
+# #10757: the COMPILE step below had no timeout at all (only the executed-
+# binary run did, via PERRY_RUN_TIMEOUT above) — a compiler hang/superlinear
+# blowup on one fixture wedged the whole harness rather than failing that one
+# test. 300s is generous enough to absorb a legitimate cold-cache
+# auto-optimize runtime/stdlib rebuild (which the fast-mode/PERRY_SKIP_BUILD
+# tiers don't pay per test, but a from-scratch full-tier run can on its first
+# test) while still bounding a genuine defect to minutes, not "forever".
+PERRY_COMPILE_TIMEOUT="${PERRY_COMPILE_TIMEOUT:-300}"
+if [[ ! "$PERRY_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid PERRY_COMPILE_TIMEOUT '$PERRY_COMPILE_TIMEOUT' (want a positive integer)" >&2
+    exit 1
+fi
 # Per-run scratch dir for compiled test binaries (2026-07-02 audit): the old
 # fixed /tmp/perry_parity_<test-id> paths meant two concurrent suite runs
 # (two agents / two worktrees on one machine) executed EACH OTHER'S compiler
@@ -1445,10 +1457,10 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(run_with_timeout "$PERRY_COMPILE_TIMEOUT" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(run_with_timeout "$PERRY_COMPILE_TIMEOUT" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
