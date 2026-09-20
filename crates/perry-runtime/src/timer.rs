@@ -984,21 +984,21 @@ fn timer_object(id: i64, kind: CallbackTimerKind) -> i64 {
         "a timer handle must carry its prototype, or it has no methods"
     );
     if !proto.is_null() {
-        crate::object::prototype_chain::object_link_class_default_prototype(
-            handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
-            crate::value::js_nanbox_pointer(proto as i64).to_bits(),
-        );
+        handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+            crate::object::prototype_chain::object_link_class_default_prototype(
+                obj as usize,
+                crate::value::js_nanbox_pointer(proto as i64).to_bits(),
+            );
+        });
     }
-    unsafe {
-        let meta = crate::object::object_meta_ensure(
-            handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        );
+    handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
+        let meta = crate::object::object_meta_ensure(obj);
         debug_assert!(!meta.is_null(), "a timer handle must carry its meta");
         if !meta.is_null() {
             (*meta).native_state = timer_state_word(id, kind);
         }
-    }
-    handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
+    });
+    handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| obj as i64)
 }
 
 pub use ref_states::is_known_timer_id;
