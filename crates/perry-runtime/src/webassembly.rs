@@ -1677,7 +1677,10 @@ pub extern "C" fn js_webassembly_memory_new(initial: u32, maximum: u32, receiver
     }
     let mut len = 0usize;
     let data = unsafe { perry_wasm_host_memory_span(external, &mut len) };
-    let buffer = crate::buffer::buffer_alloc_foreign(data, len.min(u32::MAX as usize) as u32);
+    let buffer = crate::buffer::buffer_alloc_foreign(
+        data,
+        len.min(crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize) as u32,
+    );
     if buffer.is_null() {
         return nanbox_undefined();
     }
@@ -1717,7 +1720,10 @@ pub extern "C" fn js_webassembly_memory_grow(memory_value: f64, delta: u32) -> f
     let previous = unbox_pointer(previous) as usize;
     let mut len = 0usize;
     let data = unsafe { perry_wasm_host_memory_span(handle as *mut c_void, &mut len) };
-    let buffer = crate::buffer::buffer_alloc_foreign(data, len.min(u32::MAX as usize) as u32);
+    let buffer = crate::buffer::buffer_alloc_foreign(
+        data,
+        len.min(crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize) as u32,
+    );
     if buffer.is_null() {
         return -1.0;
     }

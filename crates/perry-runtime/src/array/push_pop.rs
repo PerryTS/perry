@@ -150,8 +150,15 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             return arr;
         }
 
-        // Double the capacity, or use min_capacity if larger
-        let new_capacity = std::cmp::max(old_capacity * 2, min_capacity);
+        // Double the capacity, or use min_capacity if larger.
+        //
+        // RULE 3 (`object/shape_rule3.rs`): the result lands in `capacity` at
+        // payload `+4`, so it is bounded here, before the replacement block is
+        // sized. The bound also removes the `old_capacity * 2` overflow this
+        // line used to carry: with `old_capacity <= 2^31-1` the doubling can
+        // no longer wrap a `u32`.
+        let new_capacity =
+            super::alloc::array_capacity_or_throw(std::cmp::max(old_capacity * 2, min_capacity));
         // A named-property reserve (`named_props.rs`) travels with the array:
         // the replacement allocation keeps the same number of physical slots
         // in front of logical element 0, so `capacity` excludes them on both
@@ -195,10 +202,6 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         let shifted = array_front_offset(arr) != reserve;
         (*new_ptr).length = (*arr).length;
-        crate::object::shape_rule3::debug_assert_not_shape_id_word(
-            "ArrayHeader::capacity (grow)",
-            new_capacity,
-        );
         (*new_ptr).capacity = new_capacity;
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the logical backing
         // range, transfers its layout, and replays its write barriers below.
