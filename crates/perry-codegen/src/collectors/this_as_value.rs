@@ -376,11 +376,31 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         | Expr::Logical { left, right, .. } => {
             expr_uses_this_as_value(left, fields) || expr_uses_this_as_value(right, fields)
         }
+        // #10822: `delete this.k` inside a constructor REMOVES a property,
+        // and scalar replacement has no representation for absence -- the
+        // field alloca keeps the pre-delete value and the emitted runtime
+        // delete runs against a `this` that was never materialized, where the
+        // primitive-receiver guard makes it a silent no-op. `class C {
+        // constructor() { this.c = 3; delete this.c; } }` then read `o.c`
+        // back as `3`.
+        //
+        // The `PropertyGet { object: This }` arm above answers "safe, scalar
+        // replacement intercepts it" for a DECLARED field, and the generic
+        // unary arm below used to strip the `delete` and ask exactly that.
+        // A removal needs a real heap `this`, so say so here -- the same rule
+        // the `LocalGet` receivers get in `escape_check.rs`.
+        Expr::Delete(operand) => match operand.as_ref() {
+            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                if matches!(object.as_ref(), Expr::This) =>
+            {
+                true
+            }
+            _ => expr_uses_this_as_value(operand, fields),
+        },
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
         | Expr::Await(operand)
-        | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
