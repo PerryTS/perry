@@ -166,7 +166,6 @@ repo = "https://github.com/lovell/sharp"
 ref = "1018449164723ba0203c1beffaba0e21f7829c18"
 ported-at = "0.35.3"
 date = "2026-07-30"
-date = "2026-07-30"
 [bindings.ethers]
 crate = "perry-ext-ethers"
 lib = "perry_ext_ethers"
