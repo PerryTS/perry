@@ -30,6 +30,7 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
+    (*meta).native_state = 0;
     (*meta).array_subclass_named_prefix_token = 0;
     (*meta).array_tail_object_hot = 0;
     (*meta).array_subclass_dense_key = 0;
@@ -74,6 +75,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
+    (*meta).native_state = 0;
     (*meta).array_subclass_named_prefix_token = 0;
     (*meta).array_tail_object_hot = 0;
     (*meta).array_subclass_dense_key = 0;

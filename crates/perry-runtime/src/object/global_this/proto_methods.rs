@@ -209,6 +209,67 @@ extern "C" fn object_prototype_dunder_proto_setter_thunk(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// Install a native accessor (getter only) on a builtin prototype. The getter
+/// is an ordinary `ClosureHeader` that reads its receiver from `IMPLICIT_THIS`
+/// and brand-checks it, so `Object.getOwnPropertyDescriptor(P, k).get.call({})`
+/// throws like node's.
+///
+/// Two things this must NOT do, both learned rather than assumed:
+///
+/// * it must not use `install_fresh_accessor_property`, which flips the
+///   process-wide `GLOBAL_DESCRIPTORS_IN_USE` gate (#6809) and would push every
+///   later dynamic property write in ANY program that merely constructs a
+///   `TextDecoder` onto the descriptor-interception slow walk;
+/// * it must put the key in the prototype's keys array, or
+///   `Object.getOwnPropertyNames(TextDecoder.prototype)` and `for...in` on an
+///   instance would not see it.
+///
+/// `install_builtin_getter` does both. It records the ECMA-262 builtin shape
+/// (`enumerable: false`), which is right for its other callers
+/// (`ArrayBuffer.prototype.byteLength`), so the WebIDL flags are restated on
+/// the same entry afterwards: interface members are
+/// `{ enumerable: true, configurable: true }`, and node prints
+/// `for-in d: decode,encoding,fatal,ignoreBOM`.
+#[cfg(feature = "global-text")]
+fn install_text_accessor(proto_obj: *mut ObjectHeader, name: &str, getter: *const u8) {
+    unsafe {
+        crate::closure::js_register_closure_arity(getter, 0);
+        let closure = crate::closure::js_closure_alloc(getter, 0);
+        if closure.is_null() {
+            return;
+        }
+        let get_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+        // Spec: an accessor getter's own `.name` is `"get " + key` and its
+        // `.length` is 0, and it is not constructable.
+        super::super::native_module::set_bound_native_closure_name(closure, &format!("get {name}"));
+        super::super::native_module::set_builtin_closure_length(closure as usize, 0);
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+        install_builtin_getter(proto_obj, name, get_bits);
+        super::super::set_builtin_accessor_descriptor(
+            proto_obj as usize,
+            name.to_string(),
+            super::super::AccessorDescriptor {
+                get: get_bits,
+                set: 0,
+            },
+            super::super::PropertyAttrs::new(true, true, true),
+        );
+    }
+}
+
+/// Mark an already-installed prototype method enumerable. WebIDL interface
+/// members are enumerable; `install_proto_method` records the ECMA-262 builtin
+/// shape (`enumerable: false`), which is right for its other callers, so the
+/// text family restates its own entries here instead.
+#[cfg(feature = "global-text")]
+fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
+    super::super::set_builtin_property_attrs(
+        proto_obj as usize,
+        name.to_string(),
+        super::super::PropertyAttrs::new(true, true, true),
+    );
+}
+
 pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
@@ -824,15 +885,60 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        // #340/#341: these carried `install_noop_proto_methods` placeholders —
+        // the prototype looked right to reflection while the real work went
+        // through the handle-dispatch table. Instances are ordinary objects
+        // now, so the prototype carries the real implementations and an
+        // ordinary property lookup finds them.
         #[cfg(feature = "global-text")]
         "TextEncoder" => {
-            install_noop_proto_methods(proto_obj, &[("encode", 1), ("encodeInto", 2)]);
+            install_proto_method(
+                proto_obj,
+                "encode",
+                crate::text::text_encoder_encode_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "encodeInto",
+                crate::text::text_encoder_encode_into_thunk as *const u8,
+                2,
+            );
+            install_text_accessor(
+                proto_obj,
+                "encoding",
+                crate::text::text_encoder_encoding_getter as *const u8,
+            );
+            for name in ["encode", "encodeInto"] {
+                make_proto_member_enumerable(proto_obj, name);
+            }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
         #[cfg(feature = "global-text")]
         "TextDecoder" => {
-            install_noop_proto_methods(proto_obj, &[("decode", 1)]);
+            install_proto_method(
+                proto_obj,
+                "decode",
+                crate::text::text_decoder_decode_thunk as *const u8,
+                1,
+            );
+            install_text_accessor(
+                proto_obj,
+                "encoding",
+                crate::text::text_decoder_encoding_getter as *const u8,
+            );
+            install_text_accessor(
+                proto_obj,
+                "fatal",
+                crate::text::text_decoder_fatal_getter as *const u8,
+            );
+            install_text_accessor(
+                proto_obj,
+                "ignoreBOM",
+                crate::text::text_decoder_ignore_bom_getter as *const u8,
+            );
+            make_proto_member_enumerable(proto_obj, "decode");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }

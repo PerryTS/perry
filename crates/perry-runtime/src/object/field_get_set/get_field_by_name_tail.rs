@@ -75,10 +75,6 @@ pub(crate) fn get_field_by_name_object_tail(
                                 return JSValue::from_bits(result.to_bits());
                             }
                         }
-                        if let Some(v) = crate::text::text_handle_property(raw as usize, key_bytes)
-                        {
-                            return v;
-                        }
                     }
                     // Drizzle-sqlite blocker: synth `data.constructor` for
                     // small-handle native instances so drizzle's
@@ -156,9 +152,6 @@ pub(crate) fn get_field_by_name_object_tail(
                         );
                         return JSValue::from_bits(result.to_bits());
                     }
-                }
-                if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
-                    return v;
                 }
             }
             if let Some(dispatch) = handle_property_dispatch() {

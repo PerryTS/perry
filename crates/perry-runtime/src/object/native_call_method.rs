@@ -1465,46 +1465,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object(), want_async);
     }
-    // TextDecoder / TextEncoder registry handles on a type-erased receiver —
-    // same wall class as the URLSearchParams / AbortSignal blocks below: the
-    // statically-typed `td.decode(buf)` lowers straight to
-    // `js_text_decoder_decode_llvm`, but a fused dynamic call (through an
-    // untyped local, or via the bound method the VALUE read in
-    // `get_field_by_name_tail.rs` reifies for `K.decode.bind(K)` — the shape
-    // a minified SDK's cached decodeText helper takes) lands here, and the
-    // generic field-scan would miss and throw "is not a function".
-    if matches!(method_name, "decode" | "encode" | "encodeInto") && jsval().is_pointer() {
-        let raw = (object().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if crate::value::addr_class::is_small_handle(raw) {
-            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let arg0 = if args_len > 0 && !args_ptr.is_null() {
-                *args_ptr
-            } else {
-                undef
-            };
-            if method_name == "decode" && crate::text::is_known_text_decoder_id(raw as i64) {
-                let sp = crate::text::js_text_decoder_decode_llvm(object(), arg0);
-                return f64::from_bits(
-                    JSValue::string_ptr(sp as *mut crate::string::StringHeader).bits(),
-                );
-            }
-            if raw as i64 == crate::text::TEXT_ENCODER_SENTINEL_ID {
-                if method_name == "encode" {
-                    let bp = crate::text::js_text_encoder_encode_llvm(arg0);
-                    return crate::value::js_nanbox_pointer(bp);
-                }
-                if method_name == "encodeInto" {
-                    let arg1 = if args_len > 1 && !args_ptr.is_null() {
-                        *args_ptr.add(1)
-                    } else {
-                        undef
-                    };
-                    let rp = crate::text::js_text_encoder_encode_into_llvm(arg0, arg1);
-                    return crate::value::js_nanbox_pointer(rp);
-                }
-            }
-        }
-    }
+    // #340/#341: TextDecoder / TextEncoder no longer need an arm here. Their
+    // instances are ordinary objects linked to a per-family prototype, so a
+    // fused dynamic call on a type-erased receiver resolves `decode` / `encode`
+    // / `encodeInto` through the generic prototype walk below, exactly as it
+    // does for a user class. The arm this replaces existed only because a
+    // small-handle receiver had no prototype to walk.
     // #5961/#6710: native URLSearchParams (class_id == 0, leading `_entries`
     // slot) AND `class X extends URLSearchParams` subclass instances resolve
     // their method surface via static type-directed lowering. A fused dynamic

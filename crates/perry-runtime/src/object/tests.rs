@@ -1311,9 +1311,9 @@ fn wide_object_own_key_present_uses_index_and_object_values_is_complete() {
 /// `Headers`/`Request`/`Response`/`Blob` registry id, or any other small native
 /// handle) as a heap pointer -- `id - 8` / `id` faults on unmapped low memory.
 /// This is the `claude -p` SIGSEGV (`EXC_BAD_ACCESS` at `0x3FFFB` ==
-/// `0x40003 - 8`). Every id here is unclaimed in a bare unit-test process
-/// (not `TEXT_ENCODER_SENTINEL_ID` either -- see the sibling test below), so
-/// the brand must fall through to the generic `[object Object]` tag.
+/// `0x40003 - 8`). Every id here is unclaimed in a bare unit-test process, so
+/// the brand must fall through to the generic `[object Object]` tag. (The text
+/// family no longer mints ids at all -- see the sibling test below.)
 #[test]
 fn object_to_string_rejects_handle_band_ids() {
     use crate::value::addr_class;
@@ -1324,11 +1324,6 @@ fn object_to_string_rejects_handle_band_ids() {
         3usize,                                  // common native handle, unclaimed
     ] {
         assert!(addr_class::is_handle_band(id));
-        assert_ne!(
-            id,
-            crate::text::TEXT_ENCODER_SENTINEL_ID as usize,
-            "must not pick an id #10555 gives real meaning to"
-        );
         let handle = crate::value::js_nanbox_pointer(id as i64);
         // Must return a string brand without dereferencing the bogus pointer.
         let result = unsafe { js_object_to_string(handle) };
@@ -1340,12 +1335,14 @@ fn object_to_string_rejects_handle_band_ids() {
     }
 }
 
-/// #10555: `TEXT_ENCODER_SENTINEL_ID` is the id every `TextEncoder` shares --
-/// unlike the ids above, `js_object_to_string` must brand it `TextEncoder`
-/// unconditionally, matching the runtime's own treatment of that id.
+/// #10555 / #340 / #341: there is no `TextEncoder` sentinel id any more — an
+/// encoder is an ordinary object linked to `TextEncoder.prototype`, so the
+/// brand comes from the `Symbol.toStringTag` installed there and the generic
+/// own/inherited walk finds it with no special arm. Same observable answer,
+/// reached the ordinary way.
 #[test]
-fn object_to_string_brands_the_text_encoder_sentinel() {
-    let handle = crate::value::js_nanbox_pointer(crate::text::TEXT_ENCODER_SENTINEL_ID);
+fn object_to_string_brands_a_real_text_encoder() {
+    let handle = crate::value::js_nanbox_pointer(crate::text::js_text_encoder_new());
     let result = unsafe { js_object_to_string(handle) };
     let s = js_string_to_rust(JSValue::from_bits(result.to_bits()));
     assert_eq!(s, "[object TextEncoder]");

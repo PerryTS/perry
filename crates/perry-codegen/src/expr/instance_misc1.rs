@@ -594,6 +594,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `class X extends EventTarget` instance reaches it through the
                 // parent edge the class registry wires at definition time.
                 "EventTarget" | "globalThis.EventTarget" => 0xFFFF2406u32,
+                // #340/#341. Keep in sync with TEXT_{ENCODER,DECODER}_CLASS_ID
+                // in perry-runtime/src/text.rs. These instances are ordinary
+                // objects carrying the class id on their header, so the runtime
+                // class-id chain matches them with no probe -- the same shape as
+                // EventTarget above. Before they became ordinary objects there
+                // was no id to name here, so `e instanceof TextEncoder` folded
+                // to `js_instanceof(_, 0)` == false where node says true.
+                "TextEncoder" | "globalThis.TextEncoder" => 0xFFFF2407u32,
+                "TextDecoder" | "globalThis.TextDecoder" => 0xFFFF2408u32,
                 // node:fs constructor exports. Keep these ids in sync with
                 // perry-runtime/src/fs/mod.rs and instanceof.rs.
                 "fs.Dir" => 0xFFFF0086u32,

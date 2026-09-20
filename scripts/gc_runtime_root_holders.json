@@ -1118,12 +1118,6 @@
       "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be \u2014 see #7246."
     },
     {
-      "file": "crates/perry-runtime/src/text.rs",
-      "name": "DECODER_REGISTRY",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by decoder handle id; DecoderState is Rust-owned (encoding enum, label, flags), no JS values."
-    },
-    {
       "file": "crates/perry-runtime/src/thread.rs",
       "name": "ACTIVE_THREAD_JOBS",
       "verdict": "not_a_gc_pointer",

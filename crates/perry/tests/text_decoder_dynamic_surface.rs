@@ -19,10 +19,13 @@
 //! `TypeError: Bind must be called on a function`, killing every streamed
 //! (SSE) API response in a large esbuild-bundled CLI app.
 //!
-//! Fix: `text_handle_property` (get_field_by_name_tail.rs) reifies the
-//! method/accessor surface for VALUE reads at all three funnels, and a
-//! dispatch arm in `native_call_method.rs` routes `decode` / `encode` /
-//! `encodeInto` on text registry handles to the text natives.
+//! Fix, first as `text_handle_property` (a reifier for VALUE reads at all three
+//! funnels) plus a `native_call_method.rs` dispatch arm; since #340/#341 both
+//! are DELETED and the surface comes from the representation instead: an
+//! instance is an ordinary object linked to `TextDecoder.prototype`, so the
+//! same reads and fused calls resolve through the generic prototype walk. The
+//! tests below are unchanged and still pin the behaviour — which is the point
+//! of having written them against behaviour rather than representation.
 
 use std::path::PathBuf;
 use std::process::Command;

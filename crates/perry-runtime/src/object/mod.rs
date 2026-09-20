@@ -1605,6 +1605,27 @@ pub struct ObjectMeta {
     /// Distinct descriptor-key count, saturating at 2. See
     /// [`ObjectMeta::descriptor_key_hash`].
     pub descriptor_key_count: u64,
+    /// #340/#341 honest tags: packed state for a runtime class whose instances
+    /// are ORDINARY objects rather than small registry handles
+    /// (`TextEncoder` / `TextDecoder` today; the other twelve families follow).
+    ///
+    /// The layout is private to the owning family — `text.rs` packs
+    /// `(present | encoding index | fatal | ignoreBOM)` here — and `0` means
+    /// "this object has no native state". It lives in the meta record rather
+    /// than an inline slot for the same reason as
+    /// [`ObjectMeta::private_evaluation_brand`]: it must not consume a user
+    /// field slot, alter the ShapeId or key order, or become visible to
+    /// enumeration. An inline slot would also be handed to the first user
+    /// expando (`decoder.mine = 1`) by the slot allocator and overwritten.
+    ///
+    /// POD. Never a managed-heap edge — the GC trace arm visits this record's
+    /// child edges explicitly and this word is not one of them, exactly like
+    /// `array_tail_object_hot`.
+    ///
+    /// LAST FIELD ON PURPOSE: this record carries `offset_of!` assertions for
+    /// the words codegen and the spill lanes address by index, so a new field
+    /// may only be appended.
+    pub native_state: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_DIVERGED: u64 = 1;
@@ -1654,6 +1675,11 @@ const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_tail_object_hot) ==
 // `ObjectHeader.meta` then this word (perry-codegen `expr/index_get` and
 // `property_get/composed_ics.rs`). Keep in lock-step.
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, elements) == 96);
+// #340/#341: `native_state` must stay the LAST word. The offsets above are
+// addressed by index from emitted code, so a field inserted mid-struct moves
+// them silently; this pins the append instead of trusting the comment.
+const _: () =
+    assert!(std::mem::offset_of!(ObjectMeta, native_state) + 8 == std::mem::size_of::<ObjectMeta>());
 const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 8);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
