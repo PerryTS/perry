@@ -237,7 +237,7 @@ mod tests {
         });
         let mut slot: *mut InPresenceCache = std::ptr::null_mut();
         let answer = obj.with_mut_ptr(|o: *mut ObjectHeader| {
-            key.with_const_ptr(|k| unsafe {
+            key.with_const_ptr(|k: *const crate::StringHeader| unsafe {
                 js_in_operator_presence_ic(
                     f64::from_bits(crate::value::js_nanbox_pointer(o as i64).to_bits()),
                     f64::from_bits(crate::value::js_nanbox_string(k as i64).to_bits()),
