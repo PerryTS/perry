@@ -133,11 +133,46 @@ def _executable_clang(recorded: str | None, fallback: str) -> str:
     return recorded
 
 
-def _compile_env(clang: str, *, enable_gc_trace: bool = False) -> dict[str, str]:
+def _compile_env(
+    clang: str,
+    *,
+    enable_gc_trace: bool = False,
+    suppress_auto_optimize: bool = False,
+) -> dict[str, str]:
+    """Environment for one `perry compile` subprocess.
+
+    `suppress_auto_optimize` is per-call and defaults to OFF (#10782).
+    Auto-optimize rebuilds perry-runtime + perry-stdlib from source into a
+    hash-keyed `target/perry-auto-<hash>/`, so the FIRST `perry compile` in a
+    job blocks on a nested cold `cargo build --release`. That build does not
+    fit inside `--compile-timeout` (300s), which is how this gate went red: the
+    compiler sat at 0% CPU with a `cargo build -p perry-runtime-static -p
+    perry-stdlib-static` child until the harness killed it, and the resulting
+    traceback read like a compiler hang.
+
+    Setting it for every compile would be wrong. The two `perry compile` calls
+    in `capture()` are not the same kind of step:
+
+    * The `--print-hir --no-link` probe produces no binary and links no
+      runtime, so which runtime auto-optimize would have built cannot be
+      observed in anything the probe feeds (`hir.txt`). Suppressing there is
+      inert -- the same reasoning `compile_and_census` already records for its
+      own `--no-link` compile.
+    * The linking compile produces the binary that `run_benchmark` /
+      `run_perf_stat` then EXECUTE, and `runtime_budgets`'
+      `allocations_traced` / `gc_collections_traced` / `write_barriers_traced`
+      are read back out of that binary's `PERRY_GC_TRACE` stderr. There the
+      linked runtime is the subject, not a detail. Worse, those budgets are
+      MAXIMA: a runtime that emits no trace at all scores 0 on all three and
+      passes every one of them vacuously, so quietly swapping the runtime
+      would leave the gate green while it measured nothing.
+    """
     env = {**os.environ, "PERRY_LLVM_KEEP_IR": "1", "PERRY_NO_CACHE": "1"}
     env["PERRY_LLVM_CLANG"] = clang
     if enable_gc_trace:
         env["PERRY_GC_TRACE"] = "1"
+    if suppress_auto_optimize:
+        env["PERRY_NO_AUTO_OPTIMIZE"] = "1"
     return env
 
 
@@ -242,7 +277,13 @@ def capture(args: argparse.Namespace) -> int:
     commands["hir"] = run_command(
         hir_cmd,
         cwd=out_dir,
-        env=_compile_env(clang, enable_gc_trace=compile_gc_trace),
+        env=_compile_env(
+            clang,
+            enable_gc_trace=compile_gc_trace,
+            # #10782: `--no-link` -- no binary, no linked runtime, nothing
+            # downstream of this probe can see the difference.
+            suppress_auto_optimize=True,
+        ),
         timeout=args.compile_timeout,
         stdout_path=hir_stdout,
         stderr_path=hir_stderr,
