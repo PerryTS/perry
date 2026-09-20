@@ -26,8 +26,9 @@ pub(crate) fn nanbox_canon_enabled() -> bool {
     })
 }
 
-/// #10779: collapse any NaN in a float lane just loaded from ArrayBuffer-backed
-/// memory to the canonical quiet NaN, so it cannot alias a NaN-box tag.
+/// #10779: collapse any NaN in a raw native `f64` — an ArrayBuffer float lane,
+/// a POD record field, or a C function's `double` return — to the canonical
+/// quiet NaN, so it cannot alias a NaN-box tag.
 ///
 /// The runtime twin is `perry_runtime::array::canonical_raw_f64`, whose doc
 /// comment carries the full argument for why EVERY NaN must be collapsed and
@@ -64,7 +65,10 @@ pub(crate) fn canonicalize_lane_f32(blk: &mut LlBlock, value: &str) -> String {
     if !nanbox_canon_enabled() {
         return value.to_string();
     }
-    let is_nan = blk.fcmp("uno", value, value);
+    // MUST be `fcmp uno float`, not the `double` default: the operand is an
+    // f32 in the native lattice. Emitting `double` here made every program
+    // calling `Buffer.readFloatLE` fail codegen.
+    let is_nan = blk.fcmp_ty(F32, "uno", value, value);
     blk.select(I1, &is_nan, F32, CANONICAL_QNAN_DOUBLE, value)
 }
 
@@ -117,4 +121,94 @@ pub(crate) fn i32_to_nanbox(blk: &mut LlBlock, i32_val: &str) -> String {
     let payload = blk.zext(I32, i32_val, I64);
     let tagged = blk.or(I64, &payload, INT32_TAG_I64);
     blk.bitcast_i64_to_double(&tagged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::{LlBlock, RegCounter};
+    use crate::inst::LlInst;
+    use crate::types::DOUBLE;
+    use std::rc::Rc;
+
+    fn blk() -> LlBlock {
+        LlBlock::new("t", Rc::new(RegCounter::new()))
+    }
+
+    /// #10779 follow-up. `LlBlock::fcmp` renders its operand type as `double`
+    /// unconditionally, so canonicalising an f32 lane through it emitted
+    /// `fcmp uno double %f32` — IR LLVM rejects with
+    /// "'%r' defined with type 'float' but expected 'double'". Every program
+    /// calling `Buffer.readFloatLE` failed codegen, and no fixture in the
+    /// suite called it, so nothing caught it.
+    ///
+    /// The sabotage is one word: change `F32` back to `DOUBLE` in
+    /// `canonicalize_lane_f32` and this test fails, naming the emitted type.
+    #[test]
+    fn f32_canonicalisation_compares_as_float_not_double() {
+        let mut b = blk();
+        let out = canonicalize_lane_f32(&mut b, "%x");
+        assert_ne!(out, "%x", "the f32 lane must actually be canonicalised");
+        let fcmp = b
+            .insts()
+            .iter()
+            .find_map(|i| match i {
+                LlInst::FCmp { pred, ty, .. } => Some((pred.clone(), *ty)),
+                _ => None,
+            })
+            .expect("canonicalize_lane_f32 must emit an fcmp");
+        assert_eq!(fcmp.0, "uno", "the NaN test must be an unordered compare");
+        assert_eq!(
+            fcmp.1, F32,
+            "an f32 lane must be compared AS float; `double` here is IR LLVM \
+             rejects and it broke every `Buffer.readFloatLE` call site"
+        );
+    }
+
+    /// The f64 twin, so a future edit cannot fix the f32 case by widening
+    /// both to `float`.
+    #[test]
+    fn f64_canonicalisation_compares_as_double() {
+        let mut b = blk();
+        let out = canonicalize_lane_f64(&mut b, "%x");
+        assert_ne!(out, "%x");
+        let ty = b
+            .insts()
+            .iter()
+            .find_map(|i| match i {
+                LlInst::FCmp { ty, .. } => Some(*ty),
+                _ => None,
+            })
+            .expect("canonicalize_lane_f64 must emit an fcmp");
+        assert_eq!(ty, DOUBLE);
+    }
+
+    /// Both canonicalisers must select the SAME canonical quiet NaN, spelled
+    /// in LLVM's hex double form so the payload cannot be rounded away, and
+    /// must select it on the TRUE (is-NaN) arm.
+    #[test]
+    fn both_select_the_canonical_quiet_nan_on_the_nan_arm() {
+        for (name, want_ty) in [("f64", DOUBLE), ("f32", F32)] {
+            let mut b = blk();
+            if name == "f64" {
+                let _ = canonicalize_lane_f64(&mut b, "%x");
+            } else {
+                let _ = canonicalize_lane_f32(&mut b, "%x");
+            }
+            let sel = b
+                .insts()
+                .iter()
+                .find_map(|i| match i {
+                    LlInst::Select { ty, a, b: fb, .. } => Some((*ty, a.clone(), fb.clone())),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{name} must emit a select"));
+            assert_eq!(sel.0, want_ty, "{name} select operand type");
+            assert_eq!(
+                sel.1, CANONICAL_QNAN_DOUBLE,
+                "{name} must pick the canonical quiet NaN when the value IS a NaN"
+            );
+            assert_eq!(sel.2, "%x", "{name} must pass a non-NaN through unchanged");
+        }
+    }
 }
