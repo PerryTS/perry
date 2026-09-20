@@ -3987,6 +3987,16 @@
       "name": "TIMER_CALLBACK_DISPATCH_DEPTH"
     },
     {
+      "file": "crates/perry-runtime/src/timer/handle_object.rs",
+      "name": "TIMEOUT_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/timer/handle_object.rs",
+      "name": "IMMEDIATE_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
       "file": "crates/perry-runtime/src/tls_hot.rs",
       "name": "AFTER_PROBE"
     },
