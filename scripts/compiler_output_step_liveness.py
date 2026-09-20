@@ -37,6 +37,12 @@ UNIT_TEST_SUBJECTS = (
     "Run native ABI evidence report unit tests",
 )
 COMPILER_SUBJECTS = (
+    # #10782: pays auto-optimize's two cold runtime builds under a budget of
+    # its own, so no gate step below absorbs a 343s nested cargo build inside
+    # its 300s --compile-timeout. It is a subject, not scaffolding: it carries
+    # its own liveness assertions and can fail, so it must be listed here or a
+    # silently-removed pre-warm would hand every gate back its timeout.
+    "Pre-warm auto-optimized runtime",
     "Gate native-region proof compiler output",
     "Gate native-ABI proof compiler output",
     "Gate typed feedback runtime evidence",
