@@ -306,14 +306,38 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
 
     // Collect the partial-applied (bound) leading args, then append the
     // call-time args. `g = f.bind(obj, 2); g(3)` calls `f` with `(2, 3)`.
-    let mut combined: Vec<f64> = Vec::with_capacity(args.len() + 4);
-    if !bound_args_ptr.is_null() {
+    //
+    // The overwhelmingly common shape is `.bind(thisArg)` with NO partial
+    // args at all — a plain method reference (`arr.forEach(obj.method.bind(
+    // obj))`), the callback shape `direct.rs` cannot hoist out of a loop
+    // (BoundFunction is deliberately excluded from `resolve_direct_func_ptr`
+    // — see that module's doc), so this function runs on every element.
+    // `js_function_bind` leaves capture slot 2 (`bound_args_ptr`) null
+    // whenever `bound_arg_count == 0`, so that's exactly the free-to-detect
+    // case: skip the allocate-copy-free `Vec` and hand `js_native_call_value`
+    // the caller's own `args` slice directly. Only the actual
+    // partial-application shape (`.bind(obj, extra)`) still needs a combined
+    // buffer.
+    let mut combined: Vec<f64>;
+    let (call_ptr, call_len): (*const f64, usize) = if bound_args_ptr.is_null() {
+        if args.is_empty() {
+            (std::ptr::null(), 0)
+        } else {
+            (args.as_ptr(), args.len())
+        }
+    } else {
         let n = crate::array::js_array_length(bound_args_ptr) as usize;
+        combined = Vec::with_capacity(n + args.len());
         for i in 0..n {
             combined.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
         }
-    }
-    combined.extend_from_slice(args);
+        combined.extend_from_slice(args);
+        if combined.is_empty() {
+            (std::ptr::null(), 0)
+        } else {
+            (combined.as_ptr(), combined.len())
+        }
+    };
 
     // A bound concise/object-literal method reads `this` from its baked capture
     // slot, not IMPLICIT_THIS — rebind it to the bound receiver so the bound
@@ -321,11 +345,6 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     let target = rebind_explicit_this(target, bound_this);
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(bound_this));
-    let (call_ptr, call_len) = if combined.is_empty() {
-        (std::ptr::null::<f64>(), 0usize)
-    } else {
-        (combined.as_ptr(), combined.len())
-    };
     let result = js_native_call_value(target, call_ptr, call_len);
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
