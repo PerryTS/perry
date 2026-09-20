@@ -69,6 +69,11 @@ pub enum LlInst {
     FCmp {
         dst: String,
         pred: String,
+        /// Operand type. This USED to be hardcoded `double` at the render
+        /// site, which silently produced invalid IR for a `float` operand
+        /// (#10779 follow-up: `Buffer.readFloatLE` failed codegen with
+        /// "'%r' defined with type 'float' but expected 'double'").
+        ty: LlvmType,
         a: String,
         b: String,
     },
@@ -193,8 +198,14 @@ impl LlInst {
             LlInst::FNeg { dst, pre, a } => {
                 let _ = write!(out, "  {dst} = fneg {pre}double {a}");
             }
-            LlInst::FCmp { dst, pred, a, b } => {
-                let _ = write!(out, "  {dst} = fcmp {pred} double {a}, {b}");
+            LlInst::FCmp {
+                dst,
+                pred,
+                ty,
+                a,
+                b,
+            } => {
+                let _ = write!(out, "  {dst} = fcmp {pred} {ty} {a}, {b}");
             }
             LlInst::ICmp {
                 dst,
