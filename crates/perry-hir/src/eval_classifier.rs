@@ -1071,30 +1071,57 @@ mod tests {
         assert_eq!(mine[0].detail.as_deref(), Some("process.binding"));
     }
 
+    /// Every **bundled npm shim** the live registry currently holds: a
+    /// `NATIVE_MODULES` specifier that is neither a Node builtin nor a
+    /// Perry-owned surface. Exactly the set `shimmed_package_module` is
+    /// supposed to resolve.
+    ///
+    /// Derived, never spelled out. Native npm-package bindings are being
+    /// stripped one PR at a time — #10765 took `dayjs`, `qs`, `fastify`,
+    /// `date-fns`, `rate-limiter-flexible` and `node-cron` in a single
+    /// commit — so a package name hardcoded into a test here is a red
+    /// `cargo-test` scheduled for whoever removes that package next, on a PR
+    /// that did not cause it.
+    ///
+    /// Clears the `compilePackages` override first: `is_native_module`
+    /// consults a thread-local one, and the lib tests share a thread under
+    /// `RUST_TEST_THREADS=1`.
+    fn live_bundled_npm_shims() -> Vec<&'static str> {
+        crate::ir::clear_compile_packages_override();
+        crate::ir::NATIVE_MODULES
+            .iter()
+            .copied()
+            .filter(|m| !crate::ir::is_node_builtin_module(m))
+            .filter(|m| *m != "perry" && !m.starts_with("perry/"))
+            .collect()
+    }
+
     /// A member of a **bundled npm shim** carries the `perry.compilePackages`
     /// remedy — in the recorded notice site AND in the message the deferred
     /// site throws.
     ///
-    /// This is the actionable half of #7204. `lodash` is in `NATIVE_MODULES`,
-    /// so Perry serves it from its own partial shim instead of the installed
-    /// package; when the shim is missing the member the program calls, the
-    /// user's fix is one `compilePackages` entry, and nothing in the old
-    /// diagnostic said so. `_.omit(headers, ['host'])` — a real Socket
-    /// Firewall call on every proxied request — is exactly this shape.
+    /// This is the actionable half of #7204. Perry serves a shimmed package
+    /// from its own partial implementation instead of the installed one; when
+    /// that implementation is missing the member the program calls, the user's
+    /// fix is one `compilePackages` entry, and nothing in the old diagnostic
+    /// said so. `_.omit(headers, ['host'])` — a real Socket Firewall call on
+    /// every proxied request — is exactly this shape; the subject below is
+    /// taken from [`live_bundled_npm_shims`] rather than named, because
+    /// `lodash` is itself a removal candidate.
     #[test]
     fn shimmed_npm_member_carries_the_compile_packages_remedy() {
         let _sink_guard = lock_eval_sink();
         set_unimplemented_strict_mode(false);
+        let module = *live_bundled_npm_shims()
+            .first()
+            .expect("NATIVE_MODULES must still hold at least one bundled npm shim");
+        let api = format!("{module}.definitelyNotAShimmedMember");
         let loc = "/app/shim_remedy_fixture.ts:3";
-        let decision = check_unimplemented_api(
-            "`lodash.omit` is not implemented (#463)",
-            "lodash.omit",
-            loc,
-            0,
-        );
+        let decision =
+            check_unimplemented_api(&format!("`{api}` is not implemented (#463)"), &api, loc, 0);
         match decision {
             UnimplementedDecision::DeferToRuntimeError(msg) => {
-                assert!(msg.contains("lodash.omit"), "msg: {msg}");
+                assert!(msg.contains(&api), "msg: {msg}");
                 assert!(msg.contains("perry.compilePackages"), "msg: {msg}");
                 assert!(msg.contains("bundled native shim"), "msg: {msg}");
             }
@@ -1103,13 +1130,16 @@ mod tests {
         let sites = take_deferred_eval_sites();
         let mine: Vec<_> = sites.iter().filter(|s| s.location == loc).collect();
         assert_eq!(mine.len(), 1, "exactly one recorded site for {loc}");
-        assert_eq!(mine[0].detail.as_deref(), Some("lodash.omit"));
+        assert_eq!(mine[0].detail.as_deref(), Some(api.as_str()));
         let remedy = mine[0]
             .remedy
             .as_deref()
             .expect("a shimmed npm member must carry a remedy");
         assert!(remedy.contains("compilePackages"), "remedy: {remedy}");
-        assert!(remedy.contains("\"lodash\""), "remedy: {remedy}");
+        assert!(
+            remedy.contains(&format!("\"{module}\"")),
+            "remedy: {remedy}"
+        );
     }
 
     /// The remedy applies to bundled npm shims ONLY.
@@ -1119,13 +1149,37 @@ mod tests {
     /// send the user chasing a fix that cannot exist. Deep labels
     /// (`crypto.subtle.digest`) resolve to a module name that isn't in
     /// `NATIVE_MODULES` and fall through the same way.
+    ///
+    /// The positive half is derived from the live registry (see
+    /// [`live_bundled_npm_shims`]); the negative half stays literal on
+    /// purpose, because those are *categories* — a Node builtin, a `node:`
+    /// spelling, a Perry surface, a deep label, an unshimmed package — and
+    /// each one pins a distinct branch of `shimmed_package_module`. Between
+    /// them the two halves are what keeps this test able to fail in both
+    /// directions.
     #[test]
     fn remedy_is_scoped_to_bundled_npm_shims() {
-        assert_eq!(shimmed_package_module("lodash.omit"), Some("lodash"));
-        assert_eq!(
-            shimmed_package_module("dayjs.businessDaysAdd"),
-            Some("dayjs")
+        let shims = live_bundled_npm_shims();
+        assert!(
+            !shims.is_empty(),
+            "no bundled npm shim is left in NATIVE_MODULES, so `shimmed_package_module` can no \
+             longer return Some and the compilePackages remedy is dead code — delete the remedy \
+             and this test rather than re-pointing this assertion"
         );
+        for module in shims {
+            let api = format!("{module}.definitelyNotAShimmedMember");
+            assert_eq!(
+                shimmed_package_module(&api),
+                Some(module),
+                "{api} must offer a compilePackages remedy"
+            );
+            let remedy =
+                shimmed_package_remedy(&api).unwrap_or_else(|| panic!("{api} must carry a remedy"));
+            assert!(
+                remedy.contains(&format!("\"{module}\"")),
+                "remedy: {remedy}"
+            );
+        }
 
         for api in [
             // Node builtins — nothing to compile from npm.
