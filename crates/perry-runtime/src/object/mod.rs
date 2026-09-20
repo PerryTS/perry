@@ -79,6 +79,8 @@ pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;
 pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
+mod census;
+pub(crate) use census::object_tables_census;
 mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
@@ -1969,46 +1971,4 @@ pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHead
         crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
             as *mut ObjectHeader,
     )
-}
-
-/// `PERRY_GC_CENSUS`: per-thread object tables (`RuntimeState`): the fixed
-/// caches, the overflow-field vectors and the descriptor tables.
-pub(crate) fn object_tables_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::{map_bytes, vec_bytes};
-    let st = crate::state::state();
-    let mut rows: Vec<crate::gc::census::SideTableRow> = Vec::new();
-    {
-        let m = st.object_hot.overflow_fields.borrow();
-        let inner: usize = m.values().map(vec_bytes).sum();
-        rows.push(("object.overflow_fields", m.len(), map_bytes(&m) + inner));
-    }
-    rows.push((
-        "object.transition_cache(fixed)",
-        TRANSITION_CACHE_SIZE,
-        TRANSITION_CACHE_SIZE * std::mem::size_of::<TransitionEntry>(),
-    ));
-    rows.push((
-        "object.shape_inline_cache(fixed)",
-        SHAPE_INLINE_CACHE_SIZE,
-        SHAPE_INLINE_CACHE_SIZE * std::mem::size_of::<ShapeCacheEntry>(),
-    ));
-    {
-        let m = st.descriptors.property_descriptors.borrow();
-        let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
-        rows.push((
-            "object.property_descriptors",
-            m.len(),
-            map_bytes(&m) + inner,
-        ));
-    }
-    {
-        let m = st.descriptors.accessor_descriptors.borrow();
-        let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
-        rows.push((
-            "object.accessor_descriptors",
-            m.len(),
-            map_bytes(&m) + inner,
-        ));
-    }
-    rows
 }
