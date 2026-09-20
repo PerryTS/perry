@@ -502,10 +502,13 @@ mod tests {
         let handle = scope.root_raw_mut_ptr(arr);
         assert_eq!(
             expect_throw(|| {
-                crate::array::js_array_grow(
-                    handle.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-                    SHAPE_ID_BASE,
-                );
+                // `with_mut_ptr` rather than a bare `get_raw_mut_ptr` read:
+                // `js_array_grow` is a runtime entry point taking the current
+                // address as an argument, which is exactly the scoped shape
+                // `scripts/raw_handle_debt.py` asks for (#7341).
+                handle.with_mut_ptr::<crate::array::ArrayHeader, _>(|arr| {
+                    crate::array::js_array_grow(arr, SHAPE_ID_BASE);
+                });
             }),
             "Invalid array length"
         );
