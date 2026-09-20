@@ -1188,8 +1188,12 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
         }
     }
 
-    // Double the capacity
-    let new_capacity = capacity * 2;
+    // Double the capacity. RULE 3: bounded before the realloc is sized, and
+    // with `capacity <= 2^31-1` the doubling can no longer wrap a `u32`.
+    let new_capacity = crate::object::shape_rule3::checked_plus_four_word(
+        capacity * 2,
+        b"Set maximum size exceeded",
+    );
     let old_layout = elements_layout(capacity as usize);
     let new_layout = elements_layout(new_capacity as usize);
 
@@ -1203,10 +1207,6 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
 
     // GC_STORE_AUDIT(INIT): set external buffer pointer moves; live slots are dirtied by caller.
     (*set).elements = new_elements;
-    crate::object::shape_rule3::debug_assert_not_shape_id_word(
-        "SetHeader::capacity (grow)",
-        new_capacity,
-    );
     (*set).capacity = new_capacity;
     SET_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
@@ -1226,6 +1226,11 @@ unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
 /// Allocate a new empty set with the given initial capacity
 #[no_mangle]
 pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
+    // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`, the
+    // word the emitted property-read path compares against a cached ShapeId.
+    // The bound is 2^31-1 elements — a 16 GiB elements block.
+    let capacity =
+        crate::object::shape_rule3::checked_plus_four_word(capacity, b"Set maximum size exceeded");
     let cap = if capacity == 0 { 4 } else { capacity };
     let elem_layout = elements_layout(cap as usize);
     unsafe {
@@ -1242,7 +1247,6 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
 
         // Initialize header
         (*ptr).size = 0;
-        crate::object::shape_rule3::debug_assert_not_shape_id_word("SetHeader::capacity", cap);
         (*ptr).capacity = cap;
         // GC_STORE_AUDIT(INIT): set elements buffer is external storage; element stores are barriered separately.
         (*ptr).elements = elements;

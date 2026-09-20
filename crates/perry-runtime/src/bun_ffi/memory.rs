@@ -101,7 +101,10 @@ pub(crate) unsafe fn view_value(
     let start = address_with_offset(address, offset);
     let length = match optional_integer(length_arg, "byteLength") {
         Some(n) if n < 0 => throw_range("byteLength is out of range"),
-        Some(n) if n > u32::MAX as i64 => {
+        // RULE 3 (`object/shape_rule3.rs`): the byte count becomes a
+        // `BufferHeader`'s `capacity` at payload `+4`, so the ceiling is
+        // `i32::MAX` — the same one `new ArrayBuffer(n)` already enforces.
+        Some(n) if n > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as i64 => {
             throw_range("byteLength exceeds Perry's maximum ArrayBuffer size")
         }
         Some(n) => n as u32,
@@ -134,7 +137,8 @@ pub(crate) unsafe fn node_view_value(
 ) -> f64 {
     let address = pointer_address(pointer_arg);
     let length = match optional_integer(length_arg, "length") {
-        Some(n) if n >= 0 && n <= u32::MAX as i64 => n as u32,
+        // RULE 3: same `+4` ceiling as `toArrayBuffer` above.
+        Some(n) if n >= 0 && n <= crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as i64 => n as u32,
         _ => throw_range("length is outside Perry's ArrayBuffer range"),
     };
     let copy_jv = JSValue::from_bits(copy_arg.to_bits());

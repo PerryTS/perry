@@ -20,18 +20,40 @@ const NANBOX_PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 /// arena-allocated as `GC_TYPE_DATE_CELL`: non-movable (a NaN-boxed pointer
 /// living in a plain f64/DOUBLE local is kept alive by the conservative
 /// stack scan, and the stable address means that un-shadow-rooted pointer
-/// never goes stale across a GC) and pointer-free (`ts` is a raw IEEE
-/// double, so no write barrier is needed when a setter mutates it).
+/// never goes stale across a GC).
+///
+/// RULE 3 (single-path object model, `object/shape_rule3.rs`): `meta` comes
+/// FIRST, and the timestamp starts at payload `+8`. The emitted property-read
+/// path loads the u32 at `receiver + 4` and compares it against a cached
+/// ShapeId; with `ts` at `+0` that word was the high half of an IEEE double,
+/// and `new Date(-1)` — `0xBFF0_0000_0000_0000` — put `0xBFF0_0000` there,
+/// inside `[SHAPE_ID_BASE, SHAPE_ID_END)`. A time value has no bound to
+/// appeal to, so the cell is relaid out instead: `+4` is now the high half of
+/// a heap pointer (zero while `meta` is null), which the collector's own
+/// address ceiling keeps below `0x1_0000`. Field order is the only thing that
+/// changed — the cell is still two words, and nothing outside this file reads
+/// it by offset (`object::cell_meta_slot` and `thread.rs` both go through the
+/// named fields).
 #[repr(C)]
 pub struct DateCell {
-    pub ts: f64,
     /// #6759 phase 1 (header unification): per-object metadata record, or null.
     ///
     /// Adding this made `DateCell` non-pointer-free, so its GC type entry moved
     /// from `GcRewriteDescriptorKind::Leaf` (a no-op arm) to `MetaOnly` and its
     /// `pointer_free` flag to `false` — a cell with a pointer must be scanned.
     pub meta: *mut crate::object::ObjectMeta,
+    /// Milliseconds since the epoch, or NaN for an *Invalid Date*. A raw IEEE
+    /// double, so a setter's store needs no write barrier.
+    pub ts: f64,
 }
+
+const _: () = {
+    assert!(std::mem::offset_of!(DateCell, meta) == 0);
+    // RULE 3: the word at payload +4 must not be able to hold a ShapeId, so
+    // the timestamp may not start before +8.
+    assert!(std::mem::offset_of!(DateCell, ts) == 8);
+    assert!(std::mem::size_of::<DateCell>() == 16);
+};
 
 /// Allocate a fresh Date cell holding `ts` and return it as a NaN-boxed
 /// pointer (an f64 carrying POINTER_TAG). `ts` may be NaN — that is an
@@ -46,12 +68,14 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
             8,
             crate::gc::GC_TYPE_DATE_CELL,
         ) as *mut DateCell;
-        (*ptr).ts = ts;
         // MUST be explicit: the arena reuses free-list memory without zeroing,
         // and since #6759 phase 1 this cell is no longer pointer-free — the
         // collector now scans this slot, so leftover bytes would be followed
-        // as a pointer.
+        // as a pointer. Since the rule-3 relayout it is also the word the
+        // emitted read path loads as a ShapeId, so it is written FIRST: the
+        // cell must never be observable carrying a dead tenant's shape.
         (*ptr).meta = std::ptr::null_mut();
+        (*ptr).ts = ts;
         // A previous (collected) Date at this address may have left expando
         // properties in the side table; a fresh Date must start clean.
         crate::object::exotic_expando::expando_clear_on_alloc(ptr as usize);

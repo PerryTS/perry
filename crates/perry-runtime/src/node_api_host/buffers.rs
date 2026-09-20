@@ -22,7 +22,15 @@ pub enum NapiTypedarrayType {
 }
 
 fn checked_length(env: NapiEnv, length: usize, what: &'static str) -> Result<u32, NapiStatus> {
-    u32::try_from(length).map_err(|_| set_status(env, NapiStatus::InvalidArg, what))
+    // RULE 3 (`object/shape_rule3.rs`): the length becomes a `BufferHeader`'s
+    // `capacity` at payload `+4`, the word the emitted property-read path
+    // compares against a cached ShapeId. This entry point cannot throw (it
+    // must answer with a `NapiStatus`), so it is the one that has to refuse —
+    // `buffer_alloc_foreign` downstream can only clamp.
+    u32::try_from(length)
+        .ok()
+        .filter(|&n| n <= crate::object::shape_rule3::MAX_PLUS_FOUR_WORD)
+        .ok_or_else(|| set_status(env, NapiStatus::InvalidArg, what))
 }
 
 fn pointer_owner(env: NapiEnv, value: NapiValue) -> Result<usize, NapiStatus> {

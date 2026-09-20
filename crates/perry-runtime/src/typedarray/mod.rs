@@ -1021,7 +1021,14 @@ fn typed_array_payload_size(capacity: u32, elem_size: usize) -> usize {
 /// Allocate a zero-filled typed array of `length` elements.
 pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
     let elem_size = elem_size_for_kind(kind);
-    let capacity = length.max(1);
+    // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`.
+    // `typed_array_length_or_throw` already refuses an over-range length at
+    // the constructor; this is the same bound at the allocation funnel, which
+    // the internal callers (`subarray`, `slice`, the `set` paths) also reach.
+    let capacity = crate::object::shape_rule3::checked_plus_four_word(
+        length.max(1),
+        b"Array buffer allocation failed",
+    );
     // 2026-07-09 audit: small typed arrays were raw-`alloc`'d with NO
     // GcHeader and never freed — invisible to every GC trigger, unbounded
     // RSS on churn. Every typed array now takes the old-arena GC path
@@ -1037,10 +1044,6 @@ pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
         let header = (p as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*p).length = length;
-        crate::object::shape_rule3::debug_assert_not_shape_id_word(
-            "TypedArrayHeader::capacity",
-            capacity,
-        );
         (*p).capacity = capacity;
         (*p).kind = kind;
         (*p).elem_size = elem_size as u8;

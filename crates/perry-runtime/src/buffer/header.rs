@@ -980,6 +980,18 @@ pub fn buffer_byte_offset(buf: usize) -> u32 {
 /// post-trace registry pruning below. Their bytes now also count toward
 /// `arena_total_bytes`, so allocation pressure finally triggers collections.
 pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
+    // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`, the
+    // word the emitted property-read path compares against a cached ShapeId,
+    // and a 2 GiB buffer would write `0x8000_0000` there — shape #1. Every
+    // user-facing constructor (`Buffer.alloc`, `new ArrayBuffer`, the typed
+    // arrays) already stops at `i32::MAX` and raises exactly this
+    // `RangeError`; the paths that reached here still clamping at `u32::MAX`
+    // (`Buffer.from(arrayLike)`, `Buffer.concat`, `buffer::copy_bytes`) now
+    // agree with them instead of producing an unreadable cell.
+    let capacity = crate::object::shape_rule3::checked_plus_four_word(
+        capacity,
+        b"Array buffer allocation failed",
+    );
     let ptr = crate::arena::arena_alloc_gc_old(
         buffer_payload_size(capacity as usize),
         8,
@@ -989,10 +1001,6 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
         let header = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*ptr).length = 0;
-        crate::object::shape_rule3::debug_assert_not_shape_id_word(
-            "BufferHeader::capacity",
-            capacity,
-        );
         (*ptr).capacity = capacity;
     }
     register_buffer(ptr);
@@ -1007,6 +1015,18 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
 /// The external mapping is removed when the wrapper is collected, preventing
 /// recycled GC addresses from inheriting stale backing pointers.
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
+    // RULE 3: this wrapper is reached from `extern "C"` Node-API entry points
+    // where a JS throw has nowhere to land, so the over-range span is clamped
+    // rather than refused — the policy `instance_memory_span` already applies
+    // to a wasm memory wider than an `i32` byte count (the excess stays
+    // invisible to JS instead of wrapping the header). Every caller rejects
+    // an over-range length first (`node_api_host::buffers::checked_length`,
+    // `bun_ffi::memory`, `webassembly`), so the clamp is a backstop and the
+    // debug assertion inside it is what tells us if a new caller skips one.
+    let length = crate::object::shape_rule3::clamp_plus_four_word(
+        "BufferHeader::capacity (foreign span)",
+        length,
+    );
     let ptr = crate::arena::arena_alloc_gc_old(
         std::mem::size_of::<BufferHeader>(),
         8,
@@ -1058,6 +1078,12 @@ pub(crate) fn rebind_foreign_buffer(addr: usize, data: *mut u8, length: u32) -> 
         true
     });
     if rebound {
+        // RULE 3: same clamp as `buffer_alloc_foreign` — a rebind may not
+        // publish a `+4` word the emitted read path would read as a ShapeId.
+        let length = crate::object::shape_rule3::clamp_plus_four_word(
+            "BufferHeader::capacity (foreign rebind)",
+            length,
+        );
         unsafe {
             let header = addr as *mut BufferHeader;
             (*header).length = length;

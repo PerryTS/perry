@@ -1544,7 +1544,16 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
 /// Allocate a new empty map with the given initial capacity
 #[no_mangle]
 pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
-    let cap = if capacity == 0 { 4 } else { capacity };
+    // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`, the
+    // word the emitted property-read path compares against a cached ShapeId.
+    // Refused before the entry buffer is sized; the bound is 2^31-1 ENTRIES,
+    // which is a 32 GiB entries block (two `f64` per entry), so no reachable
+    // program loses a Map it could previously build. V8's own ceiling for the
+    // same operation is 2^24 entries and raises the same `RangeError`.
+    let cap = crate::object::shape_rule3::checked_plus_four_word(
+        if capacity == 0 { 4 } else { capacity },
+        b"Map maximum size exceeded",
+    );
     let ent_layout = entries_layout(cap as usize);
 
     // Allocate the fixed-size header in the managed arena. The entries buffer
@@ -1572,7 +1581,6 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
 
         // Initialize header
         (*ptr).size = 0;
-        crate::object::shape_rule3::debug_assert_not_shape_id_word("MapHeader::capacity", cap);
         (*ptr).capacity = cap;
         // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
         (*ptr).entries = entries;
@@ -2035,8 +2043,12 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     }
     let capacity = (*map).capacity;
 
-    // Double the capacity
-    let new_capacity = capacity * 2;
+    // Double the capacity. RULE 3: bounded before the realloc is sized, and
+    // with `capacity <= 2^31-1` the doubling can no longer wrap a `u32`.
+    let new_capacity = crate::object::shape_rule3::checked_plus_four_word(
+        capacity * 2,
+        b"Map maximum size exceeded",
+    );
     let old_layout = entries_layout(capacity as usize);
     let new_layout = entries_layout(new_capacity as usize);
 
@@ -2049,10 +2061,6 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
 
     // GC_STORE_AUDIT(INIT): map external buffer pointer moves; live entry slots are dirtied by caller.
     (*map).entries = new_entries;
-    crate::object::shape_rule3::debug_assert_not_shape_id_word(
-        "MapHeader::capacity (grow)",
-        new_capacity,
-    );
     (*map).capacity = new_capacity;
     MAP_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
