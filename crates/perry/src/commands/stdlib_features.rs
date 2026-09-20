@@ -63,9 +63,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "tls" => &["tls"],
 
         // ── Databases ─────────────────────────────────────────────────
-        // `database-mysql` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-mysql2` (v0.5.567).
-        "mysql2" | "mysql2/promise" => &["bundled-mysql2"],
         "better-sqlite3" => &["database-sqlite"],
         // node:sqlite (#3183/#3184) shares the rusqlite-backed
         // `database-sqlite` feature with better-sqlite3 — DatabaseSync /

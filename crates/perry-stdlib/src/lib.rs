@@ -192,18 +192,12 @@ pub mod tls;
 pub use tls::*;
 
 // === Databases ===
-// mysql2 lives behind `bundled-mysql2` (v0.5.567), gated on the
-// legacy `database-mysql` umbrella (kept for backwards-compat).
-// The parallel `pg` module + `bundled-pg` feature (the pre-#466
-// in-tree native implementation of the `pg` npm package) were
-// removed alongside `perry-ext-pg` — Perry now compiles the real
-// `pg` package from source instead of shipping a bundled reimplementation.
-#[cfg(feature = "bundled-mysql2")]
-pub mod mysql2;
-#[cfg(feature = "bundled-mysql2")]
-pub use mysql2::connection::*;
-#[cfg(feature = "bundled-mysql2")]
-pub use mysql2::pool::*;
+// Both in-tree database wrappers that lived here are gone: the `pg`
+// module + `bundled-pg` feature (#10677) and the `mysql2` module +
+// `bundled-mysql2` feature (#10680), the pre-#466 native
+// reimplementations of the `pg` and `mysql2` npm packages. Perry now
+// compiles both real packages from source instead of shipping bundled
+// reimplementations.
 
 #[cfg(feature = "database-sqlite")]
 pub mod sqlite;
