@@ -169,7 +169,18 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough" | "Stream"
             )
             && (crate::node_stream::is_classic_stream_instance_of(value, method.as_str())
-                || super::tls_constructor_prototype_is_instance_of(value, method.as_str()))
+                || super::tls_constructor_prototype_is_instance_of(value, method.as_str())
+                // #10798: a genuine `class X extends Stream` subclass is a real
+                // ObjectHeader carrying its own class id, chained through the
+                // dedicated Stream hop (`class_registry::parent_static`'s
+                // `js_register_class_parent_dynamic`) rather than prototype-
+                // linked to the real `Stream.prototype` — so it is invisible to
+                // `is_classic_stream_instance_of`'s own-field probe above
+                // (which answers the DIRECT `new Readable()`-shaped case). Walk
+                // the class-id chain the same way the EventEmitter branch below
+                // does for its own subclass case.
+                || (method == "Stream"
+                    && js_instanceof(value, 0xFFFF0070).to_bits() == crate::value::TAG_TRUE))
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }

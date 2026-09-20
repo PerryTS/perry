@@ -778,6 +778,29 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // shim reads is never pre-seeded for ANY `PassThrough` heritage shape —
     // that's a separate, deeper HIR-level gap needing its own fix; adding an
     // arm here alone was confirmed (empirically) to change nothing.
+    //
+    // #10798: `Stream` (the legacy `node:stream` base that `Readable` and
+    // friends themselves derive from) is a DIFFERENT shape than
+    // `PassThrough`: it carries no hidden per-instance state at all — in
+    // Node it is literally `EventEmitter` plus a `pipe()` prototype method
+    // (`lib/internal/streams/legacy.js`: `Stream(opts) { EventEmitter.call(this,
+    // opts); }`), so there is no `_readableState`/`_transform`-shaped field
+    // that needs pre-seeding, and no `js_node_stream_stream_subclass_init`
+    // is needed (there isn't one, and adding one would duplicate
+    // `js_event_emitter_subclass_init` for no reason). `canonical_native_parent_name`
+    // does not list `Stream` either, so — unlike Readable/Writable/Duplex/
+    // Transform, which have a fast STATIC path for a plain `import` and only
+    // fall here for the aliased/namespace/CJS-destructured shapes — every
+    // `extends Stream` heritage shape (bare ident, namespace member,
+    // destructured CJS `require`) already reaches this dynamic dispatch
+    // uniformly. Reuse the existing EventEmitter shim rather than adding a
+    // stream-specific one: it installs the identical `.on`/`.emit`/`.once`/…
+    // surface Stream needs, and `pipe()` resolves through the ordinary
+    // prototype chain once the parent edge is wired (unaffected by this
+    // arm). `Stream` IS a real constructor with a usable prototype in
+    // Perry's runtime (`bound_native_callable_export_value("stream",
+    // "Stream")`, #10430's `new Stream()` fix), so — unlike `PassThrough` —
+    // this one-line dispatch arm is not a no-op.
     if let Some((module, method)) = bound_native_parent.as_ref() {
         if super::super::native_module::normalize_native_module_alias(module.as_str()) == "stream" {
             let opts = if args_len >= 1 && !args_ptr.is_null() {
@@ -798,6 +821,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
                     this_box, opts,
                 )),
+                "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(this_box)),
                 _ => None,
             };
             if handled.is_some() {

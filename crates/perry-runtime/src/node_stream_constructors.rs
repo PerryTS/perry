@@ -362,6 +362,7 @@ mod web_adapter;
 pub use builders::{
     js_array_subclass_init, js_event_emitter_async_resource_subclass_init,
     js_event_emitter_subclass_init, js_node_stream_duplex_new, js_node_stream_duplex_subclass_init,
+    js_node_stream_legacy_subclass_init,
     js_node_stream_passthrough_new, js_node_stream_readable_from,
     js_node_stream_readable_from_options, js_node_stream_readable_new,
     js_node_stream_readable_subclass_init, js_node_stream_transform_new,

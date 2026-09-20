@@ -221,13 +221,31 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
             // #10430: the legacy `Stream` constructor extends EventEmitter, so a
             // `class X extends require('stream')` subclass inherits the same
             // EventEmitter parent edge (`new X() instanceof EventEmitter`).
-            let parent = match method.as_str() {
-                "EventEmitter" | "Stream" => 0xFFFF0076,
-                "EventEmitterAsyncResource" => 0xFFFF0077,
-                _ => 0,
-            };
-            if parent != 0 {
-                register_class(class_id, parent);
+            //
+            // #10798: `Stream` gets its OWN hop in the chain — the reserved id
+            // `instanceof/static_dispatch.rs` already uses to NAME 0xFFFF0070
+            // as "Stream" — rather than collapsing straight onto EventEmitter's
+            // id. `js_instanceof` walks the full class-id chain
+            // (`subclass_of_builtin_reaches` / `class_chain_reaches`), so
+            // registering `class_id -> CLASS_ID_STREAM -> CLASS_ID_EVENT_EMITTER`
+            // keeps `instanceof EventEmitter` true transitively while making
+            // `instanceof Stream` true ONLY for a genuine `extends Stream`
+            // subclass — a plain `extends EventEmitter` class (registered
+            // directly on 0xFFFF0076, no Stream hop) must NOT satisfy
+            // `instanceof Stream`, and collapsing both onto the same id would
+            // have made it. The Stream->EventEmitter edge is registered on
+            // every call; `register_class` no-ops when the edge already
+            // matches, so this is idempotent.
+            match method.as_str() {
+                "EventEmitter" => register_class(class_id, 0xFFFF0076),
+                "Stream" => {
+                    const CLASS_ID_STREAM: u32 = 0xFFFF0070;
+                    const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+                    register_class(CLASS_ID_STREAM, CLASS_ID_EVENT_EMITTER);
+                    register_class(class_id, CLASS_ID_STREAM);
+                }
+                "EventEmitterAsyncResource" => register_class(class_id, 0xFFFF0077),
+                _ => {}
             }
         }
         return;
