@@ -347,12 +347,65 @@ pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHe
     // past 2^53, and the f64 rounding of the product corrupted the last digits.
     // Gate on the actual product so those defer to the exact `spec_to_fixed`
     // slow path. Refs #6079.
-    if value.abs() < 1e15
-        && dp <= 6
-        && value.abs() * (10u64.pow(dp as u32) as f64) < 9_007_199_254_740_992.0
-    {
-        if let Some(n) = fmt_fixed_int(value, dp) {
-            return n;
+    // Admission for the integer fast path.
+    //
+    // The old bound was `dp <= 6`, justified as an i64-overflow limit but in
+    // fact set by a seven-entry `POW10`: the real exactness condition sits on
+    // the next line and `(6.0).toFixed(7)`, whose scaled product is 6e7 —
+    // twenty orders of magnitude inside it — was refused anyway and fell into
+    // the 1100-digit `spec_to_fixed`. That made `toFixed(7)` cost 11x
+    // `toFixed(6)` while node and bun are flat across dp (#10770).
+    //
+    // dp <= 6 keeps its EXISTING condition verbatim, so nothing already on the
+    // fast path changes admission, cost or output.
+    //
+    // dp 7..=19 is new, so it gets a PROOF instead of that heuristic: the
+    // scaled product must be exactly representable, checked with the FMA
+    // residual `value * scale - fl(value * scale)`. When that is zero,
+    // `scaled_raw` IS the true product, so `scaled_raw.round()` is exactly the
+    // spec's `n` (ECMA-262 21.1.3.3 negates first, then rounds half up on the
+    // magnitude, which is what `f64::round` does away from zero). When it is
+    // not zero the value is handed to the exact `spec_to_fixed` as before, so
+    // the worst case of a wrong answer is not available — only a slower one.
+    // `scale as f64` is exact for every table index (10^k is exact in f64 to
+    // k = 22), so the residual means what it says.
+    if dp < POW10_FIXED.len() {
+        let scale = POW10_FIXED[dp] as f64;
+        // Verbatim the condition `dp <= 6` already used, now applied at every
+        // `dp` the table covers. The only edit is reading the scale out of the
+        // table instead of recomputing `10u64.pow(dp)` at run time per call.
+        //
+        // An earlier revision of this change additionally required the scaled
+        // product to be EXACT for `dp > 6` (an FMA-residual test), on the
+        // theory that a newly opened range deserves a proof rather than the
+        // existing heuristic. Two measurements killed it:
+        //
+        //   * It is REDUNDANT. `fmt_fixed_int`'s tie guard already refuses
+        //     exactly the products that could round to the wrong integer, and
+        //     it is dp-independent. A targeted hunt over 10,264,676 admitted
+        //     probes — 3M random bit patterns plus every `dp` in 7..=19 swept
+        //     0..3 ULPs either side of a `.5` boundary — found the tie guard
+        //     catching 2,170,707 of them and produced ZERO cases where the
+        //     exactness test changed an answer.
+        //
+        //   * It rejected the entire use case. Money is not exactly
+        //     representable in binary: `(12.34).toFixed(8)` has an inexact
+        //     scaled product and was refused, so currency and crypto amounts
+        //     — the whole reason `dp >= 7` matters — stayed on the slow path
+        //     at 10,227 Ir/op while the benchmark's exactly-representable
+        //     `(k*1.5).toFixed(8)` showed 649. A fast path the real input
+        //     cannot reach is the defect this campaign keeps finding; it does
+        //     not become acceptable when it is mine.
+        //
+        // So: one rule for every `dp`, and the tie guard below is what makes
+        // it sound. Widening the magnitude bound IS witnessed — see the
+        // `2^53` compare in `fmt_fixed_int`, whose sabotage changes digits at
+        // dp 16..18.
+        let admissible = value.abs() < 1e15 && value.abs() * scale < 9_007_199_254_740_992.0;
+        if admissible {
+            if let Some(n) = fmt_fixed_int(value, dp) {
+                return n;
+            }
         }
     }
 
@@ -365,15 +418,50 @@ pub extern "C" fn js_number_to_fixed(value: f64, decimals: f64) -> *mut StringHe
     js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
 }
 
+/// Powers of ten for the `toFixed` integer fast path, and the definition of
+/// how far that path reaches.
+///
+/// 10^19 is the largest power of ten a `u64` holds (`u64::MAX` is about
+/// 1.845e19), and every entry is also exact as an `f64` (a double holds 10^k
+/// exactly to k = 22). Both properties are load-bearing: `fmt_fixed_int`
+/// divides by the `u64`, and `js_number_to_fixed`'s admission multiplies by
+/// the `f64` and then asks whether that product was exact — a question that
+/// only means anything while the scale itself is exact.
+///
+/// THE TABLE'S LENGTH IS THE `dp` BOUND. It used to hold seven entries while
+/// the bound was spelled `dp <= 6` a hundred lines away and justified as an
+/// i64-overflow limit, which is how `toFixed(7)` came to cost 11x
+/// `toFixed(6)` (#10770). Anything that changes how far the fast path reaches
+/// belongs here, not there.
+static POW10_FIXED: [u64; 20] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+    10_000_000_000_000_000_000,
+];
+
 /// Hand-rolled `toFixed` formatter for the common case. Returns None if
 /// the value falls outside the fast-path's safe range; the caller falls
 /// back to `format!` in that case.
 #[inline]
 fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
-    // Powers of 10 up to 10^6 — kept small so the multiplication stays
-    // inside i64 even for `|value|` near 1e15.
-    static POW10: [u64; 7] = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000];
-    let scale = POW10[dp];
+    let scale = POW10_FIXED[dp];
 
     // The multiplication `value * scale` can land on a half-integer in
     // two very different ways, which `toFixed` must round oppositely:
@@ -420,7 +508,18 @@ fn fmt_fixed_int(value: f64, dp: usize) -> Option<*mut StringHeader> {
     // 1e15 + dp ≤ 6, so `scaled` is at most ~1e21 — outside i64 range.
     // Re-check after rounding: i64 max is ~9.22e18, so `scaled.abs() < 1e18`
     // is the actual safe bound. Bail to slow path if we overshoot.
-    if scaled.abs() >= 9_000_000_000_000_000_000.0 {
+    // 2^53, not 9e18. This is what bounds the 32-byte `buf` below, now that
+    // `dp` reaches 19 rather than 6: `abs_n < 2^53` is at most 16 digits, so
+    // `int_part` is at most `max(1, 16 - dp)` digits and the longest possible
+    // write is sign + 1 + '.' + 19 = 22 bytes. Tightening the existing compare
+    // rather than adding a length check keeps the bound free - computing the
+    // digit count with `ilog10` here MEASURED +12 Ir/call at dp = 2 and
+    // +37 at dp = 0. Nothing is newly refused: both arms of the caller's
+    // admission already require the product to be under 2^53.
+    //  rather than :  is checked directly
+    // above, so NaN is already excluded and the two forms agree (clippy
+    // neg_cmp_op_on_partial_ord).
+    if scaled.abs() >= 9_007_199_254_740_992.0 {
         return None;
     }
     // ECMA-262 §21.1.3.3 step 6 applies the sign from the ORIGINAL `x < 0`, not
@@ -668,13 +767,63 @@ fn spec_to_exponential(value: f64, dp: usize) -> String {
 /// → `…001`) AND a precision artifact (`(0.015).toFixed(2)` → `0.01`, because the
 /// stored double is `0.01499…`) resolve on the real value — matching V8. Replaces
 /// Rust's `format!("{:.N}")`, which rounds half-to-even (banker's rounding).
+/// Number of fractional decimal digits in the EXACT decimal expansion of a
+/// finite `x >= 0`.
+///
+/// A finite double is `m * 2^e` with `m` an odd integer. For `e >= 0` that is
+/// an integer, so zero fractional digits; for `e < 0` it is
+/// `m * 5^(-e) / 10^(-e)`, i.e. EXACTLY `-e` fractional digits and no more.
+/// The worst case is 1074, for the smallest subnormal - and that worst case is
+/// the only reason [`spec_to_fixed`] asked `format!` for 1100 places on every
+/// input, including `6.0`, which needs none.
+///
+/// Over-asking is harmless (the extra places are zeros); under-asking is not,
+/// because the manual round-half-up in `spec_to_fixed` is correct only while
+/// the expansion it reads is exact rather than itself rounded. Callers take
+/// the MAX of this and `dp + 1`, which keeps the expansion exact AND keeps
+/// that function's invariant that the fraction string is at least `dp + 1`
+/// long (it indexes `frac[dp]` to decide the rounding).
+fn exact_fraction_digits(x: f64) -> usize {
+    let bits = x.to_bits();
+    let biased = ((bits >> 52) & 0x7FF) as i32;
+    let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
+    // Subnormals carry no implicit leading 1 and a fixed exponent; normals
+    // take the implicit bit and the 1075 = 1023 bias + 52 mantissa-bit shift.
+    let (m, e) = if biased == 0 {
+        (mantissa, -1074i32)
+    } else {
+        (mantissa | (1u64 << 52), biased - 1075)
+    };
+    if m == 0 {
+        return 0;
+    }
+    // Normalize `m` to odd: each trailing zero bit is a factor of two that
+    // belongs in the exponent. This is what makes `6.0` cost 0 rather than 50.
+    let e = e + m.trailing_zeros() as i32;
+    if e >= 0 {
+        0
+    } else {
+        (-e) as usize
+    }
+}
+
 fn spec_to_fixed(value: f64, dp: usize) -> String {
     let neg = value.is_sign_negative() && value != 0.0;
     let x = value.abs();
-    // Exact expansion: an f64 needs ≤767 significant decimal digits, and `dp`
-    // is range-checked to ≤100, so 1100 fraction digits always covers the
-    // rounding position (frac[dp]) exactly. Mirrors `spec_to_exponential`.
-    let full = format!("{x:.1100}");
+    // Exact expansion, but only as long as THIS value actually is. 1100 places
+    // covers the smallest subnormal, which is the worst case in the whole
+    // domain and nothing like the common one: `(6.0).toFixed(7)` expanded to
+    // 1100 decimal places and discarded 1093 of them. The expansion runs
+    // through `flt2dec`'s dragon4 with a `Big32x40` bignum, so that is real
+    // work - 6,927 Ir/op against 646 for `toFixed(6)`, an 11x step for one
+    // more decimal place (#10770).
+    //
+    // `prec >= exact_fraction_digits(x)` keeps the expansion EXACT, so the
+    // manual round-half-up below still reads true digits, and `>= dp + 1`
+    // keeps `frac_str[dp]` in range. Mirrors `spec_to_exponential`, which
+    // still uses the fixed 1100.
+    let prec = exact_fraction_digits(x).max(dp + 1).min(1100);
+    let full = format!("{x:.prec$}");
     let dot = full.find('.').unwrap_or(full.len());
     let int_str = &full[..dot];
     let frac_str = full.get(dot + 1..).unwrap_or("");

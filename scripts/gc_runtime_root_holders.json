@@ -1095,9 +1095,9 @@
     },
     {
       "file": "crates/perry-runtime/src/string/format.rs",
-      "name": "POW10",
+      "name": "POW10_FIXED",
       "verdict": "not_a_gc_pointer",
-      "why": "A [u64; 7] constant table of powers of ten."
+      "why": "A [u64; 20] constant table of powers of ten, holding 10^0..10^19 \u2014 plain integers, never an address, so the collector never sees a pointer here. Was POW10, a [u64; 7] local to fmt_fixed_int; hoisted to module scope by #10770 so that js_number_to_fixed's admission test and fmt_fixed_int itself read ONE table, because the old seven-entry length was what silently capped toFixed's fast path at dp <= 6."
     },
     {
       "file": "crates/perry-runtime/src/string/mod.rs",
