@@ -407,6 +407,45 @@ pub fn check_escapes_in_expr(
             check_escapes_in_stmts(body, candidates, classes, escaped);
         }
 
+        // #10822: `delete o.k` REMOVES a property, and scalar replacement has
+        // no representation for absence. The per-field alloca keeps holding
+        // the pre-delete value, and the emitted
+        // `js_object_delete_field_value(<dummy slot>, k)` runs against the
+        // never-populated `ctx.locals[id]` alloca, where the deliberate
+        // "a primitive receiver no-ops to true" guard turns it into a silent
+        // nothing. `delete o.c; String(o.c)` then answered `"3"` instead of
+        // `"undefined"` -- a wrong value with nothing in the output to show
+        // it.
+        //
+        // Without this arm the generic unary recursion below strips the
+        // `delete` and hands the inner `PropertyGet` / `IndexGet` to the
+        // "plain declared-field read" arm, which returns early WITHOUT
+        // visiting the bare `LocalGet`. That is exactly why a second observer
+        // of the same object (`Object.keys(o)`, `objs.push(o)`, `"c" in o`)
+        // repaired it: each of those reaches the bare-`LocalGet` arm and
+        // escapes the receiver, while `delete` alone never did.
+        //
+        // This is the REMOVAL sibling of #10689 (a read of an undeclared key)
+        // and #9024 / #9460 (a write of one): escape the receiver so the
+        // object takes the heap path, where the runtime delete is real and
+        // the generic read's `TAG_HOLE` compare answers `undefined`. It costs
+        // nothing for an object that is not a `delete` target, and
+        // `Ptr<Shape>` already denies any module containing a `delete`
+        // outright (ptr_shape rule 5), so no proven-path read is affected.
+        Expr::Delete(operand) => {
+            match operand.as_ref() {
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    if let Expr::LocalGet(id) = object.as_ref() {
+                        if candidates.contains_key(id) {
+                            escaped.insert(*id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            check_escapes_in_expr(operand, candidates, classes, escaped);
+        }
+
         // ── Recurse into all sub-expressions ──
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
@@ -418,7 +457,6 @@ pub fn check_escapes_in_expr(
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
         | Expr::Await(operand)
-        | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
