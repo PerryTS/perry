@@ -172,11 +172,6 @@
       "decision": "externalize",
       "migration": "compile-source"
     },
-    "perry-ext-decimal": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
     "perry-ext-ethers": {
       "category": "binding",
       "decision": "externalize",
