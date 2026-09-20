@@ -35,10 +35,6 @@ pub mod perry_ffi_async;
 pub mod async_local_storage;
 pub mod common;
 pub mod domain;
-// decimal feature-gated as of v0.5.547 — well-known flip routes
-// to perry-ext-decimal.
-#[cfg(feature = "bundled-decimal")]
-pub mod decimal;
 // dotenv is feature-gated as of v0.5.533 so the well-known bindings
 // table (#466 Phase 4) can route `import 'dotenv'` to perry-ext-dotenv
 // without duplicate _js_dotenv_* symbols at link time. Default-on
@@ -72,8 +68,6 @@ mod multipart_parser;
 // Re-export core
 pub use async_local_storage::*;
 pub use common::*;
-#[cfg(feature = "bundled-decimal")]
-pub use decimal::*;
 pub use domain::*;
 #[cfg(feature = "bundled-events")]
 pub use events::*;

@@ -303,9 +303,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("undici", "close", true, Some("Agent")),
     method("undici", "destroy", true, Some("ProxyAgent")),
     method("undici", "destroy", true, Some("Agent")),
-    // --- bignumber.js — alias surface for decimal.js. The wrapper
-    //     dispatches to the same perry-ext-decimal implementation. ---
-    class("bignumber.js", "BigNumber"),
     // --- perry/ui constructors + setters. Auto-derivable from
     //     PERRY_UI_TABLE in crates/perry-dispatch/src/lib.rs. The
     //     reverse drift test enforces parity in both directions. ---

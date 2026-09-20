@@ -84,8 +84,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dns/promises",       // (duplicate — kept for parity)
     "url",                // URL / URLSearchParams
     // ── More third-party npm packages ──
-    "decimal.js",   // arbitrary-precision decimals
-    "bignumber.js", // arbitrary-precision big numbers
     "lodash",       // general utility library
     "sharp",        // image processing (replaces the N-API addon)
     "cheerio",      // server-side jQuery-style HTML parsing
