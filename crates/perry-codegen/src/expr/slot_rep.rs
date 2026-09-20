@@ -491,6 +491,33 @@ fn context_rule_text(rule: &str) -> (&'static str, &'static str) {
 /// promotion that was wasted, and the two mean opposite things.
 pub(crate) const PTR_SHAPE_SCALAR_REPLACED: &str = "scalar_replaced";
 
+/// `Ptr<Shape>` consumption rule: the proven local is never itself the object
+/// of a property access, so no representation-selection lowering ever consults
+/// it (#10793).
+///
+/// A candidate survives rule 2 only through uses that PRESERVE containment: a
+/// bare `return <local>`, a contained `A.push(<local>)` into an
+/// element-shape-proven array (#7034 §3), and single-`Let` alias bindings. Any
+/// other bare reference disqualifies it. So a selected local whose uses are
+/// exclusively of that kind is proven and then has nowhere to spend the proof.
+/// `buildRows`'s `row` in `benchmarks/app-patterns/kernels/batch.ts` is the
+/// corpus example: its only use is `rows.push(row)`. The field reads happen
+/// later, through the array's own element-shape fact, on a different value.
+///
+/// This is the mechanism `repsel_census.check_unconsumed_is_explained` called
+/// "a promotion with no access site at all is dropped by nobody" and then
+/// tolerated as an unnamed residue. Nobody is a mechanism; it just had no
+/// recorder. #10769 made that visible by CONSUMING `batch`'s other wasted
+/// promotion (`totals`, until then dropped by [`MODULE_INIT_CONTEXT`]), which
+/// left this residue as the workload's only wasted promotion — and a wasted
+/// promotion that names no rule is indistinguishable from an honest zero, which
+/// is the one state that census exists to refuse.
+///
+/// Not a defect in the analysis: the proof is sound and costs a report entry,
+/// not an emitted byte. The defect was that it looked exactly like a promotion
+/// codegen had silently refused to apply.
+pub(crate) const PTR_SHAPE_NO_ACCESS_SITE: &str = "no_access_site";
+
 /// `(reason, issue)` for a rule that stopped a *selected* `Ptr<Shape>` proof
 /// from being consumed by codegen.
 pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static str) {
@@ -511,6 +538,15 @@ pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static
              nothing",
             PTR_SHAPE_SCALAR_REPLACED_ISSUE,
         ),
+        PTR_SHAPE_NO_ACCESS_SITE => (
+            "the local is never itself the object of a property access: every use \
+             that survived rule 2 is containment-preserving (a bare `return`, a \
+             contained `A.push(x)` into an element-shape-proven array, an alias \
+             binding), so no representation-selection lowering ever consults the \
+             fact. The proof is sound and cost nothing to emit — it simply had \
+             nowhere to be spent",
+            PTR_SHAPE_NO_ACCESS_SITE_ISSUE,
+        ),
         _ => (
             "async / generator bodies set `repsel_context_allows_canonical_i32: \
              false`, and `FnCtx::ptr_shape_receiver_fact` returns None for the \
@@ -523,6 +559,9 @@ pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static
 
 /// Tracking issue for the scalar-replacement consumption mechanism.
 const PTR_SHAPE_SCALAR_REPLACED_ISSUE: &str = "#7115";
+
+/// Tracking issue for the no-access-site consumption mechanism.
+const PTR_SHAPE_NO_ACCESS_SITE_ISSUE: &str = "#10793";
 
 pub(crate) fn deny_canonical_context(
     ctx: &FnCtx<'_>,

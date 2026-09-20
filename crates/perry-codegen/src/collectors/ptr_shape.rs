@@ -134,7 +134,6 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Class, Expr, Stmt};
 
-use super::cjs_scaffolding::CjsPreamble;
 use super::ptr_shape_elements::ElementShapeFacts;
 use super::ptr_shape_report as report;
 use super::ptr_shape_report::ShapeDenial;
@@ -229,33 +228,6 @@ fn note_ptr_shape_local(
     );
 }
 
-/// Record every candidate the collector will not even reach, on an
-/// early-bail path (env gate off, or the rule-5 module-wide barrier).
-///
-/// Runs only under `--opt-report`; it re-derives the candidate seeds purely
-/// to name them, and returns nothing the collector consumes — the bail-out
-/// itself is unchanged.
-fn report_early_bail(
-    stmts: &[Stmt],
-    boxed_vars: &HashSet<u32>,
-    module_globals: &HashMap<u32, String>,
-    preamble: &CjsPreamble,
-    denial: ShapeDenial,
-) {
-    if !opt_report::enabled() {
-        return;
-    }
-    let names = report::local_names(stmts);
-    let depths = report::loop_depths(stmts);
-    let seeds = report::candidate_seeds(stmts, boxed_vars, module_globals, preamble);
-    for (id, class_name) in &seeds {
-        report::deny_local(*id, &names, &depths, Some(class_name), denial);
-    }
-    for site in report::unbound_new_sites(stmts, preamble) {
-        report::deny_alloc_site(&site);
-    }
-}
-
 #[path = "ptr_shape_entry.rs"]
 mod entry;
 pub(crate) use entry::{
@@ -295,7 +267,7 @@ fn collect_shape_proven_ptr_locals_impl(
         None
     };
     if let Some(denial) = bail {
-        report_early_bail(stmts, boxed_vars, module_globals, &preamble, denial);
+        report::early_bail(stmts, boxed_vars, module_globals, &preamble, denial);
         return (HashMap::new(), HashMap::new());
     }
     // `--opt-report` (#6952): binding names and loop depths for the values
@@ -317,7 +289,7 @@ fn collect_shape_proven_ptr_locals_impl(
     // replacement (excludes boxed and module-global locals — which also
     // excludes async/generator bodies, whose locals are boxed by the
     // async-to-generator transform), minus #7152's CommonJS module record.
-    // Shared with `report_early_bail` so the collector and the report can
+    // Shared with `report::early_bail` so the collector and the report can
     // never disagree about what a candidate is.
     let mut candidates = report::candidate_seeds(stmts, boxed_vars, module_globals, &preamble);
     // #7034 §4: `const r = producer(...)` where `producer` carries a
@@ -411,6 +383,7 @@ fn collect_shape_proven_ptr_locals_impl(
         element_pushes: HashMap::new(),
         const_local_inits: HashMap::new(),
         disq_reasons: HashMap::new(),
+        field_reads: HashSet::new(),
         escape_ctx: report::ESC_BARE_REFERENCE,
         return_seeded,
         element_seeded: &element_seeded,
@@ -428,6 +401,7 @@ fn collect_shape_proven_ptr_locals_impl(
         element_pushes,
         const_local_inits,
         disq_reasons,
+        field_reads,
         ..
     } = walk;
     // #7770: locals whose every write is number-producing by construction —
@@ -584,6 +558,11 @@ fn collect_shape_proven_ptr_locals_impl(
             }),
         };
         note_ptr_shape_local(*id, &fact, &names, &depths);
+        // #10793. Beside the `select()` it annuls, so the two cannot drift.
+        let accessed = field_reads.contains(id)
+            || field_stores.contains_key(id)
+            || method_calls.contains_key(id);
+        report::note_no_access_site(*id, &fact, accessed);
         // Aliases carry the same fact: they hold the same object, their slots
         // are equally shadow-bound, and access sites key on the local they
         // actually reference.
@@ -819,6 +798,10 @@ struct UseWalk<'a> {
     /// disqualified it. Purely observational — `disqualified` is the set the
     /// proof consults; this only records why.
     disq_reasons: HashMap<u32, ShapeDenial>,
+    /// `--opt-report` (#10793): roots with a declared-field READ. The other
+    /// four access shapes already land in `field_stores`/`method_calls`, so
+    /// together they decide `report::note_no_access_site`.
+    field_reads: HashSet<u32>,
     /// The escape kind a bare `LocalGet` in the current position implies.
     /// Parent arms narrow it (`return`, call argument, array element, …) so
     /// the report can say *how* the object escaped, not just that it did.
@@ -870,6 +853,13 @@ impl<'a> UseWalk<'a> {
             return;
         }
         self.disq_reasons.entry(root).or_insert(why);
+    }
+
+    /// #10793; report-only. See [`Self::field_reads`].
+    fn note_field_read(&mut self, root: u32) {
+        if opt_report::enabled() {
+            self.field_reads.insert(root);
+        }
     }
 
     /// Run `f` with the bare-reference escape kind narrowed to `why`.
@@ -1070,6 +1060,7 @@ impl<'a> UseWalk<'a> {
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if let Some(root) = self.tracked_root(*id) {
+                        self.note_field_read(root);
                         if !self.candidate_chain_has_field(root, property) {
                             self.disq_root(root, report::ESC_UNDECLARED_PROPERTY);
                         }
