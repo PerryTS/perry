@@ -16,8 +16,8 @@ use crate::type_analysis::{
 use crate::types::{DOUBLE, F32, I1, I32, I64, PTR};
 
 use super::{
-    can_lower_expr_as_i32, i32_bool_to_nanbox, lower_expr, lower_expr_native, nanbox_bigint_inline,
-    nanbox_pointer_inline, record_collection_number_key_fallback,
+    can_lower_expr_as_i32, i32_bool_to_nanbox, lower_array_literal, lower_expr, lower_expr_native,
+    nanbox_bigint_inline, nanbox_pointer_inline, record_collection_number_key_fallback,
     record_collection_number_key_selected, record_collection_string_key_fallback,
     record_collection_string_key_selected, record_collection_typed_value_fallback,
     record_collection_typed_value_selected, unbox_collection_receiver, unbox_to_i64, FnCtx,
@@ -437,29 +437,52 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object,
             exclude_keys,
         } => {
-            let obj_box = lower_expr(ctx, object)?;
-            let key_handle_globals: Vec<String> = exclude_keys
+            // `exclude_keys` is ALWAYS statically-named property strings —
+            // never a computed key. The HIR lowering that populates this
+            // field (`destructuring/pattern_binding.rs`'s `Pat::Object`
+            // arm) only ever pushes `PropName::Ident`/`Str`/`Num` onto
+            // `static_keys`; a `{ [k]: v, ...rest }` computed key goes
+            // through a completely separate path (`computed_key_temps` +
+            // a `delete` on the already-built rest object, #6153) that
+            // never touches this field. So every element built below is
+            // guaranteed to be a literal `Expr::String`, not merely
+            // "usually" one.
+            //
+            // Build the excluded-key array FIRST, the same way a literal
+            // array of the same keys (`[k1, k2, ...]`) is already built:
+            // one inline bump allocation plus N `store double` (the
+            // all-literal shape `lower_array_literal` takes when every
+            // element is `Expr::String` — pooled interned-string handles,
+            // never an allocation of their own, so no operand rooting is
+            // needed around them either; see #6951's "emits nothing for
+            // the all-literal / all-local shapes"). That replaces one
+            // `js_array_alloc_with_length` call plus one
+            // `js_array_set_f64_unchecked` call PER excluded key: each of
+            // those per-key calls re-derived and re-bounds-checked a
+            // receiver this site had just allocated itself, so every
+            // check inside (`frozen?`, `has index descriptors?`, `index
+            // in range?`) was statically true here.
+            //
+            // Doing this before lowering `object` — rather than after, as
+            // the call-by-call version did — also means `object`'s
+            // pointer is derived AFTER the only allocation left in this
+            // expression, not cached across it.
+            let key_exprs: Vec<Expr> = exclude_keys
                 .iter()
-                .map(|k| {
-                    let idx = ctx.strings.intern(k);
-                    format!("@{}", ctx.strings.entry(idx).handle_global)
-                })
+                .map(|k| Expr::String(k.clone()))
                 .collect();
+            let keys_arr_boxed = lower_array_literal(ctx, &key_exprs)?;
+            let keys_arr = {
+                let blk = ctx.block();
+                let bits = blk.bitcast_double_to_i64(&keys_arr_boxed);
+                blk.and(I64, &bits, POINTER_MASK_I64)
+            };
+            let obj_box = lower_expr(ctx, object)?;
             let blk = ctx.block();
             let obj_handle = {
                 let bits = blk.bitcast_double_to_i64(&obj_box);
                 blk.and(I64, &bits, POINTER_MASK_I64)
             };
-            let n_str = (exclude_keys.len() as u32).to_string();
-            let keys_arr = blk.call(I64, "js_array_alloc_with_length", &[(I32, &n_str)]);
-            for (i, handle_global) in key_handle_globals.iter().enumerate() {
-                let idx_str = i.to_string();
-                let key_box = blk.load(DOUBLE, handle_global);
-                blk.call_void(
-                    "js_array_set_f64_unchecked",
-                    &[(I64, &keys_arr), (I32, &idx_str), (DOUBLE, &key_box)],
-                );
-            }
             let rest_ptr = blk.call(
                 I64,
                 "js_object_rest",
