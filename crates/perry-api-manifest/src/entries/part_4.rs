@@ -874,6 +874,16 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "statusMessage", true, Some("IncomingMessage")),
     method("http", "headers", true, Some("IncomingMessage")),
     method("http", "trailers", true, Some("IncomingMessage")),
+    // #10467 — client-side rawHeaders/httpVersionMajor/httpVersionMinor/
+    // complete bare-name accessors (paired with the __get_rawHeaders row
+    // below). Previously only the __get_* HIR-rewrite targets existed for
+    // httpVersionMajor/httpVersionMinor/complete and rawHeaders had no
+    // manifest row at all, so a typed `IncomingMessage` receiver reading
+    // the bare property missed dispatch entirely.
+    method("http", "rawHeaders", true, Some("IncomingMessage")),
+    method("http", "httpVersionMajor", true, Some("IncomingMessage")),
+    method("http", "httpVersionMinor", true, Some("IncomingMessage")),
+    method("http", "complete", true, Some("IncomingMessage")),
     method("http", "setStatus", true, Some("ServerResponse")),
     method("http", "getStatus", true, Some("ServerResponse")),
     method("http", "__get_method", true, Some("IncomingMessage")),
@@ -898,6 +908,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "__get_statusMessage", true, Some("IncomingMessage")),
     method("http", "__get_headers", true, Some("IncomingMessage")),
     method("http", "__get_trailers", true, Some("IncomingMessage")),
+    method("http", "__get_rawHeaders", true, Some("IncomingMessage")),
     method("http", "__get_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusMessage", true, Some("ServerResponse")),

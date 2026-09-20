@@ -710,6 +710,26 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("net", "getX509Certificate", true, Some("Socket")),
     method("net", "getPeerX509Certificate", true, Some("Socket")),
     method("net", "setKeyCert", true, Some("Socket")),
+    // #10441/#10442 — front-inserting listener variants (net.Socket is
+    // an EventEmitter), and #10444 pipe/unpipe (net.Socket is a
+    // stream.Duplex). Absent entirely pre-fix: a typed `net.Socket`
+    // receiver fell through to a plain property read for these names
+    // and got `undefined` instead of dispatching.
+    method("net", "prependListener", true, Some("Socket")),
+    method("net", "prependOnceListener", true, Some("Socket")),
+    method("net", "pipe", true, Some("Socket")),
+    method("net", "unpipe", true, Some("Socket")),
+    // #10465 — writable/readable/writableEnded/readableEnded/
+    // _writableState/_readableState state accessors. No class_filter
+    // in the dispatch table (native_table/net_events.rs) — same
+    // class_filter: None shape the generic `stream` module rows use
+    // for their own writable/readable/writableEnded/readableEnded.
+    method("net", "writable", true, None),
+    method("net", "readable", true, None),
+    method("net", "writableEnded", true, None),
+    method("net", "readableEnded", true, None),
+    method("net", "_writableState", true, None),
+    method("net", "_readableState", true, None),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
