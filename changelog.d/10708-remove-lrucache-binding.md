@@ -7,3 +7,10 @@ machinery (`class X extends LRUCache` support for a binding with no runtime clas
 compiled package's `LRUCache` is an ordinary JS class, so subclassing needs no special support at
 all. Fixes #10685. Requires #10439's import-provenance fix (#10699) to reach the real package at its
 default import name.
+
+Acceptance against the real npm `lru-cache@11.5.2` (installed as the only dependency, **no**
+`perry.compilePackages` entry) vs `node --experimental-strip-types` on the pinned Node 26.5.1:
+**byte-identical output**, covering `set`/`get`/`has`/`delete`, recency eviction at `max`, `peek`,
+object-value identity and mutation through the cached reference, `keys`/`values`/`entries`/
+`forEach`, a `dispose` callback firing on eviction, npm's constructor `TypeError`s (`{}` and the
+legacy positional form), `instanceof`, `constructor.name`, and `class Sub extends LRUCache`.

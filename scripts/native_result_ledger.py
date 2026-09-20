@@ -41,8 +41,18 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # real `typescript.js` hits a compiler defect, so the binding stays until
 # that is fixed, and `js_typescript_*` plus Bun's `js_bun_transpiler_new`/
 # `js_bun_build` all remain classified.
-EXPECTED_ROWS = 369
-EXPECTED_PROVIDERS = 320
+#
+# -13 rows / -13 providers (#10708 + #10712, same campaign): removing the
+# `lru-cache` binding dropped 2 pointer-kind rows / 2 providers
+# (`js_lru_cache_new`, `js_lru_cache_set`; its `get`/`has`/`delete`/`size`
+# rows were NR_F64 and never counted here), and removing `commander`
+# dropped 11 (`js_commander_name`/`description`/`version`/`command`/
+# `option`/`required_option`/`action`/`parse`/`opts`/`argument`/
+# `args_array`). 369 -> 367 -> 356 rows and 320 -> 318 -> 307 providers;
+# each figure is what `scripts/native_result_ledger.py` reports on the
+# resolved tree, not arithmetic (#10739).
+EXPECTED_ROWS = 356
+EXPECTED_PROVIDERS = 307
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
