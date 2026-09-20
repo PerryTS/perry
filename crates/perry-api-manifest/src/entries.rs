@@ -29,10 +29,10 @@ use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec};
 /// `perry-hir`. Order matches the original list to keep diffs minimal.
 pub const NATIVE_MODULES: &[&str] = &[
     // ── Third-party npm packages (native wrappers; see well_known_bindings.toml) ──
-    "pg",             // PostgreSQL client
-    "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
-    "argon2",         // Argon2 password hashing (replaces the N-API addon)
-    "ioredis",        // Redis/Valkey client
+    "pg",      // PostgreSQL client
+    "bcrypt",  // bcrypt password hashing (replaces the N-API addon)
+    "argon2",  // Argon2 password hashing (replaces the N-API addon)
+    "ioredis", // Redis/Valkey client
     // iovalkey: the Valkey fork of ioredis (valkey-io/iovalkey), served by the
     // same perry-ext-ioredis surface — see well_known_bindings.toml.
     "iovalkey",
