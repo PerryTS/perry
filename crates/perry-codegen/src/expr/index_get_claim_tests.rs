@@ -606,8 +606,23 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
     );
     assert_eq!(
         w4.matches("select ").count(),
-        2,
-        "signedness and the float form must be `select`s, not branches:\n{w4}"
+        3,
+        "signedness, the #10779 NaN canonicalisation and the float form must be \
+         `select`s, not branches:\n{w4}"
+    );
+    // #10779: the third select is the NaN canonicalisation, and it must apply
+    // to the Float32Array lane only — the two integer forms cannot be NaN, so
+    // canonicalising them would be pure cost. Pin the operand so a later edit
+    // cannot quietly move it onto the merged value.
+    assert!(
+        w4.contains("fcmp uno double") && w4.contains("double 0x7FF8000000000000"),
+        "the f32 lane must be canonicalised before the float-form select:\n{w4}"
+    );
+    assert_eq!(
+        w4.matches("br ").count(),
+        1,
+        "the width-4 block must still end in exactly its unconditional branch \
+         — no new control flow:\n{w4}"
     );
     assert!(
         ir.contains("call double @js_packed_arraylike_index_get("),

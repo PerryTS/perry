@@ -302,21 +302,24 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                     u32::from_be_bytes(b) as f64
                 }
             }
+            // #10779: same reasoning as `typedarray::load_at` — these two are
+            // the only `get*` kinds that can return a NaN, and the bytes are
+            // whatever the program wrote.
             DataViewKind::Float32 => {
                 let b = read_bytes::<4>(buf, offset);
-                if little {
+                crate::array::canonical_raw_f64(if little {
                     f32::from_le_bytes(b) as f64
                 } else {
                     f32::from_be_bytes(b) as f64
-                }
+                })
             }
             DataViewKind::Float64 => {
                 let b = read_bytes::<8>(buf, offset);
-                if little {
+                crate::array::canonical_raw_f64(if little {
                     f64::from_le_bytes(b)
                 } else {
                     f64::from_be_bytes(b)
-                }
+                })
             }
             DataViewKind::BigInt64 => {
                 let b = read_bytes::<8>(buf, offset);

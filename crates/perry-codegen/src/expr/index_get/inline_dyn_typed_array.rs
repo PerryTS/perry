@@ -367,12 +367,15 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.block().cond_br(&is_width2, &ta_w2_label, &ta_w1_label);
 
     // Width 8: `Float64Array` is the only non-BigInt kind of this width, so
-    // the stored lane IS the value.
+    // the stored lane IS the value — and therefore an arbitrary 64-bit pattern
+    // the program wrote through some other view. #10779: canonicalise its NaNs
+    // before the value leaves as a JS value.
     ctx.current_block = ta_w8_idx;
     let ta_w8_value = {
         let blk = ctx.block();
         let ptr = blk.inttoptr(I64, &ta_addr);
-        blk.load(DOUBLE, &ptr)
+        let lane = blk.load(DOUBLE, &ptr);
+        crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &lane)
     };
     let ta_w8_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -396,6 +399,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         let as_number = blk.sitofp(I64, &integral, DOUBLE);
         let as_f32 = blk.bitcast_i32_to_float(&lane);
         let widened_f32 = blk.fpext(F32, &as_f32, DOUBLE);
+        // #10779: an f32 NaN widens to an f64 NaN that KEEPS its payload —
+        // `0x7FFFFFFF` becomes `0x7FFF_FFFF_E000_0000`, a forged string
+        // pointer. The integer arms of this select cannot be NaN, so
+        // canonicalising the f32 arm alone is enough.
+        let widened_f32 = crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &widened_f32);
         let is_f32 = blk.icmp_eq(I64, &ta_kind, "6");
         blk.select(I1, &is_f32, DOUBLE, &widened_f32, &as_number)
     };

@@ -874,6 +874,32 @@ pub extern "C" fn js_array_numeric_value_to_raw_f64(value: f64) -> f64 {
     value_bits_to_number(value.to_bits()).unwrap_or(f64::NAN)
 }
 
+/// Collapse ANY NaN to the single canonical quiet NaN.
+///
+/// #10779: Perry's tag band is the positive qNaN range `0x7FF8..=0x7FFF`, so a
+/// genuine IEEE-754 `f64` NaN whose high mantissa nibble is >= 8 is
+/// bit-indistinguishable from a NaN-boxed string / pointer / int32 / singleton.
+/// The band cannot be moved — every 64-bit pattern with `exp == 0x7FF` and a
+/// non-zero mantissa is a NaN some program may legitimately store — so the
+/// invariant has to be established at the SOURCE: the only NaN allowed to enter
+/// a NaN-boxed slot is this one.
+///
+/// Collapsing EVERY NaN (not only the ones already inside the band) is load
+/// bearing, and two hardware behaviours are why:
+///
+/// * a **signalling** NaN quiets under arithmetic by setting mantissa bit 51,
+///   so `0x7FF7_0000_FFFF_FFFF * 1` becomes `0x7FFF_…` — a forged
+///   `StringHeader*`. Every positive sNaN in `0x7FF1..=0x7FF7` maps into the
+///   band this way.
+/// * `fneg` / `fabs` clear the sign bit, so a NEGATIVE payload NaN such as
+///   `0xFFFE_0000_1234_5678` becomes `0x7FFE_…` — a forged int32 — under `-x`
+///   or `Math.abs(x)`.
+///
+/// With every source canonicalised the only NaN in circulation is
+/// `0x7FF8_0000_0000_0000`; quieting it is a no-op and negating it gives
+/// `0xFFF8_…`, both outside the band. The property then holds inductively,
+/// which is exactly the contract
+/// `perry-codegen::type_analysis::expr_produces_canonical_raw_f64` documents.
 #[inline]
 pub(crate) fn canonical_raw_f64(value: f64) -> f64 {
     if value.is_nan() {

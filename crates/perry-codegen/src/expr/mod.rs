@@ -50,7 +50,7 @@ mod helpers;
 mod i32_fast_path;
 mod in_presence_ic;
 mod index;
-mod nanbox_inline;
+pub(crate) mod nanbox_inline;
 mod native_memory;
 mod native_record;
 mod object_literal;

@@ -1297,6 +1297,16 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // #10779 — NaN canonicalisation on ArrayBuffer float-lane reads.
+    // `=0`/`off`/`false` drops the `fcmp uno` + `select` pair from every
+    // Float64Array / Float32Array / DataView float read, which changes the
+    // emitted IR / .o bytes — a warm cache must not serve an object built
+    // under the other setting. It exists so the fix's cost can be measured
+    // with one compiler binary; it is not a supported runtime configuration.
+    h.field(
+        "env_nanbox_canon",
+        env_var("PERRY_NANBOX_CANON").as_deref().unwrap_or(""),
+    );
     // Representation-selection Phase 3a — canonical string locals
     // (tagged-at-rest): `=0`/`off`/`false` reverts the lowerings that consult a
     // SELECTED `Str` local (`+=` tag-dispatch, direct string compares, the

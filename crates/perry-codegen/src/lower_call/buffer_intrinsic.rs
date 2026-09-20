@@ -420,10 +420,16 @@ pub(super) fn try_emit_buffer_read_intrinsic(
             "{} = bitcast {} {} to {}",
             as_float, load_ty, swapped, float_ty
         ));
+        // #10779: `buf.readDoubleLE(i)` / `readFloatLE(i)` read arbitrary
+        // user bytes, exactly like a `Float64Array` lane, so the same
+        // canonicalisation applies before the value can reach a tag-dispatching
+        // consumer. Integer `read*` accessors cannot be NaN and pay nothing.
         if spec.width_bytes == 4 {
-            LoweredValue::f32(as_float)
+            let canon = crate::expr::nanbox_inline::canonicalize_lane_f32(blk, &as_float);
+            LoweredValue::f32(canon)
         } else {
-            LoweredValue::f64(as_float)
+            let canon = crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &as_float);
+            LoweredValue::f64(canon)
         }
     } else {
         // Integer: keep the raw i32 in the native lattice. Signed reads
