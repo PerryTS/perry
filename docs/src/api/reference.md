@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2855 entries across 120 modules.
+Total: 2870 entries across 120 modules.
 
 ## Modules
 
@@ -1538,6 +1538,7 @@ Total: 2855 entries across 120 modules.
 - `__get_path` — instance *(class: `ClientRequest`)*
 - `__get_protocol` — instance *(class: `Agent`)*
 - `__get_protocol` — instance *(class: `ClientRequest`)*
+- `__get_rawHeaders` — instance *(class: `IncomingMessage`)*
 - `__get_req` — instance *(class: `IncomingMessage`)*
 - `__get_requestTimeout` — instance *(class: `HttpServer`)*
 - `__get_requests` — instance *(class: `Agent`)*
@@ -1586,6 +1587,7 @@ Total: 2855 entries across 120 modules.
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
+- `complete` — instance *(class: `IncomingMessage`)*
 - `connection` — instance *(class: `IncomingMessage`)*
 - `cork` — instance *(class: `ClientRequest`)*
 - `cork` — instance *(class: `ServerResponse`)*
@@ -1615,6 +1617,8 @@ Total: 2855 entries across 120 modules.
 - `headers` — instance *(class: `IncomingMessage`)*
 - `headersTimeout` — instance *(class: `HttpServer`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
+- `httpVersionMajor` — instance *(class: `IncomingMessage`)*
+- `httpVersionMinor` — instance *(class: `IncomingMessage`)*
 - `keepAlive` — instance *(class: `Agent`)*
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
@@ -1636,6 +1640,7 @@ Total: 2855 entries across 120 modules.
 - `once` — instance *(class: `ClientRequest`)*
 - `pause` — instance *(class: `IncomingMessage`)*
 - `protocol` — instance *(class: `Agent`)*
+- `rawHeaders` — instance *(class: `IncomingMessage`)*
 - `read` — instance *(class: `IncomingMessage`)*
 - `ref` — instance *(class: `HttpServer`)*
 - `removeHeader` — instance *(class: `ClientRequest`)*
@@ -2009,6 +2014,8 @@ Total: 2855 entries across 120 modules.
 - `__set_maxConnections` — instance *(class: `Server`)*
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
+- `_readableState` — instance
+- `_writableState` — instance
 - `addAddress` — instance *(class: `BlockList`)*
 - `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
@@ -2077,9 +2084,14 @@ Total: 2855 entries across 120 modules.
 - `parse` — module *(class: `SocketAddress`)*
 - `pause` — instance *(class: `Socket`)*
 - `pending` — instance *(class: `Socket`)*
+- `pipe` — instance *(class: `Socket`)*
 - `port` — instance *(class: `SocketAddress`)*
+- `prependListener` — instance *(class: `Socket`)*
+- `prependOnceListener` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
+- `readable` — instance
+- `readableEnded` — instance
 - `readyState` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
 - `remoteAddress` — instance *(class: `Socket`)*
@@ -2105,8 +2117,11 @@ Total: 2855 entries across 120 modules.
 - `timeout` — instance *(class: `Socket`)*
 - `toJSON` — instance *(class: `BlockList`)*
 - `uncork` — instance *(class: `Socket`)*
+- `unpipe` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
+- `writable` — instance
+- `writableEnded` — instance
 - `write` — instance *(class: `Socket`)*
 
 ## `node-fetch`
