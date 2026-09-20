@@ -28,6 +28,11 @@ pub(crate) mod lower_call;
 pub(crate) mod lower_conditional;
 pub(crate) mod lower_string_concat;
 pub(crate) mod lower_string_method;
+/// #463/#512 dispatch-table/manifest drift check — see the module docs
+/// for why this moved here from an integration test (#10668's 15-row
+/// drift, which nothing caught until it surfaced on an unrelated PR).
+#[cfg(test)]
+mod manifest_consistency;
 pub mod module;
 pub mod nanbox;
 #[cfg(feature = "llvm-inprocess")]
