@@ -51,8 +51,8 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `args_array`). 369 -> 367 -> 356 rows and 320 -> 318 -> 307 providers;
 # each figure is what `scripts/native_result_ledger.py` reports on the
 # resolved tree, not arithmetic (#10739).
-EXPECTED_ROWS = 356
-EXPECTED_PROVIDERS = 307
+EXPECTED_ROWS = 349
+EXPECTED_PROVIDERS = 300
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

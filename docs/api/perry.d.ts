@@ -1,10 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-<<<<<<< HEAD
-// Coverage: 2041 entries across 122 modules
-=======
-// Coverage: 2089 entries across 135 modules
->>>>>>> 5f5f35df1 (chore(pg): finish removal — codegen dispatch table, docs, ratchet baselines)
+// Coverage: 2037 entries across 121 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };

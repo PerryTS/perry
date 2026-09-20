@@ -6015,15 +6015,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-pg"
-version = "0.5.1618"
-dependencies = [
- "perry-ffi",
- "sqlx",
- "tokio",
-]
-
-[[package]]
 name = "perry-ext-sharp"
 version = "0.5.1618"
 dependencies = [

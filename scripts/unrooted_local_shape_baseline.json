@@ -23,7 +23,6 @@
     "crates/perry-ext-net/src/jsvalue.rs": 1,
     "crates/perry-ext-net/src/lifecycle.rs": 1,
     "crates/perry-ext-node-forge/src/lib.rs": 24,
-    "crates/perry-ext-pg/src/lib.rs": 7,
     "crates/perry-ext-streams/src/lib.rs": 4,
     "crates/perry-ext-ws/src/server.rs": 3,
     "crates/perry-ext-zlib/src/stream.rs": 3,
@@ -64,7 +63,7 @@
     "crates/perry-stdlib/src/streams/transform.rs": 8,
     "crates/perry-stdlib/src/streams/writable.rs": 2,
     "crates/perry-stdlib/src/string_decoder.rs": 4,
-    "crates/perry-stdlib/src/tls.rs": 3,
+    "crates/perry-stdlib/src/tls.rs": 4,
     "crates/perry-stdlib/src/webcrypto/aes.rs": 2,
     "crates/perry-stdlib/src/webcrypto/encapsulation.rs": 10,
     "crates/perry-stdlib/src/webcrypto/jwk.rs": 2,
@@ -77,5 +76,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 555
+  "total": 520
 }

@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 70,
+    "workspace_members": 69,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -68,7 +68,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 21,
+      "externalize": 20,
       "keep": 44,
       "merge": 1,
       "remove": 1,

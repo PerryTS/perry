@@ -2,11 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-<<<<<<< HEAD
-Total: 2903 entries across 124 modules.
-=======
-Total: 3026 entries across 137 modules.
->>>>>>> 5f5f35df1 (chore(pg): finish removal — codegen dispatch table, docs, ratchet baselines)
+Total: 2894 entries across 123 modules.
 
 ## Modules
 
