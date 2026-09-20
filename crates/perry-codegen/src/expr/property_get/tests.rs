@@ -623,10 +623,11 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     let token_miss = main
         .find("\npic.token.miss")
         .unwrap_or_else(|| panic!("expected a pic.token.miss block:\n{ir}"));
-    let token_miss_body = &main[token_miss..main[token_miss + 1..]
-        .find("\npic.")
-        .map(|o| o + token_miss + 1)
-        .unwrap_or(main.len())];
+    let token_miss_body = &main[token_miss
+        ..main[token_miss + 1..]
+            .find("\npic.")
+            .map(|o| o + token_miss + 1)
+            .unwrap_or(main.len())];
     assert!(
         token_miss_body.contains("load atomic i32"),
         "pic.token.miss must re-read the ShapeId word atomically so the hot \
@@ -1027,7 +1028,10 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         // The exact POINTER test is `(bits ^ POINTER_TAG) >> 48 == 0`, on the
         // value the pointer path then uses as its handle; the tag constant is
         // the xor's operand.
-        (crate::nanbox::POINTER_TAG_I64, "the POINTER receiver-tag test"),
+        (
+            crate::nanbox::POINTER_TAG_I64,
+            "the POINTER receiver-tag test",
+        ),
         ("1048575", "the small-handle (native registry id) test"),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
@@ -1199,7 +1203,7 @@ fn generic_non_length_read_keeps_the_whole_tower() {
         "the exact POINTER test compares the xor-ed tag half-word to zero:\n{tag_test}"
     );
     assert!(
-        ir.contains(&format!("xor i64 %")) && ir.contains(crate::nanbox::POINTER_TAG_I64),
+        ir.contains("xor i64 %") && ir.contains(crate::nanbox::POINTER_TAG_I64),
         "the handle must be `bits ^ POINTER_TAG`, the value the tag test is \
          computed from:\n{ir}"
     );
@@ -1405,7 +1409,7 @@ fn a_spill_entry_is_recognised_in_the_token_miss_block_and_nowhere_else() {
     }
     let body = body.join("\n");
     assert!(
-        body.contains(&format!("xor i32 ")) && body.contains(&PACKED_SPILL_FLIP.to_string()),
+        body.contains("xor i32 ") && body.contains(&PACKED_SPILL_FLIP.to_string()),
         "`pic.token.miss` must un-flip PACKED_SPILL_FLIP to recognise a spill \
          entry:\n{body}"
     );

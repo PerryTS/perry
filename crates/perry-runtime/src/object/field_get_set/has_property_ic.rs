@@ -245,8 +245,15 @@ mod tests {
                 )
             })
         });
-        assert_eq!(answer.to_bits(), 0x7FFC_0000_0000_0004, "test premise: `in` is true");
-        assert!(!slot.is_null(), "test premise: the attempt resolved the cache");
+        assert_eq!(
+            answer.to_bits(),
+            0x7FFC_0000_0000_0004,
+            "test premise: `in` is true"
+        );
+        assert!(
+            !slot.is_null(),
+            "test premise: the attempt resolved the cache"
+        );
         let word0 = unsafe { (*slot).shape };
         assert_eq!(word0, IN_PRESENCE_UNARMED);
         assert!(

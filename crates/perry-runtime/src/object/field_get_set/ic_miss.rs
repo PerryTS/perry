@@ -931,8 +931,7 @@ pub(super) fn get_field_ic_miss_impl(
         // re-derive).
         let is_object = gc_kind == Some(crate::gc::GC_TYPE_OBJECT);
         let has_own_descriptors = is_object
-            && gc_header
-                .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0);
+            && gc_header.is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0);
         // #8122: ONE shape-table probe. `object_is_regular` is `GC_TYPE_OBJECT
         // && !FORWARDED && descriptor.object_kind == Ordinary`; the kind test
         // was already `GC_TYPE_OBJECT` above, so read the descriptor once and
@@ -1372,9 +1371,7 @@ mod ladder_skip_tests {
         // and returns before the handler's by-name tail.
         let before = crate::typedarray::test_typed_array_registry_probe_count();
         let hit = obj.with_mut_ptr(|o: *mut ObjectHeader| {
-            present.with_const_ptr(|k| {
-                super::get_field_ic_miss_impl(o, k, &mut slot, &packed)
-            })
+            present.with_const_ptr(|k| super::get_field_ic_miss_impl(o, k, &mut slot, &packed))
         });
         assert_eq!(hit, 3.0, "test premise: the own key is answered");
         assert_eq!(
