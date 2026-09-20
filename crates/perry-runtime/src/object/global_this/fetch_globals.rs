@@ -821,7 +821,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
                     this_box, opts,
                 )),
-                "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(this_box)),
+                "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(
+                    this_box,
+                )),
                 _ => None,
             };
             if handled.is_some() {
