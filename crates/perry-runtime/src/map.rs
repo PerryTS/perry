@@ -821,9 +821,23 @@ fn is_safe_numeric_key(bits: u64) -> bool {
 // Pre-fix `Map.set("key_" + i, …)` over 500k inserts was O(N²) because
 // each `set` did a linear `find_key_index` to dedup-check; with this
 // table the dedup probe is O(1) amortized.
+//
+// The inner map is keyed by `u64`, but that key is not raw input — it is
+// already the FNV-1a content hash above, a well-avalanched 64-bit value.
+// `std::collections::HashMap`'s default `RandomState` (SipHash) is built to
+// resist adversarial *byte* input; hashing an already-mixed hash through it
+// a second time buys nothing here and was costing every `Map.get`/`set`/
+// `has`/`delete` on a string-keyed map past `SIDE_TABLE_THRESHOLD` a second,
+// unrelated hash computation. `NumericIndex.hashed` next door already uses
+// `PtrHasher` for exactly this reason (u64-keyed, no adversarial input); this
+// table gets the same treatment. `PtrHasher::write_u64` is one multiply plus
+// an xorshift avalanche step — see `fast_hash.rs`'s `mix` doc comment for why
+// the avalanche still matters even though FNV-1a is already well-distributed
+// (HashMap reads bucket indices from the LOW bits, which a pure multiply
+// under-mixes for some input distributions).
 crate::perry_thread_local! {
     static MAP_STRING_INDEX: RefCell<
-        crate::fast_hash::PtrHashMap<usize, std::collections::HashMap<u64, Vec<u32>>>,
+        crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<u64, Vec<u32>>>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
@@ -1597,7 +1611,7 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // and reached directly through the header above.
         MAP_STRING_INDEX.with(|idx| {
             idx.borrow_mut()
-                .insert(ptr as usize, std::collections::HashMap::new());
+                .insert(ptr as usize, crate::fast_hash::new_ptr_hash_map());
         });
         MAP_PTR_INDEX.with(|idx| {
             idx.borrow_mut()
@@ -2131,7 +2145,7 @@ unsafe fn map_set_string_key_value(
             let mut idx = idx.borrow_mut();
             let slot = idx
                 .entry(map as usize)
-                .or_insert_with(std::collections::HashMap::new);
+                .or_insert_with(crate::fast_hash::new_ptr_hash_map);
             slot.entry(h).or_insert_with(Vec::new).push(used);
         });
     }
@@ -2253,7 +2267,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
                     let mut idx = idx.borrow_mut();
                     let slot = idx
                         .entry(map as usize)
-                        .or_insert_with(std::collections::HashMap::new);
+                        .or_insert_with(crate::fast_hash::new_ptr_hash_map);
                     slot.entry(h).or_insert_with(Vec::new).push(used);
                 });
             }
@@ -3685,6 +3699,82 @@ mod tests {
         for i in 0..64 {
             assert_eq!(js_map_get(map, i as f64), (i * 10) as f64);
             assert!(test_map_numeric_index_contains(map, i as f64));
+        }
+    }
+
+    /// MAP_STRING_INDEX's inner table switched from `std::collections::
+    /// HashMap` (SipHash) to `PtrHashMap` (a cheap multiplicative hasher) so
+    /// every string-keyed `Map.get`/`set`/`has`/`delete` past
+    /// `SIDE_TABLE_THRESHOLD` stops paying for a second, redundant hash of
+    /// an already-hashed FNV-1a value. `HashMap<K, V, S>::get` re-checks
+    /// `K: Eq` on every candidate regardless of `S`, so a hasher swap cannot
+    /// change *which* key a lookup resolves to -- only how fast it gets
+    /// there -- but this pins that down empirically at a scale (10,000+
+    /// distinct keys, forced far past `SIDE_TABLE_THRESHOLD` and any small
+    /// std-HashMap capacity) where bucket collisions in BOTH the outer
+    /// (map-pointer-keyed) and inner (content-hash-keyed) tables are a
+    /// certainty, not a contrived edge case. If a bucket collision at either
+    /// level silently returned the wrong entry, or if switching hashers
+    /// somehow let two live keys shadow each other, this test fails.
+    #[test]
+    fn string_index_resolves_every_key_correctly_past_the_hashed_threshold() {
+        let map = js_map_alloc(4);
+        const COUNT: usize = 10_000;
+        let mut keys: Vec<*const StringHeader> = Vec::with_capacity(COUNT);
+        for i in 0..COUNT {
+            let content = format!("string-index-key-{i}");
+            let key = js_string_from_bytes(content.as_ptr(), content.len() as u32);
+            js_map_set_string_number(map, key, i as f64);
+            keys.push(key);
+        }
+        assert_eq!(js_map_size(map), COUNT as u32);
+        assert!(COUNT as u32 > SIDE_TABLE_THRESHOLD);
+
+        // Every inserted key still resolves to its OWN distinct value, in
+        // reverse-insertion order (exercises the hashed side table, not
+        // append-order luck).
+        for i in (0..COUNT).rev() {
+            assert_eq!(
+                js_map_get_string_key(map, keys[i]),
+                i as f64,
+                "key {i} resolved to the wrong value -- a bucket collision \
+                 returned a neighbor's entry instead of missing or matching"
+            );
+            assert_eq!(js_map_has_string_key(map, keys[i]), 1);
+        }
+
+        // A content-equal-but-freshly-allocated key (distinct pointer from
+        // the one stored at insert time) must still resolve by content --
+        // the outer hasher change must not have started keying by identity.
+        for i in [0usize, COUNT / 2, COUNT - 1] {
+            let content = format!("string-index-key-{i}");
+            let fresh = js_string_from_bytes(content.as_ptr(), content.len() as u32);
+            assert_ne!(fresh as usize, keys[i] as usize);
+            assert_eq!(js_map_get_string_key(map, fresh), i as f64);
+        }
+
+        // Absent keys that share a long common prefix with real entries
+        // (adversarial-ish for a byte-at-a-time hash) must still miss.
+        for i in 0..50 {
+            let content = format!("string-index-key-{i}-absent");
+            let missing = js_string_from_bytes(content.as_ptr(), content.len() as u32);
+            assert_eq!(js_map_get_string_key(map, missing).to_bits(), TAG_UNDEFINED);
+            assert_eq!(js_map_has_string_key(map, missing), 0);
+        }
+
+        // Delete half the keys, then confirm the survivors are still exact
+        // and the deleted ones are definitively gone (forces
+        // `compact_map_entries`'s side-table rebuild at this scale too).
+        for i in (0..COUNT).step_by(2) {
+            assert_eq!(js_map_delete_string_key(map, keys[i]), 1);
+        }
+        assert_eq!(js_map_size(map), (COUNT / 2) as u32);
+        for i in 0..COUNT {
+            if i % 2 == 0 {
+                assert_eq!(js_map_has_string_key(map, keys[i]), 0);
+            } else {
+                assert_eq!(js_map_get_string_key(map, keys[i]), i as f64);
+            }
         }
     }
 
