@@ -36,7 +36,6 @@ Total: 2842 entries across 117 modules.
 - [`console`](#console)
 - [`constants`](#constants)
 - [`crypto`](#crypto)
-- [`decimal.js`](#decimaljs)
 - [`dgram`](#dgram)
 - [`diagnostics_channel`](#diagnostics_channel)
 - [`dns`](#dns)
@@ -909,36 +908,6 @@ Total: 2842 entries across 117 modules.
 - `constants`
 - `subtle`
 - `webcrypto`
-
-## `decimal.js`
-
-### Methods
-
-- `abs` — instance
-- `ceil` — instance
-- `cmp` — instance
-- `div` — instance
-- `eq` — instance
-- `floor` — instance
-- `gt` — instance
-- `gte` — instance
-- `isNegative` — instance
-- `isPositive` — instance
-- `isZero` — instance
-- `lt` — instance
-- `lte` — instance
-- `minus` — instance
-- `mod` — instance
-- `neg` — instance
-- `plus` — instance
-- `pow` — instance
-- `round` — instance
-- `sqrt` — instance
-- `times` — instance
-- `toFixed` — instance
-- `toNumber` — instance
-- `toString` — instance
-- `valueOf` — instance
 
 ## `dgram`
 

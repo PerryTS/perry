@@ -839,15 +839,6 @@
       "linux"
     ]
   },
-  "test_parity_decimal": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "ci-env",
-    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'decimal.js' after the repository's CI-equivalent npm ci because decimal.js is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_parity_dotenv": {
     "issue": "8271",
     "added": "2026-08-17",
