@@ -509,25 +509,14 @@ pub(crate) fn lower_generic_property_get(
     // receiver-dependent shape probing so its latency overlaps header reads.
     let packed_word = ctx.block().load_atomic_monotonic(I64, &packed_ref, 8);
 
-    // GcHeader starts with obj_type:u8, gc_flags:u8, reserved:u16. On
-    // known little-endian targets one load tests both kind and descriptors;
-    // other targets retain byte/halfword loads with native endianness.
+    // `GcHeader` starts with `obj_type: u8`. That byte is at offset 0 of the
+    // header on every target, so the kind test is one byte load and one
+    // compare everywhere; the endianness split this block used to carry
+    // existed only for the packed kind+descriptor word, and that word is
+    // gone (see below).
     let gc_type_addr = ctx.block().sub(I64, &obj_handle, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
-    let packed_header = matches!(
-        ctx.target_triple.split('-').next().unwrap_or(""),
-        "aarch64" | "arm64" | "arm64_32" | "x86_64" | "i686" | "i386" | "riscv64" | "wasm32"
-    )
-    .then(|| ctx.block().load(I32, &gc_type_ptr));
-    // The separate kind BYTE is needed only by the native-endian descriptor
-    // guard and by the Map/Set split. With the packed header word the kind is
-    // already inside it, so materialising the byte anyway would leave a dead
-    // `trunc` on every hit.
-    let gc_type =
-        (inline_collection_size || packed_header.is_none()).then(|| match &packed_header {
-            Some(word) => ctx.block().trunc(I32, word, I8),
-            None => ctx.block().load(I8, &gc_type_ptr),
-        });
+    let gc_type = ctx.block().load(I8, &gc_type_ptr);
 
     // `MapHeader` and `SetHeader` both begin with `size: u32`. A native
     // collection is not an ObjectHeader and can never hit this PIC, so split
@@ -539,11 +528,8 @@ pub(crate) fn lower_generic_property_get(
         let collection_label = ctx.block_label(collection_idx);
         let object_check_idx = ctx.new_block("pic.recv_object_check");
         let object_check_label = ctx.block_label(object_check_idx);
-        let kind = gc_type
-            .clone()
-            .expect("the GC-kind byte is materialised whenever `.size` is inlined");
-        let is_map = ctx.block().icmp_eq(I8, &kind, "8"); // GC_TYPE_MAP
-        let is_set = ctx.block().icmp_eq(I8, &kind, "12"); // GC_TYPE_SET
+        let is_map = ctx.block().icmp_eq(I8, &gc_type, "8"); // GC_TYPE_MAP
+        let is_set = ctx.block().icmp_eq(I8, &gc_type, "12"); // GC_TYPE_SET
         let is_collection = ctx.block().or(I1, &is_map, &is_set);
         ctx.block()
             .cond_br(&is_collection, &collection_label, &object_check_label);
@@ -555,43 +541,39 @@ pub(crate) fn lower_generic_property_get(
     // `GC_TYPE_OBJECT` payload is therefore an ObjectHeader and its ShapeId is
     // the remaining exact layout discriminator.
     //
-    // #6080: a receiver that has ever had a property/accessor descriptor
-    // installed (`Object.defineProperty`) needs descriptor-aware dispatch —
-    // an accessor must fire on reads, a non-writable slot must reject stores.
-    // The PIC hit path is a raw slot load: if the site was primed on a plain
-    // data property and `defineProperty` later converts that key to a getter
-    // (or a different descriptor), `keys_array` is unchanged, so the stale
-    // hit path would return the raw slot and bypass the getter entirely.
-    // OBJ_FLAG_HAS_DESCRIPTORS is bit 11 of reserved (bit 27 of the
-    // little-endian header word). Ignore gc_flags and every other flag.
-    // A descriptor-bearing receiver leaves for the slow exit, which keeps the
-    // Array-subclass named-prefix proof that used to be a second inline ladder
-    // here: it is the one case where an unrelated `length` descriptor must not
-    // make every declared field permanently generic.
-    let is_plain_kind = if let Some(word) = &packed_header {
-        let kind_and_desc = ctx.block().and(I32, word, "134217983"); // 0x080000ff
-        ctx.block().icmp_eq(I32, &kind_and_desc, "2")
-    } else {
-        let kind = gc_type
-            .as_ref()
-            .expect("the GC-kind byte is materialised on native-endian targets");
-        let is_object_kind = ctx.block().icmp_eq(I8, kind, "2");
-        let reserved_addr = ctx.block().sub(I64, &obj_handle, "6");
-        let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
-        let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
-        let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048");
-        let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
-        ctx.block().and(I1, &is_object_kind, &no_desc)
-    };
-    // Validate kind and descriptor policy before reading ObjectHeader's
-    // ShapeId. "Is this site primed?" is NOT asked here any more: the compact
-    // word's unprimed value is `PACKED_GET_EMPTY`, which no receiver ShapeId
-    // word can equal, so the ShapeId compare below answers it. Folding the old
-    // `packed != 0` test in here also violated this tower's own rule — it was
-    // the one place where two guards were AND-ed into a flat predicate instead
-    // of branching out on the first failure (#7883), and it cost the `test`
-    // and the branch on every hit.
-    ctx.block().cond_br(&is_plain_kind, &tok_label, &cold_label);
+    // The `OBJ_FLAG_HAS_DESCRIPTORS` test that used to be folded into this
+    // compare (#6080) is GONE, and the ShapeId compare below is what answers
+    // it. The argument, in three parts, each held by another lane's tests:
+    //
+    // 1. Every descriptor install, per-key removal and bulk clear on a
+    //    `GC_TYPE_OBJECT` transitions its ShapeId (#10824 closed the last
+    //    gaps: `clear_object_descriptors` and seven raw table `remove()`
+    //    calls outside `descriptor_state.rs`). A site primed on a plain data
+    //    slot therefore cannot match the receiver once `defineProperty` has
+    //    converted that key to a getter: the receiver's `+4` word changed.
+    // 2. The prime side (`get_field_ic_miss_impl`) refuses a descriptor-
+    //    bearing receiver, so no cached word ever names a shape whose slot
+    //    the descriptor tables might override. The one deliberate exception,
+    //    the Array-subclass named-prefix proof, carries its own per-key
+    //    data-only proof for the slot it publishes.
+    // 3. Nothing but the shape allocator mints into the ShapeId range
+    //    (#10824 moved synthetic class ids to `[0xC000_0000, 0xFFFF_0000)`;
+    //    they started AT the ShapeId floor), so an unstamped receiver cannot
+    //    match a primed word by carrying a class id that looks like a shape.
+    //
+    // What the flag test cost on every hit: the packed `i32` header load, a
+    // 4-byte immediate `and` and a 32-bit compare. What remains here is a
+    // byte compare, which the backend folds into `cmpb $2, -8(%reg)`.
+    let is_object_kind = ctx.block().icmp_eq(I8, &gc_type, "2");
+    // Validate the kind before reading ObjectHeader's ShapeId. "Is this site
+    // primed?" is NOT asked here any more: the compact word's unprimed value
+    // is `PACKED_GET_EMPTY`, which no receiver ShapeId word can equal, so the
+    // ShapeId compare below answers it. Folding the old `packed != 0` test in
+    // here also violated this tower's own rule — it was the one place where
+    // two guards were AND-ed into a flat predicate instead of branching out
+    // on the first failure (#7883), and it cost the `test` and the branch on
+    // every hit.
+    ctx.block().cond_br(&is_object_kind, &tok_label, &cold_label);
     ctx.current_block = tok_idx;
 
     // The receiver token is derived solely from its authoritative ShapeId.

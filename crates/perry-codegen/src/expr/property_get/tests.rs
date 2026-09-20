@@ -971,20 +971,31 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
          entry is refused by the ShapeId compare itself:\n{chain}"
     );
 
-    if func.contains(", 134217983") {
-        let masked = defs
-            .iter()
-            .find(|(_, rhs)| rhs.starts_with("and i32 ") && rhs.ends_with(", 134217983"))
-            .map(|(reg, _)| reg)
-            .expect("packed kind/descriptor mask");
+    // The GC-kind test is a BYTE compare now, on every target, and the
+    // descriptor-flag test is gone from the hit path: every descriptor change
+    // on an ordinary object transitions its ShapeId (#10824), so the ShapeId
+    // compare subsumes it. The packed `i32` header word (`and ..., 0x080000ff`)
+    // and the native-endian `i16` reserved-halfword load with its `2048`
+    // (`OBJ_FLAG_HAS_DESCRIPTORS`) mask must both be absent from the whole
+    // function — not merely off the chain — or the flag is being tested
+    // somewhere the walk does not see.
+    let kind_cmp = defs
+        .values()
+        .find(|rhs| rhs.starts_with("icmp eq i8 %") && rhs.ends_with(", 2"))
+        .expect("the GC_TYPE_OBJECT byte compare");
+    assert!(
+        chain.contains(kind_cmp.as_str()),
+        "the GC_TYPE_OBJECT byte compare must gate the slot load: {chain}"
+    );
+    for (gone, what) in [
+        (", 134217983", "the packed kind+descriptor mask"),
+        (", 2048", "the OBJ_FLAG_HAS_DESCRIPTORS mask"),
+        ("load i16", "the reserved-halfword load"),
+    ] {
         assert!(
-            chain.contains(&format!("icmp eq i32 {masked}, 2")),
-            "both kind and descriptor bits must gate the slot load: {chain}"
-        );
-    } else {
-        assert!(
-            chain.contains("icmp eq i8") && chain.contains("2048"),
-            "native-endian kind/descriptor guards must gate the slot load: {chain}"
+            !func.contains(gone),
+            "{what} must not be emitted any more — the descriptor flag is \
+             shape-carried since #10824 (found `{gone}`):\n{func}"
         );
     }
 
@@ -1195,35 +1206,48 @@ fn the_length_tier_probes_the_elements_store_before_the_shape_ic() {
     );
 }
 
+/// The descriptor-flag test has left the hit path on EVERY target, and with
+/// it the only reason the tower ever cared about endianness: the packed
+/// `i32` header word (kind byte + `OBJ_FLAG_HAS_DESCRIPTORS` in one mask) on
+/// little-endian targets, and the byte + `i16` reserved-halfword pair on the
+/// rest. What remains is a single `obj_type` BYTE compare, which sits at
+/// offset 0 of `GcHeader` regardless of byte order.
+///
+/// Renamed from `packed_pic_header_guard_is_endianness_aware`: that test
+/// pinned the packed mask's PRESENCE on x86-64/aarch64, which is now the
+/// regression this one exists to catch.
 #[test]
-fn packed_pic_header_guard_is_endianness_aware() {
-    for (target, packed) in [
-        ("aarch64-apple-darwin", true),
-        ("x86_64-unknown-linux-gnu", true),
-        ("powerpc64-unknown-linux-gnu", false),
+fn gc_kind_guard_is_one_byte_compare_on_every_target() {
+    for target in [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "powerpc64-unknown-linux-gnu",
     ] {
         let mut opts = ir_opts(false, None);
         opts.target = Some(target.to_string());
         let ir =
             String::from_utf8(compile_module(&module_with_nullish_read(), opts).unwrap()).unwrap();
-        assert_eq!(ir.contains(", 134217983"), packed, "{target}: {ir}");
-        if !packed {
+        for (gone, what) in [
+            (", 134217983", "the packed kind+descriptor mask"),
+            (", 2048", "the OBJ_FLAG_HAS_DESCRIPTORS mask"),
+            ("load i16", "the reserved-halfword load"),
+        ] {
             assert!(
-                ir.contains("load i16"),
-                "descriptor guard must retain native endianness: {ir}"
-            );
-            assert!(
-                ir.contains(", 2048"),
-                "the native-endian arm must still test OBJ_FLAG_HAS_DESCRIPTORS: {ir}"
+                !ir.contains(gone),
+                "{target}: {what} must not be emitted (found `{gone}`):\n{ir}"
             );
         }
-        // T1: the descriptor-bearing fallback is the one exit. It must still
-        // be a distinct EDGE — a descriptor-bearing receiver may never take
-        // the raw-slot hit — and the runtime keeps the Array-subclass
-        // named-prefix exception behind it.
+        assert!(
+            ir.contains("load i8") && ir.contains("icmp eq i8 %"),
+            "{target}: the GC-kind test must be a byte load and compare:\n{ir}"
+        );
+        // T1: the descriptor-bearing fallback is the one exit. A descriptor-
+        // bearing receiver reaches it by FAILING THE SHAPE COMPARE (its
+        // descriptor install transitioned its ShapeId), and the runtime keeps
+        // the Array-subclass named-prefix exception behind it.
         assert!(
             ir.contains("@js_object_get_field_ic_slow(") && ir.contains("\npic.miss.call"),
-            "descriptor fallback must remain, through the one exit: {ir}"
+            "{target}: the slow exit must remain:\n{ir}"
         );
     }
 }
