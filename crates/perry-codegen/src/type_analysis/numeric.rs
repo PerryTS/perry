@@ -667,6 +667,63 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         {
             true
         }
+        // #10777: a `Ptr<Shape>`-proven receiver whose field is in the fact's
+        // `numeric_fields` already lowers to a BARE `load double` —
+        // `expr/property_get.rs` and `expr/property_get/helpers.rs` emit
+        // `blk.load(DOUBLE, &field_ptr)` with `SemanticKind::JsNumber` /
+        // `NativeRep::F64` and, in their own words, "no volatile gate, no
+        // header checks, no fallback arm, no phi". The value this predicate is
+        // asked about is therefore ALREADY canonical raw f64 bits; what was
+        // missing is that the label never reached here. `lower_expr` returns a
+        // bare LLVM value name, and the `raw_f64_layout_fact` the read records
+        // goes to `native_value/verify`, an AUDIT channel — so this predicate
+        // re-derived "reads may be boxed" syntactically from the `Expr` node
+        // instead of asking what was emitted. That lost label is the whole of
+        // the 29-vs-9 gap in #10777: `o.a * 1` reaches 9 only because `Binary`
+        // is a shape the arm below recognises, not because the multiply
+        // normalises anything.
+        //
+        // The blanket refusal in this function's doc comment — "reads
+        // (`IndexGet`/`PropertyGet` — cold fallbacks return boxed bits)" — is
+        // about the GUARDED read diamond, whose cold arm really does hand back
+        // boxed bits. This arm is the one read shape that has no cold arm at
+        // all, so the refusal's reason does not apply to it.
+        //
+        // The two halves of this predicate's contract are discharged as
+        // follows:
+        //
+        // * "never NaN-boxed" — `collectors/ptr_shape_numeric.rs` proves, by a
+        //   greatest fixpoint over EVERY reachable store (constructor chain,
+        //   field initializers, method stores, in-function stores, with
+        //   parameters resolved through the actual arguments at the provenance
+        //   `new`s / recorded call sites), that every store into this slot is
+        //   number-producing BY CONSTRUCTION, per spec — explicitly not "the
+        //   declared type says number". `Ptr<Shape>` rule 1 containment bounds
+        //   the set of stores that fixpoint has to consider, which is why the
+        //   read needs no runtime header check. That proof already licenses a
+        //   bare `load double` claiming `JsNumber`/`F64`; it is strictly
+        //   stronger than the claim made here.
+        //
+        // * "any NaN it produces must carry a non-tag payload" — the store
+        //   universe above admits no call of any kind (that match has no
+        //   `Call`/`MethodCall`/FFI arm and ends in `_ => false`), so an FFI
+        //   return can never reach one of these slots. The one raw byte source
+        //   that can is an `ArrayBuffer` float read, reachable through the
+        //   `Add` arm's `numeric_view_value_or_undefined`, and #10779 removed
+        //   it by canonicalising a tag-band NaN at that read.
+        //
+        // Requires the receiver to resolve to the fact's own class, exactly as
+        // `numeric_proof_is_declared_only` and the two read sites do: the
+        // `numeric_fields` set is keyed to the class it was proven for.
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            let Some(fact) = ctx.ptr_shape_receiver_fact(object.as_ref()) else {
+                return false;
+            };
+            fact.numeric_fields.contains(property.as_str())
+                && receiver_class_name(ctx, object).as_deref() == Some(fact.class_name.as_str())
+        }
         Expr::Binary { .. } => {
             is_numeric_expr(ctx, e)
                 && is_provably_not_bigint(ctx, e)
