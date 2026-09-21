@@ -2994,6 +2994,7 @@ pub(crate) mod calls;
 mod child_proc;
 mod closure;
 mod compare;
+pub(crate) mod region_read_run;
 pub(crate) use compare::lower_string_literal_strict_eq;
 #[cfg(test)]
 mod compare_tests;

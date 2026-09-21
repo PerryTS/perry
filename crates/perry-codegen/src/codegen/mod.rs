@@ -427,6 +427,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let hir = live_cjs_hir.as_ref();
     let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
+    // `PERRY_REGION_DIAG=1`: report step 4b's regions and the statement-level
+    // runs it does not reach, when this module's codegen ends.
+    let _region_diag = crate::expr::region_read_run::ModuleDiag::start(hir);
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
     // #5334 lever B: decide ONCE, up front, whether this module is large enough
