@@ -41,7 +41,7 @@ struct ResolvedApp {
 }
 
 pub fn run(args: ElectronArgs, format: OutputFormat, use_color: bool, verbose: u8) -> Result<()> {
-    let app = resolve_app_path(&args.path, format)?;
+    let app = resolve_app_path(&args.path, &asar_cache_root(), format)?;
     let shim = find_electron_shim().ok_or_else(|| {
         anyhow!(
             "cannot locate the Perry Electron compat shim (packages/electron/src/index.ts).\n\
@@ -88,6 +88,7 @@ pub fn run(args: ElectronArgs, format: OutputFormat, use_color: bool, verbose: u
         no_auto_optimize: false,
         debug_symbols: false,
         report_size: false,
+        function_source: None,
         no_cache: false,
         // `perry electron` has no `--cache-dir` flag; the resolver still
         // honors `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` /
@@ -202,12 +203,13 @@ fn find_electron_shim() -> Option<PathBuf> {
 }
 
 /// Resolve the user-supplied path to an app entry + app root, handling
-/// package.json directories, packaged `.app` bundles, and `.asar` archives.
-fn resolve_app_path(input: &Path, format: OutputFormat) -> Result<ResolvedApp> {
+/// package.json directories, packaged `.app` bundles, and `.asar` archives
+/// (extracted under `cache_root`).
+fn resolve_app_path(input: &Path, cache_root: &Path, format: OutputFormat) -> Result<ResolvedApp> {
     let path = absolutize(input);
     if path.is_dir() {
         if path.extension().and_then(|e| e.to_str()) == Some("app") {
-            return resolve_app_bundle(&path, format);
+            return resolve_app_bundle(&path, cache_root, format);
         }
         if path.join("package.json").is_file() {
             return resolve_package_dir(&path);
@@ -219,7 +221,7 @@ fn resolve_app_path(input: &Path, format: OutputFormat) -> Result<ResolvedApp> {
     }
     if path.is_file() {
         if path.extension().and_then(|e| e.to_str()) == Some("asar") {
-            let root = extract_asar_with_cache(&path, format)?;
+            let root = extract_asar_with_cache(&path, cache_root, format)?;
             return resolve_package_dir(&root);
         }
         return Ok(ResolvedApp {
@@ -235,11 +237,15 @@ fn resolve_app_path(input: &Path, format: OutputFormat) -> Result<ResolvedApp> {
 
 /// A packaged macOS bundle: `Contents/Resources/app.asar` first, then the
 /// unpacked `Contents/Resources/app/` directory.
-fn resolve_app_bundle(bundle: &Path, format: OutputFormat) -> Result<ResolvedApp> {
+fn resolve_app_bundle(
+    bundle: &Path,
+    cache_root: &Path,
+    format: OutputFormat,
+) -> Result<ResolvedApp> {
     let resources = bundle.join("Contents").join("Resources");
     let asar = resources.join("app.asar");
     if asar.is_file() {
-        let root = extract_asar_with_cache(&asar, format)?;
+        let root = extract_asar_with_cache(&asar, cache_root, format)?;
         return resolve_package_dir(&root);
     }
     let unpacked = resources.join("app");
@@ -286,11 +292,15 @@ fn resolve_package_dir(dir: &Path) -> Result<ResolvedApp> {
     })
 }
 
-/// Extract an .asar into a cache directory, reusing the previous extraction
-/// when the source archive is unchanged. The cache lives under Perry's
-/// cache-dir convention when creatable and falls back to the system temp
-/// dir (packaged `.app` bundles are often signed and read-only).
-fn extract_asar_with_cache(asar_path: &Path, format: OutputFormat) -> Result<PathBuf> {
+/// Extract an .asar into a directory under `cache_root`, reusing the
+/// previous extraction when the source archive is unchanged (packaged `.app`
+/// bundles are often signed and read-only, so nothing is written beside the
+/// archive).
+fn extract_asar_with_cache(
+    asar_path: &Path,
+    cache_root: &Path,
+    format: OutputFormat,
+) -> Result<PathBuf> {
     let canonical = asar_path
         .canonicalize()
         .unwrap_or_else(|_| asar_path.to_path_buf());
@@ -303,7 +313,7 @@ fn extract_asar_with_cache(asar_path: &Path, format: OutputFormat) -> Result<Pat
         .unwrap_or(0);
     let cache_key = format!("{}|{}|{mtime_nanos}", canonical.display(), meta.len());
 
-    let target = asar_cache_root().join(format!("perry-electron-{:016x}", stable_hash(&cache_key)));
+    let target = cache_root.join(format!("perry-electron-{:016x}", stable_hash(&cache_key)));
     let extracted = asar::extract_cached(&canonical, &target, &cache_key)
         .with_context(|| format!("cannot extract asar archive {}", canonical.display()))?;
     if extracted && matches!(format, OutputFormat::Text) {
@@ -312,19 +322,10 @@ fn extract_asar_with_cache(asar_path: &Path, format: OutputFormat) -> Result<Pat
     Ok(target)
 }
 
-/// Where extracted asar apps are cached. Deliberately NOT under the
-/// invocation directory's `node_modules/.cache`: package detection walks up
-/// to the nearest `node_modules` ancestor and would classify the extracted
-/// app as an untrusted npm package, routing its modules to the (removed)
-/// JS runtime instead of compiling them. The per-user cache dir keeps the
-/// extracted app an ordinary directory tree. Unit tests use the temp dir so
-/// `cargo test` does not scatter extraction caches through the checkout.
-#[cfg(not(test))]
+/// Where extracted asar apps are cached: [`default_asar_cache_root`] when
+/// creatable, else the system temp dir.
 fn asar_cache_root() -> PathBuf {
-    let base = dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("perry")
-        .join("electron-apps");
+    let base = default_asar_cache_root();
     if fs::create_dir_all(&base).is_ok() {
         base
     } else {
@@ -332,9 +333,18 @@ fn asar_cache_root() -> PathBuf {
     }
 }
 
-#[cfg(test)]
-fn asar_cache_root() -> PathBuf {
-    std::env::temp_dir()
+/// The per-user extraction cache (`<user cache dir>/perry/electron-apps`).
+/// Deliberately NOT Perry's project cache-dir convention
+/// (`node_modules/.cache/perry`): module collection treats any `.js`/`.cjs`
+/// file with a `node_modules` path component as npm package code, so an
+/// extraction under `node_modules/.cache` made the app's own entry an
+/// untrusted package named `.cache` and the compile refused it as runtime
+/// JavaScript. Keep the extracted app an ordinary directory tree.
+fn default_asar_cache_root() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("perry")
+        .join("electron-apps")
 }
 
 /// `DefaultHasher::new()` keys are fixed within a std version, which is all
@@ -359,6 +369,12 @@ fn absolutize(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    /// Same component test module collection uses to route a `.js`/`.cjs`
+    /// file to the npm-package (runtime JavaScript) classification.
+    fn has_node_modules_component(path: &Path) -> bool {
+        path.components().any(|c| c.as_os_str() == "node_modules")
+    }
+
     fn write_app(dir: &Path, main: Option<&str>) {
         fs::create_dir_all(dir).unwrap();
         let pkg = match main {
@@ -375,7 +391,7 @@ mod tests {
         write_app(&app, Some("main.js"));
         fs::write(app.join("main.js"), "console.log(1)").unwrap();
 
-        let resolved = resolve_app_path(&app, OutputFormat::Text).unwrap();
+        let resolved = resolve_app_path(&app, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(resolved.root, app);
         assert_eq!(resolved.entry, app.join("main.js"));
     }
@@ -387,7 +403,7 @@ mod tests {
         write_app(&app, None);
         fs::write(app.join("index.js"), "console.log(1)").unwrap();
 
-        let resolved = resolve_app_path(&app, OutputFormat::Text).unwrap();
+        let resolved = resolve_app_path(&app, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(resolved.entry, app.join("index.js"));
     }
 
@@ -400,7 +416,7 @@ mod tests {
         write_app(&unpacked, Some("main.js"));
         fs::write(unpacked.join("main.js"), "console.log(1)").unwrap();
 
-        let resolved = resolve_app_path(&bundle, OutputFormat::Text).unwrap();
+        let resolved = resolve_app_path(&bundle, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(resolved.root, unpacked);
     }
 
@@ -419,7 +435,7 @@ mod tests {
         fs::create_dir_all(&resources).unwrap();
         pack_fixture(&asar_app, &resources.join("app.asar"));
 
-        let resolved = resolve_app_path(&bundle, OutputFormat::Text).unwrap();
+        let resolved = resolve_app_path(&bundle, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(fs::read(&resolved.entry).unwrap(), b"console.log(1)");
     }
 
@@ -429,7 +445,7 @@ mod tests {
         let entry = dir.path().join("main.cjs");
         fs::write(&entry, "console.log(1)").unwrap();
 
-        let resolved = resolve_app_path(&entry, OutputFormat::Text).unwrap();
+        let resolved = resolve_app_path(&entry, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(resolved.entry, entry);
         assert_eq!(resolved.root, dir.path());
     }
@@ -437,7 +453,7 @@ mod tests {
     #[test]
     fn non_app_directory_errors() {
         let dir = tempfile::tempdir().unwrap();
-        let err = resolve_app_path(dir.path(), OutputFormat::Text).unwrap_err();
+        let err = resolve_app_path(dir.path(), dir.path(), OutputFormat::Text).unwrap_err();
         assert!(
             err.to_string()
                 .contains("is not an Electron app: no package.json, app.asar, or .app bundle"),
@@ -447,8 +463,12 @@ mod tests {
 
     #[test]
     fn missing_path_errors() {
-        let err =
-            resolve_app_path(Path::new("/definitely/not/here"), OutputFormat::Text).unwrap_err();
+        let err = resolve_app_path(
+            Path::new("/definitely/not/here"),
+            &std::env::temp_dir(),
+            OutputFormat::Text,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("does not exist"), "{err}");
     }
 
@@ -458,7 +478,7 @@ mod tests {
         let app = dir.path().join("app");
         write_app(&app, Some("gone.js"));
 
-        let err = resolve_app_path(&app, OutputFormat::Text).unwrap_err();
+        let err = resolve_app_path(&app, dir.path(), OutputFormat::Text).unwrap_err();
         assert!(err.to_string().contains("`main` field"), "{err}");
     }
 
@@ -471,8 +491,45 @@ mod tests {
         let asar_path = dir.path().join("app.asar");
         pack_fixture(&app, &asar_path);
 
-        let resolved = resolve_app_path(&asar_path, OutputFormat::Text).unwrap();
+        let resolved = resolve_app_path(&asar_path, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(fs::read(&resolved.entry).unwrap(), b"console.log(1)");
+    }
+
+    /// Regression: the extraction cache once lived under Perry's project
+    /// cache dir (`node_modules/.cache/perry`), so module collection saw a
+    /// `node_modules` component in the extracted entry's path, classified the
+    /// app's own `main.cjs` as an untrusted npm package named `.cache`, and
+    /// refused the compile as runtime JavaScript.
+    #[test]
+    fn default_asar_cache_root_is_outside_node_modules() {
+        let root = default_asar_cache_root();
+        assert!(
+            !has_node_modules_component(&root),
+            "asar extraction cache {} must not sit under node_modules",
+            root.display()
+        );
+        assert!(root.ends_with("perry/electron-apps"), "{}", root.display());
+    }
+
+    #[test]
+    fn asar_with_cjs_main_resolves_to_extracted_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        write_app(&app, Some("main.cjs"));
+        fs::write(app.join("main.cjs"), "require('electron')").unwrap();
+        let asar_path = dir.path().join("app.asar");
+        pack_fixture(&app, &asar_path);
+        let cache = dir.path().join("cache");
+
+        let resolved = resolve_app_path(&asar_path, &cache, OutputFormat::Text).unwrap();
+        assert!(
+            resolved.root.starts_with(&cache),
+            "{}",
+            resolved.root.display()
+        );
+        assert_eq!(resolved.entry, resolved.root.join("main.cjs"));
+        assert_eq!(fs::read(&resolved.entry).unwrap(), b"require('electron')");
+        assert!(!has_node_modules_component(&resolved.entry));
     }
 
     /// Pack a fixture dir into an asar using the same byte layout the

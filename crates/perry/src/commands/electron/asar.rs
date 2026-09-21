@@ -256,7 +256,6 @@ pub fn unpacked_dir(asar_path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     /// Hand-craft an asar archive from a flat map of archive-relative paths
     /// to payload bytes. The byte layout here mirrors a real
