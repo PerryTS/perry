@@ -100,7 +100,7 @@ pub struct CompileArgs {
     /// `perry.packageAliases` entries, so a CLI alias wins on a duplicate
     /// `FROM`. `perry electron` uses this to redirect `electron` imports to
     /// the in-repo compat shim.
-    #[arg(long, value_name = "FROM=TO")]
+    #[arg(long = "package-alias", value_name = "FROM=TO")]
     pub package_aliases: Vec<String>,
 
     /// Keep intermediate files (for debugging)
