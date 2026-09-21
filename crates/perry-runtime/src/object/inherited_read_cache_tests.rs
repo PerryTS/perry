@@ -264,6 +264,135 @@ fn set_prototype_of_on_an_interior_prototype_invalidates() {
     }
 }
 
+/// Drive the read through the REAL inline-cache entry the compiled code calls,
+/// not through `inherited_read_cache_prime` directly.
+///
+/// That distinction is the whole point of the two tests below: both defects
+/// they pin live in `get_field_ic_miss_impl`'s routing, so a test that calls
+/// the cache's own functions cannot see either one. Measured against a build
+/// without the fixes, these reads prime zero times (first test) or once per
+/// read forever (second), and in both cases the cache is pure overhead — the
+/// probe runs on every read, never serves, and the chain walk proceeds
+/// unchanged.
+unsafe fn read_through_the_inline_cache(
+    obj: *mut ObjectHeader,
+    k: *const crate::StringHeader,
+    slot: &mut crate::object::field_get_set::PicCacheSlot,
+    site: u64,
+) -> f64 {
+    let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits() as i64;
+    crate::object::field_get_set::js_object_get_field_ic(bits, k, site, slot)
+}
+
+#[test]
+fn a_receiver_with_no_own_keys_is_cached() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let proto = crate::object::js_object_alloc(0, 4);
+        set(proto, "irc_nokeys", 11.0);
+        // `Object.create(p)` with nothing of its own: the receiver has no keys
+        // array at all, so the miss handler reports `ObjectNoKeys` rather than
+        // `NotOwn`. This is the single most common inherited-read shape there
+        // is, and the prime site was gated on `NotOwn` alone.
+        let created = crate::object::js_object_create(boxed(proto));
+        let obj = crate::value::js_nanbox_get_pointer(created) as *mut ObjectHeader;
+        let k = key("irc_nokeys");
+        let mut slot: crate::object::field_get_set::PicCacheSlot = std::ptr::null_mut();
+        for _ in 0..4 {
+            let v = read_through_the_inline_cache(obj, k, &mut slot, 9001);
+            assert_eq!(v, 11.0, "the read must still answer correctly");
+        }
+        assert!(
+            inherited_read_cache_primes() >= 1,
+            "a keyless receiver never reached the prime, so the cache can never \
+             serve this shape and its probe is pure overhead on every read"
+        );
+        assert!(
+            inherited_read_cache_hits() >= 1,
+            "primed but never served"
+        );
+    }
+}
+
+#[test]
+fn several_object_create_receivers_do_not_evict_each_other() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let proto = crate::object::js_object_alloc(0, 4);
+        set(proto, "irc_shared", 13.0);
+        // Eight receivers built the same way. `js_object_create` mints a FRESH
+        // synthetic class id per call, so these have eight DIFFERENT class ids
+        // and one identical shape — and the slot index hashed only
+        // (shape, key), so all eight landed in one direct-mapped slot.
+        let mut objs = Vec::new();
+        for i in 0..8 {
+            let created = crate::object::js_object_create(boxed(proto));
+            let o = crate::value::js_nanbox_get_pointer(created) as *mut ObjectHeader;
+            set(o, "irc_own", i as f64);
+            objs.push(o);
+        }
+        let k = key("irc_shared");
+        let mut slot: crate::object::field_get_set::PicCacheSlot = std::ptr::null_mut();
+        let rounds = 8;
+        for _ in 0..rounds {
+            for o in &objs {
+                let v = read_through_the_inline_cache(*o, k, &mut slot, 9002);
+                assert_eq!(v, 13.0, "the read must still answer correctly");
+            }
+        }
+        // Account for EVERY read rather than bounding the hits, because a
+        // loose lower bound on hits is what an off-by-one hides in.
+        let primes = inherited_read_cache_primes();
+        let hits = inherited_read_cache_hits();
+        let declines = inherited_read_cache_declines();
+        let neg = inherited_read_cache_neg_served();
+        let reads = (objs.len() * rounds) as u64;
+
+        assert_eq!(
+            primes,
+            objs.len() as u64,
+            "primed {primes} times for {} receivers. Exactly one prime per \
+             receiver is the property: more means the entries are evicting \
+             each other and every read pays a full chain walk AND an entry \
+             write",
+            objs.len()
+        );
+
+        // At most ONE decline, and it is expected rather than tolerated.
+        //
+        // The inherited-read cache refuses to record a hop that the
+        // `[[Prototype]]` install funnel has not marked, and when its walk
+        // meets an unmarked hop it marks that hop and ABANDONS the walk
+        // without recording anything (`object::proto_validity`). Marking
+        // allocates a meta record, which can move the receiver, the hop and
+        // every address the walk is holding, so nothing it was holding may be
+        // touched afterwards — abandoning is not a shortcut, it is the only
+        // safe thing to do once the allocation has happened.
+        //
+        // These eight receivers share ONE prototype, so at most one read pays
+        // that: the first to reach an unmarked hop. Every later read finds it
+        // marked and primes normally. Without the marking stack in the tree
+        // this is 0; with it, 1. Both are correct, and the accounting below
+        // pins the difference to exactly that one read instead of loosening
+        // the hit count to absorb it.
+        assert!(
+            declines <= 1,
+            "{declines} declines: at most one mark-and-abandon is expected for \
+             a single shared prototype"
+        );
+
+        assert_eq!(
+            hits + primes + declines + neg,
+            reads,
+            "every read must be exactly one of: served from an entry ({hits}), \
+             the walk that recorded one ({primes}), a mark-and-abandon \
+             ({declines}), or served from a negative entry ({neg}) — and they \
+             sum to {}, not the {reads} reads performed",
+            hits + primes + declines + neg
+        );
+    }
+}
+
 #[test]
 fn a_null_prototype_receiver_never_primes() {
     let _scope = PrimeScope::new();
