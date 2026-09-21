@@ -140,6 +140,9 @@ fn const_shape_hint(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<Co
     // guard-fail/fallback-call pair on the miss edges. A read served before
     // either would change a profiling build's signal, and that signal has to
     // stay byte-identical to the build it profiles.
+    if !crate::shape_symbols::link_time_shape_ids_for_target(ctx.target_triple) {
+        return None;
+    }
     if crate::expr::typed_feedback_emission_enabled() {
         return None;
     }

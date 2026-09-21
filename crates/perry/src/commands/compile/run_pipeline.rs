@@ -2582,6 +2582,9 @@ pub fn run_with_parse_cache(
     // cache key, so a cached `.o` can never be reused across the switch.
     let link_time_shape_ids = !args.no_link
         && !bitcode_link
+        // x86-64 only; see `link_time_shape_ids_for_target` for the
+        // per-target relocation findings this restriction records.
+        && perry_codegen::resolve_target_triple(target.as_deref()).starts_with("x86_64")
         && !target
             .as_deref()
             .is_some_and(|t| t.contains("windows") || t.contains("msvc"))

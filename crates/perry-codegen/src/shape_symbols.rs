@@ -59,3 +59,31 @@ pub(crate) fn note_static_shape_symbol(name: &str) {
 pub fn link_time_shape_ids_enabled() -> bool {
     std::env::var("PERRY_NO_LINKTIME_SHAPE_IDS").ok().as_deref() != Some("1")
 }
+
+/// Is design step 4 on for THIS target?
+///
+/// x86-64 only, and the restriction is about relocations, not about effort.
+/// Measured with LLVM 22 on each target's own lowering:
+///
+/// * **x86-64** — `external hidden` + a FULL `!absolute_symbol` range gives
+///   `movabsq $sym, %r` (`R_X86_64_64`), which GNU ld 2.42 and lld both accept
+///   in a PIE, and which LICM hoists out of a read loop. A NARROW range gives
+///   the one-instruction `cmpl $sym, 4(%rdi)` instead, but that needs
+///   `R_X86_64_32`, and bfd refuses that against an absolute symbol in a PIE —
+///   which is the link perry's native Linux target performs.
+/// * **aarch64** — `hidden` makes LLVM materialise the symbol PC-relatively
+///   (`adrp` + `add :lo12:`), which is WRONG for an absolute symbol: the
+///   linker would have to reach 0x8000_0000 from the text segment. Default
+///   visibility with a narrow range gives a GOT load instead (`adrp :got:` +
+///   `ldr`), which is correct, is two instructions rather than one, and keeps
+///   the sharing and hoisting that are the larger half of this change. That
+///   form is not enabled here because it has not been linked and run on an
+///   arm64 host — the difference between "the lowering looks right" and "it
+///   links and returns the right value" is the whole reason this lane exists.
+/// * everything else (wasm, riscv, i686, COFF) — unverified, so off.
+///
+/// Being off is not a fallback path: the module emits no absolute symbols,
+/// module init mints as it does today, and no read site changes.
+pub fn link_time_shape_ids_for_target(triple: &str) -> bool {
+    link_time_shape_ids_enabled() && triple.starts_with("x86_64")
+}
