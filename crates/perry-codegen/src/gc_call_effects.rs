@@ -100,6 +100,15 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // outside the GC heap (the `js_box_alloc_bits` precedent).
         | "perry_transition_cache_base"
         | "js_transition_ic_note_hit"
+        // `object/inherited_read_cache.rs` (#10834/#10842): a direct-mapped
+        // per-thread table probe — identity-word and ShapeId compares, a
+        // validity-word compare, then one load through the holder. It
+        // allocates nothing, never calls user code and never walks the
+        // chain (that is the miss handler's prime); every case it cannot
+        // serve answers TAG_HOLE and the emitted code takes its ordinary
+        // slow call. Listed so nothing is spilled or reloaded around it on
+        // the declined-guard edge of every generic property read.
+        | "js_inherited_read_cache_hit_f64"
         | "js_transition_ic_spill_append"
         | "js_write_barrier_slot"
         | "js_write_barrier_slot_validated_parent"

@@ -480,6 +480,10 @@ NONCOLLECTING = {
     "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
     "js_write_barrier_root_nanbox", "perry_transition_cache_base",
     "js_transition_ic_note_hit",
+    # object/inherited_read_cache.rs `js_inherited_read_cache_hit_f64`: a
+    # per-thread table probe plus one load through the holder; no allocation,
+    # no user code, no chain walk (declines answer TAG_HOLE).
+    "js_inherited_read_cache_hit_f64",
     "js_transition_ic_spill_append",
     "js_write_barrier_slot",
     "js_gc_register_global_root",

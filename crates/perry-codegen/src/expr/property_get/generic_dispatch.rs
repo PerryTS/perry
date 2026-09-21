@@ -647,12 +647,33 @@ pub(crate) fn lower_generic_property_get(
         .cond_br(&is_spill, &call_label, &ways_entry_label);
 
     // Every way load still requires a resolved full cache. A site that has
-    // never primed has no cache, so there is nothing to compare against and
-    // the read goes straight out.
+    // never primed has no cache, so there is nothing to compare against.
+    //
+    // That "never primed" edge is also exactly where an INHERITED read lives:
+    // a key on the prototype chain is never an own slot on the receiver's
+    // shape, so a site that only ever reads it never resolves its cache, and
+    // every read of it reaches this branch with `present` false. So that
+    // edge, and no other, asks the inherited-read cache (#10834/#10842)
+    // before calling out — see `pic.miss.inherited` below. Every other path
+    // to the exit (a small handle, a spill entry, an MRU or way miss at a site
+    // that HAS primed) is unchanged to the instruction; the first placement
+    // asked on all of them and cost every own-key miss the price of a
+    // declining probe (+88 on a megamorphic site, +89 on a spill read).
+    //
+    // Under `--typed-feedback` the edge keeps its old target: the recording
+    // blocks put a guard-fail and a fallback-call record on precisely this
+    // edge, and a read served without a call would have to change one of
+    // those records. Feedback builds are profiling builds; they keep their
+    // signal byte-identical and go without the hook.
     ctx.current_block = ways_entry_idx;
     let token_cache = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let inherited_idx = (!crate::expr::typed_feedback_emission_enabled())
+        .then(|| ctx.new_block("pic.miss.inherited"));
+    let never_primed_label = inherited_idx
+        .map(|idx| ctx.block_label(idx))
+        .unwrap_or_else(|| cold_label.clone());
     ctx.block()
-        .cond_br(&token_cache.present, &miss_label, &cold_label);
+        .cond_br(&token_cache.present, &miss_label, &never_primed_label);
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -890,6 +911,45 @@ pub(crate) fn lower_generic_property_get(
         ctx.block().br(&call_label);
     }
 
+    // The inherited-read hook, on the never-primed edge only (see the branch
+    // that reaches it, in `pic.token.ways`). A read whose key lives on the
+    // prototype chain can never take the own-slot hit — the receiver's shape
+    // says the key is not own — so before this block it paid the slow entry's
+    // prologue and dispatch (79 of an inherited read's 204 instructions,
+    // measured by the inherited-reads lane) just to reach the same lookup
+    // inside `get_field_ic_miss_impl`. `js_inherited_read_cache_hit_f64` is
+    // a pure state read — it allocates nothing, triggers no GC and runs no
+    // user code — so it is a leaf in `gc_call_effects.rs` and
+    // `root_reload.rs`: no spill, no reload around it. `TAG_HOLE` is its
+    // decline sentinel, which no ordinary value can be, so the answer is one
+    // compare, with the SERVED edge as the true edge like every guard-passing
+    // edge in this tower (#7883); a decline continues to the one exit exactly
+    // as the never-primed edge did before. Nothing is primed from here:
+    // priming stays in the miss handler, the one place that already knows
+    // the key is not own without a second search. The versioned-loop deopt
+    // note is emitted here as it is on the exit, so entering either cold arm
+    // still records the bailout.
+    let inherited_arm = inherited_idx.map(|idx| {
+        ctx.current_block = idx;
+        crate::expr::emit_versioned_loop_callback_deopt(ctx);
+        let inh_key_handle = emit_key_handle(ctx, &key_handle_global);
+        let recv_ptr = ctx.block().inttoptr(I64, &obj_handle);
+        let key_ptr = ctx.block().inttoptr(I64, &inh_key_handle);
+        let val_inherited = ctx.block().call(
+            DOUBLE,
+            "js_inherited_read_cache_hit_f64",
+            &[(PTR, &recv_ptr), (PTR, &key_ptr)],
+        );
+        let inherited_bits = ctx.block().bitcast_double_to_i64(&val_inherited);
+        let inherited_served =
+            ctx.block()
+                .icmp_ne(I64, &inherited_bits, crate::nanbox::TAG_HOLE_I64);
+        let inherited_end_label = ctx.block().label.clone();
+        ctx.block()
+            .cond_br(&inherited_served, &merge_label, &cold_label);
+        (val_inherited, inherited_end_label)
+    });
+
     // The object exit: one call reproducing every pointer-path arm this tower
     // used to expand.
     ctx.current_block = call_idx;
@@ -942,6 +1002,9 @@ pub(crate) fn lower_generic_property_get(
         (&val_miss, &miss_end_label),
         (&val_nonptr, &nonptr_end_label),
     ];
+    if let Some((val_inherited, inherited_end_label)) = inherited_arm.as_ref() {
+        incoming.push((val_inherited, inherited_end_label));
+    }
     if let Some((sso_val, sso_end_label)) = sso_arm.as_ref() {
         incoming.push((sso_val, sso_end_label));
     }

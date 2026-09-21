@@ -567,6 +567,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("perry_transition_cache_base", PTR, &[]);
     module.declare_function("js_transition_ic_note_hit", VOID, &[]);
+    // #10834/#10842: the inherited-read cache hit, asked on the generic
+    // property read's declined-guard edge (`expr/property_get/
+    // generic_dispatch.rs`): masked receiver + interned key -> NaN-boxed
+    // value, or `TAG_HOLE` for a decline. A pure state read (see
+    // `gc_call_effects.rs`).
+    module.declare_function("js_inherited_read_cache_hit_f64", DOUBLE, &[PTR, PTR]);
     module.declare_function(
         "js_put_value_set_dyn_ic",
         DOUBLE,

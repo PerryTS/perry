@@ -202,6 +202,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_write_barrier_root_nanbox",
     "perry_transition_cache_base",
     "js_transition_ic_note_hit",
+    "js_inherited_read_cache_hit_f64",
     "js_transition_ic_spill_append",
     "js_write_barrier_slot",
     "js_write_barrier_slot_validated_parent",
