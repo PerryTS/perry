@@ -123,7 +123,7 @@ pub(crate) use live_slots::set_object_live_slot_count;
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
-pub(crate) use null_stub::{is_null_stub_address, NullObjectBytes, NULL_OBJECT_BYTES};
+pub(crate) use null_stub::null_stub_value;
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
 #[cfg(test)]
 pub(crate) use side_table_roots::test_transition_cache_insert;
@@ -1384,6 +1384,10 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // the SAME object on every call, so the object lives here rather than
     // being re-minted.
     crate::tui::handle_object::scan_tui_handle_roots_mut(visitor);
+    // #340/#341 row 4: the unresolved-namespace stub. It was a `.data`
+    // static with no `GcHeader`; it is an ordinary object now, so the slot
+    // holding it is a real GC root that a moving collection must rewrite.
+    null_stub::scan_null_stub_roots_mut(visitor);
     #[cfg(feature = "regex-engine")]
     regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }

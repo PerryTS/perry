@@ -873,6 +873,13 @@
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
     },
     {
+      "file": "crates/perry-runtime/src/object/null_stub.rs",
+      "name": "NULL_STUB_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> object::null_stub::scan_null_stub_roots_mut",
+      "why": "#340/#341 row 4: the per-realm unresolved-namespace stub OBJECT. It used to be a `.data` static with no GcHeader; it is an ordinary GC_TYPE_OBJECT now, visited by `null_stub::scan_null_stub_roots_mut` from the registered `object::scan_object_cache_roots_mut`, which keeps it alive and rewrites the slot when it moves. Uncovered here only because that registered scanner is in another file."
+    },
+    {
       "file": "crates/perry-runtime/src/object/read_stub.rs",
       "name": "READ_STUB",
       "verdict": "not_a_gc_pointer",

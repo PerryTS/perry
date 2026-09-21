@@ -1024,8 +1024,7 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                     let key_len = (*key).byte_len as usize;
                     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                     if key_bytes == b"constructor" {
-                        let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                        return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                        return JSValue::from_bits(crate::object::null_stub_value().to_bits());
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
                         let bits = dispatch(raw as i64, key_ptr, key_len);

@@ -1388,8 +1388,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 method_name,
                 "empty object",
             );
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            return crate::object::null_stub_value();
         }
     };
 
@@ -2092,8 +2091,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            return crate::object::null_stub_value();
         }
 
         if let Some(r) = crate::builtins::try_console_instance_method_dispatch(
@@ -2162,17 +2160,25 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             // numeric arithmetic on bit patterns. Truly garbage pointers
             // benefit too — chained calls hit a stable null stub instead
             // of mysterious numeric values.
-            if !is_valid_obj_ptr(obj as *const u8) {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
-            }
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            //
+            // #340/#341 row 4 collapsed an `is_valid_obj_ptr(obj)` branch that
+            // used to sit here: BOTH of its arms already returned the stub, so
+            // it could not change the answer -- a test that cannot fail. Its
+            // premise is gone too. It was written when the stub was a `.data`
+            // static, deliberately OUTSIDE the macOS heap window
+            // (`HEAP_MIN == 0x200_0000_0000`) that `is_valid_obj_ptr` requires,
+            // so a re-entrant `stub.raw().all(...)` reached this arm with
+            // `gc_type` read out of whatever bytes preceded the static. The
+            // stub is a real `GC_TYPE_OBJECT` now, so that re-entry takes the
+            // ordinary-object path below, finds a zero-key shape, matches no
+            // method and reaches the same catch-all at the end of this
+            // function. Same answer, decided by the object model rather than by
+            // the linker's layout.
+            return crate::object::null_stub_value();
         }
 
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            return crate::object::null_stub_value();
         };
         let keys = descriptor.keys as usize as *mut ArrayHeader;
 
@@ -2180,8 +2186,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             // Validate keys_array pointer before dereferencing
             let keys_ptr = keys as usize;
             if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                return crate::object::null_stub_value();
             }
             // Issue #62 phase B: removed macOS "ASCII-like pointer" heuristic —
             // mimalloc + arena strings produce valid heap pointers with bytes
@@ -2193,8 +2198,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             let key_count = descriptor.logical_key_count as usize;
             // Sanity check key_count
             if key_count > 65536 {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                return crate::object::null_stub_value();
             }
             // Compare method_name bytes directly against each stored key
             // instead of allocating a transient StringHeader via
