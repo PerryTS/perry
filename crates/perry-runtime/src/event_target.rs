@@ -14,16 +14,16 @@ use crate::{
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-pub const CLASS_ID_EVENT: u32 = 0xFFFF_2403;
-pub const CLASS_ID_CUSTOM_EVENT: u32 = 0xFFFF_2404;
-pub const CLASS_ID_DOM_EXCEPTION: u32 = 0xFFFF_2405;
+pub const CLASS_ID_EVENT: u32 = crate::native_class_ids::EVENT;
+pub const CLASS_ID_CUSTOM_EVENT: u32 = crate::native_class_ids::CUSTOM_EVENT;
+pub const CLASS_ID_DOM_EXCEPTION: u32 = crate::native_class_ids::DOM_EXCEPTION;
 /// `EventTarget` base class. Stamped on `new EventTarget()` instances and used
 /// as the PARENT class id of a user `class X extends EventTarget` (wired by
 /// `js_register_class_parent_dynamic` via `global_builtin_constructor_class_id`).
 /// Walking to it through the class chain is what lets a subclass instance be
 /// recognized as an event target (#6301). Keep in sync with the reserved id in
 /// perry-codegen/src/expr/instance_misc1.rs.
-pub const CLASS_ID_EVENT_TARGET: u32 = 0xFFFF_2406;
+pub const CLASS_ID_EVENT_TARGET: u32 = crate::native_class_ids::EVENT_TARGET;
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;

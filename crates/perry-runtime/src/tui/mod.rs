@@ -35,6 +35,7 @@
 pub mod cell;
 pub mod color;
 pub mod ffi;
+pub(crate) mod handle_object;
 pub mod hooks;
 pub mod input;
 pub mod layout;
@@ -44,8 +45,11 @@ pub mod state;
 pub mod style;
 pub mod tree;
 
-pub(crate) fn is_known_handle(handle: i64) -> bool {
-    tree::contains_handle(handle)
-        || state::contains_handle(handle)
-        || hooks::contains_handle(handle)
-}
+// #340/#341 deleted `is_known_handle` from here. It answered "is this integer
+// one of our three registries' ids?" for the receiver-repr ledger, by asking
+// all three under their mutexes — and it could not answer correctly, because
+// `tree` counts from 1, `state` from 0 and `hooks` from 1, so one integer was
+// simultaneously a live widget, a live state slot and a live ref. A tui handle
+// is a heap object now; the brand on its header answers the same question with
+// one load and no ambiguity (`tui::handle_object::tui_handle_parts_raw`), and
+// the three `contains_handle` probes went with it.

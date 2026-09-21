@@ -65,9 +65,6 @@ pub fn lookup(handle: i64) -> Option<Node> {
         .find_map(|(h, n)| if *h == handle { Some(n.clone()) } else { None })
 }
 
-pub(crate) fn contains_handle(handle: i64) -> bool {
-    REGISTRY.lock().unwrap().iter().any(|(h, _)| *h == handle)
-}
 
 /// Append a child handle to a Box node. No-op if the handle isn't a
 /// Box (silently ignored — matches the "we accept anything, you check

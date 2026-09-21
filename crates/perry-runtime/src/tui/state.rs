@@ -95,9 +95,23 @@ pub(crate) fn scan_state_slot_roots_mut_step(
 }
 
 /// Allocate a fresh state slot with the given initial value (NaN-boxed
-/// JSValue bits). Returns the slot index as the handle.
+/// JSValue bits). Returns the JS-visible handle OBJECT (#340/#341); the slot
+/// index stays this module's internal currency and rides in the object's
+/// `ObjectMeta.native_state`.
+///
+/// The slot index is what used to cross into JS, and the FIRST one is `0`, so
+/// `state(0)` handed back `POINTER_TAG | 0` — a null pointer wearing the
+/// pointer tag, the exact shape the honest-tag invariant exists to forbid.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_alloc(initial: f64) -> i64 {
+    let id = alloc_state_slot(initial);
+    super::handle_object::tui_object(super::handle_object::TuiKind::State, id)
+}
+
+/// Mint the slot and return its index. Split out of the FFI entry point so
+/// tests can drive the table without going through the handle object, and so
+/// the registry lock is released before `tui_object` allocates.
+fn alloc_state_slot(initial: f64) -> i64 {
     let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     let h = s.len() as i64;
     s.push(initial.to_bits());
@@ -107,16 +121,28 @@ pub extern "C" fn js_perry_tui_state_alloc(initial: f64) -> i64 {
     h
 }
 
-pub(crate) fn contains_handle(handle: i64) -> bool {
-    handle >= 0 && (handle as usize) < crate::gc::lock_gc_root_registry(&SLOTS).len()
-}
-
 /// Read a state slot. Returns the stored NaN-boxed value. Out-of-range
 /// handles return undefined.
+///
+/// `handle` is the unboxed receiver payload codegen passes for a
+/// `class_filter: Some("State")` row — the handle OBJECT's address since
+/// #340/#341 — and it is resolved to a slot index at entry, before anything
+/// that could allocate and move it. A receiver of another kind (the six tui id
+/// spaces overlap) resolves to `None` rather than to a live slot of this one.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_get(handle: i64) -> f64 {
+    match super::handle_object::tui_handle_id(handle, super::handle_object::TuiKind::State) {
+        Some(id) => state_get_by_id(id),
+        None => f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
+    }
+}
+
+pub(super) fn state_get_by_id(id: i64) -> f64 {
+    if id < 0 {
+        return f64::from_bits(0x7FFC_0000_0000_0001);
+    }
     let s = crate::gc::lock_gc_root_registry(&SLOTS);
-    match s.get(handle as usize) {
+    match s.get(id as usize) {
         Some(bits) => f64::from_bits(*bits),
         None => f64::from_bits(0x7FFC_0000_0000_0001), // TAG_UNDEFINED
     }
@@ -127,15 +153,25 @@ pub extern "C" fn js_perry_tui_state_get(handle: i64) -> f64 {
 /// handles silently no-op.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_set(handle: i64, value: f64) -> f64 {
+    if let Some(id) = super::handle_object::tui_handle_id(handle, super::handle_object::TuiKind::State)
+    {
+        state_set_by_id(id, value);
+    }
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+pub(super) fn state_set_by_id(id: i64, value: f64) {
+    if id < 0 {
+        return;
+    }
     let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
-    if let Some(slot) = s.get_mut(handle as usize) {
+    if let Some(slot) = s.get_mut(id as usize) {
         let new_bits = value.to_bits();
         if *slot != new_bits {
             *slot = new_bits;
             STATE_DIRTY.store(true, Ordering::Release);
         }
     }
-    f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
 #[cfg(test)]
@@ -168,15 +204,36 @@ mod tests {
         STATE_DIRTY.store(false, Ordering::Release);
     }
 
+    /// #340/#341 re-baselined: the SLOT INDEX is still allocated
+    /// sequentially, but it is no longer what crosses into JS — the handle is
+    /// an object now, so the assertion moved onto the index it carries.
+    /// (Before: `h0 == 0`, which also meant `state(0)` handed JS
+    /// `POINTER_TAG | 0`, a tagged null.)
     #[test]
     fn alloc_returns_sequential_handles() {
         reset();
         let h0 = js_perry_tui_state_alloc(0.0);
         let h1 = js_perry_tui_state_alloc(1.0);
         let h2 = js_perry_tui_state_alloc(2.0);
-        assert_eq!(h0, 0);
-        assert_eq!(h1, 1);
-        assert_eq!(h2, 2);
+        assert_eq!(slot_of(h0), 0);
+        assert_eq!(slot_of(h1), 1);
+        assert_eq!(slot_of(h2), 2);
+        // Three distinct handles, which the pre-#340 encoding could not give
+        // for the first one: `POINTER_TAG | 0` is indistinguishable from a
+        // null pointer.
+        assert_ne!(h0, 0);
+        assert_ne!(h0, h1);
+        assert_ne!(h1, h2);
+    }
+
+    /// The slot index behind a handle object, for the tests that are about
+    /// the slot table rather than about the handle.
+    fn slot_of(handle: i64) -> i64 {
+        super::super::handle_object::tui_handle_id(
+            handle,
+            super::super::handle_object::TuiKind::State,
+        )
+        .expect("a state handle resolves to its slot")
     }
 
     #[test]
@@ -214,11 +271,21 @@ mod tests {
         assert!(!STATE_DIRTY.load(Ordering::Acquire));
     }
 
+    /// #340/#341: `9_999` is no longer an out-of-range SLOT, it is not a
+    /// handle at all — the brand refuses it before the slot table is reached.
+    /// Both the old and the new representation answer `undefined`, but for
+    /// different reasons, and the new one is the stronger property: an
+    /// arbitrary integer can no longer address a live slot.
     #[test]
-    fn out_of_range_handle_returns_undefined() {
+    fn a_value_that_is_not_a_state_handle_returns_undefined() {
         reset();
+        let _live = js_perry_tui_state_alloc(1.0);
         let v = js_perry_tui_state_get(9_999);
         assert_eq!(v.to_bits(), 0x7FFC_0000_0000_0001);
+        // Slot 0 exists and holds 1.0; the old encoding would have read it
+        // through any receiver whose payload was 0.
+        let v0 = js_perry_tui_state_get(0);
+        assert_eq!(v0.to_bits(), 0x7FFC_0000_0000_0001);
     }
 
     /// #7680: plants the #7672 shape directly — allocate a slot on THIS
@@ -255,8 +322,8 @@ mod tests {
         );
         let h_next = js_perry_tui_state_alloc(1.0);
         assert_eq!(
-            h_next,
-            h + 1,
+            slot_of(h_next),
+            slot_of(h) + 1,
             "this thread's slot count must not have been reset by the foreign clear"
         );
         reset();

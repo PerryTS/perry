@@ -1339,6 +1339,12 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // and be rewritten when they move — the same contract as the iterator
     // tower above.
     crate::timer::scan_timer_prototype_roots_mut(visitor);
+    // #340/#341: the five `perry/tui` prototypes and the three singleton
+    // handles (`useApp` / `useStdout` / `useFocusManager`). The singletons are
+    // a resource -> object mapping, not just a prototype: `useApp()` must be
+    // the SAME object on every call, so the object lives here rather than
+    // being re-minted.
+    crate::tui::handle_object::scan_tui_handle_roots_mut(visitor);
     #[cfg(feature = "regex-engine")]
     regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }

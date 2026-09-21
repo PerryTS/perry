@@ -63,7 +63,17 @@ enum HookSlot {
     },
     /// `useRef(initial)` — mutable cell. Same storage as State but a
     /// distinct kind so a rule-of-hooks mismatch can be detected.
-    Ref { value_bits: u64 },
+    ///
+    /// `handle_bits` is the NaN-boxed `RefBox` handle OBJECT for this slot,
+    /// or 0 before the first `useRef` at this index (#340/#341). React's
+    /// `useRef` is stable across renders and perry's was too — trivially,
+    /// because the handle was the slot index + 1 — so the object has to be
+    /// stable as well, which means the slot owns it rather than each call
+    /// minting one. That makes it a GC pointer living in a side table, and
+    /// [`visit_hook_slot_roots`] is the single funnel that roots it: both
+    /// scanners over `SLOTS` go through that one function so a forgotten one
+    /// is a compile error, not a scavenge crash.
+    Ref { value_bits: u64, handle_bits: u64 },
     /// `useFocus({autoFocus, isActive})` — registers this slot as a
     /// focus candidate. Stores its assigned focus-order ID so the
     /// FocusManager's Tab cycle can route correctly across renders.
@@ -72,9 +82,6 @@ enum HookSlot {
 
 static SLOTS: Mutex<Vec<HookSlot>> = Mutex::new(Vec::new());
 
-pub(crate) fn contains_handle(handle: i64) -> bool {
-    handle > 0 && (handle as usize) <= crate::gc::lock_gc_root_registry(&SLOTS).len()
-}
 /// Per-frame hook index, reset by the run loop before each component call.
 static NEXT_HOOK_IDX: AtomicUsize = AtomicUsize::new(0);
 
@@ -103,27 +110,54 @@ pub fn scan_hook_slot_roots(mark: &mut dyn FnMut(f64)) {
 pub fn scan_hook_slot_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     for slot in s.iter_mut() {
-        match slot {
-            HookSlot::State { value_bits } => {
-                visitor.visit_nanbox_u64_slot(value_bits);
-            }
-            HookSlot::Memo {
-                value_bits,
-                computed,
-                ..
-            } => {
-                if *computed {
-                    visitor.visit_nanbox_u64_slot(value_bits);
-                }
-            }
-            HookSlot::Ref { value_bits } => {
-                visitor.visit_nanbox_u64_slot(value_bits);
-            }
-            // TODO: when useEffect cleanup-on-dep-change wiring lands,
-            // emit `cleanup` here too — it'll hold a NaN-boxed POINTER
-            // to a Perry closure that the GC otherwise can't see.
-            HookSlot::Effect { .. } | HookSlot::Focus { .. } => {}
+        visit_hook_slot_roots(visitor, slot);
+    }
+}
+
+/// Every GC edge one hook slot owns, in ONE place.
+///
+/// There are two scanners over `SLOTS` — this whole-table one and the
+/// budgeted `scan_hook_slot_roots_mut_step` — and #340/#341 added a second
+/// pointer to `Ref` (its handle object). A pointer visited by one scanner and
+/// not the other is an unrooted GC address that a moving collection rewrites
+/// in one path and not the other; this campaign already had a store-only
+/// mirror SIGSEGV 3/3 on a scavenge with every perf gate green. Routing both
+/// scanners through this function makes a forgotten edge a compile error
+/// (the `match` is exhaustive and destructures every field) rather than a
+/// crash under load.
+fn visit_hook_slot_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>, slot: &mut HookSlot) {
+    match slot {
+        HookSlot::State { value_bits } => {
+            visitor.visit_nanbox_u64_slot(value_bits);
         }
+        HookSlot::Memo {
+            value_bits,
+            computed,
+            last_deps_hash: _,
+        } => {
+            if *computed {
+                visitor.visit_nanbox_u64_slot(value_bits);
+            }
+        }
+        HookSlot::Ref {
+            value_bits,
+            handle_bits,
+        } => {
+            visitor.visit_nanbox_u64_slot(value_bits);
+            visitor.visit_nanbox_u64_slot(handle_bits);
+        }
+        // TODO: when useEffect cleanup-on-dep-change wiring lands,
+        // emit `cleanup` here too — it'll hold a NaN-boxed POINTER
+        // to a Perry closure that the GC otherwise can't see.
+        HookSlot::Effect {
+            last_deps_hash: _,
+            ran_once: _,
+            cleanup: _,
+        }
+        | HookSlot::Focus {
+            focus_id: _,
+            is_active: _,
+        } => {}
     }
 }
 
@@ -146,24 +180,7 @@ pub(crate) fn scan_hook_slot_roots_mut_step(
         .expect("tui hook root scanner state type");
     let mut slots = crate::gc::lock_gc_root_registry(&SLOTS);
     while *remaining > 0 && state.index < slots.len() {
-        match &mut slots[state.index] {
-            HookSlot::State { value_bits } => {
-                visitor.visit_nanbox_u64_slot(value_bits);
-            }
-            HookSlot::Memo {
-                value_bits,
-                computed,
-                ..
-            } => {
-                if *computed {
-                    visitor.visit_nanbox_u64_slot(value_bits);
-                }
-            }
-            HookSlot::Ref { value_bits } => {
-                visitor.visit_nanbox_u64_slot(value_bits);
-            }
-            HookSlot::Effect { .. } | HookSlot::Focus { .. } => {}
-        }
+        visit_hook_slot_roots(visitor, &mut slots[state.index]);
         state.index += 1;
         *remaining -= 1;
     }
@@ -180,7 +197,10 @@ pub(crate) fn test_seed_hook_slot_roots(value_bits: u64) {
         value_bits,
         computed: true,
     });
-    slots.push(HookSlot::Ref { value_bits });
+    slots.push(HookSlot::Ref {
+        value_bits,
+        handle_bits: 0,
+    });
     NEXT_HOOK_IDX.store(0, Ordering::Release);
 }
 
@@ -196,7 +216,7 @@ pub(crate) fn test_hook_slot_roots() -> (u64, u64, u64) {
         _ => 0,
     };
     let reference = match slots.get(2) {
-        Some(HookSlot::Ref { value_bits }) => *value_bits,
+        Some(HookSlot::Ref { value_bits, .. }) => *value_bits,
         _ => 0,
     };
     (state, memo, reference)
@@ -532,42 +552,77 @@ pub extern "C" fn js_perry_tui_use_memo(fn_closure: i64, deps_array: i64) -> f64
 /// do NOT flip STATE_DIRTY, so .set() doesn't trigger a re-render
 /// (matches React).
 ///
-/// The handle is the slot index + 1 (so the encoding is never 0,
-/// which the dispatch layer treats as a null pointer). The dispatch
-/// table NR_PTR-wraps the i64 with POINTER_TAG; receiver-method
-/// dispatch unboxes it back to an i64. We subtract 1 in `ref_get` /
-/// `ref_set` to recover the slot index.
+/// The internal id is the slot index + 1 (so it is never 0, which the
+/// dispatch layer treats as a null pointer). Since #340/#341 that id no
+/// longer crosses into JS: the handle is an OBJECT carrying the id in its
+/// `ObjectMeta.native_state`, and the SLOT owns that object so the second
+/// render's `useRef` at the same index hands back the same one — React's
+/// `useRef` is stable across renders, and it used to be stable here only
+/// because the id was a pure function of the index.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_ref(initial: f64) -> i64 {
     let idx = next_idx();
-    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
-    while s.len() <= idx {
-        s.push(HookSlot::Ref {
-            value_bits: initial.to_bits(),
-        });
+    let id = {
+        let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
+        while s.len() <= idx {
+            s.push(HookSlot::Ref {
+                value_bits: initial.to_bits(),
+                handle_bits: 0,
+            });
+        }
+        if !matches!(s[idx], HookSlot::Ref { .. }) {
+            s[idx] = HookSlot::Ref {
+                value_bits: initial.to_bits(),
+                handle_bits: 0,
+            };
+        }
+        if let HookSlot::Ref { handle_bits, .. } = &s[idx] {
+            // The slot already owns its handle: hand back the SAME object.
+            if *handle_bits != 0 {
+                return (*handle_bits & crate::value::POINTER_MASK) as i64;
+            }
+        }
+        if crate::hot_diag::receiver_repr_on() {
+            crate::hot_diag::receiver_repr_note_constructed(
+                crate::hot_diag::ReceiverReprFamily::Tui,
+            );
+        }
+        (idx as i64) + 1
+    };
+    // Minted with the registry lock RELEASED: `tui_object` allocates, an
+    // allocation can collect, and a collection scans `SLOTS` through
+    // `scan_hook_slot_roots_mut` — which takes this same lock.
+    let handle = super::handle_object::tui_object(super::handle_object::TuiKind::RefBox, id);
+    if handle != 0 {
+        let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
+        if let Some(HookSlot::Ref { handle_bits, .. }) = s.get_mut(idx) {
+            // GC_STORE_AUDIT(ROOT): rooted by visit_hook_slot_roots, which both
+            // SLOTS scanners call.
+            *handle_bits = crate::value::js_nanbox_pointer(handle).to_bits();
+        }
     }
-    if !matches!(s[idx], HookSlot::Ref { .. }) {
-        s[idx] = HookSlot::Ref {
-            value_bits: initial.to_bits(),
-        };
-    }
-    if crate::hot_diag::receiver_repr_on() {
-        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
-    }
-    (idx as i64) + 1
+    handle
 }
 
-/// `ref.get()` — read the slot's stored value. `handle` is the
-/// NaN-unboxed i64 receiver (slot index + 1).
+/// `ref.get()` — read the slot's stored value. `handle` is the unboxed
+/// receiver payload: the handle OBJECT's address since #340/#341, resolved to
+/// a slot id at entry before anything that could allocate.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_ref_get(handle: i64) -> f64 {
-    if handle <= 0 {
+    match super::handle_object::tui_handle_id(handle, super::handle_object::TuiKind::RefBox) {
+        Some(id) => ref_get_by_id(id),
+        None => f64::from_bits(TAG_UNDEFINED),
+    }
+}
+
+pub(super) fn ref_get_by_id(id: i64) -> f64 {
+    if id <= 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let idx = (handle - 1) as usize;
+    let idx = (id - 1) as usize;
     let s = crate::gc::lock_gc_root_registry(&SLOTS);
     match s.get(idx) {
-        Some(HookSlot::Ref { value_bits }) => f64::from_bits(*value_bits),
+        Some(HookSlot::Ref { value_bits, .. }) => f64::from_bits(*value_bits),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
@@ -575,35 +630,53 @@ pub extern "C" fn js_perry_tui_ref_get(handle: i64) -> f64 {
 /// `ref.set(v)` — write the slot. Does NOT flip STATE_DIRTY.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_ref_set(handle: i64, value: f64) -> f64 {
-    if handle <= 0 {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let idx = (handle - 1) as usize;
-    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
-    if let Some(HookSlot::Ref { value_bits }) = s.get_mut(idx) {
-        *value_bits = value.to_bits();
+    if let Some(id) =
+        super::handle_object::tui_handle_id(handle, super::handle_object::TuiKind::RefBox)
+    {
+        ref_set_by_id(id, value);
     }
     f64::from_bits(TAG_UNDEFINED)
+}
+
+pub(super) fn ref_set_by_id(id: i64, value: f64) {
+    if id <= 0 {
+        return;
+    }
+    let idx = (id - 1) as usize;
+    let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
+    if let Some(HookSlot::Ref { value_bits, .. }) = s.get_mut(idx) {
+        *value_bits = value.to_bits();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // useApp — singleton handle with .exit() / .waitUntilExit() methods.
 // ---------------------------------------------------------------------------
 
-/// Singleton App handle value (slot 0 of an "app singleton" namespace).
-/// Returning the same handle on every call keeps reference semantics
-/// stable across renders — ink's useApp() also returns a stable object.
+/// The App singleton's internal id. It is no longer what JS receives
+/// (#340/#341) — `useApp()` hands back the realm's App OBJECT, which carries
+/// this id — but the id is still what the singleton slot is minted from.
+///
+/// This constant is also the clearest statement of the bug the migration
+/// fixes: `APP_HANDLE` is 1, `STDOUT_HANDLE` is 2, `FOCUS_MANAGER_HANDLE` is
+/// 3, the widget tree counts from 1 and `useRef` counts from 1 — six id
+/// spaces in one encoding, so `useApp() === Text("hi")` was `true` and a
+/// `Map` keyed on both kept one entry.
 const APP_HANDLE: i64 = 1;
 
-/// `useApp()` — returns an App handle whose `.exit()` and
+/// `useApp()` — returns the App handle object whose `.exit()` and
 /// `.waitUntilExit()` methods dispatch through perry-codegen's
-/// class_filter: Some("App") rows.
+/// class_filter: Some("TuiApp") rows, or through `TuiApp.prototype` when the
+/// compiler cannot see the receiver's class.
+///
+/// The SAME object every time: ink's `useApp()` is stable across renders and
+/// perry's was too, trivially, while the handle was a constant.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_app() -> i64 {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
     }
-    APP_HANDLE
+    super::handle_object::tui_singleton(super::handle_object::TuiKind::App, APP_HANDLE)
 }
 
 /// `app.exit()` — flips the run-loop's EXIT_FLAG. Receiver argument is
@@ -622,11 +695,18 @@ pub extern "C" fn js_perry_tui_app_exit(_handle: i64) -> f64 {
 /// typically don't need waitUntilExit() outside an effect.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_app_wait_until_exit(_handle: i64) -> f64 {
+    wait_until_exit_blocking();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// The blocking wait itself, without the FFI receiver. Shared by the FFI
+/// entry point above, the receiver-free `js_perry_tui_wait_until_exit`, and
+/// `TuiApp.prototype.waitUntilExit`.
+pub(super) fn wait_until_exit_blocking() {
     use std::time::Duration;
     while !super::input::EXIT_FLAG.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(50));
     }
-    f64::from_bits(TAG_UNDEFINED)
 }
 
 // ---------------------------------------------------------------------------
@@ -643,7 +723,7 @@ pub extern "C" fn js_perry_tui_use_stdout() -> i64 {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
     }
-    STDOUT_HANDLE
+    super::handle_object::tui_singleton(super::handle_object::TuiKind::Stdout, STDOUT_HANDLE)
 }
 
 /// `stdout.write(s)` — write the string to stdout raw. Used as the
@@ -654,19 +734,28 @@ pub extern "C" fn js_perry_tui_stdout_write(
     _handle: i64,
     s_ptr: *const crate::string::StringHeader,
 ) -> f64 {
-    use std::io::Write;
-    if !s_ptr.is_null() {
-        let s = unsafe {
-            let len = (*s_ptr).byte_len as usize;
-            let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-            std::slice::from_raw_parts(data, len)
-        };
-        let stdout = std::io::stdout();
-        let mut h = stdout.lock();
-        let _ = h.write_all(s);
-        let _ = h.flush();
-    }
+    stdout_write_string_ptr(s_ptr as *mut crate::string::StringHeader);
     f64::from_bits(TAG_UNDEFINED)
+}
+
+/// The write itself, shared by the FFI entry point and
+/// `TuiStdout.prototype.write` (which coerces its argument to a string
+/// first, because a prototype method receives a JS value where the
+/// statically lowered call receives an already-resolved `StringHeader`).
+pub(super) fn stdout_write_string_ptr(s_ptr: *mut crate::string::StringHeader) {
+    use std::io::Write;
+    if s_ptr.is_null() {
+        return;
+    }
+    let s = unsafe {
+        let len = (*s_ptr).byte_len as usize;
+        let data = (s_ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+        std::slice::from_raw_parts(data, len)
+    };
+    let stdout = std::io::stdout();
+    let mut h = stdout.lock();
+    let _ = h.write_all(s);
+    let _ = h.flush();
 }
 
 /// `stdout.columns()` — current terminal column count. Used by ink
@@ -829,7 +918,10 @@ pub extern "C" fn js_perry_tui_use_focus_manager() -> i64 {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
     }
-    FOCUS_MANAGER_HANDLE
+    super::handle_object::tui_singleton(
+        super::handle_object::TuiKind::FocusManager,
+        FOCUS_MANAGER_HANDLE,
+    )
 }
 
 #[no_mangle]
@@ -857,7 +949,8 @@ pub extern "C" fn js_perry_tui_focus_manager_focus(_handle: i64, id: f64) -> f64
 /// `app.waitUntilExit()` minus the receiver arg.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_wait_until_exit() -> f64 {
-    js_perry_tui_app_wait_until_exit(APP_HANDLE)
+    wait_until_exit_blocking();
+    f64::from_bits(TAG_UNDEFINED)
 }
 
 // ---------------------------------------------------------------------------

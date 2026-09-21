@@ -409,7 +409,7 @@ use ownership::{has_refed_callback_timer, has_refed_interval_timer, has_refed_pr
 pub(crate) use ownership::{purge_agent_timers, timer_phase_work_pending};
 
 pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
-pub(crate) use handle_object::{scan_timer_prototype_roots_mut, IMMEDIATE_CLASS_ID};
+pub(crate) use handle_object::scan_timer_prototype_roots_mut;
 // `crate::timer::`-qualified only from unit tests (`timer/tests_inline.rs`,
 // `gc/tests/handle_bound_method_name.rs`, `timer/ref_states.rs`'s test module);
 // an unconditional `pub(crate) use` would be an unused import in a lib build

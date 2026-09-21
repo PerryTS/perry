@@ -443,7 +443,7 @@ mod honest_tag_tests {
             ),
             (
                 js_set_immediate_callback(0),
-                crate::timer::IMMEDIATE_CLASS_ID,
+                crate::native_class_ids::IMMEDIATE,
                 true,
             ),
         ] {

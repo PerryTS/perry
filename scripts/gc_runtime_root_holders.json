@@ -1142,6 +1142,46 @@
       "why": "AtomicI64 holding a scheduled mock timer's id (an i64 returned by schedule_mock_callback_timer, never a GC heap pointer) so the timer's own extern \"C\" callback can look itself up in the ref-state registry mid-dispatch. Declared under #[cfg(test)] only (tests_inline.rs, mock_dispatch_own_pin_tests), never live in a shipped binary."
     },
     {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "STATE_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "REF_BOX_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "APP_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "STDOUT_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "FOCUS_MANAGER_PROTOTYPE_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "APP_SINGLETON_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "STDOUT_SINGLETON_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/tui/handle_object.rs",
+      "name": "FOCUS_MANAGER_SINGLETON_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
       "name": "DELIVERED",
       "verdict": "test_only",
