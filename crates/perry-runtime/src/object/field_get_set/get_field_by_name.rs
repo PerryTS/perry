@@ -1265,6 +1265,37 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                     }
                     return JSValue::from_bits(value.to_bits());
                 }
+                // A capture-carrying class declaration is materialized as a
+                // heap class object (`ClassExprFresh`).  References that were
+                // lowered before the declaration's runtime binding existed
+                // (the class constructor itself and earlier helper closures)
+                // still carry the template `ClassRef`.  Runtime additions such
+                // as `Object.defineProperty(C, "OPEN", { value: 1 })` live on
+                // the materialized object, so consulting only the template
+                // tables makes `C.OPEN` undefined in those bodies even though
+                // the same expression at the declaration site reads `1`.
+                //
+                // `CLASS_OBJECT_VALUES` is already the runtime identity used
+                // by `instance.constructor`.  Read that same current
+                // evaluation first, preserving its own-property and pinned
+                // static-parent semantics; a miss continues through the
+                // ordinary ClassRef registry path below.
+                if !is_prototype_ref {
+                    if let Some(class_object) =
+                        super::super::class_registry::class_object_value_for_cid(class_id)
+                    {
+                        let class_object = JSValue::from_bits(class_object.to_bits());
+                        if class_object.is_pointer() {
+                            let class_object = class_object.as_pointer::<ObjectHeader>();
+                            if !class_object.is_null() && class_object as usize != obj as usize {
+                                let value = js_object_get_field_by_name(class_object, key);
+                                if !value.is_undefined() {
+                                    return value;
+                                }
+                            }
+                        }
+                    }
+                }
                 // Instance (prototype) methods must only resolve when reading
                 // off the prototype ref (`C.prototype.m`), NOT off the class ref
                 // itself (`C.m`). In JS a class object does not expose its

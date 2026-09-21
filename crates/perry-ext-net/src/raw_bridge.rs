@@ -139,6 +139,18 @@ extern "C" fn perry_net_raw_poll_read(socket_id: i64, out: *mut u8, max: usize) 
     n as isize
 }
 
+/// Return an attached socket to ordinary JS event delivery while keeping the
+/// underlying connection alive. HTTP uses this after parsing a `101` response
+/// so the request's `upgrade` listener receives the same live `net.Socket`
+/// supplied by `createConnection`.
+extern "C" fn perry_net_raw_detach(socket_id: i64) {
+    if let Ok(mut sockets) = statics::sockets().lock() {
+        if let Some(socket) = sockets.get_mut(&socket_id) {
+            socket.raw = None;
+        }
+    }
+}
+
 /// Tear down socket `socket_id` (equivalent to `socket.destroy()`) and
 /// unregister it. `perry-ext-http` calls this once the HTTP exchange is done
 /// draining. Because raw mode suppresses the JS `Close` event (the path that
@@ -172,6 +184,7 @@ pub(crate) fn register() {
         attach: perry_net_raw_attach,
         write: perry_net_raw_write,
         poll_read: perry_net_raw_poll_read,
+        detach: perry_net_raw_detach,
         close: perry_net_raw_close,
     });
 }

@@ -45,6 +45,10 @@ pub struct RawNetVtable {
     /// is drained and the peer closed, or `-1` when no bytes are
     /// currently available but the socket is still open ("would block").
     pub poll_read: extern "C" fn(socket_id: i64, out: *mut u8, max: usize) -> isize,
+    /// Return a raw-consumer socket to normal JS event delivery without
+    /// closing it. Used when an HTTP 101 hands the caller-supplied socket to
+    /// the request's `upgrade` listener.
+    pub detach: extern "C" fn(socket_id: i64),
     /// Tear the socket down (sends the equivalent of `socket.destroy()`).
     pub close: extern "C" fn(socket_id: i64),
 }
