@@ -336,8 +336,10 @@ fn compute_object_cache_key_with_env(
     // either reference symbols nothing defines or mint ids the guards do not
     // expect, so the two halves must never be mixed across a cached build.
     h.field(
-        "link_time_shape_ids",
-        if opts.link_time_shape_ids { "1" } else { "0" },
+        "env_no_linktime_shape_ids",
+        env_var("PERRY_NO_LINKTIME_SHAPE_IDS")
+            .as_deref()
+            .unwrap_or(""),
     );
 
     // HIR fingerprint (issue #686). Computed by

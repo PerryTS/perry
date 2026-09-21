@@ -41,3 +41,21 @@ pub(crate) fn note_static_shape_symbol(name: &str) {
         }
     });
 }
+
+/// Is design step 4 on for this compile?
+///
+/// An environment gate rather than a `CompileOptions` field, for the reason
+/// `PERRY_DISABLE_BUFFER_FAST_PATH` and `PERRY_VERIFY_NATIVE_REGIONS` are:
+/// `CompileOptions` is constructed exhaustively at ~100 sites across the
+/// codegen test suites, and a new field there is a hundred-file edit that
+/// would collide with every lane currently in flight for no behavioural gain.
+///
+/// The object cache still covers it: `compute_object_cache_key_with_env`
+/// already folds this family of variables into the key by name, and the driver
+/// SETS the variable before codegen whenever the link that must define the
+/// absolute symbols is not going to happen (`--no-link`, bitcode-link mode,
+/// COFF targets). Read fresh rather than memoised so a test can compile both
+/// arms in one process.
+pub fn link_time_shape_ids_enabled() -> bool {
+    std::env::var("PERRY_NO_LINKTIME_SHAPE_IDS").ok().as_deref() != Some("1")
+}

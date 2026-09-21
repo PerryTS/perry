@@ -2590,6 +2590,13 @@ pub fn run_with_parse_cache(
             .ok()
             .as_deref()
             != Some("1");
+    if !link_time_shape_ids {
+        // Publish the decision the way codegen reads it, and the way
+        // `compute_object_cache_key_with_env` hashes it — set before the first
+        // cache key is computed and before any module compiles, so the emitted
+        // declarations and the generated table can never disagree.
+        std::env::set_var("PERRY_NO_LINKTIME_SHAPE_IDS", "1");
+    }
     let cache_enabled = !args.no_cache
         && !cache_env_disabled
         && !bitcode_link
@@ -5381,7 +5388,6 @@ pub fn run_with_parse_cache(
             emit_ir_only: bitcode_link,
             verify_native_regions,
             disable_buffer_fast_path,
-            link_time_shape_ids,
             namespace_imports,
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             imported_classes,

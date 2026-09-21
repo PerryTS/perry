@@ -1209,7 +1209,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // The LINK-ASSIGNED ShapeId, as an absolute symbol. A DECLARATION
         // only: the value is fixed by the linker from the driver's generated
         // object, so this module's `.o` carries the name and never the number.
-        if opts.link_time_shape_ids {
+        if crate::shape_symbols::link_time_shape_ids_enabled() {
             llmod.add_raw_global(crate::typed_shape::static_shape_symbol_decl(&global_name));
             crate::shape_symbols::note_static_shape_symbol(
                 &crate::typed_shape::static_shape_symbol_from_keys_global(&global_name),
@@ -1418,7 +1418,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // left in place). It therefore gets its own absolute symbol, and the
         // driver assigns it its own id: identity is preserved exactly, not
         // unified as a side effect of this change.
-        if opts.link_time_shape_ids {
+        if crate::shape_symbols::link_time_shape_ids_enabled() {
             llmod.add_raw_global(crate::typed_shape::static_shape_symbol_decl(&global_name));
             crate::shape_symbols::note_static_shape_symbol(
                 &crate::typed_shape::static_shape_symbol_from_keys_global(&global_name),
@@ -2835,7 +2835,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Design step 4: the module-global shape hints, installed for the rest of
     // this module's codegen. Installed ONLY under the option, so a build with
     // the feature off has an empty map and every read site consults nothing.
-    let _shape_hint_scope = opts.link_time_shape_ids.then(|| {
+    let _shape_hint_scope = crate::shape_symbols::link_time_shape_ids_enabled().then(|| {
         crate::shape_hints::install(crate::shape_hints::collect_module_global_shapes(hir))
     });
     let module_receiver_types = boxed_locals::collect_module_local_types(hir);
@@ -3703,7 +3703,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         versioned_loop_callbacks: &versioned_loop_callbacks,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
-        link_time_shape_ids: opts.link_time_shape_ids,
+        link_time_shape_ids: crate::shape_symbols::link_time_shape_ids_enabled(),
         class_header_image_inits: &class_header_image_inits,
         imported_class_stubs: &imported_class_stubs,
         cross_module: &cross_module,

@@ -248,22 +248,6 @@ pub struct CompileOptions {
     /// benchmarking/debug switch; callers fall back to the generic buffer
     /// helpers because buffer access lowering returns `None`.
     pub disable_buffer_fast_path: bool,
-    /// Design step 4: emit LINK-ASSIGNED ShapeIds as absolute symbols.
-    ///
-    /// When true, each compiler-visible shape gets an
-    /// `@perry_shape_abs_* = external hidden global i8, !absolute_symbol !1`
-    /// declaration, module init BINDS that id instead of minting one, and the
-    /// driver defines every such symbol in one generated object at link time.
-    /// The module's `.o` carries only the NAME, so the per-module object cache
-    /// stays valid under any assignment.
-    ///
-    /// It is an option rather than a constant because the symbols must be
-    /// DEFINED by the same link that consumes them: `--no-link`, the bitcode
-    /// link mode and COFF targets have no such link, and a module compiled
-    /// with the declarations but linked without the definitions would fail to
-    /// link. Being a `CompileOptions` field is what puts it in the object
-    /// cache key, so the two halves can never disagree across a cached build.
-    pub link_time_shape_ids: bool,
 
     // ── Cross-module import plumbing ──
     /// Locals that are namespace imports (`import * as X from "./mod"`).
