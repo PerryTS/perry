@@ -1136,50 +1136,80 @@
       "why": "In-flight job counter for perry/thread."
     },
     {
-      "file": "crates/perry-runtime/src/timer/tests_inline.rs",
-      "name": "SELF_ID",
-      "verdict": "test_only",
-      "why": "AtomicI64 holding a scheduled mock timer's id (an i64 returned by schedule_mock_callback_timer, never a GC heap pointer) so the timer's own extern \"C\" callback can look itself up in the ref-state registry mid-dispatch. Declared under #[cfg(test)] only (tests_inline.rs, mock_dispatch_own_pin_tests), never live in a shipped binary."
-    },
-    {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "STATE_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` prototype singleton. Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut`, which `object::scan_object_cache_roots_mut` calls beside the iterator tower and the timer prototypes; that function is a registered scanner, so the slot is both kept alive and rewritten when the prototype moves. It reads as uncovered here only because the registered scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "REF_BOX_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` prototype singleton. Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut`, which `object::scan_object_cache_roots_mut` calls beside the iterator tower and the timer prototypes; that function is a registered scanner, so the slot is both kept alive and rewritten when the prototype moves. It reads as uncovered here only because the registered scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "APP_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` prototype singleton. Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut`, which `object::scan_object_cache_roots_mut` calls beside the iterator tower and the timer prototypes; that function is a registered scanner, so the slot is both kept alive and rewritten when the prototype moves. It reads as uncovered here only because the registered scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "STDOUT_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` prototype singleton. Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut`, which `object::scan_object_cache_roots_mut` calls beside the iterator tower and the timer prototypes; that function is a registered scanner, so the slot is both kept alive and rewritten when the prototype moves. It reads as uncovered here only because the registered scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "FOCUS_MANAGER_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` prototype singleton. Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut`, which `object::scan_object_cache_roots_mut` calls beside the iterator tower and the timer prototypes; that function is a registered scanner, so the slot is both kept alive and rewritten when the prototype moves. It reads as uncovered here only because the registered scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "APP_SINGLETON_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` singleton HANDLE (`useApp()` / `useStdout()` / `useFocusManager()` must answer the same object on every call, so the object lives here rather than being re-minted). Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut` from the registered `object::scan_object_cache_roots_mut`. Uncovered here only because that scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "STDOUT_SINGLETON_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` singleton HANDLE (`useApp()` / `useStdout()` / `useFocusManager()` must answer the same object on every call, so the object lives here rather than being re-minted). Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut` from the registered `object::scan_object_cache_roots_mut`. Uncovered here only because that scanner is in another file."
     },
     {
       "file": "crates/perry-runtime/src/tui/handle_object.rs",
       "name": "FOCUS_MANAGER_SINGLETON_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> tui::handle_object::scan_tui_handle_roots_mut",
+      "why": "#340/#341 per-realm `perry/tui` singleton HANDLE (`useApp()` / `useStdout()` / `useFocusManager()` must answer the same object on every call, so the object lives here rather than being re-minted). Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut` from the registered `object::scan_object_cache_roots_mut`. Uncovered here only because that scanner is in another file."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer/handle_object.rs",
+      "name": "TIMEOUT_PROTOTYPE_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> timer::handle_object::scan_timer_prototype_roots_mut",
+      "why": "#340/#341 per-realm `Timeout` / `Immediate` prototype singleton. Real GC address, visited by `timer::handle_object::scan_timer_prototype_roots_mut`, which the registered `object::scan_object_cache_roots_mut` calls. Moved out of the `frontier` list by #10821 row 3: the frontier means ENUMERATED BUT SCANNED BY NOTHING, and these are scanned, so recording them as debt understated the gate's own coverage."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer/handle_object.rs",
+      "name": "IMMEDIATE_PROTOTYPE_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut -> timer::handle_object::scan_timer_prototype_roots_mut",
+      "why": "#340/#341 per-realm `Timeout` / `Immediate` prototype singleton. Real GC address, visited by `timer::handle_object::scan_timer_prototype_roots_mut`, which the registered `object::scan_object_cache_roots_mut` calls. Moved out of the `frontier` list by #10821 row 3: the frontier means ENUMERATED BUT SCANNED BY NOTHING, and these are scanned, so recording them as debt understated the gate's own coverage."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer/tests_inline.rs",
+      "name": "SELF_ID",
+      "verdict": "test_only",
+      "why": "AtomicI64 holding a scheduled mock timer's id (an i64 returned by schedule_mock_callback_timer, never a GC heap pointer) so the timer's own extern \"C\" callback can look itself up in the ref-state registry mid-dispatch. Declared under #[cfg(test)] only (tests_inline.rs, mock_dispatch_own_pin_tests), never live in a shipped binary."
     },
     {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
@@ -4025,16 +4055,6 @@
     {
       "file": "crates/perry-runtime/src/timer.rs",
       "name": "TIMER_CALLBACK_DISPATCH_DEPTH"
-    },
-    {
-      "file": "crates/perry-runtime/src/timer/handle_object.rs",
-      "name": "TIMEOUT_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
-    },
-    {
-      "file": "crates/perry-runtime/src/timer/handle_object.rs",
-      "name": "IMMEDIATE_PROTOTYPE_SLOT",
-      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/tls_hot.rs",
