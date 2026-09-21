@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::buffer::BufferHeader;
+use crate::gc::{GcHeader, GC_FLAG_PINNED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_BUFFER};
 
 /// Set of `BufferHeader` addresses that back a `SharedArrayBuffer`.
 static SHARED_SAB_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
@@ -45,11 +46,21 @@ fn registry() -> &'static Mutex<HashSet<usize>> {
     SHARED_SAB_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-/// Header + data layout for a SAB of `size` data bytes. 8-byte alignment so the
-/// data region (which begins immediately after the 8-byte `BufferHeader`) is
-/// itself 8-aligned — required for `BigInt64Array` / `Float64` atomic slots.
+/// Layout for a SAB of `size` data bytes:
+/// `[GcHeader:8][BufferHeader:8][data:size]`, 8-byte aligned.
+///
+/// #340/#341 / #10925: the leading `GcHeader` is what makes a SAB an honest
+/// pointer. Before it, the JS value (the `BufferHeader` address) had no header,
+/// and every `*(addr - 8)` type probe read whatever `alloc_zeroed` block sat in
+/// front of it — the tail of another SAB's user-writable data — so writing a
+/// SAB's own bytes could flip `Array.isArray` on another and crash a brand
+/// check (#10925). With the header, `BufferHeader` and the data region keep
+/// their exact offsets (the returned pointer still points at the `BufferHeader`,
+/// so `buffer_data` == `buf + 8` is unchanged), and `buf - 8` is a real
+/// `GC_TYPE_BUFFER` header. 8-byte alignment keeps the data region 8-aligned for
+/// `BigInt64Array` / `Float64` atomic slots.
 fn sab_layout(size: u32) -> Layout {
-    let total = std::mem::size_of::<BufferHeader>() + size as usize;
+    let total = GC_HEADER_SIZE + std::mem::size_of::<BufferHeader>() + size as usize;
     Layout::from_size_align(total, 8).expect("shared SAB layout")
 }
 
@@ -72,9 +83,29 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     if raw.is_null() {
         handle_alloc_error(layout);
     }
-    let buf = raw as *mut BufferHeader;
-    // SAFETY: `buf` points at a fresh `BufferHeader`-sized-and-aligned block.
+    // The `GcHeader` sits at `raw`; the JS-visible value is the `BufferHeader`
+    // one header down, so `buf - GC_HEADER_SIZE` reads back this header.
+    let buf = unsafe { raw.add(GC_HEADER_SIZE) } as *mut BufferHeader;
+    let total = layout.size();
+    // SAFETY: `raw` owns `total` zeroed, 8-aligned bytes; the header and the
+    // BufferHeader both fit within the first `GC_HEADER_SIZE + 8` of them.
     unsafe {
+        let header = raw as *mut GcHeader;
+        (*header).obj_type = GC_TYPE_BUFFER;
+        // PINNED + TENURED and NOT `GC_FLAG_ARENA`: this block is a raw,
+        // process-global `alloc_zeroed`, not an arena or a gc_malloc cell. The
+        // collector recognises a SAB by process-global registry membership
+        // (`is_shared_sab`), never by this header, and — proven by the
+        // header-write audit in the PR — no collector path (mark, scavenge,
+        // sweep, remembered-set) reaches an object outside its own thread's
+        // arena/tracked set, so this header is only ever READ by the collector,
+        // never written. It carries the honest kind for the mutator-side
+        // `*(addr - 8)` probes (`Array.isArray`, the collection-thunk brand,
+        // `JSON.stringify`), which is what #10925 needed.
+        (*header).gc_flags = GC_FLAG_PINNED | GC_FLAG_TENURED;
+        (*header)._reserved = 0;
+        // Total block size, for honesty; a non-arena object is never block-walked.
+        (*header).size = total.min(u32::MAX as usize) as u32;
         (*buf).length = size;
         (*buf).capacity = size;
     }
@@ -126,6 +157,81 @@ pub(crate) fn snapshot_shared_sabs() -> Option<HashSet<usize>> {
         return None;
     }
     registry().lock().ok().map(|r| r.clone())
+}
+
+#[cfg(test)]
+mod header_survival_tests {
+    use super::*;
+
+    /// #10925, the precondition for putting a `GcHeader` in front of
+    /// process-global memory: **no collector may WRITE it.** Two threads'
+    /// collectors setting a mark or forwarding bit on one header would be a
+    /// data race that shows up as rare corruption rather than a clean failure.
+    ///
+    /// The argument is the source audit (plan L15.7): every mark, scavenge,
+    /// sweep and remembered-set write gates on THIS thread's arena or
+    /// malloc-tracked membership — a set a process-global SAB is in on no
+    /// thread — and the moving paths classify by arena range before they read
+    /// a header at all. This test is the empirical backstop for that argument,
+    /// not a proof of it: it snapshots the header word, drives several minor
+    /// and major collections on this thread AND on two others while all three
+    /// hold the SAB, and requires the word to come back unchanged.
+    ///
+    /// It can fail: point `alloc_shared_sab` at the arena, or drop the
+    /// membership gate in front of any mark write, and the mark bit lands in
+    /// this word.
+    #[test]
+    fn no_collector_writes_a_shared_sab_header() {
+        let buf = alloc_shared_sab(64);
+        let header_addr = (buf as usize) - GC_HEADER_SIZE;
+        // Read as one 64-bit word: obj_type, gc_flags, _reserved and size
+        // together, so a write to ANY of them is caught.
+        let snapshot = unsafe { std::ptr::read_volatile(header_addr as *const u64) };
+
+        // The header must actually say what the fix intends, or "unchanged"
+        // would be vacuous.
+        let header = header_addr as *const GcHeader;
+        assert_eq!(unsafe { (*header).obj_type }, GC_TYPE_BUFFER);
+        assert_eq!(
+            unsafe { (*header).gc_flags },
+            GC_FLAG_PINNED | GC_FLAG_TENURED
+        );
+
+        fn churn() {
+            for _ in 0..8 {
+                for _ in 0..2000 {
+                    let o = crate::object::js_object_alloc(0, 0);
+                    std::hint::black_box(o);
+                }
+                crate::gc::js_gc_collect();
+            }
+        }
+
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let addr = buf as usize;
+                std::thread::spawn(move || {
+                    // Touch the shared bytes the way an Atomics user would,
+                    // so the SAB is live across this thread's collections.
+                    let data = unsafe { crate::buffer::buffer_data(addr as *const BufferHeader) };
+                    for i in 0..64u8 {
+                        unsafe { std::ptr::write_volatile((data as *mut u8).add(i as usize), i) };
+                    }
+                    churn();
+                })
+            })
+            .collect();
+        churn();
+        for w in workers {
+            w.join().expect("a collecting thread panicked");
+        }
+
+        let after = unsafe { std::ptr::read_volatile(header_addr as *const u64) };
+        assert_eq!(
+            after, snapshot,
+            "a collector wrote the process-global SAB header: {snapshot:#018x} -> {after:#018x}"
+        );
+    }
 }
 
 /// Test-only: pretend `addr` is a process-global SAB backing.
