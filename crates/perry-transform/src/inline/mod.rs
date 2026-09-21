@@ -1487,6 +1487,42 @@ mod tests {
     }
 
     #[test]
+    fn cross_module_enum_members_stay_in_the_source_module() {
+        let enum_member = Expr::EnumMember {
+            enum_name: "CharacterCode".to_string(),
+            member_name: "Lt".to_string(),
+        };
+
+        let mut source = Module::new("/src/utils.ts");
+        let mut helper = function(1, vec![Stmt::Return(Some(enum_member.clone()))]);
+        helper.name = "isHtml".to_string();
+        helper.is_exported = true;
+        source.functions.push(helper.clone());
+        source
+            .exported_functions
+            .push(("isHtml".to_string(), helper.id));
+
+        assert!(
+            gather_cross_module_functions(&source).is_empty(),
+            "free functions that depend on a source enum must remain outlined"
+        );
+
+        let mut class = anon_class(2, "Probe");
+        class.is_exported = true;
+        class.methods.push(helper);
+        source.classes.push(class);
+
+        assert!(
+            gather_cross_module_methods(&source).is_empty(),
+            "strict method harvesting must reject source enum references"
+        );
+        assert!(
+            gather_cross_module_methods_with_extern_imports(&source).is_empty(),
+            "extern-aware method harvesting must reject source enum references"
+        );
+    }
+
+    #[test]
     fn cross_module_free_function_with_dynamic_require_is_rejected() {
         let mut source = Module::new("/src/package/index.ts");
         let mut loads_relative_module = function(

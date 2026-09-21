@@ -20,6 +20,7 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
             | Expr::ExternFuncRef { .. }
             | Expr::GlobalGet(_)
             | Expr::GlobalSet(_, _)
+            | Expr::EnumMember { .. }
             | Expr::NativeModuleRef(_) => false,
             // Closures are out of scope for cross-module inlining: the
             // closure body has its own LocalIds, captures lists, and may
@@ -396,6 +397,7 @@ fn cross_function_expr_is_safe(
         }
         Expr::GlobalGet(_)
         | Expr::GlobalSet(_, _)
+        | Expr::EnumMember { .. }
         | Expr::NativeModuleRef(_)
         // These nodes carry source-module-relative path sets. Codegen resolves
         // those sets through the current module's dynamic-target map, so a
@@ -1181,6 +1183,7 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
             Expr::FuncRef(_)
             | Expr::GlobalGet(_)
             | Expr::GlobalSet(_, _)
+            | Expr::EnumMember { .. }
             | Expr::NativeModuleRef(_) => false,
             Expr::Closure { .. } => false,
             Expr::ExternFuncRef { name, .. } => {
