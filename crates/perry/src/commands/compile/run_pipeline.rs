@@ -2583,8 +2583,14 @@ pub fn run_with_parse_cache(
     let link_time_shape_ids = !args.no_link
         && !bitcode_link
         // x86-64 only; see `link_time_shape_ids_for_target` for the
-        // per-target relocation findings this restriction records.
-        && perry_codegen::resolve_target_triple(target.as_deref()).starts_with("x86_64")
+        // per-target relocation findings this restriction records. A target
+        // alias ("ios", "linux-musl", ...) resolves through the same table
+        // codegen uses, and a bare `None` means the host, which this build is.
+        && target
+            .as_deref()
+            .and_then(perry_codegen::resolve_target_triple)
+            .unwrap_or_else(|| target.clone().unwrap_or_default())
+            .starts_with("x86_64")
         && !target
             .as_deref()
             .is_some_and(|t| t.contains("windows") || t.contains("msvc"))
