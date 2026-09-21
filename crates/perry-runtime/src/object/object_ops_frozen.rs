@@ -633,3 +633,76 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
         }
     }
 }
+
+#[cfg(test)]
+mod header_gate_tests {
+    //! #10933: `Object.freeze` / `seal` / `preventExtensions` used to write
+    //! `OBJ_FLAG_*` into `(value - 8) + 2` for ANY pointer-tagged value above
+    //! the handle band, with nothing establishing that the value HAS a header.
+    //! Several values perry hands to JS do not: a registered symbol is a
+    //! `Box::into_raw`'d `SymbolHeader`, the unresolved-namespace stub is a
+    //! `.rodata` static (where the write faults), and the async handles are
+    //! bare `Box`es. The write then lands in memory that belongs to something
+    //! else.
+    //!
+    //! MUST-FAIL before the gate: measured on v0.5.1633, 30 of 32 registered
+    //! symbols had the word at `sym - 8` change, `0x...0000 -> 0x...00070000`,
+    //! which is `FROZEN|SEALED|NO_EXTEND` landing in `_reserved`.
+
+    /// The bytes in front of a header-less value must be untouched by all
+    /// three integrity operations.
+    #[test]
+    fn integrity_ops_do_not_write_in_front_of_a_header_less_value() {
+        // Registered / well-known symbols are the header-less population:
+        // a fresh `Symbol()` goes through `gc_malloc` and DOES carry a header.
+        let mut syms: Vec<usize> = Vec::new();
+        for i in 0..32 {
+            let name = format!("freezeGate{i}");
+            let ptr = crate::symbol::well_known_symbol(&name);
+            assert!(!ptr.is_null(), "the probe needs real symbols to be meaningful");
+            syms.push(ptr as usize);
+        }
+        let before: Vec<u64> = syms
+            .iter()
+            .map(|a| unsafe { std::ptr::read_volatile((*a - 8) as *const u64) })
+            .collect();
+
+        for a in &syms {
+            let boxed = f64::from_bits(crate::value::JSValue::pointer(*a as *const u8).bits());
+            super::js_object_freeze(boxed);
+            super::js_object_seal(boxed);
+            super::js_object_prevent_extensions(boxed);
+        }
+
+        let mut changed = Vec::new();
+        for (i, a) in syms.iter().enumerate() {
+            let now = unsafe { std::ptr::read_volatile((*a - 8) as *const u64) };
+            if now != before[i] {
+                changed.push(format!("sym[{i}] {:#018x} -> {:#018x}", before[i], now));
+            }
+        }
+        assert!(
+            changed.is_empty(),
+            "an integrity op wrote in front of a header-less value ({} of {}):\n  {}",
+            changed.len(),
+            syms.len(),
+            changed.join("\n  ")
+        );
+    }
+
+    /// And the ops still WORK on a real object, so the gate is not a blanket
+    /// no-op: a test that passed by disabling the feature would be worthless.
+    #[test]
+    fn integrity_ops_still_apply_to_a_real_object() {
+        let obj = crate::object::js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let boxed = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+        super::js_object_freeze(boxed);
+        let gc = unsafe { crate::object::object_ops::gc_header_for(obj) };
+        assert_ne!(
+            unsafe { (*gc)._reserved } & crate::gc::OBJ_FLAG_FROZEN,
+            0,
+            "freeze must still mark a real object"
+        );
+    }
+}
