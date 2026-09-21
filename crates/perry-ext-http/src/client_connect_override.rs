@@ -49,10 +49,10 @@ pub(crate) fn request_create_connection_socket(
 }
 
 /// Serialize an HTTP/1.1 request (request line + headers + body) into the
-/// bytes to write onto a socket. Forces `Connection: close` (the raw socket
-/// path reads until EOF), drops any caller-supplied `Connection`/`Host`
-/// header (we set `Host` from the URL), and adds `Content-Length` when a
-/// body is present and the caller didn't.
+/// bytes to write onto a socket. Ordinary responses force `Connection: close`
+/// because this path reads until EOF. Upgrade requests preserve the caller's
+/// `Connection: Upgrade` header so a `101` can hand the live socket back to
+/// JavaScript. `Host` is always derived from the URL.
 fn serialize_http_request(
     method: &str,
     path: &str,
@@ -60,13 +60,16 @@ fn serialize_http_request(
     headers: &HashMap<String, String>,
     body: &[u8],
 ) -> Vec<u8> {
+    let wants_upgrade = crate::client_upgrade::wants_upgrade(headers);
     let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
     let mut has_content_length = false;
     for (k, v) in headers {
         if k.eq_ignore_ascii_case("content-length") {
             has_content_length = true;
         }
-        if k.eq_ignore_ascii_case("connection") || k.eq_ignore_ascii_case("host") {
+        if k.eq_ignore_ascii_case("host")
+            || (k.eq_ignore_ascii_case("connection") && !wants_upgrade)
+        {
             continue;
         }
         req.push_str(k);
@@ -74,7 +77,9 @@ fn serialize_http_request(
         req.push_str(v);
         req.push_str("\r\n");
     }
-    req.push_str("Connection: close\r\n");
+    if !wants_upgrade {
+        req.push_str("Connection: close\r\n");
+    }
     if !body.is_empty() && !has_content_length {
         req.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
@@ -86,11 +91,12 @@ fn serialize_http_request(
 
 /// #2154 — run an HTTP exchange over a socket that a `createConnection`
 /// override (Agent-level or, since #10469, request-level) produced
-/// (`socket_id`), instead of through reqwest. Writes the serialized
-/// request, reads the response until the peer closes (we force
-/// `Connection: close`), parses it with [`parse_http_response`], and pushes
-/// the same `Response` / `Error` event the reqwest path produces — so the
-/// IncomingMessage surface is identical.
+/// (`socket_id`), instead of through reqwest. Ordinary responses force
+/// `Connection: close` and read to EOF. A `101` response to an upgrade request
+/// detaches the still-live socket from the raw reader and pushes `Upgrade` with
+/// any bytes following the header block. Other responses are parsed with
+/// [`parse_http_response`] and produce the same `Response` / `Error` events as
+/// the reqwest path.
 ///
 /// The socket I/O goes through perry-ffi's raw-net vtable (published by
 /// perry-ext-net), so this crate needs no link edge to perry-ext-net. If no
@@ -129,6 +135,7 @@ pub(crate) fn dispatch_request_over_socket(
         path.push_str(q);
     }
     let req_bytes = serialize_http_request(&method, &path, &host_header, &headers, &body);
+    let wants_upgrade = crate::client_upgrade::wants_upgrade(&headers);
     let deadline = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
 
     spawn_blocking(move || {
@@ -176,6 +183,39 @@ pub(crate) fn dispatch_request_over_socket(
                 let n = (vtable.poll_read)(socket_id, chunk.as_mut_ptr(), chunk.len());
                 if n > 0 {
                     raw.extend_from_slice(&chunk[..n as usize]);
+                    if wants_upgrade {
+                        if let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let header_end = header_end + 4;
+                            let status = std::str::from_utf8(&raw[..header_end])
+                                .ok()
+                                .and_then(|head| head.lines().next())
+                                .and_then(|line| line.split_whitespace().nth(1))
+                                .and_then(|code| code.parse::<u16>().ok());
+                            if status == Some(101) {
+                                match parse_http_response(&raw[..header_end]) {
+                                    Ok(parsed) => {
+                                        (vtable.detach)(socket_id);
+                                        push_event(PendingHttpEvent::Upgrade {
+                                            request_handle,
+                                            status: parsed.status,
+                                            status_message: parsed.status_message,
+                                            headers: parsed.headers,
+                                            socket_handle: socket_id,
+                                            head: raw[header_end..].to_vec(),
+                                        });
+                                    }
+                                    Err(error_message) => {
+                                        (vtable.close)(socket_id);
+                                        push_event(PendingHttpEvent::Error {
+                                            request_handle,
+                                            error_message,
+                                        });
+                                    }
+                                }
+                                return;
+                            }
+                        }
+                    }
                 } else if n == 0 {
                     break; // clean EOF — peer closed after the response
                 } else {
@@ -208,4 +248,28 @@ pub(crate) fn dispatch_request_over_socket(
         std::hint::black_box(&jh);
         std::mem::forget(jh);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::serialize_http_request;
+    use std::collections::HashMap;
+
+    #[test]
+    fn websocket_upgrade_keeps_connection_header() {
+        let headers = HashMap::from([
+            ("Connection".to_string(), "Upgrade".to_string()),
+            ("Upgrade".to_string(), "websocket".to_string()),
+        ]);
+        let request = String::from_utf8(serialize_http_request(
+            "GET",
+            "/socket",
+            "localhost:1234",
+            &headers,
+            &[],
+        ))
+        .unwrap();
+        assert!(request.contains("Connection: Upgrade\r\n"), "{request}");
+        assert!(!request.contains("Connection: close\r\n"), "{request}");
+    }
 }
