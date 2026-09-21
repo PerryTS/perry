@@ -26,15 +26,24 @@ for (let i = 0; i < 50; i++) {
 }
 await Promise.all(quickChildren);
 
-let timeoutThreadsReleased = process.platform !== "linux";
-const releaseDeadline = Date.now() + 1_000;
-while (!timeoutThreadsReleased && Date.now() < releaseDeadline) {
-  timeoutThreadsReleased = threadCount() <= baseline + 5;
-  if (!timeoutThreadsReleased) {
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+// Only Linux exposes /proc/self/task, so only Linux can observe thread
+// release. Off Linux this arm SKIPS and says so (#10855): seeding the flag
+// `true` and printing it made a check that never ran read as a pass, which is
+// worse than no line at all. The slow-child arm below is the cross-platform
+// half and does assert real behaviour everywhere.
+if (process.platform !== "linux") {
+  console.log("timeout threads released: skipped (no /proc task census)");
+} else {
+  let timeoutThreadsReleased = false;
+  const releaseDeadline = Date.now() + 1_000;
+  while (!timeoutThreadsReleased && Date.now() < releaseDeadline) {
+    timeoutThreadsReleased = threadCount() <= baseline + 5;
+    if (!timeoutThreadsReleased) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
   }
+  console.log("timeout threads released:", timeoutThreadsReleased);
 }
-console.log("timeout threads released:", timeoutThreadsReleased);
 
 const started = Date.now();
 const slow = spawn("/bin/sleep", ["30"], {

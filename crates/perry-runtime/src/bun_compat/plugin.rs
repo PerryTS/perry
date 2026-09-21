@@ -162,6 +162,19 @@ mod tests {
 
     #[test]
     fn calls_setup_for_objects_and_functions_without_running_hooks() {
+        // Build the realm global before anything else. This test forces a
+        // collection mid-setup and then reads the builder's fields back, and
+        // that only works on a thread that owns a realm global. It used to get
+        // one for free: `resolve_prototype_addr` MATERIALIZED `globalThis` as a
+        // side effect of answering "is this `Object.prototype`?", and something
+        // in setup asked. v0.5.1627 removed that side effect (it cost ~5 ms on
+        // the first `setTimeout`), so the test now has to say what it needs.
+        //
+        // Without this the suite does not merely fail — the `expect("builder
+        // hook")` below panics inside an `extern "C"` function, which cannot
+        // unwind, so the process SIGABRTs and every test after it in the
+        // binary is silently skipped.
+        let _ = crate::object::js_get_global_this();
         SETUP_CALLS.store(0, Ordering::SeqCst);
         LOADER_CALLS.store(0, Ordering::SeqCst);
         let scope = RuntimeHandleScope::new();

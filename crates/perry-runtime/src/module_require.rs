@@ -1026,23 +1026,28 @@ fn canonical_dir(dir: &std::path::Path) -> std::path::PathBuf {
     if let Some(hit) = CANONICAL_MODULE_DIRS.with(|memo| memo.borrow().get(&key).cloned()) {
         return hit;
     }
-    // Resolve the parent first (memoized), then this one component, so a deep
-    // tree costs one lookup per NEW directory rather than a full walk each time.
-    let resolved = match (dir.parent(), dir.file_name()) {
-        (Some(parent), Some(name)) if parent != dir => {
-            let base = canonical_dir(parent);
-            let joined = base.join(name);
-            match std::fs::read_link(&joined) {
-                // Not a symlink (the common case): the parent is already
-                // canonical, so the join is canonical too — no deeper walk.
-                Err(_) => joined,
-                // A symlink: hand it to the real resolver rather than
-                // re-implementing chain and relative-target semantics.
-                Ok(_) => std::fs::canonicalize(&joined).unwrap_or(joined),
-            }
-        }
-        _ => std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()),
-    };
+    // One `canonicalize` per NEW directory, memoized — the same budget the
+    // parent-join form had (it spent a `read_link` per new directory), and the
+    // same answer on Unix, where a canonical parent joined to a non-symlink
+    // component is already canonical.
+    //
+    // #10851: the join form was WRONG on Windows. It rebuilt the path from
+    // literal component names, so an 8.3 short name survived: a path typed
+    // `C:\Users\RUNNER~1\...` stayed short, while the same file reached via a
+    // `..` component took the `canonicalize` branch and came back long
+    // (`runneradmin`). `PathModuleRegistry` is keyed on this string, so two
+    // spellings of one module produced two keys and two initializers —
+    // breaking CJS singleton identity. `canonicalize` resolves short names,
+    // casing and symlinks in one step, which is what this function claims to
+    // return.
+    //
+    // Falls back to the literal path when the directory does not exist, as
+    // before: callers treat an unresolvable path as itself.
+    let resolved =
+        std::fs::canonicalize(dir).unwrap_or_else(|_| match (dir.parent(), dir.file_name()) {
+            (Some(parent), Some(name)) if parent != dir => canonical_dir(parent).join(name),
+            _ => dir.to_path_buf(),
+        });
     CANONICAL_MODULE_DIRS.with(|memo| {
         memo.borrow_mut().insert(key, resolved.clone());
     });
