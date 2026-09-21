@@ -120,6 +120,47 @@ fn allocate_property_cache(ctx: &mut FnCtx<'_>) -> String {
     cache_name
 }
 
+
+/// A shape the compiler can name for this receiver, with the slot its key
+/// occupies. See `crate::shape_hints` for why this is a HINT and never a proof.
+struct ConstShapeHint {
+    /// The absolute symbol whose ADDRESS is the shape's link-assigned ShapeId.
+    symbol: String,
+    /// The key's inline slot. Equal to its index in the shape's keys array,
+    /// which `js_object_shape_bind_static_for_keys` binds under exactly the
+    /// four facts `js_shape_ordinary_inline_slot_for_key` requires for that
+    /// equality to hold (ordinary kind, generation 0, no tombstones, every key
+    /// inline).
+    slot: u32,
+}
+
+/// Resolve the receiver's compile-time shape, or `None` to use the tower alone.
+fn const_shape_hint(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<ConstShapeHint> {
+    // A typed-feedback build records a guard-pass on the MRU hit edge and a
+    // guard-fail/fallback-call pair on the miss edges. A read served before
+    // either would change a profiling build's signal, and that signal has to
+    // stay byte-identical to the build it profiles.
+    if crate::expr::typed_feedback_emission_enabled() {
+        return None;
+    }
+    let Expr::LocalGet(local_id) = object else {
+        return None;
+    };
+    // Module globals only: that is the population `shape_hints` collects, and
+    // it is the population no single-owner proof can reach (so these sites are
+    // exactly the ones still paying the full tower).
+    if !ctx.module_globals.contains_key(local_id) {
+        return None;
+    }
+    let class_name = crate::shape_hints::anon_shape_class_for_global(*local_id)?;
+    let keys_global = ctx.class_keys_globals.get(&class_name)?;
+    let slot = crate::type_analysis::class_field_global_index(ctx, &class_name, property)?;
+    Some(ConstShapeHint {
+        symbol: crate::typed_shape::static_shape_symbol_from_keys_global(keys_global),
+        slot,
+    })
+}
+
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
 /// This is the fall-through tail of the general catch-all arm: all earlier
 /// specializations have been ruled out.
@@ -598,11 +639,85 @@ pub(crate) fn lower_generic_property_get(
     // blocks it had to sit in a register.
     let pcid = ctx.block().load(I32, &pcid_ptr);
 
+    // ── Design step 4: the LINK-ASSIGNED shape guard ─────────────────────
+    //
+    // When the compiler can name the receiver's shape, the expected ShapeId is
+    // a link-time constant and the key's slot a compile-time index. The guard
+    // is `movabs $sym` + `cmp` + `jne` and the load has a constant
+    // displacement: no per-site cache word to load, and no `shr` to unpack a
+    // slot out of one.
+    //
+    // The instruction count is the smaller half. The point is that the guard
+    // is now the SAME EXPRESSION at every site naming the same shape, so LLVM
+    // can share it: two reads of one receiver collapse to one compare (the
+    // second is jump-threaded away on the hit path), and the `movabs` is
+    // loop-invariant so LICM hoists it out of a read loop entirely.
+    //
+    // It is a HINT. A receiver of some other shape fails the compare and
+    // continues into the tower below exactly as it does today, so being wrong
+    // costs a compare and never a wrong value. That polarity is the whole
+    // safety argument: instances carry what
+    // `js_object_shape_bind_static_for_keys` RETURNED, and if the runtime
+    // could not honour the link-assigned id — out of band, or already held by
+    // a separately linked image — then no object in the process carries the
+    // constant and this guard simply never fires.
+    let const_arm: Option<(String, String)> = match const_shape_hint(ctx, object, property) {
+        None => None,
+        Some(hint) => {
+            let const_hit_idx = ctx.new_block("pic.const.hit");
+            let const_hit_label = ctx.block_label(const_hit_idx);
+            let const_miss_idx = ctx.new_block("pic.const.miss");
+            let const_miss_label = ctx.block_label(const_miss_idx);
+            let expected = format!(
+                "trunc (i64 ptrtoint (ptr @{} to i64) to i32)",
+                hint.symbol
+            );
+            let const_eq = ctx.block().icmp_eq(I32, &pcid, &expected);
+            ctx.block()
+                .cond_br(&const_eq, &const_hit_label, &const_miss_label);
+
+            ctx.current_block = const_hit_idx;
+            let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+            let byte_offset = u64::from(header) + u64::from(hint.slot) * 8;
+            let field_addr = ctx.block().add(I64, &obj_handle, &byte_offset.to_string());
+            let field_ptr = ctx.block().inttoptr(I64, &field_addr);
+            let val_const = ctx.block().load(DOUBLE, &field_ptr);
+            let val_const_bits = ctx.block().bitcast_double_to_i64(&val_const);
+            // A stable-tombstone delete (#9064) KEEPS the ShapeId, so a
+            // matching shape does not prove a live slot. Same compare and same
+            // destination as the MRU hit path below; without it this arm would
+            // hand back a raw TAG_HOLE.
+            let const_deleted =
+                ctx.block()
+                    .icmp_eq(I64, &val_const_bits, crate::nanbox::TAG_HOLE_I64);
+            let const_end_label = ctx.block().label.clone();
+            ctx.block()
+                .cond_br(&const_deleted, &deleted_label, &merge_label);
+
+            ctx.current_block = const_miss_idx;
+            Some((val_const, const_end_label))
+        }
+    };
+
+    // #10843 made the hot ShapeId load single-use so isel could fold it into
+    // the compare (`cmp %ecx, 4(%rdi)`, one instruction fewer on every hit).
+    // The constant guard above is now that single use, so the fold lands on
+    // IT; the token compare below re-reads the word atomically, exactly as
+    // `pic.token.miss` and `pic.ways` already do, which is the same deliberate
+    // re-derivation on a path that is about to spend hundreds. Without a hint
+    // nothing is inserted and the original single use is the token compare.
+    let pcid_for_token = if const_arm.is_some() {
+        ctx.block().load_atomic_monotonic(I32, &pcid_ptr, 4)
+    } else {
+        pcid.clone()
+    };
+
+
     // A nonzero packed word contains a valid ShapeId and its slot. The
     // header guard above rejects a fresh site; matching the low 32 bits then
     // proves the shape without a discriminator OR or a wide token mask.
     let packed_stamp = ctx.block().trunc(I64, &packed_word, I32);
-    let token_eq = ctx.block().icmp_eq(I32, &pcid, &packed_stamp);
+    let token_eq = ctx.block().icmp_eq(I32, &pcid_for_token, &packed_stamp);
     let token_miss_idx = ctx.new_block("pic.token.miss");
     let token_miss_label = ctx.block_label(token_miss_idx);
     ctx.block()
@@ -1013,6 +1128,9 @@ pub(crate) fn lower_generic_property_get(
     }
     if let Some((size, collection_end_label)) = collection_size_arm.as_ref() {
         incoming.push((size, collection_end_label));
+    }
+    if let Some((val_const, const_end_label)) = const_arm.as_ref() {
+        incoming.push((val_const, const_end_label));
     }
     Ok(ctx.block().phi(DOUBLE, &incoming))
 }

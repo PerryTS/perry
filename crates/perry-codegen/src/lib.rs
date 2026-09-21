@@ -77,6 +77,7 @@ pub(crate) mod type_analysis_facts;
 pub(crate) mod type_analysis_net;
 pub mod typed_feedback_profile;
 pub mod shape_symbols;
+pub(crate) mod shape_hints;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;

@@ -2832,6 +2832,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `number[]` reached `arr[i]` as an unknown receiver and fell all the way
     // to `js_dyn_index_get` (27× slower than the same array passed as a
     // parameter, and no faster than an untyped array).
+    // Design step 4: the module-global shape hints, installed for the rest of
+    // this module's codegen. Installed ONLY under the option, so a build with
+    // the feature off has an empty map and every read site consults nothing.
+    let _shape_hint_scope = opts.link_time_shape_ids.then(|| {
+        crate::shape_hints::install(crate::shape_hints::collect_module_global_shapes(hir))
+    });
     let module_receiver_types = boxed_locals::collect_module_local_types(hir);
     let mut module_local_types = module_receiver_types.clone();
     // #5869 residual: a BOXED local's slot holds a BOX POINTER, never the
