@@ -25,8 +25,9 @@ with `POLLOUT`, returns `EPIPE` instead of spinning, and caps a request at
 write, so `console.log` and `write` stay in program order.
 
 The common path got cheaper: a utf8 string chunk is written from its own
-payload instead of a `to_vec()` copy — `instructions:u` per call −300 (−8.3%)
-for a string write, −23,961 (−86.7%) for a 49-byte `Uint8Array` write.
+payload instead of a `to_vec()` copy — `instructions:u` per call −182 (−5.2%)
+for a string write, −23,924 (−86.7%) for a 49-byte `Uint8Array` write, and
+`console.log` (untouched, the control) +7 (+0.2%).
 
 Unchanged on purpose: a value that is neither a string nor a binary chunk
 (`42`, `null`, an `ArrayBuffer`) and an unknown encoding name keep perry's
