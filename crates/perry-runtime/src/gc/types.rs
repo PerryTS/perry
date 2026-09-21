@@ -1375,6 +1375,44 @@ pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
 /// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
+/// # `GcHeader::_reserved` IS FULL — the authoritative bit map
+///
+/// Read this before spending a bit. It is the only place both namespaces are
+/// written down together, and the reason it exists is that they are not:
+/// `OBJ_FLAG_*` lives here, `GC_OBJ_TYPED_LAYOUT_INTACT` / `GC_LAYOUT_*` live
+/// in `gc/layout.rs`, and a comment in this file used to claim bits 12..13
+/// were "the last free bits" while `gc/layout.rs` already owned 12, 13, 14
+/// and 15.
+///
+/// | bit | OBJECT (`GC_TYPE_OBJECT`) | ARRAY | all kinds |
+/// |---|---|---|---|
+/// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
+/// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
+/// | 6 | `OBJ_FLAG_NULL_PROTO` | | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
+/// | 7 | `OBJ_FLAG_PACKED_NUMERIC_PROOF` | `GC_ARRAY_RAW_F64_LAYOUT` | |
+/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
+/// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
+/// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
+/// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
+/// | 12 | `GC_OBJ_TYPED_LAYOUT_INTACT` (`gc/layout.rs`) | `GC_ARRAY_RAW_F64_HOLES` | |
+/// | 13 | | | `GC_LAYOUT_ALL_POINTERS` (`gc/layout.rs`) |
+/// | 14..15 | | | `GC_LAYOUT_STATE_MASK` (`gc/layout.rs`) |
+///
+/// **There are no free bits.** Bits 12 and 13 are the dangerous ones to
+/// mistake for free, because `layout::set_layout_state` CLEARS bit 13 (and the
+/// typed-layout helpers clear bit 12) on transitions that have nothing to do
+/// with whatever a new flag would mean. A flag placed there is not merely
+/// shared — it is silently ERASED, so its reader answers `false` for an object
+/// the writer marked. #8690 hit this and left its warning in
+/// `ObjectMeta::flags`' doc comment; #10842 hit it again and left this table.
+///
+/// The next bit back is 10, `OBJ_FLAG_STABLE_TOMBSTONES`, which becomes dead
+/// when #10826 makes `delete` a shape transition. Until then, a new per-object
+/// fact belongs in **`ObjectMeta::flags`** (a `u64`, bits 5/6/7 free, out of
+/// reach of the layout machinery entirely) — and for any fact a hot read path
+/// consults, that is the better home anyway whenever the path already loads
+/// `meta`.
+pub const OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC: () = ();
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
 /// `GC_ARRAY_RAW_F64_LAYOUT`. Set when `new Array(n)` hole-initializes a

@@ -626,6 +626,26 @@ pub(crate) fn class_object_value_for_cid(class_id: u32) -> Option<f64> {
     })
 }
 
+/// # Any mark that allocates must be the LAST thing its caller does with the
+/// pointer
+///
+/// This function holds `proto_ptr` as a bare pointer and re-uses it AFTER the
+/// registry insert, for `class_prototype_object_addr_index_rekey` and for
+/// `runtime_write_barrier_root_raw_ptr`. Anything inserted here that can
+/// allocate — a mark, a hook, a counter that ensures a side record — can
+/// trigger a collection that MOVES the object, and both of those later uses
+/// then run on a stale address.
+///
+/// #10842 learned this by adding one line: marking the registered prototype
+/// with `proto_validity::mark_object_as_prototype`, which calls
+/// `object_meta_ensure`, SIGSEGV'd the runtime suite. The mark now happens at
+/// the `[[Prototype]]` install funnel and, as a self-healing backstop, inside
+/// the inherited-read cache's walk, which marks and then immediately abandons
+/// the walk precisely so that no pointer it was holding is touched afterwards.
+///
+/// If you need to add something here that allocates: root `proto_ptr` in a
+/// `RuntimeHandleScope` and reload it after, or do the work in the CALLER
+/// before it takes the pointer.
 pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;

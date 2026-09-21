@@ -43,6 +43,12 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 /// `PERRY_GC_VERIFY_EVACUATION` is blind because it trusts this enumeration.
 /// Workload-free coverage lives in the child-slot and copying-relocation tests
 /// in `gc/tests/copying/deferred_finalize_7635.rs`.
+// The complete `GcHeader::_reserved` bit map — BOTH this namespace and
+// `gc::types`' `OBJ_FLAG_*` — is on `OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC` in
+// `gc/types.rs`. The constants below own bits 12, 13, 14 and 15; that file's
+// flag block used to claim 12..13 were free, and #10842 shipped a mark on
+// bit 13 that `set_layout_state` erases. Do not add a flag to either namespace
+// without reading that table.
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 // A side-layout payload whose entire live prefix contains pointers. Bit 13 is

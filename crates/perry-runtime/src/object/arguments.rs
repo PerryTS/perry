@@ -287,6 +287,15 @@ pub extern "C" fn js_arguments_object_alloc(
 
     // Latch BEFORE the insert, so no probe can observe a populated registry
     // through a `false` flag.
+    // The per-OBJECT half of the latch below, set in the same breath as the
+    // insert so that "in this registry" and "carries the flag" are one
+    // statement. A shape-keyed read cache refuses this object on the flag
+    // alone, without this registry's hash probe and without needing to reach a
+    // thread-local at all — which emitted code could not do.
+    obj.with_mut_ptr(|obj: *mut ObjectHeader| {
+        unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
+        obj
+    });
     obj.with_mut_ptr(|obj| {
         ARGUMENTS_OBJECTS_EVER_USED.store(true, std::sync::atomic::Ordering::Relaxed);
         ARGUMENTS_OBJECTS.with(|m| {
@@ -330,7 +339,18 @@ pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
     if obj.is_null() {
         return false;
     }
-    ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&(obj as usize)))
+    let found = ARGUMENTS_OBJECTS.with(|m| m.borrow().contains_key(&(obj as usize)));
+    // A registry hit MUST imply the flag: a shape-keyed read cache refuses
+    // this receiver on the flag alone, so an insert that skipped the mark
+    // would silently widen that cache onto an object with its own index
+    // semantics.
+    debug_assert!(
+        !found
+            || unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(obj as usize) },
+        "an arguments object without OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: a \
+         registry insert bypassed js_arguments_object_alloc"
+    );
+    found
 }
 
 #[cfg(test)]
