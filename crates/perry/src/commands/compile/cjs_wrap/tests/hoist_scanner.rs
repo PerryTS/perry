@@ -29,3 +29,31 @@ module.exports = { ChecksumStream };
         "the class declaration must remain at its source position inside the factory"
     );
 }
+
+#[test]
+fn multiline_var_declarator_keeps_dependent_class_in_cjs_iife() {
+    // @redis/client declares its transpiled private-field helpers as one long
+    // comma-separated `var` statement. The later helpers start on new lines;
+    // missing them here hoists RedisClient out of the CommonJS factory and
+    // severs the class methods' captures of those helper functions.
+    let src = r#"var _RedisClient_instances, _a,
+    _RedisClient_options,
+    _RedisClient_isolationPool,
+    _RedisClient_init;
+class RedisClient {
+    connect() { return _RedisClient_isolationPool(this); }
+}
+_RedisClient_isolationPool = function _RedisClient_isolationPool() {};
+module.exports = { RedisClient };
+"#;
+
+    let (blocks, hoisted_names, rest) = extract_top_level_class_decls(src);
+    assert!(
+        !hoisted_names.iter().any(|name| name == "RedisClient"),
+        "a class depending on a continued CJS-local declaration must not hoist; hoisted block:\n{blocks}"
+    );
+    assert!(
+        rest.contains("class RedisClient"),
+        "the dependent class must remain inside the CommonJS factory"
+    );
+}
