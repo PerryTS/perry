@@ -533,6 +533,46 @@ pub unsafe extern "C" fn js_super_construct_apply(
     }
     let arr =
         (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    // A replayed class expression has an exact, per-evaluation heritage edge.
+    // Resolve it before consulting the template-wide class-id registry: two
+    // evaluations of one template can form a parent chain, while the registry
+    // can retain only the most recently registered edge. Reusing that edge at
+    // every level re-enters the same constructor forever (#10660).
+    if let Some(parent_value) =
+        crate::object::class_registry::active_class_evaluation_parent(child_cid)
+    {
+        let n = if arr.is_null() {
+            0
+        } else {
+            crate::array::js_array_length(arr)
+        } as usize;
+        let args: Vec<f64> = (0..n)
+            .map(|i| crate::array::js_array_get_f64(arr, i as u32))
+            .collect();
+        if crate::object::class_registry::is_class_object_value(parent_value) {
+            let parent_ptr = crate::value::JSValue::from_bits(parent_value.to_bits())
+                .as_pointer::<ObjectHeader>();
+            if !parent_ptr.is_null() {
+                let parent_cid = super::js_object_get_class_id(parent_ptr);
+                if parent_cid != 0 {
+                    let _ = replay_class_object_super_constructor(
+                        parent_value,
+                        parent_cid,
+                        this_raw as *mut ObjectHeader,
+                        args.as_ptr(),
+                        args.len(),
+                    );
+                    return undef;
+                }
+            }
+        }
+        let parent_cid = crate::object::class_registry::dynamic_value_class_id(parent_value);
+        if parent_cid != 0 {
+            let _ =
+                run_class_constructor_on_this_flat(parent_cid, this_raw, args.as_ptr(), args.len());
+            return undef;
+        }
+    }
     let mut cur = crate::object::get_parent_class_id(child_cid).unwrap_or(0);
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
@@ -1204,6 +1244,27 @@ pub(crate) unsafe fn replay_class_object_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    replay_class_object_constructor_impl(classobj_value, class_cid, inst, args_ptr, args_len, true)
+}
+
+unsafe fn replay_class_object_super_constructor(
+    classobj_value: f64,
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    replay_class_object_constructor_impl(classobj_value, class_cid, inst, args_ptr, args_len, false)
+}
+
+unsafe fn replay_class_object_constructor_impl(
+    classobj_value: f64,
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+    pin_constructing_class: bool,
+) -> f64 {
     // Callers scope their argument read with `with_mut_ptr`; establish this
     // function's own roots before any constructor-replay path can allocate.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1216,12 +1277,14 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // `class_chain_reaches_dynamic`). Runs before anything below can
     // allocate/collect and return early, so `inst` is pinned regardless of
     // which path this replay takes.
-    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-        super::class_registry::pin_instance_constructing_class(
-            inst,
-            classobj_handle.get_nanbox_f64(),
-        );
-    });
+    if pin_constructing_class {
+        inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            super::class_registry::pin_instance_constructing_class(
+                inst,
+                classobj_handle.get_nanbox_f64(),
+            );
+        });
+    }
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // must run with the same argument list. `lookup_class_constructor` holds
