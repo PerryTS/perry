@@ -61,6 +61,12 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // machine pipeline for bounded ISel/regalloc. That changes object bytes,
     // so both the build and object caches must distinguish its settings.
     "PERRY_LL_FAST_EMIT_MAX_INSTRS",
+    // #10777: gates computing numeric-by-construction provenance AFTER the
+    // `Ptr<Shape>` receiver proofs it depends on. On, an accumulator written
+    // `h = h + o.a` is admitted and the `+` routes to INLINE_FADD; off, the
+    // shape inputs are empty and it stays GUARDED. Different emitted code, so
+    // an object built one way must not be served to a build of the other.
+    "PERRY_L14_NBC_ORDER",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.
