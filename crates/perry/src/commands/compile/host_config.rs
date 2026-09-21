@@ -635,6 +635,26 @@ pub(super) fn apply_pkg_and_toml_config(
         }
     }
 
+    // CLI `--package-alias FROM=TO` entries merge after the package.json
+    // `perry.packageAliases` set read above; a duplicate FROM is overwritten
+    // (the flag wins, same "last wins" ladder as fast-math below). The TO
+    // value may be an npm package name or an absolute source path — the
+    // module resolver's absolute-specifier branch handles the latter (this is
+    // how `perry electron` points `electron` at the in-repo compat shim).
+    for alias in &args.package_aliases {
+        let (from, to) = alias
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("--package-alias expects FROM=TO, got `{alias}`"))?;
+        if from.is_empty() || to.is_empty() {
+            anyhow::bail!("--package-alias expects a non-empty FROM and TO, got `{alias}`");
+        }
+        match format {
+            OutputFormat::Text => println!("  Package alias: {} → {}", from, to),
+            OutputFormat::Json => {}
+        }
+        ctx.package_aliases.insert(from.to_string(), to.to_string());
+    }
+
     // Env var overrides package.json (`PERRY_FAST_MATH=1` opts in).
     if std::env::var("PERRY_FAST_MATH")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

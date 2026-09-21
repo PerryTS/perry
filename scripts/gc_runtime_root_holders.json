@@ -1793,6 +1793,13 @@
       "why": "App entries retain native window/application objects and scalar window configuration. Callback roots are kept in dedicated scanned tables."
     },
     {
+      "file": "crates/perry-ui-macos/src/app/electron_shell.rs",
+      "name": "PENDING_APP_LOOP_ON_READY",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots::visit_global_root_slots (crates/perry-runtime/src/gc/roots.rs), registered via js_gc_register_global_root from request_app_loop before the slot is first written",
+      "why": "Holds the NaN-box bits of the Electron shim's app.whenReady() onReady closure between appRequestLoop and the top-level UI-loop takeover. The slot address is registered as a runtime global root before it receives a closure, so it is visited through visit_mutable_root_slots (marked and rewritten after evacuation), and app_run_loop re-reads the slot immediately before the call."
+    },
+    {
       "file": "crates/perry-ui-macos/src/audio_playback.rs",
       "name": "BUSES",
       "verdict": "not_a_gc_pointer",

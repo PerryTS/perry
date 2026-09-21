@@ -17,6 +17,9 @@ use std::sync::{LazyLock, Mutex};
 
 use crate::widgets;
 
+mod electron_shell;
+pub use electron_shell::{app_quit, app_run_loop, request_app_loop};
+
 thread_local! {
     pub(crate) static APPS: RefCell<Vec<AppEntry>> = const { RefCell::new(Vec::new()) };
     /// Buffered keyboard shortcuts registered before the menu bar exists.
@@ -1663,14 +1666,21 @@ pub fn window_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     }
 }
 
-/// Set the root widget of a window.
+/// Set the root widget of a window, pinned to fill it.
+///
+/// Unlike the bare `setContentView`, this pins the body to the window's
+/// `contentLayoutGuide` with Auto Layout so a full-window webview (an Electron
+/// `BrowserWindow` whose entire content is the page) fills and resizes with the
+/// window. Mirrors the pinning `app_set_body` does for the main window.
 pub fn window_set_body(window_handle: i64, widget_handle: i64) {
     WINDOWS.with(|w| {
         let windows = w.borrow();
         let idx = (window_handle - 1) as usize;
         if idx < windows.len() {
             if let Some(view) = crate::widgets::get_widget(widget_handle) {
-                windows[idx].window.setContentView(Some(&view));
+                let window = &windows[idx].window;
+                window.setContentView(Some(&view));
+                electron_shell::pin_to_content_layout_guide(window, &view);
             }
         }
     });
@@ -1682,8 +1692,27 @@ pub fn window_show(window_handle: i64) {
         let windows = w.borrow();
         let idx = (window_handle - 1) as usize;
         if idx < windows.len() {
-            windows[idx].window.center();
-            windows[idx].window.makeKeyAndOrderFront(None);
+            let window = &windows[idx].window;
+            // Activate the app first. In the Electron-compat loop, windows are
+            // created dynamically from a microtask *during* app_run_loop's
+            // `[NSApp run]` (via whenReady().then(createWindow)), after the
+            // initial activate(). Without re-activating + orderFrontRegardless
+            // the window is created but never composited on-screen
+            // (CGWindow `onscreen=None`) and `makeKeyAndOrderFront` alone is a
+            // no-op for a non-active app.
+            if let Some(mtm) = MainThreadMarker::new() {
+                let app = NSApplication::sharedApplication(mtm);
+                #[allow(deprecated)]
+                app.activateIgnoringOtherApps(true);
+            }
+            window.center();
+            window.makeKeyAndOrderFront(None);
+            unsafe {
+                // Force the window on-screen regardless of app-active state —
+                // this is the piece that actually composites a window created
+                // mid-run-loop.
+                let _: () = msg_send![&**window, orderFrontRegardless];
+            }
         }
     });
 }

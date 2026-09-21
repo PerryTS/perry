@@ -15,6 +15,7 @@ pub mod deps;
 #[cfg(feature = "watch-cli")]
 pub mod dev;
 pub mod doctor;
+pub mod electron;
 pub mod explain;
 pub mod fix_applier;
 pub mod fixer;

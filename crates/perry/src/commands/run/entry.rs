@@ -29,30 +29,37 @@ pub fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
     }
 }
 
-/// Resolve the entry TypeScript file
+/// Resolve the entry TypeScript file.
+///
+/// Accepts a file, a directory, or nothing:
+/// - a file path is returned as-is;
+/// - a directory (e.g. `perry run .`) is treated as a project root — its
+///   `perry.toml` `entry`, then `src/main.ts`, then `main.ts` is resolved
+///   inside it (this is what users expect from a project-level command, and
+///   avoids the bare "Is a directory" error from the compiler downstream);
+/// - nothing falls back to the current directory the same way.
 pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
-    let project_dir = match input {
-        Some(path) if !path.exists() => {
-            return Err(anyhow!("File not found: {}", path.display()));
+    if let Some(path) = input {
+        if path.is_dir() {
+            if let Some(entry) = resolve_entry_in_dir(path)? {
+                return Ok(entry);
+            }
+            return Err(anyhow!(
+                "'{}' is a directory with no entry point.\n\
+                 Looked for: perry.toml `entry`, src/main.ts, main.ts\n\
+                 Pass a file (perry run path/to/file.ts) or set `entry` in perry.toml.",
+                path.display()
+            ));
         }
-        Some(path) if !path.is_dir() => return Ok(path.to_path_buf()),
-        Some(path) => path,
-        None => Path::new("."),
-    };
-
-    // Try perry.toml
-    if let Some(entry) = read_perry_toml_entry(project_dir) {
-        if entry.exists() {
-            return Ok(entry);
+        if path.exists() {
+            return Ok(path.to_path_buf());
         }
+        return Err(anyhow!("File not found: {}", path.display()));
     }
 
-    // Fallback: src/main.ts, then main.ts
-    for candidate in &["src/main.ts", "main.ts"] {
-        let path = project_dir.join(candidate);
-        if path.exists() {
-            return Ok(path);
-        }
+    // No argument: resolve against the current directory.
+    if let Some(entry) = resolve_entry_in_dir(Path::new("."))? {
+        return Ok(entry);
     }
 
     Err(anyhow!(
@@ -62,19 +69,60 @@ pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
     ))
 }
 
-/// Read entry point from perry.toml if present
-fn read_perry_toml_entry(project_dir: &Path) -> Option<PathBuf> {
-    let toml_str = std::fs::read_to_string(project_dir.join("perry.toml")).ok()?;
-    for line in toml_str.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("entry") {
-            if let Some(eq_pos) = trimmed.find('=') {
-                let value = trimmed[eq_pos + 1..].trim().trim_matches('"');
-                return Some(project_dir.join(value));
-            }
+/// Resolve the entry file inside a project directory, honoring `perry.toml`
+/// `entry` first, then the conventional `src/main.ts` / `main.ts` fallbacks.
+/// Returns a path that is guaranteed to exist.
+fn resolve_entry_in_dir(dir: &Path) -> Result<Option<PathBuf>> {
+    // perry.toml `entry` is relative to the project directory.
+    if let Some(entry) = read_perry_toml_entry_in(dir)? {
+        let resolved = if entry.is_absolute() {
+            entry
+        } else {
+            dir.join(entry)
+        };
+        if resolved.is_file() {
+            return Ok(Some(resolved));
+        }
+        return Err(anyhow!(
+            "perry.toml configures entry '{}', but that file does not exist",
+            resolved.display()
+        ));
+    }
+
+    for candidate in &["src/main.ts", "main.ts"] {
+        let path = dir.join(candidate);
+        if path.is_file() {
+            return Ok(Some(path));
         }
     }
-    None
+
+    Ok(None)
+}
+
+/// Read the `entry` key from `<dir>/perry.toml` (`[project] entry`, or a
+/// top-level `entry`), if present. A present but malformed config is an
+/// error: silently falling back to `src/main.ts` would run a different program
+/// from the one the project explicitly configured.
+fn read_perry_toml_entry_in(dir: &Path) -> Result<Option<PathBuf>> {
+    let config_path = dir.join("perry.toml");
+    if !config_path.exists() {
+        return Ok(None);
+    }
+    let toml_str = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+    let config: toml::Value =
+        toml::from_str(&toml_str).with_context(|| format!("Invalid {}", config_path.display()))?;
+    let entry = config
+        .get("project")
+        .and_then(|project| project.get("entry"))
+        .or_else(|| config.get("entry"));
+    match entry {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|entry| Some(PathBuf::from(entry)))
+            .ok_or_else(|| anyhow!("{} `entry` must be a string", config_path.display())),
+    }
 }
 
 /// Resolve the compilation target and optional device UDID
@@ -376,6 +424,32 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolve_entry_file(Some(project.path())).unwrap(), entry);
+    }
+
+    #[test]
+    fn configured_missing_entry_does_not_fall_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("src")).expect("src");
+        std::fs::write(dir.path().join("src/main.ts"), "console.log('fallback')\n").expect("main");
+        std::fs::write(
+            dir.path().join("perry.toml"),
+            "[project]\nentry = \"src/missing.ts\"\n",
+        )
+        .expect("config");
+
+        let err = resolve_entry_file(Some(dir.path())).expect_err("missing entry must fail");
+        assert!(err.to_string().contains("src/missing.ts"));
+    }
+
+    #[test]
+    fn malformed_config_does_not_fall_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("src")).expect("src");
+        std::fs::write(dir.path().join("src/main.ts"), "console.log('fallback')\n").expect("main");
+        std::fs::write(dir.path().join("perry.toml"), "[project\nentry = 1\n").expect("config");
+
+        let err = resolve_entry_file(Some(dir.path())).expect_err("invalid config must fail");
+        assert!(err.to_string().contains("Invalid"));
     }
 
     #[test]
