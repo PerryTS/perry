@@ -1,22 +1,6 @@
+use super::process_stream_write::{with_write_bytes, write_stderr, write_stdout};
 use crate::string::StringHeader;
 use std::cell::RefCell;
-
-/// Coerce a NaN-boxed JSValue to its display bytes, suitable for raw
-/// stream writes. Used by `process.stdout.write` / `process.stderr.write`.
-/// Mirrors Node's behavior: numbers/booleans/null/undefined coerce to
-/// their string form; strings pass through verbatim.
-fn jsvalue_to_write_bytes(value: f64) -> Vec<u8> {
-    let s_ptr = crate::value::js_jsvalue_to_string(value);
-    if s_ptr.is_null() {
-        return Vec::new();
-    }
-    unsafe {
-        let header = &*s_ptr;
-        let len = header.byte_len as usize;
-        let data = (s_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::slice::from_raw_parts(data, len).to_vec()
-    }
-}
 
 /// Node's `stream.write(chunk[, encoding][, callback])` passes an optional
 /// completion callback as the last argument (whichever of the two trailing args
@@ -60,21 +44,17 @@ fn callable_closure_ptr(value: f64) -> usize {
     0
 }
 
-/// `write` impl for process.stdout. Writes the value's display bytes to fd 1
-/// without appending a newline, matching Node.js semantics, then fires the
-/// optional completion callback (see [`schedule_write_callback`]).
+/// `write` impl for process.stdout. Puts the chunk's bytes on fd 1 — a binary
+/// chunk verbatim, a string encoded per `arg2` when that is an encoding name
+/// (#10903, see [`with_write_bytes`]) — without appending a newline, then
+/// fires the optional completion callback (see [`schedule_write_callback`]).
 extern "C" fn process_stdout_write_stub(
     _closure: *const crate::closure::ClosureHeader,
     chunk: f64,
     arg2: f64,
     arg3: f64,
 ) -> f64 {
-    use std::io::Write;
-    let bytes = jsvalue_to_write_bytes(chunk);
-    let stdout = std::io::stdout();
-    let mut handle = stdout.lock();
-    let _ = handle.write_all(&bytes);
-    let _ = handle.flush();
+    with_write_bytes(chunk, arg2, write_stdout);
     schedule_write_callback(arg2, arg3);
     f64::from_bits(crate::value::TAG_TRUE)
 }
@@ -86,12 +66,7 @@ extern "C" fn process_stderr_write_stub(
     arg2: f64,
     arg3: f64,
 ) -> f64 {
-    use std::io::Write;
-    let bytes = jsvalue_to_write_bytes(chunk);
-    let stderr = std::io::stderr();
-    let mut handle = stderr.lock();
-    let _ = handle.write_all(&bytes);
-    let _ = handle.flush();
+    with_write_bytes(chunk, arg2, write_stderr);
     schedule_write_callback(arg2, arg3);
     f64::from_bits(crate::value::TAG_TRUE)
 }

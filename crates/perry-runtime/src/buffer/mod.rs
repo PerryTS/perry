@@ -115,6 +115,7 @@ pub use exotic_view::{
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
+pub(crate) use from::buffer_string_bytes_for_encoding;
 pub use from::{
     js_array_buffer_new, js_array_buffer_new_value, js_buffer_alloc, js_buffer_alloc_fill_value,
     js_buffer_alloc_unsafe, js_buffer_concat, js_buffer_concat_with_length, js_buffer_fill,
