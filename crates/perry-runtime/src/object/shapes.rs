@@ -491,6 +491,31 @@ pub(crate) const SHAPE_ID_BASE: u32 = 0x8000_0000;
 /// unreachable in practice).
 pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
 
+/// Exclusive end of the LINK-ASSIGNED sub-band (design step 4).
+///
+/// The range `[SHAPE_ID_BASE, SHAPE_ID_STATIC_END)` is never handed out by the
+/// runtime counter. It is assigned ONCE PER LINK by the compiler driver, over
+/// the sorted union of every shape symbol the program's modules name, so two
+/// separately compiled modules cannot collide: neither of them assigns
+/// anything, and a module's object file carries only the symbol NAME.
+///
+/// The split is deliberately ASYMMETRIC. Compiler-visible shapes are bounded
+/// by program size (the largest bundles name shapes in the tens of thousands);
+/// dynamic minting is bounded by nothing, and a lane adding field
+/// representation to shapes may multiply it. 2^20 static ids therefore cost
+/// the dynamic counter 0.098% of its budget rather than half of it.
+///
+/// A program that names more shapes than the band holds is not a failure: the
+/// driver assigns what fits and the rest mint dynamically, which costs those
+/// sites a runtime-learned guard and nothing else.
+pub(crate) const SHAPE_ID_STATIC_END: u32 = SHAPE_ID_BASE + (1 << 20);
+
+/// First id the runtime counter may hand out. See [`SHAPE_ID_STATIC_END`].
+pub(crate) const SHAPE_ID_DYNAMIC_BASE: u32 = SHAPE_ID_STATIC_END;
+
+const _: () = assert!(SHAPE_ID_BASE < SHAPE_ID_STATIC_END);
+const _: () = assert!(SHAPE_ID_DYNAMIC_BASE < SHAPE_ID_END);
+
 /// #6759 C3c: PROCESS-GLOBAL allocator (supersedes the per-thread counter
 /// C3a landed with). Global uniqueness matters because the worker
 /// serializer replays `parent_class_id` verbatim: a deep-copied object's
@@ -498,13 +523,22 @@ pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
 /// allocated for a different shape. Monotonic — ids are NEVER reused, so
 /// a stale stamp or cache entry can only miss, not falsely hit.
 static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE);
+    std::sync::atomic::AtomicU32::new(SHAPE_ID_DYNAMIC_BASE);
 
 static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[inline]
 pub(crate) fn is_shape_id(v: u32) -> bool {
     (SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
+}
+
+/// Is `v` an id from the LINK-ASSIGNED sub-band?
+///
+/// Every static id is also an [`is_shape_id`], so every existing range test
+/// keeps its meaning unchanged; this narrows, it does not reclassify.
+#[inline]
+pub(crate) fn is_static_shape_id(v: u32) -> bool {
+    (SHAPE_ID_BASE..SHAPE_ID_STATIC_END).contains(&v)
 }
 
 /// #6804: classify a WIDENED shape token (`object_shape()`'s usize). Ids
@@ -926,6 +960,162 @@ pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
 #[no_mangle]
 pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 {
     let id = shape_id_for_keys_ensure(keys as usize as *const ArrayHeader, key_count);
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
+    id
+}
+
+/// Counts for the link-assigned band, read by tests and `PERRY_SHAPE_DIAG`.
+///
+/// A bind that DECLINES is correct-but-slow and invisible in program output —
+/// the emitted constant guard simply never matches and every read of that
+/// shape falls to the runtime-learned tower. That is precisely the class of
+/// failure the campaign keeps finding by counter and never by output, so the
+/// counters are not optional decoration.
+pub(crate) static STATIC_BIND_BOUND: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static STATIC_BIND_UNIFIED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static STATIC_BIND_DECLINED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Bind the LINK-ASSIGNED ShapeId `static_id` to canonical keys, or fall back.
+///
+/// Module init calls this once per compiler-visible shape, in place of
+/// [`js_object_shape_id_for_keys`], and stores the RESULT in the module's
+/// `@perry_class_shape_id_*` global — which is what every stamping path reads.
+/// The return value, not the argument, is therefore what instances carry.
+///
+/// **That is the whole safety argument, and it is a polarity argument.** The
+/// emitted guard compares against the link-time CONSTANT; instances carry what
+/// this function RETURNS. When the two agree the guard hits; when they do not,
+/// no object in the process carries the constant and the guard can only miss.
+/// A miss is the runtime-learned tower, which is what every read does today.
+/// So a wrong or contended assignment costs speed and can never produce a
+/// wrong value — the fail-safe polarity §14.1 argues for, applied to ids.
+///
+/// Three outcomes:
+///
+/// * **unified** — a descriptor for these exact facts already exists. Return
+///   it. This keeps today's shape identity exactly: a dynamically built object
+///   with the same canonical keys shares the id it shares today.
+/// * **bound** — the id is in the static band and its slab slot is free.
+///   Install the record there.
+/// * **declined** — the id is out of band, or its slot is already held by
+///   DIFFERENT facts. The second case is the `dlopen` / late-`require` case:
+///   an image linked separately assigned the band on its own, so a name it
+///   assigned may already be taken. Mint from the dynamic counter instead.
+fn shape_descriptor_bind_static(
+    static_id: u32,
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+) -> Result<u32, ShapeDescriptorError> {
+    use std::sync::atomic::Ordering;
+
+    let keys_id = keys as usize as u64;
+    if keys_id == 0 && logical_key_count != 0 {
+        return Err(ShapeDescriptorError::InvalidFacts);
+    }
+    // A static bind describes a freshly built canonical keys array: an
+    // ordinary object, no descriptor generation, no tombstones. Those are the
+    // same four facts `js_shape_ordinary_inline_slot_for_key` requires before
+    // it will answer "slot k is key position k", which is what licenses the
+    // compiler to bake a constant slot beside the constant id.
+    let semantic_generation: u64 = 0;
+    let object_kind = ShapeObjectKind::Ordinary;
+    let hole_count: u32 = 0;
+
+    let facts = shapes_store::facts_key(
+        keys_id,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+    );
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
+    if let Some(ids) = inner.by_facts.get(&facts) {
+        let slab = table.slab();
+        for &id in ids.as_slice() {
+            let Some(record) = slab.record_ptr(id) else {
+                continue;
+            };
+            // SAFETY: live slab record, read immediately.
+            let record = unsafe { *record };
+            if record.has(RECORD_FLAG_FACTS_INDEXED)
+                && record.facts_match(
+                    keys_id,
+                    logical_key_count,
+                    live_inline_slot_count,
+                    semantic_generation,
+                    object_kind,
+                    hole_count,
+                )
+            {
+                STATIC_BIND_UNIFIED.fetch_add(1, Ordering::Relaxed);
+                return Ok(id);
+            }
+        }
+    }
+    let band_owns_id = is_static_shape_id(static_id);
+    let slot_is_free = table.slab().record_ptr(static_id).is_none();
+    if !band_owns_id || !slot_is_free {
+        STATIC_BIND_DECLINED.fetch_add(1, Ordering::Relaxed);
+        drop(inner);
+        return shape_descriptor_ensure_with_generation(
+            keys,
+            logical_key_count,
+            live_inline_slot_count,
+            semantic_generation,
+            object_kind,
+        );
+    }
+    let record = ShapeRecord::new(
+        keys_id,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+    );
+    // Publish by-id first, then the reverse accelerators, exactly as
+    // `shape_descriptor_ensure_with_holes` does: an ObjectHeader is stamped
+    // only after this returns, so a visible id always has a complete record.
+    // SAFETY: no slab reference is held; the `slab()` borrows above ended.
+    unsafe { table.slab_mut().insert(static_id, record) };
+    // `append_unchecked` is licensed by the same argument `ensure` makes for a
+    // freshly minted id, reached differently: the driver names each shape once
+    // per link, the exact-facts probe above already returned for a repeat bind
+    // of the same facts, and the free-slot test above already declined a
+    // repeat bind of the same id under different facts. So this line runs at
+    // most once per `(static_id, facts)` pair, and a retirement that removed
+    // the record removed it from both accelerators too.
+    inner.facts_append_fresh(facts, static_id);
+    inner.family_append_fresh(keys_id, static_id);
+    STATIC_BIND_BOUND.fetch_add(1, Ordering::Relaxed);
+    Ok(static_id)
+}
+
+/// Module-init entry point for a LINK-ASSIGNED ShapeId.
+///
+/// Codegen emits `static_id` as the value of an absolute symbol the linker
+/// fixes, so the argument is a compile-time constant at every call site. The
+/// return value is stored in `@perry_class_shape_id_*`; see
+/// [`shape_descriptor_bind_static`] for why returning a different id is safe.
+#[no_mangle]
+pub extern "C" fn js_object_shape_bind_static_for_keys(
+    static_id: u32,
+    keys: u64,
+    key_count: u32,
+) -> u32 {
+    let id = publish_shape_result(shape_descriptor_bind_static(
+        static_id,
+        keys as usize as *const ArrayHeader,
+        key_count,
+        key_count,
+    ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
     id
