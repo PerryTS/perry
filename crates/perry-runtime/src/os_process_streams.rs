@@ -349,25 +349,101 @@ pub extern "C" fn js_register_stdin_reader_consumer(
     }
 }
 
-fn ensure_stdin_reader() {
+/// Serializes the reader's decision to STOP with every request to (re)START it
+/// (#10895).
+///
+/// `pause()` sets `STDIN_DETACHED`; the reader notices at the top of its loop
+/// and exits, and `resume()` clears the latch and calls `ensure_stdin_reader`,
+/// which spawns a reader only when `STDIN_READER_STARTED` is false. Those two
+/// flags used to be read and written independently, so this interleaving lost
+/// the restart for good:
+///
+///   reader: sees `STDIN_DETACHED == true`, decides to exit
+///   main:   `resume()` → `STDIN_DETACHED = false`; CAS(STARTED: false→true)
+///           FAILS — the dying reader has not cleared STARTED yet
+///   reader: clears STARTED and is gone
+///
+/// fd 0 then has no reader while every liveness view still says stdin is open
+/// and flowing, so the process idles forever with input unread. The async
+/// iterator pauses/resumes the source once per delivered chunk, so a piped
+/// `for await (const chunk of process.stdin)` rolled this dice hundreds of
+/// times per megabyte.
+///
+/// Holding this lock across the reader's check-and-clear and across the
+/// restart CAS makes the two atomic with respect to each other: a restart
+/// request either runs entirely before the stop decision (the reader then sees
+/// the cleared latch and keeps going) or entirely after it (STARTED is already
+/// false, so a fresh reader is spawned). It is never held across `read()`.
+static STDIN_READER_LIFECYCLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn stdin_reader_lifecycle() -> std::sync::MutexGuard<'static, ()> {
+    STDIN_READER_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The stop half of the lifecycle handshake, over an explicit slot flag so the
+/// unit tests can replay interleavings without touching the process-global
+/// one. `should_stop` is evaluated UNDER the lock, and a true answer releases
+/// the slot in the same step.
+fn reader_slot_claim_stop(
+    started: &std::sync::atomic::AtomicBool,
+    should_stop: impl FnOnce() -> bool,
+) -> bool {
+    let _lifecycle = stdin_reader_lifecycle();
+    if should_stop() {
+        started.store(false, std::sync::atomic::Ordering::Release);
+        true
+    } else {
+        false
+    }
+}
+
+/// The restart half: true when the caller now owns the (single) reader slot
+/// and must spawn the reader.
+fn reader_slot_claim_start(started: &std::sync::atomic::AtomicBool) -> bool {
     use std::sync::atomic::Ordering;
-    // A previous reader may have exited (EOF, error, or explicit detach); its
-    // drop guard resets `STDIN_READER_STARTED` to false,
-    // so a later `resume()`/`on(...)` can spin up a fresh reader.
-    if STDIN_READER_STARTED
+    let _lifecycle = stdin_reader_lifecycle();
+    started
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
-    {
+}
+
+/// The reader's top-of-loop stop check. Returns true when the reader must
+/// exit; STARTED has then ALREADY been cleared, under the lifecycle lock, so
+/// the caller must not clear it again (a late clear would clobber the `true`
+/// of a reader respawned in between and let a third one start).
+fn stdin_reader_claim_stop() -> bool {
+    reader_slot_claim_stop(&STDIN_READER_STARTED, stdin_reader_should_stop)
+}
+
+fn stdin_reader_claim_start() -> bool {
+    reader_slot_claim_start(&STDIN_READER_STARTED)
+}
+
+fn ensure_stdin_reader() {
+    // A previous reader may have exited (EOF, error, or explicit detach), which
+    // resets `STDIN_READER_STARTED` to false so a later `resume()`/`on(...)`
+    // can spin up a fresh reader. The claim is atomic with a live reader's
+    // decision to stop (#10895).
+    if stdin_reader_claim_start() {
         std::thread::spawn(|| {
             use std::io::Read;
-            // On exit, clear STARTED so the reader can be restarted later.
-            struct ReaderGuard;
+            // On an EOF / error / panic exit, clear STARTED so the reader can
+            // be restarted later. The detach exit clears it itself, inside
+            // `stdin_reader_claim_stop`, and disarms this guard.
+            struct ReaderGuard {
+                armed: bool,
+            }
             impl Drop for ReaderGuard {
                 fn drop(&mut self) {
-                    STDIN_READER_STARTED.store(false, std::sync::atomic::Ordering::Release);
+                    if self.armed {
+                        let _lifecycle = stdin_reader_lifecycle();
+                        STDIN_READER_STARTED.store(false, std::sync::atomic::Ordering::Release);
+                    }
                 }
             }
-            let _guard = ReaderGuard;
+            let mut guard = ReaderGuard { armed: true };
             let stdin = std::io::stdin();
             let mut handle = stdin.lock();
             // Read in chunks, not one byte at a time. A paste or a fast-typed
@@ -387,7 +463,11 @@ fn ensure_stdin_reader() {
                 // #9676: `stdin_reader_should_stop`, NOT `stdin_is_detached` —
                 // an `unref()`d stdin still delivers data in Node, and reading
                 // the liveness view here is what killed the reader for good.
-                if stdin_reader_should_stop() {
+                // #10895: the check and the STARTED reset are one step under
+                // the lifecycle lock, so a concurrent `resume()` can never
+                // find STARTED still true for a reader that is already leaving.
+                if stdin_reader_claim_stop() {
+                    guard.armed = false;
                     break;
                 }
                 match handle.read(&mut buf) {
@@ -1263,6 +1343,88 @@ mod empty_checkpoint_tests {
         assert!(!process_stdin_needs_pump());
         STDIN_EOF_SEEN.store(false, Ordering::Release);
         STDIN_END_FIRED.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod reader_lifecycle_tests {
+    use super::{reader_slot_claim_start, reader_slot_claim_stop};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// #10895: replays the interleaving that stranded fd 0 without a reader —
+    /// the reader decides to stop, and `resume()` asks for a restart BEFORE
+    /// the dying reader has finished leaving. The stop decision must already
+    /// have released the reader slot, or the restart's claim fails and nobody
+    /// ever reads stdin again.
+    ///
+    /// Runs on local flags: no fd-0 reader is spawned and no process-global
+    /// stdin state is touched, so it cannot disturb the liveness tests.
+    #[test]
+    fn a_restart_requested_while_the_reader_is_leaving_is_not_lost() {
+        // A reader is running and `pause()` has latched the detach.
+        let started = AtomicBool::new(true);
+        let detached = AtomicBool::new(true);
+        assert!(
+            reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire)),
+            "a detached reader must decide to stop"
+        );
+        // `resume()`: clear the latch, then ask for a reader. The old reader
+        // has not run another instruction since its stop decision.
+        detached.store(false, Ordering::Release);
+        assert!(
+            reader_slot_claim_start(&started),
+            "restart lost: the stopping reader still held the reader slot"
+        );
+        // The respawned reader owns the slot; a second request is a no-op.
+        assert!(!reader_slot_claim_start(&started));
+    }
+
+    /// The other order: `resume()` clears the latch before the reader looks.
+    /// The reader keeps running and no second reader may be started on fd 0.
+    #[test]
+    fn a_resume_that_beats_the_stop_check_keeps_the_one_reader() {
+        let started = AtomicBool::new(true);
+        let detached = AtomicBool::new(true);
+        detached.store(false, Ordering::Release);
+        assert!(!reader_slot_claim_start(&started));
+        assert!(!reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire)));
+        assert!(started.load(Ordering::Acquire));
+    }
+
+    /// Hammer the handshake from two threads: a "reader" that stops whenever
+    /// it sees the latch and a "main" that pauses/resumes. After every
+    /// resume the slot must be owned — by the surviving reader or by the
+    /// restart — never stranded.
+    #[test]
+    fn pause_resume_storm_never_strands_the_slot() {
+        use std::sync::Arc;
+        let started = Arc::new(AtomicBool::new(true));
+        let detached = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let reader = {
+            let (started, detached, done) = (started.clone(), detached.clone(), done.clone());
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Acquire) {
+                    // A live reader polls the latch between reads; one that
+                    // stopped waits to be "respawned" by main's claim.
+                    if started.load(Ordering::Acquire) {
+                        reader_slot_claim_stop(&started, || detached.load(Ordering::Acquire));
+                    }
+                    std::hint::spin_loop();
+                }
+            })
+        };
+        for _ in 0..200_000 {
+            detached.store(true, Ordering::Release); // pause()
+            detached.store(false, Ordering::Release); // resume(): clear …
+            reader_slot_claim_start(&started); // … then ensure a reader
+            assert!(
+                started.load(Ordering::Acquire),
+                "resume() returned with no reader owning fd 0"
+            );
+        }
+        done.store(true, Ordering::Release);
+        reader.join().unwrap();
     }
 }
 
