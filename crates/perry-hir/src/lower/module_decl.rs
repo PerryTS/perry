@@ -1459,6 +1459,52 @@ pub(crate) fn lower_module_decl(
                                     }
                                 })
                                 .unwrap_or_else(|| local.clone());
+
+                            // A Node builtin has no compiled source module for the
+                            // driver to follow through a normal ReExport edge. Model
+                            // the forwarding binding as a synthetic named import so
+                            // codegen can publish a live getter for the builtin ESM
+                            // export cell. The synthetic local is compiler-private:
+                            // `export { x } from "node:m"` does not introduce `x`
+                            // into this module's lexical scope.
+                            let native_source = canonicalize_native_import_source(&source);
+                            if perry_api_manifest::is_node_core_module(&native_source) {
+                                if !perry_api_manifest::module_has_public_named_export(
+                                    &native_source,
+                                    &local,
+                                ) {
+                                    crate::lower_bail!(
+                                        named.span,
+                                        "The requested module '{}' does not provide an export named '{}'",
+                                        source,
+                                        local
+                                    );
+                                }
+                                let synthetic_local =
+                                    format!("__perry_builtin_reexport_{}", ctx.fresh_local());
+                                init_named_cell(module, &native_source, &local, Some(&local));
+                                module.imports.push(Import {
+                                    source: native_source,
+                                    specifiers: vec![ImportSpecifier::Named {
+                                        imported: local,
+                                        local: synthetic_local.clone(),
+                                    }],
+                                    is_native: true,
+                                    module_kind: ModuleKind::NativeRust,
+                                    resolved_path: None,
+                                    type_only: false,
+                                    runtime_erased: false,
+                                    is_dynamic: false,
+                                    is_dynamic_target: false,
+                                    is_deferred_require: false,
+                                    is_adopted_require: false,
+                                });
+                                module.exports.push(Export::Named {
+                                    local: synthetic_local,
+                                    exported,
+                                });
+                                continue;
+                            }
                             module.exports.push(Export::ReExport {
                                 source: source.clone(),
                                 imported: local,

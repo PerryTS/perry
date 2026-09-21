@@ -3612,7 +3612,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .exports
             .iter()
             .filter_map(|e| match e {
-                perry_hir::Export::Named { exported, .. } => Some(exported.clone()),
+                perry_hir::Export::Named { local, exported }
+                    if !hir.imports.iter().any(|import| {
+                        import.is_native
+                            && perry_api_manifest::is_node_core_module(&import.source)
+                            && import.specifiers.iter().any(|specifier| {
+                                matches!(
+                                    specifier,
+                                    perry_hir::ImportSpecifier::Named {
+                                        local: import_local,
+                                        ..
+                                    } if import_local == local
+                                )
+                            })
+                    }) =>
+                {
+                    Some(exported.clone())
+                }
                 _ => None,
             })
             .collect();
