@@ -232,6 +232,84 @@ def assert_before(body: str, first: str, second: str, label: str) -> None:
         raise CensusError(f"shape descriptor authority ordering failed: {label}")
 
 
+def assert_rule3_licenses_the_kind_fence_removal(rule3: str, gc_types: str) -> None:
+    """The licence for the generic read PIC having no GC-kind fence.
+
+    The emitted read used to test `obj_type == GC_TYPE_OBJECT` before the
+    ShapeId compare, so a non-object cell whose payload `+4` word happened to
+    land in `[SHAPE_ID_BASE, SHAPE_ID_END)` could not be read as a shaped
+    object. #10828 closed rule 3 -- *no pointer-tagged non-object cell holds a
+    ShapeId-range value at payload +4* -- so the compare now carries that
+    proof itself and #10843 removed the load.
+
+    What must therefore hold is not a branch but a PROPERTY of the object
+    model: `object/shape_rule3.rs` classifies every GC kind's `+4` word, and
+    the fence is removable exactly while no row is `Rule3Word::RangeReachable`
+    (the verdict meaning "can reach the range AND is pointer-tagged"). Assert
+    that, which goes red the moment a new kind reopens the hole -- precisely
+    the condition under which the removed load would be needed again.
+    """
+    table = require_match(
+        rule3,
+        r"(?s)const\s+RULE3_KINDS\s*:[^=]*=\s*&\[(.*?)\n\];",
+        "shape_rule3 declares the RULE3_KINDS verdict table",
+    )
+    verdicts = re.findall(r"(?s)gc::(GC_TYPE_\w+)\s*,.*?Rule3Word::(\w+)", table)
+    # Liveness BEFORE the emptiness test. An emptied or truncated table has no
+    # `RangeReachable` row either, so the check below would pass for free --
+    # #7024/#7025's failure mode, a green gate whose subject never ran. The
+    # table only licenses anything while it still classifies every kind the
+    # collector knows about, so re-derive that set from `gc/types.rs` instead
+    # of trusting a count. (`GC_TYPE_MAX` is an alias, not a kind, and is
+    # excluded by requiring a literal discriminant.)
+    declared = {
+        name
+        for name, _ in re.findall(
+            r"pub\s+const\s+(GC_TYPE_\w+)\s*:\s*u8\s*=\s*(\d+)\s*;", gc_types
+        )
+    }
+    if not declared:
+        raise CensusError("gc/types.rs declares no GC kinds: rule-3 coverage is unknowable")
+    classified = {kind for kind, _ in verdicts}
+    unclassified = sorted(declared - classified)
+    if unclassified:
+        raise CensusError(
+            "rule 3 is UNPROVEN for " + ", ".join(unclassified) + ": shape_rule3.rs's "
+            "RULE3_KINDS gives no verdict for these GC kinds, so 'no kind keeps the "
+            "fence' is vacuous and the generic read PIC's missing GC_TYPE_OBJECT load "
+            "is unlicensed"
+        )
+    stale = sorted(classified - declared)
+    if stale:
+        raise CensusError(
+            "RULE3_KINDS names GC kinds that no longer exist: " + ", ".join(stale)
+        )
+    still_fenced = sorted(kind for kind, verdict in verdicts if verdict == "RangeReachable")
+    if still_fenced:
+        raise CensusError(
+            "rule 3 is REOPENED by " + ", ".join(still_fenced) + ": shape_rule3.rs "
+            "classifies the payload +4 word Rule3Word::RangeReachable, so a "
+            "pointer-tagged cell of that kind can carry a live ShapeId and a shape "
+            "compare alone no longer proves the receiver is a GC_TYPE_OBJECT. The "
+            "generic read PIC dropped its GC-kind fence on the promise that no kind "
+            "can (#10828/#10843) -- restore the fence, or bound the kind's +4 word "
+            "below SHAPE_ID_BASE"
+        )
+    # "No row is RangeReachable" must not be satisfiable by deleting the
+    # concept, nor by deleting the runtime test that keeps the table honest at
+    # `cargo test` time. Both are part of the same proof.
+    require_code(
+        rule3,
+        r"RangeReachable\s*\(\s*&\s*'static\s+str\s*\)",
+        "shape_rule3 keeps the RangeReachable verdict available to classify a kind honestly",
+    )
+    require_code(
+        rule3,
+        r"fn\s+rule3_no_kind_still_requires_the_gc_kind_fence\b",
+        "shape_rule3's fence-keeping-set-is-empty test",
+    )
+
+
 def assert_authority_surfaces(sources: dict[str, str]) -> None:
     authority_paths = (
         "crates/perry-runtime/src/object/shapes.rs",
@@ -245,6 +323,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/typed_feedback/guards.rs",
         "crates/perry-runtime/src/object/native_call_method.rs",
         "crates/perry-runtime/src/object/exotic_expando.rs",
+        "crates/perry-runtime/src/object/shape_rule3.rs",
         "crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs",
         "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
         "crates/perry-runtime/src/object/field_get_set/ic_miss/packed_get.rs",
@@ -289,6 +368,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/object/native_call_method.rs"
     ]
     exotic_expando = clean["crates/perry-runtime/src/object/exotic_expando.rs"]
+    rule3 = clean["crates/perry-runtime/src/object/shape_rule3.rs"]
     get_field_tail = clean[
         "crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs"
     ]
@@ -771,12 +851,26 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             f"compact-cache empty sentinel {empty:#x} is INSIDE the valid ShapeId "
             f"range [{base:#x}, {end:#x}) — an unprimed site could be read as a hit"
         )
+    # #10843 changed what PROVES the kind, not whether it is proved. The
+    # census required `cond_br(&is_plain_kind, &tok_label, &cold_label)` — the
+    # emitted `obj_type == GC_TYPE_OBJECT` fence in front of the shape
+    # compare. #10828 closed rule 3, so the compare proves the kind by itself
+    # and #10843 deletes the header load; under the new object model,
+    # asserting that branch asserts nothing about safety, only that a
+    # redundant load survived.
+    #
+    # So assert the licence instead: the fence-keeping set in
+    # `object/shape_rule3.rs` is empty. That is strictly stronger than the
+    # branch it replaces — the branch could only notice its own deletion,
+    # whereas this notices a NEW GC kind whose `+4` word can alias a live
+    # ShapeId, which is the only way the removal can become wrong.
+    assert_rule3_licenses_the_kind_fence_removal(rule3, gc_types)
+
     # Invalid ShapeIds now fail closed at publication and exact cache matching.
     # Keep both halves of that proof: the emitted guard consumes a nonempty
     # packed word's exact stamp, and neither cache writer admits a zero stamp.
     compact_guard = re.sub(r"\s+", "", generic_body)
     for fragment in (
-        'cond_br(&is_plain_kind,&tok_label,&cold_label)',
         'letpacked_stamp=ctx.block().trunc(I64,&packed_word,I32);',
         'lettoken_eq=ctx.block().icmp_eq(I32,&pcid,&packed_stamp);',
         'cond_br(&token_eq,&hit_label,&token_miss_label)',
@@ -1129,6 +1223,51 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "generic read PIC invalid-id fail-closed token silently changed",
         lambda: assert_authority_surfaces(dropped_fail_closed),
+    )
+
+    # #10843 removed the emitted GC-kind fence; what licenses that removal is
+    # rule 3 being CLOSED, so that is what the census asserts and that is what
+    # this arm sabotages. Put a pointer-tagged kind back into the fence-keeping
+    # set -- the exact condition under which the removed GC_TYPE_OBJECT load
+    # would be needed again. `DateCell` is the honest choice: it is the one
+    # kind #10828 could not bound and had to RELAYOUT (`new Date(-1)` put
+    # 0xBFF0_0000 at +4), so this plants the real historical hole rather than
+    # an invented one.
+    reopened_rule3 = dict(sources)
+    path = "crates/perry-runtime/src/object/shape_rule3.rs"
+    reopened_body, substitutions = re.subn(
+        r"(gc::GC_TYPE_DATE_CELL,.*?)Rule3Word::StructurallySmall",
+        r'\1Rule3Word::RangeReachable("timestamp back at +0")',
+        reopened_rule3[path],
+        count=1,
+        flags=re.DOTALL,
+    )
+    if substitutions != 1:
+        raise CensusError("rule-3 fence-keeping sabotage fixture missing")
+    reopened_rule3[path] = reopened_body
+    expect_rejected(
+        "a GC kind reopened rule 3 while the emitted read has no GC-kind fence",
+        lambda: assert_authority_surfaces(reopened_rule3),
+    )
+
+    # The emptiness test must not be satisfiable by DELETING the table: an
+    # empty RULE3_KINDS has no RangeReachable row either (#7024/#7025 -- a
+    # green gate whose subject never ran). Drop one row and prove the
+    # coverage half catches it.
+    thinned_rule3 = dict(sources)
+    thinned_body, substitutions = re.subn(
+        r"\(\s*gc::GC_TYPE_DATE_CELL,.*?\),\n",
+        "",
+        thinned_rule3[path],
+        count=1,
+        flags=re.DOTALL,
+    )
+    if substitutions != 1:
+        raise CensusError("rule-3 coverage sabotage fixture missing")
+    thinned_rule3[path] = thinned_body
+    expect_rejected(
+        "a GC kind lost its rule-3 verdict, making the fence-removal licence vacuous",
+        lambda: assert_authority_surfaces(thinned_rule3),
     )
 
     # #8113: the gep-spelled emitted guards. This arm was VACUOUS before —
