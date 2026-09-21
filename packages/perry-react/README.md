@@ -10,9 +10,9 @@ type layer** for it.
 
 It does two things:
 
-1. **Bundles the React types.** It depends on `@types/react` and
-   `@types/react-dom`, so a single `npm i -D @perryts/react` gives you working
-   React types — no need to remember the `@types/*` packages separately.
+1. **Integrates with the app's React types.** It accepts both the React 18 and
+   React 19 type packages as peers, so the app remains in control of the type
+   major matching its installed React version.
 
 2. **Types Perry's `createRoot` extension.** `@types/react-dom` only knows the
    DOM-container form `createRoot(domNode)`. Perry has no DOM, so it extends
@@ -24,8 +24,9 @@ It does two things:
 
 ```bash
 npm install -D @perryts/react
-# react / react-dom themselves are peer deps (the Perry runtime provides them):
+# Install one matching major of the runtime and type peers:
 npm install react react-dom
+npm install -D @types/react @types/react-dom
 ```
 
 ## Use

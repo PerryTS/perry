@@ -150,11 +150,10 @@ export const PRELOAD_RUNTIME: string = `// Renderer-side Electron-compat runtime
     return api;
   }
 
-  // ---- require() for the renderer ----
-  // Provides require('electron'), and a CommonJS loader for LOCAL files
-  // (require('./foo.js')) so old nodeIntegration-style apps that load their
-  // scripts/jQuery via require keep working — we sync-fetch the file and eval it
-  // as a CommonJS module. (Node *builtins* are not available in the webview.)
+  // ---- require() for the trusted preload ----
+  // Provides require('electron'), and a CommonJS loader for LOCAL preload
+  // dependencies. The loader stays in this closure; it is never published to
+  // page globals.
   var electron = { ipcRenderer: ipcRenderer, contextBridge: contextBridge, webFrame: { setZoomFactor: function () {}, setZoomLevel: function () {} } };
   var moduleCache = Object.create(null);
 
@@ -194,10 +193,25 @@ export const PRELOAD_RUNTIME: string = `// Renderer-side Electron-compat runtime
       throw new Error("[perry-electron] require('" + name + "') is not available in the renderer (no Node builtins in the system webview)");
     };
   }
-  window.require = makeRequire(window.location ? window.location.href : "");
-
-  window.electron = electron;           // also expose directly for apps using window.electron
-  window.__perryIpcRenderer = ipcRenderer;
+  // BrowserWindow injects the trusted app preload as the next document-start
+  // script, invokes this runner, and then deletes it before page scripts run.
+  // Only APIs explicitly copied through contextBridge remain page-visible.
+  window.__perryRunPreload = function (source, filename) {
+    if (typeof source !== "string") throw new TypeError("preload source must be a string");
+    var file = typeof filename === "string" ? filename : "";
+    var dir = file.replace(/\\/[^/]*$/, "/");
+    var mod = { exports: {} };
+    var fn = new Function(
+      "module",
+      "exports",
+      "require",
+      "electron",
+      "__filename",
+      "__dirname",
+      source
+    );
+    fn(mod, mod.exports, makeRequire(dir), electron, file, dir);
+  };
 
   // Diagnostic heartbeat so the main process can confirm the bridge installed
   // at document-start and the message channel is live.
