@@ -623,7 +623,17 @@ pub(crate) fn lower_generic_property_get(
 
     // The compact cache is a permanently valid scalar global; its load and
     // the receiver's ShapeId load below are independent, so they overlap.
-    let packed_word = ctx.block().load_atomic_monotonic(I64, &packed_ref, 8);
+    //
+    // UNLESS this site has a link-assigned shape to compare first (design step
+    // 4): then it is loaded AFTER that compare, so a constant hit never
+    // executes it. Its only two uses — the stamp compare and the slot shift —
+    // are both dominated by the block the deferred load lands in, and the
+    // deferral happens only for a hinted site, so every other site keeps the
+    // instruction schedule it has today to the instruction.
+    let const_hint = const_shape_hint(ctx, object, property);
+    let packed_word_early = const_hint
+        .is_none()
+        .then(|| ctx.block().load_atomic_monotonic(I64, &packed_ref, 8));
 
     // The receiver token is derived solely from its authoritative ShapeId.
     // Invalid/unstamped payloads miss closed.
@@ -663,7 +673,7 @@ pub(crate) fn lower_generic_property_get(
     // could not honour the link-assigned id — out of band, or already held by
     // a separately linked image — then no object in the process carries the
     // constant and this guard simply never fires.
-    let const_arm: Option<(String, String)> = match const_shape_hint(ctx, object, property) {
+    let const_arm: Option<(String, String)> = match const_hint {
         None => None,
         Some(hint) => {
             let const_hit_idx = ctx.new_block("pic.const.hit");
@@ -684,17 +694,16 @@ pub(crate) fn lower_generic_property_get(
             let field_addr = ctx.block().add(I64, &obj_handle, &byte_offset.to_string());
             let field_ptr = ctx.block().inttoptr(I64, &field_addr);
             let val_const = ctx.block().load(DOUBLE, &field_ptr);
-            let val_const_bits = ctx.block().bitcast_double_to_i64(&val_const);
-            // A stable-tombstone delete (#9064) KEEPS the ShapeId, so a
-            // matching shape does not prove a live slot. Same compare and same
-            // destination as the MRU hit path below; without it this arm would
-            // hand back a raw TAG_HOLE.
-            let const_deleted =
-                ctx.block()
-                    .icmp_eq(I64, &val_const_bits, crate::nanbox::TAG_HOLE_I64);
+            // No `TAG_HOLE` compare, for exactly the reason the MRU hit path
+            // below no longer carries one: #10826 made every successful
+            // `delete` a shape transition, so the receiver's `+4` word ALWAYS
+            // changes and a shape that still matches proves the slot is live.
+            // The constant this arm compares against is a live ShapeId, so it
+            // inherits that proof unchanged — and it inherits #10828's rule 3
+            // the same way, which is what lets this compare stand alone as the
+            // receiver classification with no GC-header load in front of it.
             let const_end_label = ctx.block().label.clone();
-            ctx.block()
-                .cond_br(&const_deleted, &deleted_label, &merge_label);
+            ctx.block().br(&merge_label);
 
             ctx.current_block = const_miss_idx;
             Some((val_const, const_end_label))
@@ -708,6 +717,14 @@ pub(crate) fn lower_generic_property_get(
     // `pic.token.miss` and `pic.ways` already do, which is the same deliberate
     // re-derivation on a path that is about to spend hundreds. Without a hint
     // nothing is inserted and the original single use is the token compare.
+    // Either the early load (unhinted site) or the one deferred past the
+    // constant compare. Both land in a block that dominates the stamp compare
+    // and the slot shift.
+    let packed_word = match packed_word_early {
+        Some(word) => word,
+        None => ctx.block().load_atomic_monotonic(I64, &packed_ref, 8),
+    };
+
     let pcid_for_token = if const_arm.is_some() {
         ctx.block().load_atomic_monotonic(I32, &pcid_ptr, 4)
     } else {
