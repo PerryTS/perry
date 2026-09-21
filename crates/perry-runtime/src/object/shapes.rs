@@ -866,7 +866,15 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
     id: u32,
 ) {
+    let previous = (*obj).parent_class_id;
     (*obj).parent_class_id = id;
+    // A structural change to an object somebody INHERITS from is invisible to
+    // every instance below it: no instance is touched, no epoch moves, and the
+    // instances' own ShapeIds are unchanged. This is the one place every such
+    // change publishes, which is why the validity bump lives here rather than
+    // in a list of mutation entry points that would have to be kept complete.
+    // Until something is marked as a prototype this is one relaxed `bool` load.
+    crate::object::proto_validity::note_object_shape_stamped(obj as usize, previous, id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
         let record = shape_record_by_id(id);
         note_old_generation_carrier(record);

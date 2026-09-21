@@ -1342,7 +1342,14 @@ pub fn is_process_env_ptr(addr: usize) -> bool {
     } else {
         addr
     };
-    crate::value::js_nanbox_get_pointer(cached) as usize == addr
+    let is_env = crate::value::js_nanbox_get_pointer(cached) as usize == addr;
+    debug_assert!(
+        !is_env
+            || unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(addr) },
+        "the process.env object without OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: \
+         it was published without the registration that sets it"
+    );
+    is_env
 }
 
 /// Intercept a generic property read on an aliased `process.env` object.
@@ -1443,6 +1450,9 @@ fn js_process_env_impl() -> f64 {
         crate::object::js_object_set_field_by_name(obj, key, val_f64);
     }
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    // The per-OBJECT half of `ANY_PROCESS_ENV_OBJECT`, for the same reason the
+    // arguments registry sets it beside its insert.
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
     ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
     boxed

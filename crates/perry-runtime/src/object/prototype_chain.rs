@@ -389,6 +389,20 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     if obj_ptr == 0 {
         return;
     }
+    // Whatever else this link does, the TARGET is now somebody's prototype, so
+    // a later structural mutation of it is invisible to everything below it.
+    // The inherited-read cache refuses to record an unmarked hop, so a link
+    // kind missing from this funnel costs a cache hit and can never leave a
+    // stale entry (`object::proto_validity`). Marking allocates a meta record,
+    // so it happens BEFORE this function takes any raw pointer of its own.
+    unsafe {
+        let prototype = crate::value::JSValue::from_bits(proto_bits);
+        if prototype.is_pointer() {
+            crate::object::proto_validity::mark_object_as_prototype(
+                prototype.as_pointer::<crate::ObjectHeader>() as usize,
+            );
+        }
+    }
     if !ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
         && obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
         && crate::value::addr_class::is_above_handle_band(obj_ptr)

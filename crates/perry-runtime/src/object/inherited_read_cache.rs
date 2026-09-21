@@ -34,19 +34,34 @@
 //! slot `slot` on `hops[hop_count-1]`, having passed through `hops[0..]` in
 //! order.*
 //!
-//! The claim is re-proved on every hit by all five checks below. The code
-//! runs them cheapest-and-most-selective first (identity, then epoch, then
-//! the hops), not in the order they are listed:
+//! The claim is re-proved on every hit by all four checks below. The code
+//! runs them cheapest-and-most-selective first, not in the order they are
+//! listed:
 //!
-//! 1. `prop_plan::prop_plan_semantic_epoch()` is unchanged. That is Perry's
-//!    existing enforced funnel for *"what would a property lookup ANSWER"*
-//!    changes: descriptor installs and clears, `delete`, per-instance
-//!    prototype recording (`Object.setPrototypeOf`, `__proto__`),
-//!    class-prototype-object registration, parent-static linking. It is
-//!    deliberately NOT bumped by GC, which is what keeps this cache off the
-//!    #7910 cliff (the full `PROP_PLAN_EPOCH` is bumped at loop-poll cadence
-//!    by the incremental collector, so keying on it degrades any cache into an
-//!    unconditional recompute).
+//! 1. `proto_validity::proto_validity()` is unchanged. ONE global word, ONE
+//!    load, ONE compare, covering a chain of ANY depth. It stands for two
+//!    things at once:
+//!    * no object anybody inherits from has changed STRUCTURALLY. An object
+//!      is marked (`OBJ_FLAG_IS_PROTOTYPE`) when this cache records it as a
+//!      hop, and every shape-word change on a marked object bumps the counter
+//!      from the runtime's single structural-mutation publication funnel. A
+//!      key ADDED to a prototype bumps no epoch — a plain store is not a
+//!      descriptor install — and this is what sees it.
+//!    * nothing the semantic property epoch stands for has happened:
+//!      descriptor installs and clears, `delete`, per-instance prototype
+//!      recording (`Object.setPrototypeOf`, `__proto__`),
+//!      class-prototype-object registration, parent-static linking.
+//!      `prop_plan_epoch_bump` bumps this word too. It is deliberately NOT
+//!      bumped by GC, which is what keeps this cache off the #7910 cliff (the
+//!      full `PROP_PLAN_EPOCH` is bumped at loop-poll cadence by the
+//!      incremental collector, so keying on it degrades any cache into an
+//!      unconditional recompute).
+//!
+//!    This REPLACED one ShapeId compare per hop. The per-hop walk was correct
+//!    and it had two costs: it was proportional to chain depth, up to four
+//!    dependent loads through prototype objects that are usually cold; and it
+//!    was a LOOP, so the hit could only ever live behind a call. An emitted
+//!    read site cannot branch on a variable number of compares.
 //! 2. The receiver's `(class_id, ShapeId)` pair — ONE aligned 8-byte load at
 //!    offset 0 — equals what was recorded. This is what makes a shadowing own
 //!    key safe: adding `o.a` to the receiver is a key-add transition, which
@@ -55,36 +70,41 @@
 //!    present as a `TAG_HOLE` tombstone), so no stable-tombstone re-add can
 //!    reinstate an own key under an unchanged ShapeId.
 //! 3. The receiver's recorded prototype bits (`ObjectMeta.prototype`, 0 when
-//!    there is no meta record) are unchanged. Redundant today — a prototype
-//!    change transitions the shape AND bumps the epoch — and kept because it
-//!    costs two dependent loads that were needed anyway and it does not rest
-//!    on either of those two facts.
-//! 4. Every hop still carries the ShapeId it carried at prime time. A key
-//!    ADDED to a prototype does not bump the semantic epoch (a plain store is
-//!    not a descriptor install), but it is a key-add transition on that hop,
-//!    so the hop's stamp changes. This is also what covers a prototype swap
-//!    at any INTERIOR level of the chain, which neither the receiver's guard
-//!    nor the holder's would see.
-//! 5. The key pointer is identical. Keys are interned, so pointer identity is
+//!    there is no meta record) are unchanged. This is NOT redundant with the
+//!    validity word: `object_link_class_default_prototype` links a FRESH
+//!    instance to its class's prototype object without bumping any epoch and
+//!    without transitioning a shape (by design — the loud variant flushed the
+//!    plan cache on every construction). A later `C.prototype = other`
+//!    followed by `new C()` therefore produces a receiver with the SAME class
+//!    id and the SAME ShapeId as the cached one and a different chain, and
+//!    this compare is what refuses it.
+//! 4. The key pointer is identical. Keys are interned, so pointer identity is
 //!    key identity — see the GC contract below for why the pointer cannot be
 //!    reused by a different string while an entry names it.
 //!
-//! Conditions that are proved ONCE, at prime time, because the ShapeId pins
-//! them: object kind is `Ordinary`; no accessor and no customized descriptor
-//! for this key anywhere on the chain (both transition the shape of the object
-//! they are installed on, so an object still carrying the recorded stamp never
-//! had one); the slot is inline rather than spilled.
+//! Conditions that are proved ONCE, at prime time, and held afterwards by the
+//! validity word rather than re-checked: object kind is `Ordinary`; no
+//! accessor and no customized descriptor for this key anywhere on the chain
+//! (both transition the shape of the object they are installed on, and every
+//! hop is marked, so either would have bumped the counter); the slot is inline
+//! rather than spilled.
 //!
 //! Conditions re-checked on every hit because they are properties of the
-//! ADDRESS rather than of the shape: the receiver is not `process.env` and not
-//! an `arguments` object, and carries no `elements` store.
+//! ADDRESS rather than of the shape, and all three now live in ONE word this
+//! path already loads (`ObjectMeta::flags`, plus `elements` beside it): the
+//! receiver is not `process.env`, not an `arguments` object, and carries no
+//! `elements` store. The first two were two address-keyed registry probes
+//! costing 14.0 and 5.0 instructions on every cached read — and, decisively
+//! for the emitted sequence, a compiled read site could not have called
+//! either one.
 //!
 //! # GC contract
 //!
 //! The collector moves objects, so a recorded holder address is a liability.
 //! Three things together make it safe, and each is necessary:
 //!
-//! * **`scan_inherited_read_cache_roots_mut` MARKS every key and hop**, so the
+//! * **`scan_inherited_read_cache_roots_mut` MARKS every key, hop and the
+//!   holder**, so the
 //!   collector keeps them alive and rewrites this table's copy of their
 //!   addresses. A hit LOADS `holder + slot`, which is what separates this
 //!   cache from the transition cache #6759 phase 3 made weak: that one only
@@ -130,6 +150,17 @@
 //! epoch, so a negative entry for it would stand for the life of the process.
 //! Every other refusal is a function of a shape or a descriptor.
 //!
+//! # Why every hop is still recorded when only the holder is read
+//!
+//! The hit loads `holder + slot` and never touches an interior hop, so the
+//! `hops` array exists for the collector, not for the read. Dropping the
+//! interior hops would make this entry able to hit for a receiver whose
+//! recorded prototype bits name an address the collector recycled: the
+//! intermediate prototype is kept alive by the receiver in every real
+//! program, but this table does not root receivers, so nothing else is
+//! keeping it from being freed and its address reused. Rooting the whole
+//! chain costs GC time and nothing at read time.
+//!
 //! # Hook points for lane 4
 //!
 //! Two, both one call wide:
@@ -162,16 +193,18 @@ const MAX_HOPS: usize = 4;
 struct Entry {
     /// Interned key pointer. 0 marks the slot empty.
     key_ptr: usize,
-    /// `prop_plan_semantic_epoch()` at prime time.
-    epoch: u64,
+    /// `proto_validity::proto_validity()` at prime time.
+    validity: u64,
     /// The receiver's `ObjectMeta.prototype` at prime time, 0 for no record.
     recv_proto_bits: u64,
     recv_class_id: u32,
     recv_shape: u32,
-    /// Chain from the receiver's prototype (`hops[0]`) to the holder
-    /// (`hops[hop_count - 1]`).
+    /// The object the key was found on: `hops[hop_count - 1]`, kept in its own
+    /// field so the hit loads it at a fixed offset instead of indexing.
+    holder: usize,
+    /// Chain from the receiver's prototype (`hops[0]`) to the holder. Read by
+    /// the GC hooks only; the hit never walks it.
     hops: [usize; MAX_HOPS],
-    hop_shapes: [u32; MAX_HOPS],
     hop_count: u8,
     /// Inline field index on the holder. Spilled fields never prime.
     slot: u32,
@@ -203,12 +236,12 @@ pub(crate) enum Lookup {
 
 const EMPTY_ENTRY: Entry = Entry {
     key_ptr: 0,
-    epoch: 0,
+    validity: 0,
     recv_proto_bits: 0,
     recv_class_id: 0,
     recv_shape: 0,
+    holder: 0,
     hops: [0; MAX_HOPS],
-    hop_shapes: [0; MAX_HOPS],
     hop_count: 0,
     slot: 0,
 };
@@ -335,15 +368,12 @@ pub(crate) fn test_clear_cache() {
 /// `elements` store is array-subclass backing that answers reads before the
 /// shape does.
 #[inline]
-unsafe fn receiver_address_facts_ok(
-    obj: *const ObjectHeader,
-    meta: *const crate::object::ObjectMeta,
-) -> bool {
-    if !meta.is_null() && (*meta).elements != 0 {
-        return false;
+unsafe fn receiver_address_facts_ok(meta: *const crate::object::ObjectMeta) -> bool {
+    if meta.is_null() {
+        return true;
     }
-    !crate::process::is_process_env_ptr(obj as usize)
-        && !super::is_arguments_object(obj as *mut ObjectHeader)
+    (*meta).elements == 0
+        && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
 }
 
 /// An address a prime may record: one this heap knows, so its `GcHeader` is
@@ -416,15 +446,11 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     {
         return Lookup::Unknown;
     }
-    if entry.epoch != crate::object::prop_plan::prop_plan_semantic_epoch() {
+    // One load, one compare, whatever the depth of the chain. See the module
+    // header: this word covers both the semantic property epoch and every
+    // structural mutation of an object marked as somebody's prototype.
+    if entry.validity != crate::object::proto_validity::proto_validity() {
         return Lookup::Unknown;
-    }
-    let hop_count = entry.hop_count as usize;
-    for i in 0..hop_count {
-        let hop = entry.hops[i] as *const ObjectHeader;
-        if shapes::object_shape_stamp(hop) != entry.hop_shapes[i] {
-            return Lookup::Unknown;
-        }
     }
     if entry.slot == NEGATIVE_SLOT {
         if stats_enabled() {
@@ -453,10 +479,10 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
         return Lookup::Unknown;
     }
 
-    if !receiver_address_facts_ok(obj, meta) {
+    if !receiver_address_facts_ok(meta) {
         return Lookup::Unknown;
     }
-    let holder = entry.hops[hop_count - 1] as *const ObjectHeader;
+    let holder = entry.holder as *const ObjectHeader;
     let field = (holder as *const u8)
         .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
         as *const u64;
@@ -498,8 +524,8 @@ struct DeclineNote {
     recv_class_id: u32,
     recv_shape: u32,
     recv_proto_bits: u64,
+    holder: usize,
     hops: [usize; MAX_HOPS],
-    hop_shapes: [u32; MAX_HOPS],
     hop_count: u8,
 }
 
@@ -532,12 +558,12 @@ pub(crate) unsafe fn inherited_read_cache_prime(
         if note.armed && !note.value_dependent {
             let entry = Entry {
                 key_ptr: note.key_ptr,
-                epoch: crate::object::prop_plan::prop_plan_semantic_epoch(),
+                validity: crate::object::proto_validity::proto_validity(),
                 recv_proto_bits: note.recv_proto_bits,
                 recv_class_id: note.recv_class_id,
                 recv_shape: note.recv_shape,
+                holder: note.holder,
                 hops: note.hops,
-                hop_shapes: note.hop_shapes,
                 hop_count: note.hop_count,
                 slot: NEGATIVE_SLOT,
             };
@@ -614,7 +640,7 @@ unsafe fn inherited_read_cache_walk(
         return None;
     }
     let recv_meta = (*obj).meta;
-    if !receiver_address_facts_ok(obj, recv_meta) {
+    if !receiver_address_facts_ok(recv_meta) {
         return None;
     }
     if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(obj) {
@@ -643,7 +669,6 @@ unsafe fn inherited_read_cache_walk(
     }
 
     let mut hops = [0usize; MAX_HOPS];
-    let mut hop_shapes = [0u32; MAX_HOPS];
     let mut hop_count = 0usize;
     let mut current = obj;
     let mut current_class_id = recv_class_id;
@@ -702,18 +727,37 @@ unsafe fn inherited_read_cache_walk(
         if shape.object_kind != shapes::ShapeObjectKind::Ordinary {
             return None;
         }
-        let stamp = shapes::object_shape_stamp(next);
-        if stamp == 0 {
+        if shapes::object_shape_stamp(next) == 0 {
             return None;
         }
         let meta = (*next).meta;
-        if !meta.is_null() && (*meta).elements != 0 {
+        if !receiver_address_facts_ok(meta) {
             return None;
         }
-        if crate::process::is_process_env_ptr(next_addr)
-            || super::is_arguments_object(next as *mut ObjectHeader)
-            || (key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(next))
+        // The hop must ALREADY be marked as somebody's prototype. An entry
+        // through an unmarked prototype is one that a key added to that
+        // prototype would not invalidate, so it must not be created.
+        //
+        // The `[[Prototype]]` install funnel marks, which covers most routes;
+        // this is the safety net for the ones it does not, and it is what
+        // makes the coverage obligation self-healing rather than a list to
+        // keep complete. Mark the hop and ABANDON the walk: marking allocates
+        // a meta record, which can move `obj`, `next` and every address in
+        // `hops`, so not one of them may be touched afterwards. The next read
+        // of this pair finds the hop marked and primes normally.
+        //
+        // The refusal is deliberately NOT remembered (`note.armed = false`):
+        // marking bumps no validity, so a negative entry recorded here would
+        // decline the pair for the life of the process — the same trap the
+        // value-dependent refusals avoid.
+        if meta.is_null()
+            || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0
         {
+            note.armed = false;
+            crate::object::proto_validity::mark_object_as_prototype(next_addr);
+            return None;
+        }
+        if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(next) {
             return None;
         }
         // A clear Bloom bit PROVES no accessor and no customized descriptor
@@ -726,10 +770,9 @@ unsafe fn inherited_read_cache_walk(
         }
 
         hops[hop_count] = next_addr;
-        hop_shapes[hop_count] = stamp;
         hop_count += 1;
+        note.holder = next_addr;
         note.hops = hops;
-        note.hop_shapes = hop_shapes;
         note.hop_count = hop_count as u8;
 
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
@@ -760,12 +803,12 @@ unsafe fn inherited_read_cache_walk(
                 }
                 let entry = Entry {
                     key_ptr: key_addr,
-                    epoch: crate::object::prop_plan::prop_plan_semantic_epoch(),
+                    validity: crate::object::proto_validity::proto_validity(),
                     recv_proto_bits,
                     recv_class_id,
                     recv_shape,
+                    holder: next_addr,
                     hops,
-                    hop_shapes,
                     hop_count: hop_count as u8,
                     slot,
                 };
@@ -813,6 +856,11 @@ pub(crate) fn scan_inherited_read_cache_roots_mut(visitor: &mut crate::gc::Runti
             for i in 0..entry.hop_count as usize {
                 visitor.visit_usize_slot(&mut entry.hops[i]);
             }
+            // The same object as the last hop, in its own slot so the hit
+            // loads it at a fixed offset. Visiting one object through two
+            // slots is what every other multi-slot root does; the second visit
+            // finds the forwarding record the first one installed.
+            visitor.visit_usize_slot(&mut entry.holder);
         }
     });
 }
@@ -834,6 +882,7 @@ pub(crate) fn prune_dead_inherited_cache_entries(is_dead_owner: &dyn Fn(usize) -
             for i in 0..entry.hop_count as usize {
                 dead |= is_dead_owner(entry.hops[i]);
             }
+            dead |= entry.holder != 0 && is_dead_owner(entry.holder);
             if dead {
                 *entry = EMPTY_ENTRY;
             }

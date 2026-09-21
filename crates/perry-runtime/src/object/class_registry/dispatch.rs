@@ -91,6 +91,14 @@ pub(crate) fn class_lookup_surface_generation() -> u64 {
 #[inline]
 pub(crate) fn class_lookup_surface_gen_bump() {
     CLASS_LOOKUP_SURFACE_GEN.fetch_add(1, Ordering::Release);
+    // An inherited-read entry whose chain was resolved through
+    // `class_prototype_object` names the object that registry held AT PRIME
+    // TIME. Replacing the registration leaves the receiver's class id, ShapeId
+    // and recorded prototype bits all unchanged and the old prototype object
+    // unmutated, so nothing else in that entry's guard can see it — and the
+    // entry would then answer with a different object than the chain walk
+    // beside it. All four callers are registry stores on cold paths.
+    crate::object::proto_validity::bump_proto_validity();
 }
 
 const VTABLE_IC_SIZE: usize = 4096;

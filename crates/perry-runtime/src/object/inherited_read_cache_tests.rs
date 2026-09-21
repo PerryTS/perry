@@ -158,7 +158,7 @@ fn deleting_the_shadowing_own_key_exposes_the_inherited_value_again() {
 }
 
 #[test]
-fn adding_a_key_to_the_prototype_invalidates_through_the_hop_shape() {
+fn adding_a_key_to_the_prototype_invalidates_through_proto_validity() {
     let _scope = PrimeScope::new();
     unsafe {
         let (obj, proto) = one_level();
@@ -167,13 +167,18 @@ fn adding_a_key_to_the_prototype_invalidates_through_the_hop_shape() {
         assert!(inherited_read_cache_hit(obj, k).is_some());
 
         // A plain store is not a descriptor install, so it does NOT bump the
-        // semantic epoch. Only the hop's ShapeId changes — which is exactly
-        // why the per-hop stamp compare is in the guard.
+        // semantic epoch. It is a key-add transition on an object the prime
+        // MARKED, so the shape-stamp funnel bumps the validity word — the
+        // whole reason that hook exists.
+        assert!(
+            crate::object::proto_validity::object_is_marked_prototype(proto as usize),
+            "priming must mark the hop, or nothing will ever see a mutation of it"
+        );
         set(proto, "irc_b", 3.0);
         assert!(
             inherited_read_cache_hit(obj, k).is_none(),
             "a key added to the prototype changed its ShapeId and the entry \
-             still matched: the per-hop stamp compare is not load-bearing"
+             still matched: the prototype-validity bump is not load-bearing"
         );
     }
 }
@@ -386,6 +391,261 @@ fn several_object_create_receivers_do_not_evict_each_other() {
              ({declines}), or served from a negative entry ({neg}) — and they \
              sum to {}, not the {reads} reads performed",
             hits + primes + declines + neg
+        );
+    }
+}
+
+#[test]
+fn a_key_added_at_the_far_end_of_a_three_hop_chain_invalidates() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        // O -> P1 -> P2 -> P3, `a` on P3. Under the per-hop walk this cost
+        // three dependent loads on every hit; under the validity word it costs
+        // the same one compare a one-hop chain costs.
+        let p3 = crate::object::js_object_alloc(0, 4);
+        set(p3, "irc_a", 7.0);
+        let p2 = crate::object::js_object_alloc(0, 4);
+        set(p2, "irc_m2", 1.0);
+        crate::object::js_object_set_prototype_of(boxed(p2), boxed(p3));
+        let p1 = crate::object::js_object_alloc(0, 4);
+        set(p1, "irc_m1", 1.0);
+        crate::object::js_object_set_prototype_of(boxed(p1), boxed(p2));
+        let obj = crate::object::js_object_alloc(0, 4);
+        set(obj, "irc_own", 1.0);
+        crate::object::js_object_set_prototype_of(boxed(obj), boxed(p1));
+
+        let k = key("irc_a");
+        let primed = inherited_read_cache_prime(obj, k).expect("a three-hop chain must prime");
+        assert_eq!(f64::from_bits(primed.bits()), 7.0);
+        assert!(inherited_read_cache_hit(obj, k).is_some());
+
+        // Not the holder, not the receiver's prototype: the middle of the
+        // chain, whose mutation neither end's guard can see.
+        set(p2, "irc_new", 3.0);
+        assert!(
+            inherited_read_cache_hit(obj, k).is_none(),
+            "a key added to an INTERIOR prototype left the entry matching"
+        );
+    }
+}
+
+#[test]
+fn an_attribute_change_on_the_prototype_invalidates() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let (obj, proto) = one_level();
+        let k = key("irc_a");
+        inherited_read_cache_prime(obj, k).expect("prime");
+        assert!(inherited_read_cache_hit(obj, k).is_some());
+
+        // Not a value change and not a key change: only the attributes move.
+        crate::object::descriptor_state::set_property_attrs(
+            proto as usize,
+            "irc_a".to_string(),
+            crate::object::descriptor_state::PropertyAttrs::new(false, false, false),
+        );
+        assert!(
+            inherited_read_cache_hit(obj, k).is_none(),
+            "a non-enumerable/non-writable redefinition of the cached key must \
+             retire the entry: the slot is no longer the whole answer"
+        );
+    }
+}
+
+#[test]
+fn a_mutation_of_an_object_nobody_inherits_from_does_not_invalidate() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let (obj, _proto) = one_level();
+        let k = key("irc_a");
+        inherited_read_cache_prime(obj, k).expect("prime");
+        assert!(inherited_read_cache_hit(obj, k).is_some());
+
+        // The common case of all mutation. A global validity counter that was
+        // not gated on the mark would invalidate here, and this cache would be
+        // a recompute in every program that builds objects in a loop.
+        for i in 0..8 {
+            let bystander = crate::object::js_object_alloc(0, 4);
+            set(bystander, "irc_bystander", i as f64);
+            set(bystander, "irc_bystander2", i as f64);
+        }
+        assert!(
+            inherited_read_cache_hit(obj, k).is_some(),
+            "building unrelated objects invalidated the chain: the validity \
+             bump is not gated on OBJ_FLAG_IS_PROTOTYPE"
+        );
+    }
+}
+
+#[test]
+fn replacing_a_registered_class_prototype_invalidates() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        let (obj, _proto) = one_level();
+        let k = key("irc_a");
+        inherited_read_cache_prime(obj, k).expect("prime");
+        assert!(inherited_read_cache_hit(obj, k).is_some());
+
+        // The chain of an `Object.create` / `new C()` receiver with no meta
+        // record is resolved out of `CLASS_PROTOTYPE_OBJECTS`. Re-registering
+        // mutates NOTHING this entry records: not the receiver, not the
+        // holder, not any shape. Only the surface generation moves.
+        let replacement = crate::object::js_object_alloc(0, 4);
+        set(replacement, "irc_a", 42.0);
+        crate::object::class_prototype_object_root_store(0x4242_0001, replacement);
+        assert!(
+            inherited_read_cache_hit(obj, k).is_none(),
+            "a re-registered class prototype left the entry matching: it would \
+             now answer with a different object than the chain walk beside it"
+        );
+    }
+}
+
+/// Coverage for the `[[Prototype]]` INSTALL sites, as a TEST rather than a
+/// counter nobody reads.
+///
+/// The cache no longer marks its own hops: it refuses one that the install
+/// funnel did not mark. That is the fail-safe polarity — a missed install site
+/// costs a cache HIT, never a stale value — but "fail-safe" and "works" are
+/// different claims, and only the hit counter can tell them apart, because a
+/// cache that declines everything returns exactly the values the chain walk
+/// would and is invisible in a program's output.
+///
+/// So each construction style below builds a receiver the way real code does,
+/// through the same runtime entry points the compiled code calls, and asserts
+/// the READ WAS SERVED BY THE CACHE. A future change that adds a way to build
+/// a prototype without marking it fails here instead of quietly costing every
+/// inherited read through it.
+fn assert_style_is_cached(style: &str, obj: *mut ObjectHeader, key_name: &str, want: f64) {
+    unsafe {
+        let k = key(key_name);
+        // One warm-up attempt is allowed: a route the install funnel does not
+        // cover marks its hop on the first walk and abandons it, so the SECOND
+        // read is the one that primes. What is not allowed is never priming,
+        // which is what a route with no marking at all would do.
+        if inherited_read_cache_prime(obj, key(key_name)).is_none() {
+            let _ = inherited_read_cache_prime(obj, key(key_name));
+        }
+        test_clear_cache();
+        test_reset_counters();
+        let primed = inherited_read_cache_prime(obj, k)
+            .unwrap_or_else(|| panic!("{style}: the walk did not resolve {key_name}"));
+        assert_eq!(f64::from_bits(primed.bits()), want, "{style}: wrong value");
+        assert_eq!(
+            inherited_read_cache_primes(),
+            1,
+            "{style}: the walk resolved the key but REFUSED to record it — the \
+             prototype it went through was never marked by an install site, so \
+             every read of it re-walks the chain"
+        );
+        let served = inherited_read_cache_hit(obj, k)
+            .unwrap_or_else(|| panic!("{style}: the entry did not serve the next read"));
+        assert_eq!(f64::from_bits(served.bits()), want, "{style}: wrong value on hit");
+        assert_eq!(inherited_read_cache_hits(), 1, "{style}: not counted as a hit");
+    }
+}
+
+#[test]
+fn every_common_way_of_building_a_receiver_is_cached() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        // EVERY style gets its OWN prototype object. Sharing one would let a
+        // style pass because an EARLIER style's install site marked it, which
+        // is the exact shape of a test that cannot fail for the reason it
+        // names.
+        let fresh_proto = |value: f64| {
+            let p = crate::object::js_object_alloc(0, 4);
+            set(p, "cov_a", value);
+            p
+        };
+
+        // 1. `Object.setPrototypeOf` on an object literal.
+        let p1 = fresh_proto(1.0);
+        let literal = crate::object::js_object_alloc(0, 4);
+        set(literal, "cov_own", 0.0);
+        crate::object::js_object_set_prototype_of(boxed(literal), boxed(p1));
+        assert_style_is_cached("setPrototypeOf on a literal", literal, "cov_a", 1.0);
+
+        // 2. `Object.create(p)` — a different install route than 1.
+        let p2 = fresh_proto(2.0);
+        let created_bits = crate::object::js_object_create(boxed(p2));
+        let created = crate::value::js_nanbox_get_pointer(created_bits) as *mut ObjectHeader;
+        set(created, "cov_own", 0.0);
+        assert_style_is_cached("Object.create", created, "cov_a", 2.0);
+
+        // 3. A class-DEFAULT prototype link, as `new C()` performs it. This
+        //    link deliberately bumps no epoch and transitions no shape, so if
+        //    it did not mark, nothing else would.
+        let p3 = fresh_proto(3.0);
+        let instance = crate::object::js_object_alloc(0, 4);
+        set(instance, "cov_own", 0.0);
+        crate::object::prototype_chain::object_link_class_default_prototype(
+            instance as usize,
+            crate::value::js_nanbox_pointer(p3 as i64).to_bits(),
+        );
+        assert_style_is_cached("class-default link (new C())", instance, "cov_a", 3.0);
+
+        // 4. An evaluated class prototype (#9502) — its own link kind.
+        let p4 = fresh_proto(4.0);
+        let evaluated = crate::object::js_object_alloc(0, 4);
+        set(evaluated, "cov_own", 0.0);
+        crate::object::prototype_chain::object_link_class_evaluation_prototype(
+            evaluated as usize,
+            crate::value::js_nanbox_pointer(p4 as i64).to_bits(),
+        );
+        assert_style_is_cached("class-evaluation link", evaluated, "cov_a", 4.0);
+
+        // 5. Two hops: a base class's prototype reached through a derived
+        //    one. The MIDDLE object must be marked as well as the holder, or
+        //    the walk refuses at hop 1 and never reaches the answer.
+        let base_proto = crate::object::js_object_alloc(0, 4);
+        set(base_proto, "cov_method", 9.0);
+        let derived_proto = crate::object::js_object_alloc(0, 4);
+        set(derived_proto, "cov_mid", 0.0);
+        crate::object::js_object_set_prototype_of(boxed(derived_proto), boxed(base_proto));
+        let derived = crate::object::js_object_alloc(0, 4);
+        set(derived, "cov_own", 0.0);
+        crate::object::js_object_set_prototype_of(boxed(derived), boxed(derived_proto));
+        assert_style_is_cached("two hops (extends)", derived, "cov_method", 9.0);
+
+        // 6. A prototype whose key is ASSIGNED AFTER the receiver exists —
+        //    `C.prototype.m = ...` after construction. The link is already
+        //    marked; this checks the later key add does not disturb it.
+        let late_proto = crate::object::js_object_alloc(0, 4);
+        set(late_proto, "cov_placeholder", 0.0);
+        let late = crate::object::js_object_alloc(0, 4);
+        set(late, "cov_own", 0.0);
+        crate::object::js_object_set_prototype_of(boxed(late), boxed(late_proto));
+        set(late_proto, "cov_late", 5.0);
+        assert_style_is_cached("key added to the prototype later", late, "cov_late", 5.0);
+    }
+}
+
+#[test]
+fn an_unmarked_prototype_is_refused_rather_than_cached_unsafely() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        // The fail-safe polarity, asserted directly. A chain reachable by a
+        // route that never marked its hop must DECLINE, not cache: an entry
+        // through an unmarked prototype is one that a key added to that
+        // prototype would not invalidate.
+        let proto = crate::object::js_object_alloc(0, 4);
+        set(proto, "cov_u", 3.0);
+        let obj = crate::object::js_object_alloc(0, 4);
+        set(obj, "cov_own", 0.0);
+        // Install the prototype WITHOUT the funnel, the way a future install
+        // site that forgot to mark would.
+        let meta = crate::object::object_meta_ensure(obj);
+        (*meta).prototype = crate::value::js_nanbox_pointer(proto as i64).to_bits();
+        assert!(
+            !crate::object::proto_validity::object_is_marked_prototype(proto as usize),
+            "this test is vacuous unless the prototype really is unmarked"
+        );
+        assert!(
+            inherited_read_cache_prime(obj, key("cov_u")).is_none(),
+            "the cache recorded an entry through an UNMARKED prototype: a key \
+             added to that prototype would bump no validity and the entry \
+             would keep serving a stale value"
         );
     }
 }
@@ -627,7 +887,7 @@ fn a_proxy_in_the_chain_never_primes() {
 }
 
 #[test]
-fn the_semantic_epoch_guard_is_load_bearing() {
+fn the_validity_guard_is_load_bearing() {
     // Sabotage: freeze the epoch the entry recorded, then delete the key from
     // the prototype. With the guard working the hit must still fail (via the
     // shape stamps, if they happen to change) OR the entry must be gone; the
