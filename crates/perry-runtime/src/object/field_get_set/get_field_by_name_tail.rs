@@ -78,9 +78,7 @@ pub(crate) fn get_field_by_name_object_tail(
                                     return value;
                                 }
                             }
-                            let null_obj_ptr =
-                                &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                            return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                            return JSValue::from_bits(crate::object::null_stub_value().to_bits());
                         }
                     }
                     if let Some(dispatch) = handle_property_dispatch() {

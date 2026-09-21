@@ -219,9 +219,9 @@ fn observe_pointer(addr: usize) {
     if crate::async_hooks::is_async_resource_handle(addr as i64) {
         mark_old(ReceiverReprFamily::AsyncResource);
     }
-    if crate::object::is_null_stub_address(addr) {
-        mark_old(ReceiverReprFamily::NullStub);
-    }
+    // #340/#341 GATE A: `null_stub` has migrated to an ordinary object, so
+    // its arm is gone from here, and `is_null_stub_address` with it: it could
+    // only ever have answered for a `.data` static no longer handed to JS.
     if crate::shared_sab::is_shared_sab(addr) {
         mark_old(ReceiverReprFamily::Sab);
     }
@@ -481,17 +481,20 @@ mod tests {
         assert_fixture(ReceiverReprFamily::Sab, || {
             (crate::shared_sab::alloc_shared_sab(1) as usize, false)
         });
-        assert_fixture(ReceiverReprFamily::NullStub, || {
-            (
-                crate::object::js_unresolved_namespace_stub().to_bits() as usize,
-                true,
-            )
+        // #340/#341: `null_stub` is migrated — gate A, inverted (see `text`).
+        assert_fixture_migrated(ReceiverReprFamily::NullStub, || {
+            (crate::object::js_unresolved_namespace_stub().to_bits()
+                & crate::value::POINTER_MASK) as usize
         });
 
         let line = render();
         assert!(line.starts_with("[receiver-repr-diag] constructed common=0"));
         assert!(line.contains("null_stub=1; observed_old"));
-        assert!(line.contains("null_stub=1; observed_wrapped"));
+        // #340/#341 row 4: the rendered sink line is the last place gate A is
+        // visible. `null_stub` is the final bucket of the `observed_old`
+        // section, so this segment IS its observed_old count, and it must read
+        // 0 now that the stub is an ordinary object (it read 1 before).
+        assert!(line.contains("null_stub=0; observed_wrapped"));
         assert!(line.ends_with("bare_managed=0; invalid_pointer_zero=0; direct_mismatch=0\n"));
         receiver_repr_test_arm(false);
     }

@@ -877,8 +877,7 @@ pub(super) fn get_field_ic_miss_impl(
                         return bits;
                     }
                 }
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                return crate::object::null_stub_value();
             }
         }
         if let Some(dispatch) = handle_property_dispatch() {
