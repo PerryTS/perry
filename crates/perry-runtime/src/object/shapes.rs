@@ -1774,6 +1774,85 @@ fn deterministic_semantic_generation(
     Some(x | (1 << 63))
 }
 
+/// #10868 lever (iv): semantic generation for a PROTOTYPE divergence, as a
+/// pure function of *(predecessor ShapeId, the prototype's stable serial, link
+/// kind)* — the prototype twin of [`deterministic_semantic_generation`].
+///
+/// Two receivers that diverge the same way from the same predecessor land on
+/// the same successor, instead of each taking a fresh value from the
+/// `SHAPE_SEMANTIC_NEXT` counter. On one tsc `transpileModule` that site minted
+/// 48,197 shapes from 78 predecessors and at most 97 (predecessor, prototype)
+/// pairs.
+///
+/// Soundness: two receivers with DIFFERENT prototypes carry different serials,
+/// so they get different generations and different ShapeIds, and a
+/// shape-keyed inherited-read cache can never serve one receiver's holder for
+/// the other. `PROTOTYPE_DOMAIN` keeps this input space disjoint from the
+/// descriptor generation's; bit 63 is set like every deterministic generation.
+fn deterministic_prototype_generation(
+    prev_shape_id: u32,
+    prototype_serial: u64,
+    link_kind: u8,
+) -> Option<u64> {
+    if prev_shape_id == 0 || prototype_serial == 0 {
+        return None;
+    }
+    const PROTOTYPE_DOMAIN: u64 = 0x5052_4F54_4F54_5950; // "PROTOTYP"
+    let mut x = prototype_serial.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (u64::from(prev_shape_id) << 32 | u64::from(prev_shape_id))
+        ^ (u64::from(link_kind) << 24)
+        ^ PROTOTYPE_DOMAIN;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    Some(x | (1 << 63))
+}
+
+#[cfg(test)]
+pub(crate) fn test_deterministic_prototype_generation(
+    prev_shape_id: u32,
+    prototype_serial: u64,
+    link_kind: u8,
+) -> Option<u64> {
+    deterministic_prototype_generation(prev_shape_id, prototype_serial, link_kind)
+}
+
+/// [`transition_object_shape_semantics`] for a PROTOTYPE divergence whose
+/// prototype has a stable serial. Falls back to the unique-generation
+/// transition, which is always correct, when there is no predecessor.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn transition_object_shape_semantics_for_prototype(
+    obj: *mut crate::object::ObjectHeader,
+    prototype_serial: u64,
+    link_kind: u8,
+) -> u32 {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return 0;
+    }
+    crate::array::clear_array_subclass_named_prefix_token(obj);
+    let current = object_shape_descriptor(obj).unwrap_or_else(|| {
+        synchronize_object_shape_descriptor(obj);
+        object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
+    });
+    let Some(generation) =
+        deterministic_prototype_generation(object_shape_stamp(obj), prototype_serial, link_kind)
+    else {
+        return transition_object_shape_semantics(obj);
+    };
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        current.keys as usize as *mut ArrayHeader,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        generation,
+        current.object_kind,
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+    id
+}
+
 /// [`transition_object_shape_semantics`] for a DATA-descriptor install, whose
 /// successor is shared by every receiver that performs the same install over
 /// the same predecessor facts (#10287).
