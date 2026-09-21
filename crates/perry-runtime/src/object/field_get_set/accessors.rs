@@ -288,7 +288,12 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
-    if ((*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0 {
+    // #10827: this asked only whether the RECEIVER was born without a
+    // prototype. A receiver whose chain was ended higher up — an instance of a
+    // class whose `prototype` was `setPrototypeOf(..., null)`, or one pointed
+    // at an `Object.create(null)` — reached `Object.prototype` anyway and
+    // answered `toString` from it while `"toString" in o` said false.
+    if super::super::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize) {
         return None;
     }
     if super::super::prototype_chain::object_static_prototype(obj as usize).is_some() {
