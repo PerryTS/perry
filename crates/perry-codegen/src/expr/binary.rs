@@ -185,6 +185,29 @@ fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> Str
 /// precheck or a `js_typed_feedback_class_field_get_guard` call for its shape
 /// check regardless. Proven raw-f64 tiers need no guard at all.
 fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // #10904: this fold reads every leaf before the first addition converts
+    // anything, so it declines a tree whose specification order converts
+    // first and then reads a leaf that conversion could change. The decision
+    // lives HERE, not at a call site, because two entries reach the fold and
+    // both can hold such a tree: the fully dynamic tree, and the tree whose
+    // numeric proof only an annotation carries (`a: number[]`, then
+    // `a[0] + a[1] + a[2]` with an object in `a[0]`). A declined tree lowers
+    // node by node, which evaluates and converts in source order.
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        if !add_tree_evaluates_before_it_converts(ctx, expr) {
+            return lower_rooted_dynamic_binary(
+                ctx,
+                "js_dynamic_string_or_number_add",
+                left,
+                right,
+            );
+        }
+    }
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
     let needs_test: Vec<bool> = leaves
@@ -445,27 +468,15 @@ fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// is often a captured local plus fields read from interface-shaped objects,
 /// so every leaf is `Any` to codegen. The guard itself is the runtime proof;
 /// its cold arm preserves the original tree and exact dynamic `+` semantics.
-/// # #10904: the fold must not read a leaf that a conversion could change
 ///
-/// The fold evaluates every leaf before any addition converts anything. The
-/// specification does not always: `(a + b) + c` converts `a` and `b` before it
-/// evaluates `c`, and a user `valueOf` running in that conversion can change
-/// what `c` reads. `add_tree_evaluates_before_it_converts` decides which trees
-/// the fold may take; it holds the exact rule and the leaves it exempts.
-///
-/// A declined tree lowers node by node through `lower_rooted_dynamic_binary`,
-/// which evaluates and converts in source order. For a left-leaning chain of
-/// property reads (`h += o.a + o.b + o.c`) that costs the per-node helper the
-/// fold exists to avoid, which is the regression #10904 declares; correct and
-/// slower beats fast and wrong, and step 4b's region guard (#10884) is what
-/// buys it back.
-fn dynamic_add_tree_benefits_shared_guard(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    // #10904: the fold is only faithful when no leaf it reads early is one
-    // that an earlier conversion could change. See
-    // `add_tree_evaluates_before_it_converts`.
-    if !add_tree_evaluates_before_it_converts(ctx, expr) {
-        return false;
-    }
+/// This predicate is about COST only. Whether the fold is FAITHFUL to a tree
+/// (#10904) is decided inside `lower_guarded_numeric_add`, which every entry
+/// reaches; see `add_tree_evaluates_before_it_converts`. A left-leaning chain
+/// of property reads (`h += o.a + o.b + o.c`) is declined there and pays the
+/// per-node helper the fold exists to avoid — the regression #10904 declares.
+/// Correct and slower beats fast and wrong; step 4b's region guard (#10884) is
+/// what buys it back.
+fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
     if matches!(
         std::env::var("PERRY_DYNAMIC_ADD_PAIR_GUARD").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
@@ -1260,8 +1271,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let materialization_hazard =
                     add_operands_have_pod_materialization_hazard(ctx, left, right);
                 if !(both_numeric || boolean_numeric_add) || materialization_hazard {
-                    if dynamic_add_tree_benefits_shared_guard(ctx, expr) && !materialization_hazard
-                    {
+                    if dynamic_add_tree_benefits_shared_guard(expr) && !materialization_hazard {
                         return lower_guarded_numeric_add(ctx, expr);
                     }
                     return lower_rooted_dynamic_binary(
