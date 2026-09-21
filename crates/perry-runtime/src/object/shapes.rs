@@ -1074,6 +1074,111 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 static KEEP_JS_SHAPE_ORDINARY_INLINE_SLOT_FOR_KEY: extern "C" fn(u32, u64) -> i32 =
     js_shape_ordinary_inline_slot_for_key;
 
+/// The empty region guard word: its low 32 bits are `u32::MAX`, which is never
+/// a live ShapeId, so an unprimed region's shape compare can only miss.
+pub const REGION_GUARD_WORD_EMPTY: u64 = 0xFFFF_FFFF;
+/// Most distinct keys one region word can carry (6 bits each above the id).
+pub const REGION_GUARD_MAX_KEYS: u32 = 5;
+const REGION_GUARD_SLOT_BITS: u32 = 6;
+const REGION_GUARD_SLOT_MAX: i32 = (1 << REGION_GUARD_SLOT_BITS) - 1;
+
+/// Step 4b: pack a region guard word — one ShapeId and the inline slot of each
+/// of the region's keys — or return [`REGION_GUARD_WORD_EMPTY`].
+///
+/// A read region compares the receiver's ShapeId against the low 32 bits ONCE
+/// and then loads every key's slot out of the high 32 bits, so the id and the
+/// slots must be published as a single atomic word. Two separately stored
+/// words could tear under a concurrent prime and pair one shape's id with
+/// another shape's slots — a wrong value, silently.
+///
+/// Each slot comes from [`js_shape_ordinary_inline_slot_for_key`], which
+/// answers only when slot k provably IS key position k (ordinary kind, no
+/// semantic generation, no tombstones, every key inline). Anything it refuses —
+/// an absent key, an inherited key, an accessor, a spilled key — makes the
+/// whole word empty, so the region never takes its fast copy for that shape
+/// and every read keeps its ordinary tower. Refusing is always correct.
+///
+/// `keys` are the whole NaN-boxed key values as codegen loaded them from the
+/// string pool, in the region's key order; `n` of them are meaningful.
+#[no_mangle]
+pub extern "C" fn js_region_guard_pack(
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+) -> u64 {
+    if !is_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    let keys = [k0, k1, k2, k3, k4];
+    let mut word = u64::from(shape_id);
+    for (i, &key) in keys.iter().enumerate().take(n as usize) {
+        let slot = js_shape_ordinary_inline_slot_for_key(shape_id, key);
+        if !(0..=REGION_GUARD_SLOT_MAX).contains(&slot) {
+            return REGION_GUARD_WORD_EMPTY;
+        }
+        word |= (slot as u64) << (32 + REGION_GUARD_SLOT_BITS * i as u32);
+    }
+    word
+}
+
+/// Compute a region's guard word and publish it, for a read region's miss
+/// path (#10884).
+///
+/// The store lives here rather than in emitted IR for the reason
+/// [`crate::object::field_get_set::ic_miss`]'s `prime_get` does it here: a
+/// cache word is published by the runtime, which owns its memory ordering.
+/// Relaxed is enough — this publishes a numeric layout fact, not an object —
+/// and the single word is what makes a concurrent prime unable to pair one
+/// shape's id with another shape's slots. (Emitting `store atomic` from
+/// codegen also does not survive perry's own native IR construction path,
+/// which real modules take.)
+///
+/// `word` is an aligned, live site word. A shape whose layout the region
+/// cannot encode publishes nothing, so the site keeps missing and the bounded
+/// attempt counter in the emitted code retires it.
+///
+/// # Safety
+///
+/// `word` must be null or point to a live, 8-byte-aligned `AtomicU64`.
+#[no_mangle]
+pub unsafe extern "C" fn js_region_guard_prime(
+    word: *const core::sync::atomic::AtomicU64,
+    shape_id: u32,
+    n: u32,
+    k0: u64,
+    k1: u64,
+    k2: u64,
+    k3: u64,
+    k4: u64,
+) -> u64 {
+    let packed = js_region_guard_pack(shape_id, n, k0, k1, k2, k3, k4);
+    if word.is_null() || packed == REGION_GUARD_WORD_EMPTY {
+        return REGION_GUARD_WORD_EMPTY;
+    }
+    (*word).store(packed, core::sync::atomic::Ordering::Relaxed);
+    packed
+}
+
+/// Keepalive anchor — `js_region_guard_prime` is called only from generated
+/// code (a read region's miss path), so the auto-optimize whole-program build
+/// would otherwise dead-strip it.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
+    *const core::sync::atomic::AtomicU64,
+    u32,
+    u32,
+    u64,
+    u64,
+    u64,
+    u64,
+    u64,
+) -> u64 = js_region_guard_prime;
+
 /// Mint a process-global ShapeId for a codegen-registered typed layout and
 /// install its structural descriptor in the current agent. Unlike
 /// [`shape_id_for_keys_ensure`], this deliberately does not canonicalise by
