@@ -169,6 +169,35 @@ console.log(s);
 }
 
 #[test]
+fn an_overflow_rotation_long_enough_to_latch_still_reads_correctly() {
+    // #10863: the rotation above is 3 shapes over 500 reads, which never
+    // reaches the megamorphic latch. This one is 9 shapes over 30k reads with
+    // one of them carrying the key at an INLINE slot, which is what arms the
+    // site — so the site latches, counts its PIC_LATCH_RETRY window back out,
+    // re-arms and latches again several times inside one run.
+    //
+    // Every one of those transitions zeroes the ways and repopulates them
+    // while an overflow-encoded slot is sitting in the MRU entry. If any of
+    // that ever put the encoded slot into a way, the emitted way path would
+    // compute `obj + header + (index | 1<<30) * 8` and the sum would be
+    // garbage or a fault, not a number.
+    let out = compile_and_run(
+        r#"
+function deep(n: number): any { const o: any = {}; for (let j = 0; j < n; j++) o["f" + j] = 1; o["hot"] = n; return o; }
+const shapes: any[] = [];
+const shallow: any = {}; shallow["hot"] = 100;   // "hot" at an inline slot
+shapes.push(shallow);
+for (let k = 0; k < 8; k++) shapes.push(deep(12 + k));
+let t = 0;
+for (let i = 0; i < 30000; i++) { t += shapes[i % 9].hot; }
+console.log(t);
+"#,
+    );
+    // Checksum taken from node on the identical program, not computed by hand.
+    assert_eq!(out, "746717");
+}
+
+#[test]
 fn pointer_values_through_the_overflow_write_survive_evacuating_gc() {
     // String values exercise the write barrier inside the spill store; the
     // heap limit plus forced evacuation makes the collector actually move
