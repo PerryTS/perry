@@ -110,6 +110,19 @@ macro_rules! buffer_method_names {
     };
 }
 
+/// ES2024 `ArrayBuffer.prototype` methods that exist ONLY on an ArrayBuffer —
+/// `typeof u8.resize` must stay `"undefined"`, so they are kept out of the
+/// shared [`buffer_method_name_static`] table that every Buffer-shaped receiver
+/// consults. Same `'static`-name contract as that table.
+pub fn array_buffer_only_method_name_static(name: &str) -> Option<&'static str> {
+    match name {
+        "resize" => Some("resize"),
+        "transfer" => Some("transfer"),
+        "transferToFixedLength" => Some("transferToFixedLength"),
+        _ => None,
+    }
+}
+
 buffer_method_names!(
     "toString",
     "inspect",
@@ -556,7 +569,17 @@ pub unsafe fn dispatch_buffer_method(
                 && !crate::buffer::is_shared_array_buffer(addr)
                 && !crate::buffer::is_data_view(addr) =>
         {
-            crate::buffer::array_buffer_transfer(addr, args)
+            crate::buffer::array_buffer_transfer(addr, args, method_name == "transfer")
+        }
+        // ES2024 `ArrayBuffer.prototype.resize` (#10873). Same receiver scope
+        // as `transfer`; a fixed-length ArrayBuffer reaches the helper too and
+        // gets the spec's TypeError rather than "resize is not a function".
+        "resize"
+            if crate::buffer::is_array_buffer(addr)
+                && !crate::buffer::is_shared_array_buffer(addr)
+                && !crate::buffer::is_data_view(addr) =>
+        {
+            crate::buffer::array_buffer_resize(addr, args)
         }
         "slice" | "subarray" => {
             let source_is_array_buffer = crate::buffer::is_array_buffer(addr);
@@ -632,6 +655,17 @@ pub unsafe fn dispatch_buffer_method(
                     crate::buffer::js_buffer_slice(buf, start, end)
                 }
             });
+            // #10873 (ES2024 %TypedArray%.prototype.subarray): a subarray of a
+            // length-tracking view taken WITHOUT an `end` is itself
+            // length-tracking; with an `end` it is fixed-length (the default
+            // every view over a resizable buffer is registered with).
+            if method_name == "subarray"
+                && !source_is_any_array_buffer
+                && (args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined())
+                && crate::buffer::view::is_length_tracking(addr)
+            {
+                crate::buffer::view::mark_length_tracking(result as usize);
+            }
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
             // false and a subsequent `new Uint8Array(slice)` aliases it.

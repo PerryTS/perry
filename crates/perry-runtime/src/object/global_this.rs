@@ -159,7 +159,10 @@ pub(crate) use proto_methods::{
     install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
-    array_buffer_byte_length_getter_thunk, array_buffer_is_view_thunk, array_buffer_slice_thunk,
+    array_buffer_byte_length_getter_thunk, array_buffer_detached_getter_thunk,
+    array_buffer_is_view_thunk, array_buffer_max_byte_length_getter_thunk,
+    array_buffer_resizable_getter_thunk, array_buffer_resize_thunk, array_buffer_slice_thunk,
+    array_buffer_transfer_thunk, array_buffer_transfer_to_fixed_length_thunk,
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
     shared_array_buffer_byte_length_getter_thunk, shared_array_buffer_slice_thunk,
     typed_array_constructor_this_kind, typed_array_intrinsic_proto_ptr,

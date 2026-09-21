@@ -109,7 +109,10 @@ pub extern "C" fn js_typed_array_view(
     let elem_count = match requested {
         None => {
             let remaining = total_len - offset;
-            if bpe > 1 && remaining % bpe != 0 {
+            // ES2024: the whole-multiple requirement is for a FIXED-length
+            // buffer only. A length-tracking view over a resizable one floors
+            // (its length is recomputed on every resize anyway) (#10873).
+            if bpe > 1 && remaining % bpe != 0 && !crate::buffer::is_resizable_buffer(addr) {
                 throw_range_error(
                     format!(
                         "byte length of {} should be a multiple of {}",
@@ -150,6 +153,11 @@ pub extern "C" fn js_typed_array_view(
     // mutations are then visible through the buffer and every sibling view,
     // matching Node (#4103).
     register_view_meta(ta, addr, offset as u32);
+    // No explicit length: over a resizable ArrayBuffer the view's length
+    // follows `byteLength` (#10873).
+    if requested.is_none() {
+        mark_view_length_tracking(ta as usize);
+    }
     ta
 }
 
@@ -168,7 +176,7 @@ thread_local! {
     /// The backing `BufferHeader` lives for the thread's lifetime (Perry never
     /// `dealloc`s individual buffers — see `buffer::view`), so the raw addr is
     /// stable and aliasing through it is free of use-after-free.
-    static TYPED_ARRAY_VIEW_META: RefCell<crate::fast_hash::PtrHashMap<usize, ViewMeta>> =
+    static TYPED_ARRAY_VIEW_META: RefCell<crate::fast_hash::PtrHashMap<usize, ViewRecord>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
@@ -180,6 +188,23 @@ pub(crate) struct ViewMeta {
     pub backing: usize,
     /// Byte offset of element 0 within `backing`.
     pub byte_offset: u32,
+}
+
+/// What the side table stores per view: the hot `ViewMeta` (what every element
+/// access copies out through `view_meta_of`) plus the resizable-backing
+/// bookkeeping (#10873), which only `resize` and the reflective getters read.
+/// Kept apart so the per-access copy stays the two words it always was.
+struct ViewRecord {
+    meta: ViewMeta,
+    /// Construction-time element count. Only consulted when the backing is a
+    /// resizable ArrayBuffer: a fixed-length view reads as length 0 while it
+    /// does not fit, and gets THIS length back when the buffer grows.
+    fixed_len: u32,
+    /// Constructed without an explicit length over a resizable ArrayBuffer, so
+    /// its length follows the buffer's `byteLength`.
+    length_tracking: bool,
+    /// ES2024 IsTypedArrayOutOfBounds, as of the last resize.
+    out_of_bounds: bool,
 }
 
 /// #5525: process-global count of typed arrays that have a `TYPED_ARRAY_VIEW_META`
@@ -207,14 +232,78 @@ pub(crate) fn zero_views_of_detached_backing(backing: usize) {
         return;
     }
     TYPED_ARRAY_VIEW_META.with(|r| {
-        for (&ta, meta) in r.borrow().iter() {
-            if meta.backing == backing {
+        for (&ta, rec) in r.borrow().iter() {
+            if rec.meta.backing == backing {
                 unsafe {
                     (*(ta as *mut TypedArrayHeader)).length = 0;
                 }
             }
         }
     });
+}
+
+/// `ArrayBuffer.prototype.resize` support: recompute the length of every typed
+/// array aliasing `backing`, whose byteLength is now `buffer_len`. Eager, like
+/// `zero_views_of_detached_backing`, so every reader of a typed array's length
+/// stays oblivious to resizing. Growing past the construction-time element
+/// count is memory-safe: a registered view's `data_ptr` resolves into the
+/// backing (which reserves `maxByteLength`), never into the header's inline
+/// region, and the codegen inline tiers are barred while any view exists
+/// (`PERRY_TA_VIEW_GUARD`).
+pub(crate) fn relength_views_of_resized_backing(backing: usize, buffer_len: u32) {
+    if !any_view_meta() {
+        return;
+    }
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        for (&ta, rec) in r.borrow_mut().iter_mut() {
+            if rec.meta.backing != backing {
+                continue;
+            }
+            let header = ta as *mut TypedArrayHeader;
+            let elem = elem_size_for_kind(unsafe { (*header).kind }) as u32;
+            let len = crate::buffer::view_length_after_resize(
+                buffer_len,
+                rec.meta.byte_offset,
+                elem,
+                rec.length_tracking,
+                rec.fixed_len,
+            );
+            rec.out_of_bounds = len.is_none();
+            unsafe {
+                (*header).length = len.unwrap_or(0);
+            }
+        }
+    });
+}
+
+/// Mark a just-registered view as length-tracking. A no-op over a fixed-length
+/// backing.
+pub(crate) fn mark_view_length_tracking(ta: usize) {
+    if !crate::buffer::any_resizable_buffer() {
+        return;
+    }
+    TYPED_ARRAY_VIEW_META.with(|r| {
+        if let Some(rec) = r.borrow_mut().get_mut(&ta) {
+            if crate::buffer::is_resizable_buffer(rec.meta.backing) {
+                rec.length_tracking = true;
+            }
+        }
+    });
+}
+
+/// True when `ta` is a length-tracking view over a resizable ArrayBuffer.
+#[inline]
+pub(crate) fn is_view_length_tracking(ta: usize) -> bool {
+    crate::buffer::any_resizable_buffer()
+        && TYPED_ARRAY_VIEW_META
+            .with(|r| r.borrow().get(&ta).is_some_and(|rec| rec.length_tracking))
+}
+
+/// True when `ta` is a view its resizable ArrayBuffer has shrunk past.
+#[inline]
+fn is_view_out_of_bounds(ta: usize) -> bool {
+    crate::buffer::any_resizable_buffer()
+        && TYPED_ARRAY_VIEW_META.with(|r| r.borrow().get(&ta).is_some_and(|rec| rec.out_of_bounds))
 }
 
 /// Record `ta` as aliasing `backing` at `byte_offset`. After this call
@@ -224,9 +313,15 @@ pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, by
     TYPED_ARRAY_VIEW_META.with(|r| {
         let prev = r.borrow_mut().insert(
             ta as usize,
-            ViewMeta {
-                backing,
-                byte_offset,
+            ViewRecord {
+                meta: ViewMeta {
+                    backing,
+                    byte_offset,
+                },
+                // Every caller registers the view at its construction length.
+                fixed_len: unsafe { (*ta).length },
+                length_tracking: false,
+                out_of_bounds: false,
             },
         );
         if prev.is_none() {
@@ -244,7 +339,7 @@ pub(crate) fn view_meta_of(addr: usize) -> Option<ViewMeta> {
     if !any_view_meta() {
         return None;
     }
-    TYPED_ARRAY_VIEW_META.with(|r| r.borrow().get(&addr).copied())
+    TYPED_ARRAY_VIEW_META.with(|r| r.borrow().get(&addr).map(|rec| rec.meta))
 }
 
 /// Data pointer for element 0 of the typed array at `addr` when it aliases an
@@ -278,10 +373,10 @@ pub(crate) fn scan_typed_array_view_meta_roots_mut(
         return;
     }
     TYPED_ARRAY_VIEW_META.with(|r| {
-        for meta in r.borrow_mut().values_mut() {
-            let mut backing = meta.backing as *mut crate::buffer::BufferHeader;
+        for rec in r.borrow_mut().values_mut() {
+            let mut backing = rec.meta.backing as *mut crate::buffer::BufferHeader;
             visitor.visit_raw_mut_ptr_slot(&mut backing);
-            meta.backing = backing as usize;
+            rec.meta.backing = backing as usize;
         }
     });
 }
@@ -302,7 +397,16 @@ pub(crate) fn clear_view_meta(addr: usize) {
 /// in `TYPED_ARRAY_VIEW_META` report their real offset; everything else is 0.
 pub fn js_typed_array_byte_offset(ta: *const TypedArrayHeader) -> u32 {
     let addr = clean_ta_ptr(ta) as usize;
-    view_meta_of(addr).map(|m| m.byte_offset).unwrap_or(0)
+    // An out-of-bounds view (its resizable buffer shrank past it) reports 0.
+    view_meta_of(addr)
+        .map(|m| {
+            if is_view_out_of_bounds(addr) {
+                0
+            } else {
+                m.byte_offset
+            }
+        })
+        .unwrap_or(0)
 }
 
 /// `%TypedArray%.prototype.buffer` for a registered typed array: the backing

@@ -247,6 +247,31 @@ pub(super) fn lower_builtin_new<'a>(
         // Uint8Array — i.e. ArrayBuffers — are aliased rather than
         // copied). SharedArrayBuffer uses the same storage allocation with a
         // separate runtime registry so util.types can distinguish it.
+        // #10873: `new ArrayBuffer(length, { maxByteLength })`. The options bag
+        // used to be dropped here — never even evaluated — so a resizable
+        // buffer silently came back fixed-length. The runtime reads
+        // `maxByteLength` AFTER `ToIndex(length)`, per spec, so both operands
+        // go over raw. `length` can be an object (its `valueOf` runs in the
+        // runtime), and lowering the options literal allocates: root it.
+        "ArrayBuffer" if args.len() >= 2 => {
+            let size_collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
+            let size_idx = group.lower(ctx, &args[0], size_collects)?;
+            let options_idx = adopt_optional_arg(ctx, args, 1, group)?;
+            for arg in args.iter().skip(2) {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let size_box = group.reread(ctx, size_idx)?;
+            let options_box = match options_idx {
+                Some(i) => group.reread(ctx, i)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            };
+            let handle = ctx.block().call(
+                I64,
+                "js_array_buffer_new_with_options",
+                &[(DOUBLE, &size_box), (DOUBLE, &options_box)],
+            );
+            Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
+        }
         "ArrayBuffer" | "SharedArrayBuffer" => {
             let size_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?

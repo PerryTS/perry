@@ -30,6 +30,10 @@ mod mutate;
 mod numeric;
 mod own_props;
 mod query;
+mod resizable;
+/// #10873: resizable ArrayBuffer storage model + view relength.
+#[cfg(test)]
+mod resizable_tests;
 mod transcode;
 mod u8_codec;
 pub mod validate;
@@ -90,6 +94,16 @@ pub use own_props::{
     buffer_define_own_data_prop, buffer_delete_own_prop, buffer_get_own_prop, buffer_has_own_prop,
     buffer_own_prop_names, buffer_own_props_possible, buffer_read_own_prop, buffer_set_own_prop,
     clear_buffer_own_props, scan_buffer_own_props_roots_mut,
+};
+// ---- Re-exports: resizable ArrayBuffer (#10873) ----
+pub use header::resizable_max_byte_length;
+pub(crate) use header::{
+    any_resizable_buffer, mark_as_resizable_buffer, resizable_info, set_resizable_dirty_end,
+    ResizableInfo,
+};
+pub(crate) use resizable::{array_buffer_resize, view_length_after_resize};
+pub use resizable::{
+    is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
 };
 
 // ---- Re-exports: #8149 integer-indexed-exotic discrimination ----

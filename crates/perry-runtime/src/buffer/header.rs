@@ -142,6 +142,14 @@ crate::perry_thread_local! {
     /// backing store. Track constructor-created views so util.types can
     /// distinguish the ArrayBufferView predicate from TypedArray predicates.
     static DATA_VIEW_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// #10873: `ArrayBuffer addr -> maxByteLength` for RESIZABLE buffers.
+    /// Presence IS the `[[ArrayBufferMaxByteLength]]` internal slot. The same
+    /// population and lifetime as the identity sets above: a plain
+    /// address-keyed attribute of a non-moving buffer, never dereferenced and
+    /// never a root, pruned in `finalize_collected_dead_buffer` (the #6080 ABA
+    /// class). The resize logic lives in `buffer::resizable`.
+    static RESIZABLE_BUFFER_MAX: RefCell<PtrHashMap<usize, ResizableInfo>> =
+        RefCell::new(new_ptr_hash_map());
     /// Issue #1225: ArrayBuffer-identity alias map for Buffers produced by
     /// copy paths like `Buffer.from(buf)`.  Node-compatible semantics: the
     /// new Buffer's `.buffer` returns the same ArrayBuffer object as the
@@ -316,6 +324,9 @@ pub(crate) fn note_buffer_like_registered(addr: usize) {
 static ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static SHARED_ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static DATA_VIEW_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+/// #10873: armed by the first resizable ArrayBuffer. Every probe the feature
+/// adds to a shared path answers from this one load in a program without one.
+static RESIZABLE_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static UINT8ARRAY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 
 /// Smallest and largest address ever marked as a `new Uint8Array(...)`
@@ -377,6 +388,61 @@ pub fn is_array_buffer(addr: usize) -> bool {
         return false;
     }
     ARRAY_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
+}
+
+/// Per-buffer state of a resizable ArrayBuffer (#10873). Plain integers.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ResizableInfo {
+    /// `[[ArrayBufferMaxByteLength]]` — also the payload's reserved capacity.
+    pub max_byte_length: u32,
+    /// Every payload byte at or past this offset is known to read as zero, so
+    /// a grow only has to clear `[old byteLength, dirty_end)`. Never below the
+    /// current `byteLength`. See `buffer::resizable`.
+    pub dirty_end: u32,
+}
+
+/// Record `addr` as a resizable ArrayBuffer.
+pub(crate) fn mark_as_resizable_buffer(addr: usize, info: ResizableInfo) {
+    // Arm before the insert — see `crate::registry_latch`.
+    RESIZABLE_BUFFER_EVER_MARKED.arm();
+    RESIZABLE_BUFFER_MAX.with(|r| {
+        r.borrow_mut().insert(addr, info);
+    });
+}
+
+/// The resizable state of `addr`, or `None` for a fixed-length buffer.
+#[inline]
+pub(crate) fn resizable_info(addr: usize) -> Option<ResizableInfo> {
+    if RESIZABLE_BUFFER_EVER_MARKED.is_idle() {
+        return None;
+    }
+    RESIZABLE_BUFFER_MAX.with(|r| r.borrow().get(&addr).copied())
+}
+
+/// Move a resizable buffer's known-zero boundary. A no-op for any other address.
+pub(crate) fn set_resizable_dirty_end(addr: usize, dirty_end: u32) {
+    RESIZABLE_BUFFER_MAX.with(|r| {
+        if let Some(info) = r.borrow_mut().get_mut(&addr) {
+            info.dirty_end = dirty_end;
+        }
+    });
+}
+
+/// True once any resizable ArrayBuffer has existed in this process.
+#[inline]
+pub(crate) fn any_resizable_buffer() -> bool {
+    RESIZABLE_BUFFER_EVER_MARKED.is_armed()
+}
+
+/// `[[ArrayBufferMaxByteLength]]`, or `None` for a fixed-length buffer.
+#[inline]
+pub fn resizable_max_byte_length(addr: usize) -> Option<u32> {
+    resizable_info(addr).map(|info| info.max_byte_length)
+}
+
+#[cfg(test)]
+pub(crate) fn test_resizable_registry_len() -> usize {
+    RESIZABLE_BUFFER_MAX.with(|r| r.borrow().len())
 }
 
 pub fn mark_as_shared_array_buffer(addr: usize) {
@@ -1213,6 +1279,12 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     DATA_VIEW_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
+    // #10873: a recycled address must not inherit resizability.
+    if RESIZABLE_BUFFER_EVER_MARKED.is_armed() {
+        RESIZABLE_BUFFER_MAX.with(|r| {
+            r.borrow_mut().remove(&addr);
+        });
+    }
     BUFFER_AB_ALIAS.with(|r| {
         r.borrow_mut().remove(&addr);
     });

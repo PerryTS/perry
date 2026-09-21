@@ -265,7 +265,16 @@ pub extern "C" fn js_typed_array_subarray(
             crate::typedarray_view::js_typed_array_byte_offset(ta) + (b as u32) * elem;
         let buffer_val = crate::value::js_nanbox_pointer(buffer as i64);
         let off_val = byte_offset as f64;
-        let len_val = count as f64;
+        // #10873 (ES2024): a subarray of a length-tracking view taken WITHOUT an
+        // `end` is itself length-tracking — it is constructed with no length.
+        let end_absent =
+            has_end == 0 || crate::value::JSValue::from_bits(end.to_bits()).is_undefined();
+        let len_val = if end_absent && crate::typedarray_view::is_view_length_tracking(ta as usize)
+        {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            count as f64
+        };
         match choice {
             species::SpeciesChoice::Default => crate::typedarray_view::js_typed_array_view(
                 kind as i32,

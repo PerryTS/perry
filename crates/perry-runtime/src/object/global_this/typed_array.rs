@@ -111,6 +111,102 @@ pub(crate) extern "C" fn array_buffer_slice_thunk(
     }
 }
 
+/// `ArrayBuffer.prototype.{resize, transfer, transferToFixedLength}` reached
+/// reflectively (`ArrayBuffer.prototype.resize.call(ab, n)`). Instances
+/// dispatch through `buffer_dispatch` directly; these only brand-check the
+/// receiver and forward to the same arm, so the two cannot disagree (#10873).
+fn array_buffer_method_via_dispatch(method: &'static str, arg: f64, brand_error: &[u8]) -> f64 {
+    match array_buffer_receiver_addr() {
+        Some(addr)
+            if !crate::buffer::is_shared_array_buffer(addr)
+                && !crate::buffer::is_data_view(addr) =>
+        unsafe {
+            let args = [arg];
+            super::super::buffer_dispatch::dispatch_buffer_method(addr, method, args.as_ptr(), 1)
+        },
+        _ => super::super::object_ops::throw_object_type_error(brand_error),
+    }
+}
+
+pub(crate) extern "C" fn array_buffer_resize_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    new_length: f64,
+) -> f64 {
+    array_buffer_method_via_dispatch(
+        "resize",
+        new_length,
+        b"Method ArrayBuffer.prototype.resize called on incompatible receiver",
+    )
+}
+
+pub(crate) extern "C" fn array_buffer_transfer_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    new_length: f64,
+) -> f64 {
+    array_buffer_method_via_dispatch(
+        "transfer",
+        new_length,
+        b"Method ArrayBuffer.prototype.transfer called on incompatible receiver",
+    )
+}
+
+pub(crate) extern "C" fn array_buffer_transfer_to_fixed_length_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    new_length: f64,
+) -> f64 {
+    array_buffer_method_via_dispatch(
+        "transferToFixedLength",
+        new_length,
+        b"Method ArrayBuffer.prototype.transferToFixedLength called on incompatible receiver",
+    )
+}
+
+/// Shared body of the reflectable `resizable` / `maxByteLength` / `detached`
+/// accessors on `ArrayBuffer.prototype`. Instance reads are answered by
+/// `get_field_by_name_tail`; this is the `Object.getOwnPropertyDescriptor(
+/// ArrayBuffer.prototype, "resizable").get.call(ab)` route.
+fn array_buffer_flag_getter(key: &[u8]) -> f64 {
+    let Some(addr) = array_buffer_receiver_addr() else {
+        super::super::object_ops::throw_object_type_error(
+            b"Method ArrayBuffer.prototype getter called on incompatible receiver",
+        )
+    };
+    let value = match key {
+        b"resizable" => JSValue::bool(crate::buffer::is_resizable_buffer(addr)),
+        b"detached" => JSValue::bool(crate::buffer::is_detached_buffer(addr)),
+        _ => {
+            let buf = addr as *const crate::buffer::BufferHeader;
+            let max = if crate::buffer::is_detached_buffer(addr) {
+                0.0
+            } else {
+                crate::buffer::resizable_max_byte_length(addr)
+                    .map(|max| max as f64)
+                    .unwrap_or_else(|| crate::buffer::js_buffer_length(buf) as f64)
+            };
+            JSValue::number(max)
+        }
+    };
+    f64::from_bits(value.bits())
+}
+
+pub(crate) extern "C" fn array_buffer_resizable_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    array_buffer_flag_getter(b"resizable")
+}
+
+pub(crate) extern "C" fn array_buffer_max_byte_length_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    array_buffer_flag_getter(b"maxByteLength")
+}
+
+pub(crate) extern "C" fn array_buffer_detached_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    array_buffer_flag_getter(b"detached")
+}
+
 pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));

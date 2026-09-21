@@ -246,19 +246,48 @@ pub(crate) fn get_field_by_name_object_tail(
                         && !crate::buffer::is_non_indexed_buffer_view(obj as usize))
                 {
                     let b = obj as *const crate::buffer::BufferHeader;
-                    return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
+                    let len = crate::buffer::js_buffer_length(b);
+                    // #10873: a DataView its resizable buffer shrank past has no
+                    // byteLength — the getter throws (ES2024 IsViewOutOfBounds).
+                    // A typed array in the same state just reads 0. Only a
+                    // zero-length read can be one, so this costs nothing else.
+                    if len == 0 && crate::buffer::is_out_of_bounds_data_view(obj as usize) {
+                        crate::collection_iter::throw_type_error(
+                            "Cannot perform DataView.prototype.byteLength on an out-of-bounds view",
+                        );
+                    }
+                    return JSValue::number(len as f64);
                 }
                 // An own property on the Buffer shadows the same-named prototype
                 // method; both reads live in `buffer_own_prop`.
                 if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(obj, key_bytes) {
                     return v;
                 }
-                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.
-                // Perry has no resizable ArrayBuffers, so `resizable` is always
-                // false and `maxByteLength` equals `byteLength`. These live only
-                // on ArrayBuffer (not DataView/SharedArrayBuffer/typed arrays),
-                // which return `undefined` for them in Node — so scope to a
-                // plain registered ArrayBuffer.
+                // `ab.resize` / `ab.transfer` read as VALUES (`typeof ab.resize`,
+                // `const r = ab.resize`): bound methods, on ArrayBuffer only —
+                // a Uint8Array / DataView / SharedArrayBuffer has none of them.
+                if crate::buffer::is_array_buffer(obj as usize)
+                    && !crate::buffer::is_data_view(obj as usize)
+                    && !crate::buffer::is_shared_array_buffer(obj as usize)
+                {
+                    if let Some(method) = std::str::from_utf8(key_bytes).ok().and_then(
+                        crate::object::buffer_dispatch::array_buffer_only_method_name_static,
+                    ) {
+                        let bound = crate::object::js_class_method_bind(
+                            crate::value::js_nanbox_pointer(obj as i64),
+                            method.as_ptr(),
+                            method.len(),
+                        );
+                        return JSValue::from_bits(bound.to_bits());
+                    }
+                }
+                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters
+                // (#10873). A fixed-length buffer answers `false` and its
+                // `byteLength`; a resizable one answers `true` and the
+                // `maxByteLength` it was constructed with (0 once detached).
+                // These live only on ArrayBuffer (not DataView /
+                // SharedArrayBuffer / typed arrays), which return `undefined`
+                // for them in Node — so scope to a plain registered ArrayBuffer.
                 if (key_bytes == b"resizable"
                     || key_bytes == b"maxByteLength"
                     || key_bytes == b"detached")
@@ -267,7 +296,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     && !crate::buffer::is_shared_array_buffer(obj as usize)
                 {
                     if key_bytes == b"resizable" {
-                        return JSValue::bool(false);
+                        return JSValue::bool(crate::buffer::is_resizable_buffer(obj as usize));
+                    }
+                    if key_bytes == b"maxByteLength" {
+                        if let Some(max) = crate::buffer::resizable_max_byte_length(obj as usize) {
+                            let detached = crate::buffer::is_detached_buffer(obj as usize);
+                            return JSValue::number(if detached { 0.0 } else { max as f64 });
+                        }
                     }
                     // `detached` (ES2024) — true after a successful
                     // `transfer`/`transferToFixedLength`/structuredClone
