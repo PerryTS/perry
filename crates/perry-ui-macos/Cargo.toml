@@ -90,3 +90,8 @@ harness = false
 name = "native_widget_max_width"
 path = "tests/native_widget_max_width.rs"
 harness = false
+
+[[test]]
+name = "native_text_color"
+path = "tests/native_text_color.rs"
+harness = false
