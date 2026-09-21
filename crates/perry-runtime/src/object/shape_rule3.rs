@@ -326,8 +326,11 @@ mod tests {
                 return String::new();
             }
             let len = (*message).byte_len as usize;
-            let data =
-                (message as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+            // `string_data` rather than an open-coded
+            // `size_of::<StringHeader>()` add: the payload offset is the
+            // runtime's to know, and `string_payload_access_inventory.py`
+            // ratchets every hand-rolled copy of it.
+            let data = crate::string::string_data(message);
             String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
         }
     }
