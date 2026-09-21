@@ -126,6 +126,31 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
     true
 }
 
+
+/// #10933: may an integrity op write `OBJ_FLAG_*` into this value's header?
+///
+/// The band check these call sites used to rely on keeps small registry ids
+/// out, and says nothing about whether `value - 8` is a header at all. Several
+/// values perry hands to JS have none: a registered symbol is a
+/// `Box::into_raw`'d `SymbolHeader`, the unresolved-namespace stub is a
+/// `.rodata` static (where the write FAULTS), and the async-hook handles are
+/// bare `Box`es. Writing through those corrupted whatever the allocator had
+/// put in front of them — measured: `Object.freeze(Symbol.for(x))` set
+/// `0x7` six bytes before the symbol on 30 of 32 probes.
+///
+/// The right question is ownership, not magnitude, and
+/// `try_read_tracked_gc_header` is the funnel that answers it: it proves the
+/// allocator owns this address on THIS thread (arena membership or the
+/// gc_malloc registry) instead of trusting `addr - 8` to be a header. A value
+/// it refuses takes the no-op path these functions already have for a handle
+/// (`Object.freeze(handle)` returns the handle —
+/// `test_gap_handle_band_object_ops`).
+#[inline]
+unsafe fn integrity_flags_are_writable(obj: *const ObjectHeader) -> bool {
+    !obj.is_null()
+        && crate::value::addr_class::try_read_tracked_gc_header(obj as usize).is_some()
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     crate::array::subclass_elements::deopt_value(obj_value);
@@ -136,12 +161,14 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        // Reject the WHOLE handle band, not a bare `> 0x10000` floor: a
-        // common-band registry id (crypto `Hash`, `Blob`, …) can sit above
-        // 0x10000, and the `gc_header_for(obj)` write just below would store into
-        // unmapped memory (SIGSEGV) — `Object.freeze(handle)` is a no-op that
-        // returns the handle (test_gap_handle_band_object_ops `Object.freeze(blob)`).
-        if !obj.is_null() && crate::value::addr_class::is_above_handle_band(obj as usize) {
+        // #10933 replaced the handle-band check here with an OWNERSHIP check.
+        // The band rejected a common-band registry id (crypto `Hash`, `Blob`,
+        // …), which is why it was written; it could not reject a real address
+        // whose `- 8` is not a header, and the `gc_header_for(obj)` write just
+        // below then stored into memory belonging to something else. The
+        // no-op-and-return-the-value behaviour for a rejected receiver is
+        // unchanged (`test_gap_handle_band_object_ops` `Object.freeze(blob)`).
+        if integrity_flags_are_writable(obj) {
             let gc = gc_header_for(obj);
             (*gc)._reserved |= crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
@@ -251,7 +278,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
     if crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some() {
         unsafe {
             let obj = extract_obj_ptr(obj_value);
-            if !obj.is_null() && (obj as usize) > 0x10000 {
+            if integrity_flags_are_writable(obj) {
                 let gc = gc_header_for(obj);
                 (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
             }
@@ -260,7 +287,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
+        if integrity_flags_are_writable(obj) {
             let gc = gc_header_for(obj);
             (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
             // TypedArray receivers: GC flags only — see `js_object_freeze`.
@@ -355,7 +382,7 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
+        if integrity_flags_are_writable(obj) {
             // Typed arrays use a side table for extensibility. Include Perry's
             // BufferHeader-backed Uint8Array: lookup_typed_array_kind can
             // never recognise it, and setting only the Buffer's GC flag is
