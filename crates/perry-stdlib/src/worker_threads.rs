@@ -560,7 +560,13 @@ fn string_coerce(value: f64) -> f64 {
 fn pump_worker_microtasks() {
     // Bounded so a job queue that re-arms itself cannot wedge the worker here.
     for _ in 0..4096 {
-        if perry_runtime::promise::microtasks::js_promise_run_microtasks_await_loop() == 0 {
+        let mut ran = perry_runtime::promise::microtasks::js_promise_run_microtasks_await_loop();
+        // Owner-FILTERED timer tick: with this thread holding its own agent id
+        // (see the spawn body), this fires only timers whose closures live in
+        // this worker's arena. That is what lets `await` of a timer — or of
+        // anything a timer ultimately resolves — resume inside a worker.
+        ran += perry_runtime::timer::js_await_loop_tick_timers();
+        if ran == 0 {
             break;
         }
     }
@@ -1317,6 +1323,18 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         .stack_size(crate::common::async_bridge::blocking_thread_stack_size())
         .spawn(move || {
         perry_runtime::object::class_image::adopt_image(class_image);
+        // #10854/#6185: claim this thread's own agent id BEFORE it can allocate
+        // or enqueue anything. A `worker_threads` Worker gets its own arena and
+        // GC, but it never claimed an agent, so `current_agent()` fell back to
+        // `PRIMARY_AGENT` (see `agent.rs`: a thread with no agent of its own is
+        // by definition a pump acting for the primary heap). The owner tag on
+        // `TIMER_QUEUE`/`CALLBACK_TIMERS`/`INTERVAL_TIMERS` entries therefore
+        // could not tell this worker's timers from the main thread's, in either
+        // direction: the main thread fired timer closures living in this
+        // worker's arena, and an owner-filtered tick here fired the main
+        // thread's. The `perry/thread` workers in `thread.rs` have always done
+        // this; the Web Worker path was simply missing it.
+        let worker_agent = perry_runtime::agent::enter_worker_agent();
         let previous_env = apply_worker_env(&thread_options.env);
         CURRENT_WORKER_ID.with(|id| id.set(worker_id));
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
@@ -1397,6 +1415,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             }
         }));
         restore_worker_env(previous_env);
+        // This arena is about to go away; purge any queue entry still tagged
+        // with this agent rather than leave it for a drain that can never
+        // legally run it.
+        perry_runtime::agent::retire_agent(worker_agent);
 
         let exit_code = match result {
             Ok(()) => exit_code,
