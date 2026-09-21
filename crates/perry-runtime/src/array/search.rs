@@ -81,6 +81,40 @@ fn as_typed_array(
     }
 }
 
+/// Answer a search for a Buffer-backed `Uint8Array` receiver (#10894).
+///
+/// Perry's `new Uint8Array(…)` is a `BufferHeader` — one BYTE per element, and
+/// absent from the typed-array registry, so `as_typed_array` below never
+/// answers for it. `normalize_array_receiver` lets it through (its `length`
+/// sits where an `ArrayHeader`'s does), and the generic walk then reads the
+/// payload eight bytes at a time as NaN-boxed `JSValue`s: -1 / `false` for a
+/// value that is present, with no error. `forEach`/`map`/`reduce`/… closed the
+/// same hole in #8137; the three search entry points were the ones left.
+///
+/// How a Buffer gets here: a receiver the compiler statically took for a plain
+/// Array. #10894's was `m: Uint8Array<ArrayBuffer>`, lowered as an
+/// unrecognized `Generic` and folded to `Expr::ArrayIndexOf`. That spelling is
+/// fixed in HIR, but a declared type is a hint, never a proof (`as unknown as
+/// number[]`, an `any`-typed flow), so the helper must be right for whatever
+/// receiver reaches it.
+///
+/// `has_from == 0` forwards no `fromIndex` (so `lastIndexOf` keeps its
+/// `length - 1` default). `None` — not a Buffer-backed `Uint8Array`; the
+/// caller keeps its ordinary path. Asked ABOVE the array-only funnel, like
+/// every other caller of `buffer_receiver_dispatch`.
+#[inline]
+fn buffer_receiver_search(
+    arr: *const ArrayHeader,
+    method: &str,
+    value: f64,
+    from_index: f64,
+    has_from: i32,
+) -> Option<f64> {
+    let args = [value, from_index];
+    let argc = if has_from == 0 { 1 } else { 2 };
+    crate::array::buffer_receiver_dispatch(arr, method, &args[..argc])
+}
+
 /// Resolve a forward-search `fromIndex` (ECMA-262 ToIntegerOrInfinity +
 /// clamping) into the first index to inspect. Returns `None` when nothing can
 /// match (e.g. `fromIndex >= length`, including `+Infinity`). `has_from == 0`
@@ -179,6 +213,9 @@ pub extern "C" fn js_array_indexOf_jsvalue(
     from_index: f64,
     has_from: i32,
 ) -> i64 {
+    if let Some(found) = buffer_receiver_search(arr, "indexOf", value, from_index, has_from) {
+        return found as i64;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
@@ -255,6 +292,9 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
     from_index: f64,
     has_from: i32,
 ) -> i64 {
+    if let Some(found) = buffer_receiver_search(arr, "lastIndexOf", value, from_index, has_from) {
+        return found as i64;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return -1;
@@ -369,6 +409,9 @@ pub extern "C" fn js_array_includes_jsvalue(
     from_index: f64,
     has_from: i32,
 ) -> i32 {
+    if let Some(found) = buffer_receiver_search(arr, "includes", value, from_index, has_from) {
+        return (found.to_bits() == crate::value::TAG_TRUE) as i32;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return 0;

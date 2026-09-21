@@ -155,6 +155,25 @@ pub(crate) fn extract_ts_type_with_ctx(
                         let result_type = extract_ts_type_with_ctx(&type_params.params[0], ctx);
                         return Type::Promise(Box::new(result_type));
                     }
+                    // #10894: `Uint8Array<ArrayBuffer>`, `Float64Array<ArrayBufferLike>`,
+                    // `Buffer<ArrayBuffer>`, `DataView<ArrayBuffer>` — the type
+                    // argument names the BACKING buffer's type and erases
+                    // completely, so these are the same runtime class as the bare
+                    // name and must lower to the same `Type::Named`. Kept as
+                    // `Generic { base: "Uint8Array", .. }` the value matched no
+                    // typed-array/buffer recognizer anywhere (they all key on
+                    // `Named`), read as "known not a string", and the Array fast
+                    // path folded `m.indexOf(v)` to `Expr::ArrayIndexOf` over a
+                    // `BufferHeader` — a silent -1.
+                    //
+                    // A user class of the same name declared in this module owns
+                    // the spelling (`class Buffer<T> { … }`), and keeps `Generic`
+                    // so monomorphization still finds its specialization.
+                    _ if crate::ir::is_buffer_backed_builtin_name(&name)
+                        && !ctx.is_some_and(|context| context.lookup_class(&name).is_some()) =>
+                    {
+                        return Type::Named(name);
+                    }
                     _ => {
                         // Generic type instantiation (e.g., Box<number>, Map<string, number>)
                         let type_args: Vec<Type> = type_params

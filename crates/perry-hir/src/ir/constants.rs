@@ -37,6 +37,24 @@ pub fn typed_array_kind_for_name(name: &str) -> Option<u8> {
     }
 }
 
+/// Built-in binary-data classes whose TypeScript declaration carries a type
+/// parameter with NO runtime meaning (#10894). TypeScript 5.7 made every
+/// typed array and `DataView` generic over its backing buffer
+/// (`Uint8Array<TArrayBuffer extends ArrayBufferLike = ArrayBufferLike>`), and
+/// `@types/node` did the same for `Buffer`. `tsc` now *prints* the argument —
+/// `new Uint8Array(n)` is `Uint8Array<ArrayBuffer>` — so it is what people
+/// copy into annotations.
+///
+/// Every receiver recognizer in lowering and codegen keys on
+/// `Type::Named("Uint8Array")` etc., so `X<…>` for one of these names must
+/// lower to the same `Type::Named(X)` as the bare spelling. Left as
+/// `Type::Generic { base: X, .. }` it matches none of them, reads as
+/// "known not a string, not a typed array", and the Array fast path claims
+/// the receiver.
+pub fn is_buffer_backed_builtin_name(name: &str) -> bool {
+    typed_array_kind_for_name(name).is_some() || matches!(name, "Buffer" | "DataView")
+}
+
 /// Known native module names that map to stdlib implementations.
 /// These are npm packages that have native Rust replacements.
 ///
