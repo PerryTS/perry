@@ -68,22 +68,18 @@ pub fn synthesize_class_captures(
     // Without this, `LocalGet(outer_id)` inside a field's init expression
     // would read a non-existent local in the ctor's scope when
     // `apply_field_initializers_recursive` lowers the initializer.
-    // Collect refs from both the init expr and the computed key_expr.
+    // Collect refs from initializer expressions. Computed field keys are
+    // deliberately excluded: ClassDefinitionEvaluation resolves them in the
+    // enclosing scope and stores the resulting PropertyKey in a hidden class
+    // slot. They do not execute in the constructor and therefore must not be
+    // rewritten to constructor-local capture parameters. Doing so leaves the
+    // definition-site StaticFieldSet reading an unbound synthetic parameter;
+    // undici's PoolBase then installs `[kClients] = []` under the wrong key.
     for field in fields.iter() {
         if let Some(init) = &field.init {
             let mut refs = Vec::new();
             let mut visited = std::collections::HashSet::new();
             crate::analysis::collect_local_refs_expr(init, &mut refs, &mut visited);
-            for id in refs {
-                if outer_scope_ids.contains(&id) && !module_level_ids.contains(&id) {
-                    union_captures.insert(id);
-                }
-            }
-        }
-        if let Some(key) = &field.key_expr {
-            let mut refs = Vec::new();
-            let mut visited = std::collections::HashSet::new();
-            crate::analysis::collect_local_refs_expr(key, &mut refs, &mut visited);
             for id in refs {
                 if outer_scope_ids.contains(&id) && !module_level_ids.contains(&id) {
                     union_captures.insert(id);
@@ -583,9 +579,8 @@ pub fn synthesize_class_captures(
     }
     *constructor = Some(ctor);
 
-    // Issue #740: rewrite field initializers and computed-key
-    // expressions using the same `ctor_id_map`. Field initializers
-    // are lowered inside the constructor body by
+    // Issue #740: rewrite field initializers using the same `ctor_id_map`.
+    // Field initializers are lowered inside the constructor body by
     // `apply_field_initializers_recursive`, so `LocalGet(outer_id)`
     // inside a field's init must be rewritten to read the fresh
     // ctor-local param that holds the captured value (synthesized
@@ -594,9 +589,6 @@ pub fn synthesize_class_captures(
     for field in fields.iter_mut() {
         if let Some(init) = field.init.as_mut() {
             crate::analysis::remap_local_ids_in_expr(init, &ctor_id_map);
-        }
-        if let Some(key) = field.key_expr.as_mut() {
-            crate::analysis::remap_local_ids_in_expr(key, &ctor_id_map);
         }
     }
 
