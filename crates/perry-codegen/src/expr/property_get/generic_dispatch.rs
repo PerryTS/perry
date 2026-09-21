@@ -120,7 +120,6 @@ fn allocate_property_cache(ctx: &mut FnCtx<'_>) -> String {
     cache_name
 }
 
-
 /// A shape the compiler can name for this receiver, with the slot its key
 /// occupies. See `crate::shape_hints` for why this is a HINT and never a proof.
 struct ConstShapeHint {
@@ -680,10 +679,7 @@ pub(crate) fn lower_generic_property_get(
             let const_hit_label = ctx.block_label(const_hit_idx);
             let const_miss_idx = ctx.new_block("pic.const.miss");
             let const_miss_label = ctx.block_label(const_miss_idx);
-            let expected = format!(
-                "trunc (i64 ptrtoint (ptr @{} to i64) to i32)",
-                hint.symbol
-            );
+            let expected = format!("trunc (i64 ptrtoint (ptr @{} to i64) to i32)", hint.symbol);
             let const_eq = ctx.block().icmp_eq(I32, &pcid, &expected);
             ctx.block()
                 .cond_br(&const_eq, &const_hit_label, &const_miss_label);
@@ -730,7 +726,6 @@ pub(crate) fn lower_generic_property_get(
     } else {
         pcid.clone()
     };
-
 
     // A nonzero packed word contains a valid ShapeId and its slot. The
     // header guard above rejects a fresh site; matching the low 32 bits then

@@ -1471,7 +1471,8 @@ mod tests {
 
         let whole = m.to_ir();
         assert!(
-            whole.contains("@perry_shape_abs_m__C = external hidden global i8, !absolute_symbol !1"),
+            whole
+                .contains("@perry_shape_abs_m__C = external hidden global i8, !absolute_symbol !1"),
             "the declaration must carry the range node it names\n{whole}"
         );
         assert!(

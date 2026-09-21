@@ -2586,10 +2586,7 @@ pub fn run_with_parse_cache(
             .as_deref()
             .is_some_and(|t| t.contains("windows") || t.contains("msvc"))
         && !cfg!(windows)
-        && std::env::var("PERRY_NO_LINKTIME_SHAPE_IDS")
-            .ok()
-            .as_deref()
-            != Some("1");
+        && std::env::var("PERRY_NO_LINKTIME_SHAPE_IDS").ok().as_deref() != Some("1");
     if !link_time_shape_ids {
         // Publish the decision the way codegen reads it, and the way
         // `compute_object_cache_key_with_env` hashes it — set before the first

@@ -2835,10 +2835,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // Design step 4: the module-global shape hints, installed for the rest of
     // this module's codegen. Installed ONLY under the option, so a build with
     // the feature off has an empty map and every read site consults nothing.
-    let _shape_hint_scope = crate::shape_symbols::link_time_shape_ids_for_target(&triple)
-        .then(|| {
-        crate::shape_hints::install(crate::shape_hints::collect_module_global_shapes(hir))
-    });
+    let _shape_hint_scope =
+        crate::shape_symbols::link_time_shape_ids_for_target(&triple).then(|| {
+            crate::shape_hints::install(crate::shape_hints::collect_module_global_shapes(hir))
+        });
     let module_receiver_types = boxed_locals::collect_module_local_types(hir);
     let mut module_local_types = module_receiver_types.clone();
     // #5869 residual: a BOXED local's slot holds a BOX POINTER, never the

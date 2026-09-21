@@ -79,7 +79,6 @@ pub(super) fn recorded_count() -> usize {
     names().lock().map(|s| s.len()).unwrap_or(0)
 }
 
-
 /// Assign one id per name, in the order given.
 ///
 /// Injective by construction: the caller passes a SET, sorted, and this is a
@@ -184,7 +183,9 @@ mod tests {
     use super::*;
 
     fn names(count: usize) -> Vec<String> {
-        (0..count).map(|i| format!("perry_shape_abs_m__S{i}")).collect()
+        (0..count)
+            .map(|i| format!("perry_shape_abs_m__S{i}"))
+            .collect()
     }
 
     /// The property the whole design rests on: no two shapes share an id, and
@@ -206,7 +207,8 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), names.len(), "two names shared an id");
         assert!(
-            ids.iter().all(|id| (SHAPE_ID_BASE..SHAPE_ID_STATIC_END).contains(id)),
+            ids.iter()
+                .all(|id| (SHAPE_ID_BASE..SHAPE_ID_STATIC_END).contains(id)),
             "every assigned id must land inside the band the runtime reserves"
         );
     }
@@ -227,6 +229,9 @@ mod tests {
             !(SHAPE_ID_BASE..SHAPE_ID_STATIC_END).contains(&SHAPE_ID_UNASSIGNED),
             "the overflow marker must be outside the band so the runtime declines it"
         );
-        assert!(capacity >= 1 << 20, "the band must hold a real program's shapes");
+        assert!(
+            capacity >= 1 << 20,
+            "the band must hold a real program's shapes"
+        );
     }
 }

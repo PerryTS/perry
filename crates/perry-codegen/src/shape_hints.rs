@@ -221,7 +221,10 @@ mod tests {
     fn a_module_global_object_literal_is_hinted() {
         let hir = module_with(vec![let_stmt(1, "O", Some(anon_new("__AnonShape_abc123")))]);
         let hints = collect_module_global_shapes(&hir);
-        assert_eq!(hints.get(&1).map(String::as_str), Some("__AnonShape_abc123"));
+        assert_eq!(
+            hints.get(&1).map(String::as_str),
+            Some("__AnonShape_abc123")
+        );
     }
 
     /// Everything else must be absent, because a hint the compiler cannot

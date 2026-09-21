@@ -1187,11 +1187,7 @@ pub extern "C" fn js_object_shape_bind_static_for_keys(
     keys: u64,
     key_count: u32,
 ) -> u32 {
-    let id = shape_id_bind_static_ensure(
-        static_id,
-        keys as usize as *const ArrayHeader,
-        key_count,
-    );
+    let id = shape_id_bind_static_ensure(static_id, keys as usize as *const ArrayHeader, key_count);
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
     id

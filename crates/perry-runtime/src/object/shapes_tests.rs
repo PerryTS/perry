@@ -1233,7 +1233,12 @@ mod link_assigned_band_tests {
     use super::*;
 
     fn keys_array(class_id: u32, packed: &[u8], count: u32) -> *const crate::object::ArrayHeader {
-        crate::object::js_build_class_keys_array(class_id, count, packed.as_ptr(), packed.len() as u32)
+        crate::object::js_build_class_keys_array(
+            class_id,
+            count,
+            packed.as_ptr(),
+            packed.len() as u32,
+        )
     }
 
     /// The counter must never hand out an id the linker may also assign.
@@ -1248,7 +1253,10 @@ mod link_assigned_band_tests {
             let packed = format!("band_a{round}\0band_b{round}");
             let keys = keys_array(CID + round, packed.as_bytes(), 2);
             let id = js_object_shape_id_for_keys(keys as usize as u64, 2);
-            assert!(is_shape_id(id), "a minted id must stay inside the ShapeId range");
+            assert!(
+                is_shape_id(id),
+                "a minted id must stay inside the ShapeId range"
+            );
             assert!(
                 !is_static_shape_id(id),
                 "the runtime counter handed out {id:#x}, which is inside the link-assigned band \
@@ -1310,7 +1318,10 @@ mod link_assigned_band_tests {
             "the second shape was aliased onto the first's id; every read guarded on \
              {STATIC_ID:#x} would now be able to load the wrong layout"
         );
-        assert!(is_shape_id(second), "the fallback must still be a real ShapeId");
+        assert!(
+            is_shape_id(second),
+            "the fallback must still be a real ShapeId"
+        );
         assert!(
             !is_static_shape_id(second),
             "a declined bind must fall back to the runtime counter, not further into the band"
