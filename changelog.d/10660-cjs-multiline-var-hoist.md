@@ -1,0 +1,1 @@
+- Fixed CommonJS class hoisting when a comma-separated `var` declaration continues across lines. Classes such as Redis's `RedisClient` now remain inside their module factory when they capture private-field helper variables declared on later lines, preserving the initialized helper bindings at runtime. (#10660)
