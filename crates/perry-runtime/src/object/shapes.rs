@@ -671,6 +671,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         }
     }
     let id = alloc_shape_id().map_err(|_| ShapeDescriptorError::IdExhausted)?;
+    note_shape_mint(id, keys_id, logical_key_count, object_kind);
     let record = ShapeRecord::new(
         keys_id,
         logical_key_count,
@@ -1114,6 +1115,33 @@ fn shape_descriptor_bind_static(
 /// every read falls to the runtime-learned tower. There is no way to tell that
 /// from "the change did nothing" without counting, which is the whole reason
 /// these counters exist.
+/// `PERRY_SHAPE_DIAG=1`: name the first few runtime mints and who made them.
+///
+/// Exists because "the link-assigned bind unified onto an id that already
+/// existed" says the race happened without saying who won it, and the caller
+/// is not guessable from the call graph — the keys array is built two lines
+/// above the bind in the same init block.
+pub(crate) fn note_shape_mint(
+    id: u32,
+    keys_id: u64,
+    logical_key_count: u32,
+    object_kind: ShapeObjectKind,
+) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var("PERRY_SHAPE_DIAG").ok().as_deref() == Some("1")) {
+        return;
+    }
+    static SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n >= 6 {
+        return;
+    }
+    eprintln!(
+        "[perry shape] mint #{n}: id={id:#x} keys={keys_id:#x} count={logical_key_count} kind={object_kind:?}\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
+}
+
 pub(crate) fn note_static_bind(outcome: &str, requested: u32, resolved: u32) {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ON.get_or_init(|| std::env::var("PERRY_SHAPE_DIAG").ok().as_deref() == Some("1")) {
