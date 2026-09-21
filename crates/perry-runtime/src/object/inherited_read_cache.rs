@@ -221,6 +221,18 @@ struct Entry {
 /// A negative entry is never wrong — it only ever says "do what you did
 /// before" — so its invalidation may be weaker than a hit's, and it reuses
 /// the hit's identity, epoch and per-hop compares unchanged.
+/// **REQUIREMENT for any sentinel added beside this one.** Keep it at the TOP
+/// of the `u32` range, adjacent to this value and descending.
+///
+/// A real slot is an inline field index, bounded by the shape's
+/// `live_inline_slot_count`. The emitted per-site publication being built for
+/// inherited reads may publish an entry ONLY when it names a real holder and
+/// slot, and with every sentinel above every valid index that predicate is a
+/// single unsigned compare (`slot < live_inline_slot_count`) which excludes
+/// all of them by construction. A sentinel placed anywhere else turns that one
+/// compare into an enumeration that has to be extended every time somebody
+/// adds a verdict — and the failure mode of forgetting is publishing a
+/// sentinel to a site as if it were a field offset.
 const NEGATIVE_SLOT: u32 = u32::MAX;
 
 /// What a table lookup found.
@@ -781,7 +793,9 @@ unsafe fn inherited_read_cache_walk(
         // marking bumps no validity, so a negative entry recorded here would
         // decline the pair for the life of the process — the same trap the
         // value-dependent refusals avoid.
-        if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
+        if meta.is_null()
+            || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0
+        {
             note.armed = false;
             crate::object::proto_validity::mark_object_as_prototype(next_addr);
             return None;

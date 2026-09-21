@@ -656,6 +656,84 @@ fn an_unmarked_prototype_is_refused_rather_than_cached_unsafely() {
     }
 }
 
+/// **The walk never passes a hop that was unmarked when it began.**
+///
+/// This is not a property of this cache. It is what somebody ELSE's mechanism
+/// rests on: an ABSENT verdict — "this key is on nothing in the whole chain" —
+/// is invalidated by `proto_validity`, which bumps only for MARKED prototypes.
+/// So an absent verdict is sound only if every hop on an exhausted chain was
+/// marked, and the only reason that is true is the mark-and-abandon below:
+/// the walk marks one unmarked hop, abandons without recording, and the NEXT
+/// read gets one hop further. Proving exhaustion therefore implies every hop
+/// it passed was already marked.
+///
+/// Nothing states that, and removing the abandon is an obvious-looking
+/// optimisation — it costs one declined read per hop and appears to buy
+/// nothing. This test is the guard. It is red on a build where the walk
+/// proceeds past an unmarked hop, whether that hop gets marked in passing or
+/// not at all, which are the two shapes such a "cleanup" takes.
+///
+/// A comment would lose this argument to a plausible cleanup in six months; a
+/// red test does not.
+#[test]
+fn the_walk_never_passes_a_hop_that_was_unmarked_when_it_began() {
+    let _scope = PrimeScope::new();
+    unsafe {
+        // O -> P1 -> P2, with `irc_deep` only on P2, and BOTH hops installed
+        // without the funnel so neither is marked. That is the state a future
+        // `[[Prototype]]` install site that forgot to mark would leave, and it
+        // is also the state every chain is in before its first walk.
+        let p2 = crate::object::js_object_alloc(0, 4);
+        set(p2, "irc_deep", 21.0);
+        let p1 = crate::object::js_object_alloc(0, 4);
+        set(p1, "irc_mid", 1.0);
+        let obj = crate::object::js_object_alloc(0, 4);
+        set(obj, "irc_own", 0.0);
+        let link = |from: *mut ObjectHeader, to: *mut ObjectHeader| {
+            let meta = crate::object::object_meta_ensure(from);
+            (*meta).prototype = crate::value::js_nanbox_pointer(to as i64).to_bits();
+        };
+        link(p1, p2);
+        link(obj, p1);
+
+        let marked = |o: *mut ObjectHeader| {
+            crate::object::proto_validity::object_is_marked_prototype(o as usize)
+        };
+        assert!(
+            !marked(p1) && !marked(p2),
+            "vacuous unless both hops really start unmarked"
+        );
+
+        let k = key("irc_deep");
+
+        // Walk 1 reaches P1, finds it unmarked, marks it and stops. If it had
+        // continued, P2 would be marked too — or, on a build that dropped the
+        // marking entirely, neither would be.
+        assert!(
+            inherited_read_cache_prime(obj, k).is_none(),
+            "the walk resolved through hops that were unmarked when it began"
+        );
+        assert!(marked(p1), "the walk must mark the hop it stopped at");
+        assert!(
+            !marked(p2),
+            "the walk passed P1 in the same pass that marked it. An absent \
+             verdict recorded through a chain walked this way rests on a hop \
+             that a key add would not invalidate, and goes stale silently"
+        );
+
+        // Walk 2 gets exactly one hop further, for the same reason.
+        assert!(inherited_read_cache_prime(obj, k).is_none());
+        assert!(marked(p2), "the second walk must reach and mark P2");
+
+        // Only now, with every hop marked BEFORE the walk begins, may the walk
+        // resolve — and this is the state in which an exhausted chain may be
+        // recorded as absent.
+        let resolved = inherited_read_cache_prime(obj, k)
+            .expect("with every hop marked, the walk must resolve");
+        assert_eq!(f64::from_bits(resolved.bits()), 21.0);
+    }
+}
+
 #[test]
 fn a_null_prototype_receiver_never_primes() {
     let _scope = PrimeScope::new();
