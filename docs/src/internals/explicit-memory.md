@@ -25,9 +25,16 @@ Perry gives detach real teeth: buffer bytes live inline in the GC heap, so the
 runtime hands the page-aligned interior of a detached payload back to the OS
 immediately (`madvise`). A large detached buffer stops costing RSS the moment
 you transfer it, even while the (now empty) ArrayBuffer object is still
-reachable. `transferToFixedLength()` behaves identically (Perry has no
-resizable ArrayBuffers), and `structuredClone(v, { transfer: [...] })` detaches
-through the same path.
+reachable. `transferToFixedLength()` detaches the same way, and
+`structuredClone(v, { transfer: [...] })` goes through the same path.
+
+Resizable ArrayBuffers (`new ArrayBuffer(len, { maxByteLength })`) use the same
+inline storage: the buffer reserves `maxByteLength` of address space once and
+`resize()` only moves its length, so views never go stale and nothing is
+copied. Pages are touched as the buffer grows, and a shrink of 64 KiB or more
+returns the dropped pages to the OS — resident memory follows `byteLength`, not
+`maxByteLength` and not the high-water mark. `transfer()` keeps a buffer
+resizable; `transferToFixedLength()` does not.
 
 ## `perry/gc` — collection pacing
 

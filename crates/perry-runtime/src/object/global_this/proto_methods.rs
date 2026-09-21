@@ -461,18 +461,52 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         }
         "ArrayBuffer" => {
             install_proto_method(proto_obj, "slice", array_buffer_slice_thunk as *const u8, 2);
-            unsafe {
-                crate::closure::js_register_closure_arity(
+            // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
+            install_proto_method(
+                proto_obj,
+                "resize",
+                array_buffer_resize_thunk as *const u8,
+                1,
+            );
+            // The thunks take the optional `newLength` (call arity 1); the
+            // spec `.length` of both is 0.
+            let transfers: [(&str, *const u8); 2] = [
+                ("transfer", array_buffer_transfer_thunk as *const u8),
+                (
+                    "transferToFixedLength",
+                    array_buffer_transfer_to_fixed_length_thunk as *const u8,
+                ),
+            ];
+            for (name, thunk) in transfers {
+                let installed = install_proto_method(proto_obj, name, thunk, 1);
+                let closure = crate::value::js_nanbox_get_pointer(installed) as usize;
+                if closure != 0 {
+                    super::super::native_module::set_builtin_closure_length(closure, 0);
+                }
+            }
+            let getters: [(&str, *const u8); 4] = [
+                (
+                    "byteLength",
                     array_buffer_byte_length_getter_thunk as *const u8,
-                    0,
-                );
-                let getter = crate::closure::js_closure_alloc(
-                    array_buffer_byte_length_getter_thunk as *const u8,
-                    0,
-                );
-                if !getter.is_null() {
-                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
+                ),
+                (
+                    "resizable",
+                    array_buffer_resizable_getter_thunk as *const u8,
+                ),
+                (
+                    "maxByteLength",
+                    array_buffer_max_byte_length_getter_thunk as *const u8,
+                ),
+                ("detached", array_buffer_detached_getter_thunk as *const u8),
+            ];
+            for (name, thunk) in getters {
+                unsafe {
+                    crate::closure::js_register_closure_arity(thunk, 0);
+                    let getter = crate::closure::js_closure_alloc(thunk, 0);
+                    if !getter.is_null() {
+                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                        install_builtin_getter(proto_obj, name, getter_bits);
+                    }
                 }
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

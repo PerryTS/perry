@@ -681,6 +681,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_array_buffer_new", I64, &[I32]);
     module.declare_function("js_shared_array_buffer_new", I64, &[I32]);
     module.declare_function("js_array_buffer_new_value", I64, &[DOUBLE]);
+    // #10873: `new ArrayBuffer(length, { maxByteLength })`.
+    module.declare_function("js_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);

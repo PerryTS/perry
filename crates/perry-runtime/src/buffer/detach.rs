@@ -96,7 +96,7 @@ pub fn detach_array_buffer(addr: usize) {
 /// affected. Failure is harmless (the advice is best-effort), so the return
 /// value is ignored.
 #[cfg(unix)]
-fn decommit_payload_pages(data: *mut u8, capacity: usize) {
+pub(super) fn decommit_payload_pages(data: *mut u8, capacity: usize) {
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page <= 0 {
         return;
@@ -129,7 +129,45 @@ fn decommit_payload_pages(data: *mut u8, capacity: usize) {
 }
 
 #[cfg(not(unix))]
-fn decommit_payload_pages(_data: *mut u8, _capacity: usize) {}
+pub(super) fn decommit_payload_pages(_data: *mut u8, _capacity: usize) {}
+
+/// Release `[data, data + len)` AND report whether every byte of it is now
+/// guaranteed to read as zero (#10873: what lets a resizable buffer regrow into
+/// the range without clearing — i.e. without touching — it).
+///
+/// Linux only: `MADV_DONTNEED` on private anonymous memory is specified to
+/// zero-fill on the next touch, so the whole pages go back to the OS and only
+/// the two partial edge pages (< 2 pages) are cleared by hand. macOS's
+/// `MADV_FREE_REUSABLE` makes no such promise (a page not yet reclaimed keeps
+/// its bytes), so there this only releases and answers `false`.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(super) fn decommit_payload_pages_zeroed(data: *mut u8, len: usize) -> bool {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return false;
+    }
+    let page = page as usize;
+    let begin = data as usize;
+    let start = begin.wrapping_add(page - 1) & !(page - 1);
+    let end = (begin + len) & !(page - 1);
+    if end <= start {
+        return false;
+    }
+    unsafe {
+        if libc::madvise(start as *mut libc::c_void, end - start, libc::MADV_DONTNEED) != 0 {
+            return false;
+        }
+        std::ptr::write_bytes(data, 0, start - begin);
+        std::ptr::write_bytes(end as *mut u8, 0, begin + len - end);
+    }
+    true
+}
+
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+pub(super) fn decommit_payload_pages_zeroed(data: *mut u8, len: usize) -> bool {
+    decommit_payload_pages(data, len);
+    false
+}
 
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -137,12 +175,15 @@ fn throw_type_error(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-/// `ArrayBuffer.prototype.transfer(newLength?)` and `transferToFixedLength`.
-/// Perry has no resizable ArrayBuffers, so both produce a fixed-length result
-/// and are identical: allocate a zero-filled buffer of `newLength` (default:
-/// the current byteLength), copy `min(oldLength, newLength)` bytes, detach the
-/// source, and return the new buffer.
-pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64]) -> f64 {
+/// `ArrayBuffer.prototype.transfer(newLength?)` and `transferToFixedLength`
+/// (ES2024 ArrayBufferCopyAndDetach): allocate a zero-filled buffer of
+/// `newLength` (default: the current byteLength), copy
+/// `min(oldLength, newLength)` bytes, detach the source, and return the new
+/// buffer. `transfer` preserves resizability — a resizable source yields a
+/// resizable result with the same `maxByteLength` (and a `newLength` past it is
+/// a RangeError) — while `transferToFixedLength` always yields a fixed-length
+/// one. Over a fixed-length source the two are identical.
+pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizability: bool) -> f64 {
     // ES2024 ArrayBufferCopyAndDetach ordering: ToIndex(newLength) runs FIRST
     // — it can execute user code (`valueOf`) that detaches this very buffer —
     // and IsDetachedBuffer is checked after, so a mid-coercion detach is
@@ -159,8 +200,26 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64]) -> f64 {
     let src = addr as *mut BufferHeader;
     let old_len = unsafe { (*src).length } as i32;
     let new_len = requested_len.unwrap_or(old_len);
-    let dst = super::from::zeroed_array_buffer_storage(new_len);
-    mark_as_array_buffer(dst as usize);
+    let preserved_max = if preserve_resizability {
+        super::resizable_max_byte_length(addr)
+    } else {
+        None
+    };
+    let dst = match preserved_max {
+        Some(max) => {
+            if new_len as i64 > max as i64 {
+                crate::typedarray::throw_range_error(b"Invalid array buffer length");
+            }
+            // Allocates: re-read nothing from `src` across this call other
+            // than through its (non-moving, old-arena) address.
+            super::resizable::alloc_resizable_array_buffer(new_len, max as i32)
+        }
+        None => {
+            let dst = super::from::zeroed_array_buffer_storage(new_len);
+            mark_as_array_buffer(dst as usize);
+            dst
+        }
+    };
     let copy_len = old_len.min(new_len);
     if copy_len > 0 {
         unsafe {

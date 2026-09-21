@@ -93,6 +93,8 @@ eval
 # top-level-await              — partial; semantics depend on loader
 # regexp-lookbehind            — vestigial (no such test262 subdir); lookbehind cases run inline
 # regexp-v-flag                — RegExp `v` flag not yet measured
-# resizable-arraybuffer        — not implemented
+# resizable-arraybuffer        — partial since #10873 (buffer + views + DataView; 156/408 of the
+#                                tagged built-ins cases). Left off the list until the %TypedArray%
+#                                method OOB semantics land and typed-array subclasses inherit statics.
 # Temporal                     — implemented, but scored via self-validate-features.txt
 #                                (the Node oracle lacks Temporal; see #4792)
