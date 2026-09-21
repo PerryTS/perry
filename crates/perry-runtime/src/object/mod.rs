@@ -176,6 +176,12 @@ mod primitive_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
 pub(crate) mod shape_carriers;
+// The MODULE is always compiled, so its unit tests always run and the
+// classifier cannot bit-rot behind a feature nobody builds. Every CALL SITE is
+// `#[cfg(feature = "shape-mint-diag")]`, so with the feature off nothing
+// reaches it and the linker drops it: the shipped runtime is unchanged.
+#[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
+pub(crate) mod shape_mint_census;
 pub(crate) mod shapes;
 pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
@@ -1041,10 +1047,14 @@ fn transition_cache_lookup(
         // cached transition places THIS key at `slot_idx`; ShapeId identity
         // handles predecessor semantics while this check handles target bytes.
         if !transition_edge_places_key(entry.next_keys, entry_slot_idx, interned_key) {
+            #[cfg(feature = "shape-mint-diag")]
+            shape_mint_census::note_transition_miss(shape_mint_census::TcMiss::PlacesKey);
             return None;
         }
         let expected_len = entry_slot_idx.checked_add(1)?;
         if entry.target_len == expected_len {
+            #[cfg(feature = "shape-mint-diag")]
+            shape_mint_census::note_transition_hit();
             return Some((entry.next_keys, entry_slot_idx, entry.target_shape_id));
         }
         // Stamp SHAPE_SHARED on the returned keys_array — this is the
@@ -1054,19 +1064,36 @@ fn transition_cache_lookup(
         // now treat the array as shared.
         unsafe {
             if !transition_cache_stamp_shape_shared(entry.next_keys) {
+                #[cfg(feature = "shape-mint-diag")]
+                shape_mint_census::note_transition_miss(shape_mint_census::TcMiss::Unshared);
                 return None;
             }
             let keys = entry.next_keys as *const ArrayHeader;
             if (*keys).length != expected_len || (*keys).length > (*keys).capacity {
+                #[cfg(feature = "shape-mint-diag")]
+                shape_mint_census::note_transition_miss(shape_mint_census::TcMiss::TargetLen);
                 return None;
             }
         }
         // A weak, unstabilized entry must not publish a retired id.
         if !shape_carriers::unstable_target_resolves(entry) {
+            #[cfg(feature = "shape-mint-diag")]
+            shape_mint_census::note_transition_miss(shape_mint_census::TcMiss::Unstable);
             return None;
         }
+        #[cfg(feature = "shape-mint-diag")]
+        shape_mint_census::note_transition_hit();
         Some((entry.next_keys, entry_slot_idx, entry.target_shape_id))
     } else {
+        // The one distinction that matters: an EMPTY slot is a cold miss, an
+        // occupied one that does not match is a direct-mapped COLLISION with a
+        // different live edge.
+        #[cfg(feature = "shape-mint-diag")]
+        shape_mint_census::note_transition_miss(if entry.next_keys == 0 {
+            shape_mint_census::TcMiss::Empty
+        } else {
+            shape_mint_census::TcMiss::Collide
+        });
         None
     }
 }
@@ -1143,6 +1170,18 @@ fn transition_cache_insert(
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[slot];
+        // Gated at the call site: the `evicted` argument is three compares
+        // that would otherwise be paid on every insert with the census off,
+        // and the whole probe is compiled out without `shape-mint-diag`.
+        #[cfg(feature = "shape-mint-diag")]
+        if shape_mint_census::armed() {
+            shape_mint_census::note_transition_insert(
+                entry.next_keys != 0
+                    && (entry.prev_shape_id != prev_shape_id
+                        || entry.key_ptr != kid
+                        || (entry.slot_idx >> 24) != len_marker),
+            );
+        }
         entry.key_ptr = kid;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
         entry.prev_shape_id = prev_shape_id;
@@ -1773,6 +1812,7 @@ pub(crate) unsafe fn cell_has_meta_edge(user_ptr: usize) -> bool {
 /// is re-resolved from the rooted address afterwards rather than reusing the
 /// pointer taken before the allocation.
 #[inline]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
     let live = object_live_slot_count(obj);
     set_object_keys_array_with_live(obj, keys_array, live);
@@ -1785,6 +1825,7 @@ unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHe
 /// one; deriving it from the (absent) predecessor instead would mint a
 /// spurious `live = 0` intermediate for every allocation.
 #[inline]
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 unsafe fn set_object_keys_array_with_live(
     obj: *mut ObjectHeader,
     keys_array: *mut ArrayHeader,
