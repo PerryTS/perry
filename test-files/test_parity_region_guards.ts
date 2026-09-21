@@ -115,4 +115,16 @@ const G: number[] = [1, 2, 3];
 function gSum(a: number[]): number { return a[0] + a[1] + a[2]; }
 console.log("G declared number[]:", gSum(G));         // 103   (WRONG: 6)
 
+// ---- H: the same hazard on a `this` receiver, declared number fields --
+// The commonest shape in class code, and the one the declared-number entry
+// fuses: every field is annotated `number`, so the tree is statically
+// numeric and nothing enforces that. Printed 10 before the entry was gated.
+class HCls {
+  a: number = 1; b: number = 2; c: number = 3; e: number = 4;
+  sum(): number { return this.a + this.b + this.c + this.e; }
+}
+const H1 = new HCls();
+(H1 as any).a = { valueOf() { H1.c = 100; return 1; } };
+console.log("H this receiver:", H1.sum());         // 107   (WRONG: 10)
+
 console.log("done");
