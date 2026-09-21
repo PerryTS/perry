@@ -440,6 +440,14 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     // #8619: view bindings proven to hold a numeric-kind typed array (spec-ABI
     // `TaPtr` params). Empty for the `Ptr<Shape>` type-analysis caller.
     numeric_ta_views: &HashSet<u32>,
+    // #10777: shape-proven receivers visible to THIS walk, and the property
+    // names numeric on all of them. Both were hardcoded empty here, so
+    // `expr_numeric_by_construction`'s `PropertyGet` arm — gated on
+    // `members.contains(id)` — could never fire for a function-scope walk. An
+    // accumulator written `h = h + o.a` was therefore never admitted, however
+    // completely `o`'s shape was proven. Empty for every pre-existing caller.
+    shape_members: &HashSet<u32>,
+    shape_numeric_fields: &HashSet<String>,
 ) -> HashSet<u32> {
     // ONE write walker for both fixpoints (`collect_not_bigint_locals` and
     // this one) — see its doc for why sharing is load-bearing. `None` = a
@@ -460,8 +468,8 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
             stable_local_inits.entry(id).or_insert(Some(*init));
         }
     }
-    let empty_members: HashSet<u32> = HashSet::new();
-    let empty_fields: HashSet<String> = HashSet::new();
+    let empty_members: HashSet<u32> = shape_members.clone();
+    let empty_fields: HashSet<String> = shape_numeric_fields.clone();
     let mut numeric: HashSet<u32> = let_bound
         .into_iter()
         .filter(|id| !boxed_vars.contains(id) && !module_globals.contains_key(id))
