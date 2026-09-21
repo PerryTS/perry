@@ -686,7 +686,7 @@ pub(crate) fn lower_generic_property_get(
 
             ctx.current_block = const_hit_idx;
             let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
-            let byte_offset = u64::from(header) + u64::from(hint.slot) * 8;
+            let byte_offset = header + u64::from(hint.slot) * 8;
             let field_addr = ctx.block().add(I64, &obj_handle, &byte_offset.to_string());
             let field_ptr = ctx.block().inttoptr(I64, &field_addr);
             let val_const = ctx.block().load(DOUBLE, &field_ptr);
