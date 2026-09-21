@@ -153,7 +153,8 @@ pub(super) fn state_get_by_id(id: i64) -> f64 {
 /// handles silently no-op.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_state_set(handle: i64, value: f64) -> f64 {
-    if let Some(id) = super::handle_object::tui_handle_id(handle, super::handle_object::TuiKind::State)
+    if let Some(id) =
+        super::handle_object::tui_handle_id(handle, super::handle_object::TuiKind::State)
     {
         state_set_by_id(id, value);
     }

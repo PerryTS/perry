@@ -499,8 +499,8 @@ mod tests {
         });
         // #340/#341: `null_stub` is migrated — gate A, inverted (see `text`).
         assert_fixture_migrated(ReceiverReprFamily::NullStub, || {
-            (crate::object::js_unresolved_namespace_stub().to_bits()
-                & crate::value::POINTER_MASK) as usize
+            (crate::object::js_unresolved_namespace_stub().to_bits() & crate::value::POINTER_MASK)
+                as usize
         });
 
         let line = render();

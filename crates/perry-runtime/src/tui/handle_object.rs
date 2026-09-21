@@ -244,10 +244,7 @@ extern "C" fn state_proto_get_thunk(_c: *const crate::closure::ClosureHeader) ->
     }
 }
 
-extern "C" fn state_proto_set_thunk(
-    _c: *const crate::closure::ClosureHeader,
-    value: f64,
-) -> f64 {
+extern "C" fn state_proto_set_thunk(_c: *const crate::closure::ClosureHeader, value: f64) -> f64 {
     if let Some(id) = receiver_id(TuiKind::State) {
         super::state::state_set_by_id(id, value);
     }

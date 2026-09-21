@@ -158,5 +158,4 @@ mod tests {
             assert!(!is_native_backed_class_id(id), "{id:#x} is not migrated");
         }
     }
-
 }

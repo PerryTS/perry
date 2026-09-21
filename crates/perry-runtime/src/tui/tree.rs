@@ -65,7 +65,6 @@ pub fn lookup(handle: i64) -> Option<Node> {
         .find_map(|(h, n)| if *h == handle { Some(n.clone()) } else { None })
 }
 
-
 /// Append a child handle to a Box node. No-op if the handle isn't a
 /// Box (silently ignored — matches the "we accept anything, you check
 /// at the call site" convention from the rest of Perry's FFI).

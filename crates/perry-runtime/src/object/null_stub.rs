@@ -155,7 +155,11 @@ mod tests {
             .expect("the stub carries a GcHeader");
         assert_eq!(header.obj_type, crate::gc::GC_TYPE_OBJECT);
         let obj = addr as *mut super::super::ObjectHeader;
-        assert_eq!(unsafe { (*obj).class_id }, 0, "an ordinary object, not a family");
+        assert_eq!(
+            unsafe { (*obj).class_id },
+            0,
+            "an ordinary object, not a family"
+        );
         let keys = unsafe { crate::object::object_keys_array(obj) };
         let key_count = if keys.is_null() {
             0
@@ -163,7 +167,11 @@ mod tests {
             unsafe { (*keys).length }
         };
         assert_eq!(key_count, 0, "the stub must have no own keys");
-        assert_eq!(NULL_STUB_PTR.load(Ordering::Acquire) as usize, addr, "the realm slot holds it");
+        assert_eq!(
+            NULL_STUB_PTR.load(Ordering::Acquire) as usize,
+            addr,
+            "the realm slot holds it"
+        );
     }
 
     /// One object per realm, as the static was: every stub was the same

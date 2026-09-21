@@ -7,9 +7,9 @@ use crate::string::StringHeader;
 
 use super::cell::Grid;
 use super::color::{parse_color, Color};
+use super::handle_object::{tui_handle_id, tui_object, TuiKind};
 use super::render;
 use super::style::{Edges, Length};
-use super::handle_object::{tui_handle_id, tui_object, TuiKind};
 use super::tree::{box_add_child, register, Node};
 
 // ---------------------------------------------------------------------------
