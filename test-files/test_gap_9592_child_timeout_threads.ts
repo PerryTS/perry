@@ -14,11 +14,14 @@ function threadCount(): number {
   return process.platform === "linux" ? readdirSync("/proc/self/task").length : 0;
 }
 
+/** `true(1)`. Linux ships it at /bin, macOS only at /usr/bin (#10855). */
+const TRUE_BIN = process.platform === "darwin" ? "/usr/bin/true" : "/bin/true";
+
 const baseline = threadCount();
 const quickChildren: Promise<void>[] = [];
 for (let i = 0; i < 50; i++) {
   quickChildren.push(
-    close(spawn("/bin/true", [], { stdio: "ignore", timeout: 60_000 })),
+    close(spawn(TRUE_BIN, [], { stdio: "ignore", timeout: 60_000 })),
   );
 }
 await Promise.all(quickChildren);
