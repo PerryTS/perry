@@ -567,3 +567,68 @@ mod honest_tag_tests {
         assert!(crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(1)).is_none());
     }
 }
+
+/// #10836 follow-up: the first timer of a program must not drag the realm
+/// global's bootstrap in with it.
+///
+/// `build_timer_prototypes` installs `Timeout.prototype` / `Immediate.prototype`
+/// with `install_proto_method`, and that install records spec property
+/// descriptors. The descriptor bookkeeping asks "is this receiver
+/// `Object.prototype`?", which used to be answered by *materializing*
+/// `globalThis` — `populate_global_this_builtins`, measured at 4–6 ms by its own
+/// `[gc-globalthis-bootstrap]` diagnostic — so the whole bootstrap landed inside
+/// the first `setTimeout` call.
+///
+/// That is not merely slow. A timer's deadline is `now + delay`, taken per call,
+/// so 6 ms spent inside call #1 pushes call #2's deadline 6 ms later and a
+/// `setTimeout(…, 10)` written before a `setTimeout(…, 5)` fires FIRST — the
+/// `test_gap_6287_timer_batch_order` failure that blocked merge train 248.
+///
+/// The property is only observable on a thread that has not yet built its realm
+/// global, which is why the subject runs on its own thread: libtest may run unit
+/// tests on a thread earlier tests already used, and `THREAD_GLOBAL_THIS` is
+/// per-thread. The precondition is asserted rather than assumed, so a future
+/// harness change that shares the thread turns this test RED instead of making
+/// its verdict vacuous.
+#[cfg(test)]
+mod first_timer_cost_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_timer_handle_does_not_bootstrap_the_realm_global() {
+        let _serial = crate::gc::global_side_table_test_lock();
+        std::thread::spawn(|| {
+            crate::gc::ensure_gc_initialized();
+            assert!(
+                !crate::object::global_this_is_materialized(),
+                "fixture precondition: a fresh thread must start with no realm global, \
+                 or every verdict below is vacuous"
+            );
+
+            // The subject: the allocator the `js_set_*` entry points call, on the
+            // first timer of this realm — so it is the call that builds both
+            // prototypes.
+            let handle = timer_object(1, CallbackTimerKind::Timeout);
+            assert_ne!(
+                handle, 0,
+                "the handle must have been built, or nothing was measured"
+            );
+            assert_ne!(
+                handle_object::TIMEOUT_PROTOTYPE_PTR.load(Ordering::Acquire),
+                0,
+                "`Timeout.prototype` must have been installed by that call, or the \
+                 verdict below is about a path that never ran"
+            );
+
+            assert!(
+                !crate::object::global_this_is_materialized(),
+                "building the timer prototypes materialized `globalThis`: \
+                 `populate_global_this_builtins` (~5 ms) now runs inside the first \
+                 `setTimeout`, which moves the second timer's deadline and reorders \
+                 the batch (#10836)"
+            );
+        })
+        .join()
+        .expect("the probe thread must not panic");
+    }
+}
