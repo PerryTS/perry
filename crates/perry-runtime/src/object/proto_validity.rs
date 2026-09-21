@@ -144,6 +144,8 @@ pub(crate) unsafe fn mark_object_as_prototype(obj: usize) {
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit in the meta
         // record's flags word, never a heap reference.
         (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_event("object marked prototype");
     }
 }
 

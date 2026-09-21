@@ -470,6 +470,10 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 proto_bits,
             );
             if prototype_diverged {
+                #[cfg(feature = "shape-mint-diag")]
+                crate::object::shape_mint_census::note_proto_divergence(
+                    crate::object::shapes::object_shape_stamp(obj),
+                );
                 crate::object::shapes::transition_object_shape_semantics(obj);
             }
             return;

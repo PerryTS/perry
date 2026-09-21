@@ -122,6 +122,15 @@ struct Census {
     age_hist: [u64; 8],
     mint_index_of: HashMap<u32, u64>,
     define_outcomes: HashMap<&'static str, u64>,
+    /// Lever (iv): the predecessor ShapeId at every prototype divergence. If
+    /// this set is about as large as the number of divergences, the
+    /// predecessors have already forked and a deterministic generation merges
+    /// nothing until identity is canonical; if it is small, it pays now.
+    proto_div_preds: HashSet<u32>,
+    proto_div_count: u64,
+    /// Free-form event tallies (meta records born, objects marked prototype):
+    /// the cost drivers for where a prototype serial would live.
+    events: HashMap<&'static str, u64>,
 }
 
 static CENSUS: OnceLock<Mutex<Census>> = OnceLock::new();
@@ -249,6 +258,31 @@ pub(crate) fn note_define_outcome(what: &'static str) {
     }
     if let Ok(mut c) = census().lock() {
         *c.define_outcomes.entry(what).or_insert(0) += 1;
+    }
+}
+
+/// Lever (iv): one prototype divergence, recorded with its predecessor.
+#[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
+#[inline]
+pub(crate) fn note_proto_divergence(predecessor: u32) {
+    if !armed() {
+        return;
+    }
+    if let Ok(mut c) = census().lock() {
+        c.proto_div_count += 1;
+        c.proto_div_preds.insert(predecessor);
+    }
+}
+
+/// A free-form event tally.
+#[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
+#[inline]
+pub(crate) fn note_event(what: &'static str) {
+    if !armed() {
+        return;
+    }
+    if let Ok(mut c) = census().lock() {
+        *c.events.entry(what).or_insert(0) += 1;
     }
 }
 
@@ -513,6 +547,18 @@ pub(crate) fn dump() {
         d.sort_unstable_by(|a, b| b.1.cmp(a.1));
         for (what, n) in d {
             out.push_str(&format!("    {what:<40} {n:>12}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "  lever (iv) prototype divergences: {}   distinct predecessor ShapeIds: {}\n",
+        c.proto_div_count,
+        c.proto_div_preds.len()
+    ));
+    if !c.events.is_empty() {
+        let mut ev: Vec<(&&str, &u64)> = c.events.iter().collect();
+        ev.sort_unstable_by(|a, b| b.1.cmp(a.1));
+        for (what, n) in ev {
+            out.push_str(&format!("  event {what:<36} {n:>12}\n"));
         }
     }
     out.push_str("  by cause:\n");
