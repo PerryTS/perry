@@ -432,7 +432,38 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     if !crate::value::addr_class::is_plausible_heap_addr(addr) {
         return Lookup::Unknown;
     }
-    // The receiver's identity word: class id at +0, ShapeId at +4. One load.
+    // The receiver's identity word: class id at +0, ShapeId at +4. One load,
+    // taken BEFORE the kind is proved, so it must be safe on any
+    // pointer-tagged value that can reach here.
+    //
+    // #10828 proves rule 3 ("no non-object cell holds a live ShapeId at +4")
+    // over GC cell KINDS. Three pointer-tagged values are NOT in that table:
+    // `SymbolHeader`, `AsyncHookHandle` and `AsyncResourceHandle` are
+    // `Box::into_raw` native allocations outside the arena. Checked here
+    // because this read reaches them, and because the emitted sequence this
+    // cache is being built toward will fold both words into ONE 8-byte load
+    // and one compare:
+    //
+    // * `SymbolHeader` (24 bytes): +0 is `magic` = 0x5359_4D42, +4 is
+    //   `registered`, which is 0 or 1. Both reads are in bounds and neither
+    //   word can be a live ShapeId, which start at 0x8000_0000. Safe BY
+    //   CONSTRUCTION.
+    // * `AsyncHookHandle` (8 bytes): the whole payload is `index: usize`, a
+    //   Vec index, so +4 is its high half — zero. In bounds, cannot collide.
+    //   Safe BY CONSTRUCTION.
+    // * `AsyncResourceHandle` (24 bytes): +0 is `ids.async_id: u64`, a
+    //   monotonic counter, so +4 is its high half. In bounds, and zero until
+    //   a single process creates 2^32 async resources. This is the one of the
+    //   three that is safe BY MAGNITUDE rather than by construction, i.e. the
+    //   same class of argument #10824 refused for buffer capacities. It is not
+    //   load-bearing here — `is_shape_id` below rejects a zero word anyway —
+    //   but an emitted guard that drops that test would be resting on it.
+    //
+    // What actually protects this path is the `is_shape_id` range test inside
+    // `object_shape_stamp`: a word outside [0x8000_0000, 0xC000_0000) answers
+    // 0 and returns `Unknown` two instructions later. The emitted form keeps
+    // the same protection for free, because a site's expected ShapeId is
+    // always in that range, so a word that is not cannot match it.
     let recv_class_id = (*obj).class_id;
     let recv_shape = shapes::object_shape_stamp(obj);
     if recv_shape == 0 {

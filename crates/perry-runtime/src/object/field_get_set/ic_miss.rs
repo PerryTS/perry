@@ -657,6 +657,38 @@ pub(super) fn get_field_ic_miss_impl(
     // `< 0x100000` proxy / HANDLE_PROPERTY_DISPATCH routing below — matching
     // the ordering in `js_object_get_field_by_name`. The macOS heap floor
     // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
+    // Lane 3 hook A, hoisted ABOVE the async-resource probe below.
+    //
+    // That probe costs 16.0 instructions per call once its latch is armed (a
+    // thread-local registry lookup), and it ran on every inherited read before
+    // this one could answer. The lookup cannot be confused by an async
+    // resource handle: those are `Box::into_raw` native allocations outside
+    // the GC arena, so their word at payload +4 is the high half of a small
+    // counter rather than a live ShapeId, `object_shape_stamp` answers 0, and
+    // the lookup returns `Unknown` in about ten instructions without
+    // dereferencing anything further. See the rule-3 note in
+    // `object::inherited_read_cache`.
+    let mut inherited_declined = false;
+    if crate::value::addr_class::is_above_handle_band(obj as usize) {
+        // Lane 3 hook A: an INHERITED read that this site has already resolved
+        // once. Placed before the ladder rather than after it because the
+        // whole point is the ladder: an inherited read otherwise re-walks the
+        // chain on every read (~1300 instructions, measured). The guard proves
+        // the receiver is a GC_TYPE_OBJECT itself, so nothing below has been
+        // skipped on its behalf; see `object::inherited_read_cache`.
+        match unsafe { crate::object::inherited_read_cache::inherited_read_cache_lookup(obj, key) }
+        {
+            crate::object::inherited_read_cache::Lookup::Hit(value) => {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::NotOwn);
+                }
+                return f64::from_bits(value.bits());
+            }
+            crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
+            crate::object::inherited_read_cache::Lookup::Unknown => {}
+        }
+    }
+
     if !key.is_null() && crate::async_hooks::is_async_resource_handle(obj as i64) {
         unsafe {
             if let Some(name) = crate::string::header_str_checked(key) {
@@ -677,25 +709,7 @@ pub(super) fn get_field_ic_miss_impl(
     // Without that, every read the cache CANNOT serve pays for a full chain
     // walk per read — measured at +424 instructions per read for an accessor
     // on the prototype, a regression against no cache at all.
-    let mut inherited_declined = false;
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
-        // Lane 3 hook A: an INHERITED read that this site has already resolved
-        // once. Placed before the ladder rather than after it because the
-        // whole point is the ladder: an inherited read otherwise re-walks the
-        // chain on every read (~1300 instructions, measured). The guard proves
-        // the receiver is a GC_TYPE_OBJECT itself, so nothing below has been
-        // skipped on its behalf; see `object::inherited_read_cache`.
-        match unsafe { crate::object::inherited_read_cache::inherited_read_cache_lookup(obj, key) }
-        {
-            crate::object::inherited_read_cache::Lookup::Hit(value) => {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::NotOwn);
-                }
-                return f64::from_bits(value.bits());
-            }
-            crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
-            crate::object::inherited_read_cache::Lookup::Unknown => {}
-        }
         // #7753: `arr.length` on a receiver codegen could not prove is an array.
         //
         // The inline cache can never serve this read — it requires a
