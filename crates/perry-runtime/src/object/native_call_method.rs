@@ -2675,7 +2675,25 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     if jsval().is_pointer() {
         let receiver = object_handle.get_nanbox_f64();
         let recv = (receiver.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
-        if !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) {
+        // Only fire for a genuine ACCESSOR, and never for a key `delete`
+        // removed. The first version of this arm did an ordinary by-name read
+        // and called whatever came back, which resurrected members the tower
+        // had correctly refused: `delete C.prototype.m; obj.m()` stopped
+        // throwing, and the imported-clone guards lost a prototype semantic
+        // (`issue_9180`, `issue_8693`). Requiring a declared accessor on the
+        // receiver's class chain keeps the arm to exactly the case it is for.
+        let has_accessor = !recv.is_null()
+            && !crate::value::addr_class::is_small_handle(recv as usize)
+            && {
+                let class_id = crate::object::js_object_get_class_id(recv);
+                class_id != 0
+                    && !crate::object::class_registry::class_is_key_deleted(class_id, method_name)
+                    && crate::object::class_registry::class_chain_has_instance_accessor(
+                        class_id,
+                        method_name,
+                    )
+            };
+        if has_accessor {
             let accessor_key =
                 crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
             if !accessor_key.is_null() {
