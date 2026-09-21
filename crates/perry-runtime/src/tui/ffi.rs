@@ -9,7 +9,37 @@ use super::cell::Grid;
 use super::color::{parse_color, Color};
 use super::render;
 use super::style::{Edges, Length};
+use super::handle_object::{tui_handle_id, tui_object, TuiKind};
 use super::tree::{box_add_child, register, Node};
+
+// ---------------------------------------------------------------------------
+// Honest tags (#340/#341): the widget handle that crosses into JS.
+//
+// A widget used to leave this file as its raw tree id NaN-boxed with
+// `POINTER_TAG` — a small integer wearing the pointer tag, in an id space
+// shared with `useApp()`'s 1, `useStdout()`'s 2 and `useRef`'s 1, so
+// `Text("hi") === useApp()` was `true`. It is now an ORDINARY object carrying
+// the tree id in `ObjectMeta.native_state`.
+//
+// The tree, the Taffy layout pass and the paint pass are untouched: they still
+// speak ids. Only the two directions across the `#[no_mangle]` boundary change,
+// through the two helpers below. A raw argument is NOT a GC root, so a
+// consumer resolves at entry, before anything that can allocate and move it.
+// ---------------------------------------------------------------------------
+
+/// Wrap a tree id on its way out to JS.
+fn widget_object(id: i64) -> i64 {
+    tui_object(TuiKind::Widget, id)
+}
+
+/// Resolve a widget handle back to its tree id, or 0 for anything that is not
+/// one. 0 is already this module's "no such node" id, so a foreign receiver
+/// no-ops exactly as an unknown handle always did — and, unlike before, a
+/// handle of another tui kind (whose id space overlaps) cannot address a real
+/// node.
+fn widget_id(raw: i64) -> i64 {
+    tui_handle_id(raw, TuiKind::Widget).unwrap_or(0)
+}
 
 /// Singleton grid — sized to the current terminal at first render.
 static GRID: OnceLock<Mutex<Grid>> = OnceLock::new();
@@ -48,12 +78,12 @@ fn current_term_size() -> (u16, u16) {
 #[no_mangle]
 pub extern "C" fn js_perry_tui_text(content_ptr: *const StringHeader) -> i64 {
     let content = unsafe { read_string(content_ptr) };
-    register(Node::Text {
+    widget_object(register(Node::Text {
         content,
         fg: Color::Default,
         bg: Color::Default,
         style: super::cell::Style::default(),
-    })
+    }))
 }
 
 /// `Text(content, { fg, bg, bold, italic, underline, reverse })` — same as
@@ -73,12 +103,12 @@ pub extern "C" fn js_perry_tui_text_styled(
     let fg = parse_color(&unsafe { read_string(fg_ptr) });
     let bg = parse_color(&unsafe { read_string(bg_ptr) });
     let bits = style_bits.max(0.0) as u8;
-    register(Node::Text {
+    widget_object(register(Node::Text {
         content,
         fg,
         bg,
         style: super::cell::Style(bits),
-    })
+    }))
 }
 
 /// `Box()` — empty container. Children are added via
@@ -88,17 +118,20 @@ pub extern "C" fn js_perry_tui_text_styled(
 /// `Box({ flexDirection: "row" }, [children])`.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_box() -> i64 {
-    register(Node::Box {
+    widget_object(register(Node::Box {
         children: Vec::new(),
         fg: Color::Default,
         bg: Color::Default,
         style: super::style::BoxStyle::default(),
-    })
+    }))
 }
 
 /// Mutate a Box's style. Wraps `tree::with_node_mut` so the per-FFI
 /// boilerplate stays small. Silently no-ops on non-Box handles.
 fn with_box_style_mut(handle: i64, f: impl FnOnce(&mut super::style::BoxStyle)) {
+    // The single funnel for all fourteen `boxSet*` FFI rows, so the handle
+    // resolves once here rather than in each of them.
+    let handle = widget_id(handle);
     super::tree::with_node_mut(handle, |n| {
         if let Node::Box { style, .. } = n {
             f(style);
@@ -124,15 +157,16 @@ pub extern "C" fn js_perry_tui_box_add_children_array(parent: i64, children_arra
     if children_array == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    let parent = widget_id(parent);
     let len = crate::array::js_array_get_length(children_array);
     for i in 0..len {
         let child_f64 = crate::array::js_array_get_element_f64(children_array, i);
-        // Children are NaN-boxed POINTER widget handles. Unbox by
-        // stripping the high 16 bits of the NaN-box tag to recover
-        // the raw i64 widget handle. (Same pattern run.rs uses to
-        // extract a Widget handle from the component's return.)
-        let bits = child_f64.to_bits();
-        let child_handle = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
+        // Children are NaN-boxed widget handle OBJECTS (#340/#341). Resolving
+        // through the brand rather than by masking off the tag is what keeps a
+        // non-widget element — a number, a string, another tui kind — from
+        // addressing a real tree node: the low 48 bits of ANY pointer-tagged
+        // value used to be accepted as a handle.
+        let child_handle = super::handle_object::tui_widget_id_from_bits(child_f64.to_bits());
         if child_handle != 0 {
             super::tree::box_add_child(parent, child_handle);
         }
@@ -280,12 +314,12 @@ pub extern "C" fn js_perry_tui_box_set_flex_basis_pct(handle: i64, pct: f64) -> 
 pub extern "C" fn js_perry_tui_spacer() -> i64 {
     let mut s = super::style::BoxStyle::default();
     s.flex_grow = 1;
-    super::tree::register(Node::Box {
+    widget_object(super::tree::register(Node::Box {
         children: Vec::new(),
         fg: Color::Default,
         bg: Color::Default,
         style: s,
-    })
+    }))
 }
 
 /// `ProgressBar(value, max, width)` — renders `[====    ]`-style filled
@@ -310,12 +344,12 @@ pub extern "C" fn js_perry_tui_progress_bar(value: f64, max: f64, width: f64) ->
         s.push(' ');
     }
     s.push(']');
-    super::tree::register(Node::Text {
+    widget_object(super::tree::register(Node::Text {
         content: s,
         fg: Color::Default,
         bg: Color::Default,
         style: super::cell::Style::default(),
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -335,12 +369,12 @@ pub extern "C" fn js_perry_tui_spinner(frame: f64) -> i64 {
     const CHARS: [char; 4] = ['-', '\\', '|', '/'];
     let idx = (frame.max(0.0) as usize) % CHARS.len();
     let s = CHARS[idx].to_string();
-    super::tree::register(Node::Text {
+    widget_object(super::tree::register(Node::Text {
         content: s,
         fg: Color::Default,
         bg: Color::Default,
         style: super::cell::Style::default(),
-    })
+    }))
 }
 
 /// `Input(value)` — single-line text input renderer. The widget shows
@@ -352,12 +386,12 @@ pub extern "C" fn js_perry_tui_spinner(frame: f64) -> i64 {
 pub extern "C" fn js_perry_tui_input(value_ptr: *const StringHeader) -> i64 {
     let value = unsafe { read_string(value_ptr) };
     let display = format!("{}_", value);
-    super::tree::register(Node::Text {
+    widget_object(super::tree::register(Node::Text {
         content: display,
         fg: Color::Default,
         bg: Color::Default,
         style: super::cell::Style::default(),
-    })
+    }))
 }
 
 /// `Input(value, cursor)` — single-line text input with the cursor at
@@ -423,7 +457,7 @@ pub extern "C" fn js_perry_tui_input_at(value_ptr: *const StringHeader, cursor: 
         }
     }
 
-    parent
+    widget_object(parent)
 }
 
 /// Read items from a JS array of strings into an owned `Vec<String>`.
@@ -486,7 +520,7 @@ pub extern "C" fn js_perry_tui_list(items_ptr: i64, selected: f64) -> i64 {
         });
         super::tree::box_add_child(parent, child);
     }
-    parent
+    widget_object(parent)
 }
 
 /// `Select(items, selected)` — alias for `List` with an enforced
@@ -520,13 +554,13 @@ pub extern "C" fn js_perry_tui_text_area(value_ptr: *const StringHeader) -> i64 
         });
         super::tree::box_add_child(parent, child);
     }
-    parent
+    widget_object(parent)
 }
 
 /// Append a child to a Box. Both args are unboxed POINTER handles.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_box_add_child(parent: i64, child: i64) -> f64 {
-    box_add_child(parent, child);
+    box_add_child(widget_id(parent), widget_id(child));
     f64::from_bits(0x7FFC_0000_0000_0001) // TAG_UNDEFINED
 }
 
@@ -596,12 +630,12 @@ pub extern "C" fn js_perry_tui_animated_spinner(interval_ms: f64, frames_ptr: i6
         DEFAULT_SPINNER_FRAMES.to_vec()
     };
     let idx = ((process_elapsed_ms() / interval) as usize) % frames.len();
-    super::tree::register(Node::Text {
+    widget_object(super::tree::register(Node::Text {
         content: frames[idx].to_string(),
         fg: Color::Default,
         bg: Color::Default,
         style: super::cell::Style::default(),
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -663,10 +697,9 @@ fn read_handle_array(handles_ptr: i64) -> Vec<i64> {
     let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
         let v = js_array_get_f64_unchecked(arr, i);
-        // Widget handles are NaN-boxed POINTER values — extract the
-        // low 48 bits as a raw handle.
-        let h = (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-        out.push(h);
+        // Widget handles are NaN-boxed handle OBJECTS (#340/#341); resolve
+        // through the brand, not by masking the tag off an arbitrary value.
+        out.push(super::handle_object::tui_widget_id_from_bits(v.to_bits()));
     }
     out
 }
@@ -762,7 +795,7 @@ pub extern "C" fn js_perry_tui_table(headers_ptr: i64, rows_ptr: i64, selected: 
         super::tree::box_add_child(parent, row_widget);
     }
 
-    parent
+    widget_object(parent)
 }
 
 /// `Tabs({ tabs, active, body })` — render a horizontal tab bar
@@ -820,7 +853,7 @@ pub extern "C" fn js_perry_tui_tabs(tabs_ptr: i64, active: f64, body_ptr: i64) -
         super::tree::box_add_child(outer, *body);
     }
 
-    outer
+    widget_object(outer)
 }
 
 // ---------------------------------------------------------------------------
@@ -831,6 +864,7 @@ pub extern "C" fn js_perry_tui_tabs(tabs_ptr: i64, active: f64, body_ptr: i64) -
 /// the Taffy layout pass before paint so flexbox styles take effect.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_render(root: i64) -> f64 {
+    let root = widget_id(root);
     let (w, h) = current_term_size();
     let mut g = grid().lock().unwrap();
     g.resize(w, h);

@@ -85,8 +85,8 @@ struct DecoderState {
 
 /// Class ids in the web-builtin block (`0xFFFF_24xx`); `0x2401..=0x2406` are
 /// AbortController/AbortSignal/Event/CustomEvent/DOMException/EventTarget.
-pub(crate) const TEXT_ENCODER_CLASS_ID: u32 = 0xFFFF_2407;
-pub(crate) const TEXT_DECODER_CLASS_ID: u32 = 0xFFFF_2408;
+pub(crate) const TEXT_ENCODER_CLASS_ID: u32 = crate::native_class_ids::TEXT_ENCODER;
+pub(crate) const TEXT_DECODER_CLASS_ID: u32 = crate::native_class_ids::TEXT_DECODER;
 
 const STATE_PRESENT: u64 = 1;
 const STATE_FATAL: u64 = 1 << 1;
@@ -789,14 +789,6 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 // `TextDecoder.prototype.decode.call({})` throws a TypeError exactly as node
 // does, instead of silently decoding as utf-8.
 // ---------------------------------------------------------------------------
-
-/// Class ids whose instances are ordinary objects carrying native state that
-/// cannot cross a thread boundary (#340/#341). A contiguous range so the
-/// remaining handle families join it without touching the transfer path again
-/// — `timer.rs` adds `Timeout`/`Immediate` at `0x2409/A` by extending the end.
-pub(crate) fn is_native_backed_class_id(class_id: u32) -> bool {
-    (TEXT_ENCODER_CLASS_ID..=crate::timer::IMMEDIATE_CLASS_ID).contains(&class_id)
-}
 
 #[cfg(feature = "global-text")]
 fn require_text_brand(value: f64, class_id: u32, message: &[u8]) {

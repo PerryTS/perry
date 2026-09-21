@@ -39,8 +39,8 @@ use super::*;
 /// Class ids in the web-builtin block. `0x2401..=0x2406` are
 /// AbortController/AbortSignal/Event/CustomEvent/DOMException/EventTarget and
 /// `0x2407/8` are TextEncoder/TextDecoder.
-pub(crate) const TIMEOUT_CLASS_ID: u32 = 0xFFFF_2409;
-pub(crate) const IMMEDIATE_CLASS_ID: u32 = 0xFFFF_240A;
+pub(crate) const TIMEOUT_CLASS_ID: u32 = crate::native_class_ids::TIMEOUT;
+pub(crate) const IMMEDIATE_CLASS_ID: u32 = crate::native_class_ids::IMMEDIATE;
 
 const TIMER_STATE_PRESENT: u64 = 1;
 const TIMER_STATE_IMMEDIATE: u64 = 1 << 1;

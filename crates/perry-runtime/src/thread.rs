@@ -446,14 +446,17 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
                 if fs_thread_codec().is_some_and(|codec| (codec.is_filehandle)(value)) {
                     return SerializedValue::DetachedFileHandle;
                 }
-                // #340/#341: a native-backed builtin (TextEncoder/TextDecoder
-                // today) is an ORDINARY object now, so the GC kind no longer
-                // rejects it the way kinds 13-16 do below. Refuse it by class
-                // id instead — deep-copying one would hand the other thread a
-                // plain `{}` with no native state, which is exactly the silent
-                // shape #6185 made these surface a named TypeError for.
+                // #340/#341: a native-backed builtin (TextEncoder/TextDecoder,
+                // Timeout/Immediate, the six `perry/tui` handle kinds) is an
+                // ORDINARY object now, so the GC kind no longer rejects it the
+                // way kinds 13-16 do below. Refuse it by class id instead —
+                // deep-copying one would hand the other thread a plain `{}`
+                // with no native state, which is exactly the silent shape
+                // #6185 made these surface a named TypeError for. The id range
+                // is owned by `native_class_ids`, so a family joins this guard
+                // by taking the next id rather than by editing this file.
                 let class_id = (*(raw_ptr as *const crate::object::ObjectHeader)).class_id;
-                if crate::text::is_native_backed_class_id(class_id) {
+                if crate::native_class_ids::is_native_backed_class_id(class_id) {
                     return SerializedValue::Unsupported("native handle");
                 }
                 return serialize_object(raw_ptr as *const crate::object::ObjectHeader);

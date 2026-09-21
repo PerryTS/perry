@@ -206,10 +206,13 @@ fn observe_pointer(addr: usize) {
     // receiver can be a small band id any more and this family can never be
     // marked old again. The fixture below asserts `observed_old == 0` for it;
     // that inversion is the per-family record that the migration landed.
+    // #340/#341 GATE A: `tui` has migrated, so its arm is gone from here too.
+    // `tui::is_known_handle` survives for the ledger's own question ("does any
+    // small id still reach a funnel?") but is no longer consulted on this
+    // path: a tui handle is a heap object, and asking three registries whether
+    // an arbitrary heap address is one of their ids took three mutexes to
+    // answer "no".
     // Each remaining family deletes its arm here as it moves.
-    if crate::tui::is_known_handle(addr as i64) {
-        mark_old(ReceiverReprFamily::Tui);
-    }
     if crate::async_hooks::is_async_hook_handle(addr as i64) {
         mark_old(ReceiverReprFamily::AsyncHook);
     }
@@ -375,9 +378,10 @@ mod tests {
     /// It is a gate only from HERE, because the fixture calls the funnels
     /// directly. A compiled program's `observed_old` proves nothing for this
     /// family — a statically lowered `d.encoding` (codegen's
-    /// `Expr::TextDecoderEncoding`) never reaches an instrumented funnel, so
-    /// the counter read 0 before the migration too. Gate B (the producer-side
-    /// band assertion in `text.rs`'s own tests) covers those reads.
+    /// `Expr::TextDecoderEncoding`) or a `class_filter`-lowered `state.get()`
+    /// never reaches an instrumented funnel, so the counter read 0 before the
+    /// migration too. Gate B (the producer-side band assertion in the
+    /// family's own tests) covers those reads.
     fn assert_fixture_migrated(family: ReceiverReprFamily, construct: impl FnOnce() -> usize) {
         receiver_repr_test_reset();
         receiver_repr_test_arm(true);
@@ -436,12 +440,12 @@ mod tests {
         assert_fixture_migrated(ReceiverReprFamily::Text, || {
             crate::text::js_text_encoder_new() as usize
         });
-        assert_fixture(ReceiverReprFamily::Tui, || {
-            let mut handle = crate::tui::state::js_perry_tui_state_alloc(0.0);
-            if handle == 0 {
-                handle = crate::tui::state::js_perry_tui_state_alloc(0.0);
-            }
-            (handle as usize, false)
+        // #340/#341: `tui` is migrated — gate A, inverted (see `text`).
+        // Note what the pre-migration fixture had to do: retry when the handle
+        // came back 0, because the FIRST `state(0)` of a program was slot 0
+        // and `POINTER_TAG | 0` is a tagged null. It cannot be 0 now.
+        assert_fixture_migrated(ReceiverReprFamily::Tui, || {
+            crate::tui::state::js_perry_tui_state_alloc(0.0) as usize
         });
         assert_fixture(ReceiverReprFamily::AsyncHook, || {
             let options = crate::object::js_object_alloc(0, 0);
