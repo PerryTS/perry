@@ -1440,6 +1440,58 @@ mod tests {
         assert!(global_unit.contains("declare double @__perry_wrap_extern_dep__value(i64)"));
     }
 
+    /// Design step 4: the `!absolute_symbol` range node must reach EVERY
+    /// renderer, including a split codegen unit.
+    ///
+    /// This is a trap, not a formality. `push_attrs_and_referenced_metadata_ids`
+    /// emits only the metadata ids reachable from a unit's FUNCTION bodies
+    /// (`collect_metadata_refs` over `render_fn_external`), and nothing in that
+    /// walk ever looks at a global definition line. A node named only by
+    /// `@perry_shape_abs_* = external hidden global i8, !absolute_symbol !1`
+    /// would be dropped from the unit and LLVM would reject it with a dangling
+    /// metadata reference — a build failure that only appears on modules large
+    /// enough to split, i.e. exactly the ones nobody tests by hand.
+    ///
+    /// Emitting it beside `!0` removes the question. Fails without that: drop
+    /// the `ABSOLUTE_SYMBOL_RANGE_MD_LINE` push and the split-unit assertion
+    /// below goes red while the whole-module one stays green.
+    #[test]
+    fn the_absolute_symbol_range_node_reaches_every_renderer() {
+        let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+        m.declare_function("js_ic_touch", VOID, &[PTR]);
+        m.add_raw_global(crate::typed_shape::static_shape_symbol_decl(
+            "perry_class_keys_m__C",
+        ));
+        for name in ["perry_fn_m__f", "perry_fn_m__g"] {
+            let f = m.define_function(name, DOUBLE, vec![]);
+            let e = f.create_block("entry");
+            e.call_void("js_ic_touch", &[(PTR, "@perry_shape_abs_m__C")]);
+            e.ret(DOUBLE, "0.0");
+        }
+
+        let whole = m.to_ir();
+        assert!(
+            whole.contains("@perry_shape_abs_m__C = external hidden global i8, !absolute_symbol !1"),
+            "the declaration must carry the range node it names\n{whole}"
+        );
+        assert!(
+            whole.contains("!1 = !{i64 -1, i64 -1}"),
+            "the whole-module renderer must define the range node\n{whole}"
+        );
+
+        let units = m.render_codegen_units(2);
+        assert_eq!(units.len(), 2, "two functions -> two units");
+        for (index, unit) in units.iter().enumerate() {
+            if unit.contains("!absolute_symbol !1") {
+                assert!(
+                    unit.contains("!1 = !{i64 -1, i64 -1}"),
+                    "unit {index} names !1 from a global and does not define it; LLVM \
+                     rejects the unit\n{unit}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn mach_o_split_promotes_only_globals_two_units_define() {
         // #9610: `linkonce_odr` is weak-for-linker, and

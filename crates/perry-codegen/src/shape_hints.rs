@@ -85,3 +85,79 @@ pub(crate) fn collect_module_global_shapes(hir: &perry_hir::Module) -> HashMap<u
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use perry_hir::{Expr, Module, Stmt};
+
+    fn module_with(init: Vec<Stmt>) -> Module {
+        let mut m = Module::new("hint.ts");
+        m.init = init;
+        m
+    }
+
+    fn anon_new(class_name: &str) -> Expr {
+        Expr::New {
+            class_name: class_name.to_string(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            capture_arg_count: 0,
+        }
+    }
+
+    fn let_stmt(id: u32, name: &str, init: Option<Expr>) -> Stmt {
+        Stmt::Let {
+            id,
+            name: name.to_string(),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init,
+        }
+    }
+
+    /// The population the guard is emitted for: a module-level `const` bound
+    /// to an object literal. Fails without the collector.
+    #[test]
+    fn a_module_global_object_literal_is_hinted() {
+        let hir = module_with(vec![let_stmt(1, "O", Some(anon_new("__AnonShape_abc123")))]);
+        let hints = collect_module_global_shapes(&hir);
+        assert_eq!(hints.get(&1).map(String::as_str), Some("__AnonShape_abc123"));
+    }
+
+    /// Everything else must be absent, because a hint the compiler cannot
+    /// justify costs a failing compare on every read of that site. A DECLARED
+    /// class is excluded deliberately: `class_field_global_index` and the
+    /// packed-keys builder filter private fields differently, and the constant
+    /// slot is only sound where they cannot disagree.
+    #[test]
+    fn a_declared_class_and_a_non_new_initializer_are_not_hinted() {
+        let hir = module_with(vec![
+            let_stmt(1, "c", Some(anon_new("Point"))),
+            let_stmt(2, "n", Some(Expr::Number(1.0))),
+            let_stmt(3, "u", None),
+        ]);
+        let hints = collect_module_global_shapes(&hir);
+        assert!(hints.is_empty(), "unexpected hints: {hints:?}");
+    }
+
+    /// The scope must not leak into the next module compiled on this thread —
+    /// a stale hint would name another module's absolute symbol, and the link
+    /// would fail on an undefined one.
+    #[test]
+    fn hints_do_not_outlive_their_scope() {
+        {
+            let _scope = install(collect_module_global_shapes(&module_with(vec![let_stmt(
+                7,
+                "O",
+                Some(anon_new("__AnonShape_scoped")),
+            )])));
+            assert_eq!(
+                anon_shape_class_for_global(7).as_deref(),
+                Some("__AnonShape_scoped")
+            );
+        }
+        assert_eq!(anon_shape_class_for_global(7), None);
+    }
+}
