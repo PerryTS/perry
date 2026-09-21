@@ -15,6 +15,45 @@ fn make_ctx() -> LoweringContext {
     LoweringContext::new("test.ts")
 }
 
+#[test]
+fn a_computed_instance_field_key_is_not_a_constructor_capture() {
+    let source = r#"
+        function make() {
+            const items = Symbol("items");
+            const payload = { ok: true };
+            class Base {
+                [items] = [];
+                getPayload() { return payload; }
+            }
+            return Base;
+        }
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "computed-field-key.ts").expect("source parses");
+    let hir = super::lower_module(&module, "computed-field-key", "computed-field-key.ts")
+        .expect("source lowers");
+    let class = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "Base")
+        .expect("nested class is lowered");
+
+    assert_eq!(
+        class
+            .fields
+            .iter()
+            .filter(|field| field.name.starts_with("__perry_cap_"))
+            .count(),
+        1,
+        "the method value is captured, but the definition-time key is not"
+    );
+    assert!(class.fields[0].key_expr.is_some());
+    assert!(
+        class.constructor.is_some(),
+        "the unrelated method capture keeps a synthesized constructor"
+    );
+}
+
 mod instanceof_rhs;
 mod literal_shape;
 
