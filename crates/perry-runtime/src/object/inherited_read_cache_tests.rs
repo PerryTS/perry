@@ -307,10 +307,7 @@ fn a_receiver_with_no_own_keys_is_cached() {
             "a keyless receiver never reached the prime, so the cache can never \
              serve this shape and its probe is pure overhead on every read"
         );
-        assert!(
-            inherited_read_cache_hits() >= 1,
-            "primed but never served"
-        );
+        assert!(inherited_read_cache_hits() >= 1, "primed but never served");
     }
 }
 

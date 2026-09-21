@@ -957,9 +957,8 @@ pub(super) fn get_field_ic_miss_impl(
                 }
                 // Past the cache, not through it: the lookup at the top of
                 // this function has already asked.
-                let value = super::get_field_by_name::get_field_by_name_past_inherited_cache(
-                    obj, key,
-                );
+                let value =
+                    super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
                 return f64::from_bits(value.bits());
             }
             let key_count = shape.logical_key_count as usize;
