@@ -54,6 +54,27 @@ fn a_computed_instance_field_key_is_not_a_constructor_capture() {
     );
 }
 
+#[test]
+fn a_lexical_fetch_result_is_not_registered_as_a_native_response() {
+    let source = r#"
+        function fetch(_url: string) {
+            return Promise.resolve({ text() { return "userland"; } });
+        }
+        async function run() {
+            const response = await fetch("http://localhost/");
+            return response.text();
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "fetch-shadow.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "fetch-shadow", "fetch-shadow.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("NativeMethodCall { module: \"fetch\", class_name: Some(\"Response\")"),
+        "a lexical fetch function must keep userland Response dispatch: {dump}"
+    );
+}
+
 mod instanceof_rhs;
 mod literal_shape;
 

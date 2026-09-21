@@ -36,12 +36,24 @@ pub(crate) fn collect_static_object_pattern_keys(props: &[ast::ObjectPatProp]) -
 /// (Without narrowing the access went through generic PropertyGet → handle
 /// dispatch → js_fetch_response_status, so the bug only surfaced inside an
 /// `if r !== null/undefined` block.)
-pub(crate) fn get_fetch_module(expr: &ast::Expr) -> Option<&'static str> {
+pub(crate) fn get_fetch_module(
+    ctx: &crate::lower::LoweringContext,
+    expr: &ast::Expr,
+) -> Option<&'static str> {
     if let ast::Expr::Call(call_expr) = expr {
         if let ast::Callee::Expr(callee_expr) = &call_expr.callee {
             if let ast::Expr::Ident(ident) = callee_expr.as_ref() {
                 return match ident.sym.as_ref() {
-                    "fetch" | "fetchWithAuth" | "fetchPostWithAuth" => Some("fetch"),
+                    // A lexical `fetch` binding shadows the Web Fetch global.
+                    // In particular, node-fetch's default export is routinely
+                    // imported under this name; tagging its Promise result as
+                    // a native Response reroutes `response.text()` into the
+                    // native handle FFI and rejects with "Invalid response
+                    // handle". The named helper conventions below are Perry's
+                    // explicit wrappers and intentionally retain their native
+                    // result contract.
+                    "fetch" if !ctx.shadows_unqualified_global("fetch") => Some("fetch"),
+                    "fetchWithAuth" | "fetchPostWithAuth" => Some("fetch"),
                     _ => None,
                 };
             }
