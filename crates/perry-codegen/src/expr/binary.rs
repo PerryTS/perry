@@ -445,55 +445,25 @@ fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// is often a captured local plus fields read from interface-shaped objects,
 /// so every leaf is `Any` to codegen. The guard itself is the runtime proof;
 /// its cold arm preserves the original tree and exact dynamic `+` semantics.
-/// # #10904: three or more leaves need every leaf proven primitive
+/// # #10904: the fold must not read a leaf that a conversion could change
 ///
-/// The fold evaluates EVERY leaf before ANY add. For two leaves that is
-/// exactly the specification: `a + c` evaluates both operands and only then
-/// `ToPrimitive`s them. For three it is not — `(a + b) + c` evaluates `a` and
-/// `b`, converts them, **adds**, and only then evaluates `c`. So `c` must be
-/// read after `a`'s conversion has run, and that conversion can be a user
-/// `valueOf`/`toString` that mutates the object `c` is read from.
+/// The fold evaluates every leaf before any addition converts anything. The
+/// specification does not always: `(a + b) + c` converts `a` and `b` before it
+/// evaluates `c`, and a user `valueOf` running in that conversion can change
+/// what `c` reads. `add_tree_evaluates_before_it_converts` decides which trees
+/// the fold may take; it holds the exact rule and the leaves it exempts.
 ///
-/// Measured before the fix: `O.a = { valueOf() { O.c = 100; return 1 } }`,
-/// then `O.a + O.b + O.c` returned **9** where node returns **102** — a silent
-/// wrong value, on v0.5.1618 and on train 252. The cold arm does not rescue
-/// it, because `rebuild_add_tree(.., fast = false)` rebuilds over the
-/// ALREADY-LOWERED leaf values, so even the spec-`+` path adds the stale `c`.
-///
-/// The soundness rule is: pre-evaluating every leaf is unobservable only when
-/// no leaf can be non-primitive, because then no `ToPrimitive` can run, so no
-/// user code can run, so nothing can change between a leaf's source position
-/// and where it was read.
-///
-/// **A tree that satisfies that rule never reaches here**, so this declines
-/// three or more leaves outright rather than carrying an escape hatch that
-/// cannot fire. Everything `expr_produces_canonical_raw_f64` vouches
-/// (literals, `Math.*`, an explicit coerce) is also `is_numeric_expr`, and
-/// `is_numeric_expr` of an `Add` is the conjunction of its operands — so an
-/// all-vouched chain is `both_numeric` at the call site above and takes the
-/// static numeric path before this predicate is consulted. Checked, not
-/// assumed: `(a*b) + (a*b) + (a*b)` over erased operands, which is the closest
-/// candidate, is NOT vouched either (BigInt-reachable) and emits three helper
-/// calls. If a future representation fact vouches something the type system
-/// does not, the escape belongs here — added then, with a test that fires.
-///
-/// The cheaper-looking fix is not available. Making the COLD arm correct would
-/// mean discarding the pre-read values and re-evaluating the later leaves in
-/// order — but a leaf can be a call, or a read that reaches a getter, so
-/// redoing it can run an effect twice. Discarding and redoing is only legal
-/// once something has proven the leaves effect-free, which is exactly what
-/// step 4b's region guard establishes (#10884). Until then the sound choice is
-/// to decline the fold.
-///
-/// This costs the accumulator shape the fold exists for: `h += o.a + o.b`
-/// returns to per-node diamonds, the `86 ms -> 119 ms` regression the doc
-/// above records. That is the correct trade — correct-and-slower beats
-/// fast-and-wrong — and step 4b buys it back by vouching the leaves.
-fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
-    // #10904: the fold is only faithful when the spec also finishes every leaf
-    // evaluation before the first conversion. See
+/// A declined tree lowers node by node through `lower_rooted_dynamic_binary`,
+/// which evaluates and converts in source order. For a left-leaning chain of
+/// property reads (`h += o.a + o.b + o.c`) that costs the per-node helper the
+/// fold exists to avoid, which is the regression #10904 declares; correct and
+/// slower beats fast and wrong, and step 4b's region guard (#10884) is what
+/// buys it back.
+fn dynamic_add_tree_benefits_shared_guard(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    // #10904: the fold is only faithful when no leaf it reads early is one
+    // that an earlier conversion could change. See
     // `add_tree_evaluates_before_it_converts`.
-    if !add_tree_evaluates_before_it_converts(expr) {
+    if !add_tree_evaluates_before_it_converts(ctx, expr) {
         return false;
     }
     if matches!(
@@ -511,37 +481,38 @@ fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
 
 /// #10904: may every leaf of this `+` tree be evaluated before any addition?
 ///
-/// The fold evaluates all leaves up front, so it is faithful only for a tree in
-/// which the specification also finishes every evaluation before the first
-/// conversion. For `Add(L, R)` the spec evaluates `L`, evaluates `R`, and only
-/// then `ToPrimitive`s both — so if `L` is itself an `Add`, **`L`'s own
-/// conversions run before `R` is evaluated**, and a user `valueOf` in `L` can
-/// change what a leaf in `R` reads.
+/// The fold evaluates all leaves up front. For `Add(L, R)` the specification
+/// evaluates `L`, evaluates `R`, and only then `ToPrimitive`s both — so when
+/// `L` is itself an `Add`, **`L`'s conversions run before any leaf of `R` is
+/// evaluated**, and a user `valueOf`/`toString` running in them can change
+/// what such a leaf reads. Measured before the fix: with
+/// `O.a = { valueOf() { O.c = 100; return 1 } }`, `O.a + O.b + O.c` (which
+/// parses as `(O.a + O.b) + O.c`) returned **9** where node returns **102**.
 ///
-/// By induction that gives an exact rule rather than a leaf-count
-/// approximation: `Add(L, R)` is faithful iff `L` is not an `Add` and `R` is
-/// faithful. Equivalently, no `Add` node may have an `Add` as its LEFT child.
+/// The fold departs from the specification only in WHEN it reads such a
+/// leaf. The conversions themselves still run in specification order: the
+/// cold arm (`rebuild_add_tree(.., fast = false)`) calls the spec-`+` helper
+/// node for node over the lowered values. So a tree is faithful exactly when
+/// every leaf the specification reads after an earlier conversion is one
+/// whose read time cannot be observed (`add_leaf_is_evaluation_invariant`).
+/// By induction:
 ///
-/// * `h + (a + b)` — faithful. This is the accumulator shape the fold exists
-///   for (`sum += row.x + row.y` parses as `sum + (row.x + row.y)`), and it
-///   keeps its shared guard.
-/// * `(a + b) + c` — NOT faithful, and this is what source-level `a + b + c`
-///   parses to. Measured before the fix: with
-///   `O.a = { valueOf() { O.c = 100; return 1 } }`, `O.a + O.b + O.c` returned
-///   **9** where node returns **102**.
+/// `Add(L, R)` is faithful iff `L` and `R` are, and, when `L` is an `Add`,
+/// every leaf of `R` is evaluation-invariant.
 ///
-/// The cold arm does not rescue the unfaithful case, because
-/// `rebuild_add_tree(.., fast = false)` rebuilds over the ALREADY-LOWERED leaf
-/// values — so even the spec-`+` path adds the stale leaf. That is why the
-/// symptom is a wrong number rather than a crash.
+/// * `h + (a + b)` — faithful whatever the leaves are, because no leaf
+///   follows a conversion. This is the accumulator shape the fold exists for
+///   (`sum += row.x + row.y` parses as `sum + (row.x + row.y)`).
+/// * `(o.a + o.b) + o.c` — NOT faithful: `o.c` follows the first conversion,
+///   and a property read sees whatever that conversion did.
+/// * `(r0 + r1) + r2` over `const` locals — faithful: no code a conversion
+///   runs can write `r2`'s storage, and reading it has no effect.
 ///
-/// The cheaper-looking fix is not available: making the cold arm correct would
-/// mean discarding the pre-read values and re-evaluating the later leaves in
-/// order, but a leaf can be a call, or a read that reaches a getter, so redoing
-/// it can run an effect twice. Discarding and redoing is only legal once
-/// something has proven the leaves effect-free, which is what a region guard
-/// establishes (#10884).
-fn add_tree_evaluates_before_it_converts(expr: &Expr) -> bool {
+/// The cold arm cannot rescue an unfaithful tree, because it adds the values
+/// the fold ALREADY read. Making it re-read the late leaves would run a getter
+/// or a call twice; that is legal only once something has proven the leaves
+/// effect-free, which is what a region guard establishes (#10884).
+fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
@@ -550,16 +521,71 @@ fn add_tree_evaluates_before_it_converts(expr: &Expr) -> bool {
     else {
         return true;
     };
-    if matches!(
+    let left_converts = matches!(
         left.as_ref(),
         Expr::Binary {
             op: BinaryOp::Add,
             ..
         }
-    ) {
-        return false;
+    );
+    if left_converts {
+        let mut late = Vec::new();
+        add_tree_leaves(right, &mut late);
+        if !late
+            .into_iter()
+            .all(|leaf| add_leaf_is_evaluation_invariant(ctx, leaf))
+        {
+            return false;
+        }
     }
-    add_tree_evaluates_before_it_converts(right)
+    add_tree_evaluates_before_it_converts(ctx, right)
+        && add_tree_evaluates_before_it_converts(ctx, left)
+}
+
+/// #10904: may this `+` leaf be read before an earlier conversion instead of
+/// after it?
+///
+/// Yes when its value is the same whenever it is read and reading it has no
+/// effect: then the user code a conversion runs can neither change what the
+/// leaf yields nor observe that it was read early.
+///
+/// * Literals.
+/// * A local whose storage no other code can write. `boxed_vars` is exactly
+///   the set of locals that some other code CAN write: a local captured by a
+///   closure and assigned anywhere, a parameter that a sloppy-mode mapped
+///   `arguments` object aliases (`add_arguments_mapped_boxes`), and a
+///   TDZ-seeded binding, whose read can throw. Outside it a local is a stack
+///   slot that only this activation writes, or a capture slot written once
+///   when the closure is built — so `let` and `var` qualify too, not just
+///   `const`.
+///
+/// Not invariant:
+///
+/// * a module-level binding. Its storage is a module global that any function
+///   in the module can assign without capturing it
+///   (`let z = 1; function f() { z = 100 }`), so `boxed_vars` says nothing
+///   about it, and codegen carries no module-wide "never reassigned" fact at
+///   this point. Declining costs the old per-node lowering, never a wrong
+///   answer;
+/// * a POD-record local, whose read materializes an object;
+/// * everything else, property and element reads (a getter, a Proxy, or the
+///   very mutation #10904 is about) and calls included.
+fn add_leaf_is_evaluation_invariant(ctx: &FnCtx<'_>, leaf: &Expr) -> bool {
+    match leaf {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::WtfString(_) => true,
+        Expr::LocalGet(id) => {
+            !ctx.boxed_vars.contains(id)
+                && !ctx.module_globals.contains_key(id)
+                && !ctx.pod_records.contains_key(id)
+        }
+        _ => false,
+    }
 }
 
 /// Rebuild the `+` tree over already-lowered leaf values, node for node, so the
@@ -1234,7 +1260,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let materialization_hazard =
                     add_operands_have_pod_materialization_hazard(ctx, left, right);
                 if !(both_numeric || boolean_numeric_add) || materialization_hazard {
-                    if dynamic_add_tree_benefits_shared_guard(expr) && !materialization_hazard {
+                    if dynamic_add_tree_benefits_shared_guard(ctx, expr) && !materialization_hazard
+                    {
                         return lower_guarded_numeric_add(ctx, expr);
                     }
                     return lower_rooted_dynamic_binary(

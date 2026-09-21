@@ -73,4 +73,37 @@ let esum = 0;
 for (let i = 0; i < 3; i++) esum += E.a + E.b + E.c + E.d;
 console.log("E control:", esum);                      // 30
 
+// ---- F: a late leaf that is a LOCAL, but one a closure assigns ------------
+// `(o.a + o.b) + z`: `z` is a local, yet `o.a`'s valueOf reaches it through
+// `bump`. The fold may read a late leaf early only when no code a conversion
+// runs can write it; this local fails that, so the chain must keep declining.
+function fCaptured() {
+  const o = { a: null, b: 2 };
+  let z = 1;
+  const bump = () => { z = 100; };
+  o.a = { valueOf() { bump(); return 1; } };
+  return o.a + o.b + z;
+}
+console.log("F captured let:", fCaptured());          // 103   (WRONG: 4)
+
+// ---- F2: a module-level binding, assigned by a plain function -----------
+// No closure captures `fz`: `fBump` writes the module global directly, so
+// capture analysis says nothing about it.
+let fz = 1;
+function fBump() { fz = 100; }
+const F2 = { a: null, b: 2 };
+F2.a = { valueOf() { fBump(); return 1; } };
+console.log("F2 module global:", F2.a + F2.b + fz);   // 103   (WRONG: 4)
+
+// ---- F3: the leaves the fold MAY read early: const locals ----------------
+// Each read happened in its own statement, before the chain began, so the
+// valueOf that assigns `o.c` cannot change `r2`. Node's answer is 6.
+function fStmt(o) {
+  const r0 = o.a; const r1 = o.b; const r2 = o.c;
+  return r0 + r1 + r2;
+}
+const F3 = { a: null, b: 2, c: 3 };
+F3.a = { valueOf() { F3.c = 100; return 1; } };
+console.log("F3 const locals:", fStmt(F3));           // 6
+
 console.log("done");
