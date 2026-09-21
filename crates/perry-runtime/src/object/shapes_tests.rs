@@ -1232,7 +1232,31 @@ mod issue_10595_tests {
 mod link_assigned_band_tests {
     use super::*;
 
-    fn keys_array(class_id: u32, packed: &[u8], count: u32) -> *const crate::object::ArrayHeader {
+    /// The keys array as MODULE INIT builds it once design step 4 is on: the
+    /// link-assigned id is handed to the BIRTH, because that is where the
+    /// descriptor is first published.
+    fn keys_array_bound(
+        static_shape_id: u32,
+        class_id: u32,
+        packed: &[u8],
+        count: u32,
+    ) -> *const crate::object::ArrayHeader {
+        crate::object::js_build_class_keys_array_static(
+            static_shape_id,
+            class_id,
+            count,
+            packed.as_ptr(),
+            packed.len() as u32,
+        )
+    }
+
+    /// The keys array as it was built before the ordering fix — no id handed
+    /// down, so the birth mints one.
+    fn keys_array_unbound(
+        class_id: u32,
+        packed: &[u8],
+        count: u32,
+    ) -> *const crate::object::ArrayHeader {
         crate::object::js_build_class_keys_array(
             class_id,
             count,
@@ -1251,7 +1275,7 @@ mod link_assigned_band_tests {
         const CID: u32 = 0x0C3C_8101;
         for round in 0..4u32 {
             let packed = format!("band_a{round}\0band_b{round}");
-            let keys = keys_array(CID + round, packed.as_bytes(), 2);
+            let keys = keys_array_unbound(CID + round, packed.as_bytes(), 2);
             let id = js_object_shape_id_for_keys(keys as usize as u64, 2);
             assert!(
                 is_shape_id(id),
@@ -1259,22 +1283,52 @@ mod link_assigned_band_tests {
             );
             assert!(
                 !is_static_shape_id(id),
-                "the runtime counter handed out {id:#x}, which is inside the link-assigned band \
+                "the runtime counter handed out {id:#x}, inside the link-assigned band \
                  [{SHAPE_ID_BASE:#x}, {SHAPE_ID_STATIC_END:#x})"
             );
         }
     }
 
-    /// A bind inside the band installs the compiler's id, and the descriptor it
-    /// installs carries exactly the four facts under which the emitted constant
-    /// SLOT is sound (`js_shape_ordinary_inline_slot_for_key`'s conjuncts).
+    /// **The ordering defect, pinned.**
+    ///
+    /// A bind that arrives after the shape's BIRTH cannot win, and must not
+    /// try to: the exact-facts probe returning the existing id is correct
+    /// behaviour. This is what cost +3 instructions per read on every hinted
+    /// site in the first build of design step 4 — the emitted constant matched
+    /// nothing in the process because module init bound second.
+    ///
+    /// Written from the failing side deliberately. If someone routes module
+    /// init back through the unbound builder, this test still passes and the
+    /// two below go red, which is the pair that says where the defect is.
     #[test]
-    fn a_bind_installs_the_compilers_id_with_an_identity_slot_layout() {
+    fn a_bind_after_the_birth_loses_to_the_id_the_birth_minted() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_8107;
+        const STATIC_ID: u32 = SHAPE_ID_BASE + 0x5_1A77;
+        let packed = b"late_a\0late_b";
+        let keys = keys_array_unbound(CID, packed, 2);
+        let resolved = js_object_shape_bind_static_for_keys(STATIC_ID, keys as usize as u64, 2);
+        assert_ne!(
+            resolved, STATIC_ID,
+            "a bind cannot claim an id for a shape that already has one"
+        );
+        assert!(
+            !is_static_shape_id(resolved),
+            "the birth minted from the runtime counter, so the shape keeps a dynamic id"
+        );
+    }
+
+    /// The bind at the BIRTH installs the compiler's id, and the descriptor it
+    /// installs carries exactly the four facts under which the emitted
+    /// constant SLOT is sound (`js_shape_ordinary_inline_slot_for_key`'s
+    /// conjuncts).
+    #[test]
+    fn a_bind_at_the_birth_installs_the_compilers_id_with_an_identity_slot_layout() {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_8102;
         const STATIC_ID: u32 = SHAPE_ID_BASE + 0x2_9AB1;
         let packed = b"bind_a\0bind_b\0bind_c";
-        let keys = keys_array(CID, packed, 3);
+        let keys = keys_array_bound(STATIC_ID, CID, packed, 3);
         let bound = js_object_shape_bind_static_for_keys(STATIC_ID, keys as usize as u64, 3);
         assert_eq!(bound, STATIC_ID, "an unclaimed in-band id must be honoured");
 
@@ -1284,19 +1338,19 @@ mod link_assigned_band_tests {
         assert_eq!(descriptor.hole_count, 0);
         assert_eq!(
             descriptor.live_inline_slot_count, descriptor.logical_key_count,
-            "a spilled key would put later keys outside the inline block, and the emitted \
-             load's displacement is a compile-time constant"
+            "a spilled key would put later keys outside the inline block, and the \
+             emitted load's displacement is a compile-time constant"
         );
         assert_eq!(descriptor.logical_key_count, 3);
     }
 
     /// THE collision test. A second image linked on its own assigns the band
     /// from scratch, so it can name an id this process already gave to another
-    /// shape. The bind must hand back a different id rather than alias the two.
+    /// shape. The bind must hand back a different id rather than alias them.
     ///
     /// Without the free-slot check this inserts over the first descriptor and
-    /// every guard compiled against either shape reads the other's layout — a
-    /// wrong value, silently. That is what this test fails on.
+    /// every guard compiled against either shape can load the other's layout —
+    /// a wrong value, silently.
     #[test]
     fn a_second_shape_claiming_a_bound_id_is_declined_not_aliased() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -1304,19 +1358,22 @@ mod link_assigned_band_tests {
         const CID_B: u32 = 0x0C3C_8104;
         const STATIC_ID: u32 = SHAPE_ID_BASE + 0x3_1C4D;
 
-        let packed_a = b"clash_a1\0clash_a2";
-        let keys_a = keys_array(CID_A, packed_a, 2);
+        let keys_a = keys_array_bound(STATIC_ID, CID_A, b"clash_a1\0clash_a2", 2);
         let first = js_object_shape_bind_static_for_keys(STATIC_ID, keys_a as usize as u64, 2);
         assert_eq!(first, STATIC_ID);
 
-        let packed_b = b"clash_b1\0clash_b2\0clash_b3\0clash_b4";
-        let keys_b = keys_array(CID_B, packed_b, 4);
+        let keys_b = keys_array_bound(
+            STATIC_ID,
+            CID_B,
+            b"clash_b1\0clash_b2\0clash_b3\0clash_b4",
+            4,
+        );
         let second = js_object_shape_bind_static_for_keys(STATIC_ID, keys_b as usize as u64, 4);
 
         assert_ne!(
             second, STATIC_ID,
-            "the second shape was aliased onto the first's id; every read guarded on \
-             {STATIC_ID:#x} would now be able to load the wrong layout"
+            "the second shape was aliased onto the first's id; a read guarded on \
+             {STATIC_ID:#x} could now load the wrong layout"
         );
         assert!(
             is_shape_id(second),
@@ -1324,7 +1381,7 @@ mod link_assigned_band_tests {
         );
         assert!(
             !is_static_shape_id(second),
-            "a declined bind must fall back to the runtime counter, not further into the band"
+            "a declined bind falls back to the runtime counter, not further into the band"
         );
         let first_descriptor =
             shape_descriptor_by_id(STATIC_ID).expect("the first binding must survive");
@@ -1334,14 +1391,13 @@ mod link_assigned_band_tests {
         );
     }
 
-    /// An id outside the band is not the compiler's to give. The poison value
-    /// the driver writes for a shape the band could not hold arrives here.
+    /// An id outside the band is not the compiler's to give. The marker the
+    /// driver writes for a shape the band could not hold arrives here.
     #[test]
     fn an_out_of_band_id_falls_back_to_the_runtime_counter() {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_8105;
-        let packed = b"oob_a\0oob_b";
-        let keys = keys_array(CID, packed, 2);
+        let keys = keys_array_bound(u32::MAX, CID, b"oob_a\0oob_b", 2);
         let bound = js_object_shape_bind_static_for_keys(u32::MAX, keys as usize as u64, 2);
         assert!(is_shape_id(bound));
         assert!(!is_static_shape_id(bound));
@@ -1355,8 +1411,7 @@ mod link_assigned_band_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_8106;
         const STATIC_ID: u32 = SHAPE_ID_BASE + 0x4_0221;
-        let packed = b"again_a\0again_b";
-        let keys = keys_array(CID, packed, 2);
+        let keys = keys_array_bound(STATIC_ID, CID, b"again_a\0again_b", 2);
         let first = js_object_shape_bind_static_for_keys(STATIC_ID, keys as usize as u64, 2);
         let second = js_object_shape_bind_static_for_keys(STATIC_ID, keys as usize as u64, 2);
         assert_eq!(first, STATIC_ID);

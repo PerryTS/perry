@@ -576,8 +576,16 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
 
     let ir =
         String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
+    // Either spelling of the STRUCTURAL mint is what this pins. Design step 4
+    // replaces the call with `js_object_shape_bind_static_for_keys`, which
+    // resolves the same facts through the same exact-facts probe and differs
+    // only in which id it prefers when the facts are new. The property under
+    // test — that the consumer shares the producer's canonical structural
+    // ShapeId rather than inventing a typed one — is unchanged, and the
+    // typed-mint assertion below is what actually forbids the alternative.
     assert!(
-        ir.contains("call i32 @js_object_shape_id_for_keys("),
+        ir.contains("call i32 @js_object_shape_id_for_keys(")
+            || ir.contains("call i32 @js_object_shape_bind_static_for_keys("),
         "the consumer must share the producer's canonical structural ShapeId:\n{ir}"
     );
     assert!(
