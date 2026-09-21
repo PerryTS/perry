@@ -688,6 +688,7 @@ pub(crate) fn lower_class_from_ast(
         &mut computed_members,
         &mut constructor,
         &mut static_methods,
+        &static_accessor_fn_ids,
     );
 
     Ok(Class {

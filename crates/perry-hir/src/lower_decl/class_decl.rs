@@ -1227,6 +1227,7 @@ pub fn lower_class_decl(
         &mut computed_members,
         &mut constructor,
         &mut static_methods,
+        &static_accessor_fn_ids,
     );
 
     // Phase 4.1: register each method's and getter's return type so
