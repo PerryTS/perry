@@ -949,9 +949,11 @@ pub(super) fn get_field_ic_miss_impl(
                 // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
                 // this shape.
                 if !inherited_declined {
-                    if let Some(value) = unsafe {
+                    // Already inside this function's `unsafe` block (line 874),
+                    // so a nested one is `unused_unsafe` under -D warnings.
+                    if let Some(value) =
                         crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key)
-                    } {
+                    {
                         return f64::from_bits(value.bits());
                     }
                 }
