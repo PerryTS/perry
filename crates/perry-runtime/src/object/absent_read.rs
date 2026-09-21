@@ -81,6 +81,20 @@
 //! (`class_registry/prototype_methods.rs`). One relaxed load and one compare
 //! on top of what a hit already pays, against 3,629-32,874.
 //!
+//! And one bit, [`AbsentGuards::realm_cold`], for the chain end that is not
+//! an object. Every plain literal, every `Object.create(P)` chain and every
+//! keyless class instance ends at the implicit `Object.prototype` link, and
+//! a program that never touches `globalThis` never materializes the realm
+//! that link resolves through — `array::object_prototype_addr()` answers 0
+//! without bootstrapping (#10836). Measured on train 250, EVERY declining
+//! chain left the walk by that one refusal (`implicit_no_memo`: 8 of 8
+//! receivers on `Object.create`, 8 of 8 on a three-level chain), and because
+//! the refusal was remembered as a negative entry, the pair was declined for
+//! the life of the process. The zero is a proved chain end: there is no
+//! `Object.prototype` for THIS walk to miss, and the generic tail's
+//! `default_object_prototype_property_value` sees the same 0 and answers
+//! nothing. The bit keeps such an entry from outliving the realm.
+//!
 //! **An absent verdict depends on #10842's marking discipline.** The validity
 //! word bumps only for objects MARKED as somebody's prototype, so an absent
 //! entry is sound only if every hop on the exhausted chain was marked when
@@ -142,30 +156,50 @@ impl ObservedUndefined {
     }
 }
 
-/// The ONE global word an absent verdict depends on that is neither a shape
-/// transition nor a structural change to a marked prototype. See the module
-/// docs for what it covers; this struct is the one place that list is kept.
+/// What an absent verdict depends on that is neither a shape transition nor
+/// a structural change to a marked prototype. See the module docs; this
+/// struct is the one place that list is kept.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AbsentGuards {
     vtable_gen: u64,
+    /// The verdict was recorded while this thread had NO realm global — and
+    /// therefore no `Object.prototype`: `array::object_prototype_addr()` was
+    /// 0 without bootstrapping (#10836), and the generic tail's
+    /// `default_object_prototype_property_value` answered nothing for the
+    /// same 0. The chain provably ended there for every reader in the
+    /// runtime. It stays ended only while that is so: materializing the
+    /// realm allocates `Object.prototype`, which no walk has traversed and
+    /// nothing has marked, so a key added to it afterwards would bump no
+    /// validity word. An entry recorded cold therefore dies with the realm's
+    /// materialization, and the next read re-proves the chain on the real
+    /// `Object.prototype` (marking it on the way, per #10842).
+    realm_cold: bool,
 }
 
 impl AbsentGuards {
     /// The value every non-absent entry carries. `0` is not a live generation
     /// — the counter starts at 1 and only increases — so a zeroed or stale
     /// entry can never satisfy [`still_valid`](Self::still_valid).
-    pub(crate) const ZERO: AbsentGuards = AbsentGuards { vtable_gen: 0 };
+    pub(crate) const ZERO: AbsentGuards = AbsentGuards {
+        vtable_gen: 0,
+        realm_cold: false,
+    };
 
     #[inline]
     pub(crate) fn capture() -> Self {
         AbsentGuards {
             vtable_gen: crate::object::class_registry::vtable_generation(),
+            realm_cold: !crate::object::global_this_is_materialized(),
         }
     }
 
+    /// One relaxed load and one compare; the realm state is consulted only
+    /// for an entry that was recorded without one, so an entry recorded on a
+    /// materialized realm never pays the thread-local load.
     #[inline]
     pub(crate) fn still_valid(&self) -> bool {
-        *self == AbsentGuards::capture()
+        self.vtable_gen == crate::object::class_registry::vtable_generation()
+            && (!self.realm_cold || !crate::object::global_this_is_materialized())
     }
 }
 
@@ -250,7 +284,7 @@ pub(crate) mod walk_stop {
     pub(crate) const RECV_BLOOM: u8 = 11;
     pub(crate) const PROTO_NOT_POINTER: u8 = 12;
     pub(crate) const DECL_PROTOTYPE: u8 = 13;
-    pub(crate) const NO_PROTOTYPE_ROUTE: u8 = 14;
+    // 14 was `no_prototype_route`, split into the five `implicit_*` gates below.
     pub(crate) const NEXT_NULL_OR_CYCLE: u8 = 15;
     pub(crate) const MAX_HOPS: u8 = 16;
     pub(crate) const HOP_ADDR: u8 = 17;
@@ -284,7 +318,12 @@ pub(crate) mod walk_stop {
     /// prototype, so the walk marked it and stopped. The absent verdict
     /// rests on this arm — see the module docs.
     pub(crate) const HOP_UNMARKED: u8 = 41;
-    pub(crate) const COUNT: usize = 42;
+    /// The implicit `Object.prototype` link was asked for on a thread with
+    /// no realm global: there is no `Object.prototype` to hop to, for this
+    /// walk or for the generic tail. A proved chain end, guarded by
+    /// `AbsentGuards::realm_cold`.
+    pub(crate) const END_COLD_REALM: u8 = 42;
+    pub(crate) const COUNT: usize = 43;
 
     pub(crate) fn name(code: u8) -> &'static str {
         match code {
@@ -302,7 +341,6 @@ pub(crate) mod walk_stop {
             11 => "recv_bloom",
             12 => "proto_not_pointer",
             13 => "decl_prototype",
-            14 => "no_prototype_route",
             15 => "next_null_or_cycle",
             16 => "max_hops",
             17 => "hop_addr",
@@ -330,6 +368,7 @@ pub(crate) mod walk_stop {
             39 => "implicit_null_proto_flag",
             40 => "implicit_no_memo",
             41 => "hop_unmarked",
+            42 => "end_cold_realm",
             _ => "unknown",
         }
     }
@@ -344,7 +383,25 @@ static WALK_STOPS: [AtomicU64; walk_stop::COUNT] = [const { AtomicU64::new(0) };
 pub(crate) fn note_walk_stop(code: u8) {
     if (code as usize) < walk_stop::COUNT {
         WALK_STOPS[code as usize].fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        LAST_WALK_STOP.store(code, Ordering::Relaxed);
     }
+}
+
+/// The arm the most recent walk (or record attempt) left by, so a test can
+/// assert WHY nothing was recorded — a refusal for the reason under test,
+/// rather than #10842's mark-and-abandon or a served negative entry.
+#[cfg(test)]
+static LAST_WALK_STOP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
+
+#[cfg(test)]
+pub(crate) fn test_last_walk_stop() -> u8 {
+    LAST_WALK_STOP.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(crate) fn test_walk_stop_count(code: u8) -> u64 {
+    WALK_STOPS[code as usize].load(Ordering::Relaxed)
 }
 
 /// Non-zero buckets, most frequent first, for the `PERRY_IC_DIAG` report.
@@ -370,6 +427,7 @@ pub(crate) fn test_reset_walk_stops() {
     for cell in WALK_STOPS.iter() {
         cell.store(0, Ordering::Relaxed);
     }
+    LAST_WALK_STOP.store(u8::MAX, Ordering::Relaxed);
 }
 
 /// `PERRY_ABSENT_TRACE=1` prints one line per absent RECORD and per absent
@@ -409,6 +467,7 @@ pub(crate) unsafe fn receiver_may_record_absent(obj: *const ObjectHeader) -> boo
     if crate::object::field_get_set::fetch_subclass_handle_id(addr).is_some() {
         return false;
     }
+    #[cfg(feature = "temporal")]
     if crate::object::temporal_subclass_cell(addr).is_some() {
         return false;
     }
@@ -434,6 +493,7 @@ pub(crate) unsafe fn receiver_may_record_absent(obj: *const ObjectHeader) -> boo
 ///
 /// # Safety
 /// As `get_field_by_name_past_inherited_cache`.
+#[inline]
 pub(crate) unsafe fn tail_and_maybe_record_absent(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,

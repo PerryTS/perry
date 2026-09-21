@@ -1010,6 +1010,13 @@ unsafe fn inherited_read_cache_walk(
             match implicit_object_prototype_hop(current, current_class_id) {
                 Ok(implicit) => implicit,
                 Err(code) => {
+                    if code == W::END_COLD_REALM {
+                        // A proved end of chain, for the reason the hop
+                        // states: there is no `Object.prototype` to hop to.
+                        // Every hop before this one was marked, or the walk
+                        // would not have got here (see the abandon above).
+                        note.chain_exhausted = true;
+                    }
                     note.stop = code;
                     return None;
                 }
@@ -1257,7 +1264,28 @@ unsafe fn implicit_object_prototype_hop(
         return Err(W::IMPLICIT_NULL_PROTO_FLAG);
     }
     let addr = crate::array::object_prototype_addr();
-    if addr == 0 || addr == obj as usize {
+    if addr == 0 {
+        // Two facts hide behind this zero, and only one is a chain end.
+        //
+        // * This thread has no realm global yet, so `Object.prototype` does
+        //   not EXIST: `resolve_prototype_addr` answers 0 without
+        //   bootstrapping (#10836), and the generic tail's
+        //   `default_object_prototype_property_value` sees the same 0 and
+        //   answers nothing. The chain ends here for every reader there is.
+        //   The memo is written by that bootstrap and by nothing else (its
+        //   other two writers are the collector healing a resolved address),
+        //   so "not materialized" implies "memo cold" implies "no reader can
+        //   see a key on `Object.prototype`". `AbsentGuards::realm_cold`
+        //   keeps a verdict recorded on this from outliving the realm.
+        // * The realm exists and its bootstrap could not resolve
+        //   `globalThis.Object.prototype`, which a program brings about by
+        //   replacing `Object`. Nothing pins that, so it is refused.
+        if !crate::object::global_this_is_materialized() {
+            return Err(W::END_COLD_REALM);
+        }
+        return Err(W::IMPLICIT_NO_MEMO);
+    }
+    if addr == obj as usize {
         return Err(W::IMPLICIT_NO_MEMO);
     }
     Ok(addr as *const ObjectHeader)
