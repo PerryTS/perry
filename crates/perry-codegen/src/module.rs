@@ -132,9 +132,7 @@ impl LlModule {
         self.globals
             .iter()
             .filter(|g| g.contains(" thread_local "))
-            .filter_map(|g| {
-                global_symbol_name(g).map(|s| s.trim_start_matches('@').to_string())
-            })
+            .filter_map(|g| global_symbol_name(g).map(|s| s.trim_start_matches('@').to_string()))
             .collect()
     }
 

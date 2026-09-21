@@ -5199,8 +5199,7 @@ pub fn run_with_parse_cache(
                 // does need its parent's layout registered (#485 — too few
                 // inline slots otherwise), and parent refs already resolve
                 // path-aware in the child's own module (#26/#321).
-                if !is_parent_ref
-                    && perry_hir::analysis::is_global_intrinsic_value_name(&ref_name)
+                if !is_parent_ref && perry_hir::analysis::is_global_intrinsic_value_name(&ref_name)
                 {
                     continue;
                 }

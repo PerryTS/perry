@@ -228,10 +228,7 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     } else {
         format!("{tls} ")
     };
-    Some(format!(
-        "{name} = external {tls}{kind} {}",
-        &rest[..ty_end]
-    ))
+    Some(format!("{name} = external {tls}{kind} {}", &rest[..ty_end]))
 }
 
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by

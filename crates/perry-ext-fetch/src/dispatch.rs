@@ -71,15 +71,24 @@ unsafe fn name_of(ptr: *const u8, len: usize) -> &'static str {
 }
 
 fn is_headers(id: usize) -> bool {
-    HEADERS_HANDLES.lock().map(|g| g.contains_key(&id)).unwrap_or(false)
+    HEADERS_HANDLES
+        .lock()
+        .map(|g| g.contains_key(&id))
+        .unwrap_or(false)
 }
 
 fn is_request(id: usize) -> bool {
-    REQUEST_HANDLES.lock().map(|g| g.contains_key(&id)).unwrap_or(false)
+    REQUEST_HANDLES
+        .lock()
+        .map(|g| g.contains_key(&id))
+        .unwrap_or(false)
 }
 
 fn is_response(id: usize) -> bool {
-    FETCH_RESPONSES.lock().map(|g| g.contains_key(&id)).unwrap_or(false)
+    FETCH_RESPONSES
+        .lock()
+        .map(|g| g.contains_key(&id))
+        .unwrap_or(false)
 }
 
 // Layers 3-4 of #10310 need a runtime hook this crate cannot reach: the
@@ -93,12 +102,18 @@ fn is_response(id: usize) -> bool {
 // work is a runtime hook plus one registration call rather than a rediscovery.
 #[allow(dead_code)]
 fn is_blob(id: usize) -> bool {
-    BLOB_HANDLES.lock().map(|g| g.contains_key(&id)).unwrap_or(false)
+    BLOB_HANDLES
+        .lock()
+        .map(|g| g.contains_key(&id))
+        .unwrap_or(false)
 }
 
 #[allow(dead_code)]
 fn is_form_data(id: usize) -> bool {
-    FORM_DATA_HANDLES.lock().map(|g| g.contains_key(&id)).unwrap_or(false)
+    FORM_DATA_HANDLES
+        .lock()
+        .map(|g| g.contains_key(&id))
+        .unwrap_or(false)
 }
 
 /// Mirror of `perry-stdlib`'s `dispatch_headers_method`, reading THIS crate's
@@ -134,7 +149,10 @@ unsafe fn headers_method(id: usize, method: &str, args: &[f64]) -> Option<f64> {
         "has" => Some(js_headers_has(h, str_arg(0))),
         "delete" => Some(js_headers_delete(h, str_arg(0))),
         "getSetCookie" => Some(js_headers_get_set_cookie(h)),
-        "forEach" => Some(js_headers_for_each(h, args.first().copied().unwrap_or(f64::NAN))),
+        "forEach" => Some(js_headers_for_each(
+            h,
+            args.first().copied().unwrap_or(f64::NAN),
+        )),
         "keys" => Some(js_headers_keys(h)),
         "values" => Some(js_headers_values(h)),
         "entries" | "Symbol.iterator" | "@@iterator" => Some(js_headers_entries(h)),
@@ -191,7 +209,9 @@ pub unsafe extern "C" fn js_ext_fetch_handle_method_dispatch(
     args_len: usize,
     out: *mut f64,
 ) -> i32 {
-    let id = handle_id(f64::from_bits(POINTER_TAG | (handle as u64 & 0x0000_FFFF_FFFF_FFFF)));
+    let id = handle_id(f64::from_bits(
+        POINTER_TAG | (handle as u64 & 0x0000_FFFF_FFFF_FFFF),
+    ));
     let method = name_of(method_name_ptr, method_name_len);
     let args: &[f64] = if args_ptr.is_null() || args_len == 0 {
         &[]
@@ -218,7 +238,9 @@ pub unsafe extern "C" fn js_ext_fetch_handle_property_dispatch(
     prop_name_len: usize,
     out: *mut f64,
 ) -> i32 {
-    let id = handle_id(f64::from_bits(POINTER_TAG | (handle as u64 & 0x0000_FFFF_FFFF_FFFF)));
+    let id = handle_id(f64::from_bits(
+        POINTER_TAG | (handle as u64 & 0x0000_FFFF_FFFF_FFFF),
+    ));
     let prop = name_of(prop_name_ptr, prop_name_len);
     let value = request_property(id, prop).or_else(|| response_property(id, prop));
     match value {
