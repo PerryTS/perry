@@ -519,6 +519,102 @@ pub(crate) fn is_intrinsic_regexp_constructor(value: f64) -> bool {
         == super::global_this::regexp_constructor_call_thunk as *const u8
 }
 
+/// The nine accessors a `Get(rx, "flags")` consults: `flags` itself, plus the
+/// eight flag properties its getter reads, each of which is observable.
+#[cfg(feature = "regex-engine")]
+const FLAG_ACCESSORS: [(&str, *const u8); 9] = [
+    ("flags", regex_proto_flags_getter as *const u8),
+    ("hasIndices", regex_proto_has_indices_getter as *const u8),
+    ("global", regex_proto_global_getter as *const u8),
+    ("ignoreCase", regex_proto_ignore_case_getter as *const u8),
+    ("multiline", regex_proto_multiline_getter as *const u8),
+    ("dotAll", regex_proto_dot_all_getter as *const u8),
+    ("unicode", regex_proto_unicode_getter as *const u8),
+    ("unicodeSets", regex_proto_unicode_sets_getter as *const u8),
+    ("sticky", regex_proto_sticky_getter as *const u8),
+];
+
+#[cfg(feature = "regex-engine")]
+crate::perry_thread_local! {
+    /// `(semantic epoch, verdict)` for "every accessor in `FLAG_ACCESSORS` on
+    /// `RegExp.prototype` is still the builtin".
+    ///
+    /// Keyed on `prop_plan_semantic_epoch`, which the property system already
+    /// bumps for every event that can change what an inherited read answers —
+    /// the counter `promise::then_probe` keys its `Object.prototype` verdict on
+    /// (#7910). Recomputing costs nine descriptor lookups, so it must not run
+    /// per call; property mutation is rare, so in practice it runs once.
+    /// Deliberately NOT keyed on the pointer-identity epoch, which the
+    /// collector bumps at poll cadence and which would make this a recompute.
+    static FLAG_ACCESSORS_CANONICAL: std::cell::Cell<(u64, bool)> =
+        const { std::cell::Cell::new((0, false)) };
+}
+
+/// Are `RegExp.prototype`'s flag accessors all still the builtins?
+#[cfg(feature = "regex-engine")]
+fn flag_accessors_canonical() -> bool {
+    let epoch = super::prop_plan::prop_plan_semantic_epoch();
+    let cached = FLAG_ACCESSORS_CANONICAL.with(std::cell::Cell::get);
+    if cached.0 == epoch {
+        return cached.1;
+    }
+    let proto = REGEXP_PROTOTYPE_TEST_SITE
+        .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire));
+    let verdict = proto != 0
+        && FLAG_ACCESSORS.iter().all(|(key, builtin)| {
+            match super::descriptor_state::get_accessor_descriptor(proto as usize, key) {
+                // Absent means deleted or replaced by a data property.
+                None => false,
+                Some(descriptor) => {
+                    let value = f64::from_bits(descriptor.get);
+                    super::is_callable_function_value(value) && {
+                        let closure = crate::value::js_nanbox_get_pointer(value)
+                            as *const crate::closure::ClosureHeader;
+                        crate::closure::js_closure_get_func(closure) == *builtin
+                    }
+                }
+            }
+        });
+    FLAG_ACCESSORS_CANONICAL.with(|c| c.set((epoch, verdict)));
+    verdict
+}
+
+/// Can `rx.flags` be answered from the header without running user code?
+///
+/// `Get(rx, "flags")` is observable: the builtin getter itself performs eight
+/// further Gets. So this requires the instance's prototype to be the canonical
+/// `RegExp.prototype` (which `regexp_prototype_test_is_canonical` establishes,
+/// including that no per-object prototype was recorded, so a subclass fails),
+/// that none of the nine names is shadowed on the instance, and that the
+/// prototype's nine accessors are still the builtins.
+///
+/// It does NOT establish that `value` is a RegExp — the prototype predicate
+/// answers about `RegExp.prototype`, not the receiver — so callers pair it with
+/// `is_valid_regex_ptr`, as the `exec` admission sites do.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn regexp_view_flags_is_canonical(value: f64) -> bool {
+    if !regexp_prototype_test_is_canonical(value) {
+        return false;
+    }
+    let addr = crate::value::js_nanbox_get_pointer(value) as usize;
+    for (key, _) in FLAG_ACCESSORS.iter() {
+        // An own accessor (`defineProperty` on the instance) lives in the
+        // descriptor side table; an own data property lives in the exotic
+        // expando table. Either shadows the prototype.
+        if super::descriptor_state::may_have_descriptor_entry(addr, key, true)
+            || super::descriptor_state::may_have_descriptor_entry(addr, key, false)
+            || super::exotic_expando::exotic_has_own_property(
+                super::exotic_expando::ExoticKind::RegExp,
+                addr,
+                key,
+            )
+        {
+            return false;
+        }
+    }
+    flag_accessors_canonical()
+}
+
 /// Non-observable admission for a substring view. An exec/test accessor or
 /// override must run once on the materialized JS argument, so never invoke
 /// one while deciding whether to take this optimization.

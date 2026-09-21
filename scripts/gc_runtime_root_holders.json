@@ -1010,6 +1010,12 @@
       "why": "#[cfg(test)] Cell<usize> counting pre-search polls that actually ran, so a test can assert the stride took and skipped the poll path rather than infer it from a timing (#10166). A count, never a pointer; absent from shipped binaries."
     },
     {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "FLAG_ACCESSORS_CANONICAL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<(u64, bool)> memo for #10518: the prop_plan semantic epoch at which RegExp.prototype's nine flag accessors were last checked, and whether all nine were still the builtins. An epoch counter and a boolean, never an address; recomputed when the epoch moves."
+    },
+    {
       "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
       "name": "PRE_SEARCH_POLL_TICK",
       "verdict": "not_a_gc_pointer",
