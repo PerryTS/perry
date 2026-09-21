@@ -457,6 +457,7 @@ fn collect_module_one(
         &ctx.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
         ctx.bunfs_root.as_deref(),
+        !was_cjs_wrapped,
     );
 
     // #8547: a builtin reached through `require("http")` never appears in the

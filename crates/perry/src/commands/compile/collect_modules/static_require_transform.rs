@@ -15,7 +15,7 @@ fn transform_static_literal_requires(
     compile_packages: &HashSet<String>,
     module_dir: &Path,
 ) -> String {
-    transform_static_literal_requires_with_bunfs(source, compile_packages, module_dir, None)
+    transform_static_literal_requires_with_bunfs(source, compile_packages, module_dir, None, false)
 }
 
 pub(super) fn transform_static_literal_requires_with_bunfs(
@@ -23,6 +23,7 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     compile_packages: &HashSet<String>,
     module_dir: &Path,
     bunfs_root: Option<&Path>,
+    replace_json_requires: bool,
 ) -> String {
     let create_require_aliases = collect_create_require_aliases(source);
     let mut require_aliases =
@@ -140,6 +141,25 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
             if let Some(target) = require_target.as_ref() {
                 let is_native_addon =
                     target.extension().and_then(|extension| extension.to_str()) == Some("node");
+                // #10758: an ESM-shaped TypeScript source can still contain a
+                // literal `require("./data.json")` (mongodb reads its own
+                // package.json this way). Unlike a CJS-wrapped source it has
+                // no per-module `require` shim, so leaving the call in place
+                // resolves it relative to the process entry instead of the
+                // importing module. The JSON loader's default export is the
+                // same cached object a static require returns, so use that
+                // binding directly for unwrapped ESM modules.
+                if replace_json_requires
+                    && target.extension().and_then(|extension| extension.to_str()) == Some("json")
+                {
+                    let binding = unique_temp_name(source, &mut next_id);
+                    imports.push(format!(
+                        "import {binding} from {:?};",
+                        target.to_string_lossy()
+                    ));
+                    replacements.push((full.start(), full.end(), binding));
+                    continue;
+                }
                 if !matches!(
                     target.extension().and_then(|e| e.to_str()),
                     Some("ts" | "tsx" | "mts" | "cts" | "js" | "mjs")
@@ -761,6 +781,40 @@ console.log(require("./local").value);
         );
         assert!(got.contains(r#"import * as __perry_static_require_0 from "./local";"#));
         assert!(got.contains("console.log(__perry_static_require_0.value);"));
+    }
+
+    #[test]
+    fn replaces_resolved_json_require_in_unwrapped_esm_module() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let module_dir = dir.path().join("src/cmap/handshake");
+        std::fs::create_dir_all(&module_dir).expect("create nested module dir");
+        let package_json = dir.path().join("package.json");
+        std::fs::write(&package_json, r#"{"version":"7.5.0"}"#).expect("write package.json");
+        let source = r#"
+import { marker } from "./marker";
+export const version = require("../../../package.json").version + marker;
+"#;
+
+        let got = transform_static_literal_requires_with_bunfs(
+            source,
+            &HashSet::new(),
+            &module_dir,
+            None,
+            true,
+        );
+
+        assert!(
+            got.contains(&format!(
+                "import __perry_static_require_0 from {:?};",
+                package_json
+                    .canonicalize()
+                    .expect("canonicalize package.json")
+                    .to_string_lossy()
+            )),
+            "got:\n{got}"
+        );
+        assert!(got.contains("export const version = __perry_static_require_0.version + marker;"));
+        assert!(!got.contains(r#"require("../../../package.json")"#));
     }
 
     #[test]
