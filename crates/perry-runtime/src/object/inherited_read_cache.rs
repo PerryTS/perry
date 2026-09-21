@@ -793,9 +793,7 @@ unsafe fn inherited_read_cache_walk(
         // marking bumps no validity, so a negative entry recorded here would
         // decline the pair for the life of the process — the same trap the
         // value-dependent refusals avoid.
-        if meta.is_null()
-            || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0
-        {
+        if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
             note.armed = false;
             crate::object::proto_validity::mark_object_as_prototype(next_addr);
             return None;
