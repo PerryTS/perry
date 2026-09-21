@@ -1175,6 +1175,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I32, I32, I32, I64, I32],
     );
     module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
+    module.declare_function(
+        "js_build_class_keys_array_static",
+        I64,
+        &[I32, I32, I32, PTR, I32],
+    );
     module.declare_function("js_object_shape_id_for_keys", I32, &[I64, I32]);
     module.declare_function(
         "js_object_shape_bind_static_for_keys",

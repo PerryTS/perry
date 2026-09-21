@@ -703,6 +703,29 @@ fn shape_cache_get_with_id(shape_id: u32) -> (*mut ArrayHeader, u32) {
 /// (evicting any prior entry there) and also writes to the overflow
 /// map so misses on the inline cache still find the value.
 fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
+    shape_cache_insert_with_static(shape_id, keys_array, shapes::SHAPE_STATIC_ID_NONE)
+}
+
+/// [`shape_cache_insert`] carrying a LINK-ASSIGNED ShapeId for this keys array.
+///
+/// This is the ordering fix for design step 4. The comment on the mint below
+/// says it binds the runtime ShapeId "once at insert (one probe per shape
+/// BIRTH)" — and that birth happens inside `js_build_class_keys_array`, two
+/// lines before module init's bind call. So the bind always arrived second,
+/// found the descriptor already there, and correctly unified onto the
+/// runtime-minted id; the emitted constant then matched nothing in the process
+/// and every guarded read paid a compare that could not fire.
+///
+/// Passing the id down to the birth is additive to the ORDERING and changes no
+/// allocation policy: `shape_id_bind_static_ensure` runs the same exact-facts
+/// probe first, and `alloc_shape_id` is simply not reached for a shape whose
+/// id the link already chose — exactly as it was not reached when the bind
+/// used to win.
+fn shape_cache_insert_with_static(
+    shape_id: u32,
+    keys_array: *mut ArrayHeader,
+    static_shape_id: u32,
+) {
     // Mark the array as shape-shared so `js_object_set_field_by_name`
     // knows it must clone before mutating. The clone path was firing
     // every time *any* fresh object literal added a property beyond
@@ -724,7 +747,12 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
     let runtime_shape_id = if keys_array.is_null() {
         0
     } else {
-        shapes::shape_id_for_keys_ensure(keys_array, unsafe { (*keys_array).length })
+        let length = unsafe { (*keys_array).length };
+        if static_shape_id == shapes::SHAPE_STATIC_ID_NONE {
+            shapes::shape_id_for_keys_ensure(keys_array, length)
+        } else {
+            shapes::shape_id_bind_static_ensure(static_shape_id, keys_array, length)
+        }
     };
     let st = crate::state::state();
     let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);

@@ -1156,18 +1156,42 @@ pub(crate) fn note_static_bind(outcome: &str, requested: u32, resolved: u32) {
     }
 }
 
+/// Crate-internal twin of [`js_object_shape_bind_static_for_keys`].
+///
+/// `shape_cache_insert` calls this INSTEAD of `shape_id_for_keys_ensure` when
+/// the caller carries a link-assigned id, which is what makes the bind happen
+/// before any instance of the shape can be constructed. The exact-facts probe
+/// is unchanged and still runs first — it is inside
+/// [`shape_descriptor_bind_static`] — so a shape whose descriptor already
+/// exists still resolves to that descriptor, exactly as today.
+pub(crate) fn shape_id_bind_static_ensure(
+    static_id: u32,
+    keys: *const ArrayHeader,
+    key_count: u32,
+) -> u32 {
+    publish_shape_result(shape_descriptor_bind_static(
+        static_id, keys, key_count, key_count,
+    ))
+}
+
+/// The argument that means "no link-assigned id for this shape".
+///
+/// `u32::MAX` rather than 0: `is_static_shape_id` rejects it, and an unstamped
+/// anonymous literal carries 0 at payload +4, so 0 is a value a live object's
+/// word can equal.
+pub(crate) const SHAPE_STATIC_ID_NONE: u32 = u32::MAX;
+
 #[no_mangle]
 pub extern "C" fn js_object_shape_bind_static_for_keys(
     static_id: u32,
     keys: u64,
     key_count: u32,
 ) -> u32 {
-    let id = publish_shape_result(shape_descriptor_bind_static(
+    let id = shape_id_bind_static_ensure(
         static_id,
         keys as usize as *const ArrayHeader,
         key_count,
-        key_count,
-    ));
+    );
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
     id

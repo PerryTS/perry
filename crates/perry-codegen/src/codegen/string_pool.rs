@@ -569,16 +569,41 @@ pub(super) fn emit_string_pool(
             format!("@{}", packed_global_names[idx])
         };
         let len_str = packed.len().to_string();
-        let arr = blk.call(
-            I64,
-            "js_build_class_keys_array",
-            &[
-                (I32, &cid_str),
-                (I32, &fc_str),
-                (PTR, &packed_ref),
-                (I32, &len_str),
-            ],
-        );
+        // Design step 4: the shape's BIRTH has to take the link-assigned id.
+        // `js_build_class_keys_array` mints one itself (`shape_cache_insert`'s
+        // "one probe per shape BIRTH"), two lines before the bind below, so a
+        // bind that arrives afterwards can only unify onto what was already
+        // minted — measured, and the reason the first build of this feature
+        // cost +3 per read and bought nothing.
+        let static_id_const = link_time_shape_ids.then(|| {
+            format!(
+                "trunc (i64 ptrtoint (ptr @{} to i64) to i32)",
+                crate::typed_shape::static_shape_symbol_from_keys_global(global_name)
+            )
+        });
+        let arr = match &static_id_const {
+            Some(static_id) => blk.call(
+                I64,
+                "js_build_class_keys_array_static",
+                &[
+                    (I32, static_id),
+                    (I32, &cid_str),
+                    (I32, &fc_str),
+                    (PTR, &packed_ref),
+                    (I32, &len_str),
+                ],
+            ),
+            None => blk.call(
+                I64,
+                "js_build_class_keys_array",
+                &[
+                    (I32, &cid_str),
+                    (I32, &fc_str),
+                    (PTR, &packed_ref),
+                    (I32, &len_str),
+                ],
+            ),
+        };
         let global_ref = format!("@{}", global_name);
         crate::expr::emit_root_heap_word_store_on_block(blk, &arr, &global_ref);
         // #5042: register the per-class keys global as a GC root so the
@@ -647,15 +672,15 @@ pub(super) fn emit_string_pool(
             // runtime declines (out of band, or the slot already held by a
             // separately linked image's shape) costs this module's read sites a
             // runtime-learned guard and can never hand out a wrong layout.
-            if link_time_shape_ids {
-                let static_id = format!(
-                    "trunc (i64 ptrtoint (ptr @{} to i64) to i32)",
-                    crate::typed_shape::static_shape_symbol_from_keys_global(global_name)
-                );
+            if let Some(static_id) = &static_id_const {
+                // Unifies onto the descriptor the birth above already bound to
+                // this id, and returns it. That return is what is stored in
+                // `@perry_class_shape_id_*` and stamped into every instance,
+                // so the emitted constant and the instances agree.
                 blk.call(
                     I32,
                     "js_object_shape_bind_static_for_keys",
-                    &[(I32, &static_id), (I64, &arr), (I32, &fc_str)],
+                    &[(I32, static_id), (I64, &arr), (I32, &fc_str)],
                 )
             } else {
                 blk.call(

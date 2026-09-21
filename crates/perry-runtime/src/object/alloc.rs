@@ -433,6 +433,46 @@ pub extern "C" fn js_build_class_keys_array(
     packed_keys: *const u8,
     packed_keys_len: u32,
 ) -> *mut ArrayHeader {
+    build_class_keys_array_impl(
+        crate::object::shapes::SHAPE_STATIC_ID_NONE,
+        class_id,
+        field_count,
+        packed_keys,
+        packed_keys_len,
+    )
+}
+
+/// [`js_build_class_keys_array`] carrying the LINK-ASSIGNED ShapeId for this
+/// class's canonical keys (design step 4).
+///
+/// Module init calls this so the shape's BIRTH takes the compiler's id. The
+/// separate `js_object_shape_bind_static_for_keys` call that follows then
+/// unifies onto it and returns it, which is what gets stored in
+/// `@perry_class_shape_id_*` and stamped into every instance.
+#[no_mangle]
+pub extern "C" fn js_build_class_keys_array_static(
+    static_shape_id: u32,
+    class_id: u32,
+    field_count: u32,
+    packed_keys: *const u8,
+    packed_keys_len: u32,
+) -> *mut ArrayHeader {
+    build_class_keys_array_impl(
+        static_shape_id,
+        class_id,
+        field_count,
+        packed_keys,
+        packed_keys_len,
+    )
+}
+
+fn build_class_keys_array_impl(
+    static_shape_id: u32,
+    class_id: u32,
+    field_count: u32,
+    packed_keys: *const u8,
+    packed_keys_len: u32,
+) -> *mut ArrayHeader {
     let shape_id = class_id
         .wrapping_mul(10007)
         .wrapping_add(field_count.wrapping_mul(100003))
@@ -444,7 +484,7 @@ pub extern "C" fn js_build_class_keys_array(
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
         let arr = crate::array::js_array_alloc_with_length_longlived(0);
-        shape_cache_insert(shape_id, arr);
+        shape_cache_insert_with_static(shape_id, arr, static_shape_id);
         remember_class_keys_array(class_id, field_count, arr);
         return arr;
     }
@@ -506,7 +546,7 @@ pub extern "C" fn js_build_class_keys_array(
     unsafe {
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     }
-    shape_cache_insert(shape_id, arr);
+    shape_cache_insert_with_static(shape_id, arr, static_shape_id);
     remember_class_keys_array(class_id, field_count, arr);
     arr
 }
