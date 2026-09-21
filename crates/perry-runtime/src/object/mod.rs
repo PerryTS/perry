@@ -1690,6 +1690,21 @@ pub struct ObjectMeta {
     /// LAST FIELD ON PURPOSE: this record carries `offset_of!` assertions for
     /// the words codegen and the spill lanes address by index, so a new field
     /// may only be appended.
+    /// #10868 lever (iv): a stable identity for an object that is some other
+    /// object's prototype, assigned once by `mark_object_as_prototype` and
+    /// never changed. 0 = none assigned.
+    ///
+    /// Why a serial and not the prototype's address or ShapeId: the address
+    /// moves under the collector (and keying on it is an address-keyed derived
+    /// structure); the ShapeId is shared by distinct prototypes (unsound — §3
+    /// needs the receiver's shape to determine its prototype) AND changes
+    /// whenever the prototype gains a key (so two receivers diverging to the
+    /// same prototype before and after that would fork). The receiver's
+    /// generation must key on the prototype's IDENTITY, not its STATE.
+    ///
+    /// Placed before `native_state` so every codegen-addressed offset above is
+    /// unchanged and `native_state` stays the last word (#340/#341).
+    pub proto_serial: u64,
     pub native_state: u64,
 }
 
