@@ -540,85 +540,91 @@ fn assert_style_is_cached(style: &str, obj: *mut ObjectHeader, key_name: &str, w
         );
         let served = inherited_read_cache_hit(obj, k)
             .unwrap_or_else(|| panic!("{style}: the entry did not serve the next read"));
-        assert_eq!(f64::from_bits(served.bits()), want, "{style}: wrong value on hit");
-        assert_eq!(inherited_read_cache_hits(), 1, "{style}: not counted as a hit");
+        assert_eq!(
+            f64::from_bits(served.bits()),
+            want,
+            "{style}: wrong value on hit"
+        );
+        assert_eq!(
+            inherited_read_cache_hits(),
+            1,
+            "{style}: not counted as a hit"
+        );
     }
 }
 
 #[test]
 fn every_common_way_of_building_a_receiver_is_cached() {
     let _scope = PrimeScope::new();
-    unsafe {
-        // EVERY style gets its OWN prototype object. Sharing one would let a
-        // style pass because an EARLIER style's install site marked it, which
-        // is the exact shape of a test that cannot fail for the reason it
-        // names.
-        let fresh_proto = |value: f64| {
-            let p = crate::object::js_object_alloc(0, 4);
-            set(p, "cov_a", value);
-            p
-        };
+    // EVERY style gets its OWN prototype object. Sharing one would let a
+    // style pass because an EARLIER style's install site marked it, which
+    // is the exact shape of a test that cannot fail for the reason it
+    // names.
+    let fresh_proto = |value: f64| {
+        let p = crate::object::js_object_alloc(0, 4);
+        set(p, "cov_a", value);
+        p
+    };
 
-        // 1. `Object.setPrototypeOf` on an object literal.
-        let p1 = fresh_proto(1.0);
-        let literal = crate::object::js_object_alloc(0, 4);
-        set(literal, "cov_own", 0.0);
-        crate::object::js_object_set_prototype_of(boxed(literal), boxed(p1));
-        assert_style_is_cached("setPrototypeOf on a literal", literal, "cov_a", 1.0);
+    // 1. `Object.setPrototypeOf` on an object literal.
+    let p1 = fresh_proto(1.0);
+    let literal = crate::object::js_object_alloc(0, 4);
+    set(literal, "cov_own", 0.0);
+    crate::object::js_object_set_prototype_of(boxed(literal), boxed(p1));
+    assert_style_is_cached("setPrototypeOf on a literal", literal, "cov_a", 1.0);
 
-        // 2. `Object.create(p)` — a different install route than 1.
-        let p2 = fresh_proto(2.0);
-        let created_bits = crate::object::js_object_create(boxed(p2));
-        let created = crate::value::js_nanbox_get_pointer(created_bits) as *mut ObjectHeader;
-        set(created, "cov_own", 0.0);
-        assert_style_is_cached("Object.create", created, "cov_a", 2.0);
+    // 2. `Object.create(p)` — a different install route than 1.
+    let p2 = fresh_proto(2.0);
+    let created_bits = crate::object::js_object_create(boxed(p2));
+    let created = crate::value::js_nanbox_get_pointer(created_bits) as *mut ObjectHeader;
+    set(created, "cov_own", 0.0);
+    assert_style_is_cached("Object.create", created, "cov_a", 2.0);
 
-        // 3. A class-DEFAULT prototype link, as `new C()` performs it. This
-        //    link deliberately bumps no epoch and transitions no shape, so if
-        //    it did not mark, nothing else would.
-        let p3 = fresh_proto(3.0);
-        let instance = crate::object::js_object_alloc(0, 4);
-        set(instance, "cov_own", 0.0);
-        crate::object::prototype_chain::object_link_class_default_prototype(
-            instance as usize,
-            crate::value::js_nanbox_pointer(p3 as i64).to_bits(),
-        );
-        assert_style_is_cached("class-default link (new C())", instance, "cov_a", 3.0);
+    // 3. A class-DEFAULT prototype link, as `new C()` performs it. This
+    //    link deliberately bumps no epoch and transitions no shape, so if
+    //    it did not mark, nothing else would.
+    let p3 = fresh_proto(3.0);
+    let instance = crate::object::js_object_alloc(0, 4);
+    set(instance, "cov_own", 0.0);
+    crate::object::prototype_chain::object_link_class_default_prototype(
+        instance as usize,
+        crate::value::js_nanbox_pointer(p3 as i64).to_bits(),
+    );
+    assert_style_is_cached("class-default link (new C())", instance, "cov_a", 3.0);
 
-        // 4. An evaluated class prototype (#9502) — its own link kind.
-        let p4 = fresh_proto(4.0);
-        let evaluated = crate::object::js_object_alloc(0, 4);
-        set(evaluated, "cov_own", 0.0);
-        crate::object::prototype_chain::object_link_class_evaluation_prototype(
-            evaluated as usize,
-            crate::value::js_nanbox_pointer(p4 as i64).to_bits(),
-        );
-        assert_style_is_cached("class-evaluation link", evaluated, "cov_a", 4.0);
+    // 4. An evaluated class prototype (#9502) — its own link kind.
+    let p4 = fresh_proto(4.0);
+    let evaluated = crate::object::js_object_alloc(0, 4);
+    set(evaluated, "cov_own", 0.0);
+    crate::object::prototype_chain::object_link_class_evaluation_prototype(
+        evaluated as usize,
+        crate::value::js_nanbox_pointer(p4 as i64).to_bits(),
+    );
+    assert_style_is_cached("class-evaluation link", evaluated, "cov_a", 4.0);
 
-        // 5. Two hops: a base class's prototype reached through a derived
-        //    one. The MIDDLE object must be marked as well as the holder, or
-        //    the walk refuses at hop 1 and never reaches the answer.
-        let base_proto = crate::object::js_object_alloc(0, 4);
-        set(base_proto, "cov_method", 9.0);
-        let derived_proto = crate::object::js_object_alloc(0, 4);
-        set(derived_proto, "cov_mid", 0.0);
-        crate::object::js_object_set_prototype_of(boxed(derived_proto), boxed(base_proto));
-        let derived = crate::object::js_object_alloc(0, 4);
-        set(derived, "cov_own", 0.0);
-        crate::object::js_object_set_prototype_of(boxed(derived), boxed(derived_proto));
-        assert_style_is_cached("two hops (extends)", derived, "cov_method", 9.0);
+    // 5. Two hops: a base class's prototype reached through a derived
+    //    one. The MIDDLE object must be marked as well as the holder, or
+    //    the walk refuses at hop 1 and never reaches the answer.
+    let base_proto = crate::object::js_object_alloc(0, 4);
+    set(base_proto, "cov_method", 9.0);
+    let derived_proto = crate::object::js_object_alloc(0, 4);
+    set(derived_proto, "cov_mid", 0.0);
+    crate::object::js_object_set_prototype_of(boxed(derived_proto), boxed(base_proto));
+    let derived = crate::object::js_object_alloc(0, 4);
+    set(derived, "cov_own", 0.0);
+    crate::object::js_object_set_prototype_of(boxed(derived), boxed(derived_proto));
+    assert_style_is_cached("two hops (extends)", derived, "cov_method", 9.0);
 
-        // 6. A prototype whose key is ASSIGNED AFTER the receiver exists —
-        //    `C.prototype.m = ...` after construction. The link is already
-        //    marked; this checks the later key add does not disturb it.
-        let late_proto = crate::object::js_object_alloc(0, 4);
-        set(late_proto, "cov_placeholder", 0.0);
-        let late = crate::object::js_object_alloc(0, 4);
-        set(late, "cov_own", 0.0);
-        crate::object::js_object_set_prototype_of(boxed(late), boxed(late_proto));
-        set(late_proto, "cov_late", 5.0);
-        assert_style_is_cached("key added to the prototype later", late, "cov_late", 5.0);
-    }
+    // 6. A prototype whose key is ASSIGNED AFTER the receiver exists —
+    //    `C.prototype.m = ...` after construction. The link is already
+    //    marked; this checks the later key add does not disturb it.
+    let late_proto = crate::object::js_object_alloc(0, 4);
+    set(late_proto, "cov_placeholder", 0.0);
+    let late = crate::object::js_object_alloc(0, 4);
+    set(late, "cov_own", 0.0);
+    crate::object::js_object_set_prototype_of(boxed(late), boxed(late_proto));
+    set(late_proto, "cov_late", 5.0);
+    assert_style_is_cached("key added to the prototype later", late, "cov_late", 5.0);
 }
 
 #[test]

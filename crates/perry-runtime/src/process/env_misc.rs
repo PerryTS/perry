@@ -1344,8 +1344,7 @@ pub fn is_process_env_ptr(addr: usize) -> bool {
     };
     let is_env = crate::value::js_nanbox_get_pointer(cached) as usize == addr;
     debug_assert!(
-        !is_env
-            || unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(addr) },
+        !is_env || unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(addr) },
         "the process.env object without OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: \
          it was published without the registration that sets it"
     );

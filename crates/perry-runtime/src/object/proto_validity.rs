@@ -197,9 +197,8 @@ unsafe fn ensure_meta_for_mark(obj: usize) -> Option<*mut crate::object::ObjectM
     let object = obj as *mut crate::object::ObjectHeader;
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
-    let (meta, _obj) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-        crate::object::object_meta_ensure(object)
-    });
+    let (meta, _obj) = handle
+        .across_mut::<crate::object::ObjectHeader, _>(|| crate::object::object_meta_ensure(object));
     if meta.is_null() {
         None
     } else {

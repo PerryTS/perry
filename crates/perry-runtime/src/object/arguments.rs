@@ -346,7 +346,9 @@ pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
     // semantics.
     debug_assert!(
         !found
-            || unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(obj as usize) },
+            || unsafe {
+                crate::object::proto_validity::object_is_exotic_read_receiver(obj as usize)
+            },
         "an arguments object without OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: a \
          registry insert bypassed js_arguments_object_alloc"
     );

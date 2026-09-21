@@ -634,7 +634,12 @@ pub(crate) fn prototype_chain_ends_in_explicit_null(obj_ptr: usize) -> bool {
                 let top16 = bits >> 48;
                 let next = if top16 == 0x7FFD {
                     (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-                } else if top16 == 0 && bits > 0x10000 {
+                } else if top16 == 0
+                    && crate::value::addr_class::is_above_handle_band(bits as usize)
+                {
+                    // The canonical band predicate rather than a hand-typed
+                    // `> 0x10000` floor: `addr_class` owns where the handle
+                    // band ends, and a literal here is the shape #6321 fixed.
                     bits as usize
                 } else {
                     return false;
@@ -1108,7 +1113,8 @@ mod tests {
     }
 
     #[test]
-    fn a_null_ENDED_interior_prototype_ends_the_chain_for_an_instance() {
+    fn a_null_ended_interior_prototype_ends_the_chain_for_an_instance() {
+        // The interior prototype is EXPLICITLY ended, not merely absent.
         // O -> P1 -> null. Neither O's own record nor the holder's says
         // anything: the statement is two hops up.
         let p1 = crate::object::js_object_alloc(0, 4);
