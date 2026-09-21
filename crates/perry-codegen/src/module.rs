@@ -50,6 +50,12 @@ fn push_statepoint_declarations(ir: &mut String) {
     }
 }
 
+/// Metadata id reserved for the `!absolute_symbol` range node. See
+/// `typed_shape::ABSOLUTE_SYMBOL_RANGE_MD`.
+const ABSOLUTE_SYMBOL_RANGE_MD_ID: u32 = 1;
+/// The full-64-bit-range node absolute shape symbols are declared with.
+const ABSOLUTE_SYMBOL_RANGE_MD_LINE: &str = "!1 = !{i64 -1, i64 -1}\n";
+
 pub struct LlModule {
     pub target_triple: String,
     declarations: Vec<(String, String)>, // (name, full "declare …" line)
@@ -189,6 +195,11 @@ impl LlModule {
     /// Append a raw metadata definition line (e.g. `!1 = distinct !{!1}`).
     /// Emitted after `!0 = !{}` in the module IR.
     pub fn add_metadata_line(&mut self, line: String) {
+        debug_assert!(
+            metadata_definition_id(&line) != Some(ABSOLUTE_SYMBOL_RANGE_MD_ID),
+            "!{} is reserved for the !absolute_symbol range node emitted beside !0",
+            ABSOLUTE_SYMBOL_RANGE_MD_ID
+        );
         self.metadata_lines.push(line);
     }
 
@@ -608,6 +619,7 @@ impl LlModule {
         // buffer alias-scope metadata. LICM/GVN hoist invariant loads out of
         // loops only with these present.
         ir.push_str("\n!0 = !{}\n");
+        ir.push_str(ABSOLUTE_SYMBOL_RANGE_MD_LINE);
         for ml in &self.metadata_lines {
             ir.push_str(ml);
             ir.push('\n');
@@ -623,7 +635,14 @@ impl LlModule {
     fn push_attrs_and_referenced_metadata_ids(&self, ir: &mut String, mut needed: HashSet<u32>) {
         self.push_attrs(ir);
         ir.push_str("\n!0 = !{}\n");
+        // Emitted unconditionally, exactly like `!0`: it is named by GLOBAL
+        // definition lines (`@perry_shape_abs_* ... !absolute_symbol !1`), and
+        // `needed` is collected from FUNCTION bodies only. A unit that carries
+        // such a global but no function naming `!1` would otherwise be handed
+        // to LLVM with a dangling metadata reference.
+        ir.push_str(ABSOLUTE_SYMBOL_RANGE_MD_LINE);
         needed.remove(&0);
+        needed.remove(&ABSOLUTE_SYMBOL_RANGE_MD_ID);
         let mut by_id: HashMap<u32, &str> = HashMap::with_capacity(self.metadata_lines.len());
         for line in &self.metadata_lines {
             if let Some(id) = metadata_definition_id(line) {

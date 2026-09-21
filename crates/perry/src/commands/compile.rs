@@ -43,6 +43,7 @@ mod lock_scan;
 mod lowering_report;
 mod native_addon_sidecar;
 mod object_cache;
+mod shape_ids;
 mod object_staging;
 mod optimized_libs;
 mod output_path;

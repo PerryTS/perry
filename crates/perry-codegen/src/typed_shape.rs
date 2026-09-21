@@ -397,6 +397,55 @@ pub(crate) fn guard_shape_global_name_from_keys_global(keys_global_name: &str) -
         .unwrap_or_else(|| format!("perry_class_guard_shape_{}", keys_global_name))
 }
 
+/// The LLVM metadata id reserved for the `!absolute_symbol` range node.
+///
+/// `!0 = !{}` is emitted unconditionally by both metadata emitters; `!1` is
+/// emitted beside it for the same reason — a global's metadata reference is
+/// NOT part of the set `push_attrs_and_referenced_metadata_ids` collects (it
+/// scans function bodies only), so a node only a global names would be dropped
+/// from a split codegen unit and the unit would fail to parse. Emitting it
+/// unconditionally costs one line per module and removes the whole question.
+/// Ids 100+ belong to the buffer alias-scope table; 1 is otherwise unused.
+pub(crate) const ABSOLUTE_SYMBOL_RANGE_MD: &str = "!1";
+
+/// The LINK-ASSIGNED ShapeId symbol paired with one canonical class keys array.
+///
+/// This is an ABSOLUTE symbol: its ADDRESS is the shape's ShapeId, fixed by the
+/// linker from a generated object the driver emits over the whole program. The
+/// compiled module therefore carries only the NAME, never the number — which is
+/// exactly what lets a cached `.o` stay valid under a different assignment, and
+/// what makes two separately compiled modules unable to collide (neither of
+/// them assigns anything).
+///
+/// Derived from the already-unique keys global for the same reason every other
+/// per-class global is: aliases and sanitized-name collisions necessarily share
+/// the same pair.
+pub(crate) fn static_shape_symbol_from_keys_global(keys_global_name: &str) -> String {
+    keys_global_name
+        .strip_prefix("perry_class_keys_")
+        .map(|suffix| format!("perry_shape_abs_{}", suffix))
+        .unwrap_or_else(|| format!("perry_shape_abs_{}", keys_global_name))
+}
+
+/// The declaration line for [`static_shape_symbol_from_keys_global`].
+///
+/// `external hidden` plus `!absolute_symbol` is what makes LLVM materialise the
+/// value as an IMMEDIATE rather than a GOT/PC-relative address. The range is
+/// deliberately the FULL 64-bit range and not `[SHAPE_ID_BASE, SHAPE_ID_END)`:
+/// a narrow range lets LLVM fold the compare into `cmpl $sym, 4(%rdi)`, which
+/// needs an `R_X86_64_32` relocation, and GNU ld refuses that against an
+/// absolute symbol in a PIE — the link perry's native Linux target performs.
+/// The full range yields `movabsq $sym, %r` + `cmpl %r32, 4(%rdi)`
+/// (`R_X86_64_64`), which both bfd and lld accept, and which LICM hoists out of
+/// a loop so the constant costs nothing where it is read repeatedly.
+pub(crate) fn static_shape_symbol_decl(keys_global_name: &str) -> String {
+    format!(
+        "@{} = external hidden global i8, !absolute_symbol {}\n",
+        static_shape_symbol_from_keys_global(keys_global_name),
+        ABSOLUTE_SYMBOL_RANGE_MD
+    )
+}
+
 pub(crate) fn shape_id_global_name_from_keys_global(keys_global_name: &str) -> String {
     keys_global_name
         .strip_prefix("perry_class_keys_")

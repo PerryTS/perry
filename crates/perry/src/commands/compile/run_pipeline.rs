@@ -2573,6 +2573,23 @@ pub fn run_with_parse_cache(
             .ok()
             .as_deref()
             == Some("1");
+    // Design step 4. The absolute shape symbols must be DEFINED by the same
+    // link that consumes them, so the feature is off wherever this compile
+    // performs no such link: `--no-link` (the object is the product and
+    // whoever links it has no table), bitcode-link mode (the artifacts are
+    // `.ll`), and COFF targets, whose assembler syntax the generated table
+    // does not speak. Being a `CompileOptions` field puts it in the object
+    // cache key, so a cached `.o` can never be reused across the switch.
+    let link_time_shape_ids = !args.no_link
+        && !bitcode_link
+        && !target
+            .as_deref()
+            .is_some_and(|t| t.contains("windows") || t.contains("msvc"))
+        && !cfg!(windows)
+        && std::env::var("PERRY_NO_LINKTIME_SHAPE_IDS")
+            .ok()
+            .as_deref()
+            != Some("1");
     let cache_enabled = !args.no_cache
         && !cache_env_disabled
         && !bitcode_link
@@ -5364,6 +5381,7 @@ pub fn run_with_parse_cache(
             emit_ir_only: bitcode_link,
             verify_native_regions,
             disable_buffer_fast_path,
+            link_time_shape_ids,
             namespace_imports,
             namespace_member_nested: namespace_member_nested.into_iter().collect(),
             imported_classes,
@@ -5572,6 +5590,15 @@ pub fn run_with_parse_cache(
             if let Some((key, cached_path, ffi_symbols)) = cache_key
                 .and_then(|k| object_cache.lookup_path_with_ffi(k).map(|(p, s)| (k, p, s)))
             {
+                // Design step 4: a cache hit skips `compile_module`, which is
+                // what declares this module's `perry_shape_abs_*` symbols. The
+                // driver assigns ids over the union of every module's symbols,
+                // so a replayed module must contribute its names or the link
+                // would leave them undefined. Same argument, same shape, as
+                // the FFI manifest replay below.
+                if let Some(shape_symbols) = object_cache.lookup_shape_manifest(key) {
+                    super::shape_ids::record_module_symbols(shape_symbols);
+                }
                 // #6439: a hit skips `compile_module`, and `compile_module`
                 // is what populates the ext_registry (`record_ffi_call`
                 // fires from `LlBlock::call`). The registry drives
@@ -5664,6 +5691,7 @@ pub fn run_with_parse_cache(
             // everything recorded on this worker thread between these two
             // calls belongs to this module and nothing else.
             perry_codegen::ext_registry::begin_module_capture();
+            perry_codegen::shape_symbols::begin_module_capture();
             let compiled = if let Some(session) = &typed_feedback {
                 super::typed_feedback_profile::compile(session, hir_module, opts, path, perry_version)
             } else {
@@ -5679,6 +5707,7 @@ pub fn run_with_parse_cache(
             };
             let object_code = compiled.map_err(|e| {
                 perry_codegen::ext_registry::take_module_capture();
+                perry_codegen::shape_symbols::take_module_capture();
                 format!(
                     "Error compiling module '{}' ({}) with --backend llvm: {:#}",
                     hir_module.name,
@@ -5687,6 +5716,8 @@ pub fn run_with_parse_cache(
                 )
             })?;
             let emitted_ffi_symbols = perry_codegen::ext_registry::take_module_capture();
+            let emitted_shape_symbols = perry_codegen::shape_symbols::take_module_capture();
+            super::shape_ids::record_module_symbols(emitted_shape_symbols.iter().cloned());
             let object_fingerprint = cache_key
                 .map(|k| format!("cache:{:016x}", k))
                 .unwrap_or_else(|| format!("bytes:{:016x}", djb2_hash(&object_code)));
@@ -5695,6 +5726,7 @@ pub fn run_with_parse_cache(
                 // as a miss to a concurrent build (correct, just a wasted
                 // recompile), whereas the reverse ordering can never mislead.
                 object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
+                object_cache.store_shape_manifest(k, &emitted_shape_symbols);
                 object_cache.store_and_get_path(k, &object_code)
             }) {
                 // #7167: handing back the cache path saves a copy for a
@@ -6757,6 +6789,26 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
+    // Design step 4: define every `perry_shape_abs_*` the program declared.
+    // Emitted here, after every module object is in hand (compiled or replayed
+    // from cache) and before the link, because the assignment is made over the
+    // UNION of all of them — that is what makes it injective without any
+    // module having to coordinate with any other.
+    if link_time_shape_ids {
+        if let Some(obj) = super::shape_ids::generate_shape_id_object(&object_output_dir)? {
+            if verbose > 0 {
+                println!(
+                    "Assigned {} link-time ShapeIds: {}",
+                    super::shape_ids::recorded_count(),
+                    obj.display()
+                );
+            }
+            obj_cleanup_paths.push(obj.clone());
+            obj_paths.push(obj);
+            obj_fingerprints.push(None);
+        }
+    }
+
     if !embedded_assets.is_empty() {
         if let Some(obj) = embed::generate_embedded_asset_object(
             &embedded_assets,

@@ -114,6 +114,11 @@ pub(super) fn emit_string_pool(
     // `perry_plugin_unload` will `dlclose`. See `runtime_decls`.
     output_type: &str,
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
+    // Design step 4 (`CompileOptions::link_time_shape_ids`): bind the
+    // LINK-ASSIGNED ShapeId instead of minting one. Passed rather than read
+    // from a global so the object-cache key, which hashes the option, and the
+    // code emitted here can never disagree.
+    link_time_shape_ids: bool,
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
@@ -636,11 +641,29 @@ pub(super) fn emit_string_pool(
                 ],
             )
         } else {
-            blk.call(
-                I32,
-                "js_object_shape_id_for_keys",
-                &[(I64, &arr), (I32, &fc_str)],
-            )
+            // Design step 4: bind the LINK-ASSIGNED id rather than mint one.
+            // The call RETURNS the id instances will carry, and that return is
+            // what is stored in `@perry_class_shape_id_*` below — so a bind the
+            // runtime declines (out of band, or the slot already held by a
+            // separately linked image's shape) costs this module's read sites a
+            // runtime-learned guard and can never hand out a wrong layout.
+            if link_time_shape_ids {
+                let static_id = format!(
+                    "trunc (i64 ptrtoint (ptr @{} to i64) to i32)",
+                    crate::typed_shape::static_shape_symbol_from_keys_global(global_name)
+                );
+                blk.call(
+                    I32,
+                    "js_object_shape_bind_static_for_keys",
+                    &[(I32, &static_id), (I64, &arr), (I32, &fc_str)],
+                )
+            } else {
+                blk.call(
+                    I32,
+                    "js_object_shape_id_for_keys",
+                    &[(I64, &arr), (I32, &fc_str)],
+                )
+            }
         };
         let shape_global = format!(
             "@{}",

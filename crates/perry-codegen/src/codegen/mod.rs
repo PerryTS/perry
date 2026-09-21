@@ -1206,6 +1206,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             I32,
             "0",
         );
+        // The LINK-ASSIGNED ShapeId, as an absolute symbol. A DECLARATION
+        // only: the value is fixed by the linker from the driver's generated
+        // object, so this module's `.o` carries the name and never the number.
+        if opts.link_time_shape_ids {
+            llmod.add_raw_global(crate::typed_shape::static_shape_symbol_decl(&global_name));
+            crate::shape_symbols::note_static_shape_symbol(
+                &crate::typed_shape::static_shape_symbol_from_keys_global(&global_name),
+            );
+        }
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
         llmod.add_internal_global(
@@ -1404,6 +1413,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             I32,
             "0",
         );
+        // An imported class stub carries the IMPORTING module's prefix and
+        // mints its own ShapeId today (the per-module class identity #6759
+        // left in place). It therefore gets its own absolute symbol, and the
+        // driver assigns it its own id: identity is preserved exactly, not
+        // unified as a side effect of this change.
+        if opts.link_time_shape_ids {
+            llmod.add_raw_global(crate::typed_shape::static_shape_symbol_decl(&global_name));
+            crate::shape_symbols::note_static_shape_symbol(
+                &crate::typed_shape::static_shape_symbol_from_keys_global(&global_name),
+            );
+        }
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
         llmod.add_internal_global(
@@ -3677,6 +3697,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         versioned_loop_callbacks: &versioned_loop_callbacks,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
+        link_time_shape_ids: opts.link_time_shape_ids,
         class_header_image_inits: &class_header_image_inits,
         imported_class_stubs: &imported_class_stubs,
         cross_module: &cross_module,

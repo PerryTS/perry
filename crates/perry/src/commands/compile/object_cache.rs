@@ -330,6 +330,15 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // Design step 4: flipping this changes the emitted IR (absolute shape
+    // symbol declarations, and bind-vs-mint at module init) AND the link line
+    // (the generated table object). A cached `.o` from the other setting would
+    // either reference symbols nothing defines or mint ids the guards do not
+    // expect, so the two halves must never be mixed across a cached build.
+    h.field(
+        "link_time_shape_ids",
+        if opts.link_time_shape_ids { "1" } else { "0" },
+    );
 
     // HIR fingerprint (issue #686). Computed by
     // `perry_hir::stable_hash::hash_module` over the post-transform HIR
@@ -1521,6 +1530,12 @@ impl ObjectCache {
             .map(|d| d.join(format!("{:016x}.ffi", key)))
     }
 
+    fn shape_manifest_path_for(&self, key: u64) -> Option<PathBuf> {
+        self.cache_dir
+            .as_ref()
+            .map(|d| d.join(format!("{:016x}.shapes", key)))
+    }
+
     /// Look up a cached object by key. Returns `Some(bytes)` on hit,
     /// `None` on miss (cache disabled, file missing, or IO error).
     #[allow(dead_code)]
@@ -1608,6 +1623,49 @@ impl ObjectCache {
     /// Best-effort: on IO failure the manifest is simply absent, which
     /// [`Self::lookup_path_with_ffi`] treats as a miss — the build stays
     /// correct and merely recompiles that module next time.
+    /// The LINK-ASSIGNED shape symbols recorded when `key`'s object was
+    /// compiled, or `None` when the manifest is absent.
+    ///
+    /// Absent is treated by the caller as "record nothing", which is safe only
+    /// because the manifest is written beside every `.o` this perry produces
+    /// and the cache key already folds in a hash of the perry binary
+    /// (`perry_build_id`) — so an entry written by a perry without this
+    /// feature can never be served to a perry with it.
+    pub fn lookup_shape_manifest(&self, key: u64) -> Option<Vec<String>> {
+        let path = self.shape_manifest_path_for(key)?;
+        let text = fs::read_to_string(path).ok()?;
+        Some(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect(),
+        )
+    }
+
+    /// Persist the shape-symbol manifest for `key`. Same atomic tmp + rename
+    /// and same best-effort failure mode as [`Self::store_ffi_manifest`].
+    pub fn store_shape_manifest(&self, key: u64, symbols: &[String]) {
+        let Some(path) = self.shape_manifest_path_for(key) else {
+            return;
+        };
+        let mut body = symbols.join("\n");
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        let tmp_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_path = path.with_extension(format!("shapes.tmp.{:x}", tmp_suffix));
+        if fs::write(&tmp_path, body)
+            .and_then(|_| fs::rename(&tmp_path, &path))
+            .is_err()
+        {
+            let _ = fs::remove_file(&tmp_path);
+        }
+    }
+
     pub fn store_ffi_manifest(&self, key: u64, symbols: &[&str]) {
         let Some(path) = self.ffi_manifest_path_for(key) else {
             return;
