@@ -149,12 +149,11 @@ fn const_shape_hint(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<Co
     let Expr::LocalGet(local_id) = object else {
         return None;
     };
-    // Module globals only: that is the population `shape_hints` collects, and
-    // it is the population no single-owner proof can reach (so these sites are
-    // exactly the ones still paying the full tower).
-    if !ctx.module_globals.contains_key(local_id) {
-        return None;
-    }
+    // The hint map is the authority, not `ctx.module_globals`: a destructuring
+    // receiver is a function-scoped `__destruct_N` temporary bound to the
+    // global by `requireObjectCoercible`, and the map records that alias.
+    // Everything in the map is either a module-global object literal or a
+    // verified alias of one.
     let class_name = crate::shape_hints::anon_shape_class_for_global(*local_id)?;
     let keys_global = ctx.class_keys_globals.get(&class_name)?;
     let slot = crate::type_analysis::class_field_global_index(ctx, &class_name, property)?;

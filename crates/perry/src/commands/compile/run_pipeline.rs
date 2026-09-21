@@ -2582,15 +2582,6 @@ pub fn run_with_parse_cache(
     // cache key, so a cached `.o` can never be reused across the switch.
     let link_time_shape_ids = !args.no_link
         && !bitcode_link
-        // x86-64 only; see `link_time_shape_ids_for_target` for the
-        // per-target relocation findings this restriction records. A target
-        // alias ("ios", "linux-musl", ...) resolves through the same table
-        // codegen uses, and a bare `None` means the host, which this build is.
-        && target
-            .as_deref()
-            .and_then(perry_codegen::resolve_target_triple)
-            .unwrap_or_else(|| target.clone().unwrap_or_default())
-            .starts_with("x86_64")
         && !target
             .as_deref()
             .is_some_and(|t| t.contains("windows") || t.contains("msvc"))
@@ -6809,6 +6800,16 @@ pub fn run_with_parse_cache(
     // from cache) and before the link, because the assignment is made over the
     // UNION of all of them — that is what makes it injective without any
     // module having to coordinate with any other.
+    // Deliberately NOT re-deciding the per-TARGET half here. `generate_shape_id_object`
+    // returns `None` unless codegen actually declared symbols, so the table is
+    // emitted exactly when something references it — a condition derived from
+    // what codegen DID rather than from a second prediction of what it would do.
+    //
+    // The first version predicted it here instead, and got it wrong in the
+    // direction that is invisible: with no `--target` the resolution produced
+    // an empty string, the whole feature switched itself off, and BOTH ARMS OF
+    // THE A/B COMPILED IDENTICAL BINARIES. The `cmp` check is what caught it,
+    // which is the entire reason that check is part of the method.
     if link_time_shape_ids {
         if let Some(obj) = super::shape_ids::generate_shape_id_object(&object_output_dir)? {
             if verbose > 0 {

@@ -71,7 +71,7 @@ pub(crate) fn anon_shape_class_for_global(local_id: u32) -> Option<String> {
 ///   hint to those is follow-on work, not a shortcut to take now.
 pub(crate) fn collect_module_global_shapes(hir: &perry_hir::Module) -> HashMap<u32, String> {
     use perry_hir::{Expr, Stmt};
-    let mut out = HashMap::new();
+    let mut out: HashMap<u32, String> = HashMap::new();
     for stmt in &hir.init {
         let Stmt::Let { id, init, .. } = stmt else {
             continue;
@@ -83,7 +83,105 @@ pub(crate) fn collect_module_global_shapes(hir: &perry_hir::Module) -> HashMap<u
             out.insert(*id, class_name.clone());
         }
     }
+
+    // Destructuring binds the receiver to a temporary first, so without this
+    // pass `const { a, b, c, d, e } = O` — five reads of one receiver in one
+    // statement, the case the sharing is FOR — is not hinted at all. The HIR
+    // is explicit about it:
+    //
+    //   Let { id: 10, name: "__destruct_10",
+    //         init: NativeMethodCall { method: "requireObjectCoercible",
+    //                                  args: [LocalGet(0)] } }
+    //   Let { id: 11, name: "a", init: PropertyGet { object: LocalGet(10), … } }
+    //
+    // `requireObjectCoercible` returns its argument or throws, so the
+    // temporary IS the global. Keyed by LocalId with no scope qualifier
+    // because HIR LocalIds are globally unique within a module — the property
+    // `collect_module_local_types` already relies on for the same reason.
+    let mut aliases: HashMap<u32, u32> = HashMap::new();
+    collect_coercible_aliases(&hir.init, &mut aliases);
+    for function in &hir.functions {
+        collect_coercible_aliases(&function.body, &mut aliases);
+    }
+    for class in &hir.classes {
+        for method in class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.constructor.iter())
+        {
+            collect_coercible_aliases(&method.body, &mut aliases);
+        }
+    }
+    for (alias, target) in aliases {
+        if let Some(class_name) = out.get(&target).cloned() {
+            out.insert(alias, class_name);
+        }
+    }
     out
+}
+
+/// Record `let t = requireObjectCoercible(LocalGet(g))` as `t -> g`.
+///
+/// Mirrors `boxed_vars::collect_let_types_in_stmts`' descent. A container this
+/// does not descend into costs a missed hint and nothing else, which is why it
+/// is written as a best-effort walk rather than an exhaustive one.
+fn collect_coercible_aliases(stmts: &[perry_hir::Stmt], out: &mut HashMap<u32, u32>) {
+    use perry_hir::{Expr, Stmt};
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                id,
+                init: Some(Expr::NativeMethodCall { method, args, .. }),
+                ..
+            } if method == "requireObjectCoercible" => {
+                if let Some(Expr::LocalGet(target)) = args.first() {
+                    out.insert(*id, *target);
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_coercible_aliases(then_branch, out);
+                if let Some(eb) = else_branch {
+                    collect_coercible_aliases(eb, out);
+                }
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init {
+                    collect_coercible_aliases(std::slice::from_ref(init_stmt.as_ref()), out);
+                }
+                collect_coercible_aliases(body, out);
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_coercible_aliases(body, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_coercible_aliases(body, out);
+                if let Some(c) = catch {
+                    collect_coercible_aliases(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    collect_coercible_aliases(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_coercible_aliases(&case.body, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_coercible_aliases(std::slice::from_ref(body.as_ref()), out);
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
