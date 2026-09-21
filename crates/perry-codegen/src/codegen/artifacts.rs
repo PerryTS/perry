@@ -761,6 +761,56 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
 
     progress.checkpoint("class methods, constructors, and statics");
 
+    // Node builtin named imports are runtime callable/property values rather
+    // than functions compiled into this module. When one is exported (either
+    // `import { x } from "node:m"; export { x }` or the synthetic Import +
+    // Named pair used for `export { x } from "node:m"`), publish a zero-arg
+    // getter that reads the live builtin ESM export cell. Importers classify
+    // this as a variable export and invoke the returned callable value, rather
+    // than linking a nonexistent `perry_fn_<module>__x` body.
+    for export in &hir.exports {
+        let perry_hir::Export::Named { local, exported } = export else {
+            continue;
+        };
+        let native_origin = hir.imports.iter().find_map(|import| {
+            if !import.is_native || !perry_api_manifest::is_node_core_module(&import.source) {
+                return None;
+            }
+            import
+                .specifiers
+                .iter()
+                .find_map(|specifier| match specifier {
+                    perry_hir::ImportSpecifier::Named {
+                        imported,
+                        local: import_local,
+                    } if import_local == local => Some((import.source.as_str(), imported.as_str())),
+                    _ => None,
+                })
+        });
+        let Some((source, imported)) = native_origin else {
+            continue;
+        };
+        let getter_name = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+        if llmod.has_function(&getter_name) {
+            continue;
+        }
+        let source_idx = strings.intern(source);
+        let imported_idx = strings.intern(imported);
+        let source_handle = format!("@{}", strings.entry(source_idx).handle_global);
+        let imported_handle = format!("@{}", strings.entry(imported_idx).handle_global);
+        let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
+        let _ = getter.create_block("entry");
+        let blk = getter.block_mut(0).unwrap();
+        let source_value = blk.load(DOUBLE, &source_handle);
+        let imported_value = blk.load(DOUBLE, &imported_handle);
+        let value = blk.call(
+            DOUBLE,
+            "js_native_module_named_esm_export_value",
+            &[(DOUBLE, &source_value), (DOUBLE, &imported_value)],
+        );
+        blk.ret(DOUBLE, &value);
+    }
+
     // Emit FuncRef-as-value wrappers. For each user function, generate
     // a thin wrapper `__perry_wrap_<name>` whose signature matches the
     // closure-call ABI: `double(i64 this_closure, double arg0, double

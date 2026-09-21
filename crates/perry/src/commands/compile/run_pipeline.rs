@@ -1783,6 +1783,33 @@ pub fn run_with_parse_cache(
             let key = (path_str.clone(), obj_name.clone());
             exported_var_names.insert(key);
         }
+
+        // Named imports from Node builtins are runtime values, including when
+        // this module only forwards them. They have no user `Let`, so they do
+        // not appear in `exported_objects`; classify their public names as
+        // getter-backed exports explicitly. Codegen emits the corresponding
+        // live builtin-cell getter from the HIR Import + Export pair.
+        for export in &hir_module.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            let is_named_builtin_import = hir_module.imports.iter().any(|import| {
+                import.is_native
+                    && perry_api_manifest::is_node_core_module(&import.source)
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named {
+                                local: import_local,
+                                ..
+                            } if import_local == local
+                        )
+                    })
+            });
+            if is_named_builtin_import {
+                exported_var_names.insert((path_str.clone(), exported.clone()));
+            }
+        }
     }
 
     // Build a map of all exports from all modules: module_path -> HashMap<export_name, origin_module_path>
