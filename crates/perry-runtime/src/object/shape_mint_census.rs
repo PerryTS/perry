@@ -121,6 +121,7 @@ struct Census {
     /// Retirement age in mints, bucketed the same way as `family_hist`.
     age_hist: [u64; 8],
     mint_index_of: HashMap<u32, u64>,
+    define_outcomes: HashMap<&'static str, u64>,
 }
 
 static CENSUS: OnceLock<Mutex<Census>> = OnceLock::new();
@@ -232,6 +233,22 @@ pub(crate) fn note_transition_insert(evicted: bool) {
     TC_INSERTS.fetch_add(1, Ordering::Relaxed);
     if evicted {
         TC_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// One outcome of the `defineProperty` key-add path's attempt to use or
+/// publish a transition edge. #10868 lever (iii): that path performs cache
+/// LOOKUPS and never an INSERT on `acc`/`accd`, so every object forks. Which
+/// predicate refuses is the question, and guessing it from the source is how
+/// #10287's lane got the wrong fix; this counts it instead.
+#[cfg_attr(not(feature = "shape-mint-diag"), allow(dead_code))]
+#[inline]
+pub(crate) fn note_define_outcome(what: &'static str) {
+    if !armed() {
+        return;
+    }
+    if let Ok(mut c) = census().lock() {
+        *c.define_outcomes.entry(what).or_insert(0) += 1;
     }
 }
 
@@ -490,6 +507,14 @@ pub(crate) fn dump() {
         100.0 * TC_EVICTIONS.load(Ordering::Relaxed) as f64
             / TC_INSERTS.load(Ordering::Relaxed).max(1) as f64,
     ));
+    if !c.define_outcomes.is_empty() {
+        out.push_str("  defineProperty key-add, edge outcomes:\n");
+        let mut d: Vec<(&&str, &u64)> = c.define_outcomes.iter().collect();
+        d.sort_unstable_by(|a, b| b.1.cmp(a.1));
+        for (what, n) in d {
+            out.push_str(&format!("    {what:<40} {n:>12}\n"));
+        }
+    }
     out.push_str("  by cause:\n");
     let mut causes: Vec<(&MintCause, &u64)> = c.by_cause.iter().collect();
     causes.sort_unstable_by(|a, b| b.1.cmp(a.1));
