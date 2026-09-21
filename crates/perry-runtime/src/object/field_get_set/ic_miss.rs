@@ -1298,6 +1298,16 @@ pub extern "C" fn js_object_get_field_ic(
         // declines still reaches the handler below, so this only ever removes
         // work. See `pic_outlined_mru_hit`.
         //
+        // The inherited-read hook the inline tower emits on its declined edge
+        // (`js_inherited_read_cache_hit_f64`) is deliberately NOT mirrored
+        // here: this entry is already inside the runtime, so the cost that
+        // hook removes for an inline site (the slow entry's prologue and
+        // dispatch) is already paid, and `get_field_ic_miss_impl` asks the
+        // same cache first thing for a heap receiver (hook A). The two
+        // programs answer from the same lookup in the same order — own hit,
+        // then the inherited cache, then the ladder — so they stay
+        // behaviourally identical with one call fewer here.
+        //
         // POINTER tag only, exactly as the emitted tower tests it (#10833):
         // the hit compares the receiver's `+4` word against a ShapeId with no
         // GC-kind test in front of it any more, and #10828's guarantee that

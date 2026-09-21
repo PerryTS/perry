@@ -989,6 +989,14 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         "the overflow-bit test must not gate the inline slot load — a spill \
          entry is refused by the ShapeId compare itself:\n{chain}"
     );
+    // The inherited-read hook (#10834/#10842) lives on the DECLINED edge. Its
+    // answer must never be a condition on the way to the own slot load: if it
+    // were, an own read would pay a call, and this walk would have collected
+    // the call's result in the chain.
+    assert!(
+        !chain.contains("js_inherited_read_cache_hit_f64"),
+        "the inherited-read hook must not gate the inline slot load:\n{chain}"
+    );
 
     // The GC header is not read on the way to the slot load at all: neither
     // the kind byte (#10828 closed rule 3 — a `+4` word equal to a live
@@ -1348,10 +1356,21 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
     assert!(ir.contains("@js_object_get_field_ic_slow("), "{ir}");
     // The `trunc` is the ShapeId half of the compact word. There is no
     // `icmp ne i64 %packed, 0` beside it any more: the sentinel above makes
-    // the ShapeId compare prove the site is primed as well.
+    // the ShapeId compare prove the site is primed as well. Named by the
+    // packed word's register: a blanket "no `icmp ne i64`" would now also
+    // forbid the inherited-read hook's decline compare on the exit edge,
+    // which is a different question about a different value.
+    let packed = ir
+        .lines()
+        .find(|l| l.contains("load atomic i64") && l.contains("_packed_get"))
+        .and_then(|l| l.trim().split_once(" = "))
+        .map(|(reg, _)| reg.to_string())
+        .expect("the compact MRU load");
     assert!(
-        ir.contains("trunc i64") && !ir.contains("icmp ne i64"),
-        "{ir}"
+        ir.contains("trunc i64")
+            && !ir.contains(&format!("icmp ne i64 {packed}, 0"))
+            && !ir.contains(&format!("icmp eq i64 {packed}, 0")),
+        "the compact word must not be tested against zero:\n{ir}"
     );
     assert!(
         ir.contains("pic.token.miss"),
@@ -1488,6 +1507,10 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         "pic.ways",
         "pic.way.load",
         "pic.way.live",
+        // the inherited-read hook, on the never-primed edge out of
+        // `pic.token.ways` and nowhere else (`js_inherited_read_cache_hit_f64`,
+        // a leaf); a decline continues to the one exit
+        "pic.miss.inherited",
         // the one exit, and the join
         "pic.miss.call",
         "pget.recv_merge",
@@ -1509,5 +1532,200 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         normalized,
         expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         "the emitted tower's block set changed:\n{func}"
+    );
+}
+
+/// The inherited-read cache (#10834/#10842) is asked on the NEVER-PRIMED edge
+/// and nowhere else. A read whose key lives on the prototype chain is never an
+/// own slot on the receiver's shape, so a site that only reads such a key never
+/// resolves its per-site cache, and every read of it reaches `pic.token.ways`
+/// with `present` false. That edge — which used to go straight to the exit —
+/// now asks the cache before calling out. The first placement asked on EVERY
+/// path into the exit and charged each own-key miss a declining probe (+88 on
+/// a megamorphic site, +89 on a spill read, measured); this one costs every
+/// other path zero instructions.
+///
+/// Five things are pinned, each of which would otherwise fail silently (the
+/// program still computes the right value through the slow entry):
+///
+/// 1. the hook call sits in `pic.miss.inherited` and in no other block, in
+///    particular NOT on any path to the inline slot load (the CFG-walk test
+///    asserts the same from the other side);
+/// 2. that block is reached from `pic.token.ways` on the FALSE edge of the
+///    cache-present test, and from nowhere else;
+/// 3. its result is branched on with the SERVED edge as the true edge, the
+///    tower's rule for every guard-passing edge, and the false edge is the
+///    one exit;
+/// 4. the slow entry is still called from `pic.miss.call` only, with the same
+///    four operands;
+/// 5. the merge phi takes the served value from `pic.miss.inherited`.
+#[test]
+fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
+    let ir = emit(false, None);
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\npic.miss.call"))
+        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
+    let mut blocks: Vec<(String, Vec<String>)> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    for line in func.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            if let Some(b) = cur.take() {
+                blocks.push(b);
+            }
+            cur = Some((line.trim_end_matches(':').to_string(), Vec::new()));
+            continue;
+        }
+        if let Some((_, body)) = cur.as_mut() {
+            body.push(line.trim().to_string());
+        }
+    }
+    if let Some(b) = cur.take() {
+        blocks.push(b);
+    }
+    // 1. one caller block, and it is the inherited arm.
+    let holders: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| {
+            body.iter()
+                .any(|l| l.contains("call double @js_inherited_read_cache_hit_f64("))
+        })
+        .map(|(l, _)| l.as_str())
+        .collect();
+    assert_eq!(
+        holders.len(),
+        1,
+        "the inherited hook must be called from exactly one block: {holders:?}\n{func}"
+    );
+    let inh_label = holders[0];
+    assert!(
+        inh_label.starts_with("pic.miss.inherited"),
+        "the hook belongs on the never-primed edge, found it in `{inh_label}`:\n{func}"
+    );
+    let (_, inh_body) = blocks.iter().find(|(l, _)| l == inh_label).unwrap();
+    let hook_line = inh_body
+        .iter()
+        .find(|l| l.contains("@js_inherited_read_cache_hit_f64("))
+        .unwrap();
+    assert!(
+        hook_line.contains("(ptr %") && hook_line.matches(", ptr %").count() == 1,
+        "the hook takes the masked receiver and the interned key as two \
+         pointers:\n{hook_line}"
+    );
+    // 2. reached only from `pic.token.ways`, on the FALSE edge of `present`.
+    let preds: Vec<(&str, &str)> = blocks
+        .iter()
+        .flat_map(|(l, body)| {
+            body.iter()
+                .filter(|t| t.starts_with("br ") && t.contains(&format!("label %{inh_label}")))
+                .map(move |t| (l.as_str(), t.as_str()))
+        })
+        .collect();
+    assert_eq!(
+        preds.len(),
+        1,
+        "exactly one edge may reach the hook: {preds:?}\n{func}"
+    );
+    let (pred_label, pred_term) = preds[0];
+    assert!(
+        pred_label.starts_with("pic.token.ways"),
+        "the hook's one predecessor must be the cache-present test: {pred_label}"
+    );
+    let parts: Vec<&str> = pred_term
+        .strip_prefix("br i1 ")
+        .unwrap()
+        .split(", ")
+        .collect();
+    assert!(
+        parts[1].starts_with("label %pic.miss") && !parts[1].starts_with("label %pic.miss.inh"),
+        "the TRUE edge of `present` must still be the way compares: {pred_term}"
+    );
+    assert!(
+        parts[2].starts_with(&format!("label %{inh_label}")),
+        "the hook must sit on the FALSE (never-primed) edge: {pred_term}"
+    );
+    let present_def = blocks
+        .iter()
+        .find(|(l, _)| l == pred_label)
+        .and_then(|(_, body)| {
+            body.iter()
+                .find(|l| l.starts_with(&format!("{} = ", parts[0])))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the branch condition {} must be defined in {pred_label}",
+                parts[0]
+            )
+        });
+    assert!(
+        present_def.contains("icmp ne ptr ") && present_def.ends_with(", null"),
+        "`present` is the cache slot's non-null test:\n{present_def}"
+    );
+    // 3. polarity: `icmp ne <bits>, TAG_HOLE` is "served", served is the TRUE
+    //    edge and lands on the merge; the false edge is the one exit.
+    let served = inh_body
+        .iter()
+        .find(|l| l.contains("icmp ne i64 ") && l.ends_with(crate::nanbox::TAG_HOLE_I64))
+        .unwrap_or_else(|| panic!("the decline compare against TAG_HOLE:\n{func}"));
+    let cond = served.split_once(" = ").map(|(c, _)| c).unwrap();
+    let term = inh_body
+        .iter()
+        .rev()
+        .find(|l| l.starts_with("br "))
+        .unwrap();
+    let parts: Vec<&str> = term
+        .strip_prefix("br i1 ")
+        .unwrap_or_else(|| panic!("the arm must branch on the hook's answer: {term}"))
+        .split(", ")
+        .collect();
+    assert_eq!(
+        parts[0], cond,
+        "the branch must be on the served predicate: {term}"
+    );
+    assert!(
+        parts[1].starts_with("label %pget.recv_merge"),
+        "the SERVED edge must be the true edge and land on the merge: {term}"
+    );
+    assert!(
+        parts[2].starts_with("label %pic.miss.call"),
+        "the decline must be the false edge into the one exit: {term}"
+    );
+    // 4. the slow entry: one caller, the exit, same operands.
+    let slow_callers: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| {
+            body.iter()
+                .any(|l| l.contains("@js_object_get_field_ic_slow("))
+        })
+        .map(|(l, _)| l.as_str())
+        .collect();
+    assert_eq!(slow_callers.len(), 1, "{slow_callers:?}");
+    assert!(
+        slow_callers[0].starts_with("pic.miss.call"),
+        "the slow entry must be called from the one exit: {slow_callers:?}"
+    );
+    let (_, slow_body) = blocks.iter().find(|(l, _)| l == slow_callers[0]).unwrap();
+    let slow_line = slow_body
+        .iter()
+        .find(|l| l.contains("@js_object_get_field_ic_slow("))
+        .unwrap();
+    assert!(
+        slow_line.contains("ptr @perry_ic_") && slow_line.contains("_packed_get"),
+        "the slow entry must still receive the cache slot and the packed \
+         word:\n{slow_line}"
+    );
+    // 5. the merge takes the served value from the inherited arm.
+    let (_, merge_body) = blocks
+        .iter()
+        .find(|(l, _)| l.starts_with("pget.recv_merge"))
+        .unwrap();
+    let phi = merge_body
+        .iter()
+        .find(|l| l.contains(" = phi double "))
+        .unwrap();
+    let served_value = hook_line.split_once(" = ").map(|(v, _)| v).unwrap();
+    assert!(
+        phi.contains(&format!("[ {served_value}, %{inh_label} ]")),
+        "the merge must take the hook's value from `{inh_label}`:\n{phi}"
     );
 }
