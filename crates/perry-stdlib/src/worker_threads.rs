@@ -540,6 +540,69 @@ fn string_coerce(value: f64) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
+/// #10854: a worker must get event-loop turns, or an `async` `onmessage` handler
+/// never resumes after its first `await` and the reply is never posted.
+///
+/// Turns are taken ONLY while the worker actually has queued work, and the
+/// receive below stays blocking when it does not. That matters: an earlier
+/// version polled every 1-5ms, which left this thread running JS continuously
+/// alongside the main thread and intermittently corrupted it. Running JS only
+/// while servicing a message is the same exposure a synchronous handler already
+/// has, and that path is stable.
+///
+/// This must NOT be the `AllowTimers` pump (`js_promise_run_microtasks`):
+/// `timer.rs` keeps `TIMER_QUEUE`/`CALLBACK_TIMERS`/`INTERVAL_TIMERS` in global
+/// mutexes rather than thread-locals, so that drain runs the MAIN thread's timer
+/// callbacks on this worker thread against this thread's globals — a later
+/// main-thread timer then dies with "value is not a function". The
+/// microtask/nextTick queues are `perry_thread_local!`, so draining those is
+/// confined to this worker.
+fn pump_worker_microtasks() {
+    // Bounded so a job queue that re-arms itself cannot wedge the worker here.
+    for _ in 0..4096 {
+        if perry_runtime::promise::microtasks::js_promise_run_microtasks_await_loop() == 0 {
+            break;
+        }
+    }
+}
+
+/// How long the worker may block waiting for its next command.
+///
+/// `None` means "nothing pending anywhere, block until a command arrives", so an
+/// idle worker costs exactly what it did before #10854. Otherwise the wait is
+/// bounded so a continuation waiting on a timer still gets a turn: the timer
+/// itself is run by whichever thread owns the event loop, but when it resolves a
+/// promise this worker awaits, the continuation lands in THIS thread's microtask
+/// queue and only a turn here can run it.
+///
+/// The timer queues are process-global (see `pump_worker_microtasks`), so this
+/// also sees other threads' timers. That only costs an extra wake-up, and the
+/// drain has an empty fast path — it must never be used to RUN those timers.
+fn worker_wait_budget() -> Option<std::time::Duration> {
+    let pending = perry_runtime::timer::js_timer_has_pending() != 0
+        || perry_runtime::timer::js_callback_timer_has_pending() != 0
+        || perry_runtime::timer::js_interval_timer_has_pending() != 0;
+    if !pending {
+        return None;
+    }
+    let mut soonest: Option<f64> = None;
+    for ms in [
+        perry_runtime::timer::js_timer_next_deadline(),
+        perry_runtime::timer::js_callback_timer_next_deadline(),
+        perry_runtime::timer::js_interval_timer_next_deadline(),
+    ] {
+        if ms >= 0.0 {
+            soonest = Some(soonest.map_or(ms, |best: f64| best.min(ms)));
+        }
+    }
+    // Floor at 5ms so a 60fps main loop cannot turn this into a spin — the
+    // queues are global, so a TUI's own render timers would otherwise wake this
+    // worker ~1000x/s for the life of the process. Cap at 25ms so a far-off
+    // deadline still leaves the worker responsive.
+    let ms = soonest.unwrap_or(25.0).clamp(5.0, 25.0) as u64;
+    Some(std::time::Duration::from_millis(ms))
+}
+
 fn queue_worker_threads_microtask() {
     perry_runtime::closure::js_register_closure_arity(
         worker_threads_channels_microtask as *const u8,
@@ -1281,9 +1344,27 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                     return;
                 }
                 loop {
-                    match rx.recv() {
+                    // #10854: a continuation may be waiting on a timer another
+                    // thread owns, so bound the wait when anything is pending.
+                    let received = match worker_wait_budget() {
+                        Some(budget) => match rx.recv_timeout(budget) {
+                            Ok(command) => Ok(command),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                pump_worker_microtasks();
+                                continue;
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                Err(std::sync::mpsc::RecvError)
+                            }
+                        },
+                        None => rx.recv(),
+                    };
+                    match received {
                         Ok(WorkerCommand::Message(message)) => {
                             deliver_parent_port_message(&message);
+                            // #10854: let the handler's continuations run before
+                            // parking again, so an `async` handler can reply.
+                            pump_worker_microtasks();
                             if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
                                 return;
                             }
@@ -1303,6 +1384,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                         }) => {
                             let result =
                                 direct_message::deliver_worker_message(&message, source_thread_id);
+                            pump_worker_microtasks();
                             let _ = ack.send(result);
                         }
                         Ok(WorkerCommand::Terminate) => {
