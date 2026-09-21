@@ -674,6 +674,15 @@ pub(super) fn get_field_ic_miss_impl(
                 }
                 return f64::from_bits(value.bits());
             }
+            // The key is on nothing, proved once and re-proved by this
+            // lookup's guards. This is the whole of #10495: the ladder below
+            // and the generic tail after it exist only to discover it again.
+            crate::object::inherited_read_cache::Lookup::Absent => {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::NotOwn);
+                }
+                return f64::from_bits(crate::value::TAG_UNDEFINED);
+            }
             crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
             crate::object::inherited_read_cache::Lookup::Unknown => {}
         }
@@ -987,19 +996,25 @@ pub(super) fn get_field_ic_miss_impl(
                 // +106 instructions per read against the same binary with
                 // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
                 // this shape.
+                let mut exhausted = None;
                 if !inherited_declined {
                     // Already inside this function's `unsafe` block (line 874),
                     // so a nested one is `unused_unsafe` under -D warnings.
-                    if let Some(value) =
-                        crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key)
-                    {
+                    let (value, note) =
+                        crate::object::inherited_read_cache::inherited_read_cache_prime_with_absence(
+                            obj, key,
+                        );
+                    if let Some(value) = value {
                         return f64::from_bits(value.bits());
                     }
+                    exhausted = note;
                 }
                 // Past the cache, not through it: the lookup at the top of
-                // this function has already asked.
+                // this function has already asked. `exhausted` is the walk's
+                // derivation that the key is on nothing; the helper pairs it
+                // with the tail's own answer before anything is recorded.
                 let value =
-                    super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
+                    crate::object::absent_read::tail_and_maybe_record_absent(obj, key, exhausted);
                 return f64::from_bits(value.bits());
             }
             let key_count = shape.logical_key_count as usize;
@@ -1110,16 +1125,22 @@ pub(super) fn get_field_ic_miss_impl(
     // paying for a second search. Walk the chain once and record the answer.
     // A decline leaves the generic getter below untouched, which is today's
     // behaviour for every case the cache refuses.
+    let mut exhausted = None;
     if matches!(miss_reason, R::NotOwn) && !inherited_declined {
-        if let Some(value) =
-            unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key) }
-        {
+        let (value, note) = unsafe {
+            crate::object::inherited_read_cache::inherited_read_cache_prime_with_absence(obj, key)
+        };
+        if let Some(value) = value {
             return f64::from_bits(value.bits());
         }
+        exhausted = note;
     }
     // Past the cache, not through it: hook A above has already asked, and for
-    // the reads this cache refuses that question is the whole added cost.
-    let value = super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
+    // the reads this cache refuses that question is the whole added cost. When
+    // the walk proved the chain exhausted, the helper also records the
+    // `undefined` the tail answers — both halves, or nothing.
+    let value =
+        unsafe { crate::object::absent_read::tail_and_maybe_record_absent(obj, key, exhausted) };
     f64::from_bits(value.bits())
 }
 

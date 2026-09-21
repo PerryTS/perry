@@ -99,6 +99,11 @@ pub(crate) use gc_slots::{
 };
 mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
+/// The absent verdict: "this key is on nothing", recorded in
+/// [`inherited_read_cache`]'s table under the rule this module owns. See its
+/// docs for why the verdict needs BOTH a chain the walk enumerated and an
+/// `undefined` the generic tail actually answered.
+pub(crate) mod absent_read;
 mod global_this;
 pub mod handle_expando;
 /// Lane 3: the (receiver shape, key) -> (holder, slot) cache that gives an

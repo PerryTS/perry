@@ -175,6 +175,7 @@
 //! pointer and the interned key.
 
 use super::{shapes, ObjectHeader};
+use crate::object::absent_read::walk_stop as W;
 use crate::value::JSValue;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -208,6 +209,10 @@ struct Entry {
     hop_count: u8,
     /// Inline field index on the holder. Spilled fields never prime.
     slot: u32,
+    /// Read ONLY for an `ABSENT_SLOT` entry: the class-registry generations an
+    /// absent verdict depends on that are not shape transitions. Zero on every
+    /// other entry. See `object::absent_read::AbsentGuards`.
+    guards: crate::object::absent_read::AbsentGuards,
 }
 
 /// `slot` for a NEGATIVE entry: one that records that a walk from this
@@ -223,6 +228,22 @@ struct Entry {
 /// the hit's identity, epoch and per-hop compares unchanged.
 const NEGATIVE_SLOT: u32 = u32::MAX;
 
+/// `slot` for an ABSENT entry: one that records that the key is on NOTHING —
+/// not an own property of the receiver and not in the key list of any object
+/// on its prototype chain, whose end was PROVED rather than assumed.
+///
+/// This is the answer, not a routing hint: a lookup that matches one returns
+/// `undefined` and the generic tail never runs. It is therefore the one entry
+/// in this table that can be a SILENT WRONG VALUE, and it is licensed by two
+/// independent facts rather than one — see `object::absent_read`, which owns
+/// the rule and the two tokens that carry it.
+///
+/// A real slot is an inline field index, so neither sentinel can collide
+/// with one; `NEGATIVE_SLOT` and this value are distinct because "the cache
+/// declines to answer" and "the answer is `undefined`" are different claims
+/// with different invalidation obligations.
+const ABSENT_SLOT: u32 = u32::MAX - 1;
+
 /// What a table lookup found.
 pub(crate) enum Lookup {
     /// An entry proved its claim; this is the value.
@@ -230,6 +251,10 @@ pub(crate) enum Lookup {
     /// A walk from this pair declined last time, under conditions that still
     /// hold. The caller must not walk again.
     Declined,
+    /// The key is on nothing: not own, and in no key list on the whole
+    /// prototype chain, whose end was proved. The answer is `undefined` and
+    /// the caller must not consult anything else. See `object::absent_read`.
+    Absent,
     /// Nothing recorded.
     Unknown,
 }
@@ -244,6 +269,7 @@ const EMPTY_ENTRY: Entry = Entry {
     hops: [0; MAX_HOPS],
     hop_count: 0,
     slot: 0,
+    guards: crate::object::absent_read::AbsentGuards::ZERO,
 };
 
 crate::perry_thread_local! {
@@ -408,6 +434,11 @@ pub(crate) unsafe fn inherited_read_cache_hit(
 ) -> Option<JSValue> {
     match inherited_read_cache_lookup(obj, key) {
         Lookup::Hit(value) => Some(value),
+        // An absent verdict IS an answer, and this entry point is the
+        // recursive prototype hop as well as the native caller: a hop whose
+        // own chain resolves the key to nothing answers `undefined` without
+        // re-walking.
+        Lookup::Absent => Some(JSValue::undefined()),
         Lookup::Declined | Lookup::Unknown => None,
     }
 }
@@ -513,6 +544,28 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     if !receiver_address_facts_ok(meta) {
         return Lookup::Unknown;
     }
+    if entry.slot == ABSENT_SLOT {
+        // Everything above has re-proved the receiver's identity, kind,
+        // prototype bits and the validity word — the same proof a HIT rests
+        // on, because this entry also returns a VALUE rather than merely
+        // routing. What is left is the part of the verdict that is not a
+        // shape and not a marked prototype: see
+        // `object::absent_read::AbsentGuards`.
+        if !entry.guards.still_valid() {
+            return Lookup::Unknown;
+        }
+        if stats_enabled() {
+            crate::object::absent_read::note_absent_served();
+            crate::object::absent_read::trace_absent(
+                "serve",
+                recv_class_id,
+                recv_shape,
+                key,
+                entry.hop_count,
+            );
+        }
+        return Lookup::Absent;
+    }
     let holder = entry.holder as *const ObjectHeader;
     let field = (holder as *const u8)
         .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
@@ -551,6 +604,21 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
 struct DeclineNote {
     armed: bool,
     value_dependent: bool,
+    /// Which arm the walk left by. Zero means it resolved. See
+    /// `object::absent_read::WalkStop` for the codes; the walk sets this
+    /// immediately before every `return`, and one counter bump at the caller
+    /// then accounts for every walk in exactly one bucket. Named arms rather
+    /// than a single "declined" tally because "the cache refused" and "the
+    /// cache refused FOR THIS REASON" are different facts, and only the second
+    /// one can be acted on.
+    stop: u8,
+    /// The walk reached a PROVED end of chain having found the key in no
+    /// hop's key list. This is the derivation half of an absent verdict and
+    /// the only thing that can mint a `ChainExhausted`; it is deliberately
+    /// NOT set by any of the walk's refusals, because a refusal leaves
+    /// objects unexamined and an unexamined object can gain the key with no
+    /// guard moving.
+    chain_exhausted: bool,
     key_ptr: usize,
     recv_class_id: u32,
     recv_shape: u32,
@@ -573,15 +641,45 @@ struct DeclineNote {
 ///
 /// # Safety
 /// `obj` is a masked, non-null heap pointer; `key` may be null.
+///
+/// Production goes through [`inherited_read_cache_prime_with_absence`], which
+/// also carries out the walk's absence derivation. This value-only shape is
+/// what this module's own invalidation suite reads, so those tests keep
+/// stating what they assert instead of discarding a tuple field.
+#[cfg(test)]
 pub(crate) unsafe fn inherited_read_cache_prime(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
+    inherited_read_cache_prime_with_absence(obj, key).0
+}
+
+/// [`inherited_read_cache_prime`], plus the one other thing the walk learns on
+/// the way: that the chain was fully enumerated and the key is in no key list
+/// on it.
+///
+/// The token is the DERIVATION half of an absent verdict. It is returned
+/// rather than acted on here because the other half — that the generic tail
+/// actually answers `undefined` — is not known until the caller has run that
+/// tail. `object::absent_read` owns the conjunction.
+///
+/// # Safety
+/// As [`inherited_read_cache_prime`].
+pub(crate) unsafe fn inherited_read_cache_prime_with_absence(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> (
+    Option<JSValue>,
+    Option<crate::object::absent_read::ChainExhausted>,
+) {
     if key.is_null() || !cache_enabled() {
-        return None;
+        return (None, None);
     }
     let mut note = DeclineNote::default();
     let result = inherited_read_cache_walk(obj, key, &mut note);
+    if stats_enabled() {
+        crate::object::absent_read::note_walk_stop(note.stop);
+    }
     if result.is_none() {
         if stats_enabled() {
             DECLINES.fetch_add(1, Ordering::Relaxed);
@@ -597,6 +695,7 @@ pub(crate) unsafe fn inherited_read_cache_prime(
                 hops: note.hops,
                 hop_count: note.hop_count,
                 slot: NEGATIVE_SLOT,
+                guards: crate::object::absent_read::AbsentGuards::ZERO,
             };
             let index = entry_index(note.recv_class_id, note.recv_shape, note.key_ptr);
             INHERITED_READ_CACHE.with(|cell| {
@@ -604,7 +703,153 @@ pub(crate) unsafe fn inherited_read_cache_prime(
             });
         }
     }
-    result
+    let exhausted = if result.is_none()
+        && note.chain_exhausted
+        && note.armed
+        && crate::object::absent_read::absent_cache_enabled()
+    {
+        // `value_dependent` is the `P.a = undefined` case: the key IS in a
+        // hop's key list, holding a value a plain store can replace with no
+        // shape transition. The walk cannot set `chain_exhausted` and
+        // `value_dependent` together — finding the key returns before the
+        // chain-end proof — and this assertion is what keeps a later edit
+        // from making them reachable at once.
+        debug_assert!(!note.value_dependent);
+        Some(crate::object::absent_read::ChainExhausted::from_proved_chain_end())
+    } else {
+        None
+    };
+    (result, exhausted)
+}
+
+/// Record that this `(receiver identity, key)` pair resolves to nothing.
+///
+/// Called only from `object::absent_read::record_absent`, which is the only
+/// holder of the two tokens the verdict needs. This function re-derives the
+/// chain rather than trusting them: the generic tail has run in between, and
+/// it can allocate, collect, run a getter, add the key or re-parent the chain.
+/// A re-walk that no longer proves exhaustion records nothing.
+///
+/// Returns `true` when an entry was written.
+///
+/// # Safety
+/// `obj` and `key` are live heap pointers, re-read from roots by the caller
+/// after the tail call.
+pub(crate) unsafe fn inherited_read_cache_record_absent(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    if key.is_null() || !cache_enabled() || !crate::object::absent_read::absent_cache_enabled() {
+        return false;
+    }
+    let mut note = DeclineNote::default();
+    let result = inherited_read_cache_walk(obj, key, &mut note);
+    if result.is_some() || !note.chain_exhausted || !note.armed || note.value_dependent {
+        // The tail has run since the token was minted, and it can allocate,
+        // collect, run a getter, add the key or re-parent the chain. A re-walk
+        // that no longer proves exhaustion records nothing.
+        crate::object::absent_read::note_walk_stop(W::RECORD_RE_WALK_LOST);
+        return false;
+    }
+    if !receiver_key_list_admits_absent(obj, key) {
+        crate::object::absent_read::note_walk_stop(
+            crate::object::absent_read::walk_stop::RECORD_RECV_KEY_LIST,
+        );
+        return false;
+    }
+    if !crate::object::absent_read::receiver_may_record_absent(obj) {
+        crate::object::absent_read::note_walk_stop(
+            crate::object::absent_read::walk_stop::RECORD_RECV_REFUSED,
+        );
+        return false;
+    }
+    let entry = Entry {
+        key_ptr: note.key_ptr,
+        validity: crate::object::proto_validity::proto_validity(),
+        recv_proto_bits: note.recv_proto_bits,
+        recv_class_id: note.recv_class_id,
+        recv_shape: note.recv_shape,
+        hops: note.hops,
+        holder: note.holder,
+        hop_count: note.hop_count,
+        slot: ABSENT_SLOT,
+        guards: crate::object::absent_read::AbsentGuards::capture(),
+    };
+    let index = entry_index(note.recv_class_id, note.recv_shape, note.key_ptr);
+    INHERITED_READ_CACHE.with(|cell| {
+        (*cell.get())[index] = entry;
+    });
+    crate::object::absent_read::note_walk_stop(W::RECORD_WRITTEN);
+    crate::object::absent_read::trace_absent(
+        "record",
+        note.recv_class_id,
+        note.recv_shape,
+        key,
+        note.hop_count,
+    );
+    true
+}
+
+/// Does the RECEIVER's own key list admit an absent verdict?
+///
+/// `inherited_read_cache_prime`'s contract states that the caller has already
+/// established the key is not an own property, and for the POSITIVE entry that
+/// is enough: an own key that appears later is a key-add transition, which
+/// mints a new ShapeId and stops the entry matching.
+///
+/// **An absent verdict needs more, and `fx/inval.ts` route 6 is why.** Delete
+/// a key and re-add it: `get_field_ic_miss_impl`'s own-key scan skips a slot
+/// whose name pointer the delete cleared, so the read reports not-own and the
+/// verdict is recorded -- but the re-add can re-fill that same slot under an
+/// UNCHANGED ShapeId, and the entry then answers `undefined` for a key that is
+/// present. Measured before this check: `6-readded` printed `undefined` where
+/// node printed `12`.
+///
+/// So a verdict requires the key list to contain neither this key NOR a
+/// tombstone, because a tombstone is a slot that can become this key without
+/// moving anything the entry guards. Scanned once at record time, on a path
+/// that runs once per (receiver shape, key) pair; free at steady state.
+///
+/// # Safety
+/// `obj` is a live, masked heap pointer already proved to be an ordinary
+/// `GC_TYPE_OBJECT`; `key` is a live interned string.
+unsafe fn receiver_key_list_admits_absent(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> bool {
+    let Some(shape) = shapes::object_shape_descriptor(obj) else {
+        return false;
+    };
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    if keys.is_null() {
+        // No own keys at all -- the `ObjectNoKeys` receiver, which is the most
+        // common absent-read shape there is.
+        return true;
+    }
+    if !crate::value::addr_class::is_above_handle_band(keys as usize) {
+        return false;
+    }
+    // Every physically present slot, not only the logical count: a tombstone
+    // is a slot, and the whole point is that a slot can become this key with
+    // no ShapeId transition.
+    let count = ((*keys).length as usize).max(shape.logical_key_count as usize);
+    let data = (keys as *const u8).add(8) as *const f64;
+    for i in 0..count {
+        let k_bits = (*data.add(i)).to_bits();
+        if k_bits == crate::value::TAG_HOLE {
+            // The O(1) delete writes TAG_HOLE over the key pointer
+            // (`delete_rest.rs`): this is a tombstone.
+            return false;
+        }
+        let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        if k_ptr.is_null() {
+            return false;
+        }
+        if crate::string::js_string_equals(k_ptr, key) != 0 {
+            return false;
+        }
+    }
+    true
 }
 
 /// The walk itself. Every `None` here is a refusal; `note` is what makes the
@@ -621,9 +866,11 @@ unsafe fn inherited_read_cache_walk(
     if !crate::value::addr_class::is_plausible_heap_addr(key_addr)
         || !address_is_prime_stable(key_addr)
     {
+        note.stop = W::KEY_ADDR;
         return None;
     }
     if (*key).byte_len > (*key).capacity || (*key).byte_len >= 1 << 28 {
+        note.stop = W::KEY_HEADER;
         return None;
     }
     let key_bytes =
@@ -635,6 +882,7 @@ unsafe fn inherited_read_cache_walk(
         || key_bytes == b"constructor"
         || std::str::from_utf8(key_bytes).is_err()
     {
+        note.stop = W::KEY_REFUSED;
         return None;
     }
     let accessor_bit = 1u64 << (super::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len()) & 63);
@@ -649,32 +897,43 @@ unsafe fn inherited_read_cache_walk(
     if !crate::value::addr_class::is_plausible_heap_addr(obj_addr)
         || crate::arena::classify_heap_generation(obj_addr) == crate::arena::HeapGeneration::Unknown
     {
+        note.stop = W::RECV_ADDR;
         return None;
     }
     let recv_header = match crate::value::addr_class::try_read_gc_header_known_plausible(obj_addr) {
         Some(header) => header,
-        None => return None,
+        None => {
+            note.stop = W::RECV_HEADER;
+            return None;
+        }
     };
     if recv_header.obj_type != crate::gc::GC_TYPE_OBJECT
         || recv_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || recv_header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
+        note.stop = W::RECV_KIND;
         return None;
     }
     match shapes::object_shape_descriptor(obj) {
         Some(shape) if shape.object_kind == shapes::ShapeObjectKind::Ordinary => {}
-        _ => return None,
+        _ => {
+            note.stop = W::RECV_NOT_ORDINARY;
+            return None;
+        }
     }
     let recv_class_id = (*obj).class_id;
     let recv_shape = shapes::object_shape_stamp(obj);
     if recv_shape == 0 {
+        note.stop = W::RECV_NO_STAMP;
         return None;
     }
     let recv_meta = (*obj).meta;
     if !receiver_address_facts_ok(recv_meta) {
+        note.stop = W::RECV_ADDRESS_FACTS;
         return None;
     }
     if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(obj) {
+        note.stop = W::RECV_PERF_ENTRY;
         return None;
     }
     let recv_proto_bits = if recv_meta.is_null() {
@@ -696,6 +955,7 @@ unsafe fn inherited_read_cache_walk(
         && ((*recv_meta).accessor_key_bits & accessor_bit != 0
             || (*recv_meta).attr_key_bits & accessor_bit != 0)
     {
+        note.stop = W::RECV_BLOOM;
         return None;
     }
 
@@ -710,59 +970,98 @@ unsafe fn inherited_read_cache_walk(
         let next: *const ObjectHeader = if !current_meta.is_null() && (*current_meta).prototype != 0
         {
             let prototype = JSValue::from_bits((*current_meta).prototype);
+            if prototype.bits() == crate::value::TAG_NULL {
+                // `Object.setPrototypeOf(o, null)` / `Object.create(null)`
+                // recorded explicitly: the chain ENDS here, and saying so is
+                // what licenses an absent verdict for a bag with no
+                // prototype at all.
+                note.chain_exhausted = true;
+                note.stop = W::END_EXPLICIT_NULL;
+                return None;
+            }
             if !prototype.is_pointer() {
+                note.stop = W::PROTO_NOT_POINTER;
                 return None;
             }
             prototype.as_pointer()
-        } else {
-            let synthetic = current_class_id >= 0x8000_0000
-                && current_class_id
-                    < super::NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed);
-            if !synthetic {
-                // A default builtin prototype may still need lazy
-                // construction, and can be replaced through `globalThis`.
-                return None;
-            }
+        } else if is_synthetic_class_id(current_class_id) {
+            // The synthetic-class route, unchanged and FIRST: a class id this
+            // route owns must never be handed to the implicit one below, or a
+            // POSITIVE entry could be recorded through a hop that is not on
+            // the real chain. `implicit_object_prototype_hop` refuses a
+            // synthetic id for the same reason, so the two are disjoint from
+            // both sides rather than by the order of these arms alone.
             if !super::class_decl_prototype_object(current_class_id).is_null() {
                 // Declared prototype metadata has its own precedence.
+                note.stop = W::DECL_PROTOTYPE;
                 return None;
             }
             super::class_prototype_object(current_class_id)
+        } else if object_prototype_is_explicitly_null(current) {
+            // `Object.create(null)` / `setPrototypeOf(o, null)` recorded in the
+            // header rather than in a meta record. Same fact as the `TAG_NULL`
+            // arm above, reached by the other of the two setters.
+            note.chain_exhausted = true;
+            note.stop = W::END_HEADER_NULL;
+            return None;
+        } else {
+            // A default builtin prototype may still need lazy construction,
+            // and can be replaced through `globalThis`.
+            match implicit_object_prototype_hop(current, current_class_id) {
+                Ok(implicit) => implicit,
+                Err(code) => {
+                    note.stop = code;
+                    return None;
+                }
+            }
         };
         if next.is_null() || next == current || next == obj {
+            note.stop = W::NEXT_NULL_OR_CYCLE;
             return None;
         }
         if hop_count == MAX_HOPS {
+            note.stop = W::MAX_HOPS;
             return None;
         }
         let next_addr = next as usize;
         if !crate::value::addr_class::is_plausible_heap_addr(next_addr)
             || !address_is_prime_stable(next_addr)
         {
+            note.stop = W::HOP_ADDR;
             return None;
         }
         let header = match crate::value::addr_class::try_read_gc_header_known_plausible(next_addr) {
             Some(header) => header,
-            None => return None,
+            None => {
+                note.stop = W::HOP_HEADER;
+                return None;
+            }
         };
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
         {
+            note.stop = W::HOP_KIND;
             return None;
         }
         let shape = match shapes::object_shape_descriptor(next) {
             Some(shape) => shape,
-            None => return None,
+            None => {
+                note.stop = W::HOP_NO_SHAPE;
+                return None;
+            }
         };
         if shape.object_kind != shapes::ShapeObjectKind::Ordinary {
+            note.stop = W::HOP_NOT_ORDINARY;
             return None;
         }
         if shapes::object_shape_stamp(next) == 0 {
+            note.stop = W::HOP_NO_STAMP;
             return None;
         }
         let meta = (*next).meta;
         if !receiver_address_facts_ok(meta) {
+            note.stop = W::HOP_ADDRESS_FACTS;
             return None;
         }
         // The hop must ALREADY be marked as somebody's prototype. An entry
@@ -781,12 +1080,22 @@ unsafe fn inherited_read_cache_walk(
         // marking bumps no validity, so a negative entry recorded here would
         // decline the pair for the life of the process — the same trap the
         // value-dependent refusals avoid.
+        //
+        // The ABSENT verdict rests on this arm too, and not only the positive
+        // entry: `proto_validity()` bumps only for MARKED objects, so an
+        // absent entry is sound only if every hop on the exhausted chain was
+        // marked when it was recorded. Because the walk cannot proceed past
+        // this point on an unmarked hop, proving exhaustion below implies
+        // exactly that. Removing the abandon would make absent entries go
+        // stale silently; see `object::absent_read`.
         if meta.is_null() || (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
             note.armed = false;
+            note.stop = W::HOP_UNMARKED;
             crate::object::proto_validity::mark_object_as_prototype(next_addr);
             return None;
         }
         if key_bytes == b"toJSON" && crate::perf_hooks::is_perf_entry_object(next) {
+            note.stop = W::HOP_EXOTIC;
             return None;
         }
         // A clear Bloom bit PROVES no accessor and no customized descriptor
@@ -795,6 +1104,7 @@ unsafe fn inherited_read_cache_walk(
             && ((*meta).accessor_key_bits & accessor_bit != 0
                 || (*meta).attr_key_bits & accessor_bit != 0)
         {
+            note.stop = W::HOP_BLOOM;
             return None;
         }
 
@@ -811,6 +1121,7 @@ unsafe fn inherited_read_cache_walk(
             {
                 // Spilled fields are not reachable by the one-load hit path.
                 if slot >= shape.live_inline_slot_count {
+                    note.stop = W::FOUND_SPILLED;
                     return None;
                 }
                 let field = (next as *const u8)
@@ -819,6 +1130,7 @@ unsafe fn inherited_read_cache_walk(
                 let bits = *field;
                 if bits == crate::value::TAG_HOLE {
                     note.value_dependent = true;
+                    note.stop = W::FOUND_HOLE;
                     return None;
                 }
                 let value = JSValue::from_bits(bits);
@@ -828,6 +1140,7 @@ unsafe fn inherited_read_cache_walk(
                     // A later store can make this slot a real value with no
                     // shape transition, so this refusal is not remembered.
                     note.value_dependent = true;
+                    note.stop = W::FOUND_UNDEFINED;
                     return None;
                 }
                 let entry = Entry {
@@ -840,6 +1153,7 @@ unsafe fn inherited_read_cache_walk(
                     hops,
                     hop_count: hop_count as u8,
                     slot,
+                    guards: crate::object::absent_read::AbsentGuards::ZERO,
                 };
                 let index = entry_index(recv_class_id, recv_shape, key_addr);
                 INHERITED_READ_CACHE.with(|cell| {
@@ -848,14 +1162,105 @@ unsafe fn inherited_read_cache_walk(
                 if stats_enabled() {
                     PRIMES.fetch_add(1, Ordering::Relaxed);
                 }
+                // The one arm that is not a refusal, set explicitly so the
+                // buckets account for every walk rather than leaving the
+                // resolved ones as an unlabelled default.
+                note.stop = W::RESOLVED;
                 return Some(value);
             }
         }
 
+        if crate::array::object_prototype_addr_matches(next_addr) {
+            // `Object.prototype`'s own `[[Prototype]]` is null, and the only
+            // thing that can change that is `setPrototypeOf`, which bumps the
+            // semantic epoch this entry already carries. Its key list has just
+            // been scanned and missed. The chain is therefore fully
+            // enumerated and the key is on nothing.
+            note.chain_exhausted = true;
+            note.stop = W::END_OBJECT_PROTOTYPE;
+            return None;
+        }
         current = next;
         current_class_id = (*next).class_id;
         current_meta = meta;
     }
+}
+
+/// The implicit `[[Prototype]]` link for an object that records none: the
+/// realm's `Object.prototype`.
+///
+/// This deliberately reproduces only the FIRST gate of
+/// `field_get_set::accessors::ordinary_object_prototype_property_value`, the
+/// function that owns this link on the read path: an object whose `class_id`
+/// is `0` or an anon-shape id skips that function's entire class-registry
+/// ladder and resolves straight to `Object.prototype`. Any other class id has
+/// a registry surface — an Error-family prototype, a declaration prototype
+/// with a user override, a registered parent chain — that this walk does not
+/// model, so it is refused and the read keeps today's path.
+///
+/// Refusing is always safe; claiming a hop that is not on the real chain is
+/// not. That asymmetry is why this is a strict subset rather than a
+/// re-implementation.
+///
+/// The address comes from `array::object_prototype_addr`, which is memoized,
+/// healed through the forwarding chain, and a registered GC root (#7795), so
+/// it is a live address and not a cached corpse.
+///
+/// # Safety
+/// `obj` is a masked, non-null heap pointer already proved to be an ordinary
+/// `GC_TYPE_OBJECT`.
+/// `true` when this object's `[[Prototype]]` is null by the header flag that
+/// `Object.create(null)` and `setPrototypeOf(o, null)` set. Its one setter is
+/// audited in `gc/types.rs`; the read path
+/// (`ordinary_object_prototype_property_value`) treats it as a hard stop, and
+/// so does this walk.
+///
+/// # Safety
+/// `obj` is a masked, non-null heap pointer already proved to be an ordinary
+/// `GC_TYPE_OBJECT`.
+#[inline]
+unsafe fn object_prototype_is_explicitly_null(obj: *const ObjectHeader) -> bool {
+    match crate::value::addr_class::try_read_gc_header_known_plausible(obj as usize) {
+        Some(gc) => gc._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0,
+        None => false,
+    }
+}
+
+/// A class id minted by `js_object_create` and friends, whose prototype the
+/// class registry owns. Factored out so the walk's two prototype routes state
+/// the SAME predicate rather than two that could drift apart.
+#[inline]
+fn is_synthetic_class_id(class_id: u32) -> bool {
+    class_id >= 0x8000_0000
+        && class_id < super::NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[inline]
+unsafe fn implicit_object_prototype_hop(
+    obj: *const ObjectHeader,
+    class_id: u32,
+) -> Result<*const ObjectHeader, u8> {
+    // Disjoint from the synthetic-class route by construction, not by the
+    // order of the caller's arms: whether or not a synthetic id is also in the
+    // anon-shape set, only one of the two can ever claim a hop.
+    if is_synthetic_class_id(class_id) {
+        return Err(W::IMPLICIT_SYNTHETIC);
+    }
+    if class_id != 0 && !super::class_registry::is_anon_shape_class_id(class_id) {
+        return Err(W::IMPLICIT_CLASS_ID);
+    }
+    let Some(gc) = crate::value::addr_class::try_read_gc_header_known_plausible(obj as usize)
+    else {
+        return Err(W::IMPLICIT_HEADER);
+    };
+    if gc._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        return Err(W::IMPLICIT_NULL_PROTO_FLAG);
+    }
+    let addr = crate::array::object_prototype_addr();
+    if addr == 0 || addr == obj as usize {
+        return Err(W::IMPLICIT_NO_MEMO);
+    }
+    Ok(addr as *const ObjectHeader)
 }
 
 // --- GC ---------------------------------------------------------------------

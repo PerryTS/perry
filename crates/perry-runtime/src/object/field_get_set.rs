@@ -207,7 +207,7 @@ pub(crate) mod entries_shape;
 pub(crate) mod enumeration;
 mod field_ops;
 mod for_in_stable;
-mod get_field_by_name;
+pub(crate) mod get_field_by_name;
 mod get_field_by_name_async;
 #[cfg(test)]
 mod get_field_by_name_probe_tests;

@@ -1111,6 +1111,28 @@ impl IcDiag {
                  declines={inh_declines} declines_cached={inh_neg}"
             );
         }
+        // The absent verdict, on the same arming and for the same reason: a
+        // mechanism that quietly refuses to record answers the same
+        // `undefined` the generic tail does, at the same cost, and a program's
+        // output cannot tell the two apart. `served` is the claim -- reads that
+        // never reached the tail at all.
+        let abs_served = crate::object::absent_read::absent_served();
+        let abs_recorded = crate::object::absent_read::absent_recorded();
+        let abs_refused = crate::object::absent_read::absent_refused();
+        if (abs_served | abs_recorded | abs_refused) != 0 {
+            let _ = writeln!(
+                out,
+                "  absent: served={abs_served} recorded={abs_recorded} \
+                 refused={abs_refused}"
+            );
+        }
+        // Per-arm accounting for the chain walk. Every walk lands in exactly
+        // one bucket, so a coverage question is answered by reading this row
+        // rather than by forming a hypothesis about it.
+        let stops = crate::object::absent_read::walk_stop_report();
+        if !stops.is_empty() {
+            let _ = writeln!(out, "  walk: {stops}");
+        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
