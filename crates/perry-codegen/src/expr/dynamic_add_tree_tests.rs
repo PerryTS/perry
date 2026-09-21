@@ -448,3 +448,32 @@ fn left_chain_declines_when_a_late_leaf_is_a_module_global() {
     );
     assert_eq!(fadds(main), 1, "the root must not read c early:\n{main}");
 }
+
+#[test]
+fn declared_number_left_chain_declines_when_a_late_leaf_is_an_element_read() {
+    // function f(a: number[]) { return a[0] + a[1] + a[2] }. The element type
+    // is only declared, so the tree is `both_numeric` and reaches the fold
+    // through the declared-only entry, not the dynamic one. `a[0]` can still
+    // hold an object whose valueOf assigns `a[2]`: on the unfixed compiler
+    // this printed 6 where node prints 103.
+    let mut arr = param(P_A, "a");
+    arr.ty = Type::Array(Box::new(Type::Number));
+    let elem = |i: i64| Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(P_A)),
+        index: Box::new(Expr::Integer(i)),
+    };
+    let ir = function_ir(function(
+        "declared_elements",
+        vec![arr],
+        vec![Stmt::Return(Some(left_chain(vec![
+            elem(0),
+            elem(1),
+            elem(2),
+        ])))],
+    ));
+    assert!(
+        ir.contains("\nguarded_add.numeric."),
+        "premise: the declared-number chain reaches the fold\n{ir}"
+    );
+    assert_eq!(fadds(&ir), 1, "the root must not read a[2] early:\n{ir}");
+}

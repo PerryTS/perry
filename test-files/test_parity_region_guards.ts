@@ -106,4 +106,13 @@ const F3 = { a: null, b: 2, c: 3 };
 F3.a = { valueOf() { F3.c = 100; return 1; } };
 console.log("F3 const locals:", fStmt(F3));           // 6
 
+// ---- G: the same chain through the declared-number entry ----------------
+// `number[]` types the elements, but nothing enforces an annotation, so this
+// tree reaches the fold as statically numeric rather than as a dynamic tree.
+// Same hazard: `a[0]`'s valueOf assigns `a[2]` before the spec reads it.
+const G: number[] = [1, 2, 3];
+(G as any)[0] = { valueOf() { G[2] = 100; return 1; } };
+function gSum(a: number[]): number { return a[0] + a[1] + a[2]; }
+console.log("G declared number[]:", gSum(G));         // 103   (WRONG: 6)
+
 console.log("done");
