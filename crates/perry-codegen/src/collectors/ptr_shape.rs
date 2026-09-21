@@ -416,6 +416,11 @@ fn collect_shape_proven_ptr_locals_impl(
         // not the local rooting proof; it has no specialized `TaPtr` context, so
         // no view binding is spec-proven here.
         &HashSet::new(),
+        // #10777: the per-receiver proof supplies its own `members` /
+        // `numeric_fields`; this locals fixpoint feeds it, so it must stay
+        // empty here or the two would be mutually recursive.
+        &HashSet::new(),
+        &HashSet::new(),
     );
     // A spec entry has validated these parameters before entering this body.
     // Unlike a TypeScript annotation, that is runtime evidence, so derived
