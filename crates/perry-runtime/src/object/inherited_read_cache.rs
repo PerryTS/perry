@@ -218,11 +218,24 @@ crate::perry_thread_local! {
         std::cell::UnsafeCell::new(vec![EMPTY_ENTRY; CACHE_SIZE].into_boxed_slice());
 }
 
+/// An entry is identified by (class id, ShapeId, key), so all three have to
+/// reach the slot index.
+///
+/// #10834 hashed only (shape, key). That is exactly wrong for the receivers
+/// this cache exists to serve: `js_object_create` mints a FRESH synthetic
+/// class id on every call, so N objects built by `Object.create(p)` have N
+/// different class ids and ONE identical shape. Under a (shape, key) index
+/// they all landed in the same direct-mapped slot and evicted one another, so
+/// a site reading through eight of them primed on EVERY read and hit never:
+/// measured `primes=6295655 hits=0` over ten million reads, a full chain walk
+/// plus an entry write per read, +75 instructions against the same binary with
+/// the cache off.
 #[inline(always)]
-fn entry_index(shape: u32, key_ptr: usize) -> usize {
+fn entry_index(class_id: u32, shape: u32, key_ptr: usize) -> usize {
     // Interned key pointers are 8- or 16-byte aligned, so their low bits are
     // zeros; fold the middle bits down before masking.
-    let h = ((key_ptr >> 4) as u64 ^ ((shape as u64) << 21)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let h = ((key_ptr >> 4) as u64 ^ ((shape as u64) << 21) ^ ((class_id as u64) << 43))
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> 40) as usize & CACHE_MASK
 }
 
@@ -395,7 +408,7 @@ pub(crate) unsafe fn inherited_read_cache_lookup(
     if recv_shape == 0 {
         return Lookup::Unknown;
     }
-    let index = entry_index(recv_shape, key as usize);
+    let index = entry_index(recv_class_id, recv_shape, key as usize);
     let entry = INHERITED_READ_CACHE.with(|cell| (*cell.get())[index]);
     if entry.key_ptr != key as usize
         || entry.recv_shape != recv_shape
@@ -528,7 +541,7 @@ pub(crate) unsafe fn inherited_read_cache_prime(
                 hop_count: note.hop_count,
                 slot: NEGATIVE_SLOT,
             };
-            let index = entry_index(note.recv_shape, note.key_ptr);
+            let index = entry_index(note.recv_class_id, note.recv_shape, note.key_ptr);
             INHERITED_READ_CACHE.with(|cell| {
                 (*cell.get())[index] = entry;
             });
@@ -756,7 +769,7 @@ unsafe fn inherited_read_cache_walk(
                     hop_count: hop_count as u8,
                     slot,
                 };
-                let index = entry_index(recv_shape, key_addr);
+                let index = entry_index(recv_class_id, recv_shape, key_addr);
                 INHERITED_READ_CACHE.with(|cell| {
                     (*cell.get())[index] = entry;
                 });

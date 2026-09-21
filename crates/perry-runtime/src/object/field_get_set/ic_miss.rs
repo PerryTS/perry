@@ -935,7 +935,31 @@ pub(super) fn get_field_ic_miss_impl(
                 if diag {
                     ic_diag_note(cache_slot, key, R::ObjectNoKeys);
                 }
-                let value = js_object_get_field_by_name(obj, key);
+                // #10834 gated its only prime site on `miss_reason == NotOwn`,
+                // and this arm returns before reaching it. A receiver with no
+                // keys array has NO own properties at all, so "the key is not
+                // an own property" holds here MORE strongly than it does for
+                // `NotOwn` — and this is the single most common inherited-read
+                // shape there is: `Object.create(p)` with nothing of its own.
+                //
+                // Without this the lookup at the top of this function runs on
+                // every such read, always misses because nothing can ever be
+                // recorded, and the chain walk proceeds unchanged: measured at
+                // +106 instructions per read against the same binary with
+                // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
+                // this shape.
+                if !inherited_declined {
+                    if let Some(value) = unsafe {
+                        crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key)
+                    } {
+                        return f64::from_bits(value.bits());
+                    }
+                }
+                // Past the cache, not through it: the lookup at the top of
+                // this function has already asked.
+                let value = super::get_field_by_name::get_field_by_name_past_inherited_cache(
+                    obj, key,
+                );
                 return f64::from_bits(value.bits());
             }
             let key_count = shape.logical_key_count as usize;
