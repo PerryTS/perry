@@ -40,8 +40,10 @@ fn binary_chunk_span(chunk: f64) -> Option<(*const u8, usize)> {
     if !JSValue::from_bits(chunk.to_bits()).is_pointer() {
         return None;
     }
+    // Everything below keys registries by address; nothing dereferences
+    // `addr` unless a registry has vouched for it.
     let addr = (chunk.to_bits() & crate::value::POINTER_MASK) as usize;
-    if addr < 0x1000 || crate::buffer::is_any_array_buffer(addr) {
+    if crate::buffer::is_any_array_buffer(addr) {
         return None;
     }
     let mut len = 0_u32;
