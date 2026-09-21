@@ -105,7 +105,10 @@ fn intern_encoding(encoding: DecoderEncoding, label: &'static str) -> u64 {
     // Compared by VALUE: two occurrences of the same canonical label are not
     // guaranteed to be one address (thin LTO may duplicate a literal), and an
     // address compare would then mint a second row for one encoding.
-    if let Some(index) = table.iter().position(|(e, l)| *e == encoding && *l == label) {
+    if let Some(index) = table
+        .iter()
+        .position(|(e, l)| *e == encoding && *l == label)
+    {
         return index as u64;
     }
     table.push((encoding, label));
@@ -351,7 +354,6 @@ fn register_decoder(
         pack_decoder_state(&state),
     )
 }
-
 
 /// `decoder.encoding` — WHATWG-canonical label.
 #[no_mangle]
@@ -916,7 +918,10 @@ mod tests {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let cases = [
             (js_text_encoder_new(), TEXT_ENCODER_CLASS_ID),
-            (js_text_decoder_new(undef, undef, undef), TEXT_DECODER_CLASS_ID),
+            (
+                js_text_decoder_new(undef, undef, undef),
+                TEXT_DECODER_CLASS_ID,
+            ),
         ];
         for (raw, class_id) in cases {
             let addr = raw as usize;
@@ -1020,8 +1025,14 @@ mod tests {
                 .to_string()
         };
         assert_eq!(got, "windows-1252");
-        assert_eq!(js_text_decoder_ignore_bom(boxed).to_bits(), crate::value::TAG_TRUE);
-        assert_eq!(js_text_decoder_fatal(boxed).to_bits(), crate::value::TAG_FALSE);
+        assert_eq!(
+            js_text_decoder_ignore_bom(boxed).to_bits(),
+            crate::value::TAG_TRUE
+        );
+        assert_eq!(
+            js_text_decoder_fatal(boxed).to_bits(),
+            crate::value::TAG_FALSE
+        );
     }
 
     /// The encoding intern is bounded by the compile-time label set: naming the

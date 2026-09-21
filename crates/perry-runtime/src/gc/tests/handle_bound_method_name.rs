@@ -103,7 +103,10 @@ unsafe fn assert_names_the_installed_method(
 ) {
     let closure = crate::value::js_nanbox_get_pointer(f64::from_bits(value.bits()))
         as *const crate::ClosureHeader;
-    assert!(!closure.is_null(), "{what}: the read must produce a callable");
+    assert!(
+        !closure.is_null(),
+        "{what}: the read must produce a callable"
+    );
     let name = crate::closure::closure_get_dynamic_prop(closure as usize, "name");
     let name_value = crate::value::JSValue::from_bits(name.to_bits());
     assert!(
@@ -112,7 +115,10 @@ unsafe fn assert_names_the_installed_method(
         name.to_bits()
     );
     let name_ptr = (name.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
-    assert!(!name_ptr.is_null(), "{what}: the method name must be a string");
+    assert!(
+        !name_ptr.is_null(),
+        "{what}: the method name must be a string"
+    );
     let interior = (name_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     let got = std::str::from_utf8(std::slice::from_raw_parts(
         interior,

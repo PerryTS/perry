@@ -410,7 +410,6 @@ mod refresh_and_immediate_primitive_tests {
     }
 }
 
-
 /// #340/#341 — the representation itself. Everything else in this file is
 /// about timer behaviour; these are about what a timer handle IS.
 #[cfg(test)]
@@ -560,8 +559,10 @@ mod honest_tag_tests {
     fn a_foreign_receiver_is_not_a_timer_handle() {
         let _serial = crate::gc::global_side_table_test_lock();
         let plain = crate::object::js_object_alloc(0, 0);
-        assert!(crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(plain as i64))
-            .is_none());
+        assert!(
+            crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(plain as i64))
+                .is_none()
+        );
         // …and a bare small id, the OLD representation, is not one either.
         assert!(crate::timer::timer_handle_parts(crate::value::js_nanbox_pointer(1)).is_none());
     }

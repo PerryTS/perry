@@ -414,12 +414,11 @@ pub(crate) use handle_object::{scan_timer_prototype_roots_mut, IMMEDIATE_CLASS_I
 // `gc/tests/handle_bound_method_name.rs`, `timer/ref_states.rs`'s test module);
 // an unconditional `pub(crate) use` would be an unused import in a lib build
 // and `-D warnings` would reject it.
+use handle_object::{timer_handle_id, timer_object};
 #[cfg(test)]
 pub(crate) use handle_object::{timer_handle_parts, TIMEOUT_CLASS_ID};
-use handle_object::{timer_handle_id, timer_object};
 use ref_states::{
-    register_scheduled_timer, set_timer_ref_state, timer_has_ref_state,
-    ScheduledTimerId,
+    register_scheduled_timer, set_timer_ref_state, timer_has_ref_state, ScheduledTimerId,
 };
 
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);

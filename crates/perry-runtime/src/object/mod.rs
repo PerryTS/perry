@@ -1693,8 +1693,9 @@ const _: () = assert!(std::mem::offset_of!(ObjectMeta, elements) == 96);
 // #340/#341: `native_state` must stay the LAST word. The offsets above are
 // addressed by index from emitted code, so a field inserted mid-struct moves
 // them silently; this pins the append instead of trusting the comment.
-const _: () =
-    assert!(std::mem::offset_of!(ObjectMeta, native_state) + 8 == std::mem::size_of::<ObjectMeta>());
+const _: () = assert!(
+    std::mem::offset_of!(ObjectMeta, native_state) + 8 == std::mem::size_of::<ObjectMeta>()
+);
 const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 8);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
