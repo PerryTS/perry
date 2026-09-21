@@ -1055,6 +1055,7 @@ fn shape_descriptor_bind_static(
                 )
             {
                 STATIC_BIND_UNIFIED.fetch_add(1, Ordering::Relaxed);
+                note_static_bind("unified", static_id, id);
                 return Ok(id);
             }
         }
@@ -1063,6 +1064,7 @@ fn shape_descriptor_bind_static(
     let slot_is_free = table.slab().record_ptr(static_id).is_none();
     if !band_owns_id || !slot_is_free {
         STATIC_BIND_DECLINED.fetch_add(1, Ordering::Relaxed);
+        note_static_bind("declined", static_id, 0);
         drop(inner);
         return shape_descriptor_ensure_with_generation(
             keys,
@@ -1095,6 +1097,7 @@ fn shape_descriptor_bind_static(
     inner.facts_append_fresh(facts, static_id);
     inner.family_append_fresh(keys_id, static_id);
     STATIC_BIND_BOUND.fetch_add(1, Ordering::Relaxed);
+    note_static_bind("bound", static_id, static_id);
     Ok(static_id)
 }
 
@@ -1104,6 +1107,27 @@ fn shape_descriptor_bind_static(
 /// fixes, so the argument is a compile-time constant at every call site. The
 /// return value is stored in `@perry_class_shape_id_*`; see
 /// [`shape_descriptor_bind_static`] for why returning a different id is safe.
+/// `PERRY_SHAPE_DIAG=1`: report how the link-assigned binds resolved.
+///
+/// A bind that UNIFIES or DECLINES is correct and slow, and slow is invisible
+/// in program output — the emitted constant guard simply never matches and
+/// every read falls to the runtime-learned tower. There is no way to tell that
+/// from "the change did nothing" without counting, which is the whole reason
+/// these counters exist.
+pub(crate) fn note_static_bind(outcome: &str, requested: u32, resolved: u32) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var("PERRY_SHAPE_DIAG").ok().as_deref() == Some("1")) {
+        return;
+    }
+    use std::sync::atomic::Ordering;
+    let seen = STATIC_BIND_BOUND.load(Ordering::Relaxed)
+        + STATIC_BIND_UNIFIED.load(Ordering::Relaxed)
+        + STATIC_BIND_DECLINED.load(Ordering::Relaxed);
+    if seen <= 24 {
+        eprintln!("[perry shape] bind {outcome}: requested={requested:#x} resolved={resolved:#x}");
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_shape_bind_static_for_keys(
     static_id: u32,
