@@ -67,6 +67,25 @@ pub extern "C" fn js_module_top_this() -> f64 {
 #[used(compiler)]
 static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 
+/// Does THIS thread already own its `globalThis`?
+///
+/// Answers WITHOUT materializing it, which is the whole point:
+/// [`js_get_global_this`] allocates the realm global and then runs
+/// `populate_global_this_builtins`, and that population is ~5 ms of one-time
+/// work (its own `[gc-globalthis-bootstrap]` diagnostic reports the figure).
+/// A caller that only needs to know whether some address *is* one of the
+/// realm's intrinsics must not pay that to be told "there are no intrinsics
+/// yet" — see `array::prototype_addr::resolve_prototype_addr`, where forcing
+/// it put the whole bootstrap on a program's first `setTimeout` (#10836).
+///
+/// `true` from the moment the global object is allocated, i.e. BEFORE
+/// population finishes — deliberately, so a caller that runs *during*
+/// population (the descriptor bookkeeping does) behaves exactly as it did
+/// before this predicate existed.
+pub(crate) fn global_this_is_materialized() -> bool {
+    THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {

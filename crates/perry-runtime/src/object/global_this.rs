@@ -119,9 +119,9 @@ pub(crate) use fetch_globals::temporal_subclass_super;
 pub(crate) use fetch_globals::{
     attach_fetch_handle_for_construction, global_this_blob_thunk, global_this_builtin_noop_thunk,
     global_this_date_thunk, global_this_eval_thunk, global_this_file_thunk,
-    global_this_headers_thunk, global_this_request_thunk, global_this_response_error_thunk,
-    global_this_response_json_thunk, global_this_response_redirect_thunk,
-    global_this_response_thunk,
+    global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
+    global_this_response_error_thunk, global_this_response_json_thunk,
+    global_this_response_redirect_thunk, global_this_response_thunk,
 };
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,

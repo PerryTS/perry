@@ -222,6 +222,29 @@ fn resolve_prototype_addr(slot: usize) -> usize {
     if let Some(addr) = memoized_prototype_addr(&prototype_addrs()[slot]) {
         return addr;
     }
+    // #10836: the bootstrap below reads `globalThis.Array` / `globalThis.Object`,
+    // and that read MATERIALIZES the realm global when this thread has none —
+    // allocating the singleton and running `populate_global_this_builtins`, which
+    // its own `[gc-globalthis-bootstrap]` diagnostic measures at ~5 ms. Before the
+    // realm global exists, neither intrinsic prototype object has been allocated,
+    // so NO address can be one of them and the honest answer is already known:
+    // "not resolved" (0), which every caller of these accessors handles because
+    // `bootstrap_prototype_addr` can return it anyway.
+    //
+    // The check lives in the INLINED half on purpose. `note_array_index_write`
+    // consults `array_prototype_addr()` on every indexed array write and the cell
+    // stays unresolved for as long as the program has no `globalThis`, so putting
+    // it behind the `#[inline(never)]` cold call would trade a one-off 5 ms for an
+    // out-of-line call per write. Here it is one thread-local load and a branch,
+    // and only on the path that was about to make a cold call regardless.
+    //
+    // The predicate is TRUE from the moment the global object is allocated, i.e.
+    // during population as well as after it, so a caller that runs inside
+    // `populate_global_this_builtins` (the descriptor bookkeeping does) reaches
+    // the bootstrap exactly as it did before.
+    if !crate::object::global_this_is_materialized() {
+        return 0;
+    }
     bootstrap_prototype_addr(slot)
 }
 
