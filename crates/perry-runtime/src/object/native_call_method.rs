@@ -2659,6 +2659,45 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         }
     }
 
+    // #10893: `c.g(args)` where `g` is an ACCESSOR rather than a method. Every
+    // arm above probes for a callable VALUE — vtable methods, own fields, the
+    // prototype chain — but none of them RUNS a getter, so a class exposing a
+    // callable through `get g()` threw "g is not a function" even though
+    // `const f = c.g; f(args)` returned the very same function. Effect's schema
+    // classes reach their constructor this way, which is how a decoded value
+    // ended up built from the wrong class (#10891).
+    //
+    // Read the property through the ordinary by-name get, which runs the
+    // accessor, and call the result with the receiver bound as `this`. This
+    // runs LAST, after every method/field/prototype arm, so a real method of
+    // the same name still wins and only a genuine miss reaches here; a getter
+    // that yields a non-callable falls through to the throw below unchanged.
+    if jsval().is_pointer() {
+        let receiver = object_handle.get_nanbox_f64();
+        let recv = (receiver.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+        if !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) {
+            let accessor_key =
+                crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+            if !accessor_key.is_null() {
+                let got = super::field_get_set::js_object_get_field_by_name(recv, accessor_key);
+                let candidate = f64::from_bits(got.bits());
+                if crate::collection_iter::is_callable(candidate) {
+                    // Root the displaced receiver across the call: the replace has
+                    // already overwritten the cell, so this is the frame's only copy
+                    // (#8495, same as the exotic-expando arm above).
+                    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+                    let prev_this_h = prev_this_scope
+                        .root_nanbox_u64(IMPLICIT_THIS.with(|c| c.replace(receiver.to_bits())));
+                    let args = refreshed_args();
+                    let result =
+                        crate::closure::js_native_call_value(candidate, args.as_ptr(), args.len());
+                    IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
+                    return result;
+                }
+            }
+        }
+    }
+
     crate::object::class_registry::report_dispatch_miss(
         "call-method (no method/field/proto match)",
         object(),
