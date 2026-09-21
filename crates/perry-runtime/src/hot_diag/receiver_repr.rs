@@ -390,6 +390,22 @@ mod tests {
             !crate::value::addr_class::is_handle_band(value),
             "{family:?} producer still returns a small band id ({value:#x})"
         );
+        // The band check above covers only ONE of the two dishonest classes
+        // (plan section 1.1): small registry ids. The other class is a
+        // pointer-tagged address with NO `GcHeader` -- the `.data` null stub,
+        // a `Box`-allocated SymbolHeader, a SAB or external buffer backing --
+        // and it is NOT in the band, so for those families the band check
+        // alone cannot fail (measured: #10821 row 4's gate A stayed green with
+        // the stub sabotaged back to a header-less block). What every migrated
+        // family's value has in common is that the ALLOCATOR owns it:
+        // `try_read_tracked_gc_header` proves ownership rather than trusting
+        // `addr - 8`, so it refuses both old classes and accepts exactly the
+        // ordinary object the migration produces.
+        assert!(
+            unsafe { crate::value::addr_class::try_read_tracked_gc_header(value) }.is_some(),
+            "{family:?} producer returned {value:#x}, which is not an allocator-owned GC \
+             cell -- the header-less class of the old representation"
+        );
         receiver_repr_note_decoded_pointer(value);
         let (constructed, observed, wrapped) = receiver_repr_test_snapshot(family);
         assert!(
