@@ -359,7 +359,10 @@ mod tests {
             srgb.greenComponent(),
             srgb.blueComponent(),
         );
-        assert!(r > 0.9, "red component {r} — setTextColor: was overridden (#10856)");
+        assert!(
+            r > 0.9,
+            "red component {r} — setTextColor: was overridden (#10856)"
+        );
         assert!(g < 0.1, "green component {g}");
         assert!(b < 0.1, "blue component {b}");
     }
