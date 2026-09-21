@@ -910,6 +910,14 @@ pub struct IcDiag {
     /// * `new_token` + not `in_ways` — a shape neither the MRU entry nor the
     ///   ways had (genuine polymorphism, or a first sighting).
     pub prime_in_ways: u64,
+    /// #10863: primes taken while one of the site's ways held an
+    /// OVERFLOW-ENCODED slot. The emitted way path computes an inline address
+    /// straight from the slot word, so a way holding an encoded slot is a wild
+    /// load, not a slow read. #9287 keeps them out by suppressing the cascade;
+    /// this counter is the standing proof that it still does, on real programs
+    /// rather than in a unit test alone. It must read 0 in every run, and a
+    /// nonzero value is a revert, not a regression.
+    pub prime_way_encoded_slot: u64,
     /// The HIT side of the property-get IC, so a hit rate can be quoted
     /// instead of a miss count.
     ///
@@ -978,7 +986,14 @@ pub extern "C" fn js_ic_diag_note_hit(site: i64, in_ways: i32) {
 /// Diagnostic only: called from `pic_prime_get` behind [`ic_on`], and every
 /// value it reads (`prev_tok`, `token`, `state`, the ways) is one the caller
 /// already has in a register or in the cache line it has just touched.
-pub fn ic_note_prime(site: usize, prev_tok: i64, token: i64, state: i64, in_ways: bool) {
+pub fn ic_note_prime(
+    site: usize,
+    prev_tok: i64,
+    token: i64,
+    state: i64,
+    in_ways: bool,
+    way_encoded: bool,
+) {
     IC_DIAG.with(|d| {
         let mut d = d.borrow_mut();
         if d.started.is_none() {
@@ -993,6 +1008,9 @@ pub fn ic_note_prime(site: usize, prev_tok: i64, token: i64, state: i64, in_ways
         }
         if in_ways {
             d.prime_in_ways += 1;
+        }
+        if way_encoded {
+            d.prime_way_encoded_slot += 1;
         }
         match state.cmp(&0) {
             std::cmp::Ordering::Less => d.prime_while_megamorphic += 1,
@@ -1083,7 +1101,8 @@ impl IcDiag {
             let _ = writeln!(
                 out,
                 "  primes={primes} same_token={} ({:.1} %) new_token={} ({:.1} %) \
-                 in_ways={} ({:.1} %) | way_state: fresh={} armed={} megamorphic={}",
+                 in_ways={} ({:.1} %) | way_state: fresh={} armed={} megamorphic={} \
+                 | way_encoded_slot={}",
                 self.prime_same_token,
                 pct(self.prime_same_token),
                 self.prime_new_token,
@@ -1092,7 +1111,8 @@ impl IcDiag {
                 pct(self.prime_in_ways),
                 self.prime_while_fresh,
                 self.prime_while_armed,
-                self.prime_while_megamorphic
+                self.prime_while_megamorphic,
+                self.prime_way_encoded_slot
             );
         }
         // Lane 3's inherited-read cache, on the SAME arming rather than an

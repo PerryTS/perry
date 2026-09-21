@@ -351,6 +351,78 @@ const PIC_MEGAMORPHIC_EVICTIONS: i64 = 16;
 /// while a phase-changed site recovers within one such window.
 const PIC_LATCH_RETRY: i64 = 2048;
 
+/// The `PERRY_IC_DIAG` half of a prime, outlined and `#[cold]` so the armed
+/// path pays one predicted branch and nothing else. Every value it reads is in
+/// the cache line `pic_prime_get` has already touched; what it must not do is
+/// make the function it is called from any bigger.
+#[cold]
+#[inline(never)]
+fn pic_note_prime_diag(c: &PicCache, prev_tok: i64, token: i64) {
+    // Was `token` already sitting in a WAY? The MRU comparison alone cannot
+    // tell a site rotating k <= PIC_WAYS+1 shapes (the ways doing their job)
+    // from one whose cached answer the emitted gate never consulted. Read
+    // here, before the caller's loop evicts `token` from its way.
+    let in_ways = (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == token);
+    // #10863: the invariant that must never break. An overflow-encoded slot
+    // sitting in a way is a WILD LOAD in the emitted way path (it computes
+    // `obj + header + slot * 8` from the raw word, bit 30 and all), not a slow
+    // read — so it is worth a standing counter on real programs and not only a
+    // unit test.
+    let way_encoded = (0..PIC_WAYS).any(|w| {
+        c[PIC_WAY_BASE + w * 2] != 0
+            && (c[PIC_WAY_BASE + w * 2 + 1] as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT)
+                != 0
+    });
+    crate::hot_diag::ic_note_prime(
+        c as *const PicCache as usize,
+        prev_tok,
+        token,
+        c[PIC_WAY_STATE],
+        in_ways,
+        way_encoded,
+    );
+}
+
+/// #10863: one capacity eviction the ways could not absorb, on an ARMED site.
+///
+/// Advances the consecutive-eviction run and latches at
+/// [`PIC_MEGAMORPHIC_EVICTIONS`], on exactly the evidence the no-free-way arm
+/// of `pic_prime_get` latches on. Writes NOTHING to a way: the displaced slot
+/// is overflow-encoded, and an encoded slot in a way is a wild load in the
+/// emitted way path (#9287). Only the gate the ways sit behind moves.
+///
+/// Outlined so `pic_prime_get` grows by one compare and a predicted branch.
+/// It runs on 0.8% of primes at a site this applies to — the 16 that climb
+/// the run — and never at all at a site that was not armed.
+#[inline(never)]
+fn pic_note_uncascadable_eviction(c: &mut PicCache, state: i64) {
+    let run = (state >> 8) + 1;
+    if run >= PIC_MEGAMORPHIC_EVICTIONS {
+        pic_latch_megamorphic(c);
+    } else {
+        // Bits 0..7 — the armed bit and the round-robin victim — carry through
+        // unchanged. This prime claimed no way and displaced none, so it may
+        // move neither; only the run advances.
+        c[PIC_WAY_STATE] = (state & 0xff) | (run << 8);
+    }
+}
+
+/// Turn the ways off for [`PIC_LATCH_RETRY`] misses, leaving no readable way
+/// behind: the emitted gate skips the compares while `PIC_WAY_STATE` is
+/// negative, and a latched site has to be the pre-#7753 code path exactly.
+///
+/// Two callers reach the same evidence by different routes — a capacity
+/// eviction that displaced a cached shape, and (#10863) one that had nowhere
+/// to put the shape it displaced — so the latch itself lives in one place.
+#[inline]
+fn pic_latch_megamorphic(c: &mut PicCache) {
+    for w in 0..PIC_WAYS {
+        c[PIC_WAY_BASE + w * 2] = 0;
+        c[PIC_WAY_BASE + w * 2 + 1] = 0;
+    }
+    c[PIC_WAY_STATE] = -PIC_LATCH_RETRY;
+}
+
 /// Prime the MRU entry, cascading the shape it evicts into the ways.
 ///
 /// Word 0 holds the last cacheable shape. An evicted shape moves into a way,
@@ -381,12 +453,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     // `prev_tok != token` (the receiver really did change shape). Read before
     // the write below, because the write destroys the evidence.
     if crate::hot_diag::ic_on() {
-        // Was `token` already sitting in a WAY? The MRU comparison alone cannot
-        // tell a site rotating k <= PIC_WAYS+1 shapes (the ways doing their job)
-        // from one whose cached answer the emitted gate never consulted. Read
-        // here, before the loop below evicts `token` from its way.
-        let in_ways = (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == token);
-        crate::hot_diag::ic_note_prime(cache as usize, prev_tok, token, c[PIC_WAY_STATE], in_ways);
+        pic_note_prime_diag(c, prev_tok, token);
     }
     c[0] = token;
     c[1] = slot;
@@ -414,11 +481,69 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     // polymorphic site rotating overflow shapes re-primes the MRU per shape,
     // which is exactly the pre-#7753 behaviour.
     let prev_is_overflow = (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0;
-    let cascade = prev_tok != 0 && prev_tok != token && !prev_is_overflow;
-    // One pass over the ways does three things:
-    //   * evicts `token` from a way if it has one — it now lives in the MRU
-    //     entry, and leaving the stale copy behind would permanently cost a way
-    //     (a k-shape rotation would then only ever cache k-1 of them);
+    // Two different questions, which #10863 found sharing one answer:
+    //
+    //   `evicted` — did a DIFFERENT shape just displace the MRU entry? That is
+    //     the event the ways exist to absorb, and the only evidence the
+    //     megamorphic latch is entitled to count.
+    //   `cascade` — may the displaced entry be absorbed INTO a way? An encoded
+    //     slot may not, ever, for the reason directly above.
+    //
+    // A site can be evicting on every single read and still be unable to
+    // cascade. That is precisely the case the latch exists for, and it used to
+    // be the one case that could not reach it.
+    let evicted = prev_tok != 0 && prev_tok != token;
+    let cascade = evicted && !prev_is_overflow;
+    if !cascade {
+        // Nothing may enter a way on this path, so the pass over them has
+        // exactly one job: drop a stale copy of `token`, which now lives in
+        // the MRU entry. Leaving it behind would permanently cost a way (a
+        // k-shape rotation would then only ever cache k-1 of them). No free
+        // way is looked for and no victim moves, because nothing is going to
+        // be written.
+        for w in 0..PIC_WAYS {
+            let ti = PIC_WAY_BASE + w * 2;
+            if c[ti] == token {
+                c[ti] = 0;
+                c[ti + 1] = 0;
+            }
+        }
+        // #10863. Reaching here at all means neither the MRU entry nor any way
+        // answered this read — the emitted gate fell through to the handler.
+        // If the site is ARMED (`state > 0`, the exact predicate that gate
+        // evaluates) it paid four dependent loads and a compare tree to learn
+        // that, and this prime can put nothing where they would have looked.
+        //
+        // So count it. `evicted && !cascade` is exactly "the MRU entry was
+        // displaced by a different shape, and the displaced slot is
+        // overflow-encoded": a capacity eviction with nowhere to go, which is
+        // strictly stronger evidence of a rotation the ways cannot hold than
+        // the no-free-way arm below — that one at least caches the shape it
+        // displaces. Before this, one `return` served both the cascade
+        // suppression and the latch, so a site rotating overflow shapes kept
+        // the armed state it earned during warm-up for the life of the
+        // process: measured at megamorphic=0 across 16.8M primes, every one of
+        // them `armed`, on a key as ordinary as the third property of an
+        // object literal.
+        //
+        // Nothing is written to a way here. #9287's rule is untouched — the
+        // ways still never see an encoded slot. What changes is only that the
+        // gate those ways sit behind is now allowed to turn itself off.
+        //
+        // `state > 0` and not `state >= 0` on purpose: a site with no way
+        // populated is already skipping the compares, so there is nothing to
+        // latch off and no reason to spend its recovery window.
+        //
+        // Outlined, and `state > 0` tested first: a site that never armed —
+        // every shape in its rotation carrying the key in overflow — takes
+        // this path on every read and must keep paying exactly what it paid
+        // before, which is one compare against a word already in a register.
+        if state > 0 && evicted {
+            pic_note_uncascadable_eviction(c, state);
+        }
+        return;
+    }
+    // The cascading pass, which additionally:
     //   * refreshes `prev_tok`'s way if it already has one;
     //   * remembers the first empty way for the cascade.
     let mut free: Option<usize> = None;
@@ -428,7 +553,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
         if c[ti] == token {
             c[ti] = 0;
             c[ti + 1] = 0;
-        } else if cascade && c[ti] == prev_tok {
+        } else if c[ti] == prev_tok {
             c[ti + 1] = prev_slot;
             prev_present = true;
             continue;
@@ -443,9 +568,6 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
         c[PIC_WAY_STATE] = PIC_STATE_ARMED | (((c[PIC_WAY_STATE] >> 1) & 0x7f) << 1);
         return;
     }
-    if !cascade {
-        return;
-    }
     let victim = (state >> 1) & 0x7f;
     let ti = match free {
         Some(ti) => {
@@ -458,11 +580,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
             // happens only during warm-up; past it, on every single miss.
             let run = (state >> 8) + 1;
             if run >= PIC_MEGAMORPHIC_EVICTIONS {
-                for w in 0..PIC_WAYS {
-                    c[PIC_WAY_BASE + w * 2] = 0;
-                    c[PIC_WAY_BASE + w * 2 + 1] = 0;
-                }
-                c[PIC_WAY_STATE] = -PIC_LATCH_RETRY;
+                pic_latch_megamorphic(c);
                 return;
             }
             let v = (victim + 1) % PIC_WAYS as i64;
@@ -1949,9 +2067,198 @@ mod private_evaluation_brand_tests {
 mod poly_pic_tests {
     use super::{pic_prime_get, PicCache, PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE};
     use crate::object::shapes::PIC_ID_TOKEN_BIT;
+    use crate::proxy::IC_SLOT_OVERFLOW_BIT;
 
     fn id_tok(n: u64) -> i64 {
         (n | PIC_ID_TOKEN_BIT) as i64
+    }
+
+    /// A slot word for a field past the inline region, exactly as the miss
+    /// handler primes one.
+    fn enc_slot(i: u32) -> i64 {
+        i64::from(i | IC_SLOT_OVERFLOW_BIT)
+    }
+
+    /// THE constraint (#9287): the emitted way path computes
+    /// `obj + header + slot * 8` from the raw slot word, so an encoded slot in
+    /// a way is a wild load. Checked after every prime in the tests below, not
+    /// once at the end — a violation that heals before the assertion is still
+    /// a violation on the reads in between.
+    fn assert_no_encoded_slot_in_a_way(c: &PicCache, where_: &str) {
+        for w in 0..PIC_WAYS {
+            let tok = c[PIC_WAY_BASE + w * 2];
+            let slot = c[PIC_WAY_BASE + w * 2 + 1];
+            assert!(
+                tok == 0 || (slot as u64) & u64::from(IC_SLOT_OVERFLOW_BIT) == 0,
+                "way {w} holds an overflow-encoded slot {slot:#x} ({where_}); \
+                 the emitted way path would compute a wild address from it: {c:?}"
+            );
+        }
+    }
+
+    /// One pass of the site as the emitted code would actually run it: a read
+    /// the MRU entry or a live way answers never reaches `pic_prime_get` at
+    /// all. Returns the `PIC_WAY_STATE` the prime saw, or `None` when the read
+    /// hit and no prime happened.
+    unsafe fn read(c: &mut PicCache, tok: i64, slot: i64) -> Option<i64> {
+        if c[0] == tok {
+            return None;
+        }
+        if c[PIC_WAY_STATE] > 0 && (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == tok) {
+            return None;
+        }
+        let state = c[PIC_WAY_STATE];
+        pic_prime_get(c, tok, slot);
+        assert_no_encoded_slot_in_a_way(c, "after a prime");
+        Some(state)
+    }
+
+    /// #10863: a read site whose hot key lives in the overflow region could
+    /// never latch megamorphic, however many shapes it rotated. The cascade
+    /// suppression that keeps encoded slots out of the ways (#9287, correct
+    /// and kept) also kept the site out of the LATCH, because one `return`
+    /// served both — so the site held the armed state it earned during warm-up
+    /// for the life of the process and the emitted gate ran four dependent
+    /// loads and a compare tree on every read, all of which could only ever
+    /// miss. Measured on a 64-shape rotation: `megamorphic=0` across 16.8M
+    /// primes, every single one of them `armed`.
+    ///
+    /// The rotation modelled here is the one from the issue: 64 shapes, the
+    /// hot key in overflow on 63 of them and at an inline slot on the first —
+    /// which is what arms the site in the first place.
+    #[test]
+    fn an_overflow_rotation_latches_instead_of_staying_armed_forever() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        let (mut fresh, mut armed, mut megamorphic) = (0u32, 0u32, 0u32);
+        unsafe {
+            for _ in 0..400 {
+                for i in 0..64u64 {
+                    let (tok, slot) = if i == 0 {
+                        (id_tok(9_000), 1) // the one shape with the key inline
+                    } else {
+                        (id_tok(9_000 + i), enc_slot(3 + i as u32))
+                    };
+                    match read(&mut c, tok, slot) {
+                        None => {}
+                        Some(state) if state < 0 => megamorphic += 1,
+                        Some(0) => fresh += 1,
+                        Some(_) => armed += 1,
+                    }
+                }
+            }
+        }
+        let primes = fresh + armed + megamorphic;
+        assert!(
+            primes > 10_000,
+            "the rotation must actually prime: {primes}"
+        );
+        // The count is what settles it. Before the fix this was armed=100.0 %,
+        // megamorphic=0.0 %.
+        let pct = |n: u32| 100.0 * f64::from(n) / f64::from(primes);
+        assert!(
+            pct(megamorphic) > 90.0,
+            "an overflow rotation must spend its life latched: \
+             fresh={fresh} armed={armed} megamorphic={megamorphic}"
+        );
+        assert!(
+            pct(armed) < 2.0,
+            "the emitted gate runs the way compares while armed; a rotation \
+             the ways cannot hold must not stay armed: \
+             fresh={fresh} armed={armed} megamorphic={megamorphic}"
+        );
+        assert_no_encoded_slot_in_a_way(&c, "at the end of the rotation");
+    }
+
+    /// The other half of the same rule: a site the ways were never armed for
+    /// must not be latched either. With no inline-slot shape in the rotation
+    /// nothing ever cascades, `PIC_WAY_STATE` stays 0, and the emitted gate is
+    /// already skipping the compares — there is nothing to turn off and no
+    /// reason to spend the site's recovery window.
+    #[test]
+    fn a_pure_overflow_rotation_never_arms_and_never_latches() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for _ in 0..200 {
+                for i in 0..64u64 {
+                    read(&mut c, id_tok(9_500 + i), enc_slot(3 + i as u32));
+                    assert_eq!(
+                        c[PIC_WAY_STATE], 0,
+                        "a site that never armed must stay at state 0: {c:?}"
+                    );
+                }
+            }
+        }
+        for w in 0..PIC_WAYS {
+            assert_eq!(c[PIC_WAY_BASE + w * 2], 0, "no way may be populated: {c:?}");
+        }
+    }
+
+    /// The risk the #10863 arm introduces, pinned: an overflow shape passing
+    /// through a site that otherwise FITS the ways must not latch it. The
+    /// eviction run stays consecutive — any prime that cascades resets it — so
+    /// three inline shapes plus one overflow shape keep their ways for good.
+    #[test]
+    fn an_overflow_shape_in_a_fitting_rotation_does_not_latch_it() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for _ in 0..400 {
+                read(&mut c, id_tok(9_700), 0);
+                read(&mut c, id_tok(9_701), 1);
+                read(&mut c, id_tok(9_702), 2);
+                read(&mut c, id_tok(9_703), enc_slot(11));
+            }
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a rotation well inside capacity must keep its ways even when one \
+             of its shapes carries the key in overflow: {c:?}"
+        );
+        assert!(
+            (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] != 0),
+            "…and the ways must actually be populated: {c:?}"
+        );
+        assert_no_encoded_slot_in_a_way(&c, "fitting rotation with one overflow shape");
+    }
+
+    /// A latched overflow site still recovers: `PIC_LATCH_RETRY` counts down
+    /// and the ways get another chance, exactly as they do for an inline
+    /// rotation. "Megamorphic" stays a property of a program phase.
+    #[test]
+    fn a_latched_overflow_site_still_counts_down_and_re_arms() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            // Arm the site with an inline slot, then rotate overflow shapes
+            // until it latches.
+            pic_prime_get(&mut c, id_tok(9_800), 1);
+            let mut i = 0u64;
+            while c[PIC_WAY_STATE] >= 0 {
+                i += 1;
+                assert!(i < 1_000, "an overflow rotation must latch: {c:?}");
+                pic_prime_get(&mut c, id_tok(9_900 + i), enc_slot(5 + i as u32));
+            }
+            for w in 0..PIC_WAYS {
+                assert_eq!(
+                    c[PIC_WAY_BASE + w * 2],
+                    0,
+                    "a latched site must leave no readable way: {c:?}"
+                );
+            }
+            // Count it back out, then hand it a rotation the ways can hold.
+            let mut guard = 0u64;
+            while c[PIC_WAY_STATE] < 0 {
+                guard += 1;
+                assert!(guard < 100_000, "the latch must not be permanent: {c:?}");
+                pic_prime_get(&mut c, id_tok(9_800), 1);
+                pic_prime_get(&mut c, id_tok(9_801), 2);
+            }
+            pic_prime_get(&mut c, id_tok(9_800), 1);
+            pic_prime_get(&mut c, id_tok(9_801), 2);
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a latched overflow site must re-arm after its countdown: {c:?}"
+        );
+        assert_no_encoded_slot_in_a_way(&c, "after re-arming");
     }
 
     /// Paired with `pic_cache_layout_matches_runtime` in
