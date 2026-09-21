@@ -291,6 +291,7 @@ fn promote_with_element_fields_and_numeric_params(
         &HashSet::new(),
         &els,
         numeric_param_seeds,
+        &HashMap::new(),
     )
 }
 

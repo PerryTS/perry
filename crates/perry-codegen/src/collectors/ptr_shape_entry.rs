@@ -24,6 +24,39 @@ pub(crate) fn collect_shape_proven_ptr_locals(
         not_bigint_locals,
         element_facts,
         &HashSet::new(),
+        &HashMap::new(),
+    )
+    .0
+}
+
+/// Rule 6 (#10769, #10803): the module-wide `Ptr<Shape>` proof for the
+/// module-level bindings `collectors/ptr_shape_module_global.rs` admitted.
+///
+/// The primary region is `hir.init`, which holds the provenance `Stmt::Let`;
+/// `regions` is every other region of the module, walked by the same
+/// `UseWalk` under the same rules 2-5. Report rows are suppressed: the
+/// per-region passes that consume these facts record the selections, and a
+/// module-wide pre-pass recording its own would double every row.
+pub(crate) fn collect_module_wide_shape_locals<'s>(
+    hir: &'s perry_hir::Module,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    seeds: &HashMap<u32, String>,
+    regions: &[&'s [Stmt]],
+) -> HashMap<u32, PtrShapeLocal> {
+    let _quiet = report::SuppressScope::new();
+    collect_shape_proven_ptr_locals_impl(
+        &hir.init,
+        &HashSet::new(),
+        &HashMap::new(),
+        classes,
+        module_dispatch,
+        &HashSet::new(),
+        &ElementShapeFacts::default(),
+        &HashSet::new(),
+        CollectionPurpose::UnguardedRepresentation,
+        regions,
+        seeds,
     )
     .0
 }
@@ -40,6 +73,7 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
     not_bigint_locals: &HashSet<u32>,
     element_facts: &ElementShapeFacts,
     numeric_param_seeds: &HashSet<u32>,
+    module_global_seeds: &HashMap<u32, String>,
 ) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
     collect_shape_proven_ptr_locals_impl(
         stmts,
@@ -51,6 +85,8 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
         element_facts,
         numeric_param_seeds,
         CollectionPurpose::UnguardedRepresentation,
+        &[],
+        module_global_seeds,
     )
 }
 
@@ -85,6 +121,8 @@ pub(crate) fn collect_guarded_argument_route_locals(
         element_facts,
         numeric_param_seeds,
         CollectionPurpose::GuardedArgumentRoute,
+        &[],
+        &HashMap::new(),
     );
     // The guarded route consumes class/containment only, never a raw numeric
     // field representation claim.

@@ -53,7 +53,7 @@ pub(super) fn early_bail(
     }
     let names = local_names(stmts);
     let depths = loop_depths(stmts);
-    let seeds = candidate_seeds(stmts, boxed_vars, module_globals, preamble);
+    let seeds = candidate_seeds(stmts, boxed_vars, module_globals, preamble, &HashMap::new());
     for (id, class_name) in &seeds {
         deny_local(*id, &names, &depths, Some(class_name), denial);
     }
@@ -1007,6 +1007,11 @@ pub(super) fn candidate_seeds(
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     preamble: &CjsPreamble,
+    // Rule 6 (#10769): ids the module-wide containment walk admitted. The
+    // storage prefilter below must not also record them as denied — a value
+    // cannot honestly be both the module-global denial and a selection in the
+    // same report.
+    module_global_seeds: &HashMap<u32, String>,
 ) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     super::find_new_candidates(stmts, boxed_vars, module_globals, &mut out);
@@ -1036,6 +1041,9 @@ pub(super) fn candidate_seeds(
             let denial = if boxed_vars.contains(&id) {
                 BOXED_BINDING
             } else if module_globals.contains_key(&id) {
+                if module_global_seeds.contains_key(&id) {
+                    continue;
+                }
                 MODULE_GLOBAL_BINDING
             } else {
                 // `find_new_candidates` currently has exactly these two

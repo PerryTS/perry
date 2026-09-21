@@ -124,6 +124,16 @@ pub struct ModuleDispatchFacts {
     /// (`single_binding_closure_locals`), beside the module-wide reassignment
     /// scan it rests on.
     closure_bindings: HashMap<u32, u32>,
+    /// Representation-selection Phase 3b, rule 6 (#10769, #10803): module-level
+    /// `const` bindings whose `Ptr<Shape>` proof holds over EVERY region of the
+    /// module, mapped to their provenance class.
+    ///
+    /// A module-level binding is visible to every region, so its containment
+    /// proof cannot be a per-region one; it is computed once, before any region
+    /// is compiled, and travels here because this struct is already the
+    /// module-wide fact bundle every region's `collect_type_facts` receives.
+    /// See `collectors/ptr_shape_module_global.rs` for rules 6a-6d.
+    module_global_shape_seeds: HashMap<u32, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,6 +157,7 @@ impl Default for ModuleDispatchFacts {
             imported_return_shapes: HashMap::new(),
             argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
+            module_global_shape_seeds: HashMap::new(),
         }
     }
 }
@@ -250,6 +261,21 @@ impl ModuleDispatchFacts {
     /// for unit tests and producer pre-passes.
     pub(crate) fn install_imported_return_shapes(&mut self, shapes: HashMap<String, String>) {
         self.imported_return_shapes = shapes;
+    }
+
+    /// Rule 6 (#10769): install the module-level `Ptr<Shape>` seeds after the
+    /// module-wide containment walk has run. Kept out of
+    /// [`collect_module_dispatch_facts`] because that walk needs the barrier
+    /// facts this struct carries, so the two cannot be computed in one pass.
+    pub(crate) fn install_module_global_shape_seeds(&mut self, seeds: HashMap<u32, String>) {
+        self.module_global_shape_seeds = seeds;
+    }
+
+    /// Rule 6 (#10769): the module-level bindings admitted as `Ptr<Shape>`
+    /// seeds. Every region re-runs rules 1-5 over its own statements before
+    /// consuming one, so this is an admission list, not a fact.
+    pub(crate) fn module_global_shape_seeds(&self) -> &HashMap<u32, String> {
+        &self.module_global_shape_seeds
     }
 
     /// Install the guarded argument-clone capabilities emitted by this
@@ -481,6 +507,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         // `None` as "take no seed". Computed here rather than lazily so the one
         // module-wide walk it needs happens once.
         closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
+        module_global_shape_seeds: HashMap::new(),
     };
 
     // #7139: resolve the CommonJS wrap's `exports` / `require` scaffolding
@@ -983,6 +1010,7 @@ mod tests {
             imported_return_shapes: HashMap::new(),
             argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
+            module_global_shape_seeds: HashMap::new(),
         }
     }
 

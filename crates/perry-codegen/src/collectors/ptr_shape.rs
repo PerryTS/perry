@@ -101,6 +101,20 @@
 //!    §4's return-shape calls) cannot silently widen the exemption. Nothing
 //!    else is exempt: any other target, any other key, a computed key, or any
 //!    other barrier family still arms the kill.
+//! 6. **Module-level `const` receivers** (#10769, #10803). Rules 1-5 above are
+//!    stated over ONE lowered region, which is why the seed filters every
+//!    binding promoted to an `@perry_global_*` cell — and a module-level
+//!    binding is promoted the moment any function in the file mentions it, so
+//!    the identical loop over the identical object costs 42 or 74 instructions
+//!    depending on whether some unrelated function names the receiver. Rule 6
+//!    admits such a binding when its containment walk covers every region of
+//!    the module AND two obligations a function-local never carries are
+//!    discharged: no export surface publishes a second name, and the
+//!    module-level `Stmt::Let` — which dominates nothing outside `hir.init` —
+//!    provably runs before any user code can read the binding. The rules and
+//!    the soundness argument for each are in
+//!    `collectors/ptr_shape_module_global.rs`; this file applies rules 1-5 to
+//!    what that one admits, unchanged.
 //!
 //! ## Numeric-proven fields
 //!
@@ -231,8 +245,9 @@ fn note_ptr_shape_local(
 #[path = "ptr_shape_entry.rs"]
 mod entry;
 pub(crate) use entry::{
-    collect_guarded_argument_route_locals, collect_shape_proven_ptr_locals,
-    collect_shape_proven_ptr_locals_and_element_fields, expr_is_shape_barrier,
+    collect_guarded_argument_route_locals, collect_module_wide_shape_locals,
+    collect_shape_proven_ptr_locals, collect_shape_proven_ptr_locals_and_element_fields,
+    expr_is_shape_barrier,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -242,8 +257,8 @@ enum CollectionPurpose {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn collect_shape_proven_ptr_locals_impl(
-    stmts: &[Stmt],
+fn collect_shape_proven_ptr_locals_impl<'s>(
+    stmts: &'s [Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     classes: &HashMap<String, &Class>,
@@ -252,6 +267,14 @@ fn collect_shape_proven_ptr_locals_impl(
     element_facts: &ElementShapeFacts,
     numeric_param_seeds: &HashSet<u32>,
     purpose: CollectionPurpose,
+    // Rule 6 (#10769): further regions whose uses of a candidate must also
+    // satisfy rule 2. Empty for every per-region caller; the module-wide pass
+    // passes every other region of the module.
+    extra_regions: &[&'s [Stmt]],
+    // Rule 6 (#10769): module-level binding ids admitted past the
+    // module-global seed filter, mapped to their provenance class. Every id
+    // here has already cleared `ptr_shape_module_global.rs`'s rules 6a-6d.
+    module_global_seeds: &HashMap<u32, String>,
 ) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
     // #7152: Perry's own `cjs_wrap` preamble, recognised once for this region.
     // One scan of the top-level statement list on anything else, then a
@@ -291,7 +314,19 @@ fn collect_shape_proven_ptr_locals_impl(
     // async-to-generator transform), minus #7152's CommonJS module record.
     // Shared with `report::early_bail` so the collector and the report can
     // never disagree about what a candidate is.
-    let mut candidates = report::candidate_seeds(stmts, boxed_vars, module_globals, &preamble);
+    let mut candidates = report::candidate_seeds(
+        stmts,
+        boxed_vars,
+        module_globals,
+        &preamble,
+        module_global_seeds,
+    );
+    // Rule 6: a module-level `const` whose module-wide proof already held.
+    // `candidate_seeds` filtered it out by storage class; rules 6a-6d put it
+    // back, and rules 1-5 below still have to pass on this region.
+    for (id, class_name) in module_global_seeds {
+        candidates.entry(*id).or_insert_with(|| class_name.clone());
+    }
     // #7034 §4: `const r = producer(...)` where `producer` carries a
     // return-shape fact is provenance of `new`-strength (module doc, rule 1).
     let return_seeds = super::ptr_shape_returns::find_return_shape_candidates(
@@ -390,8 +425,14 @@ fn collect_shape_proven_ptr_locals_impl(
         element_facts,
         in_closure: false,
         purpose,
+        module_global_roots: module_global_seeds,
     };
     walk.walk_stmts(stmts);
+    // Rule 6c: containment for a module-level binding is only a proof when it
+    // covers every region that can see the binding.
+    for region in extra_regions {
+        walk.walk_stmts(region);
+    }
     let UseWalk {
         disqualified,
         let_counts,
@@ -463,8 +504,20 @@ fn collect_shape_proven_ptr_locals_impl(
             );
             continue;
         }
-        let expected_let_count = if callback_seeded.contains(id) { 0 } else { 1 };
-        if let_counts.get(id).copied().unwrap_or(0) != expected_let_count {
+        let observed_lets = let_counts.get(id).copied().unwrap_or(0);
+        let let_count_ok = if callback_seeded.contains(id) {
+            observed_lets == 0
+        } else if module_global_seeds.contains_key(id) {
+            // Rule 6a already proved MODULE-WIDE that exactly one `Stmt::Let`
+            // binds this id. The region now being compiled either holds that
+            // `Let` (module init) or does not (every other region); both are
+            // consistent with the proof, and a second one in this region is
+            // not.
+            observed_lets <= 1
+        } else {
+            observed_lets == 1
+        };
+        if !let_count_ok {
             deny(id, class_name, report::MULTIPLE_LET);
             continue;
         }
@@ -519,7 +572,13 @@ fn collect_shape_proven_ptr_locals_impl(
         // shape proof by itself still retires the whole guard diamond; this
         // is the same stand-down `collectors/proven_this.rs` makes, for the
         // same reason.
-        let numeric_fields = if return_seeded.contains(id) {
+        let numeric_fields = if return_seeded.contains(id) || module_global_seeds.contains_key(id) {
+            // Rule 6, first increment: a module-level seed stands down from the
+            // numeric-field claim for the same reason a return-shape seed does
+            // — the exhaustive-reachable-store obligation is a module-wide
+            // one, and this region sees only its own stores. The shape proof
+            // alone still retires the whole guard diamond; the number context
+            // keeps its two-instruction plain-finite check on the loaded bits.
             HashSet::new()
         } else if let Some(group_root) = element_facts.member_group_root(*id) {
             // #7034 §3 / #7770: an element-group member cannot discharge the
@@ -825,12 +884,36 @@ struct UseWalk<'a> {
     /// Whether this walk is proving the broad guard-free representation or
     /// only a fresh-object route protected by an exact argument guard.
     purpose: CollectionPurpose,
+    /// Rule 6 (#10769): roots that are MODULE-LEVEL bindings rather than
+    /// function locals. Two of rule 2's exemptions are justified by a local's
+    /// lifetime ending with its function, and neither justification transfers
+    /// to a binding that outlives every call — see [`Self::lifetime_bounded`].
+    module_global_roots: &'a HashMap<u32, String>,
 }
 
 impl<'a> UseWalk<'a> {
     /// Root candidate for a tracked member id (candidate or alias).
     fn tracked_root(&self, id: u32) -> Option<u32> {
         self.roots.get(&id).copied()
+    }
+
+    /// Is this root's lifetime bounded by the region being walked?
+    ///
+    /// Rule 2 grants two exemptions on exactly that premise. `return <local>`
+    /// is exempt because a return is a *terminator*: "the caller cannot have
+    /// touched the object yet, so no shape transition can have happened at any
+    /// access this pass licenses". `A.push(<local>)` is exempt because the
+    /// array's own uses are bounded by the same region.
+    ///
+    /// Neither holds for a module-level binding (rule 6). `function leak() {
+    /// return O; }` hands the record to an arbitrary caller who may reshape
+    /// it, and every OTHER region goes on reading `O.field` at a fixed offset
+    /// afterwards — the return is a terminator for `leak`, not for `O`. The
+    /// same argument voids the element exemption: the proven array bounds the
+    /// object's aliases inside one region, while `O` is still named by name
+    /// everywhere else.
+    fn lifetime_bounded(&self, root: u32) -> bool {
+        !self.module_global_roots.contains_key(&root)
     }
 
     fn disq(&mut self, id: u32, why: ShapeDenial) {
@@ -976,7 +1059,10 @@ impl<'a> UseWalk<'a> {
                     // the enclosing function's local.
                     if !self.in_closure {
                         if let Expr::LocalGet(id) = e {
-                            if self.tracked_root(*id).is_some() {
+                            if self
+                                .tracked_root(*id)
+                                .is_some_and(|root| self.lifetime_bounded(root))
+                            {
                                 return;
                             }
                         }
@@ -1303,7 +1389,11 @@ impl<'a> UseWalk<'a> {
                     self.element_pushes.entry(root).or_default().push(push);
                 }
                 if let Expr::LocalGet(v) = value.as_ref() {
-                    if self.element_facts.push_is_contained(*v, *array_id) {
+                    if self.element_facts.push_is_contained(*v, *array_id)
+                        && self
+                            .tracked_root(*v)
+                            .is_none_or(|root| self.lifetime_bounded(root))
+                    {
                         return;
                     }
                 }

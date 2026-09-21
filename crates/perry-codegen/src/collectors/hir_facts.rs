@@ -734,6 +734,10 @@ pub(crate) fn collect_type_facts(
             &not_bigint_locals,
             &element_shape_facts,
             spec_numeric_params,
+            // Rule 6 (#10769): module-level `const` bindings the module-wide
+            // containment walk admitted. This region still has to prove rules
+            // 1-5 over its own statements before it can consume one.
+            module_dispatch.module_global_shape_seeds(),
         );
     array_facts.exact_numeric_element_fields = exact_numeric_element_fields;
     let guarded_argument_route_locals = if module_dispatch.has_argument_shape_routes() {

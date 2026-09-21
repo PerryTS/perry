@@ -1963,6 +1963,27 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         })
         .collect();
     module_dispatch_facts.install_imported_return_shapes(imported_return_shapes);
+    // Representation-selection Phase 3b, rule 6 (#10769, #10803): the
+    // module-wide containment walk for module-level `const` receivers. Runs
+    // once, before any region is compiled, because a module-level binding is
+    // visible to every region and a per-region walk can therefore never be a
+    // containment proof for one. The barrier facts installed above are an
+    // input (rule 5), which is why this cannot live inside
+    // `collect_module_dispatch_facts`.
+    {
+        let class_refs: std::collections::HashMap<String, &perry_hir::Class> =
+            hir.classes.iter().map(|c| (c.name.clone(), c)).collect();
+        let seeds: std::collections::HashMap<u32, String> =
+            crate::collectors::collect_module_global_shape_locals(
+                hir,
+                &class_refs,
+                &module_dispatch_facts,
+            )
+            .into_iter()
+            .map(|(id, fact)| (id, fact.class_name))
+            .collect();
+        module_dispatch_facts.install_module_global_shape_seeds(seeds);
+    }
     // Representation-selection Phase 5a: proven-`this` method clones.
     let mut pshape_methods: std::collections::HashMap<
         (String, String),

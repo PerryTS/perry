@@ -41,6 +41,7 @@ mod ptr_numarray;
 mod ptr_shape;
 mod ptr_shape_callbacks;
 mod ptr_shape_elements;
+mod ptr_shape_module_global;
 mod ptr_shape_report;
 mod ptr_shape_returns;
 mod receiver_regions;
@@ -113,6 +114,7 @@ pub(crate) use proven_this::{
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, PtrShapeLocal};
 pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
+pub(crate) use ptr_shape_module_global::collect_module_global_shape_locals;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
 pub(crate) use receiver_regions::{
     region_enders_in_stmts_with_trusted_operations, ReceiverArrayValidationKind,

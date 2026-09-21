@@ -458,6 +458,18 @@ pub(crate) fn deny_canonical_i32(ctx: &FnCtx<'_>, id: u32, name: &str, denial: C
 /// closed issue about something else and could reasonably conclude the
 /// module-global class was already handled; that is how one optimisation pass
 /// came to record module-global storage as "less important".
+///
+/// **Scope note (#10769).** This denial is about the CANONICAL SLOT
+/// representations (i32/u32/Str), which rewrite the binding's storage and
+/// therefore genuinely cannot apply to an `@perry_global_*` cell. It is NOT a
+/// statement about `Ptr<Shape>`, which never touches storage — its access
+/// sites lower the receiver expression and then mask/gep/load
+/// (`expr/property_get/helpers.rs`) — and which admits module-level `const`
+/// bindings under `collectors/ptr_shape_module_global.rs`'s rule 6. Reading
+/// this denial as covering `Ptr<Shape>` too is what led #10769 to record the
+/// remaining gap as "slot-reload discipline for a global, representation work,
+/// not analysis work". It was analysis work: a module-global SCALAR read costs
+/// 9.00 instructions against a function-local's 9.00.
 const MODULE_GLOBAL_ISSUE: &str = "#10803";
 /// Tracking issue for the index-use / i32-bound precondition.
 const NOT_BOUNDED_ISSUE: &str = "#7123";

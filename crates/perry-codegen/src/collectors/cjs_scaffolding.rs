@@ -1455,6 +1455,7 @@ mod tests {
                 &HashSet::new(),
                 &HashMap::new(),
                 p,
+                &HashMap::new(),
             )
         };
         let fixed = seeds(&preamble_in_region(&region));
