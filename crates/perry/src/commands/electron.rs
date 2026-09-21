@@ -38,6 +38,10 @@ pub struct ElectronArgs {
 struct ResolvedApp {
     root: PathBuf,
     entry: PathBuf,
+    /// Build-cache override for app roots that must not be written to — the
+    /// unpacked `Contents/Resources/app/` of a (usually signed) `.app` bundle.
+    /// `None` keeps the compile's default `<root>/node_modules/.cache/perry`.
+    build_cache: Option<PathBuf>,
 }
 
 pub fn run(args: ElectronArgs, format: OutputFormat, use_color: bool, verbose: u8) -> Result<()> {
@@ -92,8 +96,14 @@ pub fn run(args: ElectronArgs, format: OutputFormat, use_color: bool, verbose: u
         no_cache: false,
         // `perry electron` has no `--cache-dir` flag; the resolver still
         // honors `PERRY_CACHE_DIR` / perry.toml `[perry] cacheDir` /
-        // package.json `perry.cacheDir`.
-        cache_dir: None,
+        // package.json `perry.cacheDir`. A bundle's unpacked app dir is the
+        // exception: writing the build cache there would modify the installed
+        // (signed) application, so it builds under the per-user cache instead
+        // unless `PERRY_CACHE_DIR` says otherwise.
+        cache_dir: app
+            .build_cache
+            .clone()
+            .filter(|_| std::env::var_os("PERRY_CACHE_DIR").is_none()),
         fast_math: false,
         fp_contract: None,
         verify_native_regions: false,
@@ -165,27 +175,20 @@ fn launch_in_dir(
     Ok(())
 }
 
+const SHIM_RELATIVE: &str = "packages/electron/src/index.ts";
+
 /// Locate the Electron compat shim (`packages/electron/src/index.ts`).
 ///
 /// Resolution order:
-/// 1. `PERRY_ELECTRON_SHIM` — path to the shim root directory or directly to
-///    its `src/index.ts`.
+/// 1. `PERRY_ELECTRON_SHIM` — see [`shim_from_configured`].
 /// 2. Walk the ancestors of the running `perry` executable looking for
 ///    `packages/electron/src/index.ts` — covers `target/{debug,release}/perry`
 ///    inside the repo checkout, plus `lib/`-style installed layouts one or
 ///    two levels below the install root.
 fn find_electron_shim() -> Option<PathBuf> {
-    const SHIM_RELATIVE: &str = "packages/electron/src/index.ts";
-
     if let Ok(value) = std::env::var("PERRY_ELECTRON_SHIM") {
-        let configured = PathBuf::from(value);
-        let candidate = if configured.is_dir() {
-            configured.join(SHIM_RELATIVE)
-        } else {
-            configured
-        };
-        if candidate.is_file() {
-            return Some(candidate);
+        if let Some(shim) = shim_from_configured(Path::new(&value)) {
+            return Some(shim);
         }
     }
 
@@ -200,6 +203,21 @@ fn find_electron_shim() -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Interpret a `PERRY_ELECTRON_SHIM` value: the shim's entry file itself, the
+/// shim directory (`packages/electron`, holding `src/index.ts`), or a Perry
+/// checkout root (holding `packages/electron/src/index.ts`).
+fn shim_from_configured(configured: &Path) -> Option<PathBuf> {
+    if configured.is_file() {
+        return Some(configured.to_path_buf());
+    }
+    [
+        configured.join("src").join("index.ts"),
+        configured.join(SHIM_RELATIVE),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
 }
 
 /// Resolve the user-supplied path to an app entry + app root, handling
@@ -230,6 +248,7 @@ fn resolve_app_path(input: &Path, cache_root: &Path, format: OutputFormat) -> Re
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from(".")),
             entry: path,
+            build_cache: None,
         });
     }
     bail!("'{}' does not exist", path.display());
@@ -250,7 +269,13 @@ fn resolve_app_bundle(
     }
     let unpacked = resources.join("app");
     if unpacked.join("package.json").is_file() {
-        return resolve_package_dir(&unpacked);
+        let mut app = resolve_package_dir(&unpacked)?;
+        let canonical = unpacked.canonicalize().unwrap_or_else(|_| unpacked.clone());
+        app.build_cache = Some(cache_root.join(format!(
+            "perry-electron-build-{:016x}",
+            stable_hash(&canonical.display().to_string())
+        )));
+        return Ok(app);
     }
     bail!(
         "'{}' is not an Electron app bundle: neither Contents/Resources/app.asar \
@@ -289,6 +314,7 @@ fn resolve_package_dir(dir: &Path) -> Result<ResolvedApp> {
     Ok(ResolvedApp {
         root: dir.to_path_buf(),
         entry,
+        build_cache: None,
     })
 }
 
@@ -394,6 +420,7 @@ mod tests {
         let resolved = resolve_app_path(&app, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(resolved.root, app);
         assert_eq!(resolved.entry, app.join("main.js"));
+        assert!(resolved.build_cache.is_none());
     }
 
     #[test]
@@ -418,6 +445,18 @@ mod tests {
 
         let resolved = resolve_app_path(&bundle, dir.path(), OutputFormat::Text).unwrap();
         assert_eq!(resolved.root, unpacked);
+        // The build cache must not land inside the (signed) bundle.
+        let build_cache = resolved.build_cache.expect("bundle build cache");
+        assert!(
+            build_cache.starts_with(dir.path()),
+            "{}",
+            build_cache.display()
+        );
+        assert!(
+            !build_cache.starts_with(&bundle),
+            "{}",
+            build_cache.display()
+        );
     }
 
     #[test]
@@ -509,6 +548,21 @@ mod tests {
             root.display()
         );
         assert!(root.ends_with("perry/electron-apps"), "{}", root.display());
+    }
+
+    #[test]
+    fn configured_shim_accepts_entry_shim_dir_or_checkout_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let checkout = dir.path();
+        let shim_dir = checkout.join("packages/electron");
+        let entry = shim_dir.join("src/index.ts");
+        fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        fs::write(&entry, "export {};").unwrap();
+
+        assert_eq!(shim_from_configured(&entry), Some(entry.clone()));
+        assert_eq!(shim_from_configured(&shim_dir), Some(entry.clone()));
+        assert_eq!(shim_from_configured(checkout), Some(entry));
+        assert_eq!(shim_from_configured(&checkout.join("nope")), None);
     }
 
     #[test]
