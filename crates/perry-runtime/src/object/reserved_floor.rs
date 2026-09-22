@@ -50,6 +50,16 @@ pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
     }
 }
 
+/// URL uses class_id 0 but reserves the same twelve numbered slots as a
+/// built-in iterator. Inspect it only on the first named-property write.
+pub(crate) unsafe fn reserved_slot_floor_for_object(obj: *mut ObjectHeader) -> u32 {
+    if (*obj).class_id == 0 && crate::url::is_url_object_shape(obj) {
+        crate::url::parse::URL_FIELD_COUNT
+    } else {
+        reserved_slot_floor_for_class_id((*obj).class_id)
+    }
+}
+
 /// Install the reserved-floor keys array on a keys-less receiver whose class
 /// id reserves raw field slots: `floor` leading `TAG_HOLE` slots, published
 /// as a shape whose `hole_count` matches the physical holes, preserving the
@@ -61,8 +71,11 @@ pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
 /// # Safety
 /// `obj` must be a live `GC_TYPE_OBJECT` allocation.
 pub(crate) unsafe fn ensure_reserved_floor_keys(obj: *mut ObjectHeader) -> bool {
-    let floor = reserved_slot_floor_for_class_id((*obj).class_id);
-    if floor == 0 || !super::object_keys_array(obj).is_null() {
+    if !super::object_keys_array(obj).is_null() {
+        return false;
+    }
+    let floor = reserved_slot_floor_for_object(obj);
+    if floor == 0 {
         return false;
     }
     // NaN-boxed handles rather than `root_raw_*_ptr`, so every reload is a

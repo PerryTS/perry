@@ -410,6 +410,11 @@ pub(crate) fn set_field_by_name_object_tail(
             let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
             let value = value_handle.get_nanbox_f64();
             match key_str.as_str() {
+                "origin" | "searchParams" => return,
+                "host" => {
+                    crate::url::js_url_set_host(obj, value);
+                    return;
+                }
                 "pathname" => {
                     crate::url::js_url_set_pathname(obj, value);
                     return;
@@ -488,7 +493,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // transition-cache fast path, whose `prev_shape_id` is read AFTER
         // this — then appends at the floor. Seeding allocates, so every raw
         // local is re-read through its handle.
-        if keys.is_null() && crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0 {
+        if keys.is_null() && crate::object::reserved_slot_floor_for_object(obj) != 0 {
             let seeded = crate::object::ensure_reserved_floor_keys(obj);
             refresh_roots_after_alloc!();
             keys = crate::object::object_keys_array(obj);
