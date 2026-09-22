@@ -377,12 +377,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             &local_receiver
         }
     };
-    // A local receiver (and a fold that captured one) is already in a slot the
-    // collector rewrites, so re-lowering it IS the re-read the rooting
-    // invariant wants; only a receiver that cannot be evaluated twice needs a
-    // materialisation of its own.
-    let materialize = matches!(call.receiver, Receiver::Expr(_))
-        && !matches!(receiver_expr, Expr::LocalGet(_) | Expr::This);
+    let materialize = matches!(call.receiver, Receiver::Expr(_));
 
     let receiver_value = lower_expr(ctx, receiver_expr)?;
     let key = receiver_expr as *const Expr as usize;
