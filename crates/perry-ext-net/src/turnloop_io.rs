@@ -438,6 +438,35 @@ fn on_connect(id: i64) {
             return;
         }
     }
+    // #10465: clear the connect-phase flags at the same tick the JS 'connect'
+    // event is emitted, so a listener observing the socket sees Node's state.
+    // Both tokio connect paths (lib.rs) set all three together; this one set
+    // only `is_open`, so `connecting` stayed true forever and `readyState`
+    // (lifecycle.rs:275 returns "opening" whenever `connecting`) never left
+    // "opening" for the socket's whole connected life, while `pending`
+    // (keyed on `has_opened`, lifecycle.rs:144) never cleared. A driver that
+    // waits for `readyState === "open"` or guards on `!connecting` before
+    // writing therefore never proceeds.
+    //
+    // Deliberately here rather than in the `is_open` block above: the
+    // direct-TLS branch can fail and return early, and that socket is being
+    // destroyed, so it must NOT be recorded as opened.
+    //
+    // DO NOT "fix" this to wait for the TLS handshake. It looks early — the
+    // flags clear while a direct-TLS upgrade is still in flight — but it is
+    // what Node does: a TLS socket's underlying connection completes at the
+    // TCP level, which is when `'connect'` fires and `connecting` goes false,
+    // and the handshake is signalled separately by `'secureConnect'`. The
+    // tokio path at lib.rs:1494 holds `connecting` true until the transport
+    // INCLUDING TLS is established; that is the deviation, not this. Nothing
+    // pins it yet — the parity fixture is plain-socket only, so both timings
+    // pass today (see #11056).
+    if let Ok(mut sockets) = statics::sockets().lock() {
+        if let Some(s) = sockets.get_mut(&id) {
+            s.has_opened = true;
+            s.connecting = false;
+        }
+    }
     push_event(PendingNetEvent::Connect(id, local_server));
     start_reading(id);
 }
