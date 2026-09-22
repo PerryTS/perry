@@ -2100,6 +2100,12 @@
       "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
     },
     {
+      "file": "crates/perry-ui-macos/src/widgets/text.rs",
+      "name": "TEXT_SPACING",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextSpacing maps native widget handle indices to optional finite f64 kern and line-height scalars. Both setters reject non-finite input before storage, and no field contains a JavaScript value or GC heap pointer."
+    },
+    {
       "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
       "name": "NODES",
       "verdict": "not_a_gc_pointer",
