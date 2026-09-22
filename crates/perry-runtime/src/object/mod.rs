@@ -755,7 +755,14 @@ fn shape_cache_insert(
             // to generated code. Leave it exactly as it was.
             (live, keys_array)
         } else {
-            live.across(|| unsafe { canonical_keys::canonicalize(keys_array, len).as_ptr() })
+            live.across(|| unsafe {
+                canonical_keys::canonicalize(
+                    &canonical_keys::SharedLayout::shape_cache_entry(),
+                    keys_array,
+                    len,
+                )
+                .as_ptr()
+            })
         }
     };
     // Mark the array as shape-shared so `js_object_set_field_by_name`
