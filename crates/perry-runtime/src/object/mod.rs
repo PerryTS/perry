@@ -56,6 +56,12 @@ mod test_root_helpers;
 pub(crate) use test_root_helpers::*;
 
 pub(crate) mod alloc;
+mod alloc_basic;
+pub use alloc::{
+    js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
+    js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
+};
+pub(crate) use alloc::mark_object_plain_ordinary;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,
@@ -1378,6 +1384,9 @@ pub fn scan_object_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    // Object-owned weak layout caches: rewrite moves without retaining keys.
+    canonical_keys::scan_canonical_keys_roots_mut(visitor);
+    scan_class_keys_roots_mut(visitor);
     for slot in [
         &HTTP_METHODS_CACHE,
         &FS_CONSTANTS_CACHE,
