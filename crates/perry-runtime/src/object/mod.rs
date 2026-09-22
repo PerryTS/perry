@@ -1742,6 +1742,8 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 /// #9180: the receiver `[[Set]]` own-key probe, split out to keep `tests.rs`
 /// under the 2000-line cap.
 #[cfg(test)]
+mod keys_front_offset_tests;
+#[cfg(test)]
 mod own_key_probe_tests;
 #[cfg(test)]
 mod restricted_function_store_tests;
