@@ -1,4 +1,6 @@
 function run(n: any, O: any) { let h=0; for(let k=0;k<n;k++) h+=O.a+O.b; return h; }
+function localRun(n: any) { const O={a:1,b:2}; let h=0; for(let k=0;k<n;k++) h+=O.a+O.b; return h; }
+console.log(localRun(7));
 function store(n: any, O: any) { let h=0; for(let k=0;k<n;k++){O.c=1;h+=O.a+O.b;} return h; }
 function erase(O: any) { delete O.a; }
 function callDelete(n: any, O: any) { let h=0; for(let k=0;k<n;k++){erase(O);h+=O.a+O.b;} return h; }

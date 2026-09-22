@@ -158,6 +158,12 @@ fn plan(
 fn addressable(ctx: &FnCtx<'_>, id: u32) -> bool {
     !ctx.boxed_vars.contains(&id)
         && !ctx.closure_captures.contains_key(&id)
+        // Scalar replacement leaves a bookkeeping local but no receiver.
+        // Its existing field lowering must keep reading the field allocas;
+        // even the generic clone cannot read a nonexistent object root.
+        && !ctx.scalar_replaced.contains_key(&id)
+        && !ctx.scalar_replaced_arrays.contains_key(&id)
+        && !ctx.scalar_replaced_uppercase_sources.contains_key(&id)
         // Module variables are direct registered roots too. The closed body
         // writes only the accumulator and optional fresh-array binding, and
         // cannot dispatch JS; neither receiver nor numeric inputs can change.
