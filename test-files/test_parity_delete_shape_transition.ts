@@ -122,3 +122,29 @@ for (let round = 0; round < 60; round++) {
 show("i1", bad);
 show("i2", Object.keys(churn).length);
 show("i3", Object.keys(churn).sort().join(","));
+
+// 9. delete observed through a POLYMORPHIC read site. Five shapes are made
+// resident in one site's cache — the MRU entry plus the four ways — and then
+// the read key is deleted off two of the receivers, one with the key on its
+// prototype and one without, and read back through the SAME site. A way hit
+// is an exact-ShapeId proof exactly as an MRU hit is, so a delete has to stop
+// the key hitting on both; the emitted way path carries no other check.
+const wproto: Record<string, unknown> = { pv: "P" };
+function site(o: Record<string, unknown>): unknown { return o.pv; }
+const w1: Record<string, unknown> = Object.create(wproto); w1.pv = "1";
+const w2: Record<string, unknown> = { q1: 1, pv: "2" };
+const w3: Record<string, unknown> = { q1: 1, q2: 2, pv: "3" };
+const w4: Record<string, unknown> = { q1: 1, q2: 2, q3: 3, pv: "4" };
+const w5: Record<string, unknown> = { q1: 1, q2: 2, q3: 3, q4: 4, pv: "5" };
+function wwarm(): void {
+  for (let i = 0; i < 200; i++) { site(w1); site(w2); site(w3); site(w4); site(w5); }
+}
+wwarm();
+show("j1", "" + site(w1) + site(w2) + site(w3) + site(w4) + site(w5));
+delete w1.pv;
+delete w3.pv;
+wwarm();
+show("j2", "" + site(w1) + "/" + site(w3) + "/" + site(w2) + site(w4) + site(w5));
+w1.pv = "1b"; w3.pv = "3b";
+wwarm();
+show("j3", "" + site(w1) + site(w2) + site(w3) + site(w4) + site(w5));
