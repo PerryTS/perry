@@ -351,14 +351,15 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
         } else {
             (*keys_array).length
         };
-        let published = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
-            Some(proof) => crate::object::canonical_keys::canonicalize(&proof, keys_array, len)
-                .as_ptr(),
+        let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj);
+        let (published, obj) = obj_handle.across_mut(|| match proof {
+            Some(proof) => {
+                crate::object::canonical_keys::canonicalize(&proof, keys_array, len).as_ptr()
+            }
             // A latched receiver's list is its own; publishing it as a shared
             // layout is what lost 407 of 8,192 keys before the proof existed.
             None => keys_array,
-        };
-        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        });
         set_object_keys_array(obj, published);
     }
 }
