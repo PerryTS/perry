@@ -2682,9 +2682,8 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         // throwing, and the imported-clone guards lost a prototype semantic
         // (`issue_9180`, `issue_8693`). Requiring a declared accessor on the
         // receiver's class chain keeps the arm to exactly the case it is for.
-        let has_accessor = !recv.is_null()
-            && !crate::value::addr_class::is_small_handle(recv as usize)
-            && {
+        let has_accessor =
+            !recv.is_null() && !crate::value::addr_class::is_small_handle(recv as usize) && {
                 let class_id = crate::object::js_object_get_class_id(recv);
                 class_id != 0
                     && !crate::object::class_registry::class_is_key_deleted(class_id, method_name)

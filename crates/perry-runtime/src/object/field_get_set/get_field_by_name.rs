@@ -1425,8 +1425,10 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                                 // binds it (spec OrdinaryGet threads Receiver) --
                                 // the same device `resolve_proto_chain_field_inner`
                                 // uses for instance getters.
-                                let prev = crate::object::field_get_set::
-                                    accessor_receiver_override_begin(class_value);
+                                let prev =
+                                    crate::object::field_get_set::accessor_receiver_override_begin(
+                                        class_value,
+                                    );
                                 let v = js_object_get_field_by_name(static_proto as *const _, key);
                                 crate::object::field_get_set::accessor_receiver_override_end(prev);
                                 if !v.is_undefined() {
@@ -1435,8 +1437,10 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                             }
                             let proto = super::super::class_registry::class_prototype_object(child);
                             if !proto.is_null() {
-                                let prev = crate::object::field_get_set::
-                                    accessor_receiver_override_begin(class_value);
+                                let prev =
+                                    crate::object::field_get_set::accessor_receiver_override_begin(
+                                        class_value,
+                                    );
                                 let v = js_object_get_field_by_name(proto as *const _, key);
                                 crate::object::field_get_set::accessor_receiver_override_end(prev);
                                 // Return a value present on the pinned object even
