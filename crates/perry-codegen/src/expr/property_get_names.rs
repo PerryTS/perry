@@ -54,6 +54,7 @@ fn is_net_socket_method_name(name: &str) -> bool {
             | "destroySoon"
             | "end"
             | "pause"
+            | "read"
             | "ref"
             | "resetAndDestroy"
             | "resume"
