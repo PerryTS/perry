@@ -126,7 +126,6 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
     true
 }
 
-
 /// #10933: may an integrity op write `OBJ_FLAG_*` into this value's header?
 ///
 /// The band check these call sites used to rely on keeps small registry ids
@@ -147,8 +146,7 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
 /// `test_gap_handle_band_object_ops`).
 #[inline]
 unsafe fn integrity_flags_are_writable(obj: *const ObjectHeader) -> bool {
-    !obj.is_null()
-        && crate::value::addr_class::try_read_tracked_gc_header(obj as usize).is_some()
+    !obj.is_null() && crate::value::addr_class::try_read_tracked_gc_header(obj as usize).is_some()
 }
 
 #[no_mangle]
@@ -686,7 +684,10 @@ mod header_gate_tests {
         for i in 0..32 {
             let name = format!("freezeGate{i}");
             let ptr = crate::symbol::well_known_symbol(&name);
-            assert!(!ptr.is_null(), "the probe needs real symbols to be meaningful");
+            assert!(
+                !ptr.is_null(),
+                "the probe needs real symbols to be meaningful"
+            );
             syms.push(ptr as usize);
         }
         let before: Vec<u64> = syms

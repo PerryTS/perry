@@ -822,7 +822,8 @@ pub(crate) fn set_field_by_name_object_tail(
                 // pointers. A missing property now, a SIGSEGV inside the next
                 // collection later, with a backtrace naming something else.
                 let (src_data, src_len) = crate::object::keys_array_dense_slots(keys);
-                let dst_data = crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
+                let dst_data =
+                    crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
                 // A source shorter than the shape's count means the shape is already
                 // lying; copy what exists rather than publishing uninitialised words
                 // as traced pointers.
@@ -1070,7 +1071,8 @@ pub(crate) fn set_field_by_name_object_tail(
             // pointers. A missing property now, a SIGSEGV inside the next
             // collection later, with a backtrace naming something else.
             let (src_data, src_len) = crate::object::keys_array_dense_slots(keys);
-            let dst_data = crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
+            let dst_data =
+                crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
             // A source shorter than the shape's count means the shape is already
             // lying; copy what exists rather than publishing uninitialised words
             // as traced pointers.

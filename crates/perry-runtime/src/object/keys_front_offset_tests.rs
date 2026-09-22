@@ -35,7 +35,10 @@ unsafe fn key_names(obj: *mut super::ObjectHeader) -> Vec<String> {
     out
 }
 
-unsafe fn push_name(keys: *mut crate::array::ArrayHeader, name: &str) -> *mut crate::array::ArrayHeader {
+unsafe fn push_name(
+    keys: *mut crate::array::ArrayHeader,
+    name: &str,
+) -> *mut crate::array::ArrayHeader {
     let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     crate::array::js_array_push(keys, crate::JSValue::string_ptr(s))
 }

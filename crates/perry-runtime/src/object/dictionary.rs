@@ -90,9 +90,9 @@
 //! by `runtime_write_barrier_slot`. Membership is proved by sabotage: remove
 //! the `visit` and `dictionary_keys_survive_a_moving_collection` fails.
 
-use super::{ObjectHeader, ObjectMeta, shapes};
-use crate::array::ArrayHeader;
 use super::dictionary_counters::*;
+use super::{shapes, ObjectHeader, ObjectMeta};
+use crate::array::ArrayHeader;
 use std::sync::atomic::Ordering;
 
 /// Dictionary generations set bit 62 and clear bit 63. See the module docs.
@@ -369,7 +369,11 @@ unsafe fn meta_of(obj: *const ObjectHeader) -> Option<*mut ObjectMeta> {
         return None;
     }
     let meta = (*obj).meta;
-    if meta.is_null() { None } else { Some(meta) }
+    if meta.is_null() {
+        None
+    } else {
+        Some(meta)
+    }
 }
 
 /// Is this receiver in dictionary mode?
@@ -630,9 +634,7 @@ pub(crate) unsafe fn publish_keys(
     // checked invariant rather than a comment.
     let values_may_have_moved = swapped && next_len < previous_len;
     debug_assert!(
-        !swapped
-            || next_len != previous_len
-            || key_lists_match(previous, keys, next_len),
+        !swapped || next_len != previous_len || key_lists_match(previous, keys, next_len),
         "an equal-length keys-array swap reordered a dictionary receiver's \
          keys: every cached (ShapeId, key) -> slot for it is now wrong"
     );
@@ -684,7 +686,10 @@ pub(crate) unsafe fn debug_assert_dictionary_parity(obj: *const ObjectHeader) {
         return;
     }
     let Some(meta) = meta_of(obj) else {
-        debug_assert!(false, "a dictionary receiver must be a live GC_TYPE_OBJECT with a meta");
+        debug_assert!(
+            false,
+            "a dictionary receiver must be a live GC_TYPE_OBJECT with a meta"
+        );
         return;
     };
     debug_assert!(
@@ -707,4 +712,3 @@ pub(crate) unsafe fn debug_assert_dictionary_parity(obj: *const ObjectHeader) {
         descriptor.semantic_generation
     );
 }
-

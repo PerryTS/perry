@@ -52,7 +52,8 @@ fn dictionary_generation_namespaces_are_disjoint() {
         "a dictionary generation must not land in the deterministic namespace"
     );
     assert_ne!(
-        dictionary::DICTIONARY_GENERATION_TAG, 0,
+        dictionary::DICTIONARY_GENERATION_TAG,
+        0,
         "a dictionary generation must be distinguishable from a counter draw"
     );
     // A counter draw that reached bit 62 would collide. `alloc_shape_id` parks

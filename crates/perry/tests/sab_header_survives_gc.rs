@@ -88,7 +88,10 @@ main();
         "compile failed\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = Command::new(&output).current_dir(dir.path()).output().expect("run");
+    let run = Command::new(&output)
+        .current_dir(dir.path())
+        .output()
+        .expect("run");
     assert!(
         run.status.success(),
         "a signal here would be a collector writing the shared SAB header\nstatus {:?}\nstderr:\n{}",

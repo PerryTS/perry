@@ -707,9 +707,11 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
     for i in 0..6 {
         let name = format!("gcdict_{i:02}");
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let value =
-            f64::from_bits(crate::object::js_object_get_field_by_name(owner, key).bits());
-        assert_eq!(value, i as f64, "test premise: key {i} reads back after the latch");
+        let value = f64::from_bits(crate::object::js_object_get_field_by_name(owner, key).bits());
+        assert_eq!(
+            value, i as f64,
+            "test premise: key {i} reads back after the latch"
+        );
     }
     assert!(
         unsafe { crate::object::dictionary::is_dictionary(owner) },

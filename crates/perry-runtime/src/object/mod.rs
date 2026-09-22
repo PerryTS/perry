@@ -86,11 +86,11 @@ mod data_view_registry;
 mod dataview_proto_thunks;
 mod date_proto_thunks;
 mod delete_rest;
+pub(crate) mod descriptors;
 pub(crate) mod dictionary;
 mod dictionary_counters;
 #[cfg(test)]
 mod dictionary_tests;
-pub(crate) mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;
 pub(crate) mod field_get_set;
@@ -1581,7 +1581,6 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
 }
-
 
 const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 8);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);

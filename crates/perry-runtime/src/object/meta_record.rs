@@ -212,7 +212,6 @@ pub struct ObjectMeta {
     pub native_state: u64,
 }
 
-
 // #6812 spill lanes: the versioned write-loop emitter
 // (perry-codegen/src/stmt/loops.rs) addresses `meta.spill` at word 4 of the
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
