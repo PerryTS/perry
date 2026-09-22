@@ -53,3 +53,25 @@ One entry WAS genuinely stale and is deleted: `js_ratelimit_new_from_options`,
 whose crate went with the npm-binding strip. No definition, no codegen
 declaration, nothing in nm. That is the difference the scanner could not express
 before, and `--verify-symbols` is how the next person tells the two apart.
+
+**Why column-0 is safe rather than lucky.** Item position is a heuristic, and it
+is allowed to be one because a miss is CAUGHT rather than silent. Two checks
+enforce that, at different costs:
+
+- `--verify-symbols ARCHIVE...` compares the scanner against `nm` on the real
+  archives, in `gc-root-dominance.yml` where the archives already exist. It
+  catches ANY shape the regex misses — but it needs a build, and that workflow
+  is label-gated, so it speaks on scheduled `main` runs, after the fact.
+- `--audit-macro-item-position` is the build-free half and runs in `lint`, which
+  IS a required context. It enforces the heuristic's PRECONDITION instead of its
+  result: a macro invocation naming a `js_*` symbol at an indent (an export
+  macro wrapped in an inline `mod`, say) fails the PR with the remedy — move it
+  to column 0, or teach `_macro_defined_symbols` the shape, or declare the macro
+  non-defining. Sabotage-tested by planting exactly that: it names the file, the
+  line and the symbol, and exits 2.
+
+That split matters because of #8821's precedent, cited in `test.yml`: a
+build-free audit that lives ONLY in the label-gated workflow "is skipped on every
+PR and speaks only on scheduled `main` runs, after the fact". The archive
+cross-check is the durable guarantee; the required per-PR check is what stops the
+regression reaching `main` in the first place.
