@@ -76,9 +76,9 @@ impl StickyRememberedSet {
     }
 
     /// How many of this set's entries the remembered set does NOT hold yet —
-    /// what `restore` would add. Read-only: the debug check of the coverage
-    /// restore asks this about objects it skipped.
-    #[cfg(debug_assertions)]
+    /// what `restore` would add. Read-only: the test/debug check of the
+    /// coverage restore asks this about objects it skipped.
+    #[cfg(any(test, debug_assertions))]
     pub(super) fn count_not_yet_dirty(&self) -> usize {
         let old_missing = super::barrier::DIRTY_OLD_PAGES.with(|s| {
             let s = s.borrow();
