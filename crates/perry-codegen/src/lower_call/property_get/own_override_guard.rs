@@ -55,7 +55,7 @@ use super::helpers::is_date_receiver;
 use crate::expr::{lower_expr, FnCtx};
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_map_expr, is_set_expr};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
 /// below. Over-approximating is safe — a name the chain declines simply makes
@@ -113,14 +113,18 @@ fn emit_own_override_branch(
     own_label: &str,
     builtin_label: &str,
 ) {
-    let key_idx = ctx.strings.intern(property);
-    let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
-    let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+    // The predicate takes the name as BYTES, not a dispatch id: it asks
+    // `Object.hasOwn`'s own predicate, which needs a real key.
+    let (name_bytes, name_len) = {
+        let idx = ctx.strings.intern(property);
+        let entry = ctx.strings.entry(idx);
+        (format!("@{}", entry.bytes_global), entry.byte_len.to_string())
+    };
     let blk = ctx.block();
     let maybe = blk.call(
         I32,
         "js_receiver_may_own_named_method",
-        &[(DOUBLE, recv), (I64, &method_id)],
+        &[(DOUBLE, recv), (PTR, &name_bytes), (I64, &name_len)],
     );
     let may_own = blk.icmp_ne(I32, &maybe, "0");
     blk.cond_br(&may_own, own_label, builtin_label);
