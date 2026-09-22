@@ -520,6 +520,30 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
+    // WebIDL inheritance carries prototype method values across these two
+    // interface pairs. Both constructors have been installed by this point.
+    for (child, parent) in [("AbortSignal", "EventTarget"), ("CustomEvent", "Event")] {
+        let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
+        let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
+        let child_proto = builtin_prototype_value(child);
+        let parent_proto = builtin_prototype_value(parent);
+        if JSValue::from_bits(child_ctor.to_bits()).is_pointer()
+            && JSValue::from_bits(parent_ctor.to_bits()).is_pointer()
+        {
+            crate::closure::closure_set_static_prototype(
+                crate::value::js_nanbox_get_pointer(child_ctor) as usize,
+                parent_ctor.to_bits(),
+            );
+        }
+        if JSValue::from_bits(child_proto.to_bits()).is_pointer()
+            && JSValue::from_bits(parent_proto.to_bits()).is_pointer()
+        {
+            super::super::prototype_chain::object_set_static_prototype(
+                crate::value::js_nanbox_get_pointer(child_proto) as usize,
+                parent_proto.to_bits(),
+            );
+        }
+    }
     // The hidden `%AsyncFunction%` tower is allocated before the constructor
     // loop, but its two parents are the `Function` values installed by that
     // loop. Complete those links now that both are available.
