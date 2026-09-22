@@ -34,7 +34,6 @@
     "crates/perry-stdlib/src/events/module_helpers.rs": 1,
     "crates/perry-stdlib/src/events/once_helpers.rs": 1,
     "crates/perry-stdlib/src/events/warnings.rs": 1,
-    "crates/perry-stdlib/src/fetch/mod.rs": 6,
     "crates/perry-stdlib/src/lodash.rs": 21,
     "crates/perry-stdlib/src/querystring.rs": 2,
     "crates/perry-stdlib/src/readline/mod.rs": 4,
@@ -65,5 +64,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 390
+  "total": 384
 }
