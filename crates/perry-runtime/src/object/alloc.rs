@@ -444,7 +444,7 @@ pub extern "C" fn js_build_class_keys_array(
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
         let arr = crate::array::js_array_alloc_with_length_longlived(0);
-        let arr = shape_cache_insert(shape_id, arr);
+        let (_, arr) = shape_cache_insert(shape_id, crate::object::canonical_keys::LiveObject::none(), arr);
         remember_class_keys_array(class_id, field_count, arr);
         return arr;
     }
@@ -506,7 +506,7 @@ pub extern "C" fn js_build_class_keys_array(
     unsafe {
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     }
-    let arr = shape_cache_insert(shape_id, arr);
+    let (_, arr) = shape_cache_insert(shape_id, crate::object::canonical_keys::LiveObject::none(), arr);
     remember_class_keys_array(class_id, field_count, arr);
     arr
 }
@@ -539,9 +539,17 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    // #10868 stage 1c: the receiver is carried as a `LiveObject`, never as a
+    // raw binding, because `shape_cache_insert` below CAN COLLECT — stage 1b
+    // made it allocate. The token is moved into that call and reassigned from
+    // its result, so the stale pointer this function used to write its keys
+    // edge with is no longer nameable.
+    let mut live = crate::object::canonical_keys::LiveObject::new(
+        arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader,
+    );
 
     unsafe {
+        let ptr = live.as_ptr();
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
@@ -587,11 +595,15 @@ pub extern "C" fn js_object_alloc_class_with_keys(
                 crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
             }
         }
-        let arr = shape_cache_insert(shape_id, arr);
+        // `live` is moved into the call and reassigned from its result; the
+        // pre-call value is not nameable afterwards.
+        let (live_after, arr) = shape_cache_insert(shape_id, live, arr);
+        live = live_after;
         (arr, shape_cache_get_with_id(shape_id).1)
     };
 
     unsafe {
+        let ptr = live.as_ptr();
         set_object_keys_array_with_live(ptr, keys_arr, field_count);
         // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
         // COMPILED entry point (`js_object_alloc_class_inline_keys_stamped`)
@@ -602,7 +614,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
     }
     remember_class_keys_array(class_id, field_count, keys_arr);
-    ptr
+    live.as_ptr()
 }
 
 /// Allocate a subclass instance whose parent was resolved DYNAMICALLY at
@@ -706,7 +718,10 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
                 crate::array::note_array_slot_layout_only(arr, idx, nanboxed.to_bits());
             }
         }
-        let arr = shape_cache_insert(shape_id, arr);
+        // No unrooted receiver crosses this call: the object is allocated
+        // after it here, and in `js_object_alloc_with_shape` it is already
+        // held in a `RuntimeHandleScope` and reloaded below.
+        let (_, arr) = shape_cache_insert(shape_id, crate::object::canonical_keys::LiveObject::none(), arr);
         (arr, merged_len as u32, shape_cache_get_with_id(shape_id).1)
     };
 
@@ -824,7 +839,10 @@ pub extern "C" fn js_object_alloc_with_shape(
             }
         }
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let arr = shape_cache_insert(shape_id, arr);
+        // No unrooted receiver crosses this call: the object is allocated
+        // after it here, and in `js_object_alloc_with_shape` it is already
+        // held in a `RuntimeHandleScope` and reloaded below.
+        let (_, arr) = shape_cache_insert(shape_id, crate::object::canonical_keys::LiveObject::none(), arr);
         (arr, shape_cache_get_with_id(shape_id).1)
     };
 
