@@ -105,24 +105,6 @@ fn kind_is_proven_exotic(ctx: &FnCtx<'_>, object: &Expr) -> bool {
         || is_readonly_set_expr(ctx, object)
 }
 
-/// Does this receiver need materialising, or is re-lowering it already both
-/// free and a fresh read of a rooted location?
-///
-/// A `LocalGet`/`This` receiver lives in a slot the collector rewrites, and
-/// lowering it again emits a LOAD from that slot — which is exactly the
-/// re-read the rooting invariant demands after an allocating operand ("a root
-/// buys a rewritten LOCATION; the consuming call only observes the rewrite if
-/// it reads that location again", #7114/#9523). Materialising it into a second
-/// rooted slot would be safe but pointless: it adds a hop, and it moves the
-/// re-read off the slot the receiver actually lives in.
-///
-/// Everything else — a call result, a property or element read — cannot be
-/// evaluated twice, so it is materialised once and every consumer re-reads
-/// THAT slot.
-fn receiver_needs_materializing(object: &Expr) -> bool {
-    !matches!(object, Expr::LocalGet(_) | Expr::This)
-}
-
 /// Does this call need the own-override diamond?
 pub(super) fn guards(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
     shadowable_builtin_name(property) && kind_is_proven_exotic(ctx, object)
@@ -147,10 +129,7 @@ fn emit_own_override_branch(
     let (name_bytes, name_len) = {
         let idx = ctx.strings.intern(property);
         let entry = ctx.strings.entry(idx);
-        (
-            format!("@{}", entry.bytes_global),
-            entry.byte_len.to_string(),
-        )
+        (format!("@{}", entry.bytes_global), entry.byte_len.to_string())
     };
     let blk = ctx.block();
     let maybe = blk.call(
@@ -176,15 +155,13 @@ fn emit_dispatcher(
     operands.extend(args.iter());
     rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
         let (recv, arg_vals) = values.split_first().expect("the receiver is operand 0");
-        Ok(
-            super::super::console_promise::emit_native_method_str_dispatch(
-                ctx,
-                property,
-                call_byte_offset,
-                recv,
-                arg_vals,
-            ),
-        )
+        Ok(super::super::console_promise::emit_native_method_str_dispatch(
+            ctx,
+            property,
+            call_byte_offset,
+            recv,
+            arg_vals,
+        ))
     })
 }
 
@@ -199,7 +176,7 @@ pub(super) fn lower(
 ) -> Result<String> {
     let receiver = lower_expr(ctx, object)?;
     let key = object as *const Expr as usize;
-    let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
+    rooting::with_materialized_receiver(ctx, key, &receiver, |ctx| {
         let own_idx = ctx.new_block("ownoverride.own");
         let builtin_idx = ctx.new_block("ownoverride.builtin");
         let merge_idx = ctx.new_block("ownoverride.merge");
@@ -223,17 +200,11 @@ pub(super) fn lower(
         // declines (an over-approximated name) reaches the same dispatcher, so
         // the diamond is redundant rather than wrong.
         ctx.current_block = builtin_idx;
-        let builtin_value = match super::lower_method_call_chain(
-            ctx,
-            callee,
-            object,
-            property,
-            args,
-            call_byte_offset,
-        )? {
-            Some(value) => value,
-            None => emit_dispatcher(ctx, object, property, args, call_byte_offset)?,
-        };
+        let builtin_value =
+            match super::lower_method_call_chain(ctx, callee, object, property, args, call_byte_offset)? {
+                Some(value) => value,
+                None => emit_dispatcher(ctx, object, property, args, call_byte_offset)?,
+            };
         let builtin_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
@@ -245,10 +216,5 @@ pub(super) fn lower(
                 (builtin_value.as_str(), builtin_end.as_str()),
             ],
         ))
-    };
-    if receiver_needs_materializing(object) {
-        rooting::with_materialized_receiver(ctx, key, &receiver, emit)
-    } else {
-        emit(ctx)
-    }
+    })
 }
