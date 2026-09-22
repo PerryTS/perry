@@ -44,6 +44,11 @@ mod closure_analysis;
 #[cfg(test)]
 mod closure_call_arity_tests;
 mod console_promise;
+/// #10943: the universal method dispatcher, which finds an own or
+/// inherited user method. It is the other side of every own-override
+/// diamond, including the one `expr/folded_builtin_override.rs` emits for
+/// the builtin calls HIR folded before this module could see them.
+pub(crate) use console_promise::emit_native_method_str_dispatch;
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]

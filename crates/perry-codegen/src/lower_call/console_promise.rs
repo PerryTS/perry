@@ -736,7 +736,7 @@ pub fn try_lower_promise_static_call(
 /// Kept separate from the eligibility tower below so a tag-guarded String
 /// fast path can use the identical non-string arm without re-evaluating its
 /// receiver (#7673).
-pub(super) fn emit_native_method_str_dispatch(
+pub(crate) fn emit_native_method_str_dispatch(
     ctx: &mut FnCtx<'_>,
     property: &str,
     call_byte_offset: u32,
