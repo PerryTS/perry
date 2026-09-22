@@ -825,48 +825,31 @@ mod descriptor_tests_8067 {
         test_drop_shape_descriptors(unrelated_keys);
     }
 
-    /// The retirement above is wired to the publish funnel: an in-place
-    /// append on an OWNED keys array must leave exactly one structural
-    /// descriptor under that address.
-    #[test]
-    fn in_place_owned_append_leaves_one_descriptor_per_keys_address() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            let obj = crate::object::js_object_alloc(0, 0);
-            let mut keys_before = 0usize;
-            let mut first_addr_count = 0usize;
-            for i in 0..96u32 {
-                let name = format!("owned9706_{i:03}");
-                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                crate::object::js_object_set_field_by_name(obj, key, i as f64);
-                let keys = crate::object::object_keys_array(obj) as usize;
-                let stamp = object_shape_stamp(obj);
-                assert!(is_shape_id(stamp), "receiver must stay stamped");
-                let family = test_shape_ids_for_keys(keys);
-                assert!(
-                    family.contains(&stamp),
-                    "the current stamp must be indexed under the current keys address"
-                );
-                if keys == keys_before {
-                    first_addr_count += 1;
-                    let shared = crate::value::addr_class::try_read_gc_header(keys)
-                        .is_some_and(|h| h.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0);
-                    if !shared {
-                        assert_eq!(
-                            family.len(),
-                            1,
-                            "an owned in-place append left growth history alive: {family:?}"
-                        );
-                    }
-                }
-                keys_before = keys;
-            }
-            assert!(
-                first_addr_count > 0,
-                "fixture premise: some appends must grow the owned array in place"
-            );
-        }
-    }
+    // DELETED by #10868 step 2.5: `in_place_owned_append_leaves_one_descriptor_per_keys_address`.
+    //
+    // WHAT IT PINNED: that an in-place append on an OWNED keys array leaves
+    // exactly one structural descriptor under that address — i.e. that
+    // `retire_owned_shape_siblings` really is wired to the publish funnel and
+    // growth history does not pile up under a reused address. It asserted its
+    // own precondition, `first_addr_count > 0`, "some appends must grow the
+    // owned array in place".
+    //
+    // WHY THE PREMISE IS NOW FALSE: canonical identity means one array per
+    // ordered key list, so an append never keeps its address — the successor
+    // is a different canonical array by construction. No keys array is owned
+    // any more (every one is `GC_FLAG_SHAPE_SHARED` from birth), so there is
+    // no in-place append for this test to observe, and `first_addr_count` is
+    // 0 by construction rather than by regression. `retire_owned_shape_siblings`
+    // is itself unreachable for the same reason.
+    //
+    // WHAT PINS THE REPLACEMENT PROPERTY: the concern was descriptors piling
+    // up under one address. That is now impossible in a stronger form —
+    // an address names exactly one key list, so a family under it can differ
+    // only in the non-keys facts. `object::canonical_keys`'s
+    // `one_array_serves_one_ordered_key_list` and `a_prefix_is_its_own_node`
+    // pin the identity, and the mint census's `FUNNEL OK / FUNNEL BROKEN`
+    // line pins it on a whole real program — it is the witness the funnel
+    // sabotage reddens, where the parity suite structurally cannot.
 
     #[test]
     fn shape_drop_does_not_delete_a_potential_siblings_descriptor() {
