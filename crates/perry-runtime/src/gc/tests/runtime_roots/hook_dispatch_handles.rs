@@ -5,7 +5,7 @@ extern "C" fn test_current_async_id(_closure: *const crate::closure::ClosureHead
 }
 
 #[test]
-fn test_async_resource_subclass_run_in_scope_roots_inputs_during_key_alloc_gc() {
+fn test_async_resource_subclass_run_in_scope_roots_inputs_across_a_resolve_gc() {
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -14,13 +14,22 @@ fn test_async_resource_subclass_run_in_scope_roots_inputs_during_key_alloc_gc() 
     register_runtime_handle_root_scanner_for_tests();
 
     let resource_type = test_string_value(b"SubclassResource");
-    let backing = crate::async_hooks::js_async_resource_new(
+    // #10926: `js_async_resource_new` hands back the handle OBJECT now. What a
+    // subclass receiver is linked to is the NATIVE backing behind it -- the
+    // address the registry brands -- so resolve it. Linking the object instead
+    // stores an address `is_async_resource_handle` rejects, and the resolve
+    // this test is about declines for a reason that has nothing to do with GC.
+    let resource_object = crate::async_hooks::js_async_resource_new(
         resource_type,
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
+    let backing = crate::async_hooks::resolve_async_resource_handle(resource_object)
+        .expect("a freshly constructed AsyncResource must resolve to its backing");
     let expected_async_id = crate::async_hooks::js_async_resource_async_id(backing);
     let receiver = crate::object::js_object_alloc(0, 1);
-    crate::async_hooks::test_link_async_resource_subclass(receiver, backing);
+    // The helper allocates (a key string, and the meta record the backing word
+    // lives in), so it can move the receiver; take the address it hands back.
+    let receiver = crate::async_hooks::test_link_async_resource_subclass(receiver, backing);
     let callback = crate::closure::js_closure_alloc(test_current_async_id as *const u8, 0);
 
     crate::async_hooks::test_force_next_async_resource_resolve_gc();
@@ -33,7 +42,10 @@ fn test_async_resource_subclass_run_in_scope_roots_inputs_during_key_alloc_gc() 
     );
     let after = crate::gc::copying_minor_cycles();
 
-    assert!(after > before, "the resolver must complete a copying minor");
+    assert!(
+        after > before,
+        "run_in_async_scope must complete a copying minor before it resolves"
+    );
     assert_eq!(result, expected_async_id);
     assert_eq!(crate::async_hooks::execution_async_id_u64(), 0);
 }

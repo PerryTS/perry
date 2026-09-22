@@ -74,6 +74,7 @@ pub(crate) use accessor_attrs::{
 };
 
 // ── state.rs ────────────────────────────────────────────────────────────────
+pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
 pub(crate) use state::{

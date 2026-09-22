@@ -50,12 +50,20 @@ pub(crate) const TUI_REF_BOX: u32 = 0xFFFF_240D;
 pub(crate) const TUI_APP: u32 = 0xFFFF_240E;
 pub(crate) const TUI_STDOUT: u32 = 0xFFFF_240F;
 pub(crate) const TUI_FOCUS_MANAGER: u32 = 0xFFFF_2410;
+pub(crate) const ASYNC_HOOK: u32 = 0xFFFF_2411;
+
+/// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
+/// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
+/// already bake into emitted code -- moving a live class id is #10824's hazard
+/// for no gain, so the range gets a legacy companion instead of a renumbering.
+/// Outside the block, so it is not in `ALL`.
+pub(crate) const ASYNC_RESOURCE_LEGACY: u32 = 0xFFFF_0079;
 
 /// The first id in the native-state range and the last one, inclusive. Every
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = TEXT_ENCODER;
-const NATIVE_BACKED_LAST: u32 = TUI_FOCUS_MANAGER;
+const NATIVE_BACKED_LAST: u32 = ASYNC_HOOK;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -68,6 +76,7 @@ const NATIVE_BACKED_LAST: u32 = TUI_FOCUS_MANAGER;
 /// `TypeError` #6185 made these surface.
 pub(crate) fn is_native_backed_class_id(class_id: u32) -> bool {
     (NATIVE_BACKED_FIRST..=NATIVE_BACKED_LAST).contains(&class_id)
+        || class_id == ASYNC_RESOURCE_LEGACY
 }
 
 /// Every id this module hands out, newest last. Used by the assertions below
@@ -89,6 +98,7 @@ const ALL: &[u32] = &[
     TUI_APP,
     TUI_STDOUT,
     TUI_FOCUS_MANAGER,
+    ASYNC_HOOK,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -138,6 +148,8 @@ mod tests {
             TUI_APP,
             TUI_STDOUT,
             TUI_FOCUS_MANAGER,
+            ASYNC_HOOK,
+            ASYNC_RESOURCE_LEGACY,
         ] {
             assert!(
                 is_native_backed_class_id(id),

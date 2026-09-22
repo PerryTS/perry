@@ -1043,6 +1043,16 @@ fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
     class_parent_prototype_bits(parent_proto)
 }
 
+/// `AsyncResource.prototype` as a NaN-boxed value, resolved exactly the way
+/// the subclass edge above resolves it, so a direct `new AsyncResource(...)`
+/// instance and a subclass prototype reach the SAME object by identity.
+/// Returns `undefined` if the export is not materialized.
+pub(crate) fn async_resource_prototype_value() -> f64 {
+    let func_value =
+        super::super::native_module::bound_native_callable_export_value("async_hooks", "AsyncResource");
+    super::function_prototype::js_function_prototype_value_for_read(func_value)
+}
+
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // #7757: a specialization answers with its generic's prototype.
     let class_id = decl_prototype_identity_id(class_id);

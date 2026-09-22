@@ -165,6 +165,8 @@ per_test_global! {
     static ASYNC_WRAP_PROVIDERS: AtomicU64 = AtomicU64::new(0);
 }
 
+const ASYNC_RESOURCE_SUBCLASS_KEY: &[u8] = b"__perryAsyncResourceBacking";
+
 /// Live `AsyncResource` handles. Handles are raw `Box::into_raw` pointers
 /// (never freed → membership is monotonic), NaN-boxed with POINTER_TAG like
 /// heap objects — so the dynamic method path needs this registry to recognize
@@ -173,7 +175,6 @@ per_test_global! {
 static ASYNC_RESOURCE_HANDLES: LazyLock<Mutex<HashSet<i64>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static ASYNC_RESOURCE_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);
-const ASYNC_RESOURCE_SUBCLASS_KEY: &[u8] = b"__perryAsyncResourceBacking";
 
 /// Live `AsyncHook` handles, for the same dynamic-receiver reason as
 /// `ASYNC_RESOURCE_HANDLES`. A helper that returns
@@ -227,31 +228,169 @@ pub(crate) fn is_async_hook_handle(handle: i64) -> bool {
 
 /// Resolve either a native `AsyncResource` handle or the ordinary object used
 /// for a source-compiled subclass to its native backing allocation.
+
+// ===========================================================================
+// Honest tags (#340/#341, #10926): an `AsyncResource` / `AsyncHook` handed to
+// JS is an ORDINARY object.
+//
+// Both used to be raw `Box::into_raw` addresses under `POINTER_TAG` with NO
+// `GcHeader` (the plan's `NR_FOREIGN_PTR` class), so every type probe read the
+// bytes in front of the `Box`: `JSON.stringify` answered `""` or `[]` where
+// node answers `{}`, build-dependently. A subclass fared worse — with no
+// prototype link (now wired in `class_registry::state`) the five methods were
+// copied onto each instance and the raw `Box` was parked in a user-visible
+// `__perryAsyncResourceBacking` field, so `Object.keys(new R())` leaked it.
+//
+// The `Box` is unchanged and stays the module's internal currency: every
+// `js_async_resource_*` entry point still resolves to it through
+// `resolve_async_resource_handle`. Only the value crossing into JS changes.
+//
+// State word: the backing address ORed with `PRESENT` (and `KIND_HOOK` for a
+// hook). A `Box` is 8-aligned, so the low three bits are free. The address is
+// then confirmed against `ASYNC_RESOURCE_HANDLES` / `ASYNC_HOOK_HANDLES` —
+// exact membership, so a word written by some other family can never produce a
+// false positive.
+// ===========================================================================
+
+/// Legacy reserved id, already used by `instanceof` and
+/// `class_registry::parent_static`. NOT moved into the `0xFFFF_24xx` block:
+/// it is baked into emitted code in three places and renumbering a live class
+/// id is #10824's hazard for no gain.
+pub(crate) const ASYNC_RESOURCE_CLASS_ID: u32 = 0xFFFF_0079;
+/// A fresh id. Deliberately `0x2411`, ABOVE the `0x240B..=0x2410` range the
+/// `perry/tui` family claims in #10915, so the two land in either order
+/// without colliding.
+pub(crate) const ASYNC_HOOK_CLASS_ID: u32 = 0xFFFF_2411;
+
+const ASYNC_STATE_PRESENT: u64 = 1;
+const ASYNC_STATE_KIND_HOOK: u64 = 1 << 1;
+const ASYNC_STATE_ADDR_MASK: u64 = !0b111;
+
+fn async_state_word(backing: i64, is_hook: bool) -> u64 {
+    debug_assert_eq!(backing as u64 & 0b111, 0, "a Box backing must be 8-aligned");
+    let mut word = (backing as u64 & ASYNC_STATE_ADDR_MASK) | ASYNC_STATE_PRESENT;
+    if is_hook {
+        word |= ASYNC_STATE_KIND_HOOK;
+    }
+    word
+}
+
+/// The backing address recorded in `receiver`'s `ObjectMeta`, or `None`.
+/// Accepts ANY object: a direct instance carries its own class id, a
+/// `class R extends AsyncResource` instance carries the USER's class id, so
+/// the brand cannot be the class id here. Exact registry membership is the
+/// brand instead, applied by the caller.
+fn async_state_backing(receiver: i64, is_hook: bool) -> Option<i64> {
+    if receiver <= 0 {
+        return None;
+    }
+    let addr = receiver as usize;
+    // `try_read_TRACKED_gc_header`, not `try_read_gc_header`: this resolver is
+    // handed arbitrary receivers, including the header-less `Box`es this very
+    // family still produces, and the unchecked reader would take `addr - 8`
+    // from a non-object and then dereference a fabricated `meta` (measured: a
+    // SIGSEGV). The tracked reader proves the allocator owns the address
+    // before anything is read through it -- the same lesson as #10925/#10933.
+    let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr)? };
+    if unsafe { header.as_ref() }.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj = addr as *mut ObjectHeader;
+    unsafe {
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return None;
+        }
+        let word = (*meta).native_state;
+        if word & ASYNC_STATE_PRESENT == 0 {
+            return None;
+        }
+        if (word & ASYNC_STATE_KIND_HOOK != 0) != is_hook {
+            return None;
+        }
+        Some((word & ASYNC_STATE_ADDR_MASK) as i64)
+    }
+}
+
+/// Record `backing` on an existing object (the `class R extends AsyncResource`
+/// receiver).
+fn set_async_state(receiver: *mut ObjectHeader, backing: i64, is_hook: bool) {
+    unsafe {
+        let meta = crate::object::object_meta_ensure(receiver);
+        debug_assert!(!meta.is_null(), "an async handle must carry its meta");
+        if !meta.is_null() {
+            (*meta).native_state = async_state_word(backing, is_hook);
+        }
+    }
+}
+
+/// Wrap a backing `Box` in the JS-visible handle object.
+fn async_handle_object(backing: i64, is_hook: bool) -> i64 {
+    let class_id = if is_hook {
+        ASYNC_HOOK_CLASS_ID
+    } else {
+        ASYNC_RESOURCE_CLASS_ID
+    };
+    let obj = crate::object::js_object_alloc(class_id, 0);
+    if obj.is_null() {
+        return 0;
+    }
+    // Resolving the prototype allocates and `GC_TYPE_OBJECT` is movable, so
+    // the instance is re-read through its handle after each allocating step.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_raw_mut_ptr(obj);
+    if !is_hook {
+        // The SAME prototype object a subclass now inherits, resolved through
+        // the same helper, so `getPrototypeOf(new AsyncResource(x))` and
+        // `getPrototypeOf(R.prototype)` are one object.
+        let proto = crate::object::async_resource_prototype_value();
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+            handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+                crate::object::prototype_chain::object_link_class_default_prototype(
+                    obj as usize,
+                    proto.to_bits(),
+                );
+            });
+        }
+    }
+    handle.with_mut_ptr::<ObjectHeader, _>(|obj| set_async_state(obj, backing, is_hook));
+    handle.with_mut_ptr::<ObjectHeader, _>(|obj| obj as i64)
+}
+
+/// The backing behind an `AsyncResource` receiver.
+///
+/// **This resolver must never perform a property get.** #10926 put it on the
+/// generic property-miss path: `js_object_get_field_by_name` calls
+/// `try_async_resource_property_dispatch` for ANY receiver
+/// (`field_get_set/get_field_by_name.rs`), and that entry point now resolves
+/// the receiver instead of the identity check it used before. Reading an own
+/// property from here therefore closes a cycle --
+/// `get_field_by_name` -> `try_async_resource_property_dispatch` ->
+/// `resolve_async_resource_handle` -> `get_field_by_name` -- and because the
+/// key it looked for (`__perryAsyncResourceBacking`) is absent on ordinary
+/// objects, the inner lookup always misses and re-enters. A first draft of
+/// this split did exactly that and blew the 8 MB stack on the FIRST property
+/// miss after `node:async_hooks` was linked: `import "node:async_hooks"` alone
+/// was a SIGSEGV. The `ObjectMeta.native_state` word is allocation-free and
+/// cannot re-enter, which is why both representations are recorded there.
+///
+/// Exact registry membership is the brand: a `native_state` word written by
+/// any other family cannot name a live resource backing.
 pub(crate) fn resolve_async_resource_handle(receiver: i64) -> Option<i64> {
     if is_async_resource_handle(receiver) {
         return Some(receiver);
     }
-    let raw = receiver as usize;
-    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
-        return None;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_raw_mut_ptr(raw as *mut ObjectHeader);
-    #[cfg(test)]
-    if TEST_FORCE_RESOLVE_GC.swap(0, Ordering::Relaxed) != 0 {
-        let _ = crate::gc::gc_collect_minor();
-    }
-    let key = js_string_from_bytes(
-        ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
-        ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
-    );
-    let value = receiver
-        .with_mut_ptr::<ObjectHeader, _>(|receiver| js_object_get_field_by_name(receiver, key));
-    if !value.is_pointer() {
-        return None;
-    }
-    let backing = value.as_pointer::<u8>() as i64;
+    let backing = async_state_backing(receiver, false)?;
     is_async_resource_handle(backing).then_some(backing)
+}
+
+/// The hook backing behind a JS value, for `hook.enable()` / `.disable()`.
+fn resolve_async_hook_handle(receiver: i64) -> Option<i64> {
+    if is_async_hook_handle(receiver) {
+        return Some(receiver);
+    }
+    let backing = async_state_backing(receiver, true)?;
+    is_async_hook_handle(backing).then_some(backing)
 }
 
 #[cfg(test)]
@@ -259,8 +398,16 @@ pub(crate) fn test_force_next_async_resource_resolve_gc() {
     TEST_FORCE_RESOLVE_GC.store(1, Ordering::Relaxed);
 }
 
+/// Link a subclass receiver to its backing exactly the way
+/// `js_async_resource_subclass_init` does: the held `__perryAsyncResourceBacking`
+/// own property AND the `ObjectMeta.native_state` word the resolver actually
+/// reads. Planting only one of the two would let the GC-root test below pass
+/// against a representation production does not produce.
 #[cfg(test)]
-pub(crate) fn test_link_async_resource_subclass(receiver: *mut ObjectHeader, backing: i64) {
+pub(crate) fn test_link_async_resource_subclass(
+    receiver: *mut ObjectHeader,
+    backing: i64,
+) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(receiver);
     let key = js_string_from_bytes(
@@ -274,6 +421,13 @@ pub(crate) fn test_link_async_resource_subclass(receiver: *mut ObjectHeader, bac
             crate::value::js_nanbox_pointer(backing),
         );
     });
+    receiver.with_mut_ptr::<ObjectHeader, _>(|receiver| {
+        set_async_state(receiver, backing, false);
+    });
+    // Both writes allocate, so either can move the receiver. Hand the caller
+    // the refreshed address: a test that kept the pre-call raw pointer would
+    // root a from-space address and the resolve would decline.
+    receiver.get_raw_mut_ptr::<ObjectHeader>()
 }
 
 #[inline(always)]
@@ -572,7 +726,8 @@ pub extern "C" fn js_async_hooks_create_hook(options: f64) -> i64 {
             crate::hot_diag::ReceiverReprFamily::AsyncHook,
         );
     }
-    handle
+    // #10926: hand JS an ordinary object wrapping the backing.
+    async_handle_object(handle, true)
 }
 
 /// Dynamic method dispatch for `AsyncHook` values whose static class was lost
@@ -593,10 +748,11 @@ pub fn try_async_hook_method_dispatch(handle: i64, method_name: &str) -> Option<
 }
 
 #[no_mangle]
-pub extern "C" fn js_async_hook_enable(handle: i64) -> i64 {
-    if handle == 0 {
-        return handle;
-    }
+pub extern "C" fn js_async_hook_enable(receiver: i64) -> i64 {
+    // #10926: the receiver is the handle OBJECT; resolve it to the backing.
+    let Some(handle) = resolve_async_hook_handle(receiver) else {
+        return receiver;
+    };
     let hook = unsafe { &*(handle as *const AsyncHookHandle) };
     if HOOK_CALLBACK_DEPTH.with(Cell::get) != 0 {
         PENDING_HOOK_STATES.with(|pending| {
@@ -633,10 +789,11 @@ fn set_hook_enabled(index: usize, enabled: bool) {
 }
 
 #[no_mangle]
-pub extern "C" fn js_async_hook_disable(handle: i64) -> i64 {
-    if handle == 0 {
-        return handle;
-    }
+pub extern "C" fn js_async_hook_disable(receiver: i64) -> i64 {
+    // #10926: the receiver is the handle OBJECT; resolve it to the backing.
+    let Some(handle) = resolve_async_hook_handle(receiver) else {
+        return receiver;
+    };
     let hook = unsafe { &*(handle as *const AsyncHookHandle) };
     if HOOK_CALLBACK_DEPTH.with(Cell::get) != 0 {
         PENDING_HOOK_STATES.with(|pending| {
@@ -1255,10 +1412,27 @@ fn new_async_resource_with_public_value(
             crate::hot_diag::ReceiverReprFamily::AsyncResource,
         );
     }
-    let resource_value = public_resource.unwrap_or_else(|| crate::value::js_nanbox_pointer(handle));
-    let ids = init_resource_with_trigger(&type_name, resource_value, true, trigger_async_id);
+    // #10926: what crosses into JS is an ordinary object wrapping `handle`.
+    // For a subclass the public value is the user's `this`, which
+    // `js_async_resource_subclass_init` stamps instead.
+    let public = match public_resource {
+        Some(v) => v,
+        None => {
+            let obj = async_handle_object(handle, false);
+            if obj == 0 {
+                return 0;
+            }
+            crate::value::js_nanbox_pointer(obj)
+        }
+    };
+    let ids = init_resource_with_trigger(&type_name, public, true, trigger_async_id);
     unsafe { (*(handle as *mut AsyncResourceHandle)).ids = ids };
-    handle
+    if public_resource.is_some() {
+        // Subclass: the caller owns the public object and returns it; hand back
+        // the backing so it can stamp `this`.
+        return handle;
+    }
+    crate::value::js_nanbox_get_pointer(public) as i64
 }
 
 /// Initialize the native backing for a source-compiled
@@ -1282,6 +1456,12 @@ pub extern "C" fn js_async_resource_subclass_init(
     let raw =
         crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64()) as *mut ObjectHeader;
     if !raw.is_null() && crate::value::addr_class::is_plausible_heap_addr(raw as usize) {
+        // HELD for the subclass half of #10926: the backing stays an own
+        // `__perryAsyncResourceBacking` property and the five methods stay
+        // copied onto each instance, because `R.prototype.[[Prototype]]` is
+        // still `Object.prototype` -- the two-arm prototype link needs a
+        // codegen condition in `property_get.rs` that belongs to another lane
+        // (see this PR's description). This half changes only the DIRECT path.
         let key = js_string_from_bytes(
             ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
             ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
@@ -1321,6 +1501,15 @@ pub extern "C" fn js_async_resource_subclass_init(
                 crate::object::PropertyAttrs::new(true, false, true),
             );
         }
+        // The RESOLUTION path is the metadata word, not the own property
+        // above. `resolve_async_resource_handle` runs on the generic
+        // property-miss path, so it may not do a property get (see its doc
+        // comment); recording the backing here is what lets it stay
+        // allocation-free while the subclass surface is held unchanged.
+        // Re-read `this` from its root: every write above can collect.
+        let current_raw =
+            crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64()) as *mut ObjectHeader;
+        set_async_state(current_raw, backing, false);
     }
     this_handle.get_nanbox_f64()
 }
@@ -1398,10 +1587,16 @@ fn async_resource_bind_method_value(handle: i64) -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-pub fn try_async_resource_property_dispatch(handle: i64, property: &str) -> Option<f64> {
-    if !is_async_resource_handle(handle) {
-        return None;
-    }
+pub fn try_async_resource_property_dispatch(receiver: i64, property: &str) -> Option<f64> {
+    // #10926: resolve the RECEIVER rather than requiring it to be the backing
+    // itself. Before the migration the JS value WAS the `Box`, so an identity
+    // check sufficed; now it is an ordinary object (and for a
+    // `class R extends AsyncResource` it always was). Going through the same
+    // resolver every other entry point uses is what makes a property READ of
+    // `bind` work on a subclass instance -- a fused CALL already resolved,
+    // which is why `sub.asyncId()` worked while `typeof sub.bind` was
+    // `undefined`.
+    let handle = resolve_async_resource_handle(receiver)?;
     // User-defined own properties shadow AsyncResource.prototype just as they
     // do on Node's ordinary public resource object.  The backing allocation is
     // a native Box, so keep expandos in the same traced side table used by
@@ -1558,6 +1753,20 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     let callback_handle = scope.root_nanbox_f64(callback_value);
     let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let args_array_handle = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
+    // #10926: the forced collection used to sit INSIDE
+    // `resolve_async_resource_handle`, because that resolver allocated the
+    // `__perryAsyncResourceBacking` key and therefore had inputs of its own to
+    // root. It reads `ObjectMeta.native_state` now and cannot allocate, so a
+    // collection can no longer originate there and forcing one inside it would
+    // only be testing scaffolding -- and would hand the resolver a stale
+    // receiver, since nothing refreshes it. The axis that still exists is this
+    // frame's: a collection between rooting the receiver and resolving it must
+    // not lose the receiver. `with_mut_ptr` below refreshes from the root, so
+    // the resolve still finds the backing; drop the rooting and it does not.
+    #[cfg(test)]
+    if TEST_FORCE_RESOLVE_GC.swap(0, Ordering::Relaxed) != 0 {
+        let _ = crate::gc::gc_collect_minor();
+    }
     let Some(handle) = receiver_handle
         .with_mut_ptr::<ObjectHeader, _>(|receiver| resolve_async_resource_handle(receiver as i64))
     else {

@@ -81,6 +81,7 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+pub(crate) use class_registry::async_resource_prototype_value;
 pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;

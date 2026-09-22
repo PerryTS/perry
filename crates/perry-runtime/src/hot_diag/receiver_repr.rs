@@ -213,15 +213,13 @@ fn observe_pointer(addr: usize) {
     // an arbitrary heap address is one of their ids took three mutexes to
     // answer "no".
     // Each remaining family deletes its arm here as it moves.
-    if crate::async_hooks::is_async_hook_handle(addr as i64) {
-        mark_old(ReceiverReprFamily::AsyncHook);
-    }
-    if crate::async_hooks::is_async_resource_handle(addr as i64) {
-        mark_old(ReceiverReprFamily::AsyncResource);
-    }
     // #340/#341 GATE A: `null_stub` has migrated to an ordinary object, so
     // its arm is gone from here, and `is_null_stub_address` with it: it could
     // only ever have answered for a `.data` static no longer handed to JS.
+    // #340/#341 GATE A: `async_hook` and `async_resource` have migrated to
+    // ordinary objects, so neither can hand a header-less `Box` to a funnel
+    // any more and their arms are gone from here. The fixtures below assert
+    // `observed_old == 0` for both.
     if crate::shared_sab::is_shared_sab(addr) {
         mark_old(ReceiverReprFamily::Sab);
     }
@@ -463,22 +461,18 @@ mod tests {
         assert_fixture_migrated(ReceiverReprFamily::Tui, || {
             crate::tui::state::js_perry_tui_state_alloc(0.0) as usize
         });
-        assert_fixture(ReceiverReprFamily::AsyncHook, || {
+        // #340/#341: `async_hook` is migrated — gate A, inverted (see `text`).
+        assert_fixture_migrated(ReceiverReprFamily::AsyncHook, || {
             let options = crate::object::js_object_alloc(0, 0);
             let value = f64::from_bits(crate::value::JSValue::pointer(options.cast()).bits());
-            (
-                crate::async_hooks::js_async_hooks_create_hook(value) as usize,
-                false,
-            )
+            crate::async_hooks::js_async_hooks_create_hook(value) as usize
         });
-        assert_fixture(ReceiverReprFamily::AsyncResource, || {
+        // #340/#341: `async_resource` is migrated — gate A, inverted.
+        assert_fixture_migrated(ReceiverReprFamily::AsyncResource, || {
             let name = crate::string::js_string_from_bytes(b"receiver-repr".as_ptr(), 13);
             let type_value = f64::from_bits(crate::value::js_nanbox_string(name as i64).to_bits());
             let options = f64::from_bits(crate::value::TAG_UNDEFINED);
-            (
-                crate::async_hooks::js_async_resource_new(type_value, options) as usize,
-                false,
-            )
+            crate::async_hooks::js_async_resource_new(type_value, options) as usize
         });
         assert_fixture(ReceiverReprFamily::SymbolGlobal, || {
             (

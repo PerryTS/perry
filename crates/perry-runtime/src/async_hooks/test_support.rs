@@ -162,19 +162,32 @@ mod tests {
                 track_promises: true,
             },
         ]);
-        let suppressed = AsyncHookHandle { index: 0 };
-        let tracked = AsyncHookHandle { index: 1 };
-        js_async_hook_enable(&suppressed as *const AsyncHookHandle as i64);
+        // #10926: `js_async_hook_enable`/`disable` take the JS receiver and
+        // resolve it, where they used to dereference whatever address they
+        // were handed. A BORROWED STACK handle is no longer a valid input --
+        // it is not in the registry, so the resolve declines and the call is a
+        // no-op. Build the backing the way production does instead: a leaked
+        // `Box` in the registry, which is what makes membership monotonic and
+        // an address safe to keep. That exercises the resolver's registry arm;
+        // the handle-OBJECT arm is covered end to end by `hook.enable()` /
+        // `hook.disable()` in the object-surface integration test.
+        let suppressed = Box::into_raw(Box::new(AsyncHookHandle { index: 0 })) as i64;
+        let tracked = Box::into_raw(Box::new(AsyncHookHandle { index: 1 })) as i64;
+        for backing in [suppressed, tracked] {
+            ASYNC_HOOK_HANDLES.lock().unwrap().insert(backing);
+            ASYNC_HOOK_HANDLE_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        js_async_hook_enable(suppressed);
         assert!(hooks_active());
         assert!(!promise_hooks_active());
-        js_async_hook_enable(&tracked as *const AsyncHookHandle as i64);
+        js_async_hook_enable(tracked);
         assert!(promise_hooks_active());
         assert_eq!(enabled_callbacks(false).len(), 2);
         assert_eq!(enabled_callbacks(true).len(), 1);
-        js_async_hook_disable(&tracked as *const AsyncHookHandle as i64);
+        js_async_hook_disable(tracked);
         assert!(hooks_active());
         assert!(!promise_hooks_active());
-        js_async_hook_disable(&suppressed as *const AsyncHookHandle as i64);
+        js_async_hook_disable(suppressed);
         assert!(!hooks_active());
         reset_for_tests();
     }
@@ -198,7 +211,13 @@ mod tests {
         crate::symbol::test_clear_symbol_side_table_roots();
         let type_ptr = js_string_from_bytes(b"ExpandoResource".as_ptr(), 15);
         let type_value = crate::value::js_nanbox_string(type_ptr as i64);
-        let handle = js_async_resource_new(type_value, TAG_UNDEFINED_F64);
+        // #10926: `js_async_resource_new` hands JS the ordinary handle OBJECT
+        // now, not the raw backing. The subject here is still the NATIVE
+        // backing's expando side table, so resolve through the same entry
+        // point every caller uses and keep going with the backing.
+        let resource_object = js_async_resource_new(type_value, TAG_UNDEFINED_F64);
+        let handle = resolve_async_resource_handle(resource_object)
+            .expect("a freshly constructed AsyncResource must resolve to its backing");
         assert!(is_async_resource_handle(handle));
         let resource = crate::value::js_nanbox_pointer(handle);
         let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
