@@ -70,7 +70,7 @@ if [[ ! "$PERRY_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_COMPILE_TIMEOUT '$PERRY_COMPILE_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
-# A compile that may rebuild the TOOLCHAIN needs its own budget.
+# A compile that may build native TOOLCHAIN artifacts needs its own budget.
 #
 # #10757 sized the single 300s budget on the belief that "the fast-mode/
 # PERRY_SKIP_BUILD tiers don't pay [an auto-optimize rebuild] per test". That
@@ -99,14 +99,27 @@ fi
 # test_gap_gc_net_once_flags_rekey PASSED in #10930 at 287.4s — 12.6s of
 # margin. A gate that costs a human judgement call on every run is not a gate.
 #
+# The ext wrapper is not the only way in. `--enable-wasm-runtime` fixtures
+# take the same shape through a different door: perry prints
+# `wasm-host: building perry-wasm-host from workspace source` and
+# `wasm-host (no-auto): rebuilding runtime with wasm-host feature`, and that
+# compile measures 395s here — over the line even though the fixture imports
+# no ext-routed module and auto-optimize is off. It is in the #10918 list
+# below for exactly this reason.
+#
+# Across the four runs sampled (#10859, #10918, #10892, #10930) those two
+# properties cover the whole observed population: 13 of 14 distinct fixtures
+# route to an ext wrapper and the 14th is the WebAssembly one.
+#
 # The budget is therefore split by the property that predicts the cost —
-# "this compile may rebuild the toolchain" — and not by test name. The
-# ordinary budget is unchanged, so a genuine hang in a plain compile is still
-# bounded at 300s; a toolchain rebuild gets 900s, 3x the observed cost and
-# still far inside the shard's 110-minute cap (shards run 17-46 min).
-PERRY_EXT_COMPILE_TIMEOUT="${PERRY_EXT_COMPILE_TIMEOUT:-900}"
-if [[ ! "$PERRY_EXT_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
-    echo "Invalid PERRY_EXT_COMPILE_TIMEOUT '$PERRY_EXT_COMPILE_TIMEOUT' (want a positive integer)" >&2
+# "this compile may build native toolchain artifacts" — and not by test name.
+# The ordinary budget is unchanged, so a genuine hang in a plain compile is
+# still bounded at 300s; a toolchain build gets 900s, over 2x the slowest
+# observed and still far inside the shard's 110-minute cap (shards run
+# 15-46 min).
+PERRY_TOOLCHAIN_COMPILE_TIMEOUT="${PERRY_TOOLCHAIN_COMPILE_TIMEOUT:-900}"
+if [[ ! "$PERRY_TOOLCHAIN_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid PERRY_TOOLCHAIN_COMPILE_TIMEOUT '$PERRY_TOOLCHAIN_COMPILE_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
 # Per-run scratch dir for compiled test binaries (2026-07-02 audit): the old
@@ -725,6 +738,15 @@ EXT_ROUTED_MODULES='http|https|http2|net|ws|zlib|events'
 # `^import`-anchored match would miss it.
 test_routes_to_ext_wrapper() {
     grep -qE "(from|import|require\()[[:space:]]*\(?[\"'](node:)?($EXT_ROUTED_MODULES)[\"']" "$1"
+}
+
+# Does this test drive the WebAssembly host? perry links `perry-wasm-host`
+# and a wasm-host-featured runtime for these, building both from workspace
+# source when they are absent — a cargo build inside the compile, exactly
+# like the ext-wrapper path, and it happens whether or not auto-optimize is
+# on (`wasm-host (no-auto): rebuilding runtime with wasm-host feature`).
+test_builds_wasm_host() {
+    grep -qE "WebAssembly|\.wasm\b" "$1"
 }
 if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "node-suite" ]]; then
     case "$MODULE_FILTER" in
@@ -1490,12 +1512,14 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         compile_env="-u PERRY_NO_AUTO_OPTIMIZE $compile_env"
         auto_optimize_on=1
     fi
-    # Auto-optimize + an ext-routed module is exactly the combination that can
-    # spend a `cargo build` of runtime+stdlib+wrapper inside this compile. See
-    # PERRY_EXT_COMPILE_TIMEOUT at the top for the measurements.
+    # Two ways this compile can spend a `cargo build` on native artifacts:
+    # auto-optimize plus an ext-routed module (runtime+stdlib+wrapper), or a
+    # WebAssembly fixture (perry-wasm-host plus a wasm-host runtime, with or
+    # without auto-optimize). See PERRY_TOOLCHAIN_COMPILE_TIMEOUT at the top
+    # for the measurements.
     compile_timeout="$PERRY_COMPILE_TIMEOUT"
-    if (( auto_optimize_on && ext_routed )); then
-        compile_timeout="$PERRY_EXT_COMPILE_TIMEOUT"
+    if (( auto_optimize_on && ext_routed )) || test_builds_wasm_host "$parity_test_file"; then
+        compile_timeout="$PERRY_TOOLCHAIN_COMPILE_TIMEOUT"
     fi
     compile_flags=()
     if [[ -n "$BACKEND_FLAG" ]]; then
