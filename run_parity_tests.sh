@@ -63,13 +63,50 @@ fi
 # #10757: the COMPILE step below had no timeout at all (only the executed-
 # binary run did, via PERRY_RUN_TIMEOUT above) — a compiler hang/superlinear
 # blowup on one fixture wedged the whole harness rather than failing that one
-# test. 300s is generous enough to absorb a legitimate cold-cache
-# auto-optimize runtime/stdlib rebuild (which the fast-mode/PERRY_SKIP_BUILD
-# tiers don't pay per test, but a from-scratch full-tier run can on its first
-# test) while still bounding a genuine defect to minutes, not "forever".
+# test. 300s bounds an ORDINARY compile — one that links prebuilt archives —
+# at minutes rather than "forever".
 PERRY_COMPILE_TIMEOUT="${PERRY_COMPILE_TIMEOUT:-300}"
 if [[ ! "$PERRY_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_COMPILE_TIMEOUT '$PERRY_COMPILE_TIMEOUT' (want a positive integer)" >&2
+    exit 1
+fi
+# A compile that may rebuild the TOOLCHAIN needs its own budget.
+#
+# #10757 sized the single 300s budget on the belief that "the fast-mode/
+# PERRY_SKIP_BUILD tiers don't pay [an auto-optimize rebuild] per test". That
+# is not true, and the reason is in this same script: the #7629 block at the
+# compile site UNSETS PERRY_NO_AUTO_OPTIMIZE for every fixture that routes a
+# module to a `perry-ext-*` wrapper, because no single prebuilt stdlib can
+# serve the mixed corpus. perry then runs `cargo build` for a feature-stripped
+# runtime+stdlib (and the wrapper) INSIDE the per-test compile budget, once per
+# distinct feature set, into a fresh `target/perry-auto-<hash>` directory.
+#
+# Measured on GitHub's hosted runners those rebuilds take 270-300s — the same
+# ~200s-per-distinct-feature-set the gap-suite workflow comment already
+# records, plus runner variance. They therefore sit ON the 300s line, and a
+# rotating handful of ext-routed fixtures expires at exactly 300.1s in run
+# after run. `timeout` kills perry, the harness sees a non-zero exit, and
+# reports `pass -> compile_fail` — indistinguishable from a real compile
+# error:
+#
+#   PR #10918  11 fixtures, incl. test_gap_http2_settings,
+#              test_gap_3527_http_ctor_prototype, test_gap_net_connect_bound_value
+#   PR #10930   4 fixtures, incl. test_gap_http2_settings (300.13s),
+#              test_gap_3527_http_ctor_prototype (300.13s)
+#   PR #10892   5 fixtures, incl. test_gap_3527_http_ctor_prototype
+#
+# All three merged: the red was overridden by hand every time, and
+# test_gap_gc_net_once_flags_rekey PASSED in #10930 at 287.4s — 12.6s of
+# margin. A gate that costs a human judgement call on every run is not a gate.
+#
+# The budget is therefore split by the property that predicts the cost —
+# "this compile may rebuild the toolchain" — and not by test name. The
+# ordinary budget is unchanged, so a genuine hang in a plain compile is still
+# bounded at 300s; a toolchain rebuild gets 900s, 3x the observed cost and
+# still far inside the shard's 110-minute cap (shards run 17-46 min).
+PERRY_EXT_COMPILE_TIMEOUT="${PERRY_EXT_COMPILE_TIMEOUT:-900}"
+if [[ ! "$PERRY_EXT_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid PERRY_EXT_COMPILE_TIMEOUT '$PERRY_EXT_COMPILE_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
 # Per-run scratch dir for compiled test binaries (2026-07-02 audit): the old
@@ -1435,11 +1472,30 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # Scoped to the `all` suite: node-suite selects one module at a time, so its
     # prebuilt stdlib and its ext archives DO agree and the per-module setup
     # above is coherent. It is the mixed corpus that cannot be served.
+    ext_routed=0
+    if test_routes_to_ext_wrapper "$parity_test_file"; then
+        ext_routed=1
+    fi
+    # Does THIS compile run with auto-optimize on? Unset means on; the branch
+    # below turns it back on for the ext-routed tests that cannot be served by
+    # one prebuilt stdlib.
+    auto_optimize_on=1
+    if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" ]]; then
+        auto_optimize_on=0
+    fi
     if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]] &&
-        test_routes_to_ext_wrapper "$parity_test_file"; then
+        (( ext_routed )); then
         # `-u` and not `PERRY_NO_AUTO_OPTIMIZE=`: perry tests the variable with
         # `var_os(...).is_some()`, so an empty-but-set value still counts as on.
         compile_env="-u PERRY_NO_AUTO_OPTIMIZE $compile_env"
+        auto_optimize_on=1
+    fi
+    # Auto-optimize + an ext-routed module is exactly the combination that can
+    # spend a `cargo build` of runtime+stdlib+wrapper inside this compile. See
+    # PERRY_EXT_COMPILE_TIMEOUT at the top for the measurements.
+    compile_timeout="$PERRY_COMPILE_TIMEOUT"
+    if (( auto_optimize_on && ext_routed )); then
+        compile_timeout="$PERRY_EXT_COMPILE_TIMEOUT"
     fi
     compile_flags=()
     if [[ -n "$BACKEND_FLAG" ]]; then
@@ -1457,15 +1513,30 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(run_with_timeout "$PERRY_COMPILE_TIMEOUT" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(run_with_timeout "$compile_timeout" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(run_with_timeout "$PERRY_COMPILE_TIMEOUT" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(run_with_timeout "$compile_timeout" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
     if [[ $compile_exit -ne 0 ]]; then
-        echo -e "${RED}FAIL${NC}  $test_id (compile error)"
+        # A killed compile and a rejected compile are not the same finding, and
+        # printing both as "compile error" cost a lane a night: the CI log said
+        # `compile error` with no message, the fixture compiled fine by hand,
+        # and the actual cause — `timeout` firing at exactly the budget — was
+        # only visible by subtracting two log timestamps. Name it here and in
+        # the persisted log. (`run_with_timeout` returns 124 like GNU timeout;
+        # 137 is a SIGKILL that outran the wrapper.)
+        compile_timed_out=0
+        if [[ $compile_exit -eq 124 || $compile_exit -eq 137 ]]; then
+            compile_timed_out=1
+        fi
+        if (( compile_timed_out )); then
+            echo -e "${RED}FAIL${NC}  $test_id (compile TIMEOUT after ${compile_timeout}s — killed, not rejected)"
+        else
+            echo -e "${RED}FAIL${NC}  $test_id (compile error)"
+        fi
         ((COMPILE_FAIL++))
         COMPILE_FAILURES+=("$test_id")
         record_result "$test_id" "compile_fail"
@@ -1476,7 +1547,13 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         # the parity runner only logged "compile error" with no detail and
         # the macOS-14 family was diagnosed by inference, not data.
         compile_log="$OUTPUT_DIR/${safe_test_id}.compile_error.log"
-        printf "%s\n" "$compile_output" > "$compile_log"
+        if (( compile_timed_out )); then
+            printf "*** KILLED by the harness after %ss (exit %s) — this is a TIMEOUT, not a compiler diagnostic. ***\n" \
+                "$compile_timeout" "$compile_exit" > "$compile_log"
+            printf "%s\n" "$compile_output" >> "$compile_log"
+        else
+            printf "%s\n" "$compile_output" > "$compile_log"
+        fi
         [[ -n "$local_server_pid" ]] && stop_tls_upgrade_server
         continue
     fi
