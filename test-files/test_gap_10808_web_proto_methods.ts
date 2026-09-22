@@ -33,6 +33,15 @@ console.log("dispatch", EventTarget.prototype.dispatchEvent.call(target, new Eve
 EventTarget.prototype.removeEventListener.call(target, "hit", listener);
 EventTarget.prototype.dispatchEvent.call(target, new Event("hit"));
 console.log("removed", called);
+for (const [name, invoke] of [
+  ["add", () => EventTarget.prototype.addEventListener.call({}, "x", listener)],
+  ["remove", () => EventTarget.prototype.removeEventListener.call({}, "x", listener)],
+  ["dispatch", () => EventTarget.prototype.dispatchEvent.call({}, new Event("x"))],
+] as const) {
+  try { invoke(); } catch (error: any) {
+    console.log("invalid target", name, error.name, error.message);
+  }
+}
 
 const event = new Event("x", { cancelable: true });
 Event.prototype.preventDefault.call(event);

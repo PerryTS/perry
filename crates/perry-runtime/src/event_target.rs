@@ -1092,7 +1092,22 @@ pub unsafe extern "C" fn js_event_target_set_max_listeners(
 unsafe fn bound_event_target(closure: *const crate::closure::ClosureHeader) -> *mut ObjectHeader {
     let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
     if bits == 0 {
-        return value_as_ptr(crate::object::js_implicit_this_get()).unwrap_or(std::ptr::null_mut());
+        let receiver = crate::object::js_implicit_this_get();
+        if let Some(target) = value_as_ptr::<ObjectHeader>(receiver) {
+            let valid = crate::value::addr_class::try_read_gc_header(target as usize)
+                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT);
+            if valid {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let target = scope.root_raw_mut_ptr(target);
+                if is_event_target(target.get_raw_mut_ptr::<ObjectHeader>()) {
+                    return target.get_raw_mut_ptr::<ObjectHeader>();
+                }
+            }
+        }
+        let msg = b"Value of \"this\" must be of type EventTarget";
+        let text = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let error = crate::error::js_typeerror_new(text);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
     }
     crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut ObjectHeader
 }
