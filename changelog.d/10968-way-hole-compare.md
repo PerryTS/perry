@@ -1,0 +1,3 @@
+### Performance
+
+- The polymorphic property-read way path no longer compares the loaded slot against `TAG_HOLE`, and `pic.way.live` is removed with it. This finishes what #10826 did for the MRU hit. The only writer of a way is `pic_prime_get`, and it only stores an aged-out MRU `(token, slot)` pair. The way compare reads the same receiver ShapeId word as the MRU compare, and every successful delete moves that word (#10826, made unconditional by #10981). So a way hit is as safe to load unchecked as an MRU hit. Measured `instructions:u` per read: −4.000 (−2.15%) on a site rotating five shapes, 0.000 on the single-shape control. `test_parity_delete_shape_transition.ts` gains a way-path delete section.
