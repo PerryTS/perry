@@ -319,6 +319,17 @@ fn pin_object_non_young_call_sites_are_never_young() {
              Eden/FromSurvivor"
         );
 
+        // `shared_sab.rs` pins the SAB backing block: a process-global
+        // `alloc_zeroed` with no `GC_FLAG_ARENA`, so it is malloc space by
+        // construction and the latch must stay disarmed for it (#10925).
+        let sab = crate::shared_sab::alloc_shared_sab(64);
+        let sab_header = (sab as usize - crate::gc::GC_HEADER_SIZE) as *mut GcHeader;
+        assert!(
+            !crate::gc::pin::pin_constrains_copying_minor_for_tests(sab_header),
+            "the SAB backing block is a process-global alloc_zeroed; if it were \
+             ever young, pin_object_non_young there would be memory corruption"
+        );
+
         // Control: a plain nursery object IS young, so the predicate the two
         // assertions above rely on is not vacuously false for everything.
         let young = young_leaf();

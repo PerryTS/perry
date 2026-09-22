@@ -45,9 +45,13 @@ unsafe fn get_key(obj: *mut super::ObjectHeader, name: &str) -> f64 {
 /// dictionary draws set bit 62 and clear bit 63.
 #[test]
 fn dictionary_generation_namespaces_are_disjoint() {
-    const DETERMINISTIC: u64 = 1 << 63;
+    // Named *_BIT, not DETERMINISTIC: `global_sink_isolation.py` resolves an
+    // asserted identifier by NAME across the crate with no scope awareness,
+    // so a test-local const sharing a name with `stub_diag.rs`'s real
+    // `static DETERMINISTIC` is reported as a new asserted process-global.
+    const DETERMINISTIC_BIT: u64 = 1 << 63;
     assert_eq!(
-        dictionary::DICTIONARY_GENERATION_TAG & DETERMINISTIC,
+        dictionary::DICTIONARY_GENERATION_TAG & DETERMINISTIC_BIT,
         0,
         "a dictionary generation must not land in the deterministic namespace"
     );

@@ -26,7 +26,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::buffer::BufferHeader;
-use crate::gc::{GcHeader, GC_FLAG_PINNED, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_BUFFER};
+// `GC_FLAG_PINNED` is deliberately NOT imported: the #7645 custody gate reads a
+// bare mention of the token as a pin creation, and this module only ever masks
+// with it (in the header-survival test). Spelled in full at those two reads.
+use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE, GC_TYPE_BUFFER};
 
 /// Set of `BufferHeader` addresses that back a `SharedArrayBuffer`.
 static SHARED_SAB_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
@@ -102,12 +105,19 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
         // never written. It carries the honest kind for the mutator-side
         // `*(addr - 8)` probes (`Array.isArray`, the collection-thunk brand,
         // `JSON.stringify`), which is what #10925 needed.
-        (*header).gc_flags = GC_FLAG_PINNED | GC_FLAG_TENURED;
+        (*header).gc_flags = GC_FLAG_TENURED;
         (*header)._reserved = 0;
         // Total block size, for honesty; a non-arena object is never block-walked.
         (*header).size = total.min(u32::MAX as usize) as u32;
         (*buf).length = size;
         (*buf).capacity = size;
+        // #7645 custody: the PIN goes through `gc::pin`, not a raw flag write.
+        // `pin_object_non_young` is the right variant and its safety contract
+        // is met by construction — this block is a process-global
+        // `alloc_zeroed` with no `GC_FLAG_ARENA`, so it is malloc space and can
+        // never be Eden/FromSurvivor, and the latch must stay disarmed for it.
+        // `pin_object_non_young_call_sites_are_never_young` carries the case.
+        crate::gc::pin_object_non_young(header);
     }
     // Latch BEFORE the insert, not after. `buffer::is_registered_buffer` and
     // `buffer::is_shared_array_buffer` both report a SAB backing as a buffer
@@ -199,7 +209,23 @@ mod header_survival_tests {
         let header = unsafe { crate::value::addr_class::try_read_gc_header(buf as usize) }
             .expect("the shared SAB block carries a GcHeader");
         assert_eq!(header.obj_type, GC_TYPE_BUFFER);
-        assert_eq!(header.gc_flags, GC_FLAG_PINNED | GC_FLAG_TENURED);
+        // Masking reads, per the #7645 custody gate: a creation of the flag
+        // may only live in `gc/pin.rs`. Both bits set, and nothing else.
+        assert_ne!(
+            header.gc_flags & crate::gc::GC_FLAG_PINNED,
+            0,
+            "the SAB header is pinned"
+        );
+        assert_ne!(
+            header.gc_flags & GC_FLAG_TENURED,
+            0,
+            "the SAB header is tenured"
+        );
+        assert_eq!(
+            header.gc_flags & !(crate::gc::GC_FLAG_PINNED | GC_FLAG_TENURED),
+            0,
+            "no other flag is set on a SAB header"
+        );
 
         fn churn() {
             for _ in 0..8 {

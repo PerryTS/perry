@@ -856,12 +856,12 @@ pub(super) unsafe fn alloc_old_test_object(
     // 0". The inline/overflow boundary is
     // `max(object_live_slot_count(obj), INLINE_SLOT_FLOOR)` with a floor of 2,
     // so the first two keys written to a zero-slot fixture store into inline
-    // slots 0 and 1 of an object that has none — those two words are THE NEXT
-    // CELL. It presents as a wrong read now and a SIGSEGV somewhere unrelated
-    // during the next collection. Allocate to the floor; the PUBLISHED bound
-    // stays `field_count`, so the collector still traces exactly `field_count`
-    // slots and the descriptor-count accounting sibling tests assert on is
-    // unchanged.
+    // slots 0 and 1 of an object that has none — those two words belong to the
+    // NEXT OBJECT. It presents as a wrong read now and a SIGSEGV somewhere
+    // unrelated during the next collection. Allocate to the floor; the
+    // PUBLISHED bound stays `field_count`, so the collector still traces
+    // exactly `field_count` slots and the descriptor-count accounting sibling
+    // tests assert on is unchanged.
     let allocated_slots = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let payload = std::mem::size_of::<crate::object::ObjectHeader>() + allocated_slots * 8;
     let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
@@ -895,12 +895,12 @@ pub(super) unsafe fn alloc_nursery_test_object(
     // 0". The inline/overflow boundary is
     // `max(object_live_slot_count(obj), INLINE_SLOT_FLOOR)` with a floor of 2,
     // so the first two keys written to a zero-slot fixture store into inline
-    // slots 0 and 1 of an object that has none — those two words are THE NEXT
-    // CELL. It presents as a wrong read now and a SIGSEGV somewhere unrelated
-    // during the next collection. Allocate to the floor; the PUBLISHED bound
-    // stays `field_count`, so the collector still traces exactly `field_count`
-    // slots and the descriptor-count accounting sibling tests assert on is
-    // unchanged.
+    // slots 0 and 1 of an object that has none — those two words belong to the
+    // NEXT OBJECT. It presents as a wrong read now and a SIGSEGV somewhere
+    // unrelated during the next collection. Allocate to the floor; the
+    // PUBLISHED bound stays `field_count`, so the collector still traces
+    // exactly `field_count` slots and the descriptor-count accounting sibling
+    // tests assert on is unchanged.
     let allocated_slots = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let payload = std::mem::size_of::<crate::object::ObjectHeader>() + allocated_slots * 8;
     let obj = crate::arena::arena_alloc_gc(payload, 8, GC_TYPE_OBJECT)
