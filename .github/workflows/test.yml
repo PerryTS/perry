@@ -809,6 +809,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/global_sink_isolation.py --self-test
+          # #10980: the lock-downgrade gate runs at MERGE time, not per-PR
+          # (a branch that merely predates a bump is not at fault, and failing
+          # those trains people to bypass it). Only its self-test belongs here
+          # -- it proves the detector still catches a downgrade and still
+          # passes every legitimate move.
+          python3 scripts/lock_no_downgrade.py --self-test
           python3 scripts/global_sink_isolation.py
 
       # #10944's asserted-global ratchet, merge-base half. The gate above
