@@ -1277,19 +1277,18 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // is wired alongside the `OBJ_FLAG_TYPED_ARRAY_PROTO` flag so the
             // generic property-get chain walk resolves the inherited methods.
         }
-        // #10555: these Web API types install NO methods here (their surface
-        // is either type-directed static dispatch or the small-int/handle
-        // dispatch tables), but each still needs its `.prototype`'s own
-        // `Symbol.toStringTag` descriptor for reflection -- see
-        // `install_web_builtin_to_string_tag`'s doc comment. `URLSearchParams`
-        // used to be listed here too; #10759 moved it to its own arm above
-        // (still calling `install_web_builtin_to_string_tag`) once a VALUE
-        // read of one of its prototype methods turned out to need real
-        // reified closures, not just the toStringTag descriptor. The other
-        // six members of this group (`URL`, `AbortController`,
-        // `AbortSignal`, `EventTarget`, `Event`, `CustomEvent`) have not been
-        // audited for the same "read as a value" gap -- see #10759's PR body.
-        "URL" => unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") },
+        // #10555: these Web API types expose their prototype toStringTag for
+        // reflection. URL additionally installs WebIDL component accessors;
+        // its methods still use type-directed dispatch. The remaining five
+        // types have not been audited for methods read as values.
+        "URL" => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto_obj as i64));
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") };
+            let proto =
+                crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
+            crate::url::prototype::install_url_prototype_accessors(proto);
+        }
         "AbortController" => unsafe {
             install_web_builtin_to_string_tag(proto_obj, "AbortController")
         },

@@ -1,7 +1,8 @@
 //! URL operations runtime support
 //!
 //! Provides JavaScript URL functionality for parsing and working with URLs.
-//! URLs are represented as regular JavaScript objects with string fields.
+//! URLs use ordinary GC objects with numbered component slots and accessors
+//! on `URL.prototype`.
 
 use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::object::{js_object_set_field_f64, js_object_set_keys};
@@ -10,6 +11,7 @@ use crate::{js_object_alloc, js_string_from_bytes, ArrayHeader, ObjectHeader, St
 pub mod abort;
 pub mod node_compat;
 pub mod parse;
+pub(crate) mod prototype;
 pub mod search_params;
 pub mod url_class;
 pub mod url_pattern;
@@ -48,7 +50,7 @@ pub use self::url_class::{
     js_url_can_parse, js_url_can_parse_with_base, js_url_get_hash, js_url_get_host,
     js_url_get_hostname, js_url_get_href, js_url_get_origin, js_url_get_pathname, js_url_get_port,
     js_url_get_protocol, js_url_get_search, js_url_get_search_params, js_url_new,
-    js_url_new_with_base, js_url_parse, js_url_parse_with_base, js_url_set_hash,
+    js_url_new_with_base, js_url_parse, js_url_parse_with_base, js_url_set_hash, js_url_set_host,
     js_url_set_hostname, js_url_set_href, js_url_set_password, js_url_set_pathname,
     js_url_set_port, js_url_set_protocol, js_url_set_search, js_url_set_username,
 };
