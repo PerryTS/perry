@@ -203,6 +203,9 @@ pub(crate) fn infer_decl_type(
     // dispatches via the native-instance registry, not this declared type.
     if matches!(ty, Type::Any) {
         if let Some(init_expr) = &decl.init {
+            if crate::lower_types::is_web_readable_stream_from_call(ctx, init_expr) {
+                ty = Type::Named("ReadableStream".to_string());
+            }
             if let ast::Expr::Call(call) = init_expr.as_ref() {
                 if let ast::Callee::Expr(callee) = &call.callee {
                     if let ast::Expr::Member(m) = callee.as_ref() {

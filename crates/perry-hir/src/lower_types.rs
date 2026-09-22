@@ -1137,6 +1137,69 @@ pub(crate) fn is_node_readable_static_factory_call(
         && is_node_readable_constructor_ref(ctx, member.obj.as_ref())
 }
 
+fn is_web_readable_stream_module_alias(ctx: &LoweringContext, name: &str) -> bool {
+    matches!(
+        ctx.lookup_native_module(name),
+        Some(("stream/web" | "node:stream/web", None))
+    ) || matches!(
+        ctx.namespace_import_sources.get(name).map(String::as_str),
+        Some("stream/web" | "node:stream/web")
+    )
+}
+
+pub(crate) fn is_web_readable_stream_constructor_ref(
+    ctx: &LoweringContext,
+    expr: &ast::Expr,
+) -> bool {
+    match expr {
+        ast::Expr::Ident(ident) => {
+            let name = ident.sym.as_ref();
+            matches!(
+                ctx.lookup_native_module(name),
+                Some(("stream/web" | "node:stream/web", Some("ReadableStream")))
+            ) || (name == "ReadableStream" && !ctx.shadows_unqualified_global(name))
+        }
+        ast::Expr::Member(member) => {
+            let (ast::Expr::Ident(obj), ast::MemberProp::Ident(prop)) =
+                (member.obj.as_ref(), &member.prop)
+            else {
+                return false;
+            };
+            prop.sym.as_ref() == "ReadableStream"
+                && is_web_readable_stream_module_alias(ctx, obj.sym.as_ref())
+        }
+        ast::Expr::Paren(paren) => is_web_readable_stream_constructor_ref(ctx, &paren.expr),
+        ast::Expr::TsAs(ts_as) => is_web_readable_stream_constructor_ref(ctx, &ts_as.expr),
+        ast::Expr::TsTypeAssertion(ts_assert) => {
+            is_web_readable_stream_constructor_ref(ctx, &ts_assert.expr)
+        }
+        ast::Expr::TsNonNull(non_null) => {
+            is_web_readable_stream_constructor_ref(ctx, &non_null.expr)
+        }
+        ast::Expr::TsConstAssertion(const_assert) => {
+            is_web_readable_stream_constructor_ref(ctx, &const_assert.expr)
+        }
+        ast::Expr::TsSatisfies(satisfies) => {
+            is_web_readable_stream_constructor_ref(ctx, &satisfies.expr)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn is_web_readable_stream_from_call(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
+    let ast::Expr::Call(call) = expr else {
+        return false;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = callee.as_ref() else {
+        return false;
+    };
+    matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "from")
+        && is_web_readable_stream_constructor_ref(ctx, member.obj.as_ref())
+}
+
 fn expr_may_have_typed_receiver(expr: &ast::Expr, ctx: &LoweringContext) -> bool {
     match expr {
         ast::Expr::Lit(ast::Lit::Str(_)) => true,
