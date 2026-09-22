@@ -262,7 +262,8 @@ pub(crate) use accessors::{
     builtin_reflection_accessor_read, class_getter_this, invoke_accessor_getter,
     invoke_accessor_setter, is_typed_array_prototype, object_field_at_with_live,
     ordinary_object_prototype_property_value, own_data_field_by_name,
-    primitive_builtin_prototype_property, primitive_object_prototype_accessor, string_index_value,
+    primitive_builtin_prototype_property, primitive_object_prototype_accessor,
+    primitive_tagged_prototype_property, string_index_value,
 };
 pub(crate) use class_object_props::class_object_prototype_value;
 pub(crate) use crypto_key::{
