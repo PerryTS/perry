@@ -11,7 +11,8 @@
 //! use a hash-keyed target dir so consecutive runs with the same
 //! profile are no-ops after the first build.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use super::CompilationContext;
@@ -92,4 +93,62 @@ pub(crate) fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<Str
         }
     }
     iteration_set
+}
+
+/// Name wrapper archives needed by emitted object-file symbols but absent from
+/// the link line. The caller has already scanned the runtime and stdlib too,
+/// so a symbol those archives define does not produce a false missing-wrapper
+/// diagnostic. Return one deterministic message per missing archive.
+pub(crate) fn missing_ext_archive_diagnostics(
+    emitted_undefined: &BTreeSet<String>,
+    linked_definitions: &HashSet<String>,
+    resolved_ext_libs: &[PathBuf],
+    target: Option<&str>,
+) -> Vec<String> {
+    let mut missing: BTreeMap<String, (&str, &str, bool)> = BTreeMap::new();
+    for symbol in emitted_undefined {
+        if linked_definitions.contains(symbol) {
+            continue;
+        }
+        let Some(owner) = perry_codegen::ext_registry::well_known_owner_for_symbol(symbol) else {
+            continue;
+        };
+        let Some(binding) = super::well_known::lookup_well_known(owner) else {
+            continue;
+        };
+        let filename = super::well_known::ext_staticlib_filename(
+            &binding.lib,
+            super::rust_target_triple(target),
+        );
+        if resolved_ext_libs
+            .iter()
+            .any(|path| path.file_name() == Some(OsStr::new(&filename)))
+        {
+            continue;
+        }
+        missing.entry(filename).or_insert((
+            symbol,
+            &binding.krate,
+            binding_needs_shared_tokio(owner),
+        ));
+    }
+    missing
+        .into_iter()
+        .map(|(filename, (symbol, krate, shared_tokio))| {
+            let build = if shared_tokio {
+                format!(
+                    "cargo build --release -p perry -p perry-runtime-static \
+                     -p perry-stdlib-static -p {krate}"
+                )
+            } else {
+                format!("cargo build --release -p {krate}")
+            };
+            format!(
+                "`{symbol}` needs {filename}, but that archive is not linked. \
+                 Build it with: {build}. Make it available through \
+                 PERRY_RUNTIME_DIR or PERRY_LIB_DIR if Perry is installed \
+                 outside the workspace."
+            )
+        })
+        .collect()
 }

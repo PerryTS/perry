@@ -6252,9 +6252,10 @@ pub fn run_with_parse_cache(
 
     // Generate stubs for missing symbols from unresolved imports (npm packages etc.)
     {
-        use std::collections::HashSet;
+        use std::collections::{BTreeSet, HashSet};
         let mut undefined_syms: HashSet<String> = HashSet::new();
         let mut defined_syms: HashSet<String> = HashSet::new();
+        let mut emitted_ext_syms: BTreeSet<String> = BTreeSet::new();
         // Prefer the auto-built runtime so the symbol-stub scan and the
         // final link see the same artifact (panic mode + feature set).
         let runtime_lib_path = optimized_libs
@@ -6282,6 +6283,12 @@ pub fn run_with_parse_cache(
         if let Some(ref p) = wasm_host_lib_path {
             all_scan_paths.push(p.clone());
         }
+        // Wrapper archives can contain more than one provider's symbols
+        // through static dependencies. Count their definitions before
+        // reporting a missing wrapper for an emitted FFI call.
+        let ext_scan_start = all_scan_paths.len();
+        all_scan_paths.extend(optimized_libs.well_known_libs.iter().cloned());
+        let ext_scan_end = all_scan_paths.len();
         // Scan UI library for defined symbols so we don't generate stubs for
         // functions that exist in the platform UI library (e.g. screen detection FFI)
         if ctx.needs_ui {
@@ -6339,11 +6346,13 @@ pub fn run_with_parse_cache(
             "nm".to_string()
         };
         // Scan object files in parallel for symbol resolution
-        let scan_results: Vec<(HashSet<String>, HashSet<String>)> = all_scan_paths
+        let scan_results: Vec<(HashSet<String>, HashSet<String>, HashSet<String>)> = all_scan_paths
             .par_iter()
-            .map(|scan_path| {
+            .enumerate()
+            .map(|(index, scan_path)| {
                 let mut local_undef = HashSet::new();
                 let mut local_def = HashSet::new();
+                let mut local_ext = HashSet::new();
                 if let Ok(output) = std::process::Command::new(&nm_cmd)
                     .arg("-g")
                     .arg(scan_path)
@@ -6363,6 +6372,17 @@ pub fn run_with_parse_cache(
                                 sn
                             };
                             if st == "U" {
+                                // Wrapper-private references do not need the
+                                // app's generated missing-symbol stubs.
+                                if (ext_scan_start..ext_scan_end).contains(&index) {
+                                    continue;
+                                }
+                                if index < obj_paths.len()
+                                    && perry_codegen::ext_registry::well_known_owner_for_symbol(cn)
+                                        .is_some()
+                                {
+                                    local_ext.insert(cn.to_string());
+                                }
                                 if cn.starts_with("__export_") || cn.starts_with("__wrapper_") {
                                     local_undef.insert(cn.to_string());
                                 } else if !will_link_stdlib
@@ -6391,14 +6411,24 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
-                (local_undef, local_def)
+                (local_undef, local_def, local_ext)
             })
             .collect();
 
         // Merge parallel scan results
-        for (local_undef, local_def) in scan_results {
+        for (local_undef, local_def, local_ext) in scan_results {
             undefined_syms.extend(local_undef);
             defined_syms.extend(local_def);
+            emitted_ext_syms.extend(local_ext);
+        }
+        let missing_ext = optimized_libs::missing_ext_archive_diagnostics(
+            &emitted_ext_syms,
+            &defined_syms,
+            &optimized_libs.well_known_libs,
+            target.as_deref(),
+        );
+        if !missing_ext.is_empty() {
+            return Err(anyhow!(missing_ext.join("\n")));
         }
         let missing: Vec<String> = undefined_syms.difference(&defined_syms).cloned().collect();
         if !missing.is_empty() {

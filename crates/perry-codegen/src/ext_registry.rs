@@ -643,6 +643,25 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("js_bun_build", "typescript"),
 ];
 
+/// Return the well-known binding that provides an emitted FFI symbol. The
+/// compile driver's pre-link check uses the same exact and prefix registries
+/// as codegen's provider routing, including the two-provider Bun server call.
+pub fn well_known_owner_for_symbol(symbol: &str) -> Option<&'static str> {
+    if symbol == "js_bun_serve" {
+        return Some("http");
+    }
+    if let Some((_, owner)) = FFI_REGISTRY.iter().find(|(name, _)| *name == symbol) {
+        return match owner {
+            OwnerKind::WellKnown(key) => Some(key),
+            OwnerKind::Stdlib { .. } => None,
+        };
+    }
+    EXT_PREFIX_REGISTRY
+        .iter()
+        .find(|(prefix, _)| symbol.starts_with(prefix))
+        .map(|(_, binding)| *binding)
+}
+
 /// Process-wide collector of provider keys observed during codegen.
 /// Populated by [`record_ffi_call`] from `LlBlock::call` / `call_void`.
 /// Drained by [`take_used_providers`] right before `build_optimized_libs`.
