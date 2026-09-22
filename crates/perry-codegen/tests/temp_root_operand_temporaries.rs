@@ -51,8 +51,9 @@
 //! the per-PR `cargo-test` gate rather than the nightly-only integration tier.
 
 use perry_codegen::testing::temp_slots::{
-    assert_no_temp_rooting, assert_rooted_across, derives_from_slot_load, first_call_result,
-    slot_holding, slot_traffic, temp_root_slots, SlotEvent,
+    assert_no_temp_rooting, assert_rooted_across, assert_temp_rooting_count,
+    derives_from_slot_load, first_call_result, slot_holding, slot_traffic, temp_root_slots,
+    SlotEvent,
 };
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
@@ -238,10 +239,28 @@ fn map_set_with_a_non_allocating_value_emits_no_rooting_calls() {
         })],
     );
 
-    assert_no_temp_rooting(
+    // #10943 moved this from "none" to "exactly one", deliberately. The
+    // own-override guard tests the receiver before it branches — an own
+    // `set` beats `Map.prototype.set` — and the receiver stays rooted across
+    // that call because the predicate allocates today
+    // (`js_string_from_bytes` on its authoritative tier), so it is not a GC
+    // leaf and the root is not optional.
+    //
+    // Measured on the sibling shape (`s.has(2)` in a hot loop, same compiler
+    // with the kind in and out of the guard's gate, min of 3, fitted
+    // 500k -> 5M): 778.27 vs 778.26 instructions per iteration, +0.01. LLVM
+    // hoists the test, the branch and the slot traffic out of the loop, so
+    // what this costs is emitted shape, not runtime.
+    //
+    // #10957 removes it for real by passing the INTERNED KEY instead of
+    // (ptr, len): no allocation in the predicate, the GC-leaf claim becomes
+    // provable, and this returns to `assert_no_temp_rooting`, which is the
+    // stronger claim. Counted rather than dropped in the meantime, so a
+    // SECOND slot still reddens.
+    assert_temp_rooting_count(
         init_ir(&ir),
-        "#6970 gate: nothing after the key can collect, so this must cost \
-         exactly what it cost before",
+        1,
+        "#6970 gate: only the own-override test's receiver is rooted here",
     );
 }
 
