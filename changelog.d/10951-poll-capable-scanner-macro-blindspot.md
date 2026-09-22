@@ -75,3 +75,18 @@ build-free audit that lives ONLY in the label-gated workflow "is skipped on ever
 PR and speaks only on scheduled `main` runs, after the fact". The archive
 cross-check is the durable guarantee; the required per-PR check is what stops the
 regression reaching `main` in the first place.
+
+`_NON_DEFINING_MACROS` (the assertion and formatting macros that take a `js_*`
+name without defining it) is an **allowlist on purpose**: an unknown macro reads
+as DEFINING, so it is a hit and the audit fails. A new assert-like macro is then
+a loud false positive fixed by adding one name, never a silent miss. Inverting it
+into a list of known-defining macros is the obvious tidy-up later and would
+reintroduce exactly this bug.
+
+Two `--self-test` arms keep that honest, because an allowlist can go vacuous the
+same way a scanner can: one empties the allowlist and requires the scan to then
+report something (it suppresses exactly one real occurrence today —
+`assert_eq!(js_thread, PRIMARY_AGENT)` at `agent_dispatch_tests.rs:48` — so a
+rename of that test would otherwise leave the arm passing while suppressing
+nothing), and one asserts an indented invocation of an UNLISTED macro is
+recognised as a hit, which is the failure direction that matters.
