@@ -178,6 +178,14 @@ fn expando_remove(addr: usize, key: &str) -> bool {
 /// Kind-dispatched own data-property store: Error delegates to the
 /// pre-existing `ERROR_USER_PROPS` table, Date/RegExp use `EXOTIC_EXPANDO`.
 pub(crate) fn value_store(kind: ExoticKind, addr: usize, key: &str, bits: u64) {
+    // #10943: this is where an exotic cell ACTUALLY takes a named property,
+    // whatever lowering asked for it. Arming at `field_set_by_name`'s exotic
+    // gauntlet missed the common spelling outright: `m.get = () => 1` on a
+    // proven Map local lowers to `js_put_value_set_dyn_ic`, which never enters
+    // that gauntlet, so the guard's predicate answered "no own override" and
+    // the builtin still won. Arming at the store itself is the funnel the
+    // gauntlet was chosen to approximate.
+    crate::object::own_override::note_exotic_named_prop_install();
     match kind {
         ExoticKind::Error => {
             crate::node_submodules::set_error_user_prop(addr, key, f64::from_bits(bits))
