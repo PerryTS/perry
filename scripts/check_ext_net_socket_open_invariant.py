@@ -57,6 +57,8 @@ CHAR_LITERAL = re.compile(
     r"'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}|.)|[^'\\\n])'"
 )
 RAW_STRING_START = re.compile(r'(?:b|c)?r(#{0,255})"')
+PATTERN_MACRO = re.compile(r"\b(?:matches|assert_matches)\s*!\s*\(")
+PATTERN_FOLLOW = re.compile(r"(?:=>|=(?!=|>)|:(?!:)|\bin\b|\|)")
 
 
 @dataclass(frozen=True)
@@ -170,21 +172,27 @@ def mask_non_code(source: str) -> str:
     return "".join(chars)
 
 
-def brace_pairs(code: str) -> dict[int, int]:
-    """Map opening braces to closing braces, rejecting malformed input."""
+def delimiter_pairs(code: str, opening: str, closing: str) -> dict[int, int]:
+    """Map OPENING delimiters to CLOSING delimiters or reject malformed input."""
 
     stack: list[int] = []
     pairs: dict[int, int] = {}
     for index, char in enumerate(code):
-        if char == "{":
+        if char == opening:
             stack.append(index)
-        elif char == "}":
+        elif char == closing:
             if not stack:
-                raise ValueError(f"unmatched closing brace at byte {index}")
+                raise ValueError(f"unmatched {closing!r} at byte {index}")
             pairs[stack.pop()] = index
     if stack:
-        raise ValueError(f"unmatched opening brace at byte {stack[-1]}")
+        raise ValueError(f"unmatched {opening!r} at byte {stack[-1]}")
     return pairs
+
+
+def brace_pairs(code: str) -> dict[int, int]:
+    """Map opening braces to closing braces, rejecting malformed input."""
+
+    return delimiter_pairs(code, "{", "}")
 
 
 def function_spans(code: str, pairs: dict[int, int]) -> list[tuple[int, int, str]]:
@@ -240,6 +248,35 @@ def has_direct_match(
     )
 
 
+def is_struct_pattern(
+    code: str,
+    block: tuple[int, int],
+    braces: dict[int, int],
+    parentheses: dict[int, int],
+    brackets: dict[int, int],
+) -> bool:
+    """Whether BLOCK is nested in Rust pattern syntax rather than an expression."""
+
+    for macro in PATTERN_MACRO.finditer(code):
+        opening = code.find("(", macro.start(), macro.end())
+        closing = parentheses.get(opening)
+        if closing is not None and opening < block[0] < block[1] < closing:
+            return True
+
+    containers = [block]
+    for pairs in (braces, parentheses, brackets):
+        containers.extend(
+            (opening, closing)
+            for opening, closing in pairs.items()
+            if opening < block[0] < block[1] < closing
+        )
+    for _, closing in containers:
+        tail = code[closing + 1 :].lstrip()
+        if PATTERN_FOLLOW.match(tail):
+            return True
+    return False
+
+
 def receiver_pattern(receiver: str, field: str) -> re.Pattern[str]:
     """Build an assignment pattern for FIELD on a proven simple RECEIVER."""
 
@@ -256,6 +293,8 @@ def scan_source(path: str, source: str) -> list[Site]:
 
     code = mask_non_code(source)
     pairs = brace_pairs(code)
+    parentheses = delimiter_pairs(code, "(", ")")
+    brackets = delimiter_pairs(code, "[", "]")
     spans = function_spans(code, pairs)
     openings = sorted(pairs)
     sites: list[Site] = []
@@ -297,6 +336,10 @@ def scan_source(path: str, source: str) -> list[Site]:
         function = containing_span(initializer.start(), spans)
         function_name = function[2] if function else "<outside-function>"
         block = containing_block(initializer.start(), openings, pairs)
+        if block is not None and is_struct_pattern(
+            code, block, pairs, parentheses, brackets
+        ):
+            continue
         receiver = None
         if block is not None and SOCKET_STATE_HEAD.search(code[: block[0]]):
             receiver = "SocketState"
@@ -581,6 +624,24 @@ fn build() -> SocketState {
     )
     assert any("cannot prove is SocketState" in error for error in errors)
 
+    struct_patterns = """
+fn inspect(socket: SocketState, pair: (SocketState, bool)) {
+    let _ = matches!(socket, SocketState { is_open: true, .. });
+    let _ = match socket {
+        SocketState { is_open: true, .. } => true,
+        _ => false,
+    };
+    let SocketState { is_open: true, .. } = socket;
+    let (SocketState { is_open: true, .. }, _) = pair;
+}
+"""
+    sites, errors = evaluate(
+        {path: struct_patterns},
+        {"schema_version": 1, "exceptions": []},
+        min_open_sites=0,
+    )
+    assert not sites and not errors
+
     complex_field_receiver = """
 fn open() {
     factory().socket.is_open = true;
@@ -618,7 +679,7 @@ fn open() {
     print(
         "check_ext_net_socket_open_invariant self-test: OK "
         "(pair, missing, exception, stale, scope, nesting, masking, syntax, "
-        "initializer, ambiguity)"
+        "initializer, struct patterns, ambiguity)"
     )
 
 
