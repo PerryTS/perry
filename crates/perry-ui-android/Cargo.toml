@@ -27,4 +27,4 @@ perry-ext-sharp = { path = "../perry-ext-sharp" }
 base64.workspace = true
 libc.workspace = true
 jni = "0.22"
-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
