@@ -43,7 +43,7 @@ pub extern "C" fn perry_ui_button_set_text_color(handle: f64, r: f64, g: f64, b:
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64) {
+pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64, _point_size: f64) {
     catch_panic_void("perry_ui_button_set_image", || {
         widgets::button::set_image(handle, name_ptr as *const u8)
     });

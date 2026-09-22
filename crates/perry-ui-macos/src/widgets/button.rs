@@ -173,8 +173,9 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-/// Set an SF Symbol image on a button with a large point size.
-pub fn set_image(handle: i64, name_ptr: *const u8) {
+/// Set an SF Symbol image on a button. Omitted/invalid point sizes keep the
+/// historical large symbol scale; a positive point size controls its height.
+pub fn set_image(handle: i64, name_ptr: *const u8, point_size: f64) {
     let name = unsafe { str_from_header(name_ptr) };
     if let Some(view) = super::get_widget(handle) {
         unsafe {
@@ -188,13 +189,17 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
                 accessibilityDescription: std::ptr::null::<AnyObject>()
             ];
             if !img.is_null() {
-                // Apply large symbol scale
-                // NSImageSymbolScale: 1=small, 2=medium, 3=large
                 let config_cls = AnyClass::get(c"NSImageSymbolConfiguration").unwrap();
-                let config: *mut AnyObject = msg_send![
-                    config_cls,
-                    configurationWithScale: 3_isize  // NSImageSymbolScaleLarge
-                ];
+                let config: *mut AnyObject = if point_size.is_finite() && point_size > 0.0 {
+                    msg_send![
+                        config_cls,
+                        configurationWithPointSize: point_size as objc2_core_foundation::CGFloat,
+                        weight: 0.0 as objc2_core_foundation::CGFloat // NSFontWeightRegular
+                    ]
+                } else {
+                    // NSImageSymbolScaleLarge = 3, preserving two-argument calls.
+                    msg_send![config_cls, configurationWithScale: 3_isize]
+                };
                 if !config.is_null() {
                     let sized_img: *mut AnyObject =
                         msg_send![img, imageWithSymbolConfiguration: config];

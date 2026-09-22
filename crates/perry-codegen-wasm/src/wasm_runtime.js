@@ -3331,7 +3331,7 @@ function perry_ui_text_set_color(h, r, g, b, a) { perry_ui_set_foreground(h, r, 
 function perry_ui_button_set_bordered(h, bordered) { const el = uiGet(h); if (el) el.style.border = bordered ? "" : "none"; }
 function perry_ui_button_set_title(h, title) { const el = uiGet(h); if (el) el.textContent = title; }
 function perry_ui_button_set_text_color(h, r, g, b, a) { perry_ui_set_foreground(h, r, g, b, a); }
-function perry_ui_button_set_image(h, name) { /* SF symbols not available in web */ }
+function perry_ui_button_set_image(h, name, pointSize) { /* SF symbols not available in web */ }
 function perry_ui_button_set_content_tint_color(h, r, g, b, a) { perry_ui_set_foreground(h, r, g, b, a); }
 function perry_ui_button_set_image_position() { /* no-op in web */ }
 function perry_ui_textfield_focus(h) { const el = uiGet(h); if (el) el.focus(); }

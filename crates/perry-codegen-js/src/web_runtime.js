@@ -1194,7 +1194,7 @@ var _sfSymbolSVGs = {
     "swift":            '<svg viewBox="0 0 20 20" fill="currentColor"><path d="M13.7 3.3C12.5 2.7 11.2 2.4 10 2.4c-4.2 0-7.6 3.4-7.6 7.6 0 2 .8 3.8 2 5.2C5 14.4 7 12.6 8.5 11c-1.4-.8-2.4-2-3-3.2 1.2 1 2.5 1.7 3.7 2 1.6-1.6 2.8-3.4 3.5-5-1 1.2-2.3 2.5-3.7 3.5 1 .3 2 .3 2.8.1.8-.3 1.5-.8 2-1.5.3-.5.5-1.1.4-1.7-.1-.7-.3-1.3-.5-1.9z"/></svg>',
 };
 
-function perry_ui_button_set_image(h, name) {
+function perry_ui_button_set_image(h, name, pointSize) {
     var el = getHandle(h);
     if (!el) return;
     var svg = _sfSymbolSVGs[name];
@@ -1204,8 +1204,9 @@ function perry_ui_button_set_image(h, name) {
         iconSpan.className = "perry-icon";
         iconSpan.innerHTML = svg;
         iconSpan.style.display = "inline-flex";
-        iconSpan.style.width = "16px";
-        iconSpan.style.height = "16px";
+        var size = Number.isFinite(pointSize) && pointSize > 0 ? pointSize : 16;
+        iconSpan.style.width = size + "px";
+        iconSpan.style.height = size + "px";
         iconSpan.style.verticalAlign = "middle";
         iconSpan.style.flexShrink = "0";
         var svgEl = iconSpan.querySelector("svg");
