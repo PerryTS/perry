@@ -28,7 +28,7 @@ mod helpers;
 mod imported_object;
 mod map_set;
 mod number_string;
-mod own_override_guard;
+pub(crate) mod own_override_guard;
 mod promise_chain;
 mod static_dispatch;
 

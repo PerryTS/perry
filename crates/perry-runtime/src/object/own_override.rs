@@ -58,7 +58,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Has any non-`ObjectHeader` cell ever taken a named property?
 ///
 /// Set-only. See the module docs for why it is armed early and never cleared.
-static EXOTIC_OWN_NAMED_PROP_INSTALLED: AtomicBool = AtomicBool::new(false);
+/// Exported so EMITTED CODE can test it inline. The guard's common case is
+/// "nothing anywhere has ever installed a named property on a non-ordinary
+/// cell", and paying a call to learn that cost +38 instructions on every
+/// proven-Map builtin call. This is the same shape as
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT`: a counter-shaped gate the
+/// emitted guard reads with one monotonic load and a not-taken branch, with
+/// the call left behind it for the case that is almost never taken.
+///
+/// A `u32` rather than a bool so the emitted load matches the barrier gate's
+/// alignment and width; only zero / non-zero is meaningful.
+#[no_mangle]
+pub static PERRY_OWN_NAMED_PROP_INSTALLED: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 
 /// Armed from the top of `field_set_by_name`'s exotic-store gauntlet.
 #[inline]
@@ -68,15 +80,15 @@ pub(crate) fn note_exotic_named_prop_install() {
     // the one just written (the write happens-before any publication of the
     // receiver to another thread — perry workers deep-copy rather than share
     // `ObjectHeader`s, #6185).
-    if !EXOTIC_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) {
-        EXOTIC_OWN_NAMED_PROP_INSTALLED.store(true, Ordering::Relaxed);
+    if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
+        PERRY_OWN_NAMED_PROP_INSTALLED.store(1, Ordering::Relaxed);
     }
 }
 
 /// Test-only: read the arm state.
 #[cfg(test)]
 pub(crate) fn test_exotic_named_prop_installed() -> bool {
-    EXOTIC_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed)
+    PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) != 0
 }
 
 /// May `recv` own a property named `name` that must beat a builtin?
@@ -183,7 +195,7 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
         return 1;
     }
 
-    if !EXOTIC_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) {
+    if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
         // Nothing anywhere in this process has ever put a named property on a
         // non-object cell, so this receiver cannot have one. The common case,
         // and the reason this is cheap.
@@ -232,7 +244,7 @@ unsafe fn authoritative_has_own(recv: f64, name_ptr: *const u8, name_len: usize)
 pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64> {
     // The same relaxed arm the emitted guard consults: nothing anywhere has
     // ever put a named property on a non-object cell, so nothing can shadow.
-    if !EXOTIC_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) {
+    if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
         return None;
     }
     let jsval = crate::JSValue::from_bits(recv.to_bits());

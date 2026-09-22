@@ -55,7 +55,7 @@ use super::helpers::is_date_receiver;
 use crate::expr::{lower_expr, FnCtx};
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_declared_map_expr, is_map_expr, is_set_expr};
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I16, I32, I64, I8, PTR};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
 /// below. Over-approximating is safe — a name the chain declines simply makes
@@ -138,13 +138,65 @@ pub(super) fn guards(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
 /// receiver (`object/own_override.rs`), and never answers "no" for anything it
 /// cannot prove: a wrong "no" is a silent wrong value, a wrong "yes" is only
 /// slower.
-fn emit_own_override_branch(
+/// `GC_ARRAY_NAMED_PROPS` (0x100) | `OBJ_FLAG_ARRAY_DESCRIPTORS` (0x400) in
+/// `GcHeader::_reserved`. Both clear is the runtime predicate's own proof that
+/// an array owns no named property: the bit is monotonic and set when an array
+/// takes one, and the fallback table is reachable only with the descriptor
+/// flag set (`named_props::fallback_possible`).
+const ARRAY_MAY_OWN_NAMED_MASK_I16: &str = "1280";
+/// `HANDLE_MASK_48` — the address bits of a NaN-boxed pointer.
+const HANDLE_MASK_48: &str = "281474976710655";
+
+/// The guard's receiver test: `may this receiver own a named property of this
+/// name?`, answered INLINE for the case that is almost always the answer.
+///
+/// Calling `js_receiver_may_own_named_method` to learn "no" cost, measured
+/// against upstream/main with five interleaved rounds: **+38.000 instructions
+/// on every proven-Map builtin call**, and, before the array tier had its
+/// absence proof, +4,745 on every array one. The predicate's first act is one
+/// of two cheap proofs, so the guard performs that proof itself and calls only
+/// when it fails:
+///
+/// * a proven ARRAY answers from its own `GcHeader::_reserved` — the bit the
+///   predicate tests first;
+/// * every other proven kind answers from `PERRY_OWN_NAMED_PROP_INSTALLED`,
+///   which is the predicate's own early return (`nothing anywhere has ever put
+///   a named property on a non-ordinary cell`) read with one monotonic load.
+///
+/// This is a LIFT, not a new proof: both tests are the predicate's own first
+/// lines, so nothing is proven here that the runtime did not already prove,
+/// and no new install site has to be armed for it to be sound.
+pub(crate) fn emit_own_override_branch(
     ctx: &mut FnCtx<'_>,
     property: &str,
     recv: &str,
+    receiver_is_array: bool,
     own_label: &str,
     builtin_label: &str,
 ) {
+    let ask_idx = ctx.new_block("ownoverride.ask");
+    let ask_label = ctx.block_label(ask_idx);
+    {
+        let blk = ctx.block();
+        if receiver_is_array {
+            // GcHeader precedes the object: `_reserved` @-6 (i16).
+            let bits = blk.bitcast_double_to_i64(recv);
+            let handle = blk.and(I64, &bits, HANDLE_MASK_48);
+            let obj_ptr = blk.inttoptr(I64, &handle);
+            let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+            let reserved = blk.load(I16, &res_ptr);
+            let may = blk.and(I16, &reserved, ARRAY_MAY_OWN_NAMED_MASK_I16);
+            let maybe_owns = blk.icmp_ne(I16, &may, "0");
+            blk.cond_br(&maybe_owns, &ask_label, builtin_label);
+        } else {
+            let installed =
+                blk.load_atomic_monotonic(I32, "@PERRY_OWN_NAMED_PROP_INSTALLED", 4);
+            let any_installed = blk.icmp_ne(I32, &installed, "0");
+            blk.cond_br(&any_installed, &ask_label, builtin_label);
+        }
+    }
+
+    ctx.current_block = ask_idx;
     // The predicate takes the name as BYTES, not a dispatch id: it asks
     // `Object.hasOwn`'s own predicate, which needs a real key.
     let (name_bytes, name_len) = {
@@ -202,6 +254,12 @@ pub(super) fn lower(
 ) -> Result<String> {
     let receiver = lower_expr(ctx, object)?;
     let key = object as *const Expr as usize;
+    // Which cheap proof the guard can perform inline. A proven ARRAY answers
+    // from its own header bit; every other proven kind answers from the global
+    // install flag. The two are not interchangeable -- arrays do not arm the
+    // global one -- so this asks the same predicate `kind_is_proven_exotic`
+    // used to admit the receiver in the first place.
+    let receiver_is_array = is_array_expr(ctx, object);
     let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
         let own_idx = ctx.new_block("ownoverride.own");
         let builtin_idx = ctx.new_block("ownoverride.builtin");
@@ -218,7 +276,14 @@ pub(super) fn lower(
             Some(value) => value,
             None => lower_expr(ctx, object)?,
         };
-        emit_own_override_branch(ctx, property, &recv, &own_label, &builtin_label);
+        emit_own_override_branch(
+            ctx,
+            property,
+            &recv,
+            receiver_is_array,
+            &own_label,
+            &builtin_label,
+        );
 
         // The own arm: the universal dispatcher. Its operands are lowered
         // HERE, inside the arm, so they are evaluated once by whichever arm
