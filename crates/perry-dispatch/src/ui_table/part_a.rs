@@ -410,6 +410,18 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "textSetLetterSpacing",
+        runtime: "perry_ui_text_set_letter_spacing",
+        args: &[ArgKind::Widget, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "textSetLineHeight",
+        runtime: "perry_ui_text_set_line_height",
+        args: &[ArgKind::Widget, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "textSetString",
         runtime: "perry_ui_text_set_string",
         args: &[ArgKind::Widget, ArgKind::Str],

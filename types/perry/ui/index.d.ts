@@ -827,6 +827,10 @@ export function textSetColor(widget: Widget, r: number, g: number, b: number, a:
 export function textSetFontSize(widget: Widget, size: number): void;
 export function textSetFontWeight(widget: Widget, size: number, weight: number): void;
 export function textSetFontFamily(widget: Widget, family: string): void;
+/** Set character spacing in points on a macOS or web Text label. Zero restores the default. */
+export function textSetLetterSpacing(widget: Widget, points: number): void;
+/** Set line height as a multiple of the font's natural line height on macOS or web. One restores the default. */
+export function textSetLineHeight(widget: Widget, multiple: number): void;
 export function textSetWraps(widget: Widget, maxWidth: number): void;
 export function textSetSelectable(widget: Widget, selectable: number): void;
 /**

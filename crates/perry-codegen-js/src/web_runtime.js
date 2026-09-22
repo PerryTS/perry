@@ -2935,6 +2935,16 @@ function perry_ui_text_set_color(h, r, g, b, a) {
     if (el) el.style.color = "rgba(" + Math.round(r*255) + "," + Math.round(g*255) + "," + Math.round(b*255) + "," + a + ")";
 }
 
+function perry_ui_text_set_letter_spacing(h, points) {
+    var el = getHandle(h);
+    if (el) el.style.letterSpacing = points === 0 ? "normal" : points + "px";
+}
+
+function perry_ui_text_set_line_height(h, multiple) {
+    var el = getHandle(h);
+    if (el && multiple > 0) el.style.lineHeight = multiple === 1 ? "normal" : String(multiple);
+}
+
 function perry_ui_textfield_get_string(h) {
     var el = getHandle(h);
     return el ? (el.value || "") : "";
@@ -3871,6 +3881,8 @@ window.__perry = {
     perry_ui_button_set_image_position,
     perry_ui_text_set_wraps,
     perry_ui_text_set_color,
+    perry_ui_text_set_letter_spacing,
+    perry_ui_text_set_line_height,
     perry_ui_textfield_get_string,
     perry_ui_textfield_blur_all,
     perry_ui_textfield_set_on_submit,

@@ -429,6 +429,16 @@ pub extern "C" fn perry_ui_text_set_font_weight(handle: i64, size: f64, weight: 
     widgets::text::set_font_weight(handle, size, weight);
 }
 
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_letter_spacing(handle: i64, points: f64) {
+    widgets::text::set_letter_spacing(handle, points);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_line_height(handle: i64, multiple: f64) {
+    widgets::text::set_line_height(handle, multiple);
+}
+
 /// Enable word wrapping on a Text widget with a max width.
 #[no_mangle]
 pub extern "C" fn perry_ui_text_set_wraps(handle: i64, max_width: f64) {
