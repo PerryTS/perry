@@ -33,6 +33,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // existing `crate::expr::X` paths resolve unchanged.
 mod array_literal;
 mod bitset_test;
+pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 mod literal_descriptor;
 #[cfg(test)]
