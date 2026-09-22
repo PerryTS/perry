@@ -68,6 +68,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.
     module.add_external_global("PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", I32);
+    // #10943: has ANY named property ever been installed on a non-ordinary
+    // cell in this process? Zero is the own-override guard's own proof that a
+    // proven Map/Set/Date receiver cannot be shadowing its builtin, and the
+    // emitted guard reads it inline so the common case costs a load and a
+    // not-taken branch instead of a call -- measured at +38.000 instructions
+    // per proven-Map builtin call when the call was paid to learn the same
+    // thing. An array answers the same question from its own header bit and
+    // does not read this.
+    module.add_external_global("PERRY_OWN_NAMED_PROP_INSTALLED", I32);
     // tls_hot::darwin_tsd — the pthread key of the per-thread hot cache, read
     // by the inline lookup in `expr::hot_tls` (Apple aarch64 targets only;
     // the declaration is unreferenced, and therefore inert, elsewhere).

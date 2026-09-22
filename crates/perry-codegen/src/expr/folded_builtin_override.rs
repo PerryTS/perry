@@ -29,8 +29,9 @@ use perry_hir::Expr;
 use std::cell::Cell;
 
 use super::{lower_expr, FnCtx};
+use crate::lower_call::property_get::own_override_guard::emit_own_override_branch;
 use crate::rooting;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::DOUBLE;
 
 thread_local! {
     /// The identity of the node whose builtin arm is currently re-entering
@@ -331,32 +332,6 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
 
 /// Branch to `own_label` when `recv` may own a property named `method`, else
 /// to `builtin_label`.
-fn emit_own_override_branch(
-    ctx: &mut FnCtx<'_>,
-    method: &str,
-    recv: &str,
-    own_label: &str,
-    builtin_label: &str,
-) {
-    // The predicate takes the name as BYTES, not a dispatch id: it asks
-    // `Object.hasOwn`'s own predicate, which needs a real key.
-    let (name_bytes, name_len) = {
-        let idx = ctx.strings.intern(method);
-        let entry = ctx.strings.entry(idx);
-        (
-            format!("@{}", entry.bytes_global),
-            entry.byte_len.to_string(),
-        )
-    };
-    let blk = ctx.block();
-    let maybe = blk.call(
-        I32,
-        "js_receiver_may_own_named_method",
-        &[(DOUBLE, recv), (PTR, &name_bytes), (I64, &name_len)],
-    );
-    let may_own = blk.icmp_ne(I32, &maybe, "0");
-    blk.cond_br(&may_own, own_label, builtin_label);
-}
 
 fn emit_dispatcher(
     ctx: &mut FnCtx<'_>,
@@ -414,7 +389,18 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             Some(value) => value,
             None => lower_expr(ctx, receiver_expr)?,
         };
-        emit_own_override_branch(ctx, call.method, &recv, &own_label, &builtin_label);
+        let receiver_is_array = matches!(
+            expr,
+            Expr::ArrayPush { .. } | Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. }
+        ) || crate::type_analysis::is_array_expr(ctx, receiver_expr);
+        emit_own_override_branch(
+            ctx,
+            call.method,
+            &recv,
+            receiver_is_array,
+            &own_label,
+            &builtin_label,
+        );
 
         ctx.current_block = own_idx;
         let own_value = emit_dispatcher(ctx, receiver_expr, call.method, &call.args)?;
