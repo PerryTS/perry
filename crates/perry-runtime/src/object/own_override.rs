@@ -168,24 +168,38 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     if !jsval.is_pointer() {
         return None;
     }
-    // OWN only. `js_object_get_field_by_name_f64` walks the PROTOTYPE CHAIN,
-    // so on a Set it returned `Set.prototype.has` and this called the builtin
-    // thunk through the dispatcher — the exact bug, one layer further in
-    // (traced: js_native_call_method -> js_native_call_value ->
-    // set_proto_has_thunk -> js_set_has). An inherited method is not an
-    // override; only an own one beats the builtin.
-    let value = crate::object::object_ops::js_object_get_own_field_or_undef(
-        recv,
-        name.as_ptr(),
-        name.len(),
-    );
+
+    // Read the OWN property from the table that actually holds it. Neither
+    // general getter is right here, and each is wrong in its own direction —
+    // both measured on this issue's differential:
+    //
+    //  * `js_object_get_field_by_name_f64` walks the PROTOTYPE CHAIN, so on a
+    //    Set it returned `Set.prototype.has` and the dispatcher called the
+    //    builtin thunk (traced: js_native_call_value -> set_proto_has_thunk);
+    //  * `js_object_get_own_field_or_undef` is own-only but does not consult
+    //    the exotic side table, so on a Map it answered `undefined` and every
+    //    Map row regressed.
+    //
+    // An exotic cell keeps its own named properties in the expando table —
+    // the same one `hasOwn`, `typeof` and `Object.keys` read, which is why
+    // reflection already agreed with node while the call did not.
+    let value = match crate::object::exotic_expando::exotic_expando_kind_of_value(recv) {
+        Some((addr, kind)) => {
+            f64::from_bits(crate::object::exotic_expando::value_lookup(kind, addr, name)?)
+        }
+        None => crate::object::object_ops::js_object_get_own_field_or_undef(
+            recv,
+            name.as_ptr(),
+            name.len(),
+        ),
+    };
+    if !crate::JSValue::from_bits(value.to_bits()).is_pointer() {
+        return None;
+    }
     // A borrowed builtin (`m.get = Map.prototype.get`) must keep the native
     // arm: dispatching it by name again is the recursion an earlier attempt
     // hit. `object_owns_user_method` is the existing two-valued classifier.
     if !crate::array::object_owns_user_method(recv, name) {
-        return None;
-    }
-    if !crate::JSValue::from_bits(value.to_bits()).is_pointer() {
         return None;
     }
     Some(value)
