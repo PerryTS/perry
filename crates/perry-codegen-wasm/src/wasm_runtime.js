@@ -3328,6 +3328,8 @@ function perry_ui_text_set_string(h, text) { const el = uiGet(h); if (el) el.tex
 function perry_ui_text_set_selectable(h, selectable) { const el = uiGet(h); if (el) el.style.userSelect = selectable ? "text" : "none"; }
 function perry_ui_text_set_wraps(h) { const el = uiGet(h); if (el) el.style.wordWrap = "break-word"; }
 function perry_ui_text_set_color(h, r, g, b, a) { perry_ui_set_foreground(h, r, g, b, a); }
+function perry_ui_text_set_letter_spacing(h, points) { const el = uiGet(h); if (el) el.style.letterSpacing = points === 0 ? "normal" : points + "px"; }
+function perry_ui_text_set_line_height(h, multiple) { const el = uiGet(h); if (el && multiple > 0) el.style.lineHeight = multiple === 1 ? "normal" : String(multiple); }
 function perry_ui_button_set_bordered(h, bordered) { const el = uiGet(h); if (el) el.style.border = bordered ? "" : "none"; }
 function perry_ui_button_set_title(h, title) { const el = uiGet(h); if (el) el.textContent = title; }
 function perry_ui_button_set_text_color(h, r, g, b, a) { perry_ui_set_foreground(h, r, g, b, a); }
@@ -4761,6 +4763,7 @@ const __perryUiDispatch = {
   perry_ui_foreach_register, perry_ui_navstack_register_route,
   // Text/Button/TextField ops
   perry_ui_text_set_string, perry_ui_text_set_selectable, perry_ui_text_set_wraps, perry_ui_text_set_color,
+  perry_ui_text_set_letter_spacing, perry_ui_text_set_line_height,
   perry_ui_text_set_text_alignment,
   perry_ui_button_set_bordered, perry_ui_button_set_title, perry_ui_button_set_text_color,
   perry_ui_button_set_image, perry_ui_button_set_content_tint_color, perry_ui_button_set_image_position,

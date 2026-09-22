@@ -1975,3 +1975,10 @@ pub extern "C" fn perry_ui_app_set_frame_autosave_name(_app_handle: i64, _value_
 /// Export the shared ABI so portable perry/ui code continues to compile.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_max_width(_handle: i64, _max_width: f64) {}
+
+// macOS Text spacing setters are harmless on this platform.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_letter_spacing(_handle: i64, _points: f64) {}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_line_height(_handle: i64, _multiple: f64) {}

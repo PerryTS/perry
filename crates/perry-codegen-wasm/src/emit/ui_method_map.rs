@@ -49,6 +49,8 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "setFontSize" | "set_font_size" | "textSetFontSize" => "perry_ui_set_font_size",
         "setFontWeight" | "set_font_weight" | "textSetFontWeight" => "perry_ui_set_font_weight",
         "setFontFamily" | "set_font_family" | "textSetFontFamily" => "perry_ui_set_font_family",
+        "textSetLetterSpacing" => "perry_ui_text_set_letter_spacing",
+        "textSetLineHeight" => "perry_ui_text_set_line_height",
         "setPadding" | "set_padding" => "perry_ui_set_padding",
         "setFrame" | "set_frame" => "perry_ui_set_frame",
         "setCornerRadius" | "set_corner_radius" => "perry_ui_set_corner_radius",

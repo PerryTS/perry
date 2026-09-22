@@ -230,3 +230,10 @@ pub extern "C" fn perry_ui_scrollview_get_offset(scroll_handle: i64) -> f64 {
 pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, offset: f64) {
     widgets::scrollview::set_offset(scroll_handle, offset);
 }
+
+// macOS Text spacing setters are harmless on this platform.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_letter_spacing(_handle: f64, _points: f64) {}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_line_height(_handle: f64, _multiple: f64) {}

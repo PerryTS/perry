@@ -319,6 +319,8 @@ impl JsEmitter {
             "stackSetDistribution" => "perry_ui_stack_set_distribution",
             "buttonSetImagePosition" => "perry_ui_button_set_image_position",
             "textSetColor" => "perry_ui_text_set_color",
+            "textSetLetterSpacing" => "perry_ui_text_set_letter_spacing",
+            "textSetLineHeight" => "perry_ui_text_set_line_height",
             "textSetTextAlignment" => "perry_ui_text_set_text_alignment",
             "textSetWraps" => "perry_ui_text_set_wraps",
             "textfieldSetString" => "perry_ui_textfield_set_string",
