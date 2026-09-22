@@ -439,6 +439,14 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::canonical_keys::prune_dead_canonical_keys,
         young_prune: None,
     },
+    // #10868 step 2.5: the same weak discipline for the class keys-array
+    // memo. A dropped entry costs one rebuild, never a wrong answer.
+    DeadKeyPrune {
+        table: "CLASS_KEYS_BY_ID (class -> keys array memo)",
+        owner: DeadKeyOwner::Any,
+        prune: crate::object::alloc::prune_dead_class_keys_entries,
+        young_prune: None,
+    },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "state().exotic_expando.entries",
