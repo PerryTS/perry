@@ -920,7 +920,7 @@ pub(super) fn drain_readable_from_events(stream: f64) {
             }
         }
     }
-    if !stream_destroyed(stream) {
+    if !stream_destroyed(stream) && !has_truthy_hidden(stream, hidden_transform_finishing_key()) {
         emit_readable_end_once(stream);
     }
 }

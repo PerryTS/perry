@@ -1019,6 +1019,67 @@ fn transform_flush_callback_pushes_tail_before_finish() {
 }
 
 #[test]
+fn piped_transform_flush_callback_pushes_tail_before_finish() {
+    READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| matches.borrow_mut().clear());
+    TRANSFORM_FLUSH_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let opts = crate::object::js_object_alloc(0, 2);
+    let transform_cb = js_closure_alloc(transform_identity_callback as *const u8, 0);
+    let flush_cb = js_closure_alloc(transform_flush_tail_callback as *const u8, 0);
+    crate::closure::js_register_closure_arity(transform_identity_callback as *const u8, 3);
+    crate::closure::js_register_closure_arity(transform_flush_tail_callback as *const u8, 1);
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"transform"),
+        box_pointer(transform_cb as *const u8),
+    );
+    js_object_set_field_by_name(
+        opts,
+        hidden_key(b"flush"),
+        box_pointer(flush_cb as *const u8),
+    );
+
+    let source = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let destination = js_node_stream_transform_new(box_pointer(opts as *const u8));
+    let destination_handle = raw_ptr_from_value(destination) as i64;
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, destination);
+    let _ = js_node_stream_method_on(
+        destination_handle,
+        string_value("data"),
+        box_pointer(data_closure as *const u8),
+    );
+    let _ = js_node_stream_method_pipe(
+        raw_ptr_from_value(source) as i64,
+        destination,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+
+    let source_handle = raw_ptr_from_value(source) as i64;
+    let _ = js_node_stream_method_write(
+        source_handle,
+        string_value("a"),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    let _ = js_node_stream_method_end(source_handle, f64::from_bits(TAG_UNDEFINED));
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    READABLE_DATA_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"!".to_vec()]
+        );
+    });
+    TRANSFORM_FLUSH_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+    TRANSFORM_THIS_HAS_STREAM_STATE.with(|matches| {
+        assert_eq!(matches.borrow().as_slice(), &[true]);
+    });
+}
+
+#[test]
 fn transform_callback_can_push_multiple_outputs_per_input() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
 
