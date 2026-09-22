@@ -20,7 +20,6 @@ import { spawn } from "node:child_process";
 
 const ROLE_ENV = "PERRY_9493_STDIN_ROLE";
 const FILE_ENV = "PERRY_9493_STDIN_FILE";
-const WATCHDOG_MS = 8000;
 const BIG = 4 * 1024 * 1024;
 
 const role = process.env[ROLE_ENV] ?? "";
@@ -85,11 +84,9 @@ if (role === "stdin-small-exit") {
   const childArgs = [...process.execArgv, ...process.argv.slice(1)];
 
   const waitForMarker = (marker: string) =>
-    new Promise<boolean>((resolve) => {
-      const deadline = Date.now() + WATCHDOG_MS;
+    new Promise<void>((resolve) => {
       const poll = () => {
-        if (fs.existsSync(marker)) return resolve(true);
-        if (Date.now() > deadline) return resolve(false);
+        if (fs.existsSync(marker)) return resolve();
         setTimeout(poll, 20);
       };
       poll();
@@ -103,12 +100,12 @@ if (role === "stdin-small-exit") {
         env: { ...process.env, [ROLE_ENV]: name, [FILE_ENV]: file },
         stdio: ["ignore", "inherit", "inherit"],
       });
-      let settled = false;
-      const report = async (code: number | null | string) => {
+      const report = async (code: number | null) => {
         if (silent) {
-          const landed = (await waitForMarker(file + ".done")) && fs.existsSync(file)
-            ? fs.statSync(file).size
-            : -1;
+          // If the marker never appears, let the parity harness report a
+          // timeout instead of printing a clock-dependent `no-marker` result.
+          await waitForMarker(file + ".done");
+          const landed = fs.existsSync(file) ? fs.statSync(file).size : -1;
           const total = name === "stdin-small-exit" ? 6 : BIG;
           const kind = landed < 0 ? "no-marker" : landed === 0 ? "none" : landed >= total ? "full" : "partial";
           console.log(name + " exit=" + code + " landed=" + kind);
@@ -117,16 +114,7 @@ if (role === "stdin-small-exit") {
         }
         resolve();
       };
-      const watchdog = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        child.kill("SIGKILL");
-        void report("WATCHDOG");
-      }, WATCHDOG_MS);
       child.on("exit", (code) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(watchdog);
         void report(code);
       });
     });
