@@ -564,9 +564,20 @@ unsafe fn probe(
             };
             if addr != 0 && len == parent_len + 1 {
                 let arr = addr as *const ArrayHeader;
+                // Keep the cache entry's exact-length check before resolving
+                // slots: a forwarded stub is not a canonical array to return.
                 if (*arr).length == parent_len + 1 {
+                    let (slots, slot_len) = crate::object::keys_array_dense_slots(arr);
+                    if parent_len as usize >= slot_len {
+                        cur = next;
+                        continue;
+                    }
                     note_slot_read();
-                    if appended.matches(crate::array::js_array_get(arr, parent_len)) {
+                    // Compare the internal key slot, not JavaScript Get:
+                    // Get translates a tombstone into undefined (or a
+                    // prototype value), which would miss the same trie edge.
+                    let stored = JSValue::from_bits((*slots.add(parent_len as usize)).to_bits());
+                    if appended.matches(stored) {
                         return Some(CanonicalKeys(addr as *mut ArrayHeader));
                     }
                 }
@@ -1063,6 +1074,27 @@ mod canonical_keys_tests {
                     Appended::Slot(hole),
                 ),
                 Appended::Key(b),
+            );
+            let hole_first_again = extend(
+                &p,
+                extend(
+                    &p,
+                    extend(&p, CanonicalKeys::EMPTY, Appended::Slot(hole)),
+                    Appended::Key(a),
+                ),
+                Appended::Key(b),
+            );
+            assert_eq!(
+                hole_first.addr(), hole_first_again.addr(),
+                "the same tombstone list must hit the same canonical node"
+            );
+            let raw = crate::array::js_array_alloc(3);
+            let raw = crate::array::js_array_push(raw, hole);
+            let raw = crate::array::js_array_push(raw, JSValue::string_ptr(a as *mut _));
+            let raw = crate::array::js_array_push(raw, JSValue::string_ptr(b as *mut _));
+            assert_eq!(
+                canonicalize(&p, raw, 3).addr(), hole_first.addr(),
+                "canonicalizing raw keys must preserve tombstones"
             );
             assert_eq!(hole_first.len(), 3);
             assert_eq!(hole_middle.len(), 3);
