@@ -4,6 +4,43 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
+fn web_method_receiver(name: &str) -> *mut ObjectHeader {
+    let receiver = crate::object::js_implicit_this_get();
+    if crate::object::web_builtin_to_string_tag(receiver) == Some(name) {
+        return crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader;
+    }
+    let message = format!("Value of this must be of type {name}");
+    let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_typeerror_new(text);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+}
+
+extern "C" fn url_prototype_href_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::url::js_url_get_href(web_method_receiver("URL"))
+}
+
+extern "C" fn abort_controller_prototype_abort_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    crate::url::js_abort_controller_abort_reason(web_method_receiver("AbortController"), reason);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn abort_signal_prototype_throw_if_aborted_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::url::js_abort_signal_throw_if_aborted(web_method_receiver("AbortSignal"))
+}
+
+fn web_method_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
+    super::super::set_builtin_property_attrs(
+        proto_obj as usize,
+        name.to_string(),
+        super::super::PropertyAttrs::new(true, true, true),
+    );
+}
+
 /// Install a FIXED-string `Symbol.toStringTag` data property (`{ value: tag,
 /// writable: false, enumerable: false, configurable: true }`, ES2019
 /// WebIDL/`get %TypedArray%.prototype [ @@toStringTag ]` sibling shape but a
@@ -926,10 +963,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
         // Symbol.toStringTag)` keeps reflecting a real descriptor -- see
         // that function's doc comment. The other six members of the
-        // `#10555` group below (`URL`, `AbortController`, `AbortSignal`,
-        // `EventTarget`, `Event`, `CustomEvent`) have the same
-        // "toStringTag-only arm" shape and have NOT been audited for this
-        // same value-read gap; see #10759's PR body for what was checked.
+        // `#10555` group have their value-read methods below (#10808).
         "URLSearchParams" => {
             install_noop_proto_methods(
                 proto_obj,
@@ -1277,25 +1311,43 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // is wired alongside the `OBJ_FLAG_TYPED_ARRAY_PROTO` flag so the
             // generic property-get chain walk resolves the inherited methods.
         }
-        // #10555: these Web API types install NO methods here (their surface
-        // is either type-directed static dispatch or the small-int/handle
-        // dispatch tables), but each still needs its `.prototype`'s own
-        // `Symbol.toStringTag` descriptor for reflection -- see
-        // `install_web_builtin_to_string_tag`'s doc comment. `URLSearchParams`
-        // used to be listed here too; #10759 moved it to its own arm above
-        // (still calling `install_web_builtin_to_string_tag`) once a VALUE
-        // read of one of its prototype methods turned out to need real
-        // reified closures, not just the toStringTag descriptor. The other
-        // six members of this group (`URL`, `AbortController`,
-        // `AbortSignal`, `EventTarget`, `Event`, `CustomEvent`) have not been
-        // audited for the same "read as a value" gap -- see #10759's PR body.
-        "URL" => unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") },
-        "AbortController" => unsafe {
-            install_web_builtin_to_string_tag(proto_obj, "AbortController")
-        },
-        "AbortSignal" => unsafe { install_web_builtin_to_string_tag(proto_obj, "AbortSignal") },
-        "EventTarget" => unsafe { install_web_builtin_to_string_tag(proto_obj, "EventTarget") },
-        "Event" => unsafe { install_web_builtin_to_string_tag(proto_obj, "Event") },
+        // #10808: these methods must exist as values on their prototypes.
+        // Statically-dispatched instance calls alone do not make
+        // `URL.prototype.toString` or `Event.prototype.preventDefault` work.
+        "URL" => {
+            for name in ["toString", "toJSON"] {
+                install_proto_method(proto_obj, name, url_prototype_href_thunk as *const u8, 0);
+                web_method_enumerable(proto_obj, name);
+            }
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") };
+        }
+        "AbortController" => {
+            let method = install_proto_method(
+                proto_obj,
+                "abort",
+                abort_controller_prototype_abort_thunk as *const u8,
+                1,
+            );
+            if JSValue::from_bits(method.to_bits()).is_pointer() {
+                let closure = crate::value::js_nanbox_get_pointer(method) as usize;
+                super::super::native_module::set_builtin_closure_length(closure, 0);
+            }
+            web_method_enumerable(proto_obj, "abort");
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "AbortController") };
+        }
+        "AbortSignal" => {
+            install_proto_method(
+                proto_obj,
+                "throwIfAborted",
+                abort_signal_prototype_throw_if_aborted_thunk as *const u8,
+                0,
+            );
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "AbortSignal") };
+        }
+        "EventTarget" | "Event" => {
+            crate::event_target::install_web_event_proto_methods(builtin_name, proto_obj);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
+        }
         "CustomEvent" => unsafe { install_web_builtin_to_string_tag(proto_obj, "CustomEvent") },
         _ => {}
     }

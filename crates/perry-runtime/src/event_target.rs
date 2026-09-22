@@ -1091,7 +1091,175 @@ pub unsafe extern "C" fn js_event_target_set_max_listeners(
 /// as NaN-boxed bits so the GC's closure scan keeps it alive and relocates it).
 unsafe fn bound_event_target(closure: *const crate::closure::ClosureHeader) -> *mut ObjectHeader {
     let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+    if bits == 0 {
+        return value_as_ptr(crate::object::js_implicit_this_get()).unwrap_or(std::ptr::null_mut());
+    }
     crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as *mut ObjectHeader
+}
+
+fn event_proto_receiver() -> *mut ObjectHeader {
+    let receiver = crate::object::js_implicit_this_get();
+    if let Some(event) = value_as_ptr::<ObjectHeader>(receiver) {
+        let valid = unsafe {
+            crate::value::addr_class::try_read_gc_header(event as usize)
+                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        };
+        if valid && is_event_instance(event) {
+            return event;
+        }
+    }
+    let msg = b"Value of this must be an Event";
+    let text = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    let error = crate::error::js_typeerror_new(text);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+}
+
+extern "C" fn event_proto_prevent_default_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    event_proto_receiver();
+    event_prevent_default_thunk(closure)
+}
+
+extern "C" fn event_proto_stop_propagation_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    event_proto_receiver();
+    event_stop_propagation_thunk(closure)
+}
+
+extern "C" fn event_proto_stop_immediate_propagation_thunk(
+    closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    event_proto_receiver();
+    event_stop_immediate_propagation_thunk(closure)
+}
+
+extern "C" fn event_proto_init_event_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    event_type: f64,
+    bubbles: f64,
+    cancelable: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event = scope.root_raw_mut_ptr(event_proto_receiver());
+    let event_type = scope.root_nanbox_f64(event_type);
+    let phase_key = key(b"eventPhase");
+    if event
+        .with_mut_ptr::<ObjectHeader, _>(|event| js_object_get_field_by_name_f64(event, phase_key))
+        != 0.0
+    {
+        return undefined_value();
+    }
+    let type_string = scope.root_string_ptr(string_from_value(event_type.get_nanbox_f64()));
+    let type_value =
+        type_string.with_const_ptr::<StringHeader, _>(|p| crate::value::js_nanbox_string(p as i64));
+    event.with_mut_ptr::<ObjectHeader, _>(|event| set_event_field(event, b"type", type_value));
+    event.with_mut_ptr::<ObjectHeader, _>(|event| {
+        set_event_field(
+            event,
+            b"bubbles",
+            bool_value(crate::value::js_is_truthy(bubbles) != 0),
+        )
+    });
+    event.with_mut_ptr::<ObjectHeader, _>(|event| {
+        set_event_field(
+            event,
+            b"cancelable",
+            bool_value(crate::value::js_is_truthy(cancelable) != 0),
+        )
+    });
+    event.with_mut_ptr::<ObjectHeader, _>(|event| {
+        set_event_field(event, b"defaultPrevented", bool_value(false))
+    });
+    undefined_value()
+}
+
+extern "C" fn event_proto_composed_path_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let event = scope.root_raw_mut_ptr(event_proto_receiver());
+    let current_key = key(b"currentTarget");
+    let current = event.with_mut_ptr::<ObjectHeader, _>(|event| {
+        js_object_get_field_by_name_f64(event, current_key)
+    });
+    let current = scope.root_nanbox_f64(current);
+    let result = js_array_alloc(0);
+    let result = if JSValue::from_bits(current.get_nanbox_f64().to_bits()).is_null() {
+        result
+    } else {
+        js_array_push_f64(result, current.get_nanbox_f64())
+    };
+    boxed_ptr(result)
+}
+
+/// Install the WebIDL method values on EventTarget and Event prototypes.
+/// CustomEvent inherits Event's methods through its prototype link.
+pub(crate) fn install_web_event_proto_methods(name: &str, proto_obj: *mut ObjectHeader) {
+    use crate::object::install_proto_method;
+    let install = |method: &str, func: *const u8, call_arity: u32, spec_length: u32| {
+        let value = install_proto_method(proto_obj, method, func, call_arity);
+        let closure = crate::value::js_nanbox_get_pointer(value) as usize;
+        if closure != 0 {
+            crate::object::native_module::set_builtin_closure_length(closure, spec_length);
+        }
+        crate::object::set_builtin_property_attrs(
+            proto_obj as usize,
+            method.to_string(),
+            crate::object::PropertyAttrs::new(true, true, true),
+        );
+    };
+    match name {
+        "EventTarget" => {
+            install(
+                "addEventListener",
+                event_target_add_event_listener_thunk as *const u8,
+                3,
+                2,
+            );
+            install(
+                "removeEventListener",
+                event_target_remove_event_listener_thunk as *const u8,
+                3,
+                2,
+            );
+            install(
+                "dispatchEvent",
+                event_target_dispatch_event_thunk as *const u8,
+                1,
+                1,
+            );
+        }
+        "Event" => {
+            install("initEvent", event_proto_init_event_thunk as *const u8, 3, 1);
+            install(
+                "stopImmediatePropagation",
+                event_proto_stop_immediate_propagation_thunk as *const u8,
+                0,
+                0,
+            );
+            install(
+                "preventDefault",
+                event_proto_prevent_default_thunk as *const u8,
+                0,
+                0,
+            );
+            install(
+                "composedPath",
+                event_proto_composed_path_thunk as *const u8,
+                0,
+                0,
+            );
+            install(
+                "stopPropagation",
+                event_proto_stop_propagation_thunk as *const u8,
+                0,
+                0,
+            );
+        }
+        _ => {}
+    }
 }
 
 /// Shared body of the add/remove listener thunks. `string_from_value` can
