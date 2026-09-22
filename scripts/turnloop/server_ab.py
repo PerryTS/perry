@@ -1337,15 +1337,31 @@ def run(args):
     # the reading taken before the first round this brackets the whole run: quiet
     # at both ends means nobody else showed up in between, which is the claim the
     # timing verdict actually rests on.
-    log("settling for 70s to re-read ambient load (the 1-minute average must shed this run's own)")
-    time.sleep(70)
+    # 70s was not enough and this check was crying wolf. A 1-minute load average
+    # has a ~60s time constant, so after 70s roughly e^-(70/60) — about a third —
+    # of THIS RUN'S OWN load is still in the reading. Five consecutive runs were
+    # marked ADVISORY on their own tail: ambient 1.82 before, 2.12 after, against
+    # a 2.0 threshold, with nothing else having arrived.
+    #
+    # Two fixes, because the settle time alone would not be enough. Wait three
+    # time constants so self-load decays to ~5%, and then judge the reading
+    # against the PRE-RUN ambient rather than against the absolute ceiling. The
+    # question this check exists to answer is "did another tenant arrive mid-run",
+    # which is a CHANGE from ambient; an absolute threshold cannot tell a
+    # neighbour from our own decay, and on a host whose baseline sits near the
+    # ceiling it can never pass at all. The absolute ceiling still guards the
+    # pre-run reading, where there is no self-load to confuse it.
+    log("settling for 180s to re-read ambient load (three 1-minute time constants, so this run's own load decays to ~5%)")
+    time.sleep(180)
     settled = os.getloadavg()[0]
     doc["ambient_loadavg_before"] = AMBIENT_LOADAVG[0]
     doc["ambient_loadavg_after"] = settled
     log(f"ambient loadavg: {AMBIENT_LOADAVG[0]:.2f} before the run, {settled:.2f} after it settled")
-    if settled > args.max_loadavg:
-        note = (f"host was at loadavg {settled:.2f} after the run settled, above "
-                f"--max-loadavg {args.max_loadavg}: another tenant may have arrived mid-run")
+    ARRIVAL_MARGIN = 1.0
+    if settled > AMBIENT_LOADAVG[0] + ARRIVAL_MARGIN:
+        note = (f"host was at loadavg {settled:.2f} after the run settled, "
+                f"{settled - AMBIENT_LOADAVG[0]:.2f} above the {AMBIENT_LOADAVG[0]:.2f} "
+                f"it started at: another tenant arrived mid-run")
         for sample in doc["samples"]:
             sample.setdefault("timing_reasons", []).append(note)
             sample["timing_authoritative"] = False
