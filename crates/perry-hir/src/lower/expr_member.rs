@@ -818,8 +818,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // (where `path` is an imported alias of the node:path module).
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.to_string();
-        let is_path_module =
-            obj_name == "path" || ctx.lookup_builtin_module_alias(&obj_name) == Some("path");
+        let is_path_module = ctx.is_builtin_module_namespace(&obj_name, "path");
         if is_path_module {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 match prop_ident.sym.as_ref() {
@@ -839,8 +838,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             (inner.obj.as_ref(), &inner.prop)
         {
             let root_name = root_ident.sym.to_string();
-            let is_path_root =
-                root_name == "path" || ctx.lookup_builtin_module_alias(&root_name) == Some("path");
+            let is_path_root = ctx.is_builtin_module_namespace(&root_name, "path");
             if is_path_root {
                 let sub = sub_prop.sym.as_ref();
                 if let ast::MemberProp::Ident(prop_ident) = &member.prop {
@@ -1097,8 +1095,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // Check if this is os.EOL / os.devNull property access
     if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
         let obj_name = obj_ident.sym.as_ref();
-        let is_os_module =
-            obj_name == "os" || ctx.lookup_builtin_module_alias(obj_name) == Some("os");
+        let is_os_module = ctx.is_builtin_module_namespace(obj_name, "os");
         if is_os_module {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 match prop_ident.sym.as_ref() {

@@ -1231,6 +1231,18 @@ impl LoweringContext {
             .map(|&idx| self.builtin_module_aliases[idx].1.as_str())
     }
 
+    /// Does `name` denote `module` as a builtin namespace at this point?
+    ///
+    /// Canonical names such as `fs` and `path` are accepted for the historical
+    /// implicit-namespace lowering when no ordinary local shadows them. Imports
+    /// may use any registered alias; the native-module shadow stack records
+    /// when an inner local masks one of those aliases.
+    pub(crate) fn is_builtin_module_namespace(&self, name: &str, module: &str) -> bool {
+        let alias_matches = self.lookup_builtin_module_alias(name) == Some(module)
+            && !self.module_shadow_stack.iter().any(|shadow| shadow == name);
+        alias_matches || (name == module && self.lookup_local(name).is_none())
+    }
+
     /// #1750: record `const w = <root>.win32` / `.posix` so that later
     /// `w.<method>(...)` calls dispatch like `path.<sub>.<method>(...)`. The
     /// root identifier is stored unresolved (imports aren't processed yet at

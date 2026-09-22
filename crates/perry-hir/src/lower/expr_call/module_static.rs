@@ -190,8 +190,7 @@ pub(super) fn try_module_static_methods(
 
         if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
             let obj_name = obj_ident.sym.as_ref();
-            let is_fs_module =
-                obj_name == "fs" || ctx.lookup_builtin_module_alias(obj_name) == Some("fs");
+            let is_fs_module = ctx.is_builtin_module_namespace(obj_name, "fs");
             if is_fs_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -260,8 +259,7 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for path.methodName() calls (including require('path') aliases)
-            let is_path_module =
-                obj_name == "path" || ctx.lookup_builtin_module_alias(obj_name) == Some("path");
+            let is_path_module = ctx.is_builtin_module_namespace(obj_name, "path");
             if is_path_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -1034,8 +1032,7 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for crypto.methodName() calls (including require('crypto') aliases)
-            let is_crypto_module =
-                obj_name == "crypto" || ctx.lookup_builtin_module_alias(obj_name) == Some("crypto");
+            let is_crypto_module = ctx.is_builtin_module_namespace(obj_name, "crypto");
             if is_crypto_module {
                 // #6668: a spread call declines the whole crypto fast-path.
                 // `lower_crypto_passthrough` AND the manual `sha256`/`md5`/
@@ -1108,8 +1105,7 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for os.methodName() calls (including require('os') aliases)
-            let is_os_module =
-                obj_name == "os" || ctx.lookup_builtin_module_alias(obj_name) == Some("os");
+            let is_os_module = ctx.is_builtin_module_namespace(obj_name, "os");
             if is_os_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -1471,8 +1467,7 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for net.methodName() calls
-            let is_net_module =
-                obj_name == "net" || ctx.lookup_builtin_module_alias(obj_name) == Some("net");
+            let is_net_module = ctx.is_builtin_module_namespace(obj_name, "net");
             if is_net_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();

@@ -152,3 +152,74 @@ fn proven_array_receivers_keep_the_array_intrinsics() {
         );
     }
 }
+
+#[test]
+fn builtin_module_names_on_user_objects_stay_generic() {
+    let hir = lower(
+        r#"
+        const crypto = { sha256(x: string) { return x; }, md5(x: string) { return x; } };
+        const fs = { readFileSync(x: string) { return x; } };
+        const path = { join(a: string, b: string) { return a + b; }, sep: "user-sep" };
+        const os = { platform() { return "user-os"; }, EOL: "user-eol" };
+        const net = { createServer() { return "user-server"; } };
+        function viaParam(crypto: any) { return crypto.md5("param"); }
+        console.log(
+            crypto.sha256("x"), fs.readFileSync("x"), path.join("a", "b"),
+            path.sep, os.platform(), os.EOL, net.createServer(), viaParam(crypto),
+        );
+        "#,
+    );
+    for intrinsic in [
+        "CryptoSha256",
+        "CryptoMd5",
+        "FsReadFileBinary",
+        "PathJoin",
+        "PathSep",
+        "OsPlatform",
+        "OsEOL",
+        "NetCreateServer",
+    ] {
+        assert!(
+            !hir.contains(intrinsic),
+            "a user object was lowered to the builtin intrinsic {intrinsic}: {hir}"
+        );
+    }
+}
+
+#[test]
+fn imported_builtin_modules_keep_their_intrinsics() {
+    let hir = lower(
+        r#"
+        import * as cryptoBuiltin from "node:crypto";
+        import * as fsBuiltin from "node:fs";
+        import * as pathBuiltin from "node:path";
+        import * as osBuiltin from "node:os";
+        import * as netBuiltin from "node:net";
+        function shadowed(cryptoBuiltin: any) { return cryptoBuiltin.sha256("local"); }
+        console.log(
+            cryptoBuiltin.sha256("x"), fsBuiltin.readFileSync("x"), pathBuiltin.join("a", "b"),
+            pathBuiltin.sep, osBuiltin.platform(), osBuiltin.EOL, netBuiltin.createServer(),
+            shadowed({ sha256(value: string) { return value; } }),
+        );
+        "#,
+    );
+    for intrinsic in [
+        "CryptoSha256",
+        "FsReadFileBinary",
+        "PathJoin",
+        "PathSep",
+        "OsPlatform",
+        "OsEOL",
+        "NetCreateServer",
+    ] {
+        assert!(
+            hir.contains(intrinsic),
+            "a builtin import lost the {intrinsic} intrinsic: {hir}"
+        );
+    }
+    assert_eq!(
+        hir.matches("CryptoSha256").count(),
+        1,
+        "an inner local must shadow the imported builtin alias: {hir}"
+    );
+}
