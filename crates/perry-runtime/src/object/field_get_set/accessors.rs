@@ -667,6 +667,69 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
     Some(bind_closure_value_to_receiver(value, receiver))
 }
 
+/// The Boolean/BigInt property-read lane carries a NaN-boxed primitive rather
+/// than a raw number. A BigInt and the property key can move while resolving
+/// the builtin prototype, so keep both rooted across every lookup and re-read
+/// their addresses before the recursive prototype walk.
+pub(crate) unsafe fn primitive_tagged_prototype_property(
+    builtin_name: &[u8],
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    if key.is_null() {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    let ctor_h = scope.root_nanbox_f64(js_get_global_this_builtin_value(
+        builtin_name.as_ptr(),
+        builtin_name.len(),
+    ));
+    let ctor_value = JSValue::from_bits(ctor_h.get_nanbox_u64());
+    if !ctor_value.is_pointer() {
+        return None;
+    }
+    let ctor_ptr = ctor_value.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let proto_h = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
+        ctor_ptr,
+        "prototype",
+    ));
+    let proto_value = JSValue::from_bits(proto_h.get_nanbox_u64());
+    if !proto_value.is_pointer() {
+        return None;
+    }
+
+    if crate::state::state().descriptors.accessors_in_use.get() {
+        let key_ptr = JSValue::from_bits(key_h.get_nanbox_u64()).as_string_ptr();
+        if let Some(name) = crate::string::header_str_checked(key_ptr) {
+            let proto_ptr =
+                JSValue::from_bits(proto_h.get_nanbox_u64()).as_pointer::<ObjectHeader>();
+            if let Some(acc) = get_accessor_descriptor(proto_ptr as usize, name) {
+                if acc.get == 0 {
+                    return Some(JSValue::undefined());
+                }
+                return Some(invoke_accessor_getter(acc.get, receiver_h.get_nanbox_f64()));
+            }
+        }
+    }
+
+    let prev_override = accessor_receiver_override_begin(receiver_h.get_nanbox_f64());
+    let prev_h = prev_override.map(|value| scope.root_nanbox_f64(value));
+    let proto_ptr = JSValue::from_bits(proto_h.get_nanbox_u64()).as_pointer::<ObjectHeader>();
+    let key_ptr = JSValue::from_bits(key_h.get_nanbox_u64()).as_string_ptr();
+    let value = js_object_get_field_by_name(proto_ptr, key_ptr);
+    accessor_receiver_override_end(prev_h.map(|handle| handle.get_nanbox_f64()));
+    if value.is_undefined() {
+        return None;
+    }
+    let value_h = scope.root_nanbox_u64(value.bits());
+    Some(bind_closure_value_to_receiver(
+        JSValue::from_bits(value_h.get_nanbox_u64()),
+        receiver_h.get_nanbox_f64(),
+    ))
+}
+
 pub(crate) unsafe fn string_index_value(
     str_value: f64,
     key: *const crate::StringHeader,
