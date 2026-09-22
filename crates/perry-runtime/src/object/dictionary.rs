@@ -191,10 +191,27 @@ pub(crate) fn test_clear_layout_id_budget() {
 
 /// Resolve the knob once. Value-parsed, not presence-parsed: #7991 shipped a
 /// knob that `PERRY_GC_DIAG=0` turned ON.
+/// The compiled-in trigger-1 threshold, armed BY DEFAULT.
+///
+/// #10868 step 2.5: per-prefix canonicalization makes a receiver with a key
+/// list unique to it allocate one array per prefix — k(k+1)/2 element words.
+/// Measured, not projected: 8,192 keys cost 461 MB unlatched and 50 MB
+/// latched, and the 65,536-key membership test allocated past 24 GB
+/// unlatched and passes in 0.03 s latched. §L8.3.2 wrote this down before
+/// either stage existed — "canonical arrays cannot ship ahead of dictionary
+/// mode without a cliff" — so the latch is the bound canonical keys stand on,
+/// and a bound that is off by default is not a bound.
+///
+/// 1,024 keys is ~4 MB of prefix arrays, which is the point the quadratic
+/// stops being free. The env var still overrides, in both directions.
+const DEFAULT_LATCH_MIN_KEYS: u64 = 1024;
+
 #[cold]
 #[inline(never)]
 fn resolve_latch_arming() -> bool {
-    let mut armed = false;
+    // Armed by default; the reads below only ADJUST the threshold.
+    LATCH_MIN_KEYS.store(DEFAULT_LATCH_MIN_KEYS, Ordering::Relaxed);
+    let mut armed = true;
     // Trigger 2, injectable. A fixture that really exhausts a 24-bit layout-id
     // space is impractical, so the budget is a number the allocator PUBLISHES
     // and anyone can inject — which is the only thing that makes the

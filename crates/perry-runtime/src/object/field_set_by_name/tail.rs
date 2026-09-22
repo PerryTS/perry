@@ -622,11 +622,22 @@ pub(crate) fn set_field_by_name_object_tail(
             // reaches the SAME array — which is the whole of the mint fix at
             // this site, because a fresh 4-slot allocation per receiver was a
             // fresh identity per receiver.
-            let new_keys = crate::object::canonical_keys::extend_key(
-                crate::object::canonical_keys::CanonicalKeys::EMPTY,
-                key,
-            )
-            .as_ptr();
+            let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
+                Some(proof) => crate::object::canonical_keys::extend_key(
+                    &proof,
+                    crate::object::canonical_keys::CanonicalKeys::EMPTY,
+                    key,
+                )
+                .as_ptr(),
+                // A latched receiver owns its list from its first key.
+                None => {
+                    let fresh = crate::array::js_array_alloc(4);
+                    refresh_roots_after_alloc!();
+                    let grown =
+                        crate::array::js_array_push(fresh, JSValue::string_ptr(key as *mut _));
+                    grown
+                }
+            };
             refresh_roots_after_alloc!();
             set_object_keys_array(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
@@ -814,11 +825,35 @@ pub(crate) fn set_field_by_name_object_tail(
             // owned any more, so the arm it served does not exist rather than
             // being guarded (L8.3.15c).
             let new_index = key_count;
-            let canonical_parent =
-                crate::object::canonical_keys::canonicalize(keys, key_count as u32);
-            refresh_roots_after_alloc!();
-            let new_keys =
-                crate::object::canonical_keys::extend_key(canonical_parent, key).as_ptr();
+            // #10868 step 2.5: TWO MODES, chosen by a fact on the shape —
+            // which is what dictionary mode IS. This is not a fast path
+            // beside a slow one inside one mode; an ordinary receiver's key
+            // list is a SHARED LAYOUT and interns, a latched receiver's list
+            // is its OWN and appends in place. `SharedLayout::of_receiver` is
+            // the kind check, and `canonicalize`/`extend_key` cannot be
+            // called without what it returns.
+            let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
+                Some(proof) => {
+                    let canonical_parent = crate::object::canonical_keys::canonicalize(
+                        &proof,
+                        keys,
+                        key_count as u32,
+                    );
+                    refresh_roots_after_alloc!();
+                    crate::object::canonical_keys::extend_key(&proof, canonical_parent, key)
+                        .as_ptr()
+                }
+                None => {
+                    // The parent's owned arm, unchanged: a dictionary's array
+                    // carries no `GC_FLAG_SHAPE_SHARED`, so this is the
+                    // in-place O(1)-amortized append that mode exists for.
+                    let owned = scope.root_raw_mut_ptr(keys);
+                    let grown =
+                        crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
+                    let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
+                    grown
+                }
+            };
             refresh_roots_after_alloc!();
             if new_index >= alloc_limit {
                 set_object_keys_array(obj, new_keys);
@@ -991,10 +1026,21 @@ pub(crate) fn set_field_by_name_object_tail(
         // tail.rs:1044/1102 `key_count` 3,676 + 5,416. `keys_shared` is not
         // tested because it is now true of every keys array by construction.
         let new_index = key_count;
-        let canonical_parent =
-            crate::object::canonical_keys::canonicalize(keys, key_count as u32);
-        refresh_roots_after_alloc!();
-        let new_keys = crate::object::canonical_keys::extend_key(canonical_parent, key).as_ptr();
+        // Two modes, as above the linear scan.
+        let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
+            Some(proof) => {
+                let canonical_parent =
+                    crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+                refresh_roots_after_alloc!();
+                crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).as_ptr()
+            }
+            None => {
+                let owned = scope.root_raw_mut_ptr(keys);
+                let grown = crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
+                let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
+                grown
+            }
+        };
         refresh_roots_after_alloc!();
 
         // Check if we have a spare physical slot (js_object_alloc_with_shape allocates max(N,8) slots).
