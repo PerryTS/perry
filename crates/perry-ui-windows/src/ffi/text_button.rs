@@ -108,3 +108,10 @@ pub extern "C" fn perry_ui_button_set_content_tint_color(
 ) {
     widgets::button::set_text_color(handle, r, g, b, a);
 }
+
+// macOS Text spacing setters are harmless on this platform.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_letter_spacing(_handle: i64, _points: f64) {}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_line_height(_handle: i64, _multiple: f64) {}

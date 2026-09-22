@@ -401,6 +401,7 @@ pub extern "C" fn perry_ui_text_set_font_family(handle: i64, family_ptr: i64) {
                     }
                 };
             tf.setFont(Some(&font));
+            widgets::text::refresh_spacing(handle);
         }
     }
 }

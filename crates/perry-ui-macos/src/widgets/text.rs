@@ -1,12 +1,128 @@
 use objc2::rc::Retained;
 use objc2_app_kit::{NSTextField, NSView};
 use objc2_foundation::{MainThreadMarker, NSString};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 use super::register_widget;
 
 /// Extract a &str from a *const StringHeader pointer.
 /// StringHeader is { length: u32, capacity: u32 } followed by UTF-8 data.
 use perry_ffi::copy_string_from_raw as str_from_header;
+
+#[derive(Clone, Copy, Default)]
+struct TextSpacing {
+    kern: Option<f64>,
+    line_height: Option<f64>,
+}
+
+thread_local! {
+    // Widget handles remain registered for the app lifetime. Keep the styling
+    // here so textSetString can restore it after replacing the label's value.
+    static TEXT_SPACING: RefCell<HashMap<i64, TextSpacing>> = RefCell::new(HashMap::new());
+}
+
+/// Rebuild the full-range spacing attributes from the current label value.
+/// Copying the existing attributed value retains unrelated decorations.
+pub(crate) fn refresh_spacing(handle: i64) {
+    use objc2::runtime::{AnyClass, AnyObject};
+    let Some(style) = TEXT_SPACING.with(|styles| styles.borrow().get(&handle).copied()) else {
+        return;
+    };
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
+    unsafe {
+        let Some(tf_cls) = AnyClass::get(c"NSTextField") else {
+            return;
+        };
+        let is_tf: bool = objc2::msg_send![&*view, isKindOfClass: tf_cls];
+        if !is_tf {
+            return;
+        }
+        let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
+        let source: Retained<AnyObject> = objc2::msg_send![tf, attributedStringValue];
+        let length: usize = objc2::msg_send![&*source, length];
+        if length == 0 {
+            return;
+        }
+        let range = objc2_foundation::NSRange {
+            location: 0,
+            length,
+        };
+        let attrs: Retained<AnyObject> = objc2::msg_send![&*source, mutableCopy];
+
+        // Once a label has an attributed value, control-level font and color
+        // setters alone no longer update its rendered text.
+        if let Some(font) = tf.font() {
+            let key = NSString::from_str("NSFont");
+            let _: () = objc2::msg_send![&*attrs, addAttribute: &*key, value: &*font, range: range];
+        }
+        if let Some(color) = tf.textColor() {
+            let key = NSString::from_str("NSColor");
+            let _: () =
+                objc2::msg_send![&*attrs, addAttribute: &*key, value: &*color, range: range];
+        }
+
+        let kern_key = NSString::from_str("NSKern");
+        if let Some(points) = style.kern {
+            let number: Retained<AnyObject> =
+                objc2::msg_send![AnyClass::get(c"NSNumber").unwrap(), numberWithDouble: points];
+            let _: () =
+                objc2::msg_send![&*attrs, addAttribute: &*kern_key, value: &*number, range: range];
+        } else {
+            let _: () = objc2::msg_send![&*attrs, removeAttribute: &*kern_key, range: range];
+        }
+
+        let paragraph_key = NSString::from_str("NSParagraphStyle");
+        if let Some(multiple) = style.line_height {
+            let previous: Option<Retained<AnyObject>> = objc2::msg_send![
+                &*source,
+                attribute: &*paragraph_key,
+                atIndex: 0usize,
+                effectiveRange: std::ptr::null_mut::<objc2_foundation::NSRange>()
+            ];
+            let paragraph: Retained<AnyObject> = if let Some(previous) = previous {
+                objc2::msg_send![&*previous, mutableCopy]
+            } else {
+                let paragraph: Retained<AnyObject> =
+                    objc2::msg_send![AnyClass::get(c"NSMutableParagraphStyle").unwrap(), new];
+                paragraph
+            };
+            let alignment: i64 = objc2::msg_send![tf, alignment];
+            let _: () = objc2::msg_send![&*paragraph, setAlignment: alignment];
+            let _: () = objc2::msg_send![&*paragraph, setLineHeightMultiple: multiple as objc2_core_foundation::CGFloat];
+            let _: () = objc2::msg_send![&*attrs, addAttribute: &*paragraph_key, value: &*paragraph, range: range];
+        } else {
+            let _: () = objc2::msg_send![&*attrs, removeAttribute: &*paragraph_key, range: range];
+        }
+        let _: () = objc2::msg_send![tf, setAttributedStringValue: &*attrs];
+    }
+}
+
+pub fn set_letter_spacing(handle: i64, points: f64) {
+    if !points.is_finite() || super::get_widget(handle).is_none() {
+        return;
+    }
+    TEXT_SPACING.with(|styles| {
+        let mut styles = styles.borrow_mut();
+        let style = styles.entry(handle).or_default();
+        style.kern = (points != 0.0).then_some(points);
+    });
+    refresh_spacing(handle);
+}
+
+pub fn set_line_height(handle: i64, multiple: f64) {
+    if !multiple.is_finite() || multiple <= 0.0 || super::get_widget(handle).is_none() {
+        return;
+    }
+    TEXT_SPACING.with(|styles| {
+        let mut styles = styles.borrow_mut();
+        let style = styles.entry(handle).or_default();
+        style.line_height = (multiple != 1.0).then_some(multiple);
+    });
+    refresh_spacing(handle);
+}
 
 /// Create an NSTextField configured as a non-editable label.
 pub fn create(text_ptr: *const u8) -> i64 {
@@ -35,6 +151,7 @@ pub fn set_text_str(handle: i64, text: &str) {
             let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
             tf.setStringValue(&ns_string);
         }
+        refresh_spacing(handle);
     }
 }
 
@@ -90,6 +207,7 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         ];
         tf.setTextColor(Some(&color));
     }
+    refresh_spacing(handle);
 }
 
 /// Set the font size of a Text widget.
@@ -103,6 +221,7 @@ pub fn set_font_size(handle: i64, size: f64) {
             ];
             tf.setFont(Some(&font));
         }
+        refresh_spacing(handle);
     }
 }
 
@@ -118,6 +237,7 @@ pub fn set_font_weight(handle: i64, size: f64, weight: f64) {
             ];
             tf.setFont(Some(&font));
         }
+        refresh_spacing(handle);
     }
 }
 
@@ -230,6 +350,7 @@ pub fn set_text_alignment(handle: i64, alignment: i64) {
             };
             let _: () = objc2::msg_send![tf, setAlignment: native];
         }
+        refresh_spacing(handle);
     }
 }
 
@@ -247,6 +368,7 @@ pub fn set_decoration(handle: i64, decoration: i64) {
             let current: Retained<NSString> = objc2::msg_send![tf, stringValue];
             if decoration == 0 {
                 tf.setStringValue(&current);
+                refresh_spacing(handle);
                 return;
             }
             let key = if decoration == 1 {
@@ -270,6 +392,7 @@ pub fn set_decoration(handle: i64, decoration: i64) {
                 attributes: &*attrs
             ];
             let _: () = objc2::msg_send![tf, setAttributedStringValue: attr_str];
+            refresh_spacing(handle);
         }
     }
 }
