@@ -176,3 +176,63 @@ fn an_active_replay_does_not_answer_for_another_class_id() {
         );
     }
 }
+
+#[test]
+fn sibling_class_objects_of_the_same_template_keep_distinct_pins() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    const TEMPLATE: u32 = 0x0936_40C0;
+    const FIRST_PARENT: u32 = 0x0936_40C1;
+    const LAST_PARENT: u32 = 0x0936_40C2;
+    register(TEMPLATE);
+    register(FIRST_PARENT);
+    register(LAST_PARENT);
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+
+    // First evaluation: pins FIRST_PARENT onto its own class object.
+    let first_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(TEMPLATE, 0));
+    first_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        crate::object::class_registry::js_object_mark_class(class as i64)
+    });
+    js_register_class_parent_dynamic(TEMPLATE, class_ref(FIRST_PARENT));
+    first_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE)
+    });
+    let first_pin = first_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        super::super::parent_static::class_object_pinned_parent(class as *const crate::ObjectHeader)
+    });
+    assert_eq!(
+        first_pin.map(|v| v.to_bits()),
+        Some(class_ref(FIRST_PARENT).to_bits()),
+        "first evaluation's own pin must be readable immediately after being written",
+    );
+
+    // Second evaluation of the SAME template: pins LAST_PARENT onto a
+    // DIFFERENT class object, overwriting the shared CLASS_DYNAMIC_PARENT_VALUE
+    // stash for TEMPLATE.
+    let last_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(TEMPLATE, 0));
+    last_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        crate::object::class_registry::js_object_mark_class(class as i64)
+    });
+    js_register_class_parent_dynamic(TEMPLATE, class_ref(LAST_PARENT));
+    last_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        super::super::parent_static::js_class_object_pin_parent(class as i64, TEMPLATE)
+    });
+
+    // The EARLIER evaluation's own pin must be UNCHANGED by the later one.
+    let first_pin_again = first_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        super::super::parent_static::class_object_pinned_parent(class as *const crate::ObjectHeader)
+    });
+    assert_eq!(
+        first_pin_again.map(|v| v.to_bits()),
+        Some(class_ref(FIRST_PARENT).to_bits()),
+        "an earlier evaluation's pin must survive a LATER sibling evaluation's pin write",
+    );
+    let last_pin = last_handle.with_mut_ptr::<crate::ObjectHeader, _>(|class| {
+        super::super::parent_static::class_object_pinned_parent(class as *const crate::ObjectHeader)
+    });
+    assert_eq!(
+        last_pin.map(|v| v.to_bits()),
+        Some(class_ref(LAST_PARENT).to_bits()),
+    );
+}

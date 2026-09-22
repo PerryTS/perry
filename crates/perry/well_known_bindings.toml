@@ -36,78 +36,6 @@
 # requires every ext crate and package mapping to have an explicit decision
 # (#5716).
 
-[bindings.dotenv]
-crate = "perry-ext-dotenv"
-# Library file name without the `lib` prefix or `.a` extension.
-# Cargo derives this from the crate name by replacing `-` with `_`,
-# but stating it explicitly here is documentation for humans
-# inspecting the table.
-lib = "perry_ext_dotenv"
-# Tracking issue for the migration; surfaced in error messages
-# when the bundled .a is missing at link time.
-tracking = "#466"
-# `compat` — how faithful this wrapper is to the npm package's public
-# API (see `BindingCompat` in well_known.rs). `full` = audited complete
-# drop-in, safe to auto-prefer over an on-disk node_modules copy.
-# ABSENT ⇒ conservative `partial` default. dotenv remains partial: this
-# wrapper has `config()` / `parse()`, but not the upstream decrypt/populate/
-# configDotenv surface and option/error semantics.
-compat = "partial"
-
-[bindings.dotenv.upstream]
-version = "17.4.2"
-sha256 = "8648852be8209110b34dca75dcc3ed12ce7fae9fcc8edd1ef9e180e708af1398"
-repo = "https://github.com/motdotla/dotenv"
-ref = "a61f616a3160bb6e6f22ff55f08b7eba3a3fab68"
-ported-at = "17.4.2"
-date = "2026-07-30"
-[bindings.nanoid]
-crate = "perry-ext-nanoid"
-lib = "perry_ext_nanoid"
-tracking = "#466"
-# Partial: the wrapper covers nanoid + custom alphabets, but not the complete
-# upstream export set and flattens the curried customAlphabet contract.
-compat = "partial"
-
-[bindings.nanoid.upstream]
-version = "6.0.0"
-sha256 = "5cade80a39ccf4fd174c8e412eca13accfce36c9c2a0982b4ea23403d729a8d8"
-repo = "https://github.com/ai/nanoid"
-ref = "4dacb107b54ffd0e1abfe91b7ef452e0fd5a8e12"
-ported-at = "6.0.0"
-date = "2026-07-30"
-[bindings.uuid]
-crate = "perry-ext-uuid"
-lib = "perry_ext_uuid"
-tracking = "#466"
-# Partial: several upstream exports and input forms are absent (including
-# parse/stringify and newer conversion/constants APIs).
-compat = "partial"
-
-[bindings.uuid.upstream]
-version = "14.0.1"
-sha256 = "e062c57ed120ea135478f305da04802bf69eab23fbc0ca2bae6989b6855390c4"
-repo = "https://github.com/uuidjs/uuid"
-ref = "70177807e9229dfacde2038dc1e722f1828f358a"
-ported-at = "14.0.1"
-date = "2026-07-30"
-[bindings.qs]
-crate = "perry-ext-qs"
-lib = "perry_ext_qs"
-tracking = "#8751"
-# Partial: stringify covers qs' ordinary scalar/object/array surface and the
-# callback/options used by Stripe. parse covers the safe nested-query subset.
-# Regex delimiters and the full decoder/filter extension-hook contracts remain
-# intentionally outside this shim.
-compat = "partial"
-
-[bindings.qs.upstream]
-version = "6.15.3"
-sha256 = "c0278b636e7a016d6e835cd8f194a63c276dff430620e4a04344a4ba8892c0f9"
-repo = "https://github.com/ljharb/qs.git"
-ref = "18d085e919dae70c8f1b200ab99323058edab2c2"
-ported-at = "6.15.3"
-date = "2026-08-25"
 [bindings.bcrypt]
 crate = "perry-ext-bcrypt"
 lib = "perry_ext_bcrypt"
@@ -131,75 +59,6 @@ repo = "https://github.com/ranisalt/node-argon2"
 ref = "786de7152f95881b0683aea1d2ca60ed0d6d9e2f"
 ported-at = "0.45.1"
 date = "2026-07-30"
-[bindings.jsonwebtoken]
-crate = "perry-ext-jsonwebtoken"
-lib = "perry_ext_jsonwebtoken"
-tracking = "#466"
-
-[bindings.jsonwebtoken.upstream]
-version = "9.0.3"
-sha256 = "d9af2628a7a4dda25acf1e19c7ecc2468e1e9e8d4619fe2cae829e89d96f6b82"
-repo = "https://github.com/auth0/node-jsonwebtoken"
-ref = "ed59e76ea37a80f54b833668c02a5271984dcba3"
-ported-at = "9.0.3"
-date = "2026-07-30"
-[bindings.validator]
-crate = "perry-ext-validator"
-lib = "perry_ext_validator"
-tracking = "#466"
-
-[bindings.validator.upstream]
-version = "13.15.35"
-sha256 = "f9a6b506bd9eda8df9d2a4120613426948d9f66cde1b6d5fad3406758d2f81f4"
-repo = "https://github.com/validatorjs/validator.js"
-ref = "7a8079709cd4cb27b2a1846e6f6508d68c9d928f"
-ported-at = "13.15.35"
-date = "2026-07-30"
-[bindings.lru-cache]
-crate = "perry-ext-lru-cache"
-lib = "perry_ext_lru_cache"
-tracking = "#466"
-# PARTIAL (explicit) — but NOT for the reason this comment used to give.
-#
-# The old wording ("the wrapper's store is numeric-value-oriented") went
-# stale when #7136 landed: the store holds real JS keys and values, string
-# keys hash and compare by CONTENT, cached heap values are registered GC
-# roots (marked and rewritten across copying evacuation), and `ttl` /
-# `updateAgeOnGet` follow npm's clock semantics. A 20-assertion probe of
-# real-world usage — string keys, object values, object identity, mutation
-# through the cached reference, overwrite, size, delete, clear, miss,
-# has, eviction at max, get-promotes / peek-does-not, numeric values, ttl,
-# and object survival across forced heap churn — prints IDENTICAL output
-# under npm `lru-cache@11.5.2` on Node 26.5.0 and under this binding.
-#
-# It stays `partial` because `full` is a stronger claim than "faithful for
-# what it implements": per docs/src/native-libraries/zero-config-and-
-# faithfulness.md it means an exhaustively audited drop-in for the pinned
-# package's ENTIRE public API, and it licenses auto-preferring this wrapper
-# over a user's installed `node_modules/lru-cache`. This wrapper exports 8
-# entry points and does not cover `maxSize`/`sizeCalculation`,
-# `dispose`/`disposeAfter`, `fetch`/`forceFetch`, `allowStale`, per-call
-# `set`/`get` option objects, or the iterator / `forEach` / `entries` /
-# `keys` / `values` surface (the ABI only carries `(key, value)`).
-#
-# Two of those gaps fail SILENTLY rather than loudly, which is precisely
-# what the marker exists to prevent: measured against the same probe,
-# `cache.forEach(...)` visits nothing (npm visits every entry) and a
-# `dispose` callback is never invoked (npm invokes it on eviction). Both
-# print a wrong answer instead of throwing, so a `full` marker here would
-# let Perry silently substitute this wrapper for a correct installed copy.
-# Promote to `full` only once those surfaces exist and are conformance-
-# tested; until then `PERRY_REQUIRE_FAITHFUL_BINDINGS=1` refusing this
-# binding is the correct outcome, not a false positive.
-compat = "partial"
-
-[bindings.lru-cache.upstream]
-version = "11.5.2"
-sha256 = "e46c8eaafc64f168603aebd39cfd0e987bec39a93ade280653e2331fd2516a22"
-repo = "https://github.com/isaacs/node-lru-cache"
-ref = "16b3a916662ab449d496b7b4b4f04132565d1d28"
-ported-at = "11.5.2"
-date = "2026-07-30"
 [bindings.better-sqlite3]
 crate = "perry-ext-better-sqlite3"
 lib = "perry_ext_better_sqlite3"
@@ -218,11 +77,6 @@ lib = "perry_ext_zlib"
 tracking = "#466"
 node-builtin = true
 
-[bindings.exponential-backoff]
-crate = "perry-ext-exponential-backoff"
-lib = "perry_ext_exponential_backoff"
-tracking = "#466"
-
 # NOTE: tursodb (#424) and iroh (#425) lived here through v0.5.556 but
 # were moved out to standalone third-party repositories in v0.5.557:
 #   - https://github.com/PerryTS/tursodb-bindings  → `bun add @perryts/tursodb`
@@ -235,25 +89,6 @@ tracking = "#466"
 # its job: bundling the wrappers that *port* perry-stdlib's existing
 # in-tree implementations, not net-new functionality.
 
-[bindings.exponential-backoff.upstream]
-version = "3.1.3"
-sha256 = "2ede00f3e458fa991d304dd8a1fed812d686ac5d213c1d6704963c3674913526"
-repo = "https://github.com/coveooss/exponential-backoff"
-ref = "5622170828bd91dc149585bfa3d82c8972a75ac5"
-ported-at = "3.1.3"
-date = "2026-07-30"
-[bindings.axios]
-crate = "perry-ext-axios"
-lib = "perry_ext_axios"
-tracking = "#466"
-
-[bindings.axios.upstream]
-version = "1.19.0"
-sha256 = "a511049fdaec40a320368b3ee965079b3e14481f82d052584f746bbdc3f01ede"
-repo = "https://github.com/axios/axios"
-ref = "311fcc5c8d989b7248f05d390bb83bfbfb009977"
-ported-at = "1.19.0"
-date = "2026-07-30"
 [bindings.events]
 crate = "perry-ext-events"
 lib = "perry_ext_events"
@@ -284,40 +119,6 @@ repo = "https://github.com/MikeMcl/bignumber.js"
 ref = "275cd85181041d7b6bebf8ef9b70ee0b1bf056b0"
 ported-at = "11.1.5"
 date = "2026-07-30"
-[bindings.dayjs]
-crate = "perry-ext-dayjs"
-lib = "perry_ext_dayjs"
-tracking = "#466"
-
-[bindings.dayjs.upstream]
-version = "1.11.21"
-sha256 = "290ec8bf81878ae4927581d9be74125f07722ea8bbea2ff77a2226dce12df876"
-repo = "https://github.com/iamkun/dayjs"
-ref = "a25f01e8154290b203ab480ffeedc60c80bd0710"
-ported-at = "1.11.21"
-date = "2026-07-30"
-[bindings."date-fns"]
-crate = "perry-ext-dayjs"
-lib = "perry_ext_dayjs"
-tracking = "#466"
-
-[bindings.date-fns.upstream]
-version = "4.4.0"
-sha256 = "eb106d1e9276213d6144b221c103e4abb7d92186734f7505f5a3860427b41a06"
-repo = "https://github.com/date-fns/date-fns"
-ported-at = "4.4.0"
-date = "2026-07-30"
-[bindings.moment]
-crate = "perry-ext-moment"
-lib = "perry_ext_moment"
-tracking = "#466"
-
-[bindings.moment.upstream]
-version = "2.30.1"
-sha256 = "52219a9fee5e1faade4c72536c173c54cedd5e2619272dd0c251a30aeafcde8c"
-repo = "https://github.com/moment/moment"
-ported-at = "2.30.1"
-date = "2026-07-30"
 [bindings.cheerio]
 crate = "perry-ext-cheerio"
 lib = "perry_ext_cheerio"
@@ -342,30 +143,6 @@ repo = "https://github.com/lovell/sharp"
 ref = "1018449164723ba0203c1beffaba0e21f7829c18"
 ported-at = "0.35.3"
 date = "2026-07-30"
-[bindings."rate-limiter-flexible"]
-crate = "perry-ext-ratelimit"
-lib = "perry_ext_ratelimit"
-tracking = "#466"
-
-[bindings.rate-limiter-flexible.upstream]
-version = "11.2.0"
-sha256 = "db92ca4b73bea8ccac0ed67b37b6970170dea15a063f539a5b354bb2a36661d0"
-repo = "https://github.com/animir/node-rate-limiter-flexible"
-ref = "2c12f60043c4bc2d0a7b7d05392824027d810b75"
-ported-at = "11.2.0"
-date = "2026-07-30"
-[bindings.commander]
-crate = "perry-ext-commander"
-lib = "perry_ext_commander"
-tracking = "#466"
-
-[bindings.commander.upstream]
-version = "15.0.0"
-sha256 = "632c1e039b31e98fa79c4fae5b10a5ffbbf9df0f21c9ffb3d74e95734b30696f"
-repo = "https://github.com/tj/commander.js"
-ref = "ba6d13ddb4243e5913367734f8c159089ffe7834"
-ported-at = "15.0.0"
-date = "2026-07-30"
 [bindings.ethers]
 crate = "perry-ext-ethers"
 lib = "perry_ext_ethers"
@@ -377,30 +154,6 @@ sha256 = "17355f81284ba8431953c77af803b122baf4670cdbf84907adf7cafcd745052b"
 repo = "https://github.com/ethers-io/ethers.js"
 ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
 ported-at = "6.17.0"
-date = "2026-07-30"
-[bindings.cron]
-crate = "perry-ext-cron"
-lib = "perry_ext_cron"
-tracking = "#466"
-
-[bindings.cron.upstream]
-version = "4.4.0"
-sha256 = "868d5acfd1ff068de40d25a8d78cc1678305c7bc9192edd7e2b0d083346bcbdf"
-repo = "https://github.com/kelektiv/node-cron"
-ref = "d2f18cf7c56721913607c8159abe9f18c72decba"
-ported-at = "4.4.0"
-date = "2026-07-30"
-[bindings."node-cron"]
-crate = "perry-ext-cron"
-lib = "perry_ext_cron"
-tracking = "#466"
-
-[bindings.node-cron.upstream]
-version = "4.6.0"
-sha256 = "78766bf4f4de32b009259e4e780a9ac8cd7155da970052427e68518cbeecfd32"
-repo = "https://github.com/node-cron/node-cron"
-ref = "0be2ca03ffebc79fa823081b8a44bff6f731a583"
-ported-at = "4.6.0"
 date = "2026-07-30"
 [bindings.ioredis]
 crate = "perry-ext-ioredis"
@@ -443,38 +196,6 @@ repo = "https://github.com/redis/node-redis"
 ref = "d400bc9c1e7b17013c53015f098274a25aa70640"
 ported-at = "6.1.0"
 date = "2026-07-30"
-[bindings.pg]
-crate = "perry-ext-pg"
-lib = "perry_ext_pg"
-tracking = "#466"
-
-[bindings.pg.upstream]
-version = "8.22.0"
-sha256 = "2f8b273b9b93b8712251cbe2b0f05378f4da2187eab5348c3c6c34d02622a55e"
-repo = "https://github.com/brianc/node-postgres"
-ref = "b617619f9fb6fbd231731823e2732a2927ded4be"
-ported-at = "8.22.0"
-date = "2026-07-30"
-[bindings.mysql2]
-crate = "perry-ext-mysql2"
-lib = "perry_ext_mysql2"
-tracking = "#466"
-
-[bindings.mysql2.upstream]
-version = "3.23.2"
-sha256 = "5ebc7c22dd90fe3c7c69b9b1343208d71cc8e9395b433d16eb8be63306218a78"
-repo = "https://github.com/sidorares/node-mysql2"
-ref = "a98730277381005777f70aabfcefa017c1b970a3"
-ported-at = "3.23.2"
-date = "2026-07-30"
-[bindings."mysql2/promise"]
-crate = "perry-ext-mysql2"
-lib = "perry_ext_mysql2"
-tracking = "#466"
-# Subpath of the mysql2 package — not separately published, so it carries no
-# pin of its own; its provenance is mysql2's.
-alias-of = "mysql2"
-
 [bindings.nodemailer]
 crate = "perry-ext-nodemailer"
 lib = "perry_ext_nodemailer"
@@ -565,11 +286,6 @@ lib = "perry_ext_streams"
 tracking = "#466"
 node-builtin = true
 
-[bindings.fastify]
-crate = "perry-ext-fastify"
-lib = "perry_ext_fastify"
-tracking = "#466"
-
 # `@perryts/google-auth` is no longer bundled — extracted to a
 # standalone repo (https://github.com/PerryTS/google-auth) and
 # published as an npm package starting v0.5.1015. The previous
@@ -585,14 +301,6 @@ tracking = "#466"
 # function FFI: createPdf / pdfAddText / pdfAddLine / pdfNewPage /
 # pdfSave. Page units = PDF points (1/72"), origin = bottom-left
 # per the PDF standard.
-
-[bindings.fastify.upstream]
-version = "5.10.0"
-sha256 = "765b9bbdc03029d65b2fc544306ce950029c3470806d2ddee47a454dec0a67dc"
-repo = "https://github.com/fastify/fastify"
-ref = "c47975e8a4c0cb1cb066749b948c0e6e22c97663"
-ported-at = "5.10.0"
-date = "2026-07-30"
 [bindings."@perryts/pdf"]
 crate = "perry-ext-pdf"
 lib = "perry_ext_pdf"
@@ -609,30 +317,6 @@ tracking = "#516"
 crate = "perry-ext-ads"
 lib = "perry_ext_ads"
 tracking = "#867"
-
-# `node-forge` — the PKI subset (RSA keygen, X.509 build/sign, PEM
-# round-trips) that Socket Firewall's TLS-MITM CA uses. Ports the pure-JS
-# bignum/crypto/ASN.1 stack to native RustCrypto (`rsa` + `x509-cert`) so
-# apps stop AOT-compiling forge's enormous JS. Hyphenated package name →
-# `js_node_forge_*` symbol prefix + `perry_ext_node_forge` lib (same
-# convention as `date-fns`/`lru-cache`). CPU-only: not in
-# `binding_needs_shared_tokio`.
-[bindings.node-forge]
-crate = "perry-ext-node-forge"
-lib = "perry_ext_node_forge"
-tracking = "#466"
-# PARTIAL (explicit): only the PKI subset (RSA keygen, X.509 build/sign,
-# PEM round-trips) is ported — forge's cipher/md/util/asn1 surface is not.
-compat = "partial"
-
-# Upstream provenance pin (see PR #7031 / docs upstream-pins.md).
-[bindings.node-forge.upstream]
-version = "1.4.0"
-sha256 = "bf9d7ca0d774235354697bd4b5e642af6505e7ce2066762c3b855138cf870820"
-repo = "https://github.com/digitalbazaar/forge"
-ref = "fa385f92440879601240020f158bed68e444e83a"
-ported-at = "1.4.0"
-date = "2026-07-30"
 
 # `undici` — Node's HTTP client library, served by perry's NATIVE
 # fetch/http stack instead of AOT-compiling undici's ~50k lines of JS.

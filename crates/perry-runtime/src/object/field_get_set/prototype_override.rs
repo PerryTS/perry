@@ -39,5 +39,26 @@ pub(super) fn inherited_field_if_overridden(
     if !crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize) {
         return None;
     }
-    crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)
+    if let Some(value) = crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)
+    {
+        return Some(value);
+    }
+    // #10827: the two reasons this walk can miss are not the same reason.
+    //
+    // If the chain ENDS IN AN EXPLICIT NULL, the miss is the final answer and
+    // it is `undefined` — there is nothing above this receiver to synthesize
+    // from, and the arms below would go and ask the class surface anyway.
+    // That is how `Object.setPrototypeOf(o, null); o.a` kept answering from
+    // the prototype `o` was born with, while `"a" in o` correctly said false:
+    // the read and the `in` disagreed, which is the whole bug.
+    //
+    // Every other miss still returns `None` and defers, which is what #9244
+    // requires: the arms below are not only the class vtable, they are also
+    // everything Perry SYNTHESIZES rather than stores on a real prototype (a
+    // plain function's `.prototype`, the boxed-wrapper builtins, the iterator
+    // helpers), and swallowing those made them unreachable.
+    if crate::object::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize) {
+        return Some(JSValue::undefined());
+    }
+    None
 }

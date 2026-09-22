@@ -220,6 +220,11 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "error");
             }
             PendingNetEvent::End(id) => {
+                // #10465 — `readableEnded` (and `readable`) flip as part of
+                // emitting `'end'`, before any listener runs, matching Node.
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
+                    socket.readable_ended = true;
+                }
                 // Issue #1852 — readable side ended (peer FIN). Fire the
                 // `'end'` listeners; the trailing `Close` event (pushed
                 // right after `End` in `run_socket_task`) does the actual
@@ -253,6 +258,18 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     fn js_tls_client_record_closed(handle: i64);
                 }
                 js_tls_client_record_closed(id);
+                // #10465 — flip the terminal state fields synchronously with
+                // firing `'close'`, matching Node's own timing (its
+                // `'close'` listeners see `destroyed: true`; earlier events
+                // on the SAME socket do not). This is the common teardown
+                // point for every path that reaches `Close`: peer EOF +
+                // local end, explicit `.destroy()`, connect failure, TLS
+                // handshake failure.
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
+                    socket.destroyed = true;
+                    socket.is_open = false;
+                    socket.connecting = false;
+                }
                 let had_error = f64::from_bits(JsValue::from_bool(false).bits());
                 let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "close"));
                 for i in 0..frame.len() {
@@ -269,6 +286,11 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 statics::http_agent_phases().lock().unwrap().remove(&id);
                 statics::max_listeners().lock().unwrap().remove(&id);
                 server_state::discard_pending_server_data(id);
+                // #10444 — the listener-map entry above just went away, so
+                // any pipe route's tracked callback pointers are dangling;
+                // drop the tracking table entry too (nothing left to
+                // uninstall from).
+                crate::pipe::drop_routes(id);
             }
             // Issue #1123 followup — server-side events. The
             // accept loop pushes `ServerConnection`/`ServerListening`/

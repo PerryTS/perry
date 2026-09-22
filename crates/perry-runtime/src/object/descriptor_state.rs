@@ -136,8 +136,13 @@ thread_local! {
 }
 
 mod gc_scan;
+mod owner_lifecycle;
 mod young;
 pub(crate) use gc_scan::{scan_descriptor_owner, scan_descriptor_roots_mut};
+pub(crate) use owner_lifecycle::{
+    clear_object_descriptors, prune_dead_descriptor_owner_entries,
+    prune_dead_descriptor_owner_entries_young, transfer_descriptor_owner,
+};
 use young::{relevant_descriptor_owners, scan_descriptor_roots_young};
 
 /// Rule 1 of `gc/young_log.rs`: log `owner` BEFORE its descriptor is
@@ -290,7 +295,15 @@ pub static PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED: AtomicU8 = AtomicU8::new(0);
 
 /// Disable the codegen-inlined class-field fast path process-wide (see
 /// [`PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`]). Idempotent.
+///
+/// Sets the latch AND poisons every registered guard-expectation slot. The two
+/// are one decision with two carriers: sites that still read the latch keep
+/// working unchanged, while `emit_class_field_inline_precheck` — the per-access
+/// guard on every static-key read — gets the same authority for free out of the
+/// expectation it already loads. Poison first, so no thread can observe a set
+/// latch beside a live expectation.
 pub(crate) fn disable_class_field_inline_guard() {
+    super::class_guard_shape::poison_class_guard_shapes();
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(1, Ordering::Relaxed);
 }
 
@@ -302,6 +315,11 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
 #[cfg(test)]
 pub(crate) fn test_reset_class_field_inline_guard() {
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(0, Ordering::Relaxed);
+    // Unpoison every registered expectation back to the ShapeId it was seeded
+    // with. Production never does this — the disable decision is monotonic —
+    // but a test that flips the latch must not leave later tests guarding
+    // against `CLASS_GUARD_SHAPE_POISON`.
+    super::class_guard_shape::restore_class_guard_shapes_for_test();
     // Also clear the C5a per-key vetting sets (production-monotonic, so
     // without this a key name reused across tests in one process would
     // inherit an earlier test's declared-field / installed-key state and
@@ -571,13 +589,6 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
 /// `GLOBAL_DESCRIPTORS_IN_USE`, neither is poisoned by the runtime
 /// installing attrs on unrelated builtins (RegExp prototype etc.), so the
 /// dynamic-write fast path stays precise.
-/// #6710: set once a native HANDLE-band owner (small id, not a heap object)
-/// gets a property-attr / accessor descriptor. Heap owners record this on their
-/// GC header (`OBJ_FLAG_HAS_DESCRIPTORS`) but a handle id has no header, so
-/// `clear_object_descriptors` uses this flag to skip the O(N) `retain` scans on
-/// the common path where no handle was ever `defineProperty`'d.
-static HANDLE_HAS_DESCRIPTORS: AtomicBool = AtomicBool::new(false);
-
 pub(crate) fn note_descriptor_target(obj: usize) {
     note_descriptor_target_keyed(obj, None);
 }
@@ -610,10 +621,31 @@ pub(crate) fn note_accessor_descriptor_target(obj: usize, key: &str, acc: &Acces
     note_descriptor_target_keyed(obj, Some((key.as_bytes(), shape)));
 }
 
+/// The ONE funnel every descriptor install goes through, and therefore the
+/// one place RULE 1 ("every descriptor change changes the ShapeId of an
+/// ordinary object") is implemented.
+///
+/// What it covers, and what it deliberately does not — this is the exact
+/// scope any shape-only read guard inherits:
+///
+/// * `GC_TYPE_OBJECT`: sets `OBJ_FLAG_HAS_DESCRIPTORS` **and**, when the
+///   receiver is shaped, transitions the shape. A cache entry keyed on the
+///   old ShapeId can no longer match, so for these receivers the shape
+///   compare subsumes the flag test.
+/// * **typed arrays**: early return, before either. A small typed array is
+///   plain-alloc'd without a `GcHeader`, so there is no flag bit to set and
+///   no `ObjectHeader` to stamp.
+/// * **every other cell kind** (array, closure, Map/Set, RegExp, Error,
+///   Promise, native handles, handle-band ids): the `obj_type` test below
+///   rejects them, so they get neither the flag nor a shape transition.
+///
+/// Consequence for the emitted read path: for a non-`GC_TYPE_OBJECT`
+/// receiver the descriptor flag is *never set*, so dropping the flag test
+/// loses nothing — but the SHAPE is equally uninformative, so such receivers
+/// must still be rejected by KIND. Removing the GC-header load from the read
+/// path needs their descriptor state carried in the shape word first
+/// (`rule1_funnel_does_not_cover_non_object_receivers` pins this).
 fn note_descriptor_target_keyed(obj: usize, data_install: Option<(&[u8], u8)>) {
-    if crate::value::addr_class::is_handle_band(obj) {
-        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
-    }
     if crate::array::object_prototype_addr_matches(obj) {
         OBJECT_PROTO_DESCRIPTORS.store(true, Ordering::Relaxed);
     }
@@ -1748,223 +1780,4 @@ pub(crate) unsafe fn mark_all_keys(
         }
         set_property_attrs(obj_addr, key_str, attrs);
     }
-}
-
-/// Death pruning for the two descriptor side tables (2026-07-09 GC audit
-/// wave 2). Entries are keyed by `(owner_addr, key)` and were never removed
-/// when the owner died: `Object.freeze(perRequestObj)` leaked one entry per
-/// key per request, accessor closures were immortalized by the root scanner
-/// below, and a fresh object at a recycled address inherited the dead
-/// owner's descriptors (stale "read only property" throws). `is_dead_owner`
-/// is one of the GC's post-trace / copied-minor deadness predicates
-/// (`gc::dead_owner`); each distinct owner is probed once.
-pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let mut verdicts: HashMap<usize, bool> = HashMap::new();
-    let mut is_dead = |owner: usize| -> bool {
-        *verdicts
-            .entry(owner)
-            .or_insert_with(|| is_dead_owner(owner))
-    };
-    let st = state();
-    {
-        let mut m = st.descriptors.property_descriptors.borrow_mut();
-        if !m.is_empty() {
-            m.retain(|(owner, _), _| !is_dead(*owner));
-        }
-    }
-    {
-        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
-        if !m.is_empty() {
-            m.retain(|(owner, _), _| !is_dead(*owner));
-        }
-    }
-    // Keep the owner index in step: a dead owner left here would keep
-    // reporting keys through `accessor_descriptor_keys_for_obj` after its
-    // entries were reaped, and would be re-walked by every later GC scan.
-    for index in [
-        &st.descriptors.attr_keys_by_owner,
-        &st.descriptors.accessor_keys_by_owner,
-    ] {
-        let mut idx = index.borrow_mut();
-        if !idx.is_empty() {
-            idx.retain(|owner, _| !is_dead(*owner));
-        }
-    }
-}
-
-/// [`prune_dead_descriptor_owner_entries`] for a MINOR (#9754): only a young
-/// owner can be dead, and a young owner is always in the young log (noted at
-/// insert, re-logged by every minor-scoped walk while it stays young), so the
-/// log is the complete candidate set.
-pub(crate) fn prune_dead_descriptor_owner_entries_young(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let st = state();
-    let candidates = st.descriptors.young_owners.borrow_mut().take_sorted();
-    let mut kept = Vec::with_capacity(candidates.len());
-    for owner in candidates {
-        if is_dead_owner(owner) {
-            remove_descriptor_owner_entries(st, owner);
-        } else {
-            kept.push(owner);
-        }
-    }
-    st.descriptors.young_owners.borrow_mut().extend(kept);
-}
-
-/// Drop every entry `owner` holds in both tables and both indexes, through
-/// the owner index (O(owner's keys), not O(table)).
-fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize) {
-    if let Some(keys) = st
-        .descriptors
-        .attr_keys_by_owner
-        .borrow_mut()
-        .remove(&owner)
-    {
-        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
-        for key in keys {
-            attrs.remove(&(owner, key));
-        }
-    }
-    if let Some(keys) = st
-        .descriptors
-        .accessor_keys_by_owner
-        .borrow_mut()
-        .remove(&owner)
-    {
-        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
-        for key in keys {
-            accessors.remove(&(owner, key));
-        }
-    }
-}
-
-/// #6710: drop every property-attr + accessor descriptor owned by `obj`.
-///
-/// The generic descriptor tables are keyed by owner address; for a native
-/// handle that address is its (recycled) handle id. `gc_sweep_dead_descriptors`
-/// only reaps entries whose owner is a dead *heap* object, so a recycled handle
-/// id's descriptors survive into the next owner. Called from
-/// `handle_expando_clear` when perry-ffi hands a freed handle id back out.
-pub(crate) fn clear_object_descriptors(obj: usize) {
-    // Fast path: if no handle-band owner ever received a descriptor, these
-    // tables hold only heap owners — none of whose keys can match `obj` (a
-    // handle id) — so the O(N) `retain` scans would remove nothing. Skip them.
-    if !HANDLE_HAS_DESCRIPTORS.load(Ordering::Relaxed) {
-        return;
-    }
-    let st = state();
-    {
-        let mut m = st.descriptors.property_descriptors.borrow_mut();
-        if !m.is_empty() {
-            m.retain(|(owner, _), _| *owner != obj);
-        }
-    }
-    {
-        let mut m = st.descriptors.accessor_descriptors.borrow_mut();
-        if !m.is_empty() {
-            m.retain(|(owner, _), _| *owner != obj);
-        }
-    }
-    st.descriptors.attr_keys_by_owner.borrow_mut().remove(&obj);
-    st.descriptors
-        .accessor_keys_by_owner
-        .borrow_mut()
-        .remove(&obj);
-}
-
-/// Move string-keyed descriptor ownership when `ArrayHeader` growth replaces
-/// one live allocation with another. Array growth is not a GC collection, so
-/// the metadata-rewrite scanner below does not run; without this explicit
-/// transfer, descriptors installed before a later grow remain keyed to the
-/// forwarding stub and disappear from reads through the canonical array head.
-pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
-    if old_owner == new_owner {
-        return;
-    }
-    let st = state();
-    // The moved entries keep their accessor values, so the new owner is
-    // logged unconditionally; the next minor-scoped walk drops it if nothing
-    // in it is relevant any more.
-    st.descriptors.young_owners.borrow_mut().note(new_owner);
-    // The owner index names exactly this owner's keys, so neither table is
-    // walked in full any more. Array growth calls this on every reallocation.
-    {
-        let moved = st
-            .descriptors
-            .attr_keys_by_owner
-            .borrow()
-            .get(&old_owner)
-            .cloned()
-            .unwrap_or_default();
-        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
-        for key in moved {
-            if let Some(value) = attrs.remove(&(old_owner, key.clone())) {
-                attrs.insert((new_owner, key), value);
-            }
-        }
-    }
-    {
-        let moved = st
-            .descriptors
-            .accessor_keys_by_owner
-            .borrow()
-            .get(&old_owner)
-            .cloned()
-            .unwrap_or_default();
-        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
-        for key in moved {
-            if let Some(value) = accessors.remove(&(old_owner, key.clone())) {
-                accessors.insert((new_owner, key), value);
-            }
-        }
-    }
-    owner_index_transfer(&st.descriptors.attr_keys_by_owner, old_owner, new_owner);
-    owner_index_transfer(&st.descriptors.accessor_keys_by_owner, old_owner, new_owner);
-
-    // Carry the per-object Bloom summary across too. Every descriptor read is
-    // gated on the owner's `attr_key_bits` / `accessor_key_bits`
-    // (`owner_may_have_descriptor_entries`), and a freshly grown array has a
-    // null `meta` — for which that gate answers **false**, authoritatively.
-    // Without this the entries move correctly and then read back as absent:
-    // `Object.keys` / `getOwnPropertyDescriptor` silently lose every accessor
-    // an array had before it grew. (Pre-existing: the gate sat in front of the
-    // old full-table scan as well, so the scan never ran for the new owner.)
-    //
-    // Done after the borrows above are released — `note_meta_descriptor_key`
-    // allocates via `object_meta_ensure`.
-    let moved_attr = st
-        .descriptors
-        .attr_keys_by_owner
-        .borrow()
-        .get(&new_owner)
-        .cloned()
-        .unwrap_or_default();
-    let moved_acc = st
-        .descriptors
-        .accessor_keys_by_owner
-        .borrow()
-        .get(&new_owner)
-        .cloned()
-        .unwrap_or_default();
-    for key in &moved_attr {
-        note_meta_descriptor_key(new_owner, key, false);
-    }
-    for key in &moved_acc {
-        note_meta_descriptor_key(new_owner, key, true);
-    }
-}
-
-/// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
-/// phase (evacuation moved the owning object), mirroring the symbol-keyed
-/// twin tables' owner rekey (`symbol/gc_roots.rs`). Outside that phase the
-/// owner is returned unchanged.
-fn rewrite_descriptor_owner(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    owner: usize,
-) -> usize {
-    if !visitor.is_metadata_rewrite_phase() {
-        return owner;
-    }
-    let mut addr = owner;
-    visitor.visit_metadata_usize_slot(&mut addr);
-    addr
 }

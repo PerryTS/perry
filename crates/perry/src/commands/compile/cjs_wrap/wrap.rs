@@ -100,15 +100,21 @@ fn is_global_value_builtin_name(name: &str) -> bool {
 /// peeking at re-export wrappers' transitive named exports.
 #[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Path) -> String {
-    wrap_commonjs_for_target(source, source_path, None)
+    // Not the process entry: every call site that does not know (or care)
+    // whether `source_path` is the compile-time entry module goes through
+    // here, which is correct for the overwhelming majority of CJS-wrapped
+    // files (dependencies). The real per-module entry status is threaded
+    // explicitly from `collect_modules.rs`, the only place that knows it.
+    wrap_commonjs_for_target(source, source_path, None, false)
 }
 
 pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     source: &str,
     source_path: &Path,
     target: Option<&str>,
+    is_entry_module: bool,
 ) -> String {
-    wrap_commonjs_with_body_offset(source, source_path, target).0
+    wrap_commonjs_with_body_offset(source, source_path, target, is_entry_module).0
 }
 
 /// Like [`wrap_commonjs_for_target`], but also returns the byte offset within
@@ -122,6 +128,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     source: &str,
     source_path: &Path,
     target: Option<&str>,
+    is_entry_module: bool,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -302,15 +309,21 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         }
         true
     };
-    // Next.js lazy-require: specifiers whose every `require('S')` call site is
-    // inside a function body (lazy in Node). Computed up front because it also
-    // suppresses alias ADOPTION below — a function-local `const dep =
-    // require('S')` is a function-scoped const, not a module binding, and
-    // adopting it would hoist `import dep from 'S'` to module scope (eager). We
-    // instead keep the synthetic binding and rename it `_lazyreq_N` so the
-    // target stays `Deferred` and inits only when the shim's
-    // `return _lazyreq_N` runs (i.e. when the function actually calls require).
-    let mut lazy_specs = function_local_specs(source);
+    // Specifiers whose every `require('S')` call site is conditional or inside
+    // a function body. Computed up front because it also suppresses alias
+    // ADOPTION below — a function-local `const dep = require('S')` is a
+    // function-scoped const, not a module binding, and adopting it would hoist
+    // `import dep from 'S'` to module scope (eager). We instead keep the
+    // synthetic binding and rename it `_lazyreq_N` so the target stays
+    // `Deferred`, and the shim initializes it through the path registry at the
+    // moment control flow reaches the call.
+    //
+    // #10754: the registry, not the binding, is what makes this work for EVERY
+    // target. Reading `_lazyreq_N` fires `<S>__init()` only when codegen knows
+    // the binding as an imported function (`import_function_prefixes`), which a
+    // target with no default export never is — so a side-effect-only dependency
+    // was deferred and then never evaluated at all.
+    let mut lazy_specs = deferred_require_specs(source);
     let cyclic_specs = cyclic_require_specs(source, source_path);
     let parent_sensitive_specs = parent_sensitive_require_specs(source, source_path);
     lazy_specs.extend(cyclic_specs.iter().cloned());
@@ -457,8 +470,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     )
                 })
                 .unwrap_or_default();
-            let needs_runtime_record =
-                cyclic_specs.contains(spec) || parent_sensitive_specs.contains(spec);
+            // Deferred targets must initialize even when they have no default
+            // export getter (for example, a side-effect-only module). The path
+            // registry owns initialization and cached exports independently of
+            // the target's export shape, and preserves thrown exceptions here.
+            let needs_runtime_record = lazy_specs.contains(spec);
             let runtime_require = if needs_runtime_record {
                 resolved_target
                     .as_ref()
@@ -480,9 +496,24 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                         } else {
                             String::new()
                         };
+                        // #10754: the registry initializes the target whatever
+                        // its export shape, but it only holds EXPORTS for a
+                        // target that publishes them — which is every
+                        // CJS-wrapped module and no other. A target with no
+                        // CommonJS marker at all (`console.log('x')` and
+                        // nothing else, the commonest polyfill/registration
+                        // shape) is not CJS-wrapped, so it registers an
+                        // initializer and never any exports: the registry runs
+                        // its body and hands back `undefined` where Node hands
+                        // back `{}`. `__perry_has_path_module` is the
+                        // miss-vs-`undefined`-export discriminator (a real
+                        // module may export `undefined`), and on a genuine miss
+                        // the import binding is the value this arm returned
+                        // before the target was deferred at all.
                         format!(
-                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} {warnings}{link_child}return required;",
+                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} if (required === undefined && !__perry_has_path_module({path:?})) required = {local}; {warnings}{link_child}const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
                             path = target.to_string_lossy(),
+                            local = local,
                         )
                     })
             } else {
@@ -510,15 +541,29 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 // `typeof {local} === 'boolean'` sentinel guard does not apply
                 // (builtins are never the pruned-build TRUE sentinel).
                 format!("        if (specifier === '{spec}') {{ {required_value} }}")
-            } else if require_site_in_try(source, spec) {
+            } else if require_site_in_try(source, spec) && runtime_require.is_none() {
                 format!(
                     "        if (specifier === '{spec}') {{ if (typeof {local} === 'boolean') \
                      throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \
                      \"Cannot find module '{spec}'\"); {required_value} }}"
                 )
             } else {
-                if needs_runtime_record {
-                    format!("        if (specifier === '{spec}') {{ {required_value} }}")
+                if needs_runtime_record && runtime_require.is_some() {
+                    // A repeat require must not re-enter the path registry.
+                    // The registry call exists so a DEFERRED target initializes
+                    // even with no default-export getter, but it is only needed
+                    // until the target is loaded; after that it was costing a
+                    // registry lookup, a `globalThis` write pair and a
+                    // try/finally on EVERY call — 3.4x on a hot require.
+                    //
+                    // The RECORD is cached rather than the exports, and only
+                    // once `loaded === true`, so a module that replaces
+                    // `module.exports` after evaluation still reads through
+                    // (matching Node), and a cyclic target mid-initialisation
+                    // keeps going through the registry until it completes.
+                    format!(
+                        "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined) return {local}__rec.exports; {required_value} }}"
+                    )
                 } else if link_child.is_empty() {
                     format!("        if (specifier === '{spec}') return {local};")
                 } else {
@@ -528,6 +573,23 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 }
             }
         })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // One memo slot per deferred specifier, declared in the factory so each
+    // module INSTANCE gets its own (they are per-module state, not global).
+    // A plain local is deliberate: an object keyed by specifier would put a
+    // property read on the hot require path, which is what this is removing.
+    let lazy_cache_decls = require_specs
+        .iter()
+        .zip(import_local_names.iter())
+        .filter(|(spec, _)| {
+            // Only the specs that get the runtime-record arm ever assign a
+            // slot; an unresolvable target keeps the plain binding return and
+            // would otherwise carry a check nothing can ever satisfy.
+            lazy_specs.contains(*spec)
+                && super::super::resolve::resolve_relative_import_path(spec, source_path).is_some()
+        })
+        .map(|(_, local)| format!("    let {local}__rec;"))
         .collect::<Vec<_>>()
         .join("\n");
     // Heuristic: is any `require('<spec>')` call site lexically inside a
@@ -727,7 +789,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             .iter()
             .filter_map(|(name, spec)| {
                 let n = require_specs.iter().position(|s| s == spec)?;
-                if builtin_requires.contains(spec) {
+                if builtin_requires.contains(spec) || lazy_specs.contains(spec) {
                     // #8343 followup: built-in specs no longer hoist a static
                     // `import _req_N` (the codegen doesn't initialize
                     // native-module import bindings in CJS-wrapped modules),
@@ -736,7 +798,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     // `exports.name = require("<builtin>")` resolves through
                     // the synthetic require's `createRequire` arm and populates
                     // `_cjs.name`, so back the re-export with that — the same
-                    // surface `named_export_decls` uses below.
+                    // surface `named_export_decls` uses below. Conditional
+                    // requires also need the actual CJS property: forwarding
+                    // their import binding would bypass the branch and expose
+                    // a dependency that the module never required.
                     Some(format!("export const {name} = _cjs.{name};"))
                 } else {
                     Some(format!(
@@ -833,6 +898,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // from the blanking filter below) and resolves through the synthetic
             // require's `createRequire` arm at runtime.
             .filter(|(_, spec, _)| !builtin_requires.contains(spec))
+            .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter_map(|(alias, spec, _range)| {
                 let idx = require_specs.iter().position(|s| s == spec)?;
                 // When the alias is already the spec's import local name
@@ -851,6 +917,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         let ranges = aliases
             .into_iter()
             .filter(|(_, spec, _)| require_specs.iter().any(|s| s == spec))
+            .filter(|(_, spec, _)| !lazy_specs.contains(spec))
             .filter(|(alias, _, _)| !identifier_is_reassigned(source, alias))
             // #sdxgen: Don't blank alias declarations for Node.js built-in
             // modules — let them stay in the IIFE body and resolve through
@@ -955,6 +1022,68 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // `require(specifier)` for one of those fell through to compiled-module
     // resolution and raised `MODULE_NOT_FOUND` instead of routing through
     // `createRequire`. Each entry emits both the bare and `node:` spelling.
+    // #10735: `require.main` must be the process ENTRY module only —
+    // `module` there, unequal (or `undefined`, for an ESM entry) everywhere
+    // else. `codegen::entry::compile_module_entry` already published a
+    // placeholder object as the shared "main module" in `main()`, BEFORE any
+    // module ran — see `js_bootstrap_cjs_main_module_placeholder`'s doc
+    // comment for why that has to happen outside any module's own preamble
+    // (ESM eval order runs a CJS entry's own static-import dependencies
+    // before the entry's own top-level code, so a naive "entry publishes
+    // first thing in its own preamble" is too late for every hoisted
+    // `require('./relative')`).
+    //
+    // The entry module CLAIMS that placeholder (same object identity a
+    // dependency may already have captured as `require.main`) and fills in
+    // its real fields; every non-entry module just reads it back instead of
+    // building its own — the latter is what made `require.main === module`
+    // trivially true in every compiled CommonJS module, not just the true
+    // entry point (#10735).
+    let require_main_stmt = if is_entry_module {
+        "require.main = module;"
+    } else {
+        "require.main = __perry_get_cjs_main_module();"
+    };
+    // #10735: entry-only. A non-entry module keeps the single-literal
+    // construction below unchanged (still recognised by
+    // `cjs_scaffolding.rs`'s `Ptr<Shape>` folding — see the comment on that
+    // literal). The entry instead mutates the ALREADY-PUBLISHED placeholder
+    // in place, field by field, so its identity matches what a dependency
+    // may have captured before this preamble ran. This is entry-only (one
+    // object per program), so it does not reintroduce the eleven-shape-
+    // transition cost the folded literal below exists to avoid.
+    let cjs_module_init_stmt = if is_entry_module {
+        format!(
+            r#"const __cjs_module = __perry_get_cjs_main_module();
+    __cjs_module.exports = {{}};
+    __cjs_module.__perry_cjs_record = true;
+    __cjs_module.__perry_cjs_factory = {cjs_factory_value};
+    __cjs_module.id = {module_filename_literal};
+    __cjs_module.path = {module_dir_literal};
+    __cjs_module.filename = {module_filename_literal};
+    __cjs_module.loaded = false;
+    __cjs_module.children = [];
+    __cjs_module.parent = globalThis.__perry_cjs_pending_parent;
+    __cjs_module.paths = [{module_dir_literal} + '/node_modules'];
+    __cjs_module.require = undefined;"#
+        )
+    } else {
+        format!(
+            r#"const __cjs_module = {{
+        exports: {{}},
+        __perry_cjs_record: true,
+        __perry_cjs_factory: {cjs_factory_value},
+        id: {module_filename_literal},
+        path: {module_dir_literal},
+        filename: {module_filename_literal},
+        loaded: false,
+        children: [],
+        parent: globalThis.__perry_cjs_pending_parent,
+        paths: [{module_dir_literal} + '/node_modules'],
+        require: undefined,
+    }};"#
+        )
+    };
     let cjs_preamble = format!(
         r#"    // #3527: `module`/`exports` are reassignable `var`s (mirroring Node, where
     // they are wrapper-function parameters), so CJS bodies that do
@@ -980,19 +1109,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // positionally. Adding or reordering a field drops the record back to being
     // reported as a denied user candidate in the `Ptr<Shape>` report;
     // `preamble_canary_tests` is what catches that.
-    const __cjs_module = {{
-        exports: {{}},
-        __perry_cjs_record: true,
-        __perry_cjs_factory: {cjs_factory_value},
-        id: {module_filename_literal},
-        path: {module_dir_literal},
-        filename: {module_filename_literal},
-        loaded: false,
-        children: [],
-        parent: globalThis.__perry_cjs_pending_parent,
-        paths: [{module_dir_literal} + '/node_modules'],
-        require: undefined,
-    }};
+    {cjs_module_init_stmt}
     globalThis.__perry_cjs_pending_parent = undefined;
     // Node populates `module.parent` before the body evaluates, so link it
     // here rather than at the tail's registry publication.
@@ -1043,6 +1160,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // `test/reporters` are builtins only in their `node:` form, and the switch
     // accepted the bare spelling too. The runtime predicate agrees with Node
     // 26 on all 58 names in both spellings.
+{lazy_cache_decls}
     function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
@@ -1135,7 +1253,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // ~2,200 CJS modules that is pure startup garbage.
     require.cache = __perry_cjs_base_require.cache;
     require.extensions = __perry_cjs_base_require.extensions;
-    require.main = module;"#
+    {require_main_stmt}"#
     );
     let cjs_preamble = format!(
         "{cjs_preamble}\n    module.require = function moduleRequire(specifier) {{ return require(specifier); }};"

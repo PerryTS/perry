@@ -480,6 +480,15 @@ pub(crate) fn load_pod_field_native(
     let llvm_ty =
         llvm_type_for_native_rep(&field.native_rep).expect("pod field reps have scalar LLVM types");
     let value = ctx.block().load_aligned(llvm_ty, &ptr, field.alignment);
+    // #10779: a POD record's backing memory is a native struct — written by C,
+    // by Rust, or by a previous native store — so its float fields can hold any
+    // NaN, including one whose bits alias a NaN-box tag. The integer field reps
+    // cannot be NaN and pay nothing.
+    let value = match field.native_rep {
+        NativeRep::F64 => crate::expr::nanbox_inline::canonicalize_lane_f64(ctx.block(), &value),
+        NativeRep::F32 => crate::expr::nanbox_inline::canonicalize_lane_f32(ctx.block(), &value),
+        _ => value,
+    };
     let lowered = LoweredValue {
         semantic: SemanticKind::JsNumber,
         rep: field.native_rep.clone(),

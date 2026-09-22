@@ -117,7 +117,12 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
         arg,
     );
 
-    let timer_id = (timer_value.to_bits() & POINTER_MASK) as i64;
+    // #340/#341: the value `setTimeout` hands back is the handle OBJECT, not
+    // the registry id, so its payload is an address — resolve the id through
+    // the handle instead of masking the bits. The queue below is still keyed by
+    // id; that split is the migration.
+    let (timer_id, _) = crate::timer::timer_handle_parts(timer_value)
+        .expect("setTimeout must return a branded timer handle");
     let (callback, arg_bits) = crate::timer::test_callback_timer_snapshot(timer_id)
         .expect("scheduled callback timer should remain queued");
     assert_moved_closure_ptr(ptr_bits(callback), timer_callback_original);

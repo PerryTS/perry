@@ -270,10 +270,31 @@ unsafe fn emit_domain_event(handle: Handle, event: &str, args: &[f64]) -> bool {
         return false;
     }
     let receiver = nanbox_handle(handle);
-    for listener in listeners {
-        let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
-        let _ = perry_runtime::closure::js_native_call_value(listener, args.as_ptr(), args.len());
-        perry_runtime::object::js_implicit_this_set(previous_this);
+    // #10600: `listeners` and `args` are plain Rust locals cloned out of the
+    // live domain, not GC roots. A listener can allocate enough to trigger a
+    // moving minor collection; an unrooted copy then holds a retired
+    // from-space address for the NEXT listener in this same loop. Root both
+    // through one handle scope and re-read the current bits before every
+    // call.
+    //
+    // #10490: the displaced `this` is the caller's receiver and every listener
+    // is user code that can move it too. Root it ONCE, in that same scope,
+    // before the first `js_implicit_this_set`, and restore it from that root
+    // rather than from a plain per-iteration local.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let previous_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
+    let listener_handles = scope.root_nanbox_f64_slice(&listeners);
+    let arg_handles = scope.root_nanbox_f64_slice(args);
+    for listener_handle in &listener_handles {
+        let live_args =
+            perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+        perry_runtime::object::js_implicit_this_set(receiver);
+        let _ = perry_runtime::closure::js_native_call_value(
+            listener_handle.get_nanbox_f64(),
+            live_args.as_ptr(),
+            live_args.len(),
+        );
+        perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     }
     true
 }

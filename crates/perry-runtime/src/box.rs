@@ -457,27 +457,29 @@ fn push_free_cell(addr: usize, head: &'static crate::tls_hot::HotKey<std::cell::
 }
 
 fn publish_box_cell(addr: usize, tag: usize) {
+    // A cell that is not registered is already published or parked; pushing
+    // it again would hand one cell to two future bindings.
     match tag {
         ASYNC_RELEASE_JS => {
-            BOX_REGISTRY.with(|r| {
-                r.borrow_mut().remove(&addr);
-            });
+            if !BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
+                return;
+            }
             box_ptr_cache_evict(box_ptr_cache(), addr);
             unsafe { (*(addr as *mut Box)).value = crate::value::TAG_UNDEFINED };
             push_free_cell(addr, &BOX_FREE_HEAD);
         }
         ASYNC_RELEASE_I32 => {
-            I32_BOX_REGISTRY.with(|r| {
-                r.borrow_mut().remove(&addr);
-            });
+            if !I32_BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
+                return;
+            }
             box_ptr_cache_evict(i32_box_ptr_cache(), addr);
             unsafe { (*(addr as *mut I32Box)).value = -1 };
             push_free_cell(addr, &I32_BOX_FREE_HEAD);
         }
         ASYNC_RELEASE_BOOL => {
-            BOOL_BOX_REGISTRY.with(|r| {
-                r.borrow_mut().remove(&addr);
-            });
+            if !BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
+                return;
+            }
             box_ptr_cache_evict(bool_box_ptr_cache(), addr);
             unsafe { (*(addr as *mut BoolBox)).value = true };
             push_free_cell(addr, &BOOL_BOX_FREE_HEAD);
@@ -485,7 +487,10 @@ fn publish_box_cell(addr: usize, tag: usize) {
         _ => unreachable!("invalid async released-cell tag"),
     }
     ASYNC_PENDING_RELEASES.with(|pending| {
-        pending.borrow_mut().remove(&addr);
+        let mut pending = pending.borrow_mut();
+        if !pending.is_empty() {
+            pending.remove(&addr);
+        }
     });
     BOX_FLUSH_PUBLISHED.fetch_add(1, Ordering::Relaxed);
 }
@@ -499,21 +504,22 @@ pub(crate) fn box_capture_count_reached_zero(addr: usize) {
     }
 }
 
-/// Expose a drained, closure-owned JS box's payload to the closure tracer.
-/// The exact-capture table may also contain i32/bool box addresses; requiring
-/// the pending JS tag is the authoritative type discriminator before the
-/// pointer is dereferenced as [`Box`].
+/// Expose a released, closure-owned JS box's payload to the closure tracer —
+/// a drained async activation cell, or one its ordinary frame released
+/// (#10464). The exact-capture table may also contain i32/bool box addresses;
+/// requiring the JS tag on the release record is the authoritative type
+/// discriminator before the pointer is dereferenced as [`Box`].
 pub(crate) fn visit_pending_captured_js_box_payload_slot(
     addr: usize,
     visit: &mut dyn FnMut(*mut u64),
 ) {
-    let is_pending_js = ASYNC_PENDING_RELEASES.with(|pending| {
+    let is_released_js = ASYNC_PENDING_RELEASES.with(|pending| {
         pending
             .borrow()
             .get(&addr)
             .is_some_and(|tag| *tag == (ASYNC_RELEASE_JS | ASYNC_RELEASE_DRAINED))
-    });
-    if is_pending_js && BOX_REGISTRY.with(|registry| registry.borrow().contains(&addr)) {
+    }) || crate::closure::frame_released_js_cell(addr, ASYNC_RELEASE_JS);
+    if is_released_js && BOX_REGISTRY.with(|registry| registry.borrow().contains(&addr)) {
         let ptr = addr as *mut Box;
         unsafe { visit(&raw mut (*ptr).value) };
     }
@@ -965,19 +971,6 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         BOX_REGISTRY.with(|r| {
             let r = r.borrow();
             for &addr in r.iter() {
-                // A drained box is retained only by exact closure-capture
-                // metadata. During a full trace its payload is reached from
-                // each live closure instead. Rooting it here as well would
-                // make `box -> closure -> same box` an uncollectable native
-                // cycle. Minors retain the old strong-root rule because they
-                // cannot adjudicate old-closure liveness.
-                if full_trace
-                    && pending
-                        .get(&addr)
-                        .is_some_and(|tag| *tag == (ASYNC_RELEASE_JS | ASYNC_RELEASE_DRAINED))
-                {
-                    continue;
-                }
                 let ptr = addr as *mut Box;
                 // Defensive: the registry should only contain valid live
                 // pointers, but if a stale entry slipped through we'd
@@ -985,15 +978,40 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                 // address (alloc gives 8-aligned pointers in user space)
                 // matches `is_plausible_box_ptr` to keep this a no-op for
                 // any pathological entry.
-                if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
+                if !(addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0) {
+                    continue;
+                }
+                // A released box (a drained async cell, or a cell its
+                // ordinary frame released — #10464) is retained only by exact
+                // closure-capture metadata. During a full trace its payload is
+                // reached from each live closure instead. Rooting it here as
+                // well would make `box -> closure -> same box` an uncollectable
+                // native cycle. Minors retain the old strong-root rule because
+                // they cannot adjudicate old-closure liveness — and a minor
+                // walks ONLY the log below, so a young payload must stay logged
+                // even when this trace does not visit it. Dropping it here left
+                // the next minor with no root for a live payload
+                // (`gc-fromspace-protect` catches the stale use immediately).
+                if full_trace
+                    && (pending
+                        .get(&addr)
+                        .is_some_and(|tag| *tag == (ASYNC_RELEASE_JS | ASYNC_RELEASE_DRAINED))
+                        || crate::closure::frame_released_js_cell(addr, ASYNC_RELEASE_JS))
+                {
                     unsafe {
-                        visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
                         if crate::gc::young_log::bits_are_minor_relevant((*ptr).value) {
                             kept.push(addr);
                         }
                     }
-                    visited += 1;
+                    continue;
                 }
+                unsafe {
+                    visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
+                    if crate::gc::young_log::bits_are_minor_relevant((*ptr).value) {
+                        kept.push(addr);
+                    }
+                }
+                visited += 1;
             }
         });
     });
@@ -1905,3 +1923,11 @@ mod tests {
 #[cfg(test)]
 #[path = "box/release_tests.rs"]
 mod release_tests;
+
+// #10464: scope-exit release for frame-owned cells.
+#[path = "box/scope_release.rs"]
+mod scope_release;
+pub(crate) use scope_release::publish_frame_released_cell;
+pub use scope_release::{
+    js_bool_box_scope_release, js_box_scope_release, js_i32_box_scope_release,
+};

@@ -32,6 +32,14 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// Install wrappers of the well-known native providers this program links
+    /// (`js_ext_net_nm_install`, …; see `native_provider_install_symbols`).
+    /// Set only on the entry module, whose `main` / dylib initializer calls
+    /// each one before any module initializer runs, so module objects the
+    /// runtime creates itself — a CommonJS `require('net')` resolves through
+    /// `createRequire` — already reach the provider's export dispatcher.
+    /// (#10428, #10429)
+    pub native_provider_installs: Vec<String>,
 }
 
 impl Default for AppMetadata {
@@ -43,6 +51,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            native_provider_installs: Vec::new(),
         }
     }
 }
@@ -553,14 +562,18 @@ pub struct ImportedClass {
     pub constructor_param_count: usize,
     /// Whether the source class declared its own constructor body.
     pub has_own_constructor: bool,
-    /// Whether the source class's constructor's last declared parameter is
-    /// `...rest`. Symmetric to `method_has_rest` but for the constructor: the
+    /// Whether the source class's constructor declares a user `...rest`
+    /// parameter. Symmetric to `method_has_rest` but for the constructor: the
     /// source module compiled `<class>_constructor(this, arg0, …)` expecting
     /// the rest slot to receive a PACKED ARRAY of the trailing args. Without
     /// this flag the cross-module `new C(a, b, c)` dispatch passed the args
     /// positionally, so `arg0 = a` (raw) and `b`/`c` were dropped — a
     /// `constructor(...args)` saw `args = a`, length 1.
     pub constructor_has_rest: bool,
+    /// Whether the source constructor reads `arguments`, i.e. its signature
+    /// ends in the HIR-synthesized `arguments` slot (after any user rest). That
+    /// slot receives a packed array of EVERY argument (#10484).
+    pub constructor_has_synthetic_arguments: bool,
     /// Whether the source class has instance fields that require initializer replay.
     pub has_instance_fields: bool,
     /// Method names defined on this class.
@@ -677,6 +690,17 @@ pub struct ImportedClass {
 }
 
 impl ImportedClass {
+    /// The standalone-constructor ABI this class's defining module compiled,
+    /// as recorded on the import route (the constructor-contract resolver
+    /// overwrites all three fields for classes in the source graph).
+    pub(crate) fn ctor_abi(&self) -> super::ctor_arity::CtorAbi {
+        super::ctor_arity::CtorAbi {
+            param_count: self.constructor_param_count,
+            has_rest: self.constructor_has_rest,
+            has_synthetic_arguments: self.constructor_has_synthetic_arguments,
+        }
+    }
+
     /// Consumer-side registry key for this class.
     pub fn effective_name(&self) -> String {
         let member = self.local_alias.as_deref().unwrap_or(&self.name);
@@ -770,10 +794,13 @@ pub(crate) struct ImportedCtor {
     pub param_count: usize,
     pub has_own_constructor: bool,
     pub has_instance_fields: bool,
-    /// True when the constructor's last declared param is `...rest`. Tells
+    /// True when the constructor declares a user `...rest` param. Tells
     /// the cross-module `new` dispatch to pack the trailing args into an
     /// array for the rest slot rather than passing them positionally.
     pub has_rest: bool,
+    /// True when the constructor's last param is the synthesized `arguments`
+    /// slot, which receives every argument packed into one array.
+    pub has_synthetic_arguments: bool,
 }
 
 impl ImportedCtor {

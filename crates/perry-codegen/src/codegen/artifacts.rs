@@ -761,6 +761,56 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
 
     progress.checkpoint("class methods, constructors, and statics");
 
+    // Node builtin named imports are runtime callable/property values rather
+    // than functions compiled into this module. When one is exported (either
+    // `import { x } from "node:m"; export { x }` or the synthetic Import +
+    // Named pair used for `export { x } from "node:m"`), publish a zero-arg
+    // getter that reads the live builtin ESM export cell. Importers classify
+    // this as a variable export and invoke the returned callable value, rather
+    // than linking a nonexistent `perry_fn_<module>__x` body.
+    for export in &hir.exports {
+        let perry_hir::Export::Named { local, exported } = export else {
+            continue;
+        };
+        let native_origin = hir.imports.iter().find_map(|import| {
+            if !import.is_native || !perry_api_manifest::is_node_core_module(&import.source) {
+                return None;
+            }
+            import
+                .specifiers
+                .iter()
+                .find_map(|specifier| match specifier {
+                    perry_hir::ImportSpecifier::Named {
+                        imported,
+                        local: import_local,
+                    } if import_local == local => Some((import.source.as_str(), imported.as_str())),
+                    _ => None,
+                })
+        });
+        let Some((source, imported)) = native_origin else {
+            continue;
+        };
+        let getter_name = format!("perry_fn_{}__{}", module_prefix, sanitize(exported));
+        if llmod.has_function(&getter_name) {
+            continue;
+        }
+        let source_idx = strings.intern(source);
+        let imported_idx = strings.intern(imported);
+        let source_handle = format!("@{}", strings.entry(source_idx).handle_global);
+        let imported_handle = format!("@{}", strings.entry(imported_idx).handle_global);
+        let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
+        let _ = getter.create_block("entry");
+        let blk = getter.block_mut(0).unwrap();
+        let source_value = blk.load(DOUBLE, &source_handle);
+        let imported_value = blk.load(DOUBLE, &imported_handle);
+        let value = blk.call(
+            DOUBLE,
+            "js_native_module_named_esm_export_value",
+            &[(DOUBLE, &source_value), (DOUBLE, &imported_value)],
+        );
+        blk.ret(DOUBLE, &value);
+    }
+
     // Emit FuncRef-as-value wrappers. For each user function, generate
     // a thin wrapper `__perry_wrap_<name>` whose signature matches the
     // closure-call ABI: `double(i64 this_closure, double arg0, double
@@ -1868,56 +1918,16 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         user_fn_display_names.push((sym, display.clone()));
     }
 
-    // #4101: collect retained function source text, keyed by the same
-    // wrapper/closure symbol the name registration uses. Top-level functions
-    // always have a `__perry_wrap_<name>` global (emitted unconditionally
-    // above); inline closures only have a `perry_closure_*` global when
-    // materialized, so gate those on `materialized_closure_ids` to avoid
-    // referencing an undefined global (the #318/#343 clang-failure class).
-    let mut user_fn_source: Vec<(String, String, bool)> = Vec::new();
-    for f in &hir.functions {
-        if let Some(src) = hir.closure_source_text.get(&f.id) {
-            if let Some(sym) = func_names.get(&f.id) {
-                user_fn_source.push((
-                    format!("__perry_wrap_{}", sym),
-                    src.text.clone(),
-                    src.is_non_strict_ordinary,
-                ));
-            }
-        }
-    }
-    // Sorted, NOT raw `HashMap` iteration (#7038). The loop above walks
-    // `hir.functions` (a `Vec`) and is already deterministic; this one keyed off
-    // the map's iteration order, so the `@.str.N` numbering of the emitted
-    // string constants was a per-process permutation. Same input, different
-    // `.ll` on every run — which silently invalidates any A/B that compares raw
-    // IR, a technique several representation and GC investigations relied on.
-    // Emission order is the only thing that changes; sorting by `FuncId` makes
-    // it stable without altering what is emitted.
-    let mut materialized_closure_sources: Vec<(
-        &perry_hir::types::FuncId,
-        &perry_hir::FunctionSourceMetadata,
-    )> = hir
-        .closure_source_text
-        .iter()
-        .filter(|(func_id, _)| {
-            !registered_fn_ids.contains(*func_id) && materialized_closure_ids.contains(*func_id)
-        })
-        .collect();
-    materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
-    for (func_id, src) in materialized_closure_sources {
-        let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
-        user_fn_source.push((sym, src.text.clone(), src.is_non_strict_ordinary));
-    }
-
-    // #9468: method/accessor bodies are raw symbols rather than closure
-    // wrappers. Pair retained MethodDefinition text only with symbols this
-    // module actually emitted; the helper also preserves the file-size gate.
-    super::artifact_source_text::extend_class_method_source_text(
+    // #4101 + #9468: collecting retained function source text lives in
+    // `artifact_source_text::collect_user_fn_source` (split out for the file cap).
+    let user_fn_source = super::artifact_source_text::collect_user_fn_source(
         hir,
+        &func_names,
+        closures,
+        &registered_fn_ids,
+        &materialized_closure_ids,
         module_prefix,
         llmod,
-        &mut user_fn_source,
     );
 
     // Wall 51: the standalone-ctor arity registered into CLASS_CONSTRUCTORS must
@@ -1943,6 +1953,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
 
     progress.checkpoint("runtime registration metadata");
 
+    let class_source_elided = super::function_source_header::elide_class_sources(hir);
+    let class_source_text = class_source_elided
+        .as_ref()
+        .unwrap_or(&hir.class_source_text);
     emit_string_pool(
         llmod,
         strings,
@@ -1954,7 +1968,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         class_table,
         imported_class_stubs,
         &hir.class_display_names,
-        &hir.class_source_text,
+        &class_source_text,
         &ctor_arity_overrides,
         closure_rest_params,
         closure_arities,

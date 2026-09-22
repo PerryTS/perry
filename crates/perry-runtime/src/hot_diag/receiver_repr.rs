@@ -199,26 +199,29 @@ fn observe_pointer(addr: usize) {
             mark_old(ReceiverReprFamily::Proxy);
         }
     }
-    if crate::timer::is_known_timer_id(addr as i64) {
-        mark_old(ReceiverReprFamily::Timer);
-    }
-    if addr as i64 == crate::text::TEXT_ENCODER_SENTINEL_ID
-        || crate::text::is_known_text_decoder_id(addr as i64)
-    {
-        mark_old(ReceiverReprFamily::Text);
-    }
-    if crate::tui::is_known_handle(addr as i64) {
-        mark_old(ReceiverReprFamily::Tui);
-    }
+    // #340/#341 GATE A: `timer` has migrated to ordinary objects, so no timer
+    // receiver can be a small band id any more and this family can never be
+    // marked old again. The fixture asserts `observed_old == 0` for it.
+    // #340/#341 GATE A: `text` has migrated to ordinary objects, so no text
+    // receiver can be a small band id any more and this family can never be
+    // marked old again. The fixture below asserts `observed_old == 0` for it;
+    // that inversion is the per-family record that the migration landed.
+    // #340/#341 GATE A: `tui` has migrated, so its arm is gone from here too.
+    // `tui::is_known_handle` survives for the ledger's own question ("does any
+    // small id still reach a funnel?") but is no longer consulted on this
+    // path: a tui handle is a heap object, and asking three registries whether
+    // an arbitrary heap address is one of their ids took three mutexes to
+    // answer "no".
+    // Each remaining family deletes its arm here as it moves.
     if crate::async_hooks::is_async_hook_handle(addr as i64) {
         mark_old(ReceiverReprFamily::AsyncHook);
     }
     if crate::async_hooks::is_async_resource_handle(addr as i64) {
         mark_old(ReceiverReprFamily::AsyncResource);
     }
-    if crate::object::is_null_stub_address(addr) {
-        mark_old(ReceiverReprFamily::NullStub);
-    }
+    // #340/#341 GATE A: `null_stub` has migrated to an ordinary object, so
+    // its arm is gone from here, and `is_null_stub_address` with it: it could
+    // only ever have answered for a `.data` static no longer handed to JS.
     if crate::shared_sab::is_shared_sab(addr) {
         mark_old(ReceiverReprFamily::Sab);
     }
@@ -364,6 +367,59 @@ mod tests {
         assert_eq!(wrapped, 0, "PR 1 must not create wrappers");
     }
 
+    /// #340/#341 GATE A. A family that has migrated to ordinary objects can no
+    /// longer hand a small band id to any funnel, so its `observed_old` bucket
+    /// must stay 0 while `constructed` keeps moving. This is the per-family
+    /// record that the migration landed, and it cannot pass by accident: on an
+    /// unmigrated tree `observe_pointer` still marks the family old and the
+    /// `assert_eq!(observed, 0)` fails; if a producer ever returns a small id
+    /// again, the band assertion fails first.
+    ///
+    /// It is a gate only from HERE, because the fixture calls the funnels
+    /// directly. A compiled program's `observed_old` proves nothing for this
+    /// family — a statically lowered `d.encoding` (codegen's
+    /// `Expr::TextDecoderEncoding`) or a `class_filter`-lowered `state.get()`
+    /// never reaches an instrumented funnel, so the counter read 0 before the
+    /// migration too. Gate B (the producer-side band assertion in the
+    /// family's own tests) covers those reads.
+    fn assert_fixture_migrated(family: ReceiverReprFamily, construct: impl FnOnce() -> usize) {
+        receiver_repr_test_reset();
+        receiver_repr_test_arm(true);
+        let value = construct();
+        assert!(
+            !crate::value::addr_class::is_handle_band(value),
+            "{family:?} producer still returns a small band id ({value:#x})"
+        );
+        // The band check above covers only ONE of the two dishonest classes
+        // (plan section 1.1): small registry ids. The other class is a
+        // pointer-tagged address with NO `GcHeader` -- the `.data` null stub,
+        // a `Box`-allocated SymbolHeader, a SAB or external buffer backing --
+        // and it is NOT in the band, so for those families the band check
+        // alone cannot fail (measured: #10821 row 4's gate A stayed green with
+        // the stub sabotaged back to a header-less block). What every migrated
+        // family's value has in common is that the ALLOCATOR owns it:
+        // `try_read_tracked_gc_header` proves ownership rather than trusting
+        // `addr - 8`, so it refuses both old classes and accepts exactly the
+        // ordinary object the migration produces.
+        assert!(
+            unsafe { crate::value::addr_class::try_read_tracked_gc_header(value) }.is_some(),
+            "{family:?} producer returned {value:#x}, which is not an allocator-owned GC \
+             cell -- the header-less class of the old representation"
+        );
+        receiver_repr_note_decoded_pointer(value);
+        let (constructed, observed, wrapped) = receiver_repr_test_snapshot(family);
+        assert!(
+            constructed > 0,
+            "{family:?} constructor did not move its bucket"
+        );
+        assert_eq!(
+            observed, 0,
+            "{family:?} has migrated to ordinary objects: no receiver of it can \
+             be a band id any more"
+        );
+        assert_eq!(wrapped, 0, "PR 1 must not create wrappers");
+    }
+
     #[test]
     fn receiver_repr_family_fixtures_move_constructed_and_observed_old() {
         // These three producers live in perry-stdlib, below perry-runtime in
@@ -391,21 +447,21 @@ mod tests {
                 true,
             )
         });
-        assert_fixture(ReceiverReprFamily::Timer, || {
-            (
-                crate::timer::js_set_timeout_callback(0, 60_000.0) as usize,
-                false,
-            )
+        // #340/#341: `timer` is migrated — gate A, inverted (see `text`).
+        assert_fixture_migrated(ReceiverReprFamily::Timer, || {
+            crate::timer::js_set_timeout_callback(0, 60_000.0) as usize
         });
-        assert_fixture(ReceiverReprFamily::Text, || {
-            (crate::text::js_text_encoder_new() as usize, false)
+        // #340/#341: `text` is migrated — gate A, inverted. Every other family
+        // still asserts the old representation above and below.
+        assert_fixture_migrated(ReceiverReprFamily::Text, || {
+            crate::text::js_text_encoder_new() as usize
         });
-        assert_fixture(ReceiverReprFamily::Tui, || {
-            let mut handle = crate::tui::state::js_perry_tui_state_alloc(0.0);
-            if handle == 0 {
-                handle = crate::tui::state::js_perry_tui_state_alloc(0.0);
-            }
-            (handle as usize, false)
+        // #340/#341: `tui` is migrated — gate A, inverted (see `text`).
+        // Note what the pre-migration fixture had to do: retry when the handle
+        // came back 0, because the FIRST `state(0)` of a program was slot 0
+        // and `POINTER_TAG | 0` is a tagged null. It cannot be 0 now.
+        assert_fixture_migrated(ReceiverReprFamily::Tui, || {
+            crate::tui::state::js_perry_tui_state_alloc(0.0) as usize
         });
         assert_fixture(ReceiverReprFamily::AsyncHook, || {
             let options = crate::object::js_object_alloc(0, 0);
@@ -441,17 +497,20 @@ mod tests {
         assert_fixture(ReceiverReprFamily::Sab, || {
             (crate::shared_sab::alloc_shared_sab(1) as usize, false)
         });
-        assert_fixture(ReceiverReprFamily::NullStub, || {
-            (
-                crate::object::js_unresolved_namespace_stub().to_bits() as usize,
-                true,
-            )
+        // #340/#341: `null_stub` is migrated — gate A, inverted (see `text`).
+        assert_fixture_migrated(ReceiverReprFamily::NullStub, || {
+            (crate::object::js_unresolved_namespace_stub().to_bits() & crate::value::POINTER_MASK)
+                as usize
         });
 
         let line = render();
         assert!(line.starts_with("[receiver-repr-diag] constructed common=0"));
         assert!(line.contains("null_stub=1; observed_old"));
-        assert!(line.contains("null_stub=1; observed_wrapped"));
+        // #340/#341 row 4: the rendered sink line is the last place gate A is
+        // visible. `null_stub` is the final bucket of the `observed_old`
+        // section, so this segment IS its observed_old count, and it must read
+        // 0 now that the stub is an ordinary object (it read 1 before).
+        assert!(line.contains("null_stub=0; observed_wrapped"));
         assert!(line.ends_with("bare_managed=0; invalid_pointer_zero=0; direct_mismatch=0\n"));
         receiver_repr_test_arm(false);
     }

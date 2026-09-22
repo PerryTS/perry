@@ -152,6 +152,78 @@ pub(crate) fn is_self_heritage_value(class_id: u32, parent_bits: u64) -> bool {
     parent_bits & 0xFFFF_0000_0000_0000 == INT32_TAG && parent_bits as u32 == class_id
 }
 
+/// #10624: monotone "has any class object ever pinned its own heritage"
+/// flag. `js_class_object_pin_parent` arms it before its own write, so
+/// anything it can EVER make true (an instance pinned to its constructing
+/// class object, or a class_id that has more than one live per-evaluation
+/// parent) is only reachable once this is armed. `instanceof`'s value-aware
+/// chain walk (`object/instanceof.rs`'s `class_chain_reaches_dynamic`) is
+/// gated on it: the overwhelming majority of programs never evaluate a
+/// heritage-carrying class expression more than once, and this keeps that
+/// case exactly as cheap as it was before this fix (one relaxed-cost atomic
+/// load) instead of paying a table lookup at every hop of every
+/// `instanceof` check. See `registry_latch.rs`.
+pub(crate) static CLASS_OBJECT_HERITAGE_PIN_LATCH: crate::registry_latch::RegistryLatch =
+    crate::registry_latch::RegistryLatch::new();
+
+/// Own-property key under which a genuine INSTANCE (constructed via
+/// `new <perEvaluationClassObject>()`) remembers which SPECIFIC evaluation
+/// built it (#10624).
+///
+/// `js_class_object_pin_parent`'s pin lives on the CLASS OBJECT and answers
+/// "what is MY parent" — `super()`, the prototype chain, and capture
+/// resolution above all already consult it. Nothing, though, gave the
+/// resulting INSTANCE a way back to that same evaluation: an instance
+/// carries only its class's shared TEMPLATE `class_id`
+/// (`ObjectHeader.class_id`), identical for every evaluation of the same
+/// factory. `instanceof`'s class-chain walk therefore fell back to
+/// `CLASS_REGISTRY`/`get_parent_class_id` — the same last-write-wins table
+/// `super()` used to read before #9364 — so an instance built from an
+/// EARLIER evaluation, checked after a LATER evaluation of the same
+/// template has run, could construct correctly (via the class-object pin
+/// above) yet fail `instanceof` against its own true parent (the later
+/// evaluation's parent shadows it in that shared table).
+///
+/// Pinning the constructing class object onto the instance too closes that
+/// gap: `object/instanceof.rs`'s `class_chain_reaches_dynamic` walks from
+/// THIS value, following the exact same per-evaluation pin chain
+/// `pinned_class_object_for_ancestor` already walks for capture resolution,
+/// instead of the shared class_id table.
+pub(crate) const INSTANCE_CONSTRUCTING_CLASS_KEY: &str = "__perry_ctor_class_object";
+
+/// Pin the per-evaluation class OBJECT that is about to construct `inst`
+/// onto `inst` itself (#10624). A no-op when `classobj_value` is not itself
+/// a per-evaluation class object, or carries no heritage of its own to
+/// disambiguate — an ordinary class DECLARATION (or a heritage-less class
+/// expression) has none of the ambiguity this exists to resolve, and the
+/// plain class_id registry is already exact for those.
+pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_value: f64) {
+    if inst.is_null() || !is_class_object_value(classobj_value) {
+        return;
+    }
+    let class_ptr = crate::value::js_nanbox_get_pointer(classobj_value) as *const ObjectHeader;
+    if class_ptr.is_null() || class_object_pinned_parent(class_ptr).is_none() {
+        return;
+    }
+    // `js_class_object_pin_parent` already armed `CLASS_OBJECT_HERITAGE_PIN_LATCH`
+    // before writing `class_ptr`'s own pin above (the ordering rule in
+    // `registry_latch.rs`) — that write happens-before this one in this
+    // thread's program order, so the latch is already armed here.
+    let key_bytes = INSTANCE_CONSTRUCTING_CLASS_KEY.as_bytes();
+    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    crate::object::js_object_set_field_by_name(inst, key, classobj_value);
+}
+
+/// Read back the pin [`pin_instance_constructing_class`] wrote, or `None`
+/// when `obj` was never pinned — including the common case where the latch
+/// alone already answers "no" without scanning `obj`'s own fields at all.
+pub(crate) fn instance_pinned_constructing_class(obj: *const ObjectHeader) -> Option<f64> {
+    if CLASS_OBJECT_HERITAGE_PIN_LATCH.is_idle() {
+        return None;
+    }
+    class_object_own_field_bytes(obj, INSTANCE_CONSTRUCTING_CLASS_KEY.as_bytes())
+}
+
 #[cfg(test)]
 #[path = "evaluation_heritage/tests.rs"]
 mod tests;

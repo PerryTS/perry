@@ -1089,3 +1089,200 @@ fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
 fn protected_block(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     exec_block_scope(ctx, &t.block, env_idx)
 }
+
+// ── class expressions (#10661) ──────────────────────────────────────────────
+
+/// `class [Name] { constructor(...) { ... } method(...) { ... } ... }` as a
+/// standalone expression — the shape `generate-function` emits (mysql2's row
+/// parsers: `return class TextRow { constructor(fields) {...} next(...) {...} }`).
+///
+/// **Supported subset, deliberately narrow** (matches what the schema/codegen
+/// corpus behind #6559 actually emits, not general ES2022 class syntax):
+///   * an optional `constructor`; missing one synthesizes an empty no-op
+///     constructor (there is no `extends`, so there is nothing to forward to
+///     a super constructor);
+///   * regular (non-getter/setter, non-generator/async) methods, instance or
+///     `static`, keyed by identifier / string / numeric literal;
+///   * a named class expression sees its own name inside its body, exactly
+///     like a named function expression.
+///
+/// **Explicitly unsupported** (throws the #6559 diagnostic naming the
+/// construct, same as every other out-of-subset form in this interpreter):
+/// `extends` (no superclass chain — no `super()`/`super.foo` machinery
+/// exists here), decorators, getters/setters, generator/async methods,
+/// class fields (public or private), private methods, static blocks,
+/// auto-accessors, TS index signatures, TS parameter properties, and
+/// computed member keys.
+///
+/// **Why this is sugar, not a new mechanism.** The interpreter already
+/// supports the ES5 pattern this desugars to — `function Foo(){}` plus
+/// `Foo.prototype.bar = function(){}` plus `new Foo()` — because ordinary
+/// property writes on an interpreted closure already land in its dynamic
+/// expando table (ajv's `validate.errors = ...` already exercises that path),
+/// and `new` on ANY closure (host or interpreted) already goes through
+/// `js_new_function_construct`'s generic path, which specifically looks for a
+/// `"prototype"` dynamic prop to link the new instance's `[[Prototype]]`
+/// (`crates/perry-runtime/src/object/class_registry/construct.rs`). So this
+/// function does nothing runtime-side that wasn't already reachable from
+/// interpreted code — it just builds a constructor closure, a plain prototype
+/// object, and wires them together the same way hand-written ES5 would.
+/// Nothing new is added to `js_new_function_construct`, method dispatch, or
+/// `instanceof` — an instance built this way is an ordinary object whose
+/// `[[Prototype]]` happens to be the class's prototype object, found by the
+/// same prototype-chain walk any plain object uses.
+pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: usize) -> f64 {
+    let class = class_expr.class.as_ref();
+    if class.super_class.is_some() {
+        throw_unsupported("class expression with `extends`");
+    }
+    if !class.decorators.is_empty() {
+        throw_unsupported("class decorator");
+    }
+
+    let base = roots_len();
+
+    // Named class expressions see their own name inside constructor AND
+    // method bodies — same pattern `make_function_value` uses for named
+    // function expressions: chain a one-binding scope, alloc the closure
+    // over it, then backfill the binding once the closure value exists.
+    let name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
+    let body_env_idx = if name.is_some() {
+        let name_env = env::env_new(root_get(env_idx));
+        root_push(name_env)
+    } else {
+        env_idx
+    };
+
+    let ctor_member = class.body.iter().find_map(|m| match m {
+        ast::ClassMember::Constructor(c) => Some(c),
+        _ => None,
+    });
+    let ctor_fn_id = match ctor_member {
+        Some(c) => {
+            let mut params = Vec::with_capacity(c.params.len());
+            for p in &c.params {
+                match p {
+                    ast::ParamOrTsParamProp::Param(p) => params.push(p.pat.clone()),
+                    ast::ParamOrTsParamProp::TsParamProp(_) => {
+                        throw_unsupported("TypeScript parameter property in class constructor")
+                    }
+                }
+            }
+            let body =
+                InterpBody::Block(c.body.as_ref().map(|b| b.stmts.clone()).unwrap_or_default());
+            fn_id_for_node(c as *const ast::Constructor as usize, || {
+                build_interp_fn(params, body, ctx.strict)
+            })
+        }
+        None => {
+            // No constructor written: synthesize an empty one. Keyed on the
+            // `Class` node itself (there is no dedicated AST node for a
+            // synthesized constructor) — only used as a cache key, stable
+            // for the same reason every other node-address key here is:
+            // `FN_REGISTRY` keeps the owning `InterpFn` (and therefore this
+            // address) alive for the program's lifetime.
+            fn_id_for_node(class as *const ast::Class as usize, || {
+                build_interp_fn(Vec::new(), InterpBody::Block(Vec::new()), ctx.strict)
+            })
+        }
+    };
+
+    let ctor_closure = alloc_interp_closure(
+        ctor_fn_id,
+        root_get(body_env_idx),
+        None,
+        root_get(ctx.global_idx),
+        root_get(ctx.intrinsics_idx),
+        ctx.strings_allowed,
+        ctx.wasm_allowed,
+    );
+    let ctor_idx = root_push(ctor_closure);
+
+    if let Some(name) = &name {
+        env::define(root_get(body_env_idx), name, root_get(ctor_idx));
+    }
+
+    // Plain object, `Object.prototype`-rooted — same as any object literal.
+    let prototype = bridge::attach_intrinsic_prototype(
+        bridge::object_new(),
+        root_get(ctx.intrinsics_idx),
+        "Object",
+    );
+    let proto_idx = root_push(prototype);
+    bridge::set_member(root_get(proto_idx), "constructor", root_get(ctor_idx));
+
+    for member in &class.body {
+        match member {
+            ast::ClassMember::Constructor(_) => {}
+            ast::ClassMember::Method(m) => {
+                if m.kind != ast::MethodKind::Method {
+                    throw_unsupported("getter/setter in class body");
+                }
+                if m.function.is_generator || m.function.is_async {
+                    throw_unsupported("generator/async method in class body");
+                }
+                let value = make_function_value(
+                    ctx,
+                    m.function.params.iter().map(|p| p.pat.clone()).collect(),
+                    InterpBody::Block(
+                        m.function
+                            .body
+                            .as_ref()
+                            .map(|b| b.stmts.clone())
+                            .unwrap_or_default(),
+                    ),
+                    false,
+                    None,
+                    m.function.as_ref() as *const ast::Function as usize,
+                    body_env_idx,
+                );
+                let target_idx = if m.is_static { ctor_idx } else { proto_idx };
+                set_class_member(target_idx, &m.key, value);
+            }
+            ast::ClassMember::PrivateMethod(_) => throw_unsupported("private method (#field)"),
+            ast::ClassMember::ClassProp(_) => throw_unsupported("class field"),
+            ast::ClassMember::PrivateProp(_) => throw_unsupported("private class field (#field)"),
+            ast::ClassMember::TsIndexSignature(_) => {
+                throw_unsupported("TypeScript index signature in class body")
+            }
+            ast::ClassMember::Empty(_) => {}
+            ast::ClassMember::StaticBlock(_) => throw_unsupported("static initialization block"),
+            ast::ClassMember::AutoAccessor(_) => throw_unsupported("auto-accessor class member"),
+        }
+    }
+
+    // Wire the two together last: `Ctor.prototype = proto` is the dynamic
+    // expando write `js_new_function_construct` specifically looks for
+    // (`closure_get_dynamic_prop(fp, "prototype")`) to link a `new`-built
+    // instance's `[[Prototype]]` to `proto` instead of the closure's default
+    // (empty, per-function) prototype object.
+    bridge::set_member(root_get(ctor_idx), "prototype", root_get(proto_idx));
+
+    let result = root_get(ctor_idx);
+    roots_truncate(base);
+    result
+}
+
+/// Set a class member (method) by its `PropName` onto the target (prototype
+/// or constructor, for instance vs. `static`). Rejects computed and bigint
+/// keys — see `eval_class_expr`'s documented subset.
+fn set_class_member(target_idx: usize, key: &ast::PropName, value: f64) {
+    let value_idx = root_push(value);
+    match key {
+        ast::PropName::Ident(i) => {
+            bridge::set_member(root_get(target_idx), &i.sym, root_get(value_idx))
+        }
+        ast::PropName::Str(s) => bridge::set_member(
+            root_get(target_idx),
+            &String::from_utf8_lossy(s.value.as_bytes()),
+            root_get(value_idx),
+        ),
+        ast::PropName::Num(n) => {
+            let k = bridge::make_number(n.value);
+            bridge::set_index(root_get(target_idx), k, root_get(value_idx), false);
+        }
+        ast::PropName::Computed(_) => throw_unsupported("computed method name in class body"),
+        ast::PropName::BigInt(_) => throw_unsupported("bigint method name in class body"),
+    }
+    roots_truncate(value_idx);
+}

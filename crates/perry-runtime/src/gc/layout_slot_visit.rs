@@ -10,6 +10,71 @@ fn fixed_slot(slot: *mut u64) -> GcMutableSlotDescriptor {
     GcMutableSlotDescriptor::Slot(GcMutableSlot::new(slot, None))
 }
 
+impl HeapChildSlotIterator {
+    /// The payload mask WORD for a `Masked` selection whose mask is
+    /// [`LayoutSlotMask::Inline`]: exactly the slot indices [`Self::next`]
+    /// would yield, in the same ascending order, so the caller can walk them
+    /// with `trailing_zeros` and `word &= word - 1` instead of re-entering the
+    /// iterator once per slot. `None` for every other selection, which keeps
+    /// iterating through `next`.
+    ///
+    /// `next` re-dispatched the selection, re-decoded the mask's niche and
+    /// rebuilt the limit and cursor masks FOR EVERY SLOT, for about eight
+    /// instructions of work.
+    ///
+    /// Equivalence, since this replaces the whole iteration:
+    /// * `next` stops at `slot_count` and at 64 (an inline mask holds no bit
+    ///   above 63), so the eligible set is the mask under both limits — which
+    ///   is what this returns;
+    /// * it takes the ONE-SHOT raw-numeric accounting with it, exactly as
+    ///   `next`'s first call performs it, so the counters see one record per
+    ///   traced object either way; and
+    /// * it leaves the cursor at the end, so a later `next` yields nothing.
+    ///
+    /// The prefix and meta slots are NOT its business: every caller takes them
+    /// with `take_prefix_child_slot` / `take_meta_child_slot{,2}` before it
+    /// reaches the payload, so they are already `None` here. The debug
+    /// assertion below is what keeps that true.
+    pub(super) fn take_inline_mask_word(&mut self) -> Option<u64> {
+        // Silent loss of a prefix/meta edge is the one way this can go wrong
+        // without disagreeing with `next` on any payload index, so it is
+        // asserted rather than argued.
+        debug_assert!(
+            self.prefix_slot.is_none() && self.meta_slot.is_none() && self.meta_slot2.is_none(),
+            "the inline walk covers the PAYLOAD only; the caller takes the prefix and meta edges first"
+        );
+        let slot_count = self.payload.slot_count();
+        let HeapPayloadSlotSelection::Masked {
+            mask: LayoutSlotMask::Inline(bits),
+            cursor,
+            raw_numeric_object_slots,
+            raw_numeric_recorded,
+        } = &mut self.selection
+        else {
+            return None;
+        };
+        debug_assert_eq!(*cursor, 0, "the inline walk replaces the whole iteration");
+        if !*raw_numeric_recorded {
+            *raw_numeric_recorded = true;
+            if *raw_numeric_object_slots != 0 {
+                record_layout_raw_numeric_object_field_range_skipped(*raw_numeric_object_slots);
+            }
+        }
+        let bits = *bits;
+        *cursor = slot_count;
+        let limit = slot_count.min(64);
+        let limit_mask = if limit == 64 {
+            u64::MAX
+        } else {
+            (1u64 << limit) - 1
+        };
+        let word = bits & limit_mask;
+        #[cfg(test)]
+        let word = inline_mask_sabotage::perturb(word);
+        Some(word)
+    }
+}
+
 pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     header: *mut GcHeader,
     visit: &mut dyn FnMut(GcMutableSlotDescriptor),
@@ -117,14 +182,31 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
             });
         }
         HeapPayloadSlotScan::Masked => {
-            // Iterate by reference: `for .. in child_slots` moves the iterator
-            // into the loop, a copy per traced object (#10362).
-            for child_slot in &mut child_slots {
-                if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+            // An inline mask's set bits ARE the slot indices, in ascending
+            // order: take the word once and walk it, instead of re-entering
+            // `next` per slot to re-dispatch the selection and rebuild the
+            // same two masks. Every other mask — `Heap`, i.e. more than 64
+            // payload slots — keeps the iterator.
+            if let Some(mut word) = child_slots.take_inline_mask_word() {
+                let payload = child_slots.payload;
+                while word != 0 {
+                    let index = word.trailing_zeros() as usize;
+                    word &= word - 1;
                     visit(GcMutableSlotDescriptor::Slot(GcMutableSlot::new(
-                        slot,
-                        Some(layout_kind),
+                        payload.slot(index),
+                        Some(HeapChildSlotReadKind::Masked),
                     )));
+                }
+            } else {
+                // Iterate by reference: `for .. in child_slots` moves the
+                // iterator into the loop, a copy per traced object (#10362).
+                for child_slot in &mut child_slots {
+                    if let HeapChildSlot::Child(slot, layout_kind) = child_slot {
+                        visit(GcMutableSlotDescriptor::Slot(GcMutableSlot::new(
+                            slot,
+                            Some(layout_kind),
+                        )));
+                    }
                 }
             }
         }
@@ -167,6 +249,12 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     // arms, so no arm's early return can skip it.
     if crate::object::prototype_chain::object_static_prototypes_maybe_nonempty()
         && crate::object::prototype_chain::residual_prototype_owner_type(obj_type)
+        // #10362: the per-OWNER half. The latch above is exact for a process
+        // that never re-prototyped a non-object and useless for one that has —
+        // it is what made a single `Object.setPrototypeOf(anArray, p)` charge
+        // every traced cell of every owner-capable kind a global mutex and a
+        // SipHash probe. This asks the owner's own header instead.
+        && crate::object::prototype_chain::residual_entry_possible_for(header)
     {
         crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
             user_ptr as usize,
@@ -401,4 +489,46 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         descriptor.visit_slots(&mut visit);
     });
+}
+
+/// Test-only sabotage for the inline mask walk
+/// ([`HeapChildSlotIterator::take_inline_mask_word`]): a fast path that
+/// enumerates a DIFFERENT set than the iterator it replaces must be caught, so
+/// the witnesses arm this and REQUIRE the failure. Its witnesses are
+/// `gc::tests::layout_inline_mask`.
+#[cfg(test)]
+pub(crate) mod inline_mask_sabotage {
+    use std::cell::Cell;
+
+    /// Forget the mask's highest slot — the one a cursor-or-limit mistake
+    /// loses, and the one no `0..slot_count` spot check would look at.
+    pub(crate) const DROP_TOP: u8 = 1;
+
+    thread_local! {
+        static PERTURB: Cell<u8> = const { Cell::new(0) };
+    }
+
+    #[inline]
+    pub(crate) fn perturb(word: u64) -> u64 {
+        let armed = PERTURB.with(Cell::get);
+        if armed & DROP_TOP != 0 && word != 0 {
+            return word & !(1u64 << (63 - word.leading_zeros()));
+        }
+        word
+    }
+
+    pub(crate) struct Guard(u8);
+
+    impl Guard {
+        pub(crate) fn arm(what: u8) -> Self {
+            Self(PERTURB.with(|p| p.replace(p.get() | what)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prior = self.0;
+            PERTURB.with(|p| p.set(prior));
+        }
+    }
 }

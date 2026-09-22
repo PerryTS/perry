@@ -19,12 +19,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
     let normalized = module.strip_prefix("node:").unwrap_or(module);
     match normalized {
         // ── HTTP server (Hyper) ───────────────────────────────────────
-        // fastify needs no perry-stdlib feature: the in-stdlib adapter was
-        // removed, so `import 'fastify'` is served entirely by the external
-        // perry-ext-fastify crate via the well-known flip (which links the
-        // wrapper and enables `external-fastify-pump`). See optimized_libs.rs.
-        "fastify" => &[],
-
         // ── Web Streams API ──────────────────────────────────────────
         // Per-binding gate `bundled-streams` (v0.5.572) — the
         // well-known flip routes `import 'streams'` to perry-ext-streams.
@@ -33,11 +27,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // spellings need the same feature for auto-optimized stdlib builds.
         "streams" | "stream/web" | "stream_web" | "fs/promises" => &["bundled-streams"],
 
-        // ── Web Fetch and Axios compatibility surface ────────────────
+        // ── Web Fetch compatibility surface ───────────────────────────
         // Node HTTP/HTTPS/HTTP2 are provided by perry-ext-http and need
-        // no perry-stdlib feature. Axios and node-fetch still use the
-        // legacy umbrella for compatibility.
-        "axios" | "node-fetch" => &["http-client"],
+        // no perry-stdlib feature. node-fetch still uses the legacy
+        // umbrella for compatibility.
+        "node-fetch" => &["http-client"],
 
         // `undici` (#466) has no perry-stdlib copy to strip — the wrapper
         // crate (perry-ext-undici) is thin glue over the native Web Fetch
@@ -110,7 +104,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // bcrypt also typically use sha256/jwt/etc., which keeps the
         // umbrella worthwhile.
         "bcrypt" => &["bundled-bcrypt"],
-        "jsonwebtoken" => &["bundled-jsonwebtoken"],
         "crypto" => &["crypto"],
         // ethers ships utility functions (formatUnits, parseUnits,
         // getAddress, keccak256, …). The keccak256 implementation is
@@ -158,14 +151,7 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // ── Scheduler (cron) ──────────────────────────────────────────
         // `scheduler` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-cron` (v0.5.564) so the
-        // well-known flip can route to perry-ext-cron.
-        "cron" | "node-cron" => &["bundled-cron"],
-
-        // ── Validation (validator.js) ─────────────────────────────────
-        // `validation` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-validator` (v0.5.538).
-        "validator" => &["bundled-validator"],
-
+        // well-known flip can route to perry-ext-cron. `node-cron`'s own
         // ── argon2 ────────────────────────────────────────────────────
         // argon2 split off into `bundled-argon2` (v0.5.537) — same
         // reason as bcrypt above. Note: NATIVE_MODULES doesn't list
@@ -175,27 +161,18 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "argon2" => &["bundled-argon2"],
 
         // ── IDs (uuid / nanoid) ───────────────────────────────────────
-        // Per-binding split as of v0.5.534 (#466 Phase 4 step 2)
-        // so the well-known flip can swap each one out
-        // independently. The `ids` umbrella stays in
-        // perry-stdlib/Cargo.toml as `bundled-uuid + bundled-nanoid`
-        // for backwards compat, but feature-set computation goes
-        // straight to the per-binding feature.
-        "uuid" => &["bundled-uuid"],
-        "nanoid" => &["bundled-nanoid"],
+        // No entries: the uuid binding (#10701) and the nanoid
+        // binding (#10693) are gone, so `import "uuid"` /
+        // `import "nanoid"` compile the real npm packages from
+        // source and need no perry-stdlib feature. The `ids`
+        // umbrella survives (empty) in perry-stdlib/Cargo.toml
+        // for backwards compat only.
 
         // ── Container ─────────────────────────────────────────────────
         "perry/container" | "perry/container-compose" | "perry/compose" | "perry/workloads" => {
             &["container"]
         }
 
-        // lru-cache: feature-gated v0.5.539; well-known flip
-        // routes to perry-ext-lru-cache.
-        "lru-cache" => &["bundled-lru-cache"],
-        // exponential-backoff: feature-gated v0.5.542 alongside
-        // the perry-ffi closure-invocation surface that powers
-        // its `backOff(fn)` retry loop.
-        "exponential-backoff" => &["bundled-exponential-backoff"],
         // events: feature-gated v0.5.546 alongside perry-ffi's
         // GC-root-scanner surface that keeps EventEmitter
         // listener closures alive between .on() and .emit().
@@ -203,27 +180,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // decimal.js / bignumber.js: feature-gated v0.5.547 —
         // well-known flip routes to perry-ext-decimal.
         "decimal.js" | "bignumber.js" => &["bundled-decimal"],
-        // dayjs / date-fns: feature-gated v0.5.548 — well-known
-        // flip routes to perry-ext-dayjs.
-        "dayjs" | "date-fns" => &["bundled-dayjs"],
-        // moment: feature-gated v0.5.549 — well-known flip routes
-        // to perry-ext-moment.
-        "moment" => &["bundled-moment"],
-        // rate-limiter-flexible: feature-gated v0.5.552 — well-known
-        // flip routes to perry-ext-ratelimit.
-        "rate-limiter-flexible" => &["bundled-ratelimit"],
-        // commander: feature-gated v0.5.555 — well-known flip routes
-        // to perry-ext-commander.
-        "commander" => &["bundled-commander"],
-        // dotenv was always-on through v0.5.532; gated behind
-        // `bundled-dotenv` from v0.5.533 onwards so the well-known
-        // bindings flip (#466 Phase 4 step 2) can swap perry-stdlib's
-        // copy out for `perry-ext-dotenv` without duplicate
-        // `_js_dotenv_*` symbols at link time. The well-known path
-        // strips this feature from the set; the default path leaves
-        // it on so byte-identical behavior is preserved.
-        "dotenv" | "dotenv/config" => &["bundled-dotenv"],
-
         // readline (#347) — needs the async-runtime feature so the
         // event-loop pump tick drains its line / data / keypress
         // queues. Without async-runtime, `import readline` still
@@ -333,7 +289,7 @@ mod tests {
         assert!(module_to_features("http").is_empty());
         assert!(module_to_features("node:https").is_empty());
         assert!(module_to_features("http2").is_empty());
-        assert_eq!(module_to_features("axios"), &["http-client"]);
+        assert_eq!(module_to_features("node-fetch"), &["http-client"]);
     }
 
     #[test]

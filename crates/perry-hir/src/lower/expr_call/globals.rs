@@ -351,6 +351,38 @@ pub(super) fn try_global_builtins(
                     args: vec![path],
                 }));
             }
+            // #10735: `require.main` must be the process ENTRY module only —
+            // equal to `module` there, unequal (or `undefined`, when the
+            // process entry is ESM) everywhere else. The CJS preamble
+            // (`cjs_wrap/wrap.rs`) emits exactly one of these two calls per
+            // module depending on whether IT is the compile-time entry:
+            // the entry publishes its own `module` record as the shared
+            // "main module"; every other CJS module reads it back instead of
+            // assigning its OWN `module` (which is the bug — it made
+            // `require.main === module` trivially true everywhere).
+            "__perry_set_cjs_main_module" => {
+                let module = if !args.is_empty() {
+                    args.remove(0)
+                } else {
+                    Expr::Undefined
+                };
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "setCjsMainModule".to_string(),
+                    args: vec![module],
+                }));
+            }
+            "__perry_get_cjs_main_module" => {
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "__perry_runtime".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "getCjsMainModule".to_string(),
+                    args: vec![],
+                }));
+            }
             "Symbol" => {
                 // Symbol() / Symbol(description)
                 if args.is_empty() {

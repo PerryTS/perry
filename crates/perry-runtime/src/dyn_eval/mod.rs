@@ -15,7 +15,12 @@
 //! covers the pragmatic subset those code generators emit (see `interp.rs` /
 //! `expr.rs`); anything outside the subset throws a diagnostic TypeError
 //! naming the unsupported construct, so real-world gaps surface as clear
-//! errors instead of silent miscomputation.
+//! errors instead of silent miscomputation. #10661: `generate-function`
+//! (mysql2's row parsers, and others beyond mysql2) emits a **class
+//! expression** as the returned value — `interp::eval_class_expr` supports a
+//! deliberately narrow subset of that (constructor + plain methods, no
+//! `extends`/decorators/getters/setters/fields/private members/computed
+//! keys); see its doc comment for the exact boundary.
 //!
 //! Bridging is the crux and it is bidirectional:
 //!  * interpreted code calls REAL runtime values (schema refs, format

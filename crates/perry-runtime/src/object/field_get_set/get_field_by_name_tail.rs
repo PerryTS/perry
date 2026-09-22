@@ -48,38 +48,13 @@ pub(crate) fn get_field_by_name_object_tail(
             // this, every property access on those handles silently
             // returned undefined.
             if crate::value::addr_class::is_small_handle(raw as usize) {
+                // #340/#341: a timer handle is an ordinary object linked to
+                // `Timeout.prototype` / `Immediate.prototype`, so its
+                // `constructor` and its method surface resolve through the
+                // generic prototype walk. The arms that used to reify them for
+                // a small registry id are gone, and with them this block's
+                // reason to decode the key.
                 if !key.is_null() {
-                    unsafe {
-                        let key_ptr =
-                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                        let key_len = (*key).byte_len as usize;
-                        let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                        if key_bytes == b"constructor" {
-                            if let Some(value) = crate::timer::timer_constructor_value(raw as i64) {
-                                return JSValue::from_bits(value.to_bits());
-                            }
-                        }
-                        if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                            if crate::timer::is_known_timer_id(raw as i64) {
-                                let this_f64 = f64::from_bits(
-                                    crate::value::js_nanbox_pointer(raw as i64).to_bits(),
-                                );
-                                // #8133: the `'static` literal, NOT `key_ptr` —
-                                // that is the interior of a movable heap string
-                                // this read does not own.
-                                let result = super::super::js_class_method_bind(
-                                    this_f64,
-                                    method.as_ptr(),
-                                    method.len(),
-                                );
-                                return JSValue::from_bits(result.to_bits());
-                            }
-                        }
-                        if let Some(v) = crate::text::text_handle_property(raw as usize, key_bytes)
-                        {
-                            return v;
-                        }
-                    }
                     // Drizzle-sqlite blocker: synth `data.constructor` for
                     // small-handle native instances so drizzle's
                     // `isConfig(data)` duck-type via
@@ -103,9 +78,7 @@ pub(crate) fn get_field_by_name_object_tail(
                                     return value;
                                 }
                             }
-                            let null_obj_ptr =
-                                &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                            return JSValue::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                            return JSValue::from_bits(crate::object::null_stub_value().to_bits());
                         }
                     }
                     if let Some(dispatch) = handle_property_dispatch() {
@@ -135,32 +108,8 @@ pub(crate) fn get_field_by_name_object_tail(
     // when the codegen passes a raw i64 handle through the slow path.
     if crate::value::addr_class::is_handle_band(obj as usize) {
         if !key.is_null() {
-            unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                if key_bytes == b"constructor" {
-                    if let Some(value) = crate::timer::timer_constructor_value(obj as i64) {
-                        return JSValue::from_bits(value.to_bits());
-                    }
-                }
-                if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                    if crate::timer::is_known_timer_id(obj as i64) {
-                        let this_f64 =
-                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                        // #8133: see the sibling arm above.
-                        let result = super::super::js_class_method_bind(
-                            this_f64,
-                            method.as_ptr(),
-                            method.len(),
-                        );
-                        return JSValue::from_bits(result.to_bits());
-                    }
-                }
-                if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
-                    return v;
-                }
-            }
+            // #340/#341: the timer arm that decoded the key here is gone; the
+            // handle dispatcher below decodes its own.
             if let Some(dispatch) = handle_property_dispatch() {
                 unsafe {
                     let key_ptr =
@@ -295,19 +244,48 @@ pub(crate) fn get_field_by_name_object_tail(
                         && !crate::buffer::is_non_indexed_buffer_view(obj as usize))
                 {
                     let b = obj as *const crate::buffer::BufferHeader;
-                    return JSValue::number(crate::buffer::js_buffer_length(b) as f64);
+                    let len = crate::buffer::js_buffer_length(b);
+                    // #10873: a DataView its resizable buffer shrank past has no
+                    // byteLength — the getter throws (ES2024 IsViewOutOfBounds).
+                    // A typed array in the same state just reads 0. Only a
+                    // zero-length read can be one, so this costs nothing else.
+                    if len == 0 && crate::buffer::is_out_of_bounds_data_view(obj as usize) {
+                        crate::collection_iter::throw_type_error(
+                            "Cannot perform DataView.prototype.byteLength on an out-of-bounds view",
+                        );
+                    }
+                    return JSValue::number(len as f64);
                 }
                 // An own property on the Buffer shadows the same-named prototype
                 // method; both reads live in `buffer_own_prop`.
                 if let Some(v) = super::buffer_own_prop::buffer_own_prop_or_method(obj, key_bytes) {
                     return v;
                 }
-                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters.
-                // Perry has no resizable ArrayBuffers, so `resizable` is always
-                // false and `maxByteLength` equals `byteLength`. These live only
-                // on ArrayBuffer (not DataView/SharedArrayBuffer/typed arrays),
-                // which return `undefined` for them in Node — so scope to a
-                // plain registered ArrayBuffer.
+                // `ab.resize` / `ab.transfer` read as VALUES (`typeof ab.resize`,
+                // `const r = ab.resize`): bound methods, on ArrayBuffer only —
+                // a Uint8Array / DataView / SharedArrayBuffer has none of them.
+                if crate::buffer::is_array_buffer(obj as usize)
+                    && !crate::buffer::is_data_view(obj as usize)
+                    && !crate::buffer::is_shared_array_buffer(obj as usize)
+                {
+                    if let Some(method) = std::str::from_utf8(key_bytes).ok().and_then(
+                        crate::object::buffer_dispatch::array_buffer_only_method_name_static,
+                    ) {
+                        let bound = crate::object::js_class_method_bind(
+                            crate::value::js_nanbox_pointer(obj as i64),
+                            method.as_ptr(),
+                            method.len(),
+                        );
+                        return JSValue::from_bits(bound.to_bits());
+                    }
+                }
+                // ArrayBuffer.prototype `resizable` / `maxByteLength` getters
+                // (#10873). A fixed-length buffer answers `false` and its
+                // `byteLength`; a resizable one answers `true` and the
+                // `maxByteLength` it was constructed with (0 once detached).
+                // These live only on ArrayBuffer (not DataView /
+                // SharedArrayBuffer / typed arrays), which return `undefined`
+                // for them in Node — so scope to a plain registered ArrayBuffer.
                 if (key_bytes == b"resizable"
                     || key_bytes == b"maxByteLength"
                     || key_bytes == b"detached")
@@ -316,7 +294,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     && !crate::buffer::is_shared_array_buffer(obj as usize)
                 {
                     if key_bytes == b"resizable" {
-                        return JSValue::bool(false);
+                        return JSValue::bool(crate::buffer::is_resizable_buffer(obj as usize));
+                    }
+                    if key_bytes == b"maxByteLength" {
+                        if let Some(max) = crate::buffer::resizable_max_byte_length(obj as usize) {
+                            let detached = crate::buffer::is_detached_buffer(obj as usize);
+                            return JSValue::number(if detached { 0.0 } else { max as f64 });
+                        }
                     }
                     // `detached` (ES2024) — true after a successful
                     // `transfer`/`transferToFixedLength`/structuredClone

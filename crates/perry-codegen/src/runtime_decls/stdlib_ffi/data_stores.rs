@@ -1,22 +1,10 @@
 //! Database / data-store / crypto / OS stdlib FFI declarations
-//! (extracted from stdlib_ffi.rs): pg, redis, mongodb, sqlite, OS, crypto, nanoid.
+//! (extracted from stdlib_ffi.rs): redis, mongodb, sqlite, OS, crypto, nanoid.
 
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_data_stores(module: &mut LlModule) {
-    // ========== PostgreSQL (pg) ==========
-    module.declare_function("js_pg_client_connect", I64, &[I64]);
-    module.declare_function("js_pg_client_end", I64, &[I64]);
-    module.declare_function("js_pg_client_new", I64, &[I64]);
-    module.declare_function("js_pg_client_query", I64, &[I64, I64]);
-    module.declare_function("js_pg_client_query_params", I64, &[I64, I64, I64]);
-    module.declare_function("js_pg_connect", I64, &[I64]);
-    module.declare_function("js_pg_create_pool", I64, &[I64]);
-    module.declare_function("js_pg_pool_end", I64, &[I64]);
-    module.declare_function("js_pg_pool_new", I64, &[I64]);
-    module.declare_function("js_pg_pool_query", I64, &[I64, I64]);
-
     // ========== Redis / ioredis ==========
     module.declare_function("js_ioredis_connect", I64, &[I64]);
     module.declare_function("js_ioredis_decr", I64, &[I64, I64]);
@@ -288,8 +276,4 @@ pub(crate) fn declare_data_stores(module: &mut LlModule) {
     module.declare_function("js_crypto_x25519_shared_secret", I64, &[I64, I64]);
     module.declare_function("js_keccak256_native", I64, &[I64]);
     module.declare_function("js_keccak256_native_bytes", I64, &[I64]);
-
-    // ========== Nanoid ==========
-    module.declare_function("js_nanoid", I64, &[DOUBLE]);
-    module.declare_function("js_nanoid_custom", I64, &[I64, DOUBLE]);
 }

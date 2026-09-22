@@ -11,7 +11,6 @@ use super::*;
 use std::cell::RefCell;
 
 const CHECKPOINT_BYTES: usize = 128;
-const CACHE_ENTRIES: usize = 4;
 
 #[derive(Clone, Copy, Default)]
 struct Position {
@@ -29,7 +28,11 @@ struct Index {
 }
 
 impl Index {
-    fn unit_at(&mut self, bytes: &[u8], idx: usize) -> Option<u16> {
+    /// Locate the code point containing UTF-16 index `idx`, returning its
+    /// position along with the decoded step. Shared by `unit_at` and
+    /// `boundary_at` so both pay the same amortised seek and both maintain the
+    /// same cursor and checkpoints.
+    fn seek(&mut self, bytes: &[u8], idx: usize) -> Option<(Position, usize, u32)> {
         let mut pos = self.cursor;
         // Nearby forward reads use the cursor, including the second half of
         // an astral character. Other seeks start at the nearest checkpoint.
@@ -49,7 +52,7 @@ impl Index {
             let (advance, units, cp) = decode_step(bytes, pos.byte as usize);
             if units > 0 && pos.utf16 as usize + units > idx {
                 self.cursor = pos;
-                return Some(code_unit(cp, units, idx == pos.utf16 as usize));
+                return Some((pos, units, cp));
             }
             // A truncated tail can advance past byte_len; never save an
             // out-of-payload cursor (or narrow that offset with a wrapping cast).
@@ -58,6 +61,18 @@ impl Index {
         }
         self.cursor = pos;
         None
+    }
+
+    fn unit_at(&mut self, bytes: &[u8], idx: usize) -> Option<u16> {
+        let (pos, units, cp) = self.seek(bytes, idx)?;
+        Some(code_unit(cp, units, idx == pos.utf16 as usize))
+    }
+
+    /// Byte offset of the code point containing `idx`, and whether `idx` is
+    /// its low surrogate half — i.e. `slice_range::Boundary` in its raw parts.
+    fn boundary_at(&mut self, bytes: &[u8], idx: usize) -> Option<(usize, bool)> {
+        let (pos, units, _) = self.seek(bytes, idx)?;
+        Some((pos.byte as usize, units == 2 && idx != pos.utf16 as usize))
     }
 }
 
@@ -82,29 +97,67 @@ fn decode_step(bytes: &[u8], i: usize) -> (usize, usize, u32) {
     wtf8_step(bytes, i)
 }
 
-struct IndexCache {
-    entries: [Index; CACHE_ENTRIES],
-    hot: usize,
-    next: usize,
-}
-
-impl Default for IndexCache {
-    fn default() -> Self {
-        Self {
-            entries: std::array::from_fn(|_| Index::default()),
-            hot: 0,
-            next: 0,
-        }
-    }
-}
+/// #10688: an owner-keyed map rather than a fixed array of slots.
+///
+/// The array held `CACHE_ENTRIES` indexes and evicted round-robin, so a
+/// program interleaving indexed access across more strings than that evicted
+/// the entry it was about to need on every single access and rebuilt from
+/// scratch forever — measured at 1,224x once K exceeded the slot count, with
+/// no gradual degradation. Capacity is the defect, so there is no capacity:
+/// entries live until their string dies, and `prune_dead_utf16_indexes`
+/// (already driven by the collector) reclaims them.
+///
+/// The map is keyed by a string identity the GC *rewrites* when it relocates
+/// an object, so `scan_utf16_index_roots_mut` must rehash after the visitor
+/// runs — see there.
+type IndexCache = crate::fast_hash::PtrHashMap<usize, Index>;
 
 crate::perry_thread_local! {
-    static UTF16_INDEX_CACHE: RefCell<IndexCache> = RefCell::new(IndexCache::default());
+    static UTF16_INDEX_CACHE: RefCell<IndexCache> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// Caller has validated the header and UTF-16 index. Small strings bypass the
 /// cache: in particular, consuming a character returned by `s[i]` must not evict
 /// the source string. ASCII callers retain their existing direct byte access.
+/// Byte offset (and low-surrogate-half flag) for UTF-16 index `idx`, through
+/// the same cache `unit_at` uses. #10685: `slice_range::copy_utf16_range`
+/// resolved its start boundary with `advance(bytes, Boundary::default(), start)`
+/// — a walk from byte 0 on every call — so slicing a non-ASCII string at
+/// increasing offsets was O(n^2), which is the shape TypeScript's scanner has.
+pub(super) fn boundary_at(s: *const StringHeader, idx: usize) -> Option<(usize, bool)> {
+    let byte_len = unsafe { (*s).byte_len };
+    let bytes = unsafe { slice::from_raw_parts(string_data(s), byte_len as usize) };
+    if bytes.len() < CHECKPOINT_BYTES || idx == 0 {
+        // Short strings and a zero start do not need the cache: the caller's
+        // own walk is already O(1)-ish, and consuming a slice must not evict
+        // the source string from a four-entry cache.
+        return None;
+    }
+    UTF16_INDEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let owner = s as usize;
+        let utf16_len = unsafe { (*s).utf16_len };
+        let entry = cache.entry(owner).or_insert_with(|| Index {
+            owner,
+            byte_len,
+            utf16_len,
+            ..Index::default()
+        });
+        // A uniquely owned string can be appended to in place, which
+        // invalidates every recorded offset.
+        if entry.byte_len != byte_len || entry.utf16_len != utf16_len {
+            *entry = Index {
+                owner,
+                byte_len,
+                utf16_len,
+                ..Index::default()
+            };
+        }
+        entry.boundary_at(bytes, idx)
+    })
+}
+
 pub(super) fn unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
     let byte_len = unsafe { (*s).byte_len };
     let bytes = unsafe { slice::from_raw_parts(string_data(s), byte_len as usize) };
@@ -124,19 +177,16 @@ pub(super) fn unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
     UTF16_INDEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         let owner = s as usize;
-        let slot = if cache.entries[cache.hot].owner == owner {
-            cache.hot
-        } else if let Some(slot) = cache.entries.iter().position(|entry| entry.owner == owner) {
-            slot
-        } else {
-            let slot = cache.next;
-            cache.next = (slot + 1) % CACHE_ENTRIES;
-            slot
-        };
-        cache.hot = slot;
-        let entry = &mut cache.entries[slot];
         let utf16_len = unsafe { (*s).utf16_len };
-        if entry.owner != owner || entry.byte_len != byte_len || entry.utf16_len != utf16_len {
+        let entry = cache.entry(owner).or_insert_with(|| Index {
+            owner,
+            byte_len,
+            utf16_len,
+            ..Index::default()
+        });
+        // A uniquely owned string can be appended to in place, which
+        // invalidates every recorded offset.
+        if entry.byte_len != byte_len || entry.utf16_len != utf16_len {
             *entry = Index {
                 owner,
                 byte_len,
@@ -150,19 +200,27 @@ pub(super) fn unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
 
 pub(crate) fn scan_utf16_index_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     UTF16_INDEX_CACHE.with(|cache| {
-        for entry in &mut cache.borrow_mut().entries {
-            visitor.visit_metadata_usize_slot(&mut entry.owner);
+        let mut cache = cache.borrow_mut();
+        // The visitor may relocate the string each entry describes, which
+        // changes the very address the map is keyed by. Drain first, let the
+        // owners be rewritten, then reinsert so the keys and the `owner`
+        // fields agree again.
+        let mut moved: Vec<(usize, Index)> = cache.drain().collect();
+        for (key, index) in &mut moved {
+            visitor.visit_metadata_usize_slot(key);
+            index.owner = *key;
+        }
+        for (key, index) in moved {
+            cache.insert(key, index);
         }
     });
 }
 
 pub(crate) fn prune_dead_utf16_indexes(is_dead_owner: &dyn Fn(usize) -> bool) {
     UTF16_INDEX_CACHE.with(|cache| {
-        for entry in &mut cache.borrow_mut().entries {
-            if entry.owner != 0 && is_dead_owner(entry.owner) {
-                *entry = Index::default();
-            }
-        }
+        cache
+            .borrow_mut()
+            .retain(|&owner, _| owner != 0 && !is_dead_owner(owner));
     });
 }
 
@@ -174,13 +232,15 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn test_utf16_index_entries() -> Vec<(usize, usize)> {
     UTF16_INDEX_CACHE.with(|cache| {
-        cache
+        let mut entries: Vec<(usize, usize)> = cache
             .borrow()
-            .entries
             .iter()
-            .filter(|entry| entry.owner != 0)
-            .map(|entry| (entry.owner, entry.checkpoints.len()))
-            .collect()
+            .filter(|(&owner, _)| owner != 0)
+            .map(|(&owner, index)| (owner, index.checkpoints.len()))
+            .collect();
+        // HashMap iteration order is not stable; callers compare snapshots.
+        entries.sort_unstable();
+        entries
     })
 }
 

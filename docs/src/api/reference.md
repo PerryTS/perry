@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3054 entries across 140 modules.
+Total: 2829 entries across 117 modules.
 
 ## Modules
 
@@ -22,7 +22,6 @@ Total: 3054 entries across 140 modules.
 - [`assert`](#assert)
 - [`assert/strict`](#assertstrict)
 - [`async_hooks`](#async_hooks)
-- [`axios`](#axios)
 - [`bcrypt`](#bcrypt)
 - [`better-sqlite3`](#better-sqlite3)
 - [`bignumber.js`](#bignumberjs)
@@ -35,24 +34,17 @@ Total: 3054 entries across 140 modules.
 - [`cheerio`](#cheerio)
 - [`child_process`](#child_process)
 - [`cluster`](#cluster)
-- [`commander`](#commander)
 - [`console`](#console)
 - [`constants`](#constants)
-- [`cron`](#cron)
 - [`crypto`](#crypto)
-- [`date-fns`](#date-fns)
-- [`dayjs`](#dayjs)
 - [`decimal.js`](#decimaljs)
 - [`dgram`](#dgram)
 - [`diagnostics_channel`](#diagnostics_channel)
 - [`dns`](#dns)
 - [`dns/promises`](#dnspromises)
 - [`domain`](#domain)
-- [`dotenv`](#dotenv)
 - [`ethers`](#ethers)
 - [`events`](#events)
-- [`exponential-backoff`](#exponential-backoff)
-- [`fastify`](#fastify)
 - [`fetch`](#fetch)
 - [`ffi`](#ffi)
 - [`fs`](#fs)
@@ -64,20 +56,11 @@ Total: 3054 entries across 140 modules.
 - [`inspector/promises`](#inspectorpromises)
 - [`ioredis`](#ioredis)
 - [`iovalkey`](#iovalkey)
-- [`iroh`](#iroh)
-- [`jsonwebtoken`](#jsonwebtoken)
 - [`lodash`](#lodash)
-- [`lru-cache`](#lru-cache)
 - [`module`](#module)
-- [`moment`](#moment)
 - [`mongodb`](#mongodb)
-- [`mysql2`](#mysql2)
-- [`mysql2/promise`](#mysql2promise)
-- [`nanoid`](#nanoid)
 - [`net`](#net)
-- [`node-cron`](#node-cron)
 - [`node-fetch`](#node-fetch)
-- [`node-forge`](#node-forge)
 - [`node-pty`](#node-pty)
 - [`nodemailer`](#nodemailer)
 - [`os`](#os)
@@ -106,12 +89,9 @@ Total: 3054 entries across 140 modules.
 - [`perry/widget`](#perrywidget)
 - [`perry/workloads`](#perryworkloads)
 - [`perry/yoga`](#perryyoga)
-- [`pg`](#pg)
 - [`process`](#process)
 - [`punycode`](#punycode)
-- [`qs`](#qs)
 - [`querystring`](#querystring)
-- [`rate-limiter-flexible`](#rate-limiter-flexible)
 - [`readline`](#readline)
 - [`readline/promises`](#readlinepromises)
 - [`redis`](#redis)
@@ -132,15 +112,12 @@ Total: 3054 entries across 140 modules.
 - [`timers/promises`](#timerspromises)
 - [`tls`](#tls)
 - [`tty`](#tty)
-- [`tursodb`](#tursodb)
 - [`typescript`](#typescript)
 - [`undici`](#undici)
 - [`url`](#url)
 - [`util`](#util)
 - [`util/types`](#utiltypes)
-- [`uuid`](#uuid)
 - [`v8`](#v8)
-- [`validator`](#validator)
 - [`vm`](#vm)
 - [`wasi`](#wasi)
 - [`worker_threads`](#worker_threads)
@@ -346,22 +323,6 @@ Total: 3054 entries across 140 modules.
 
 - `asyncWrapProviders`
 - `default`
-
-## `axios`
-
-### Methods
-
-- `all` — module
-- `create` — module
-- `default` — module
-- `delete` — module
-- `get` — module
-- `head` — module
-- `options` — module
-- `patch` — module
-- `post` — module
-- `put` — module
-- `request` — module
 
 ## `bcrypt`
 
@@ -597,26 +558,6 @@ Total: 3054 entries across 140 modules.
 - `schedulingPolicy`
 - `settings`
 - `workers`
-
-## `commander`
-
-### Methods
-
-- `action` — instance
-- `args` — instance
-- `argument` — instance
-- `command` — instance
-- `description` — instance
-- `name` — instance
-- `option` — instance
-- `opts` — instance
-- `parse` — instance
-- `requiredOption` — instance
-- `version` — instance
-
-### Properties
-
-- `args`
 
 ## `console`
 
@@ -893,22 +834,6 @@ Total: 3054 entries across 140 modules.
 - `default`
 - `defaultCoreCipherList`
 
-## `cron`
-
-### Classes
-
-- `CronJob`
-
-### Methods
-
-- `describe` — module
-- `isRunning` — instance
-- `nextDate` — instance
-- `schedule` — module
-- `start` — instance
-- `stop` — instance
-- `validate` — module
-
 ## `crypto`
 
 ### Classes
@@ -991,52 +916,6 @@ Total: 3054 entries across 140 modules.
 - `constants`
 - `subtle`
 - `webcrypto`
-
-## `date-fns`
-
-### Methods
-
-- `addDays` — module
-- `addMonths` — module
-- `addYears` — module
-- `differenceInDays` — module
-- `differenceInHours` — module
-- `differenceInMinutes` — module
-- `endOfDay` — module
-- `format` — module
-- `isAfter` — module
-- `isBefore` — module
-- `parseISO` — module
-- `startOfDay` — module
-
-## `dayjs`
-
-### Methods
-
-- `add` — instance
-- `clone` — instance
-- `date` — instance
-- `day` — instance
-- `dayjs` — module
-- `default` — module
-- `diff` — instance
-- `endOf` — instance
-- `format` — instance
-- `hour` — instance
-- `isAfter` — instance
-- `isBefore` — instance
-- `isSame` — instance
-- `isValid` — instance
-- `millisecond` — instance
-- `minute` — instance
-- `month` — instance
-- `second` — instance
-- `startOf` — instance
-- `subtract` — instance
-- `toISOString` — instance
-- `unix` — instance
-- `valueOf` — instance
-- `year` — instance
 
 ## `decimal.js`
 
@@ -1351,13 +1230,6 @@ Total: 3054 entries across 140 modules.
 - `active`
 - `members`
 
-## `dotenv`
-
-### Methods
-
-- `config` — module
-- `parse` — module
-
 ## `ethers`
 
 ### Methods
@@ -1417,52 +1289,6 @@ Total: 3054 entries across 140 modules.
 - `defaultMaxListeners`
 - `errorMonitor`
 - `usingDomains`
-
-## `exponential-backoff`
-
-### Methods
-
-- `backOff` — module
-
-## `fastify`
-
-### Methods
-
-- `addHook` — instance
-- `all` — instance
-- `body` — instance
-- `close` — instance
-- `code` — instance
-- `default` — module
-- `delete` — instance
-- `get` — instance
-- `head` — instance
-- `header` — instance
-- `headers` — instance
-- `html` — instance
-- `json` — instance
-- `listen` — instance
-- `method` — instance
-- `on` — instance
-- `options` — instance
-- `param` — instance
-- `params` — instance
-- `patch` — instance
-- `post` — instance
-- `put` — instance
-- `query` — instance
-- `rawBody` — instance
-- `redirect` — instance
-- `register` — instance
-- `route` — instance
-- `send` — instance
-- `server` — instance
-- `setErrorHandler` — instance
-- `status` — instance
-- `text` — instance
-- `type` — instance
-- `url` — instance
-- `user` — instance
 
 ## `fetch`
 
@@ -1709,6 +1535,7 @@ Total: 3054 entries across 140 modules.
 - `__get_path` — instance *(class: `ClientRequest`)*
 - `__get_protocol` — instance *(class: `Agent`)*
 - `__get_protocol` — instance *(class: `ClientRequest`)*
+- `__get_rawHeaders` — instance *(class: `IncomingMessage`)*
 - `__get_req` — instance *(class: `IncomingMessage`)*
 - `__get_requestTimeout` — instance *(class: `HttpServer`)*
 - `__get_requests` — instance *(class: `Agent`)*
@@ -1757,6 +1584,7 @@ Total: 3054 entries across 140 modules.
 - `close` — instance *(class: `HttpServer`)*
 - `closeAllConnections` — instance *(class: `HttpServer`)*
 - `closeIdleConnections` — instance *(class: `HttpServer`)*
+- `complete` — instance *(class: `IncomingMessage`)*
 - `connection` — instance *(class: `IncomingMessage`)*
 - `cork` — instance *(class: `ClientRequest`)*
 - `cork` — instance *(class: `ServerResponse`)*
@@ -1786,6 +1614,8 @@ Total: 3054 entries across 140 modules.
 - `headers` — instance *(class: `IncomingMessage`)*
 - `headersTimeout` — instance *(class: `HttpServer`)*
 - `httpVersion` — instance *(class: `IncomingMessage`)*
+- `httpVersionMajor` — instance *(class: `IncomingMessage`)*
+- `httpVersionMinor` — instance *(class: `IncomingMessage`)*
 - `keepAlive` — instance *(class: `Agent`)*
 - `keepAliveMsecs` — instance *(class: `Agent`)*
 - `keepAliveTimeout` — instance *(class: `HttpServer`)*
@@ -1807,6 +1637,7 @@ Total: 3054 entries across 140 modules.
 - `once` — instance *(class: `ClientRequest`)*
 - `pause` — instance *(class: `IncomingMessage`)*
 - `protocol` — instance *(class: `Agent`)*
+- `rawHeaders` — instance *(class: `IncomingMessage`)*
 - `read` — instance *(class: `IncomingMessage`)*
 - `ref` — instance *(class: `HttpServer`)*
 - `removeHeader` — instance *(class: `ClientRequest`)*
@@ -2014,30 +1845,6 @@ Total: 3054 entries across 140 modules.
 
 - `createClient` — module
 
-## `iroh`
-
-### Methods
-
-- `acceptBi` — instance
-- `acceptOne` — instance
-- `bind` — module
-- `close` — instance
-- `connClose` — instance
-- `connect` — instance
-- `nodeId` — instance
-- `openBi` — instance
-- `streamFinish` — instance
-- `streamReadToEnd` — instance
-- `streamWrite` — instance
-
-## `jsonwebtoken`
-
-### Methods
-
-- `decode` — module
-- `sign` — module
-- `verify` — module
-
 ## `lodash`
 
 ### Methods
@@ -2071,19 +1878,6 @@ Total: 3054 entries across 140 modules.
 - `take` — module
 - `times` — module
 - `uniq` — module
-
-## `lru-cache`
-
-### Methods
-
-- `clear` — instance
-- `default` — module
-- `delete` — instance
-- `get` — instance
-- `has` — instance
-- `peek` — instance
-- `set` — instance
-- `size` — instance
 
 ## `module`
 
@@ -2129,38 +1923,6 @@ Total: 3054 entries across 140 modules.
 - `default`
 - `globalPaths`
 
-## `moment`
-
-### Methods
-
-- `add` — instance
-- `clone` — instance
-- `date` — instance
-- `day` — instance
-- `default` — module
-- `diff` — instance
-- `endOf` — instance
-- `format` — instance
-- `fromNow` — instance
-- `hour` — instance
-- `isAfter` — instance
-- `isBefore` — instance
-- `isBetween` — instance
-- `isSame` — instance
-- `isValid` — instance
-- `millisecond` — instance
-- `minute` — instance
-- `moment` — module
-- `month` — instance
-- `second` — instance
-- `startOf` — instance
-- `subtract` — instance
-- `toDate` — instance
-- `toISOString` — instance
-- `unix` — instance
-- `valueOf` — instance
-- `year` — instance
-
 ## `mongodb`
 
 ### Methods
@@ -2179,60 +1941,6 @@ Total: 3054 entries across 140 modules.
 - `insertOne` — instance
 - `updateMany` — instance
 - `updateOne` — instance
-
-## `mysql2`
-
-### Classes
-
-- `Pool`
-
-### Methods
-
-- `beginTransaction` — instance
-- `commit` — instance
-- `createConnection` — module
-- `createPool` — module
-- `end` — instance *(class: `Pool`)*
-- `end` — instance
-- `execute` — instance *(class: `Pool`)*
-- `execute` — instance *(class: `PoolConnection`)*
-- `execute` — instance
-- `getConnection` — instance
-- `query` — instance *(class: `Pool`)*
-- `query` — instance *(class: `PoolConnection`)*
-- `query` — instance
-- `release` — instance
-- `rollback` — instance
-
-## `mysql2/promise`
-
-### Classes
-
-- `Pool`
-
-### Methods
-
-- `beginTransaction` — instance
-- `commit` — instance
-- `createConnection` — module
-- `createPool` — module
-- `end` — instance *(class: `Pool`)*
-- `end` — instance
-- `execute` — instance *(class: `Pool`)*
-- `execute` — instance *(class: `PoolConnection`)*
-- `execute` — instance
-- `getConnection` — instance
-- `query` — instance *(class: `Pool`)*
-- `query` — instance *(class: `PoolConnection`)*
-- `query` — instance
-- `release` — instance
-- `rollback` — instance
-
-## `nanoid`
-
-### Methods
-
-- `nanoid` — module
 
 ## `net`
 
@@ -2255,6 +1963,8 @@ Total: 3054 entries across 140 modules.
 - `__set_maxConnections` — instance *(class: `Server`)*
 - `_createServerHandle` — module
 - `_normalizeArgs` — module
+- `_readableState` — instance
+- `_writableState` — instance
 - `addAddress` — instance *(class: `BlockList`)*
 - `addListener` — instance *(class: `Socket`)*
 - `addListener` — instance *(class: `Server`)*
@@ -2323,9 +2033,14 @@ Total: 3054 entries across 140 modules.
 - `parse` — module *(class: `SocketAddress`)*
 - `pause` — instance *(class: `Socket`)*
 - `pending` — instance *(class: `Socket`)*
+- `pipe` — instance *(class: `Socket`)*
 - `port` — instance *(class: `SocketAddress`)*
+- `prependListener` — instance *(class: `Socket`)*
+- `prependOnceListener` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Socket`)*
 - `rawListeners` — instance *(class: `Server`)*
+- `readable` — instance
+- `readableEnded` — instance
 - `readyState` — instance *(class: `Socket`)*
 - `ref` — instance *(class: `Socket`)*
 - `remoteAddress` — instance *(class: `Socket`)*
@@ -2351,16 +2066,12 @@ Total: 3054 entries across 140 modules.
 - `timeout` — instance *(class: `Socket`)*
 - `toJSON` — instance *(class: `BlockList`)*
 - `uncork` — instance *(class: `Socket`)*
+- `unpipe` — instance *(class: `Socket`)*
 - `unref` — instance *(class: `Socket`)*
 - `upgradeToTLS` — instance *(class: `Socket`)*
+- `writable` — instance
+- `writableEnded` — instance
 - `write` — instance *(class: `Socket`)*
-
-## `node-cron`
-
-### Methods
-
-- `schedule` — module
-- `validate` — module
 
 ## `node-fetch`
 
@@ -2375,23 +2086,6 @@ Total: 3054 entries across 140 modules.
 ### Methods
 
 - `default` — module
-
-## `node-forge`
-
-### Methods
-
-- `certificateFromPem` — module
-- `certificateToPem` — module
-- `create` — module
-- `createCertificate` — module
-- `generateKeyPair` — module
-- `privateKeyFromPem` — module
-- `privateKeyToPem` — module
-- `publicKeyToPem` — module
-- `setExtensions` — instance *(class: `Certificate`)*
-- `setIssuer` — instance *(class: `Certificate`)*
-- `setSubject` — instance *(class: `Certificate`)*
-- `sign` — instance *(class: `Certificate`)*
 
 ## `node-pty`
 
@@ -3082,23 +2776,6 @@ Total: 3054 entries across 140 modules.
 - `setNumber` — module
 - `unsetMeasureFunc` — module
 
-## `pg`
-
-### Classes
-
-- `Client`
-- `Pool`
-
-### Methods
-
-- `Pool` — module
-- `connect` — module
-- `connect` — instance *(class: `Client`)*
-- `end` — instance *(class: `Pool`)*
-- `end` — instance
-- `query` — instance *(class: `Pool`)*
-- `query` — instance
-
 ## `process`
 
 ### Methods
@@ -3208,13 +2885,6 @@ Total: 3054 entries across 140 modules.
 - `ucs2`
 - `version`
 
-## `qs`
-
-### Methods
-
-- `parse` — module
-- `stringify` — module
-
 ## `querystring`
 
 ### Methods
@@ -3230,22 +2900,6 @@ Total: 3054 entries across 140 modules.
 ### Properties
 
 - `default`
-
-## `rate-limiter-flexible`
-
-### Classes
-
-- `RateLimiterAbstract`
-- `RateLimiterMemory`
-
-### Methods
-
-- `block` — instance
-- `consume` — instance
-- `delete` — instance
-- `get` — instance
-- `penalty` — instance
-- `reward` — instance
 
 ## `readline`
 
@@ -3786,19 +3440,6 @@ Total: 3054 entries across 140 modules.
 - `removeListener` — instance *(class: `WriteStream`)*
 - `setRawMode` — instance *(class: `ReadStream`)*
 
-## `tursodb`
-
-### Methods
-
-- `close` — instance
-- `exec` — instance
-- `execBatch` — instance
-- `isAutocommit` — instance
-- `lastInsertRowid` — instance
-- `open` — module
-- `queryAll` — instance
-- `queryOne` — instance
-
 ## `typescript`
 
 ### Methods
@@ -3957,18 +3598,6 @@ Total: 3054 entries across 140 modules.
 - `isWeakMap` — module
 - `isWeakSet` — module
 
-## `uuid`
-
-### Methods
-
-- `v1` — module
-- `v3` — module
-- `v4` — module
-- `v5` — module
-- `v7` — module
-- `validate` — module
-- `version` — module
-
 ## `v8`
 
 ### Classes
@@ -4026,16 +3655,6 @@ Total: 3054 entries across 140 modules.
 
 - `promiseHooks`
 - `startupSnapshot`
-
-## `validator`
-
-### Methods
-
-- `isEmail` — module
-- `isEmpty` — module
-- `isJSON` — module
-- `isURL` — module
-- `isUUID` — module
 
 ## `vm`
 

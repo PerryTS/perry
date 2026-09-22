@@ -476,16 +476,15 @@ fn undici_needs_shared_tokio() {
 }
 
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
-/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` /
-/// `js_node_forge_*` to these binding keys; each must exist in the shipped
-/// `well_known_bindings.toml` and map to its `perry-ext-*` crate, or the
-/// driver's routing loop would silently drop the flip.
+/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` to these
+/// binding keys; each must exist in the shipped `well_known_bindings.toml`
+/// and map to its `perry-ext-*` crate, or the driver's routing loop would
+/// silently drop the flip.
 #[test]
 fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
     for (key, krate) in [
         ("ioredis", "perry-ext-ioredis"),
         ("undici", "perry-ext-undici"),
-        ("node-forge", "perry-ext-node-forge"),
     ] {
         let binding = super::super::well_known::lookup_well_known(key)
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
@@ -501,10 +500,6 @@ fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
 fn ext_binding_build_routing_split() {
     assert!(binding_needs_shared_tokio("ioredis"));
     assert!(binding_needs_shared_tokio("undici"));
-    assert!(
-        !binding_needs_shared_tokio("node-forge"),
-        "node-forge is CPU-only and must not ride the shared-tokio invocation"
-    );
 }
 
 #[test]
@@ -788,16 +783,18 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     let old_disable_well_known = std::env::var("PERRY_DISABLE_WELL_KNOWN").ok();
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let http =
-        super::super::well_known::lookup_well_known("http").expect("http well-known binding");
+    // #10466 — deliberately NOT "http"/"https" here: importing either now
+    // triggers `build_http_client_pump_stdlib`'s on-demand rebuild (a real
+    // cargo invocation), which this test's fake `PERRY_LIB_DIR` archives
+    // (raw `!<arch>\n` placeholders, not real cargo output) can't stand in
+    // for, and which would turn this fast unit test into a slow, real build.
+    // That new behavior has its own coverage below
+    // (`no_auto_http_client_import_rebuilds_pump_stdlib_with_ext_http`).
+    // This test's job is unrelated: confirm `resolve_prebuilt_ext_libs` still
+    // finds multiple well-known archives via `PERRY_LIB_DIR` when no rebuild
+    // trigger is present.
     let net = super::super::well_known::lookup_well_known("net").expect("net well-known binding");
     let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
-    let http_lib = dir
-        .path()
-        .join(super::super::well_known::ext_staticlib_filename(
-            &http.lib,
-            rust_target_triple(None),
-        ));
     let net_lib = dir
         .path()
         .join(super::super::well_known::ext_staticlib_filename(
@@ -810,7 +807,6 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
             &ws.lib,
             rust_target_triple(None),
         ));
-    std::fs::write(&http_lib, b"!<arch>\n").expect("write fake http archive");
     std::fs::write(&net_lib, b"!<arch>\n").expect("write fake net archive");
     std::fs::write(&ws_lib, b"!<arch>\n").expect("write fake ws archive");
 
@@ -822,7 +818,6 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     set_env_var("PERRY_DISABLE_WELL_KNOWN", None);
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    ctx.native_module_imports.insert("http".to_string());
     ctx.native_module_imports.insert("net".to_string());
     ctx.native_module_imports.insert("ws".to_string());
     let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
@@ -837,11 +832,6 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     assert_eq!(libs.runtime, None);
     assert_eq!(libs.stdlib, None);
     assert!(
-        libs.well_known_libs.contains(&http_lib),
-        "expected no-auto well-known libs to include {http_lib:?}, got {:?}",
-        libs.well_known_libs
-    );
-    assert!(
         libs.well_known_libs.contains(&net_lib),
         "expected no-auto well-known libs to include {net_lib:?}, got {:?}",
         libs.well_known_libs
@@ -849,6 +839,43 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     assert!(
         libs.well_known_libs.contains(&ws_lib),
         "expected no-auto well-known libs to include {ws_lib:?}, got {:?}",
+        libs.well_known_libs
+    );
+}
+
+/// #10466 — the flip side of the test above: when the program DOES import
+/// `http`, no-auto now rebuilds `perry-stdlib-static` (with
+/// `external-http-client-pump`) and `perry-ext-http` together, and the
+/// rebuilt `perry-ext-http` archive takes the place of whatever
+/// `resolve_prebuilt_ext_libs` would otherwise have found on disk for it.
+/// This does a real (if small) cargo build, so it's slower than the rest of
+/// this file — that's the trade-off for exercising the actual rebuild path
+/// rather than re-asserting the pass-through plumbing against a mock.
+#[test]
+fn no_auto_http_client_import_rebuilds_pump_stdlib_with_ext_http() {
+    let _guard = env_lock();
+    let mut ctx = CompilationContext::new(
+        find_perry_workspace_root().expect("workspace root for this checkout"),
+    );
+    ctx.native_module_imports.insert("http".to_string());
+    let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
+
+    let stdlib = libs
+        .stdlib
+        .as_ref()
+        .expect("http import should trigger the http-client-pump stdlib rebuild");
+    assert!(
+        stdlib.ends_with("libperry_stdlib.a") || stdlib.ends_with("perry_stdlib.lib"),
+        "unexpected stdlib archive name: {stdlib:?}"
+    );
+    let ext_http_in_well_known = libs.well_known_libs.iter().any(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains("perry_ext_http"))
+    });
+    assert!(
+        ext_http_in_well_known,
+        "expected the freshly-rebuilt perry-ext-http archive in well_known_libs, got {:?}",
         libs.well_known_libs
     );
 }

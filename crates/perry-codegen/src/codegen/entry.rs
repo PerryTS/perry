@@ -591,6 +591,11 @@ pub(super) fn compile_module_entry(
             if cross_module.needs_stdlib {
                 blk.call_void("js_stdlib_init_dispatch", &[]);
             }
+            // #10428/#10429: linked providers register their module-export
+            // dispatchers before any module init (see `native_provider_installs`).
+            for install in &cross_module.app_metadata.native_provider_installs {
+                blk.call_void(install, &[]);
+            }
             // Start the Geisterhand HTTP inspector if requested. The
             // port comes from `--geisterhand-port` (default 7676). Calling
             // `perry_geisterhand_start` here also pins the geisterhand
@@ -686,6 +691,14 @@ pub(super) fn compile_module_entry(
                         (I64, init_addr.as_str()),
                     ],
                 );
+            }
+            // #10735: publish the shared `require.main` placeholder before
+            // ANY module's `__init` below runs (those are this CJS entry's
+            // OWN static imports, which ESM eval order runs before the
+            // entry's own preamble). See the callee's doc comment. Skipped
+            // for an ESM entry, which must leave `require.main` `undefined`.
+            if crate::collectors::is_cjs_wrapped_module(hir) {
+                blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
             }
             for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {

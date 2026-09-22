@@ -11,8 +11,8 @@ use perex::binding::{
 };
 use perex::compiler::{self, CompileError, Node, Range};
 use perex::executor::{
-    ExecError, Frame, Progress, Scratch, ScratchOwner, ScratchRequirements, Search, SearchError,
-    Undo,
+    ExecError, Frame, Progress, Run, Scratch, ScratchOwner, ScratchRequirements, Search,
+    SearchError, Undo,
 };
 use perex::input::Position;
 use perex::span::Span;
@@ -382,11 +382,46 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             undo: &mut cell.undo[..],
         };
         poll_on_stride(poll)?;
-        let mut search = match near {
-            Some(near) => Search::new_near(resources, start, near, scratch, *budget),
-            None => Search::new(resources, start, scratch, *budget),
-        }
-        .map_err(search_error)?;
+        // Both views are acquired once for the quantum that decides nearly
+        // every per-call search; a `Search` is built and moved only if this
+        // one pauses or asks for more scratch.
+        // On an error that is not a capacity request -- WorkLimit,
+        // InvalidProgram, ChangedResources, Cancelled -- `run` returns Err and
+        // drops the scratch and the remaining budget, where `new` + `advance`
+        // left a Search to read `remaining_work()` from. So `*budget` keeps its
+        // entry value and under-counts what the failed call spent. WORK is
+        // usize::MAX on every path here, so nothing observes it today; if a
+        // finite execution budget is ever reintroduced (see #10164/#10165),
+        // this stops being free and wants the engine's failure arm to report
+        // remaining work.
+        let mut search = match Search::run(resources, start, near, scratch, *budget, quantum)
+            .map_err(search_error)?
+        {
+            Run::Finished(mut finished) => {
+                *budget = Budget::new(finished.remaining_work());
+                let position = finished.position();
+                if !finished.matched() {
+                    return Ok(Lent::Done(None, position));
+                }
+                let full = finished
+                    .capture(0)
+                    .map_err(EngineError::Execution)?
+                    .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
+                let captures = match mode {
+                    CaptureMode::Full => None,
+                    CaptureMode::All => {
+                        poll()?;
+                        let mut output = Slots::new(memory, finished.capture_count())?;
+                        finished
+                            .copy_captures(&mut output)
+                            .map_err(EngineError::Execution)?;
+                        Some(output)
+                    }
+                };
+                return Ok(Lent::Done(Some(Match { full, captures }), position));
+            }
+            Run::Paused(search) => search,
+        };
         loop {
             let result = search.advance(quantum);
             *budget = Budget::new(search.remaining_work());
@@ -482,11 +517,43 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
 
     poll()?;
     let buffers = MatchBuffers::new(memory, size)?;
-    let mut search = match near {
-        Some(near) => Search::new_near(&resources, start, near, buffers, *budget),
-        None => Search::new(&resources, start, buffers, *budget),
-    }
-    .map_err(search_error)?;
+    // On an error that is not a capacity request -- WorkLimit,
+    // InvalidProgram, ChangedResources, Cancelled -- `run` returns Err and
+    // drops the scratch and the remaining budget, where `new` + `advance`
+    // left a Search to read `remaining_work()` from. So `*budget` keeps its
+    // entry value and under-counts what the failed call spent. WORK is
+    // usize::MAX on every path here, so nothing observes it today; if a
+    // finite execution budget is ever reintroduced (see #10164/#10165),
+    // this stops being free and wants the engine's failure arm to report
+    // remaining work.
+    let mut search = match Search::run(&resources, start, near, buffers, *budget, quantum)
+        .map_err(search_error)?
+    {
+        Run::Finished(mut finished) => {
+            *budget = Budget::new(finished.remaining_work());
+            let position = finished.position();
+            if !finished.matched() {
+                return Ok((None, position));
+            }
+            let full = finished
+                .capture(0)
+                .map_err(EngineError::Execution)?
+                .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
+            let captures = match mode {
+                CaptureMode::Full => None,
+                CaptureMode::All => {
+                    poll()?;
+                    let mut output = Slots::new(memory, finished.capture_count())?;
+                    finished
+                        .copy_captures(&mut output)
+                        .map_err(EngineError::Execution)?;
+                    Some(output)
+                }
+            };
+            return Ok((Some(Match { full, captures }), position));
+        }
+        Run::Paused(search) => search,
+    };
     loop {
         let result = search.advance(quantum);
         // Preserve consumed work even when the following poll cancels/throws,

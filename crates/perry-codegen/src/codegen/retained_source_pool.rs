@@ -11,6 +11,12 @@ use crate::{
 };
 
 const MIN_PATTERN_BYTES: usize = 4096;
+/// Byte-sum cap on the all-parents Aho-Corasick intern. Nested function
+/// source on a real bundle is *unique strings* whose lengths still sum to
+/// the duplicated total (tsc: ~24 MB of overlapping slices of a ~6 MB
+/// module). Exceeding this used to disable intern entirely (`plan` returned
+/// one blob per function), which is how #10574 measured 24.3 MB of
+/// `__cstring`. Over-budget modules now still share into the longest parent.
 const MAX_PATTERN_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MATCHES: usize = 1_000_000;
 
@@ -81,8 +87,10 @@ impl<'a> SourcePool<'a> {
     }
 }
 
-/// Each result names an input parent and an exact byte offset. Budget/build
-/// failure keeps independent byte ranges, never a guessed match or missing text.
+/// Each result names an input parent and an exact byte offset. Empty sources
+/// and below-minimum modules keep independent byte ranges. Over-budget or
+/// automaton-build failure still intern into the longest parent (#10574)
+/// rather than emitting one copy per function.
 fn plan(
     input: &[&[u8]],
     minimum_bytes: usize,
@@ -93,13 +101,11 @@ fn plan(
     let total = input
         .iter()
         .fold(0usize, |sum, bytes| sum.saturating_add(bytes.len()));
-    if input.len() < 2
-        || total < minimum_bytes
-        || total > maximum_bytes
-        || input.iter().any(|bytes| bytes.is_empty())
-        || maximum_matches == 0
-    {
+    if input.len() < 2 || total < minimum_bytes || input.iter().any(|bytes| bytes.is_empty()) {
         return raw();
+    }
+    if total > maximum_bytes || maximum_matches == 0 {
+        return share_into_longest(input);
     }
     // A contiguous NFA avoids the potentially much larger dense DFA. Pattern
     // bytes and reported matches are bounded independently of source syntax.
@@ -107,7 +113,7 @@ fn plan(
         .kind(Some(AhoCorasickKind::ContiguousNFA))
         .build(input)
     else {
-        return raw();
+        return share_into_longest(input);
     };
     let mut order: Vec<usize> = (0..input.len()).collect();
     order.sort_by_key(|&idx| (std::cmp::Reverse(input[idx].len()), idx));
@@ -136,6 +142,46 @@ fn plan(
         .into_iter()
         .map(|location| location.expect("every source has a parent"))
         .collect()
+}
+
+/// Nested `Function.prototype.toString` text is almost always a slice of the
+/// longest function (the CJS factory / module wrapper). Searching each
+/// remaining unique string in that one haystack recovers the 4× duplication
+/// without building an automaton over every overlapping copy.
+fn share_into_longest(input: &[&[u8]]) -> Vec<(usize, usize)> {
+    let n = input.len();
+    let mut result: Vec<(usize, usize)> = (0..n).map(|idx| (idx, 0)).collect();
+    if n < 2 {
+        return result;
+    }
+    let parent = (0..n)
+        .min_by_key(|&idx| (std::cmp::Reverse(input[idx].len()), idx))
+        .expect("n >= 2");
+    let haystack = input[parent];
+    for (idx, needle) in input.iter().copied().enumerate() {
+        if idx == parent || needle.len() > haystack.len() {
+            continue;
+        }
+        if let Some(offset) = find_bytes(haystack, needle) {
+            result[idx] = (parent, offset);
+        }
+    }
+    result
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    if needle.len() > haystack.len() {
+        return None;
+    }
+    AhoCorasickBuilder::new()
+        .kind(Some(AhoCorasickKind::ContiguousNFA))
+        .build(std::iter::once(needle))
+        .ok()?
+        .find(haystack)
+        .map(|found| found.start())
 }
 
 #[cfg(test)]
@@ -188,9 +234,32 @@ mod tests {
         }
         let raw: Vec<_> = (0..input.len()).map(|idx| (idx, 0)).collect();
         assert_eq!(verify(input, 1024, 2048, 100), raw);
-        assert_eq!(verify(input, 0, 1, 100), raw);
+        // Over the automaton byte budget: still share into the longest parent
+        // (`aaaa`) instead of disabling intern. `b` is disjoint and stays a
+        // blob. #10574: this is the tsc-sized path (24 MB nested / 8 MB cap).
+        let over = verify(input, 0, 1, 100);
+        assert_eq!(over[0], (3, 0));
+        assert_eq!(over[1], (3, 0));
+        assert_eq!(over[2], (3, 0));
+        assert_eq!(over[3], (3, 0));
+        assert_eq!(over[4], (4, 0));
         verify(&[b"", b"hello"], 0, 1024, 100);
         verify(&[], 0, 1024, 100);
+    }
+
+    #[test]
+    fn over_budget_nested_function_source_shares_into_the_longest_parent() {
+        let inner = b"function inner() { return 1; }";
+        let mut outer = b"function outer() { ".to_vec();
+        outer.extend_from_slice(inner);
+        outer.extend_from_slice(b" }");
+        let input: &[&[u8]] = &[&outer, inner];
+        // `maximum_bytes` below `outer.len() + inner.len()` forces the
+        // longest-parent fallback the 8 MiB production cap takes on tsc.
+        let result = verify(input, 0, 8, 100);
+        assert_eq!(result[0], (0, 0));
+        assert_eq!(result[1].0, 0);
+        assert_eq!(&outer[result[1].1..result[1].1 + inner.len()], inner);
     }
 
     #[test]

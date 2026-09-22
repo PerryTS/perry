@@ -396,6 +396,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         VOID,
         &[I32, PTR, I64],
     );
+    // #10446: the failure arm of the static-type Map/Set receiver guard
+    // (`expr::collection_receiver`). Args: (receiver, method_ptr, method_len).
+    // Helper diverges (`-> !`); declared as void-return for LLVM purposes.
+    module.declare_function(
+        "js_throw_collection_receiver_type_error",
+        VOID,
+        &[DOUBLE, PTR, I64],
+    );
     // Issue #510: thrown by `lower_string_method`'s unknown-method
     // catch-all for primitive (string-typed) receivers. Args:
     // (kind_ptr, kind_len, prop_ptr, prop_len). Helper diverges
@@ -1117,6 +1125,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_box_release", VOID, &[I64]);
     module.declare_function("js_i32_box_release", VOID, &[I64]);
     module.declare_function("js_bool_box_release", VOID, &[I64]);
+    // #10464: frame-exit release of cells an ordinary frame minted.
+    module.declare_function("js_box_scope_release", VOID, &[I64]);
+    module.declare_function("js_i32_box_scope_release", VOID, &[I64]);
+    module.declare_function("js_bool_box_scope_release", VOID, &[I64]);
     module.declare_function("js_bool_box_alloc", I64, &[I32]);
     module.declare_function("js_bool_box_get", I32, &[I64]);
     module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
@@ -1164,6 +1176,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
     module.declare_function("js_object_shape_id_for_keys", I32, &[I64, I32]);
+    module.declare_function("js_register_class_guard_shape", VOID, &[PTR]);
     // #10123: (shape_id, NaN-boxed key) -> inline slot index, or -1. The
     // element-shape loop clone's shape-keyed preheader resolves each tracked
     // property once against the shape the runtime just proved.
@@ -1176,7 +1189,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_register_imported_class_shape_slot",
         VOID,
-        &[I32, I32, PTR, PTR, PTR],
+        &[I32, I32, PTR, PTR, PTR, PTR],
     );
     // Inline bump-allocator state accessor + slow path. Ordinary allocation
     // kernels cache `js_inline_arena_state` at function entry. Self-recursive

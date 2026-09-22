@@ -511,7 +511,11 @@ unsafe fn store_inline_value(arr: *mut ArrayHeader, i: usize, bits: u64) {
 ///
 /// Allocates: may collect.
 unsafe fn pairs_alloc(pair_capacity: usize, preset_len: usize) -> *mut ArrayHeader {
-    let capacity = (pair_capacity.max(2) * 2) as u32;
+    // RULE 3: `capacity` lands at payload `+4`. The `as u32` here used to be
+    // able to truncate as well as to alias a ShapeId; both are refused now.
+    let capacity = super::alloc::array_capacity_or_throw(
+        u32::try_from(pair_capacity.max(2).saturating_mul(2)).unwrap_or(u32::MAX),
+    );
     let pairs = crate::arena::arena_alloc_gc(
         super::header::array_byte_size(capacity as usize),
         8,

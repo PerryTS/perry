@@ -233,6 +233,9 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
 /// js_implicit_this_set(prev.get_nanbox_f64());
 /// ```
 ///
+/// or, when the restore must also run as the callee unwinds, the
+/// [`ImplicitThisScope`] guard, which is that idiom with the restore in `Drop`.
+///
 /// This is longjmp-safe: `exception.rs` saves and restores the handle stack at
 /// trap boundaries, so a throw through the window truncates the scope exactly
 /// as a normal drop would. Inside a loop, open the scope PER ITERATION (or
@@ -247,6 +250,45 @@ pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
     f64::from_bits(implicit_this_cell().replace(value.to_bits()))
 }
 
+/// Bind `IMPLICIT_THIS` for the lifetime of the guard and restore the
+/// displaced value on the way out — including when the callee unwinds, which
+/// the runtime's `extern "C-unwind"` dispatch surfaces make an ordinary
+/// outcome: a plain set/restore pair leaks the receiver into every later
+/// implicit-`this` read once a callback throws (#9244).
+///
+/// The displaced value is the CALLER's receiver, held across the user code the
+/// guard brackets, so it lives in a slot of the borrowed `RuntimeHandleScope`
+/// — marked, and rewritten when an evacuating minor moves it — and `Drop`
+/// re-reads that slot. A guard that keeps it in a plain field is the #9445
+/// shape with the restore moved into `Drop`, where a sweep for
+/// `let prev = js_implicit_this_set(..)` cannot see it: the private guards this
+/// replaced reinstalled a retired from-space address as the caller's `this`
+/// after `Object.setPrototypeOf(o, proto); o.run()` ran an allocating method
+/// (#10490), and after every `Array.prototype` callback method.
+///
+/// The borrow is what makes the order safe: the scope must be declared before
+/// the guard, so the guard's `Drop` runs while its slot is still on the handle
+/// stack.
+pub struct ImplicitThisScope<'scope> {
+    previous: crate::gc::RuntimeHandle<'scope>,
+}
+
+impl<'scope> ImplicitThisScope<'scope> {
+    #[inline]
+    pub fn bind(scope: &'scope crate::gc::RuntimeHandleScope, receiver: f64) -> Self {
+        Self {
+            previous: scope.root_nanbox_f64(js_implicit_this_set(receiver)),
+        }
+    }
+}
+
+impl Drop for ImplicitThisScope<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        js_implicit_this_set(self.previous.get_nanbox_f64());
+    }
+}
+
 /// Read the current `new.target` value for ordinary function bodies.
 #[no_mangle]
 pub extern "C" fn js_new_target_get() -> f64 {
@@ -257,6 +299,41 @@ pub extern "C" fn js_new_target_get() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_new_target_set(value: f64) -> f64 {
     NEW_TARGET.with(|c| f64::from_bits(c.replace(value.to_bits())))
+}
+
+/// `catch_savepoints!` capture/restore for `IMPLICIT_THIS` (PR #10564 review
+/// finding). Several runtime guards displace `IMPLICIT_THIS` around a call
+/// they don't control — a `super()` bridge, a prototype-walk accessor
+/// dispatch, a stdlib listener/getter dispatcher — with a bare
+/// save/call/restore statement sequence, not `ImplicitThisScope`. Neither a
+/// `longjmp` nor a system unwind runs the restore statement that follows the
+/// call, so a throw crossing one of those sites leaves the callee's receiver
+/// installed for every later implicit-`this` read. This closes that gap the
+/// same way `runtime_handles`/`call_method` already do: captured at every `try`,
+/// replayed by `js_throw` before the exception transports, regardless of
+/// transport. It is an unconditional `set`, so it composes safely with a
+/// `ImplicitThisScope::drop` that also fires on the unwind path: whichever
+/// runs last for a given frame reproduces the same locally-correct value.
+#[inline]
+pub(crate) fn implicit_this_trap_savepoint() -> u64 {
+    implicit_this_cell().get()
+}
+
+pub(crate) fn implicit_this_trap_restore(bits: u64) {
+    implicit_this_cell().set(bits);
+}
+
+/// `catch_savepoints!` capture/restore for `NEW_TARGET`. Same rationale as
+/// [`implicit_this_trap_savepoint`]: the Temporal/Intl subclass `super()`
+/// bridges (`fetch_globals.rs`, `intl/subclass.rs`) save/restore `new.target`
+/// with a bare statement pair around the parent constructor call.
+#[inline]
+pub(crate) fn new_target_trap_savepoint() -> u64 {
+    NEW_TARGET.with(|c| c.get())
+}
+
+pub(crate) fn new_target_trap_restore(bits: u64) {
+    NEW_TARGET.with(|c| c.set(bits));
 }
 
 /// GC mutable-root scanner for the implicit-`this` cell (issue #1813).

@@ -246,7 +246,10 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
     };
     // AllocateTypedArrayBuffer implementation limit (Node throws RangeError
     // for lengths past the max typed-array size).
-    if len > u32::MAX as f64 {
+    // RULE 3: see `typed_array_length_or_throw` — the element count lands in
+    // `TypedArrayHeader::capacity` at payload `+4`, which must stay outside
+    // the ShapeId range.
+    if len > i32::MAX as f64 {
         throw_range_error(format!("Invalid typed array length: {}", len as u64).as_bytes());
     }
     let len = len as u32;

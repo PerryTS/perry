@@ -273,6 +273,19 @@ pub struct CompileArgs {
     #[arg(long)]
     pub report_size: bool,
 
+    /// How much `Function.prototype.toString` source to keep in the binary
+    /// (#10574). `full` (default) stores interned original source — nested
+    /// functions share one module blob, so this is already the 18 MB
+    /// duplication win, with byte-identical `fn.toString()`. `header` stores
+    /// `function <name>(<params>) { /* source elided */ }` instead: enough
+    /// for name extraction, Angular/Vue-style parameter-name DI, and
+    /// `[native code]` probes, and drops the remaining unique function
+    /// source (~6 MB on a tsc-sized bundle). Also `PERRY_FUNCTION_SOURCE`.
+    /// Programs that parse function *bodies* (`new Function(fn.toString())`,
+    /// `perry-threads` worker serialization) need `full`.
+    #[arg(long, value_parser = ["full", "header"])]
+    pub function_source: Option<String>,
+
     /// Disable the per-module object cache.
     /// By default Perry caches each module's object bytes keyed by a
     /// hash of the source plus every `CompileOptions` field that can

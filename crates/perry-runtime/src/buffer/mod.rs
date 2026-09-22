@@ -30,6 +30,10 @@ mod mutate;
 mod numeric;
 mod own_props;
 mod query;
+mod resizable;
+/// #10873: resizable ArrayBuffer storage model + view relength.
+#[cfg(test)]
+mod resizable_tests;
 mod transcode;
 mod u8_codec;
 pub mod validate;
@@ -91,6 +95,16 @@ pub use own_props::{
     buffer_own_prop_names, buffer_own_props_possible, buffer_read_own_prop, buffer_set_own_prop,
     clear_buffer_own_props, scan_buffer_own_props_roots_mut,
 };
+// ---- Re-exports: resizable ArrayBuffer (#10873) ----
+pub use header::resizable_max_byte_length;
+pub(crate) use header::{
+    any_resizable_buffer, mark_as_resizable_buffer, resizable_info, set_resizable_dirty_end,
+    ResizableInfo,
+};
+pub(crate) use resizable::{array_buffer_resize, view_length_after_resize};
+pub use resizable::{
+    is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
+};
 
 // ---- Re-exports: #8149 integer-indexed-exotic discrimination ----
 // `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share `BufferHeader` and the
@@ -101,6 +115,7 @@ pub use exotic_view::{
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
+pub(crate) use from::buffer_string_bytes_for_encoding;
 pub use from::{
     js_array_buffer_new, js_array_buffer_new_value, js_buffer_alloc, js_buffer_alloc_fill_value,
     js_buffer_alloc_unsafe, js_buffer_concat, js_buffer_concat_with_length, js_buffer_fill,

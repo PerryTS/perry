@@ -58,6 +58,13 @@ fn sab_layout(size: u32) -> Layout {
 /// process and valid (readable / writable) from every thread, so views built
 /// over it on different agents alias the same physical bytes.
 pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
+    // RULE 3 (`object/shape_rule3.rs`): a SAB's bytes are `alloc_zeroed`, so
+    // unlike an arena buffer a 2 GiB request really can succeed — and it would
+    // write `0x8000_0000` into `capacity` at payload `+4`, which the emitted
+    // read path cannot tell from shape #1. Same ceiling and same `RangeError`
+    // as `new ArrayBuffer(n)`.
+    let size =
+        crate::object::shape_rule3::checked_plus_four_word(size, b"Array buffer allocation failed");
     let layout = sab_layout(size);
     // SAFETY: `layout` has non-zero size (BufferHeader is 8 bytes) and 8-byte
     // alignment. `alloc_zeroed` gives the spec-required zero-initialized bytes.

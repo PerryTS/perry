@@ -42,7 +42,7 @@ mod shapes_store;
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
 pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
 pub(crate) use shapes_slot_list::{
-    object_shape_hole_count, publish_object_shape_holes,
+    object_shape_hole_count, publish_object_shape_delete_transition, publish_object_shape_holes,
     rekey_stable_tombstone_shape_after_squeeze, retire_owned_shape_history,
     shape_index_migrate_after_delete, shape_index_shift_in_place,
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotIndex,
@@ -554,10 +554,22 @@ fn alloc_shape_id() -> Result<u32, ShapeIdExhausted> {
     alloc_shape_id_from(&SHAPE_ID_NEXT)
 }
 
+/// The next ShapeId this process would hand out.
+///
+/// Tests assert the DELTA across a workload, because ids come from a 2^30
+/// counter that is never reused and parks (fail-stop) at the end: a path that
+/// mints one id per operation is a process-LIFETIME bug, not merely a memory
+/// cost, and nothing in the program's output ever reveals it.
+#[cfg(test)]
+pub(crate) fn test_shape_id_counter() -> u32 {
+    SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Get or create the exact structural descriptor. The public allocation and
 /// mutation paths turn exhaustion into a fail-stop before publishing an
 /// untracked layout; the `Result` stays explicit so the allocator boundary and
 /// its exhaustion tests remain reviewable.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 fn shape_descriptor_ensure_with_generation(
     keys: *const ArrayHeader,
     logical_key_count: u32,
@@ -580,6 +592,7 @@ fn shape_descriptor_ensure_with_generation(
 /// identity distinct from every hole state of the same array. Also the mint
 /// for #9019's reserved-floor seed (`object/reserved_floor.rs`), whose keys
 /// array is BORN with `floor` leading holes.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
     keys: *const ArrayHeader,
     logical_key_count: u32,
@@ -592,6 +605,29 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
+    // #10868 attribution, compiled out entirely without `shape-mint-diag`.
+    // When it IS compiled in, both halves are gated on one relaxed atomic
+    // load, and the key-list hash is resolved BEFORE the table borrow because
+    // it reads the keys array and its key strings.
+    #[cfg(feature = "shape-mint-diag")]
+    let census_on = crate::object::shape_mint_census::armed();
+    #[cfg(feature = "shape-mint-diag")]
+    let (census_list_hash, census_file, census_line) = if census_on {
+        // `#[track_caller]` on this chain is part of the same feature, so
+        // `Location::caller()` here names the runtime path that ASKED for a
+        // shape rather than this line.
+        let loc = std::panic::Location::caller();
+        (
+            // SAFETY: a live keys array (or 0); no table borrow is held here.
+            unsafe {
+                crate::object::shape_mint_census::key_list_content_hash(keys_id, logical_key_count)
+            },
+            loc.file(),
+            loc.line(),
+        )
+    } else {
+        (0, "", 0)
+    };
     let facts = shapes_store::facts_key(
         keys_id,
         logical_key_count,
@@ -621,11 +657,46 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
                     hole_count,
                 )
             {
+                #[cfg(feature = "shape-mint-diag")]
+                crate::object::shape_mint_census::note_memo_hit();
                 return Ok(id);
             }
         }
     }
     let id = alloc_shape_id().map_err(|_| ShapeDescriptorError::IdExhausted)?;
+    #[cfg(feature = "shape-mint-diag")]
+    if census_on {
+        // Every descriptor already indexed under this keys ADDRESS, copied out
+        // so no slab reference is alive across `slab_mut()` below.
+        let mut family_facts: Vec<(u32, u32, u64, bool, u32)> = Vec::new();
+        if let Some(ids) = inner.families.get(&keys_id) {
+            let slab = table.slab();
+            for &fid in ids.as_slice() {
+                if let Some(record) = slab.get(fid) {
+                    family_facts.push((
+                        record.logical_key_count,
+                        record.live_inline_slot_count,
+                        record.semantic_generation,
+                        record.object_kind() == ShapeObjectKind::Class,
+                        record.hole_count,
+                    ));
+                }
+            }
+        }
+        crate::object::shape_mint_census::note_mint(
+            id,
+            keys_id,
+            census_list_hash,
+            logical_key_count,
+            live_inline_slot_count,
+            semantic_generation,
+            object_kind == ShapeObjectKind::Class,
+            hole_count,
+            &family_facts,
+            census_file,
+            census_line,
+        );
+    }
     let record = ShapeRecord::new(
         keys_id,
         logical_key_count,
@@ -648,6 +719,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     Ok(id)
 }
 
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure(
     keys: *const ArrayHeader,
     logical_key_count: u32,
@@ -694,6 +766,7 @@ pub(crate) fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) ->
 
 /// Compatibility mint for canonical shapes whose key and live-slot counts are
 /// identical. New object-aware paths use [`shape_descriptor_ensure`] directly.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
     publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
 }
@@ -855,7 +928,15 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
     id: u32,
 ) {
+    let previous = (*obj).parent_class_id;
     (*obj).parent_class_id = id;
+    // A structural change to an object somebody INHERITS from is invisible to
+    // every instance below it: no instance is touched, no epoch moves, and the
+    // instances' own ShapeIds are unchanged. This is the one place every such
+    // change publishes, which is why the validity bump lives here rather than
+    // in a list of mutation entry points that would have to be kept complete.
+    // Until something is marked as a prototype this is one relaxed `bool` load.
+    crate::object::proto_validity::note_object_shape_stamped(obj as usize, previous, id);
     if !crate::arena::pointer_in_nursery(obj as usize) {
         let record = shape_record_by_id(id);
         note_old_generation_carrier(record);
@@ -1416,6 +1497,7 @@ pub(crate) unsafe fn publish_object_live_slot_count(
 /// publishes 0 for it rather than inventing one. Callers that know the bound
 /// (allocators, the by-name append path) must use
 /// [`birth_publish_object_shape`] / [`publish_object_live_slot_count`].
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn synchronize_object_shape_descriptor(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
@@ -1433,6 +1515,7 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor(
 /// MINT-THEN-STAMP (#8113): every allocation below happens with the
 /// predecessor stamp still installed; the receiver's published shape changes at
 /// the final `parent_class_id` store and nowhere else.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
     obj: *mut crate::object::ObjectHeader,
     predecessor: Option<ShapeDescriptor>,
@@ -1454,6 +1537,7 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
 /// caller stamps the successor here, with the predecessor still describing the
 /// current edge throughout every allocation inside. The final ShapeId store is
 /// the atomic publication point for the new descriptor and its rooted edge.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn publish_object_shape_from(
     obj: *mut crate::object::ObjectHeader,
     predecessor: Option<ShapeDescriptor>,
@@ -1605,6 +1689,7 @@ fn retire_owned_shape_siblings(keys: u64, keep: u32) {
 /// The structural facts remain unchanged, but the process-unique generation
 /// prevents a cache trained before the transition from comparing equal after
 /// it. Shared siblings retain their immutable predecessor descriptor.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn transition_object_shape_semantics(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
@@ -1633,19 +1718,6 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     debug_assert_object_shape_parity(obj);
     id
 }
-
-/// Publish the successor shape for an O(1) hole-delete on `obj`'s CURRENT
-/// keys array: same address, same surviving slots, one more tombstone.
-///
-/// Modeled on [`transition_object_shape_semantics`]: the structural facts are
-/// unchanged except `hole_count`, and the fresh process-unique generation is
-/// what retires every cached `(token, key)` pair for this receiver — a
-/// deleted key must stop hitting even though the array address and every
-/// surviving slot are byte-identical, or a stale IC hit would return the
-/// cleared slot instead of walking the prototype chain.
-///
-/// Returns the successor id, or 0 when the object is not stamped/shaped —
-/// the caller falls back to the compacting delete.
 
 /// #10287: a DATA-descriptor install reuses one generation per
 /// `(predecessor facts, key, attributes)`, so two receivers built the same way
@@ -1720,6 +1792,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_for_descriptor_removal(
     transition_object_shape_semantics_for_data_descriptor(obj, key_bytes, tag)
 }
 
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
     obj: *mut crate::object::ObjectHeader,
     key_bytes: &[u8],
@@ -1762,6 +1835,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
 /// descriptor. Minting a fresh generation here retained one descriptor per
 /// evaluation as long as their shared keys array stayed live (one million
 /// evaluations consumed hundreds of MB).
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn transition_object_shape_to_class(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
@@ -1836,6 +1910,8 @@ fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed
     let Some(record) = (unsafe { table.slab_mut().remove(id) }) else {
         return;
     };
+    #[cfg(feature = "shape-mint-diag")]
+    crate::object::shape_mint_census::note_retire(id);
     retire_cached_shape_object_kind(id);
     if record.has(RECORD_FLAG_FACTS_INDEXED) {
         inner.facts_remove(record.facts_key_with_keys(indexed), id);
@@ -2027,6 +2103,22 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
     };
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (slots, slot_len) = super::keys_array_dense_slots(keys);
+    // #10595: keep scanning past the first content match and keep the
+    // HIGHEST slot index among them, not the probe order's first hit.
+    // A field name that a subclass re-declares (`class Sub extends Base {
+    // tag = ... }` where `Base` also declares `tag`) is NOT deduplicated in
+    // the packed keys — `codegen/mod.rs` lists ancestor fields first, then
+    // the class's own, so a genuine duplicate always has the most-derived
+    // declaration at the HIGHER slot index, regardless of this table's probe
+    // order (which is insertion order for a fresh table, but open-addressing
+    // growth/rehash can reshuffle it). `class_field_global_index` — the
+    // compile-time-typed read's index resolver — already picks the
+    // most-derived declaration ("TS shadowing"); this dynamic by-name lookup
+    // must agree, or a receiver whose static type is unknown (an inherited
+    // accessor's `this.field`, a computed `obj[key]`) sees the ancestor's
+    // stale slot instead of the override. A name with only one candidate
+    // (the common, non-shadowing case) is unaffected.
+    let mut found: Option<u32> = None;
     for i in shape.slots.candidates(key_hash) {
         if (i as usize) >= slot_len || i >= key_count {
             continue;
@@ -2034,9 +2126,12 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
         let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
             if stored == key_bytes {
-                return KeysIndexVerdict::Found(i);
+                found = Some(found.map_or(i, |prev| prev.max(i)));
             }
         }
+    }
+    if let Some(i) = found {
+        return KeysIndexVerdict::Found(i);
     }
     // Hash-bucket candidates existed but none matched: with a complete index
     // that still proves absence (the bucket held colliding OTHER keys).

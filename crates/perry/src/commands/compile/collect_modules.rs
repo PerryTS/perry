@@ -408,6 +408,9 @@ fn collect_module_one(
     // left untouched.
     let was_cjs_wrapped =
         (is_in_compiled_pkg || !is_in_node_modules) && super::cjs_wrap::is_commonjs(&raw_source);
+    // #10735: this module's `require.main` (CJS preamble below) must resolve
+    // to the compile-time entry -- same comparison as `is_entry_module` below.
+    let cjs_is_entry_module = ctx.entry_canonical.as_ref() == Some(&canonical);
     // #5247 / #7036: when source locations are requested, capture where the
     // original module body lands inside the wrapped output so debug frames and
     // opt reports can map a wrapped-coordinate byte offset back to an
@@ -415,8 +418,12 @@ fn collect_module_one(
     let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
     let source = if was_cjs_wrapped {
         if ctx.debug_symbols {
-            let (wrapped, body_off) =
-                super::cjs_wrap::wrap_commonjs_with_body_offset(&raw_source, &canonical, target);
+            let (wrapped, body_off) = super::cjs_wrap::wrap_commonjs_with_body_offset(
+                &raw_source,
+                &canonical,
+                target,
+                cjs_is_entry_module,
+            );
             // Newlines before the original body in the wrapped output = the
             // wrapper prefix line count. Recorded only when the body was
             // located; otherwise we skip the skew correction (graceful
@@ -429,7 +436,12 @@ fn collect_module_one(
             });
             wrapped
         } else {
-            super::cjs_wrap::wrap_commonjs_for_target(&raw_source, &canonical, target)
+            super::cjs_wrap::wrap_commonjs_for_target(
+                &raw_source,
+                &canonical,
+                target,
+                cjs_is_entry_module,
+            )
         }
     } else {
         raw_source
@@ -445,6 +457,7 @@ fn collect_module_one(
         &ctx.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
         ctx.bunfs_root.as_deref(),
+        !was_cjs_wrapped,
     );
 
     // #8547: a builtin reached through `require("http")` never appears in the
@@ -1777,15 +1790,19 @@ fn collect_module_one(
         }
     }
 
-    // Next.js lazy-require: the CJS→ESM wrap names a binding `_lazyreq_N` when
-    // every `require('S')` call site is inside a function body (lazy in Node).
-    // Tag the import so `classify_eager_modules` leaves the target Deferred —
-    // matching Node, which only loads such a module when the enclosing function
-    // runs (e.g. jsonwebtoken, required only inside Next.js's request handlers).
-    // The require shim triggers the target's `__init` on first `require()`, so
-    // an over-eager classification is self-correcting at runtime. Limited to
-    // Perry-compiled (`NativeCompiled`) targets — native stdlib / V8 modules
-    // have their own init paths.
+    // Deferred require (#10437, originally the Next.js lazy-require case): the
+    // CJS→ESM wrap names a binding `_lazyreq_N` when every `require('S')` call
+    // site is NOT guaranteed to run the moment the module loads — inside a
+    // function body (lazy in Node: jsonwebtoken, required only inside Next.js's
+    // request handlers), or inside a top-level control-flow block / braceless
+    // equivalent that may never run (`if (forceNative) { require('./native') }`,
+    // pg's optional native binding). Tag the import so `classify_eager_modules`
+    // leaves the target Deferred — matching Node, which only loads such a
+    // module when control flow actually reaches the call. The require shim
+    // triggers the target's `__init` at that same call site, so an over-eager
+    // classification is self-correcting at runtime (it just runs a bit early).
+    // Limited to Perry-compiled (`NativeCompiled`) targets — native stdlib /
+    // V8 modules have their own init paths.
     {
         for import in &mut hir_module.imports {
             if import.type_only

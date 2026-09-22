@@ -93,6 +93,37 @@ pub extern "C" fn js_event_emitter_subclass_init(this: f64) -> f64 {
     this
 }
 
+/// #10798: install the legacy `node:stream` `Stream` base surface onto
+/// `this` for a source-compiled `class X extends Stream` (the bare
+/// `node:stream` base — NOT one of its Readable/Writable/Duplex/Transform
+/// subclasses). In Node, `Stream` is EventEmitter plus exactly one added
+/// prototype method: `pipe()` (`lib/internal/streams/legacy.js`). It has no
+/// `_readableState`/`_writableState`/etc, so — unlike the stream-state
+/// inits above — there is no option-driven state to seed here either; this
+/// is `js_event_emitter_subclass_init` plus the one extra method. `ns_pipe2`
+/// is the same generic, receiver-keyed pipe implementation
+/// Readable/Duplex/Transform install (`readable_methods`/
+/// `duplex_methods` in `node_stream_readwrite.rs` /
+/// `node_stream_duplex_methods.rs`); it drives itself entirely off `on`/
+/// `emit` on the source and destination, so it works unmodified on a plain
+/// EventEmitter-shaped receiver that never went through a stream
+/// constructor.
+#[no_mangle]
+pub extern "C" fn js_node_stream_legacy_subclass_init(this: f64) -> f64 {
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 {
+        return this;
+    }
+    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+    let obj = raw as *mut ObjectHeader;
+    let mut methods: Vec<(&str, StubFn)> = emitter_methods().to_vec();
+    methods.push(("pipe", cast2(ns_pipe2)));
+    install_methods_on_existing_object(obj, this, &methods, &[]);
+    this
+}
+
 /// Initialize a source-compiled subclass of EventEmitterAsyncResource on its
 /// already-allocated `this` object. The listener surface remains the generic
 /// object-backed EventEmitter implementation; a hidden AsyncResource supplies

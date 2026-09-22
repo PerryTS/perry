@@ -399,8 +399,19 @@ fn emergency_full_trace_is_excluded_from_ordinary_pause_stats() {
         malloc_trim["ordinary_pause_stats_include"].as_bool(),
         Some(false)
     );
-    if cfg!(any(target_env = "gnu", target_os = "macos")) {
-        // glibc malloc_trim / darwin malloc_zone_pressure_relief (#6180).
+    // Three ways the maintenance can be real, not two. glibc `malloc_trim` and
+    // darwin `malloc_zone_pressure_relief` (#6180) are the OS-keyed pair, but
+    // `cycle_malloc_trim.rs` also reports `executed` on ANY other target when
+    // the mimalloc purge ran — and `alloc-mimalloc` is in perry-runtime's
+    // `default`, so that is the live path on windows-msvc.
+    //
+    // Keying this on the OS alone asserted `unsupported` on Windows while the
+    // runtime correctly reported `executed`: a stale expectation, not a defect
+    // (found running the suite for #10385). Ask the reach witness instead, so
+    // the branch follows the mechanism rather than a platform list that has to
+    // be remembered whenever the allocator changes.
+    let purged_mimalloc = super::super::cycle_malloc_trim::test_mimalloc_purge_count() > 0;
+    if cfg!(any(target_env = "gnu", target_os = "macos")) || purged_mimalloc {
         assert_eq!(malloc_trim["status"].as_str(), Some("executed"));
         assert_eq!(
             malloc_trim["reason"].as_str(),

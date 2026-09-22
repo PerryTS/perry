@@ -40,23 +40,23 @@ pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow
     rows
 }
 pub use registry::{
-    build_rest_array, closure_arity, closure_is_arrow, closure_is_bound_method, closure_length,
-    dispatch_rest_bundled, dispatch_with_arity, is_registered_arrow_function,
-    is_registered_async_function, is_registered_async_generator_function,
-    is_registered_generator_function, is_registered_strict_function, js_register_closure_arity,
-    js_register_closure_arrow_function, js_register_closure_async_function,
-    js_register_closure_async_generator_function, js_register_closure_generator_function,
-    js_register_closure_length, js_register_closure_rest, js_register_closure_rest_and_arguments,
-    js_register_closure_strict_function, js_register_closure_synthetic_arguments,
-    js_register_closure_trusted_direct, lookup_closure_arity, lookup_closure_length,
-    lookup_closure_rest, lookup_closure_rest_full, real_capture_count, resolve_strategy,
-    DispatchStrategy, BOUND_FUNCTION_FUNC_PTR, BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG,
-    CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
+    build_rest_array, build_rest_array_rooted, closure_arity, closure_is_arrow,
+    closure_is_bound_method, closure_length, dispatch_rest_bundled, dispatch_with_arity,
+    is_registered_arrow_function, is_registered_async_function,
+    is_registered_async_generator_function, is_registered_generator_function,
+    is_registered_strict_function, js_register_closure_arity, js_register_closure_arrow_function,
+    js_register_closure_async_function, js_register_closure_async_generator_function,
+    js_register_closure_generator_function, js_register_closure_length, js_register_closure_rest,
+    js_register_closure_rest_and_arguments, js_register_closure_strict_function,
+    js_register_closure_synthetic_arguments, js_register_closure_trusted_direct,
+    lookup_closure_arity, lookup_closure_length, lookup_closure_rest, lookup_closure_rest_full,
+    real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
+    BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
 };
 
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
-    reify_function_method_value, reset_throw_not_callable_counter,
+    rebind_explicit_this_allocates, reify_function_method_value, reset_throw_not_callable_counter,
 };
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
@@ -73,7 +73,8 @@ pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked
 pub(crate) use box_captures::test_clear_closure_box_capture_indexes;
 pub(crate) use box_captures::{
     box_capture_count, clone_closure_box_captures, closure_box_captures_owner_moved,
-    prune_dead_closure_box_capture_owners, visit_closure_box_payload_slots_mut,
+    frame_released_js_cell, note_frame_released_cell, prune_dead_closure_box_capture_owners,
+    visit_closure_box_payload_slots_mut, FrameRelease,
 };
 #[cfg(feature = "wasm-host")]
 pub(crate) use dynamic_props::register_wasm_funcref_external;
@@ -102,11 +103,10 @@ pub use v8_stubs::{
 };
 
 pub use v8_stubs::{
-    js_argon2_hash_options, js_axios_create, js_axios_request, js_lodash_ends_with,
-    js_lodash_escape, js_lodash_includes, js_lodash_lower_first, js_lodash_replace,
-    js_lodash_split, js_lodash_start_case, js_lodash_starts_with, js_lodash_unescape,
-    js_lodash_upper_first, js_ratelimit_create, js_sharp_negate, js_sharp_quality,
-    js_sharp_to_format,
+    js_argon2_hash_options, js_lodash_ends_with, js_lodash_escape, js_lodash_includes,
+    js_lodash_lower_first, js_lodash_replace, js_lodash_split, js_lodash_start_case,
+    js_lodash_starts_with, js_lodash_unescape, js_lodash_upper_first, js_sharp_negate,
+    js_sharp_quality, js_sharp_to_format,
 };
 
 #[cfg(test)]

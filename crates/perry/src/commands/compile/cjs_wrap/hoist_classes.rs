@@ -808,9 +808,10 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
             continue;
         };
         let mut q = p + kw_len;
-        // Walk through one or more comma-separated declarators on the same
-        // logical line. Stop at `=` (initializer), `;`, or the end of line
-        // (semicolon optional in JS).
+        // Walk through one or more comma-separated declarators. A comma may
+        // continue the declaration onto another physical line (as emitted by
+        // TypeScript for long lists of private-field helpers). Otherwise a
+        // top-level newline ends an ASI-terminated declaration.
         loop {
             while q < bytes.len() && (bytes[q] == b' ' || bytes[q] == b'\t') {
                 q += 1;
@@ -874,6 +875,12 @@ fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
                     }
                     b',' if inner == 0 => {
                         q += 1;
+                        // A top-level comma proves that another declarator
+                        // follows, so newlines here are continuation
+                        // whitespace rather than ASI boundaries.
+                        while q < bytes.len() && bytes[q].is_ascii_whitespace() {
+                            q += 1;
+                        }
                         break;
                     }
                     b';' | b'\n' if inner == 0 => {

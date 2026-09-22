@@ -281,7 +281,9 @@ impl Iterator for SlotCandidates<'_> {
     }
 }
 
-use super::shapes_store::{ShapeRecord, RECORD_FLAG_FACTS_INDEXED};
+use super::shapes_store::{
+    ShapeRecord, RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
+};
 
 /// Shift a key index in place after an IN-PLACE delete.
 ///
@@ -614,6 +616,21 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     Some(new_id)
 }
 
+/// Publish the successor shape for an O(1) hole-delete on `obj`'s CURRENT
+/// keys array: same address, same surviving slots, one more tombstone.
+///
+/// This is #9064's ID-PRESERVING publish, now reached only through
+/// `PERRY_DELETE_SHAPE_TRANSITION=0` and the squeeze:
+/// [`publish_object_shape_delete_transition`] is what an ordinary delete takes.
+/// For a stable-tombstone receiver it keeps the ShapeId and relies on the
+/// emitted read's per-slot `TAG_HOLE` compare to retire the deleted key;
+/// otherwise it mints a process-unique generation.
+///
+/// Returns the successor id, or 0 when the object is not stamped/shaped —
+/// the caller falls back to the compacting delete.
+///
+/// (This doc block lived in `shapes.rs` after the function moved here, where
+/// it documented nothing.)
 pub(crate) unsafe fn publish_object_shape_holes(
     obj: *mut crate::object::ObjectHeader,
     hole_count: u32,
@@ -624,6 +641,12 @@ pub(crate) unsafe fn publish_object_shape_holes(
     let Some(current) = super::object_shape_descriptor(obj) else {
         return 0;
     };
+    // A hole delete is a STRUCTURAL change to the layout, so the Array-subclass
+    // named-prefix proof must go — it is the one identity that deliberately
+    // survives a ShapeId change, and a stale one lets a cached slot for the
+    // deleted key still be served. Every other transition publisher clears it;
+    // this one and its stable-tombstone sibling did not.
+    crate::array::clear_array_subclass_named_prefix_token(obj);
     if let Some(id) = try_update_stable_tombstone_shape(
         obj,
         current.keys as usize as *mut super::ArrayHeader,
@@ -672,33 +695,366 @@ pub(crate) unsafe fn publish_object_shape_holes(
     // per delete and every later publish walked it, which measured as a 26x
     // slowdown (2.06 s → 53.6 s) on `bench_populated_delete` before this
     // line existed.
-    {
-        let mut inner = crate::state::state().shapes.inner.borrow_mut();
-        // Sweep EVERY other id for this keys address, not just the direct
-        // predecessor: the delete-then-re-add cycle publishes an id on the
-        // APPEND side too, and nothing else retires those — the post-trace
-        // dead-key pruning only fires when the keys ARRAY dies, and this
-        // array lives at a stable address for the object's whole life.
-        // Retiring only the predecessor halved the descriptor pile-up
-        // (53.6 s → 25.1 s on the churn benchmark) but ids still accumulated
-        // one per iteration from the append publish.
-        let stale: Vec<u32> = inner
-            .families
-            .get(&(current.keys))
-            .map(|ids| {
-                ids.as_slice()
-                    .iter()
-                    .copied()
-                    .filter(|&other| other != id)
-                    .collect()
-            })
-            .unwrap_or_default();
-        for other in stale {
+    //
+    // Sweep EVERY other id for this keys address, not just the direct
+    // predecessor: the delete-then-re-add cycle publishes an id on the
+    // APPEND side too, and nothing else retires those — the post-trace
+    // dead-key pruning only fires when the keys ARRAY dies, and this
+    // array lives at a stable address for the object's whole life.
+    // Retiring only the predecessor halved the descriptor pile-up
+    // (53.6 s → 25.1 s on the churn benchmark) but ids still accumulated
+    // one per iteration from the append publish.
+    retire_family_except(current.keys, id);
+    super::debug_assert_object_shape_parity(obj);
+    id
+}
+
+/// Semantic generation for a DELETE edge, as a PURE function of the
+/// transition: the predecessor's identity, the deleted key, and the slot the
+/// delete vacates.
+///
+/// This is [`super::deterministic_semantic_generation`]'s rule (#10287)
+/// applied to `delete`. Two receivers that delete the same key from the same
+/// predecessor shape therefore agree on the successor's generation — and,
+/// when they also share the predecessor's keys allocation, on the successor
+/// ShapeId itself, so a delete does not fork their shape lineages.
+///
+/// Soundness is the same induction #10287 rests on: the predecessor ShapeId
+/// implies the predecessor's exact layout, and (layout, key, slot) implies the
+/// successor's, so two publications that agree on this generation *and* on the
+/// structural facts describe the same layout. Distinct transitions collide
+/// only on a full 64-bit hash collision.
+///
+/// Bit 63 keeps these out of the counter's namespace exactly as
+/// [`super::deterministic_semantic_generation`] does. The `0xFD` tag keeps a
+/// delete of key `k` from aliasing a descriptor install over the same
+/// predecessor (real attribute bytes are `< 0x10`) or a descriptor removal
+/// (`0xFE` attribute entry / `0xFF` accessor entry).
+pub(super) fn delete_transition_generation(
+    prev_shape_id: u32,
+    key_hash: u64,
+    slot: u32,
+) -> Option<u64> {
+    if prev_shape_id == 0 {
+        // No predecessor identity to key on: the caller keeps the unique
+        // generation, which is always correct, just unshareable.
+        return None;
+    }
+    // SplitMix64 finalizer over the four components, so nearby shape ids,
+    // adjacent slots and one-byte key differences land far apart.
+    let mut x = key_hash
+        ^ (u64::from(prev_shape_id) << 32 | u64::from(prev_shape_id))
+        ^ (u64::from(slot) << 16)
+        ^ (0xFDu64 << 24);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    Some(x | (1 << 63))
+}
+
+/// Retire every descriptor indexed under `keys` other than `keep`.
+///
+/// Extracted from [`publish_object_shape_holes`], which is where the rule was
+/// established: the tombstone lanes are gated on an OWNED keys array, so the
+/// publishing receiver is the only carrier of every other id under that
+/// address and the ids become unreachable the moment its header word names
+/// `keep`. A stale IC token already misses on the stamp compare and
+/// `shape_descriptor_by_id` of a retired id is `None`.
+///
+/// Without the sweep a delete-churn loop piles one descriptor per delete onto
+/// ONE stable address; the reverse-index list under it grows by one per
+/// iteration and every later publish walks it (measured at 2.06 s -> 53.6 s on
+/// `bench_populated_delete` before the sweep existed).
+fn retire_family_except(keys: u64, keep: u32) {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    // The family here is almost always exactly `{predecessor, keep}` — the
+    // previous publish swept everything else. Lift that single id out without
+    // the `Vec` the general case needs (the table borrow cannot be held across
+    // `remove_descriptor_and_reverse_indices`). This runs on EVERY delete
+    // under the shape transition, not only on the non-stable ones, so the
+    // allocation is per-delete rather than occasional.
+    let mut only_stale = None;
+    let mut more_than_one = false;
+    if let Some(ids) = inner.families.get(&keys) {
+        for &other in ids.as_slice() {
+            if other == keep {
+                continue;
+            }
+            if only_stale.is_none() {
+                only_stale = Some(other);
+            } else {
+                more_than_one = true;
+                break;
+            }
+        }
+    }
+    if !more_than_one {
+        if let Some(other) = only_stale {
             super::remove_descriptor_and_reverse_indices(&mut inner, other);
         }
+        return;
+    }
+    let stale: Vec<u32> = inner
+        .families
+        .get(&keys)
+        .map(|ids| {
+            ids.as_slice()
+                .iter()
+                .copied()
+                .filter(|&other| other != keep)
+                .collect()
+        })
+        .unwrap_or_default();
+    for other in stale {
+        super::remove_descriptor_and_reverse_indices(&mut inner, other);
+    }
+}
+
+/// The DELETE edge of the shape transition graph:
+/// `(predecessor ShapeId, deleted key, vacated slot) -> successor ShapeId`.
+///
+/// Unlike [`publish_object_shape_holes`], this NEVER hands back the
+/// predecessor. `delete` must move the shape word, because that is what makes
+/// a `(shape, key)` cache entry primed for the deleted key unable to hit
+/// afterwards — and therefore what lets a shape hit prove that the slot it
+/// names is LIVE. Today the emitted read path proves that with a per-read
+/// `TAG_HOLE` compare instead (#9064's stable tombstones deliberately kept the
+/// id); this is the structural replacement for that compare.
+///
+/// Returns 0 when the receiver is unstamped/unshaped, or when the publication
+/// would have reinstated the predecessor id — in both cases the caller falls
+/// back to the compacting delete, which needs no shape stamp.
+pub(crate) unsafe fn publish_object_shape_delete_transition(
+    obj: *mut crate::object::ObjectHeader,
+    key_hash: u64,
+    slot: u32,
+    hole_count: u32,
+) -> u32 {
+    if obj.is_null() || !super::shape_word_is_writable(obj) {
+        return 0;
+    }
+    let Some(current) = super::object_shape_descriptor(obj) else {
+        return 0;
+    };
+    let predecessor = super::object_shape_stamp(obj);
+    // A delete is a STRUCTURAL transition, so the Array-subclass
+    // named-prefix proof has to go: it is the one identity that deliberately
+    // SURVIVES a ShapeId change ("proves the cached slot survives exact
+    // numeric-tail ShapeId transitions"), so leaving it armed would let a
+    // cached slot for the deleted key still be served — the exact hole the
+    // shape transition exists to close. Every other transition publisher
+    // already clears it; the hole-delete publishes did not.
+    crate::array::clear_array_subclass_named_prefix_token(obj);
+    // The key count comes from the ARRAY, not the lineage: an O(1) hole
+    // delete leaves the length untouched, and the caller has not yet written
+    // the hole, so both agree here. Reading the array keeps this function
+    // honest if a future caller publishes after a length change.
+    let keys_ptr = current.keys as usize as *mut super::ArrayHeader;
+    let logical_key_count = crate::array::keys_array_len_capped_to_capacity(keys_ptr) as u32;
+    let generation =
+        delete_transition_generation(predecessor, key_hash, slot).unwrap_or_else(|| {
+            let generation =
+                super::SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if generation == 0 {
+                super::shape_id_exhausted_abort();
+            }
+            generation
+        });
+    // An OWNED keys array makes this receiver the single carrier of the
+    // predecessor, so the cheapest correct publish is to MOVE the
+    // predecessor's record onto a fresh id rather than mint a second
+    // descriptor and retire the first.
+    let owned = !keys_array_is_shape_shared(keys_ptr);
+    let mut id = if owned {
+        rekey_predecessor_for_delete(
+            predecessor,
+            current.keys,
+            logical_key_count,
+            current.live_inline_slot_count,
+            generation,
+            hole_count,
+        )
+    } else {
+        0
+    };
+    if id == 0 {
+        id = mint_detached_delete_successor(
+            current.keys,
+            logical_key_count,
+            current.live_inline_slot_count,
+            generation,
+            current.object_kind,
+            hole_count,
+        );
+    }
+    if id == 0 {
+        return 0;
+    }
+    // `alloc_shape_id` never reuses a value, so a freshly minted successor
+    // cannot be the predecessor. Stated as an assert because the whole point
+    // of this function is that it never hands the predecessor back.
+    debug_assert_ne!(
+        id, predecessor,
+        "a delete must not keep the receiver's ShapeId"
+    );
+    // #9200: stamp through the carrier-note funnel, which arms `old_carrier`
+    // for a non-nursery receiver. This publish is the one that mints a fresh
+    // descriptor and then retires the armed predecessor below, so without the
+    // funnel an evacuating minor could sweep a live keys array.
+    super::stamp_object_shape_id_with_carrier_note(obj, id);
+    // The rekey above already removed the predecessor, but growth-era prefix
+    // descriptors can still sit under this address from before the receiver
+    // entered the lane. Sweeping is sound only because the array is OWNED,
+    // which makes this receiver the single carrier of every id under it:
+    // retiring a SIBLING's live stamp would leave it shapeless — an empty
+    // `Object.keys()` and `undefined` fixed-slot reads, silently (#9200's
+    // exact wrong answer, reached a different way). On the steady-state churn
+    // path the family already holds only `id`, and the sweep is then one
+    // lookup with nothing to remove.
+    if owned {
+        retire_family_except(current.keys, id);
     }
     super::debug_assert_object_shape_parity(obj);
     id
+}
+
+/// Move the predecessor's record onto a FRESH id carrying the delete's facts.
+/// Returns 0 when it declines, and the caller mints instead.
+///
+/// This is [`rekey_stable_tombstone_shape_after_squeeze`]'s primitive applied
+/// to the delete edge, and it is what makes a per-delete shape transition
+/// affordable. An OWNED keys array makes this receiver the single carrier of
+/// the predecessor, so minting a second descriptor and retiring the first
+/// reaches the same end state through two hash-table inserts and two removes;
+/// moving the record does it with one slab move and one in-place id swap.
+///
+/// The predecessor id stops resolving the moment its record moves, which is
+/// precisely the retirement a delete owes: a cache entry still holding it
+/// resolves to no descriptor and takes the ordinary miss.
+///
+/// Declines for a record an optimization cache owns — that cache may reinstall
+/// it while no object carries it, so its id has to survive — and for a record
+/// whose keys edge has drifted from the caller's.
+fn rekey_predecessor_for_delete(
+    predecessor: u32,
+    keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    hole_count: u32,
+) -> u32 {
+    if !super::is_shape_id(predecessor) {
+        return 0;
+    }
+    let table = &crate::state::state().shapes;
+    let Some(live_ptr) = table.slab().record_ptr(predecessor) else {
+        return 0;
+    };
+    // SAFETY: live slab record, single-threaded agent, read immediately.
+    let live = unsafe { *live_ptr };
+    if live.keys != keys || live.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER) {
+        return 0;
+    }
+    let Ok(id) = super::alloc_shape_id() else {
+        return 0;
+    };
+    let mut inner = table.inner.borrow_mut();
+    if live.has(RECORD_FLAG_FACTS_INDEXED) {
+        // Only the FIRST delete on a receiver pays this: the record is born
+        // detached from then on, which is also what keeps the re-add on its
+        // cheap `try_update_stable_tombstone_shape_cached` path.
+        inner.facts_remove(live.facts_key_with_keys(keys), predecessor);
+    }
+    // SAFETY: no slab reference is held across these calls.
+    let Some(mut record) = (unsafe { table.slab_mut().remove(predecessor) }) else {
+        return 0;
+    };
+    record.logical_key_count = logical_key_count;
+    record.live_inline_slot_count = live_inline_slot_count;
+    record.semantic_generation = semantic_generation;
+    record.hole_count = hole_count;
+    record.set(RECORD_FLAG_FACTS_INDEXED, false);
+    super::retire_cached_shape_object_kind(predecessor);
+    // SAFETY: as above.
+    unsafe { table.slab_mut().insert(id, record) };
+    let replaced = inner
+        .families
+        .get_mut(&keys)
+        .is_some_and(|ids| ids.replace(predecessor, id));
+    if !replaced {
+        // `id` came from `alloc_shape_id` above and is in no list yet.
+        inner.family_append_fresh(keys, id);
+    }
+    id
+}
+
+/// Mint a FRESH descriptor for a delete successor, DETACHED from exact-facts
+/// interning. Returns 0 when the id space is exhausted.
+///
+/// The accelerator is skipped deliberately, not forgotten. Its key includes
+/// the keys array's ADDRESS, and the tombstone lane is gated on an OWNED
+/// array, so no second receiver can ever present these facts: every entry the
+/// index gained had to be removed again by the retirement sweep, and a third
+/// time by the re-add's detach (`try_update_stable_tombstone_shape`), which
+/// also pushed the re-add off its cheap `_cached` path. Six hash-table
+/// operations per delete/re-add cycle for an index with no possible reader,
+/// measured at +1153 instructions per cycle on `bench_populated_delete`.
+///
+/// The successor's `semantic_generation` is still the deterministic
+/// [`delete_transition_generation`], so the identity of the transition is
+/// unchanged — only its discoverability is. The day shape facts stop carrying
+/// the keys address, indexing becomes useful (two receivers could then agree
+/// on one successor) and this is the line that turns it back on.
+fn mint_detached_delete_successor(
+    keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: super::ShapeObjectKind,
+    hole_count: u32,
+) -> u32 {
+    let Ok(id) = super::alloc_shape_id() else {
+        return 0;
+    };
+    let mut record = ShapeRecord::new(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+    );
+    // `ShapeRecord::new` sets the flag by default, because its usual caller
+    // inserts into `by_facts` on the next line. This record is never inserted
+    // there, and the flag is what both stable-tombstone updaters read to
+    // decide whether a detach is owed: leaving it set would make the cheap
+    // `try_update_stable_tombstone_shape_cached` path refuse the receiver
+    // forever and send every re-add through a `facts_remove` for an entry
+    // that does not exist.
+    record.set(RECORD_FLAG_FACTS_INDEXED, false);
+    let table = &crate::state::state().shapes;
+    // Publish by-id first, then the family index — an ObjectHeader is stamped
+    // only after this returns, so a visible id always has a complete record.
+    // SAFETY: no slab reference is held across the insert.
+    unsafe { table.slab_mut().insert(id, record) };
+    table.inner.borrow_mut().family_append_fresh(keys, id);
+    id
+}
+
+/// Does this keys allocation have more than one owner?
+///
+/// `GC_FLAG_SHAPE_SHARED` is sticky and the caches stamp it when they publish
+/// an array, so its ABSENCE is the proof of single ownership that the
+/// in-place tombstone lanes already run on.
+unsafe fn keys_array_is_shape_shared(keys: *const super::ArrayHeader) -> bool {
+    let Some(gc) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
+        // Unreadable header: assume shared, which only costs a retained
+        // descriptor.
+        return true;
+    };
+    gc.obj_type != crate::gc::GC_TYPE_ARRAY || gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
 }
 
 /// Install a process-global id into this agent's local descriptor table.

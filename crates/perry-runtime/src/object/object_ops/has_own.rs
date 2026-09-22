@@ -600,7 +600,24 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                                 class_id, key_name,
                             )
                             .is_some();
-                    return f64::from_bits(if is_static_field { TAG_TRUE } else { TAG_FALSE });
+                    // #10480: a declared static accessor is non-enumerable by
+                    // ClassBody default, but a generic descriptor can flip it
+                    // (Object.defineProperty(C, "x", { enumerable: true })).
+                    let is_enumerable_static_accessor =
+                        super::super::class_registry::class_accessor_attrs_in_use()
+                            && super::super::class_registry::class_declared_accessor_ptrs(
+                                class_id, true, key_name,
+                            )
+                            .is_some()
+                            && super::super::class_registry::class_accessor_attrs(
+                                class_id, true, key_name,
+                            )
+                            .0;
+                    return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    });
                 }
             }
         }
@@ -719,6 +736,12 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // non-enumerable like private (`#`) elements.
         if (*obj).class_id != 0 && super::super::field_get_set::is_internal_runtime_key(key_name) {
             return f64::from_bits(TAG_FALSE);
+        }
+        // #10480: a ClassBody accessor is an own property of the prototype with
+        // no physical key; a generic `defineProperty` can make it enumerable.
+        if super::super::class_registry::class_prototype_enumerable_accessor(obj as usize, key_name)
+        {
+            return f64::from_bits(TAG_TRUE);
         }
         if !own_key_present(obj, key_str) {
             return f64::from_bits(TAG_FALSE);

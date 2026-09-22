@@ -796,7 +796,9 @@ pub(crate) unsafe fn define_property_force_store_value(
     // refreshed receiver.
     let (key_str, obj_reloaded) = obj_handle.across_mut::<ObjectHeader, _>(|| {
         key_handle
-            .across_const::<crate::StringHeader, _>(|| ensure_key_in_keys_array(obj, key_str))
+            .across_const::<crate::StringHeader, _>(|| {
+                ensure_key_in_keys_array_for_value(obj, key_str)
+            })
             .1
     });
     obj = obj_reloaded;

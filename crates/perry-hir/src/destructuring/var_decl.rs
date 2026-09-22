@@ -257,6 +257,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // Alias / prototype / static-method tracking for the freshly-
             // bound identifier (extracted to `alias_tracking`).
             track_decl_aliases(ctx, decl, &name, id, &init);
+            // #10489: remember WHICH class this binding holds, so a `new <name>()`
+            // resolves to it even when another binding claimed the same name.
+            if let Some(key) = init.as_ref().and_then(class_expr_value_key) {
+                if decl
+                    .init
+                    .as_deref()
+                    .is_some_and(crate::lower::expr_assign::rhs_accepts_assignment_name)
+                    && ctx.inferred_class_bindings.contains(&name)
+                {
+                    ctx.inferred_class_bindings
+                        .record_binding(id, key.to_string());
+                }
+            }
             // `with (o) { var foo = v; }` — the binding `foo` is hoisted to
             // the enclosing var scope, but the *initialisation* is a normal
             // PutValue under the with environment: when `o` has a `foo`
@@ -527,4 +540,23 @@ pub(crate) fn lower_var_decl_with_destructuring(
     }
 
     Ok(result)
+}
+
+/// The registration key of the class a lowered class-expression initializer
+/// yields: a bare `ClassRef`/`ClassExprFresh`, or the tail of the sequence
+/// `lower_class_expr` wraps it in (parent registration, computed names, the
+/// #6654 capture-owner `LocalSet(owner, fresh), LocalGet(owner)` pair).
+fn class_expr_value_key(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::ClassRef(key) => Some(key),
+        Expr::ClassExprFresh { template, .. } => Some(template),
+        Expr::Sequence(items) => match items.as_slice() {
+            [.., Expr::LocalSet(owner, value), Expr::LocalGet(read)] if owner == read => {
+                class_expr_value_key(value)
+            }
+            [.., last] => class_expr_value_key(last),
+            [] => None,
+        },
+        _ => None,
+    }
 }

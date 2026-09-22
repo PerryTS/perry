@@ -52,7 +52,7 @@
 //! (`js_node_http_*` → `http`). But a large family of data-store / client
 //! wrappers name every symbol `js_<binding>_*` 1:1 with the binding key
 //! (`js_ioredis_*` → `perry-ext-ioredis`). Those are routed generically by
-//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `iovalkey`/`undici`/`node-forge`
+//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `iovalkey`/`undici`/`typescript`
 //! (a `perry.compilePackages` member that never appears in any import set)
 //! still flips its wrapper onto the link line off the emitted FFI alone.
 
@@ -113,6 +113,10 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // The Bun dispatch bucket can reach listen/connect through extracted
     // callable exports, so installing it also activates the net provider.
     ("js_bun_tcp_nm_install",                       OwnerKind::WellKnown("net")),
+    // #10428/#10429: a materialized `net` / `http`/`https`/`http2` namespace
+    // or bound export installs its provider's value-form dispatcher.
+    ("js_ext_net_nm_install",                       OwnerKind::WellKnown("net")),
+    ("js_ext_http_nm_install",                      OwnerKind::WellKnown("http")),
     // ── #835: Web Streams ────────────────────────────────────────────
     // `perry-stdlib::streams` owns the canonical implementations.
     // `perry-ext-streams` re-implements a subset, but `js_stream_unwrap_handle`
@@ -596,33 +600,6 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_ext_net_socket_write3",                    OwnerKind::WellKnown("net")),
     ("js_ext_net_socket_end3",                      OwnerKind::WellKnown("net")),
 
-    // ── mysql2 (perry-ext-mysql2) ────────────────────────────────────
-    // Normally `import "mysql2"` flips the `[bindings.mysql2]` well-known
-    // and links perry-ext-mysql2. But a bundler (webpack/turbopack) inlines
-    // mysql2 under a NUMERIC module id, so there is no bare import for perry
-    // to see — and JS mysql2 JIT-compiles its row parsers with `new Function`
-    // (via `generate-function`), which an AOT binary cannot execute. The HIR
-    // pass in `perry-hir`'s native-module lowering recognizes a bundled
-    // `createPool`/`createConnection` by its mysql2 config-object signature
-    // and emits these FFIs directly, WITHOUT adding "mysql2" to the import
-    // set. Tag them here so the well-known flip fires off codegen provenance
-    // — same mechanism as the http/net/events rows above — and the staticlib
-    // joins the link line instead of leaving `_js_mysql2_*` undefined.
-    ("js_mysql2_create_pool",                       OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_create_connection",                 OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_query",                        OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_execute",                      OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_get_connection",               OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_end",                          OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_connection_query",             OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_connection_execute",           OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_pool_connection_release",           OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_connection_query",                  OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_connection_execute",                OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_connection_begin_transaction",      OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_connection_commit",                 OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_connection_rollback",               OwnerKind::WellKnown("mysql2")),
-    ("js_mysql2_connection_end",                    OwnerKind::WellKnown("mysql2")),
 ];
 
 /// Prefix-based routing for ext-binding FFI whose emitted symbols follow the
@@ -659,15 +636,11 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("js_ioredis_",    "ioredis"),
     // undici HTTP/1.1 client + Agent/ProxyAgent (perry-ext-undici).
     ("js_undici_",     "undici"),
-    // node-forge PKI subset — RSA keygen, X.509 build/sign, PEM
-    // (perry-ext-node-forge). Hyphenated package → underscored prefix.
-    ("js_node_forge_", "node-forge"),
     // Native runtime TypeScript transpilation subset (#8511).
     ("js_typescript_", "typescript"),
     // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
     ("js_bun_transpiler_", "typescript"),
     ("js_bun_build", "typescript"),
-    ("js_qs_",         "qs"),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.
@@ -803,7 +776,7 @@ pub(crate) fn record_ffi_call(symbol: &str) {
 
     // Ext-binding prefix net: an emitted `js_<binding>_*` symbol flips its
     // well-known wrapper onto the link line off codegen provenance alone. This
-    // is what lets an AOT-compiled `iovalkey` / `undici` / `node-forge` (in
+    // is what lets an AOT-compiled `iovalkey` / `undici` / `typescript` (in
     // `perry.compilePackages`, so never in any import set) still link its
     // `perry-ext-*` staticlib. The MODULE_CAPTURE marker is the matched prefix
     // itself: replaying it (object-cache manifest, #6439) re-enters this arm
@@ -1062,6 +1035,27 @@ mod tests {
         );
     }
 
+    /// #10428/#10429: materializing a `net` / `http`/`https`/`http2`
+    /// namespace (or a bound export such as `require('net').createConnection`)
+    /// emits the PROVIDER's install wrapper, which registers the value-form
+    /// dispatcher. It lives in the ext crate, so emitting it must flip that
+    /// crate onto the link line even when no import made it visible.
+    #[test]
+    fn provider_namespace_installs_route_to_their_well_known_binding() {
+        let _guard = ProviderTestGuard::new();
+        for (module, owner) in [
+            ("net", "net"),
+            ("node:net", "net"),
+            ("http", "http"),
+            ("node:https", "http"),
+            ("http2", "http"),
+        ] {
+            let symbol = crate::nm_install::nm_install_symbol(module)
+                .unwrap_or_else(|| panic!("{module} has no namespace install symbol"));
+            assert_symbol_routes_to(symbol, OwnerKind::WellKnown(owner));
+        }
+    }
+
     #[test]
     fn bun_serve_routes_to_http_and_fetch_providers() {
         let _guard = ProviderTestGuard::new();
@@ -1241,12 +1235,11 @@ mod tests {
             ("js_ioredis_hgetall", "ioredis"),
             ("js_undici_request", "undici"),
             ("js_undici_proxy_agent_new", "undici"),
-            ("js_node_forge_generate_key_pair", "node-forge"),
-            ("js_node_forge_create_certificate", "node-forge"),
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
-            ("js_qs_stringify", "qs"),
-            ("js_qs_parse", "qs"),
+            ("js_typescript_transpile_module", "typescript"),
+            ("js_bun_transpiler_new", "typescript"),
+            ("js_bun_build", "typescript"),
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
         }

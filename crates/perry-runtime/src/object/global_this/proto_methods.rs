@@ -4,6 +4,45 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
+/// Install a FIXED-string `Symbol.toStringTag` data property (`{ value: tag,
+/// writable: false, enumerable: false, configurable: true }`, ES2019
+/// WebIDL/`get %TypedArray%.prototype [ @@toStringTag ]` sibling shape but a
+/// plain data property rather than a getter -- these Web API interfaces
+/// each own a single fixed tag, unlike the shared TypedArray prototype) on
+/// `proto_obj`. #10555: `Object.prototype.toString.call(x)` and
+/// `x[Symbol.toStringTag]` for these types are ALSO answered directly by
+/// `crate::object::web_builtin_to_string_tag` (`object/to_string_tag.rs`)
+/// for every instance shape that reaches it -- most of these types' own
+/// instances never link `[[Prototype]]` back to this very `proto_obj` (see
+/// that function's doc comment), so that synthesized answer is load-bearing
+/// for `x[Symbol.toStringTag]`/`toString.call(x)` on an INSTANCE. This
+/// installs the matching descriptor on the constructor's `.prototype`
+/// object itself so `Object.getOwnPropertyDescriptor(Ctor.prototype,
+/// Symbol.toStringTag)` also reflects a real, correctly-shaped descriptor
+/// (test262-style reflection, and libraries that copy descriptors off the
+/// prototype rather than reading the instance).
+unsafe fn install_web_builtin_to_string_tag(proto_obj: *mut ObjectHeader, tag: &str) {
+    if proto_obj.is_null() {
+        return;
+    }
+    let symbol = crate::symbol::well_known_symbol("toStringTag");
+    if symbol.is_null() {
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    let value = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+    crate::symbol::js_object_set_symbol_property(
+        crate::value::js_nanbox_pointer(proto_obj as i64),
+        crate::value::js_nanbox_pointer(symbol as i64),
+        value,
+    );
+    crate::symbol::set_symbol_property_attrs(
+        proto_obj as usize,
+        symbol as usize,
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
+}
+
 /// Universal `Object.prototype` methods inherited by every receiver in
 /// JS. Installed on every built-in constructor's prototype since Perry's
 /// prototype chain on these built-ins doesn't walk back up to a shared
@@ -64,6 +103,170 @@ fn install_array_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
         proto_obj as usize,
         iter as usize,
         crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+/// #10482: install `Object.prototype.__proto__` as a REAL accessor
+/// descriptor — `{ get, set, enumerable: false, configurable: true }`, per
+/// ECMA-262 Annex B §B.3.1 — instead of the purely behavioral special-casing
+/// Perry had before (reads/writes worked through `__proto__` as a magic key
+/// name in several call sites, but nothing on `Object.prototype` reflected
+/// it). `hasOwnProperty`/`Object.hasOwn`/`getOwnPropertyNames`/
+/// `getOwnPropertyDescriptor`/`"__proto__" in {}`/`Reflect.ownKeys` all read
+/// `ACCESSOR_DESCRIPTORS`/`PROPERTY_DESCRIPTORS` unconditionally, so a real
+/// entry here is what makes them agree with Node.
+///
+/// Uses `set_builtin_accessor_descriptor` (gate-neutral): it does not flip
+/// `GLOBAL_DESCRIPTORS_IN_USE` / `ACCESSORS_IN_USE`, so ordinary property
+/// read/write fast paths are unaffected for every OTHER key. `__proto__`
+/// itself was already treated as unconditionally interceptable by
+/// `object_proto_may_intercept_key` / `plain_custom_prototype_may_intercept`
+/// (see `object/descriptor_state.rs`) before this change, so installing a
+/// real descriptor for it changes no hot-path gate this key didn't already
+/// trip — only what reflection sees.
+///
+/// The getter delegates to `js_object_get_prototype_of`, which already
+/// implements the getter's exact spec shape (ToObject-style wrapper
+/// resolution for primitives, Proxy/Temporal/handle receivers, and a throw
+/// on `null`/`undefined`). The setter delegates to
+/// `proxy::legacy_dunder_proto_set`, the same Annex-B logic `proxy.rs`'s
+/// `ordinary_set_with_receiver` used to inline for this one key (#6828) —
+/// now shared so both call sites can never drift apart. Once this
+/// descriptor exists, `own_set_descriptor` finds it and dispatches through
+/// the ordinary accessor-setter path before that inlined special case is
+/// ever reached (see the comment there).
+fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
+    if proto_obj.is_null() {
+        return;
+    }
+    let getter = crate::closure::js_closure_alloc(
+        object_prototype_dunder_proto_getter_thunk as *const u8,
+        0,
+    );
+    let setter = crate::closure::js_closure_alloc(
+        object_prototype_dunder_proto_setter_thunk as *const u8,
+        0,
+    );
+    if getter.is_null() || setter.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(
+        object_prototype_dunder_proto_getter_thunk as *const u8,
+        0,
+    );
+    crate::closure::js_register_closure_arity(
+        object_prototype_dunder_proto_setter_thunk as *const u8,
+        1,
+    );
+    super::super::native_module::set_bound_native_closure_name(getter, "get __proto__");
+    super::super::native_module::set_bound_native_closure_name(setter, "set __proto__");
+    super::super::native_module::set_builtin_closure_length(getter as usize, 0);
+    super::super::native_module::set_builtin_closure_length(setter as usize, 1);
+    super::super::native_module::set_builtin_closure_non_constructable(getter as usize);
+    super::super::native_module::set_builtin_closure_non_constructable(setter as usize);
+    let get_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+    let set_bits = crate::value::js_nanbox_pointer(setter as i64).to_bits();
+    // A descriptor alone doesn't make the name enumerable by
+    // `getOwnPropertyNames`/`hasOwnProperty`/`Object.hasOwn`/
+    // `Reflect.ownKeys` — those walk the object's OWN KEYS ARRAY, which
+    // `set_builtin_accessor_descriptor` (deliberately gate-neutral) never
+    // touches. Write an ordinary placeholder field first, exactly like
+    // `perf_hooks::install_perf_getter`: this appends `"__proto__"` to the
+    // keys array via the ordinary field-set path, and the accessor
+    // descriptor installed right after takes over every actual read/write —
+    // the placeholder `undefined` is never observed.
+    let key = crate::string::js_string_from_bytes(b"__proto__".as_ptr(), 9);
+    js_object_set_field_by_name(proto_obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+    super::super::set_builtin_accessor_descriptor(
+        proto_obj as usize,
+        "__proto__".to_string(),
+        super::super::AccessorDescriptor {
+            get: get_bits,
+            set: set_bits,
+        },
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}
+
+extern "C" fn object_prototype_dunder_proto_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    // Spec (Annex B §B.3.1 `get __proto__`): `ToObject(this).[[GetPrototypeOf]]()`.
+    // `js_object_get_prototype_of` already implements exactly this shape —
+    // wrapper-prototype resolution for primitives, Proxy/Temporal/handle
+    // receivers, and a throw on `null`/`undefined` (the `ToObject` failure
+    // case) — so the getter is a direct delegation, not a reimplementation.
+    let receiver = crate::object::js_implicit_this_get();
+    crate::object::js_object_get_prototype_of(receiver)
+}
+
+extern "C" fn object_prototype_dunder_proto_setter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    let receiver = crate::object::js_implicit_this_get();
+    crate::proxy::legacy_dunder_proto_set(receiver, value);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Install a native accessor (getter only) on a builtin prototype. The getter
+/// is an ordinary `ClosureHeader` that reads its receiver from `IMPLICIT_THIS`
+/// and brand-checks it, so `Object.getOwnPropertyDescriptor(P, k).get.call({})`
+/// throws like node's.
+///
+/// Two things this must NOT do, both learned rather than assumed:
+///
+/// * it must not use `install_fresh_accessor_property`, which flips the
+///   process-wide `GLOBAL_DESCRIPTORS_IN_USE` gate (#6809) and would push every
+///   later dynamic property write in ANY program that merely constructs a
+///   `TextDecoder` onto the descriptor-interception slow walk;
+/// * it must put the key in the prototype's keys array, or
+///   `Object.getOwnPropertyNames(TextDecoder.prototype)` and `for...in` on an
+///   instance would not see it.
+///
+/// `install_builtin_getter` does both. It records the ECMA-262 builtin shape
+/// (`enumerable: false`), which is right for its other callers
+/// (`ArrayBuffer.prototype.byteLength`), so the WebIDL flags are restated on
+/// the same entry afterwards: interface members are
+/// `{ enumerable: true, configurable: true }`, and node prints
+/// `for-in d: decode,encoding,fatal,ignoreBOM`.
+#[cfg(feature = "global-text")]
+fn install_text_accessor(proto_obj: *mut ObjectHeader, name: &str, getter: *const u8) {
+    unsafe {
+        crate::closure::js_register_closure_arity(getter, 0);
+        let closure = crate::closure::js_closure_alloc(getter, 0);
+        if closure.is_null() {
+            return;
+        }
+        let get_bits = crate::value::js_nanbox_pointer(closure as i64).to_bits();
+        // Spec: an accessor getter's own `.name` is `"get " + key` and its
+        // `.length` is 0, and it is not constructable.
+        super::super::native_module::set_bound_native_closure_name(closure, &format!("get {name}"));
+        super::super::native_module::set_builtin_closure_length(closure as usize, 0);
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+        install_builtin_getter(proto_obj, name, get_bits);
+        super::super::set_builtin_accessor_descriptor(
+            proto_obj as usize,
+            name.to_string(),
+            super::super::AccessorDescriptor {
+                get: get_bits,
+                set: 0,
+            },
+            super::super::PropertyAttrs::new(true, true, true),
+        );
+    }
+}
+
+/// Mark an already-installed prototype method enumerable. WebIDL interface
+/// members are enumerable; `install_proto_method` records the ECMA-262 builtin
+/// shape (`enumerable: false`), which is right for its other callers, so the
+/// text family restates its own entries here instead.
+#[cfg(feature = "global-text")]
+fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
+    super::super::set_builtin_property_attrs(
+        proto_obj as usize,
+        name.to_string(),
+        super::super::PropertyAttrs::new(true, true, true),
     );
 }
 
@@ -258,18 +461,52 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         }
         "ArrayBuffer" => {
             install_proto_method(proto_obj, "slice", array_buffer_slice_thunk as *const u8, 2);
-            unsafe {
-                crate::closure::js_register_closure_arity(
+            // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
+            install_proto_method(
+                proto_obj,
+                "resize",
+                array_buffer_resize_thunk as *const u8,
+                1,
+            );
+            // The thunks take the optional `newLength` (call arity 1); the
+            // spec `.length` of both is 0.
+            let transfers: [(&str, *const u8); 2] = [
+                ("transfer", array_buffer_transfer_thunk as *const u8),
+                (
+                    "transferToFixedLength",
+                    array_buffer_transfer_to_fixed_length_thunk as *const u8,
+                ),
+            ];
+            for (name, thunk) in transfers {
+                let installed = install_proto_method(proto_obj, name, thunk, 1);
+                let closure = crate::value::js_nanbox_get_pointer(installed) as usize;
+                if closure != 0 {
+                    super::super::native_module::set_builtin_closure_length(closure, 0);
+                }
+            }
+            let getters: [(&str, *const u8); 4] = [
+                (
+                    "byteLength",
                     array_buffer_byte_length_getter_thunk as *const u8,
-                    0,
-                );
-                let getter = crate::closure::js_closure_alloc(
-                    array_buffer_byte_length_getter_thunk as *const u8,
-                    0,
-                );
-                if !getter.is_null() {
-                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
+                ),
+                (
+                    "resizable",
+                    array_buffer_resizable_getter_thunk as *const u8,
+                ),
+                (
+                    "maxByteLength",
+                    array_buffer_max_byte_length_getter_thunk as *const u8,
+                ),
+                ("detached", array_buffer_detached_getter_thunk as *const u8),
+            ];
+            for (name, thunk) in getters {
+                unsafe {
+                    crate::closure::js_register_closure_arity(thunk, 0);
+                    let getter = crate::closure::js_closure_alloc(thunk, 0);
+                    if !getter.is_null() {
+                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+                        install_builtin_getter(proto_obj, name, getter_bits);
+                    }
                 }
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -360,6 +597,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 object_prototype_property_is_enumerable_thunk as *const u8,
                 1,
             );
+            install_object_prototype_dunder_proto(proto_obj);
         }
         "Function" => {
             // `Function.prototype` has own `length` (0) and `name` ("") data
@@ -660,6 +898,59 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 );
             }
         }
+        // #10759: `URLSearchParams` previously had ONLY the `#10555` arm
+        // below (moved here): `install_web_builtin_to_string_tag` and
+        // nothing else, because its methods dispatch through type-directed
+        // static dispatch / the small-int/handle dispatch tables and never
+        // needed reified closures for ordinary `x.method()` calls. That
+        // design has no answer for a method read AS A VALUE --
+        // `URLSearchParams.prototype.append`, `.prototype["has"]`, or
+        // through a Proxy `get` trap indirection -- which returned
+        // `undefined` instead of a callable closure. node-fetch's
+        // `Headers extends URLSearchParams` -- whose constructor returns
+        // `new Proxy(this, { get(target, p, receiver) { ... return
+        // (...)=> URLSearchParams.prototype[p].call(target, ...); } })` --
+        // then threw "Function.prototype.call was called on a value that is
+        // not a function" on the very first `headers.has(...)`, reached by
+        // every `fetch()` call before the request is even sent. Same
+        // mechanism as the `Stream.prototype`/`Object.hasOwnProperty`/
+        // `Function.toString` fixes elsewhere (`install_static.rs`,
+        // `node_stream_dispatch.rs`): install the no-op-backed reified
+        // closures so a value read resolves to a real (name-carrying)
+        // function, which `Function.prototype.call`/`.apply`'s
+        // `try_dispatch_value_called_proto_method` re-dispatches by name
+        // through `try_url_search_params_dynamic_dispatch` using the
+        // caller-supplied receiver. Method set + arities verified against
+        // `node --experimental-strip-types` (v26.5.1). The
+        // `install_web_builtin_to_string_tag` call is retained so
+        // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
+        // Symbol.toStringTag)` keeps reflecting a real descriptor -- see
+        // that function's doc comment. The other six members of the
+        // `#10555` group below (`URL`, `AbortController`, `AbortSignal`,
+        // `EventTarget`, `Event`, `CustomEvent`) have the same
+        // "toStringTag-only arm" shape and have NOT been audited for this
+        // same value-read gap; see #10759's PR body for what was checked.
+        "URLSearchParams" => {
+            install_noop_proto_methods(
+                proto_obj,
+                &[
+                    ("append", 2),
+                    ("delete", 1),
+                    ("entries", 0),
+                    ("forEach", 1),
+                    ("get", 1),
+                    ("getAll", 1),
+                    ("has", 1),
+                    ("keys", 0),
+                    ("set", 2),
+                    ("sort", 0),
+                    ("toString", 0),
+                    ("values", 0),
+                ],
+            );
+            install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
+        }
         "Promise" => {
             install_proto_method(
                 proto_obj,
@@ -681,15 +972,62 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
+        // #340/#341: these carried `install_noop_proto_methods` placeholders —
+        // the prototype looked right to reflection while the real work went
+        // through the handle-dispatch table. Instances are ordinary objects
+        // now, so the prototype carries the real implementations and an
+        // ordinary property lookup finds them.
         #[cfg(feature = "global-text")]
         "TextEncoder" => {
-            install_noop_proto_methods(proto_obj, &[("encode", 1), ("encodeInto", 2)]);
+            install_proto_method(
+                proto_obj,
+                "encode",
+                crate::text::text_encoder_encode_thunk as *const u8,
+                1,
+            );
+            install_proto_method(
+                proto_obj,
+                "encodeInto",
+                crate::text::text_encoder_encode_into_thunk as *const u8,
+                2,
+            );
+            install_text_accessor(
+                proto_obj,
+                "encoding",
+                crate::text::text_encoder_encoding_getter as *const u8,
+            );
+            for name in ["encode", "encodeInto"] {
+                make_proto_member_enumerable(proto_obj, name);
+            }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
         #[cfg(feature = "global-text")]
         "TextDecoder" => {
-            install_noop_proto_methods(proto_obj, &[("decode", 1)]);
+            install_proto_method(
+                proto_obj,
+                "decode",
+                crate::text::text_decoder_decode_thunk as *const u8,
+                1,
+            );
+            install_text_accessor(
+                proto_obj,
+                "encoding",
+                crate::text::text_decoder_encoding_getter as *const u8,
+            );
+            install_text_accessor(
+                proto_obj,
+                "fatal",
+                crate::text::text_decoder_fatal_getter as *const u8,
+            );
+            install_text_accessor(
+                proto_obj,
+                "ignoreBOM",
+                crate::text::text_decoder_ignore_bom_getter as *const u8,
+            );
+            make_proto_member_enumerable(proto_obj, "decode");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }
         #[cfg(feature = "global-webfetch")]
         "Headers" => {
@@ -709,6 +1047,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
         #[cfg(feature = "global-webfetch")]
         "Request" | "Response" => {
@@ -781,6 +1120,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 }
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         #[cfg(feature = "global-webfetch")]
         "Blob" | "File" => {
@@ -795,6 +1135,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         #[cfg(feature = "global-webfetch")]
         "FormData" => {
@@ -814,6 +1155,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 ],
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
         #[cfg(feature = "global-websocket")]
         "WebSocket" => {
@@ -935,6 +1277,26 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // is wired alongside the `OBJ_FLAG_TYPED_ARRAY_PROTO` flag so the
             // generic property-get chain walk resolves the inherited methods.
         }
+        // #10555: these Web API types install NO methods here (their surface
+        // is either type-directed static dispatch or the small-int/handle
+        // dispatch tables), but each still needs its `.prototype`'s own
+        // `Symbol.toStringTag` descriptor for reflection -- see
+        // `install_web_builtin_to_string_tag`'s doc comment. `URLSearchParams`
+        // used to be listed here too; #10759 moved it to its own arm above
+        // (still calling `install_web_builtin_to_string_tag`) once a VALUE
+        // read of one of its prototype methods turned out to need real
+        // reified closures, not just the toStringTag descriptor. The other
+        // six members of this group (`URL`, `AbortController`,
+        // `AbortSignal`, `EventTarget`, `Event`, `CustomEvent`) have not been
+        // audited for the same "read as a value" gap -- see #10759's PR body.
+        "URL" => unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") },
+        "AbortController" => unsafe {
+            install_web_builtin_to_string_tag(proto_obj, "AbortController")
+        },
+        "AbortSignal" => unsafe { install_web_builtin_to_string_tag(proto_obj, "AbortSignal") },
+        "EventTarget" => unsafe { install_web_builtin_to_string_tag(proto_obj, "EventTarget") },
+        "Event" => unsafe { install_web_builtin_to_string_tag(proto_obj, "Event") },
+        "CustomEvent" => unsafe { install_web_builtin_to_string_tag(proto_obj, "CustomEvent") },
         _ => {}
     }
 }

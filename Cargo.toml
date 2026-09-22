@@ -16,45 +16,27 @@ members = [
     "crates/perry-http-client",
     "crates/perry-http-server",
     "crates/perry-native-registration",
-    "crates/perry-ext-dotenv",
-    "crates/perry-ext-nanoid",
-    "crates/perry-ext-uuid",
     "crates/perry-ext-bcrypt",
     "crates/perry-ext-argon2",
-    "crates/perry-ext-jsonwebtoken",
-    "crates/perry-ext-validator",
-    "crates/perry-validation",
     "crates/perry-perex",
-    "crates/perry-ext-lru-cache",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
-    "crates/perry-ext-exponential-backoff",
-    "crates/perry-ext-axios",
     "crates/perry-ext-events",
     "crates/perry-ext-decimal",
-    "crates/perry-ext-dayjs",
-    "crates/perry-ext-qs",
-    "crates/perry-ext-moment",
     "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
-    "crates/perry-ext-ratelimit",
-    "crates/perry-ext-commander",
     "crates/perry-ext-ethers",
     "crates/perry-ext-nodemailer",
-    "crates/perry-ext-cron",
     "crates/perry-ext-ioredis",
-    "crates/perry-ext-pg",
-    "crates/perry-ext-mysql2",
+
     "crates/perry-ext-undici",
     "crates/perry-ext-mongodb",
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
     "crates/perry-ext-http",
     "crates/perry-ext-streams",
-    "crates/perry-ext-fastify",
     "crates/perry-ext-pdf",
     "crates/perry-ext-ads",
-    "crates/perry-ext-node-forge",
     "crates/perry-ext-parcel-watcher",
     "crates/perry-ext-typescript",
     "crates/perry-wasm-host",
@@ -229,8 +211,6 @@ codegen-units = 1
 # needs 2+ of these wrapper crates simultaneously, because perry's
 # strip-dedup mechanism assumes same-named codegen units are byte-identical
 # and safe to drop duplicates from — an assumption this mismatch violated.
-[profile.release.package.perry-ext-fastify]
-codegen-units = 1
 [profile.release.package.perry-ext-http]
 codegen-units = 1
 [profile.release.package.perry-ext-ioredis]
@@ -328,8 +308,6 @@ codegen-units = 1
 # Issue #5928: mirrors the [profile.release.package.perry-ext-*] block above
 # — see its comment for why matching `codegen-units` across every crate in
 # the "shared tokio" (#507) cargo invocation is required.
-[profile.dist.package.perry-ext-fastify]
-codegen-units = 1
 [profile.dist.package.perry-ext-http]
 codegen-units = 1
 [profile.dist.package.perry-ext-ioredis]
@@ -342,7 +320,7 @@ codegen-units = 1
 codegen-units = 1
 
 [workspace.package]
-version = "0.5.1593"
+version = "0.5.1634"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/PerryTS/perry"
@@ -403,7 +381,7 @@ chrono = "0.4"
 regex = "1.12"
 aho-corasick = "1.1"
 # The single regular-expression engine, through crates/perry-perex.
-perex = "0.1.7"
+perex = "0.1.9"
 # turnloop P0/P1: the per-agent event-loop wait driver and, since P1, Perry's
 # stream sockets (docs/turnloop/p0-report.md, crates/perry-runtime/src/turnloop_net).
 # 0.1.0-alpha.3 switched turnloop's own dependency requirements from exact pins
@@ -566,45 +544,27 @@ perry-http-client = { path = "crates/perry-http-client" }
 # crate instead of those bindings taking an edge to perry-ext-http.
 perry-http-server = { path = "crates/perry-http-server" }
 perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1534" }
-perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
-perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
-perry-ext-uuid = { path = "crates/perry-ext-uuid" }
 perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
 perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
-perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }
-perry-ext-validator = { path = "crates/perry-ext-validator" }
-perry-validation = { path = "crates/perry-validation" }
 perry-perex = { path = "crates/perry-perex" }
-perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
-perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }
-perry-ext-axios = { path = "crates/perry-ext-axios" }
 perry-ext-events = { path = "crates/perry-ext-events" }
 perry-ext-decimal = { path = "crates/perry-ext-decimal" }
-perry-ext-dayjs = { path = "crates/perry-ext-dayjs" }
-perry-ext-qs = { path = "crates/perry-ext-qs" }
-perry-ext-moment = { path = "crates/perry-ext-moment" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
-perry-ext-ratelimit = { path = "crates/perry-ext-ratelimit" }
-perry-ext-commander = { path = "crates/perry-ext-commander" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
-perry-ext-cron = { path = "crates/perry-ext-cron" }
 perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
-perry-ext-pg = { path = "crates/perry-ext-pg" }
-perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
+
 perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }
 perry-ext-streams = { path = "crates/perry-ext-streams" }
-perry-ext-fastify = { path = "crates/perry-ext-fastify" }
 perry-ext-pdf = { path = "crates/perry-ext-pdf" }
 perry-ext-ads = { path = "crates/perry-ext-ads" }
-perry-ext-node-forge = { path = "crates/perry-ext-node-forge" }
 perry-ext-parcel-watcher = { path = "crates/perry-ext-parcel-watcher" }
 perry-ext-typescript = { path = "crates/perry-ext-typescript" }
 perry-stdlib = { path = "crates/perry-stdlib" }

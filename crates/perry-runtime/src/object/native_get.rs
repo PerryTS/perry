@@ -70,7 +70,10 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
         {
             return None;
         }
-        let header = crate::value::addr_class::try_read_gc_header(addr)?;
+        // `is_plausible_heap_addr(addr)` was just proven true above; skip
+        // `try_read_gc_header`'s own re-derivation of it (see
+        // `try_read_gc_header_known_plausible`'s doc comment).
+        let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
         if header.obj_type != crate::gc::GC_TYPE_OBJECT
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
@@ -85,7 +88,7 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
         // Positive membership, rather than a blacklist of native class ids.
         // Synthetic function/Object.create ids occupy the allocated prefix
         // of this counter's range; reserved native ids are outside it.
-        let synthetic = class_id >= 0x8000_0000
+        let synthetic = class_id >= super::class_registry::SYNTHETIC_CLASS_ID_BASE
             && class_id < super::NEXT_SYNTHETIC_CLASS_ID.load(std::sync::atomic::Ordering::Relaxed);
         if class_id != 0 && !synthetic && !super::is_anon_shape_class_id(class_id) {
             return None;
@@ -108,7 +111,15 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
             let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
                 if let Some(slot) =
-                    super::keys_find_slot_by_bytes(keys, descriptor.logical_key_count, key)
+                    // `keys` came straight out of `descriptor` above with no
+                    // allocation in between, and the collector maintains that
+                    // field — so the resolved entry skips a `clean_arr_ptr`
+                    // that re-derives it.
+                    super::keys_find_slot_by_bytes_resolved(
+                        keys,
+                        descriptor.logical_key_count,
+                        key,
+                    )
                 {
                     let value = super::field_get_set::object_field_at_with_live(
                         object,

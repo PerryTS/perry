@@ -383,6 +383,22 @@ pub(crate) fn lower_let(
                 ctx,
                 &perry_hir::Expr::LocalSet(id, Box::new(init_expr.clone())),
             )?;
+            // #10488: a hoisted `var`'s real declaration reaches this branch
+            // (#1803 predefine-then-declare) and returns before the
+            // fresh-declaration path's `insert` runs, desyncing
+            // `is_numeric_expr` from the `local_types` readers. Refresh here.
+            //
+            // #10727: but NOT when the storage is a box. A captured local
+            // reaches this branch with no source redeclaration --
+            // `PreallocateBoxes` registers the id up front -- and the refined
+            // type then describes the VALUE while the slot holds a box
+            // pointer, so reads lower as raw local loads instead of
+            // `js_box_get_bits`: the declaring scope read `undefined` while a
+            // closure over the same binding saw the real value. A hoisted
+            // `var` is unboxed unless captured, so #10488 keeps its fix.
+            if !ctx.boxed_vars.contains(&id) {
+                ctx.local_types.insert(id, refined_ty.clone());
+            }
         } else if ctx.tdz_boxes.remove(&id) {
             // No-init reuse (`let x;`) of a TDZ-seeded box must still end the
             // dead zone by clearing the sentinel to `undefined`; otherwise a
@@ -1242,13 +1258,6 @@ pub(crate) fn lower_let(
             }
             return Ok(());
         }
-        // Step 1: allocate box with undefined sentinel bits.
-        let blk = ctx.block();
-        let box_ptr = blk.call(
-            crate::types::I64,
-            "js_box_alloc_bits",
-            &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
-        );
         // Slot must live in the entry block — closures from sibling
         // branches may capture this id later, and an alloca placed
         // here would not dominate those branches' loads.
@@ -1267,7 +1276,14 @@ pub(crate) fn lower_let(
         // deterministically.
         let undef_bits = crate::nanbox::TAG_UNDEFINED_I64.to_string();
         ctx.func.entry_allocas_push_store(I64, &undef_bits, &slot);
-        ctx.block().store(I64, &box_ptr, &slot);
+        // Step 1: allocate the box (#10464: released by this frame).
+        let box_ptr = super::boxed_frame_release::mint_frame_cell(
+            ctx,
+            &slot,
+            "js_box_alloc_bits",
+            &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
+            super::boxed_frame_release::JS_BOX_SCOPE_RELEASE,
+        );
         super::record_boxed_slot_js_value_bits(ctx, id, &box_ptr, "boxed_let.box_ptr_slot");
         // Step 2: register BEFORE lowering init.
         ctx.locals.insert(id, slot);

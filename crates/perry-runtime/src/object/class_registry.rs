@@ -42,6 +42,7 @@ pub use super::class_handles::{
 };
 use super::*;
 
+mod accessor_attrs;
 mod builtin_alias_construct;
 mod class_meta;
 mod construct;
@@ -52,7 +53,8 @@ pub mod decl_prototype_table;
 mod dispatch;
 pub(crate) mod evaluation_heritage;
 pub(crate) use evaluation_heritage::{
-    active_class_evaluation_parent, is_self_heritage_value, push_active_class_evaluation,
+    active_class_evaluation_parent, instance_pinned_constructing_class, is_self_heritage_value,
+    pin_instance_constructing_class, push_active_class_evaluation,
 };
 mod function_prototype;
 mod gc_roots;
@@ -62,6 +64,14 @@ pub(crate) mod prototype_objects;
 mod registration;
 mod state;
 mod vm_brand;
+
+// ── accessor_attrs.rs ───────────────────────────────────────────────────────
+pub(crate) use accessor_attrs::{
+    class_accessor_attrs, class_accessor_attrs_in_use, class_accessor_descriptor,
+    class_declared_accessor_ptrs, class_enumerable_accessor_names,
+    class_prototype_enumerable_accessor, class_set_accessor_attrs,
+    decl_prototype_enumerable_key_snapshot, decl_prototype_keys_with_enumerable_accessors,
+};
 
 // ── state.rs ────────────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -95,13 +105,16 @@ pub use state::{
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
-    class_prototype_object, ensure_function_prototype_object, function_class_id,
-    function_value_for_class_id, resolve_proto_chain_field,
-    resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
+    alloc_synthetic_class_id, class_prototype_object, ensure_function_prototype_object,
+    function_class_id, function_value_for_class_id, proto_chain_symbol_slot,
+    resolve_proto_chain_field, resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
+    synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
 pub use prototype_objects::{
     js_set_function_prototype, js_set_prototype_property, NEXT_SYNTHETIC_CLASS_ID,
 };
+#[cfg(test)]
+pub(crate) use prototype_objects::{test_alloc_synthetic_class_id, SYNTHETIC_CLASS_ID_END};
 
 // ── class_meta.rs ───────────────────────────────────────────────────────────
 #[cfg(test)]
@@ -191,9 +204,9 @@ pub use registration::{
 #[cfg(test)]
 pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
-    call_vtable_method, call_vtable_method_with_private_brand, fetch_parent_kind_in_chain,
-    obj_dispatch_ic_insert, obj_dispatch_ic_lookup, vtable_generation, vtable_ic_insert,
-    vtable_ic_lookup, VTABLE_GEN,
+    call_vtable_method, call_vtable_method_with_private_brand, class_lookup_surface_gen_bump,
+    class_lookup_surface_generation, fetch_parent_kind_in_chain, obj_dispatch_ic_insert,
+    obj_dispatch_ic_lookup, vtable_generation, vtable_ic_insert, vtable_ic_lookup, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────
@@ -207,8 +220,8 @@ pub(crate) use parent_static::{
     class_own_symbol_method, class_private_instance_getter_value,
     class_private_instance_setter_apply, class_static_accessor_getter_value,
     class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
-    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    register_class, register_class_dynamic_static_accessor,
+    dynamic_value_class_id, get_parent_class_id, lookup_class_symbol_method_in_chain,
+    lookup_static_method_in_chain, register_class, register_class_dynamic_static_accessor,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

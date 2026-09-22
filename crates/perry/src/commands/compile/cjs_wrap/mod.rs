@@ -37,12 +37,15 @@
 //!     follows up to a small depth (2 levels) to handle one level of env
 //!     switching; deeper indirection is rare and gets the no-op fallback.
 
+mod deferred_requires;
 pub(crate) mod detect;
 mod extract_exports;
 mod extract_requires;
 mod hoist_classes;
 mod wrap;
 
+#[cfg(test)]
+mod issue_10662_tests;
 #[cfg(test)]
 mod issue_6585_tests;
 #[cfg(test)]
@@ -51,6 +54,7 @@ mod parcel_watcher_tests;
 mod preamble_canary_tests;
 
 // Cross-sibling helpers — siblings reach for these via `use super::*;`.
+use deferred_requires::deferred_require_specs;
 use detect::is_js_reserved_word;
 use extract_exports::{
     extract_exports_from_source, extract_named_exports_from_require,
@@ -60,8 +64,8 @@ use extract_exports::{
 // #8547: the stdlib-link decision needs the literal `require()` specifiers.
 pub(crate) use extract_requires::extract_require_specifiers;
 use extract_requires::{
-    extract_export_star_specs, extract_require_aliases_with_ranges, function_local_specs,
-    identifier_is_declared_binding, identifier_is_reassigned,
+    extract_export_star_specs, extract_require_aliases_with_ranges, identifier_is_declared_binding,
+    identifier_is_reassigned,
 };
 use hoist_classes::{
     extract_top_level_class_decls, rewrite_module_exports_class_expression,

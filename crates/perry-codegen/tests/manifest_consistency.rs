@@ -3,15 +3,31 @@
 //! Every row of `NATIVE_MODULE_TABLE` (the static dispatch table in
 //! `lower_call.rs`) must have a counterpart entry in `API_MANIFEST`,
 //! otherwise the unimplemented-API check would error on a real
-//! implementation. This file covers two drifts:
+//! implementation.
 //!
-//! 1. `every_dispatch_entry_has_manifest_counterpart` — by name only;
-//!    catches new dispatch rows that nobody added to the manifest.
-//! 2. `manifest_param_counts_match_dispatch_table` (#512) — for
+//! **`every_dispatch_entry_has_manifest_counterpart` moved** to
+//! `perry_codegen::manifest_consistency`, a `#[cfg(test)]` unit test in
+//! `crates/perry-codegen/src/manifest_consistency.rs` — see that module's
+//! doc comment for the full reasoning. Short version: as an integration test
+//! here, it only ran per-PR when the diff named this file, which is the one
+//! file a drifting PR (one that only adds `NATIVE_MODULE_TABLE` rows) has no
+//! reason to touch. #10668 landed 15 such rows and nothing caught it until an
+//! unrelated PR happened to run this suite. The unit test runs on every
+//! `cargo-test` invocation regardless of which files the diff touches.
+//!
+//! This file still covers:
+//!
+//! 1. `manifest_param_counts_match_dispatch_table` (#512) — for
 //!    auto-derivable rows (`has_receiver: false`, no class filter) the
 //!    manifest's `params.len()` must match the dispatch table's args
 //!    arity, so the generated `.d.ts` doesn't claim a different shape
-//!    than what codegen actually accepts.
+//!    than what codegen actually accepts. (Same disjoint-trigger gap as
+//!    the moved check applies here too — left as an integration test for
+//!    now, out of scope for this pass.)
+//! 2. `every_native_module_has_at_least_one_manifest_entry` (#513) — the
+//!    reverse-direction structural check.
+//! 3. `cjs_style_node_builtins_have_default_entries`.
+//! 4. `every_well_known_binding_has_manifest_entry` (#513).
 //!
 //! Class-filtered duplicates collapse to one manifest entry — the
 //! manifest tracks "is this method known on this module?", not the
@@ -19,43 +35,6 @@
 
 use perry_api_manifest::{ApiKind, ParamSpec, TypeSpec, API_MANIFEST};
 use perry_codegen::iter_native_method_signatures;
-
-#[test]
-fn every_dispatch_entry_has_manifest_counterpart() {
-    let mut missing: Vec<String> = Vec::new();
-
-    for sig in iter_native_method_signatures() {
-        // Look for a manifest entry on the same (module, name) where
-        // the kind is Method with matching has_receiver. class_filter
-        // mismatches across rows of the same (module, method) pair are
-        // expected — the dispatch table specializes by class, the
-        // manifest does not.
-        let hit = API_MANIFEST.iter().any(|e| {
-            e.module == sig.module
-                && e.name == sig.method
-                && matches!(
-                    e.kind,
-                    ApiKind::Method { has_receiver, .. } if has_receiver == sig.has_receiver
-                )
-        });
-        if !hit {
-            let cls = sig.class_filter.unwrap_or("-");
-            missing.push(format!(
-                "{}::{} (has_receiver={}, class_filter={})",
-                sig.module, sig.method, sig.has_receiver, cls
-            ));
-        }
-    }
-
-    assert!(
-        missing.is_empty(),
-        "API_MANIFEST is missing {} entry/entries that exist in NATIVE_MODULE_TABLE:\n  {}\n\n\
-         Add the missing rows to crates/perry-api-manifest/src/entries.rs — \
-         drift here would make the unimplemented-API check (#463) error on real implementations.",
-        missing.len(),
-        missing.join("\n  ")
-    );
-}
 
 /// #512: for every auto-derivable dispatch row (no receiver, no class
 /// filter) the manifest's `params` length must match the dispatch
@@ -199,7 +178,7 @@ fn every_native_module_has_at_least_one_manifest_entry() {
     /// allowed list documents the exception so a future module that
     /// genuinely lacks coverage doesn't sneak past CI by being added
     /// here.
-    const SIDE_EFFECT_ONLY: &[&str] = &["dotenv/config"];
+    const SIDE_EFFECT_ONLY: &[&str] = &[];
 
     let mut missing: Vec<&'static str> = Vec::new();
     for &module in perry_api_manifest::NATIVE_MODULES {
@@ -267,7 +246,7 @@ fn cjs_style_node_builtins_have_default_entries() {
 /// the sibling test above and excluded here too.
 #[test]
 fn every_well_known_binding_has_manifest_entry() {
-    const SIDE_EFFECT_ONLY: &[&str] = &["dotenv/config"];
+    const SIDE_EFFECT_ONLY: &[&str] = &[];
 
     // Inline parse of well_known_bindings.toml — small enough that
     // pulling in `toml` as a dev-dep just for this test would be

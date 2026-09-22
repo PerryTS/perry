@@ -344,15 +344,6 @@
       "linux"
     ]
   },
-  "test_issue_340_axios_response_props": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_issue_341_typed_field_native": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -839,38 +830,11 @@
       "linux"
     ]
   },
-  "test_parity_cron": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "Node runs; Perry's cron default import resolves validate/schedule as undefined and then throws while reading task.start. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_parity_crypto": {
     "issue": "8271",
     "added": "2026-08-17",
     "category": "bug-open",
     "reason": "Node runs; Perry's algorithm inventories are incomplete: Linux reports 15/6/17 ciphers/curves/hashes versus Node's 134/82/52. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_parity_date_fns": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "ci-env",
-    "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'date-fns' after the repository's CI-equivalent npm ci because date-fns is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_parity_dayjs": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "Node runs; Perry's native dayjs shim returns numeric 1/0 for predicates and diverges on ISO, default, startOf, and endOf formatting. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]
@@ -907,15 +871,6 @@
     "added": "2026-08-17",
     "category": "ci-env",
     "reason": "Node 26.5.1 exits ERR_MODULE_NOT_FOUND for 'lru-cache' after the repository's CI-equivalent npm ci because lru-cache is absent from package.json/package-lock.json. Broken oracle; Perry output cannot be adjudicated until the fixture dependency is intentionally provisioned. Confirmed in the #8271 audit.",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_parity_moment": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "bug-open",
-    "reason": "Node runs; Perry's native moment shim stops at moment.utc with an unimplemented-call error. This reproduces against Node 22 and 26.5.1 and is independent of the oracle bump. Confirmed in the #8271 audit.",
     "platforms": [
       "linux"
     ]

@@ -148,10 +148,22 @@ fn cache_distinguishes_strings_and_invalidates_in_place_appends() {
     prune_dead_utf16_indexes(&|_| true);
 }
 
+/// #10688: the index used to live in a fixed four-slot array that evicted
+/// round-robin, so interleaving indexed access across more strings than that
+/// rebuilt from scratch on every access — 1,224x, as a step function at the
+/// fifth string. There is no capacity now, so this asserts the replacement
+/// guarantee: **an index survives no matter how many other strings are
+/// indexed alongside it.**
+///
+/// It also keeps the original invariant this test carried, which is unrelated
+/// to capacity and still load-bearing: consuming a one-character string
+/// produced by `char_at` must not disturb the source string's index.
 #[test]
-fn cache_eviction_is_bounded_and_short_strings_do_not_evict_sources() {
+fn indexes_survive_any_number_of_interleaved_strings() {
     prune_dead_utf16_indexes(&|_| true);
-    for i in 0..CACHE_ENTRIES * 3 {
+    const STRINGS: usize = 16; // comfortably past the old four-slot capacity
+    let mut sources = Vec::new();
+    for i in 0..STRINGS {
         let text = format!(
             "{}{}",
             "中".repeat(256),
@@ -162,8 +174,150 @@ fn cache_eviction_is_bounded_and_short_strings_do_not_evict_sources() {
         let before = test_utf16_index_entries();
         let ch = js_string_char_at(s, 256);
         assert_eq!(js_string_char_code_at(ch, 0), (0x400 + i) as f64);
-        assert_eq!(test_utf16_index_entries(), before);
-        assert!(before.len() <= CACHE_ENTRIES);
+        assert_eq!(
+            test_utf16_index_entries(),
+            before,
+            "a short string from char_at must not disturb the source's index"
+        );
+        sources.push((s, 0x400 + i));
+    }
+    // Every index is still resident: no eviction happened at any depth.
+    assert_eq!(
+        test_utf16_index_entries().len(),
+        STRINGS,
+        "all {STRINGS} indexes must survive; the old array held only four"
+    );
+    // And every one still answers correctly, cheaply, in a second pass.
+    for (s, expected) in &sources {
+        assert_eq!(js_string_char_code_at(*s, 256), *expected as f64);
     }
     prune_dead_utf16_indexes(&|_| true);
+    assert!(
+        test_utf16_index_entries().is_empty(),
+        "the collector's prune hook must reclaim them"
+    );
+}
+
+/// #10656: `codePointAt` used to walk the WTF-8 payload from byte 0 on every
+/// call, so a scan over a string holding one non-ASCII character was O(n^2).
+/// These pin the spec behaviour across the cached-index path that replaced it:
+/// a BMP code point, the start of a surrogate pair (the whole code point), the
+/// low half (the bare trailing surrogate), and an unpaired leading surrogate.
+#[test]
+fn code_point_at_matches_the_spec_through_the_cached_index() {
+    // Long enough to exercise the checkpoint/cursor path, not the short-string
+    // fallback, and non-ASCII so it cannot take the ASCII fast path.
+    let mut text = String::new();
+    for _ in 0..200 {
+        text.push_str("\u{e9}abcdefghij0123456789");
+    }
+    let astral_at = text.chars().count();
+    text.push('\u{1F600}'); // surrogate pair
+    text.push('z');
+
+    let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let units: Vec<u16> = text.encode_utf16().collect();
+
+    // Walk forwards (the sequential case tsc hits) and compare every index
+    // against an independent UTF-16 expansion of the same text.
+    for (idx, &unit) in units.iter().enumerate() {
+        let got = crate::string::js_string_code_point_at(s, idx as i32);
+        let expected = if (0xD800..0xDC00).contains(&unit) && idx + 1 < units.len() {
+            let second = units[idx + 1];
+            if (0xDC00..0xE000).contains(&second) {
+                0x10000 + (((unit as u32 - 0xD800) << 10) | (second as u32 - 0xDC00))
+            } else {
+                unit as u32
+            }
+        } else {
+            unit as u32
+        };
+        assert_eq!(got, expected as f64, "codePointAt({idx})");
+    }
+
+    // The surrogate pair specifically: start yields the astral code point, the
+    // low half yields the bare trailing surrogate.
+    let pair_start = units.len() - 3;
+    assert_eq!(
+        crate::string::js_string_code_point_at(s, pair_start as i32),
+        128512.0_f64
+    );
+    assert!((0xDC00..0xE000).contains(
+        &(crate::string::js_string_code_point_at(s, pair_start as i32 + 1) as u32 as u16)
+    ));
+    let _ = astral_at;
+
+    // Out of bounds stays undefined.
+    let oob = crate::string::js_string_code_point_at(s, units.len() as i32);
+    assert_eq!(oob.to_bits(), crate::value::TAG_UNDEFINED);
+}
+
+/// Random access must agree with sequential access: the cursor optimises the
+/// forward case, and a backward seek must not return a stale answer.
+#[test]
+fn code_point_at_is_order_independent() {
+    let mut text = String::new();
+    for _ in 0..150 {
+        text.push_str("x\u{e9}yz");
+    }
+    let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let n = text.encode_utf16().count();
+
+    let forward: Vec<f64> = (0..n)
+        .map(|i| crate::string::js_string_code_point_at(s, i as i32))
+        .collect();
+    let backward: Vec<f64> = (0..n)
+        .rev()
+        .map(|i| crate::string::js_string_code_point_at(s, i as i32))
+        .collect();
+    for (i, value) in backward.iter().rev().enumerate() {
+        assert_eq!(*value, forward[i], "index {i} differs by traversal order");
+    }
+}
+
+/// #10685: `copy_utf16_range` resolved its start boundary by walking from byte
+/// 0 on every call, so slicing a non-ASCII string at increasing offsets was
+/// O(n^2). `boundary_at` must agree with that walk at every index — including
+/// the low half of a surrogate pair, where `low` selects the split copy path.
+#[test]
+fn boundary_at_matches_a_walk_from_zero() {
+    let mut text = String::new();
+    for _ in 0..80 {
+        text.push_str("\u{e9}abcdefghij0123456789");
+    }
+    text.push('\u{1F600}');
+    text.push_str("tail\u{e9}");
+    let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let bytes = unsafe {
+        std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize)
+    };
+    let n = text.encode_utf16().count();
+
+    for idx in 0..n {
+        let walked = crate::string::slice_range::advance(
+            bytes,
+            crate::string::slice_range::Boundary::default(),
+            idx,
+        );
+        if let Some((byte, low)) = super::boundary_at(s, idx) {
+            assert_eq!(byte, walked.byte, "byte offset at {idx}");
+            assert_eq!(low, walked.low, "low-surrogate flag at {idx}");
+        }
+    }
+}
+
+/// The cursor optimises forward seeks; a backward seek must not reuse it.
+#[test]
+fn boundary_at_is_order_independent() {
+    let mut text = String::new();
+    for _ in 0..80 {
+        text.push_str("x\u{e9}yz");
+    }
+    let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let n = text.encode_utf16().count();
+    let forward: Vec<_> = (0..n).map(|i| super::boundary_at(s, i)).collect();
+    let backward: Vec<_> = (0..n).rev().map(|i| super::boundary_at(s, i)).collect();
+    for (i, value) in backward.iter().rev().enumerate() {
+        assert_eq!(*value, forward[i], "index {i} differs by traversal order");
+    }
 }

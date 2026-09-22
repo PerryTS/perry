@@ -204,21 +204,6 @@ pub(crate) fn set_method_value_name(key: &[u8]) -> Option<&'static [u8]> {
 /// predicate left, a caller has nothing to pair with its own pointer, so the
 /// bug cannot be reintroduced by writing the obvious code. Same shape as
 /// `set_method_value_name` above and `buffer_method_name_static` (#7747).
-pub(crate) fn timer_handle_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
-    match key {
-        b"ref" => Some(b"ref"),
-        b"unref" => Some(b"unref"),
-        b"hasRef" => Some(b"hasRef"),
-        b"refresh" => Some(b"refresh"),
-        b"close" => Some(b"close"),
-        b"__perry_dispose__" => Some(b"__perry_dispose__"),
-        // `using t = setTimeout(...)` / `t[Symbol.dispose]` — the well-known
-        // dispose symbol lowers to this key. (#1213)
-        b"@@__perry_wk_dispose" => Some(b"@@__perry_wk_dispose"),
-        b"@@__perry_wk_toPrimitive" => Some(b"@@__perry_wk_toPrimitive"),
-        _ => None,
-    }
-}
 
 /// Words in a per-site property-read cache global (`@perry_ic_N`). Codegen
 /// emits `[PIC_CACHE_WORDS x i64] zeroinitializer`; this type is the runtime's
@@ -238,6 +223,77 @@ pub const PIC_CACHE_WORDS: usize = 12;
 /// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
 /// | 11 | round-robin victim index for the ways |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
+
+/// The value a per-site compact MRU word (`@perry_ic_N_packed_get`) holds
+/// before anything primes it.
+///
+/// **Must equal `PACKED_GET_EMPTY` in perry-codegen's
+/// `expr/property_get/generic_dispatch.rs`** — `packed_get_sentinels_match_codegen`
+/// below and `pic_cache_layout_matches_runtime` there hold the pair.
+///
+/// It is deliberately NOT zero. The emitted hit path compares the receiver's
+/// ShapeId word at `+4` against this word's low half; an object that was never
+/// shape-stamped carries `parent_class_id` there, which is 0 for an anonymous
+/// object literal, so a zero sentinel would let such a receiver MATCH an
+/// unprimed site and take the raw load at slot 0. That is why the tower used
+/// to spend a `test`/`je` on every read proving the word was filled. A
+/// sentinel no receiver word can equal makes the ShapeId compare prove both
+/// facts at once.
+///
+/// `0xFFFF_FFFF`. The u32 at `+4` is a ShapeId ([0x8000_0000, 0xC000_0000)),
+/// a synthetic class id, or an ordinary HIR class id (a counter from 1).
+/// Synthetic ids sit at or above 0x8000_0000 today and move to
+/// [0xC000_0000, 0xFFFF_0000) under #10824, so `0xFFFF_FFFF` is above every
+/// one of them under BOTH schemes, and an ordinary id would need ~2^32
+/// classes to reach it.
+pub(crate) const PACKED_GET_EMPTY: u64 = 0xFFFF_FFFF;
+
+/// Bit flipped into the ShapeId a compact MRU word publishes when the key is
+/// SPILL-located. **Must equal `PACKED_SPILL_FLIP` in perry-codegen.**
+///
+/// ShapeIds live in [0x8000_0000, 0xC000_0000), so flipping the TOP TWO bits
+/// lands a spill entry in [0x4000_0000, 0x8000_0000) — the one u32 band that
+/// is neither a ShapeId, nor a synthetic class id (at or above 0x8000_0000
+/// today, [0xC000_0000, 0xFFFF_0000) under #10824), nor reachable by an
+/// ordinary HIR class id without ~2^30 classes. Flipping only bit 30 would
+/// land it in [0xC000_0000, 2^32), which #10824 turns into the synthetic
+/// class-id range — a receiver carrying one would then take the inline load
+/// with a spill index, silently.
+/// The emitted hit path's plain compare therefore declines a spill entry for
+/// free, which is what let the overflow-bit test (a 10-byte `movabs`, a `test`
+/// and a branch) leave the hit path of every site, including the ones whose
+/// field is inline and could never see the bit.
+pub(crate) const PACKED_SPILL_FLIP: u32 = 0xC000_0000;
+
+/// Decode a compact MRU word into `(ShapeId, index, is_spill)`.
+///
+/// `None` for the unprimed sentinel. The inverse of the encoding in
+/// [`packed_get::prime_get`]; the emitted code open-codes the two compares
+/// this performs, so any change here is a change there.
+#[inline]
+pub(crate) fn packed_get_decode(word: u64) -> Option<(u32, u32, bool)> {
+    use crate::object::shapes::{SHAPE_ID_BASE, SHAPE_ID_END};
+    // The overwhelmingly common word on a cold site, and the one the
+    // emitted global is born holding. Named rather than range-derived so
+    // this stays visibly paired with the perry-codegen copy of it.
+    if word == PACKED_GET_EMPTY {
+        return None;
+    }
+    let key32 = word as u32;
+    let index = (word >> 32) as u32;
+    if (SHAPE_ID_BASE..SHAPE_ID_END).contains(&key32) {
+        return Some((key32, index, false));
+    }
+    // The spill band is the ShapeId range with [`PACKED_SPILL_FLIP`] flipped
+    // in, and the flip is an involution, so this recognises exactly the words
+    // [`packed_get::prime_get`] can publish for a spill-located key.
+    let unflipped = key32 ^ PACKED_SPILL_FLIP;
+    if (SHAPE_ID_BASE..SHAPE_ID_END).contains(&unflipped) {
+        return Some((unflipped, index, true));
+    }
+    // [`PACKED_GET_EMPTY`], and anything else no prime can publish.
+    None
+}
 
 /// The per-site slot codegen emits for a property-read cache — `@perry_ic_N =
 /// private global ptr null` — holding null until the site's first priming
@@ -295,6 +351,78 @@ const PIC_MEGAMORPHIC_EVICTIONS: i64 = 16;
 /// while a phase-changed site recovers within one such window.
 const PIC_LATCH_RETRY: i64 = 2048;
 
+/// The `PERRY_IC_DIAG` half of a prime, outlined and `#[cold]` so the armed
+/// path pays one predicted branch and nothing else. Every value it reads is in
+/// the cache line `pic_prime_get` has already touched; what it must not do is
+/// make the function it is called from any bigger.
+#[cold]
+#[inline(never)]
+fn pic_note_prime_diag(c: &PicCache, prev_tok: i64, token: i64) {
+    // Was `token` already sitting in a WAY? The MRU comparison alone cannot
+    // tell a site rotating k <= PIC_WAYS+1 shapes (the ways doing their job)
+    // from one whose cached answer the emitted gate never consulted. Read
+    // here, before the caller's loop evicts `token` from its way.
+    let in_ways = (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == token);
+    // #10863: the invariant that must never break. An overflow-encoded slot
+    // sitting in a way is a WILD LOAD in the emitted way path (it computes
+    // `obj + header + slot * 8` from the raw word, bit 30 and all), not a slow
+    // read — so it is worth a standing counter on real programs and not only a
+    // unit test.
+    let way_encoded = (0..PIC_WAYS).any(|w| {
+        c[PIC_WAY_BASE + w * 2] != 0
+            && (c[PIC_WAY_BASE + w * 2 + 1] as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT)
+                != 0
+    });
+    crate::hot_diag::ic_note_prime(
+        c as *const PicCache as usize,
+        prev_tok,
+        token,
+        c[PIC_WAY_STATE],
+        in_ways,
+        way_encoded,
+    );
+}
+
+/// #10863: one capacity eviction the ways could not absorb, on an ARMED site.
+///
+/// Advances the consecutive-eviction run and latches at
+/// [`PIC_MEGAMORPHIC_EVICTIONS`], on exactly the evidence the no-free-way arm
+/// of `pic_prime_get` latches on. Writes NOTHING to a way: the displaced slot
+/// is overflow-encoded, and an encoded slot in a way is a wild load in the
+/// emitted way path (#9287). Only the gate the ways sit behind moves.
+///
+/// Outlined so `pic_prime_get` grows by one compare and a predicted branch.
+/// It runs on 0.8% of primes at a site this applies to — the 16 that climb
+/// the run — and never at all at a site that was not armed.
+#[inline(never)]
+fn pic_note_uncascadable_eviction(c: &mut PicCache, state: i64) {
+    let run = (state >> 8) + 1;
+    if run >= PIC_MEGAMORPHIC_EVICTIONS {
+        pic_latch_megamorphic(c);
+    } else {
+        // Bits 0..7 — the armed bit and the round-robin victim — carry through
+        // unchanged. This prime claimed no way and displaced none, so it may
+        // move neither; only the run advances.
+        c[PIC_WAY_STATE] = (state & 0xff) | (run << 8);
+    }
+}
+
+/// Turn the ways off for [`PIC_LATCH_RETRY`] misses, leaving no readable way
+/// behind: the emitted gate skips the compares while `PIC_WAY_STATE` is
+/// negative, and a latched site has to be the pre-#7753 code path exactly.
+///
+/// Two callers reach the same evidence by different routes — a capacity
+/// eviction that displaced a cached shape, and (#10863) one that had nowhere
+/// to put the shape it displaced — so the latch itself lives in one place.
+#[inline]
+fn pic_latch_megamorphic(c: &mut PicCache) {
+    for w in 0..PIC_WAYS {
+        c[PIC_WAY_BASE + w * 2] = 0;
+        c[PIC_WAY_BASE + w * 2 + 1] = 0;
+    }
+    c[PIC_WAY_STATE] = -PIC_LATCH_RETRY;
+}
+
 /// Prime the MRU entry, cascading the shape it evicts into the ways.
 ///
 /// Word 0 holds the last cacheable shape. An evicted shape moves into a way,
@@ -325,12 +453,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     // `prev_tok != token` (the receiver really did change shape). Read before
     // the write below, because the write destroys the evidence.
     if crate::hot_diag::ic_on() {
-        // Was `token` already sitting in a WAY? The MRU comparison alone cannot
-        // tell a site rotating k <= PIC_WAYS+1 shapes (the ways doing their job)
-        // from one whose cached answer the emitted gate never consulted. Read
-        // here, before the loop below evicts `token` from its way.
-        let in_ways = (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == token);
-        crate::hot_diag::ic_note_prime(cache as usize, prev_tok, token, c[PIC_WAY_STATE], in_ways);
+        pic_note_prime_diag(c, prev_tok, token);
     }
     c[0] = token;
     c[1] = slot;
@@ -358,11 +481,69 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     // polymorphic site rotating overflow shapes re-primes the MRU per shape,
     // which is exactly the pre-#7753 behaviour.
     let prev_is_overflow = (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0;
-    let cascade = prev_tok != 0 && prev_tok != token && !prev_is_overflow;
-    // One pass over the ways does three things:
-    //   * evicts `token` from a way if it has one — it now lives in the MRU
-    //     entry, and leaving the stale copy behind would permanently cost a way
-    //     (a k-shape rotation would then only ever cache k-1 of them);
+    // Two different questions, which #10863 found sharing one answer:
+    //
+    //   `evicted` — did a DIFFERENT shape just displace the MRU entry? That is
+    //     the event the ways exist to absorb, and the only evidence the
+    //     megamorphic latch is entitled to count.
+    //   `cascade` — may the displaced entry be absorbed INTO a way? An encoded
+    //     slot may not, ever, for the reason directly above.
+    //
+    // A site can be evicting on every single read and still be unable to
+    // cascade. That is precisely the case the latch exists for, and it used to
+    // be the one case that could not reach it.
+    let evicted = prev_tok != 0 && prev_tok != token;
+    let cascade = evicted && !prev_is_overflow;
+    if !cascade {
+        // Nothing may enter a way on this path, so the pass over them has
+        // exactly one job: drop a stale copy of `token`, which now lives in
+        // the MRU entry. Leaving it behind would permanently cost a way (a
+        // k-shape rotation would then only ever cache k-1 of them). No free
+        // way is looked for and no victim moves, because nothing is going to
+        // be written.
+        for w in 0..PIC_WAYS {
+            let ti = PIC_WAY_BASE + w * 2;
+            if c[ti] == token {
+                c[ti] = 0;
+                c[ti + 1] = 0;
+            }
+        }
+        // #10863. Reaching here at all means neither the MRU entry nor any way
+        // answered this read — the emitted gate fell through to the handler.
+        // If the site is ARMED (`state > 0`, the exact predicate that gate
+        // evaluates) it paid four dependent loads and a compare tree to learn
+        // that, and this prime can put nothing where they would have looked.
+        //
+        // So count it. `evicted && !cascade` is exactly "the MRU entry was
+        // displaced by a different shape, and the displaced slot is
+        // overflow-encoded": a capacity eviction with nowhere to go, which is
+        // strictly stronger evidence of a rotation the ways cannot hold than
+        // the no-free-way arm below — that one at least caches the shape it
+        // displaces. Before this, one `return` served both the cascade
+        // suppression and the latch, so a site rotating overflow shapes kept
+        // the armed state it earned during warm-up for the life of the
+        // process: measured at megamorphic=0 across 16.8M primes, every one of
+        // them `armed`, on a key as ordinary as the third property of an
+        // object literal.
+        //
+        // Nothing is written to a way here. #9287's rule is untouched — the
+        // ways still never see an encoded slot. What changes is only that the
+        // gate those ways sit behind is now allowed to turn itself off.
+        //
+        // `state > 0` and not `state >= 0` on purpose: a site with no way
+        // populated is already skipping the compares, so there is nothing to
+        // latch off and no reason to spend its recovery window.
+        //
+        // Outlined, and `state > 0` tested first: a site that never armed —
+        // every shape in its rotation carrying the key in overflow — takes
+        // this path on every read and must keep paying exactly what it paid
+        // before, which is one compare against a word already in a register.
+        if state > 0 && evicted {
+            pic_note_uncascadable_eviction(c, state);
+        }
+        return;
+    }
+    // The cascading pass, which additionally:
     //   * refreshes `prev_tok`'s way if it already has one;
     //   * remembers the first empty way for the cascade.
     let mut free: Option<usize> = None;
@@ -372,7 +553,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
         if c[ti] == token {
             c[ti] = 0;
             c[ti + 1] = 0;
-        } else if cascade && c[ti] == prev_tok {
+        } else if c[ti] == prev_tok {
             c[ti + 1] = prev_slot;
             prev_present = true;
             continue;
@@ -387,9 +568,6 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
         c[PIC_WAY_STATE] = PIC_STATE_ARMED | (((c[PIC_WAY_STATE] >> 1) & 0x7f) << 1);
         return;
     }
-    if !cascade {
-        return;
-    }
     let victim = (state >> 1) & 0x7f;
     let ti = match free {
         Some(ti) => {
@@ -402,11 +580,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
             // happens only during warm-up; past it, on every single miss.
             let run = (state >> 8) + 1;
             if run >= PIC_MEGAMORPHIC_EVICTIONS {
-                for w in 0..PIC_WAYS {
-                    c[PIC_WAY_BASE + w * 2] = 0;
-                    c[PIC_WAY_BASE + w * 2 + 1] = 0;
-                }
-                c[PIC_WAY_STATE] = -PIC_LATCH_RETRY;
+                pic_latch_megamorphic(c);
                 return;
             }
             let v = (victim + 1) % PIC_WAYS as i64;
@@ -416,16 +590,6 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     };
     c[ti] = prev_tok;
     c[ti + 1] = prev_slot;
-}
-
-/// The receiver's GC object type, or `None` when the address does not carry a
-/// readable `GcHeader`.
-///
-/// # Safety
-/// `obj` is only *inspected*; `try_read_gc_header` validates the address first.
-#[inline]
-unsafe fn gc_type_of(obj: *const ObjectHeader) -> Option<u8> {
-    crate::value::addr_class::try_read_gc_header(obj as usize).map(|h| h.obj_type)
 }
 
 /// Does this heap property key have exactly these bytes?
@@ -601,6 +765,38 @@ pub(super) fn get_field_ic_miss_impl(
     // `< 0x100000` proxy / HANDLE_PROPERTY_DISPATCH routing below — matching
     // the ordering in `js_object_get_field_by_name`. The macOS heap floor
     // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
+    // Lane 3 hook A, hoisted ABOVE the async-resource probe below.
+    //
+    // That probe costs 16.0 instructions per call once its latch is armed (a
+    // thread-local registry lookup), and it ran on every inherited read before
+    // this one could answer. The lookup cannot be confused by an async
+    // resource handle: those are `Box::into_raw` native allocations outside
+    // the GC arena, so their word at payload +4 is the high half of a small
+    // counter rather than a live ShapeId, `object_shape_stamp` answers 0, and
+    // the lookup returns `Unknown` in about ten instructions without
+    // dereferencing anything further. See the rule-3 note in
+    // `object::inherited_read_cache`.
+    let mut inherited_declined = false;
+    if crate::value::addr_class::is_above_handle_band(obj as usize) {
+        // Lane 3 hook A: an INHERITED read that this site has already resolved
+        // once. Placed before the ladder rather than after it because the
+        // whole point is the ladder: an inherited read otherwise re-walks the
+        // chain on every read (~1300 instructions, measured). The guard proves
+        // the receiver is a GC_TYPE_OBJECT itself, so nothing below has been
+        // skipped on its behalf; see `object::inherited_read_cache`.
+        match unsafe { crate::object::inherited_read_cache::inherited_read_cache_lookup(obj, key) }
+        {
+            crate::object::inherited_read_cache::Lookup::Hit(value) => {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::NotOwn);
+                }
+                return f64::from_bits(value.bits());
+            }
+            crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
+            crate::object::inherited_read_cache::Lookup::Unknown => {}
+        }
+    }
+
     if !key.is_null() && crate::async_hooks::is_async_resource_handle(obj as i64) {
         unsafe {
             if let Some(name) = crate::string::header_str_checked(key) {
@@ -615,99 +811,143 @@ pub(super) fn get_field_ic_miss_impl(
             }
         }
     }
+    // Lane 3 hook A's answer, carried to hook B at the bottom of this
+    // function: `Declined` means the chain walk has already been tried for
+    // this (receiver shape, key) and refused, so hook B must not try it again.
+    // Without that, every read the cache CANNOT serve pays for a full chain
+    // walk per read — measured at +424 instructions per read for an accessor
+    // on the prototype, a regression against no cache at all.
+    // ONE validated header read classifies the receiver for everything below.
+    // `try_read_gc_header` rejects the handle band and implausible addresses
+    // without touching memory, so `None` here is "not a heap cell" and the
+    // small-handle routing further down still sees it. The object path used
+    // to read the same header three more times (kind, descriptor flag,
+    // forwarding flag); it now takes all three from this one read.
+    //
+    // Hook A and `inherited_declined` are NOT re-declared here: #10842 hoisted
+    // them above the async-resource probe, so this commit's copy would be a
+    // second lookup per read and a shadowed binding.
+    let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) };
+    let gc_kind = gc_header.map(|h| h.obj_type);
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
-        // #7753: `arr.length` on a receiver codegen could not prove is an array.
+        // # The receiver-classification ladder runs only for NON-object kinds
         //
-        // The inline cache can never serve this read — it requires a
-        // GC_TYPE_OBJECT receiver by construction (#72, so an Array's
-        // `element[1]` is never mistaken for `keys_array`) — so EVERY dynamic
-        // `.length` lands here, and then walks a ladder built for objects: a
-        // closure-magic deref, two side-table registry probes behind
-        // thread-locals, then `js_object_get_field_by_name`'s own dispatch,
-        // which repeats the registry probes before finally reaching the array
-        // arm. On a tree-walking interpreter whose variable lookup is
-        // `for (i = 0; i < names.length; i++)`, that one read was 22% of total
-        // run time — more than the entire polymorphic-dispatch fix above saved.
+        // A miss used to walk, for EVERY heap receiver, the closure probe
+        // (`is_closure_ptr`'s magic read plus `closure_get_dynamic_prop`'s
+        // accessor side-table lookup), the buffer registry and the typed-array
+        // registry before it ever reached the object path — and on a read
+        // site that sees many shapes, where the ways cannot help and every
+        // read is a miss, that ladder was 33% of the read (`is_closure_ptr` +
+        // `closure_dynamic_prop_by_key` + `closure_get_dynamic_prop`, measured
+        // with `perf` on a 64-shape `o.kind` site by #10833), against 3% for
+        // the key scan the ladder was assumed to be protecting.
         //
-        // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays, lazy
-        // arrays, Sets and Maps all carry their own distinct `obj_type`. A
-        // `class X extends Array` instance instead uses `GC_TYPE_OBJECT`, but
-        // the exact-ShapeId dense-layout proof can read its live own `length`
-        // slot without repeating generic object dispatch. Both arms retain
-        // their established helpers, making this a dispatch short-circuit
-        // rather than a second implementation of either representation.
-        // An elements-backed Array-subclass instance answers its indices and
-        // `length` from its store; an absent index falls through to the ordinary
-        // lookup, which reaches the prototype chain (the shape has no index keys).
-        if let Some((_, elements)) =
-            unsafe { crate::array::subclass_elements::backed(obj as usize) }
-        {
+        // The ladder never answered for a `GC_TYPE_OBJECT`: closures are
+        // `GC_TYPE_CLOSURE`, buffers `GC_TYPE_BUFFER`, typed arrays
+        // `GC_TYPE_TYPED_ARRAY` — distinct kinds, and the registries the two
+        // probes consult are populated only from allocations of those kinds
+        // (the one `GC_TYPE_OBJECT` ever registered as a buffer is a test's
+        // forgery, which that test asserts is REJECTED). `object/shape_rule3.rs`
+        // classifies all 21 kinds. So the kind byte decides the ladder in one
+        // compare, and an ordinary object goes straight to the object path.
+        //
+        // What an object receiver keeps here is the two arms that genuinely
+        // apply to a `GC_TYPE_OBJECT`: an elements-backed Array subclass
+        // answering an INDEX or `length` key from its store, and `length` on an
+        // object-backed Array subclass through its exact-ShapeId layout proof.
+        // Both are gated on the KEY first — the store probe used to read the
+        // meta record for every key, and a named property can never be an
+        // elements key (`key_of_header` rejects it on its first byte).
+        if gc_kind == Some(crate::gc::GC_TYPE_OBJECT) {
+            // An elements-backed Array-subclass instance answers its indices
+            // and `length` from its store; an absent index falls through to
+            // the ordinary lookup, which reaches the prototype chain (the
+            // shape has no index keys).
             if let Some(elements_key) =
                 unsafe { crate::array::subclass_elements::key_of_header(key) }
             {
-                if let Some(value) =
-                    unsafe { crate::array::subclass_elements::get_by_key(elements, elements_key) }
+                if let Some((_, elements)) =
+                    unsafe { crate::array::subclass_elements::backed(obj as usize) }
                 {
-                    if diag {
-                        ic_diag_note(cache_slot, key, R::SubclassElements);
+                    if let Some(value) = unsafe {
+                        crate::array::subclass_elements::get_by_key(elements, elements_key)
+                    } {
+                        if diag {
+                            ic_diag_note(cache_slot, key, R::SubclassElements);
+                        }
+                        return value;
                     }
-                    return value;
                 }
             }
-        }
-        if unsafe { key_bytes_are(key, b"length") } {
-            match unsafe { gc_type_of(obj) } {
-                Some(crate::gc::GC_TYPE_ARRAY) => {
+            // Wolf ECS's Query and Archetype are `class ... extends Array`
+            // instances. They use ObjectHeader storage, so the Array arm in
+            // the other branch cannot recognize them and a megamorphic
+            // `.length` site otherwise repeats the full object lookup on every
+            // loop entry. Reuse the exact ShapeId-backed subclass layout proof
+            // already used by packed numeric reads. It declines accessor,
+            // prototype-override, sparse, and non-Array-subclass receivers,
+            // preserving the generic lookup below for every case it cannot
+            // prove.
+            if unsafe { key_bytes_are(key, b"length") } {
+                let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                if let Some(length) = crate::array::array_subclass_fast_length(receiver) {
                     if diag {
                         ic_diag_note(cache_slot, key, R::ArrayLength);
                     }
-                    let arr = obj as *const crate::array::ArrayHeader;
-                    return crate::array::js_array_length(arr) as f64;
+                    return length;
                 }
-                Some(crate::gc::GC_TYPE_OBJECT) => {
-                    // Wolf ECS's Query and Archetype are `class ... extends
-                    // Array` instances. They use ObjectHeader storage, so the
-                    // Array arm above cannot recognize them and a megamorphic
-                    // `.length` site otherwise repeats the full object lookup
-                    // on every loop entry. Reuse the exact ShapeId-backed
-                    // subclass layout proof already used by packed numeric
-                    // reads. It declines accessor, prototype-override, sparse,
-                    // and non-Array-subclass receivers, preserving the generic
-                    // lookup below for every case it cannot prove.
-                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                    if let Some(length) = crate::array::array_subclass_fast_length(receiver) {
-                        if diag {
-                            ic_diag_note(cache_slot, key, R::ArrayLength);
-                        }
-                        return length;
+            }
+        } else {
+            // #7753: `arr.length` on a receiver codegen could not prove is an
+            // array.
+            //
+            // The inline cache can never serve this read — it requires a
+            // GC_TYPE_OBJECT receiver by construction (#72, so an Array's
+            // `element[1]` is never mistaken for `keys_array`) — so EVERY
+            // dynamic `.length` lands here, and then walks a ladder built for
+            // objects: a closure-magic deref, two side-table registry probes
+            // behind thread-locals, then `js_object_get_field_by_name`'s own
+            // dispatch, which repeats the registry probes before finally
+            // reaching the array arm. On a tree-walking interpreter whose
+            // variable lookup is `for (i = 0; i < names.length; i++)`, that
+            // one read was 22% of total run time — more than the entire
+            // polymorphic-dispatch fix above saved.
+            //
+            // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays,
+            // lazy arrays, Sets and Maps all carry their own distinct
+            // `obj_type`.
+            if gc_kind == Some(crate::gc::GC_TYPE_ARRAY) && unsafe { key_bytes_are(key, b"length") }
+            {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::ArrayLength);
+                }
+                let arr = obj as *const crate::array::ArrayHeader;
+                return crate::array::js_array_length(arr) as f64;
+            }
+            unsafe {
+                if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::ClosureProp);
                     }
+                    return val;
                 }
-                _ => {}
-            }
-        }
-        unsafe {
-            if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::ClosureProp);
+                // The generic IC-miss object path below may inspect GC/object
+                // metadata, so mirror js_object_get_field_by_name's
+                // buffer-first dispatch here.
+                if crate::buffer::is_registered_buffer(obj as usize) {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::Buffer);
+                    }
+                    let value = js_object_get_field_by_name(obj, key);
+                    return f64::from_bits(value.bits());
                 }
-                return val;
-            }
-            // Buffers have no GcHeader. The generic IC-miss object path below may
-            // inspect GC/object metadata, so mirror js_object_get_field_by_name's
-            // buffer-first dispatch here.
-            if crate::buffer::is_registered_buffer(obj as usize) {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::Buffer);
+                if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::TypedArray);
+                    }
+                    let value = js_object_get_field_by_name(obj, key);
+                    return f64::from_bits(value.bits());
                 }
-                let value = js_object_get_field_by_name(obj, key);
-                return f64::from_bits(value.bits());
-            }
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::TypedArray);
-                }
-                let value = js_object_get_field_by_name(obj, key);
-                return f64::from_bits(value.bits());
             }
         }
     }
@@ -737,42 +977,10 @@ pub(super) fn get_field_ic_miss_impl(
                 return crate::proxy::js_proxy_get(boxed, key_f64);
             }
         }
-        // #1213: Timeout/Immediate handle methods (ref/unref/hasRef/refresh/
-        // close) read as bound-method function values so `typeof t.ref ===
-        // "function"` holds (the call form already works via
-        // js_native_call_method). The IC fast path funnels small handles here,
-        // bypassing the identical block in `js_object_get_field_by_name`, so it
-        // must be mirrored.
-        unsafe {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            if key_bytes == b"constructor" {
-                if let Some(value) = crate::timer::timer_constructor_value(obj as i64) {
-                    return value;
-                }
-            }
-            if let Some(method) = timer_handle_method_name_static(key_bytes) {
-                if crate::timer::is_known_timer_id(obj as i64) {
-                    let this_f64 =
-                        f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                    // #8133: the `'static` literal, NOT `key_ptr` — that is the
-                    // interior of a movable heap string this read does not own.
-                    return super::super::js_class_method_bind(
-                        this_f64,
-                        method.as_ptr(),
-                        method.len(),
-                    );
-                }
-            }
-            // TextDecoder/TextEncoder registry handles — IC-miss mirror of
-            // the arms in `js_object_get_field_by_name` /
-            // `get_field_by_name_object_tail`; static-name reads (`td.decode`,
-            // `td.encoding`) funnel here. See `text_handle_property`.
-            if let Some(v) = crate::text::text_handle_property(obj as usize, key_bytes) {
-                return f64::from_bits(v.bits());
-            }
-        }
+        // #340/#341: the Timeout/Immediate arm that used to reify `ref` /
+        // `unref` / `hasRef` / `refresh` / `close` for a small registry id is
+        // gone — a timer handle is an ordinary object whose prototype carries
+        // those methods, so this read resolves them the ordinary way.
         // Drizzle-sqlite blocker: synth `data.constructor` for small-handle
         // receivers — IC-miss path mirror of the constructor intercept in
         // `js_object_get_field_by_name`. Refs #645 deeper followup.
@@ -787,8 +995,7 @@ pub(super) fn get_field_ic_miss_impl(
                         return bits;
                     }
                 }
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                return crate::object::null_stub_value();
             }
         }
         if let Some(dispatch) = handle_property_dispatch() {
@@ -833,28 +1040,25 @@ pub(super) fn get_field_ic_miss_impl(
         // The codegen guard funnels non-OBJECT receivers here too, so this
         // belt-and-braces check keeps the cache from being primed with
         // values that would survive into the inline hot path.
-        let is_object = (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
-            && is_valid_obj_ptr(obj as *const u8)
-            && {
-                let gc_header =
-                    (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
-            };
-        let has_own_descriptors = is_object && super::super::object_has_descriptors(obj as usize);
+        // The kind, the descriptor flag and the forwarding flag all come from
+        // the ONE validated header read at the top of this function
+        // (`try_read_gc_header` already required an address above the handle
+        // band and inside the platform heap range, which is stricter than the
+        // `>= GC_HEADER_SIZE + 0x1000 && is_valid_obj_ptr` pair this used to
+        // re-derive).
+        let is_object = gc_kind == Some(crate::gc::GC_TYPE_OBJECT);
+        let has_own_descriptors = is_object
+            && gc_header.is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0);
         // #8122: ONE shape-table probe. `object_is_regular` is `GC_TYPE_OBJECT
         // && !FORWARDED && descriptor.object_kind == Ordinary`; the kind test
         // was already `GC_TYPE_OBJECT` above, so read the descriptor once and
         // take the kind, the keys edge, the key count and the live bound from
         // it — this path used to probe three times (regularity, the
         // descriptor, then `object_shape_id` for the PIC token).
-        let shape = if is_object {
-            let gc_header =
-                (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
-                crate::object::shapes::object_shape_descriptor(obj)
-            } else {
-                None
-            }
+        let shape = if is_object
+            && gc_header.is_some_and(|h| h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
+        {
+            crate::object::shapes::object_shape_descriptor(obj)
         } else {
             None
         };
@@ -887,13 +1091,39 @@ pub(super) fn get_field_ic_miss_impl(
                 if diag {
                     ic_diag_note(cache_slot, key, R::ObjectNoKeys);
                 }
-                let value = js_object_get_field_by_name(obj, key);
+                // #10834 gated its only prime site on `miss_reason == NotOwn`,
+                // and this arm returns before reaching it. A receiver with no
+                // keys array has NO own properties at all, so "the key is not
+                // an own property" holds here MORE strongly than it does for
+                // `NotOwn` — and this is the single most common inherited-read
+                // shape there is: `Object.create(p)` with nothing of its own.
+                //
+                // Without this the lookup at the top of this function runs on
+                // every such read, always misses because nothing can ever be
+                // recorded, and the chain walk proceeds unchanged: measured at
+                // +106 instructions per read against the same binary with
+                // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
+                // this shape.
+                if !inherited_declined {
+                    // Already inside this function's `unsafe` block (line 874),
+                    // so a nested one is `unused_unsafe` under -D warnings.
+                    if let Some(value) =
+                        crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key)
+                    {
+                        return f64::from_bits(value.bits());
+                    }
+                }
+                // Past the cache, not through it: the lookup at the top of
+                // this function has already asked.
+                let value =
+                    super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
                 return f64::from_bits(value.bits());
             }
             let key_count = shape.logical_key_count as usize;
             let keys_data = (keys as *const u8).add(8) as *const f64;
             let alloc_limit = shape.live_inline_slot_count as usize;
-            for i in 0..key_count {
+            for i in (0..key_count).rev() {
+                // #10595: back-to-front so a shadowed field's most-derived slot wins; see keys_lookup.rs.
                 let k_bits = (*keys_data.add(i)).to_bits();
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
                 if !k_ptr.is_null() && crate::string::js_string_equals(k_ptr, key) != 0 {
@@ -992,7 +1222,21 @@ pub(super) fn get_field_ic_miss_impl(
     if diag {
         ic_diag_note(cache_slot, key, miss_reason);
     }
-    let value = js_object_get_field_by_name(obj, key);
+    // Lane 3 hook B: the own-key search above has failed, so this is the one
+    // place in the runtime that KNOWS the key is not an own property without
+    // paying for a second search. Walk the chain once and record the answer.
+    // A decline leaves the generic getter below untouched, which is today's
+    // behaviour for every case the cache refuses.
+    if matches!(miss_reason, R::NotOwn) && !inherited_declined {
+        if let Some(value) =
+            unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key) }
+        {
+            return f64::from_bits(value.bits());
+        }
+    }
+    // Past the cache, not through it: hook A above has already asked, and for
+    // the reads this cache refuses that question is the whole added cost.
+    let value = super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
     f64::from_bits(value.bits())
 }
 
@@ -1060,15 +1304,23 @@ fn outlined_mru_hit_enabled() -> bool {
 ///
 /// # The guards are the emitted diamond's, one for one
 ///
-/// Receiver is a real heap pointer (`>= HANDLE_BAND_MAX`), a `GC_TYPE_OBJECT`
-/// with `OBJ_FLAG_HAS_DESCRIPTORS` clear, its shape stamp is non-zero and
-/// equal to the cached token, and the cached slot carries no
+/// Receiver is a real heap pointer (`>= HANDLE_BAND_MAX`), its shape stamp is
+/// non-zero and equal to the cached token, and the cached slot carries no
 /// `IC_SLOT_OVERFLOW_BIT`. Those are exactly the predicates
 /// `lower_generic_property_get` emits before `pic.hit`, evaluated in the same
-/// order, and the raw header loads are the same ones it emits — the caller has
-/// already established the pointer tag, which is what licenses them there and
-/// here. A `TAG_HOLE` in the slot is a deleted field and misses, as it does
-/// there.
+/// order — the caller has already established the POINTER tag, which is what
+/// licenses the `+4` load there and here.
+///
+/// Three predicates this twin used to evaluate are gone from BOTH copies, for
+/// the same reasons, so the two stay behaviourally identical: the GC-kind
+/// test (#10828: a `+4` word equal to a live ShapeId proves `GC_TYPE_OBJECT`),
+/// the `OBJ_FLAG_HAS_DESCRIPTORS` test (#10824: every descriptor change
+/// transitions the ShapeId) and the `TAG_HOLE` compare after the load
+/// (#10826: every delete transitions the ShapeId, so a stamp hit proves the
+/// slot live). Keeping any of them here while the emitted hit dropped it
+/// would make the outlined and inline programs answer differently in exactly
+/// the situation the invariant is meant to rule out — which is the opposite
+/// of what a behavioural twin is for.
 ///
 /// Word 2 (the Array-subclass named-prefix token) and the polymorphic ways are
 /// deliberately NOT served here: they are 2.5 % of primes between them and
@@ -1076,8 +1328,8 @@ fn outlined_mru_hit_enabled() -> bool {
 ///
 /// # Safety
 /// `obj_handle` is the receiver with the NaN-box tag already masked off, and
-/// the caller has established that the tag was `POINTER`/`STRING`. `cache_slot`
-/// is the codegen-emitted per-site slot or null.
+/// the caller has established that the tag was `POINTER`. `cache_slot` is the
+/// codegen-emitted per-site slot or null.
 #[inline]
 unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
@@ -1096,15 +1348,12 @@ unsafe fn pic_outlined_mru_hit(
     if cache.is_null() {
         return None;
     }
-    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
-        || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-    {
-        return None;
-    }
     // `object_shape_stamp` answers 0 for a receiver whose `parent_class_id` is
     // not a ShapeId, which is what keeps a keyless receiver out of an empty
-    // cache slot (#809).
+    // cache slot (#809). The emitted copy has no such range test: its cache
+    // word is born holding `PACKED_GET_EMPTY`, so equality alone proves the
+    // site primed; here the full cache's word 0 is born 0, and this is the
+    // test that keeps a 0 stamp from matching it.
     let stamp = crate::object::shapes::object_shape_stamp(obj_handle);
     if stamp == 0 {
         return None;
@@ -1117,13 +1366,10 @@ unsafe fn pic_outlined_mru_hit(
     if (slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0 {
         return None;
     }
-    let field = *((obj_handle as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-        as *const f64);
-    if field.to_bits() == crate::value::TAG_HOLE {
-        return None;
-    }
-    Some(field)
+    Some(
+        *((obj_handle as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+            as *const f64),
+    )
 }
 
 #[no_mangle]
@@ -1168,9 +1414,29 @@ pub extern "C" fn js_object_get_field_ic(
         // The monomorphic hit the emitted diamond does inline. Everything it
         // declines still reaches the handler below, so this only ever removes
         // work. See `pic_outlined_mru_hit`.
-        if let Some(value) = unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
-            crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
-            return value;
+        //
+        // The inherited-read hook the inline tower emits on its declined edge
+        // (`js_inherited_read_cache_hit_f64`) is deliberately NOT mirrored
+        // here: this entry is already inside the runtime, so the cost that
+        // hook removes for an inline site (the slow entry's prologue and
+        // dispatch) is already paid, and `get_field_ic_miss_impl` asks the
+        // same cache first thing for a heap receiver (hook A). The two
+        // programs answer from the same lookup in the same order — own hit,
+        // then the inherited cache, then the ladder — so they stay
+        // behaviourally identical with one call fewer here.
+        //
+        // POINTER tag only, exactly as the emitted tower tests it (#10833):
+        // the hit compares the receiver's `+4` word against a ShapeId with no
+        // GC-kind test in front of it any more, and #10828's guarantee that
+        // such a word proves a `GC_TYPE_OBJECT` is stated over POINTER-tagged
+        // values — a heap STRING's `+4` is a `StringHeader` field that rule 3
+        // deliberately does not bound. The kind test used to be what turned a
+        // string away here; the tag does it now, one compare earlier.
+        if tag == 0x7FFD {
+            if let Some(value) = unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
+                crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
+                return value;
+            }
         }
         return js_object_get_field_ic_miss(obj_handle, key, cache_slot);
     }
@@ -1197,6 +1463,74 @@ pub extern "C" fn js_object_get_field_ic(
 // than touching object field storage directly, so they were split out
 // of this module. See `polymorphic_index.rs` for the implementations
 // and the #471 fix notes.
+
+#[cfg(test)]
+mod ladder_skip_tests {
+    //! The receiver-classification ladder (closure / buffer / typed-array
+    //! probes) runs only for receivers that are NOT `GC_TYPE_OBJECT`. The
+    //! typed-array registry counts its probes per thread, so "the ladder was
+    //! skipped" is directly observable — and the Array receiver case pins that
+    //! the counter still moves when the ladder does run, so this cannot pass
+    //! by the counter having stopped counting.
+    use crate::object::{ObjectHeader, PicCache, PicCacheSlot, PIC_CACHE_WORDS};
+    use std::sync::atomic::AtomicU64;
+
+    fn key_of(bytes: &[u8]) -> *const crate::StringHeader {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    #[test]
+    fn an_object_miss_does_not_consult_the_typed_array_registry() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 4));
+        let present = scope.root_string_ptr(key_of(b"ladder_present"));
+        let absent = scope.root_string_ptr(key_of(b"ladder_absent"));
+        obj.with_mut_ptr(|o| {
+            present.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 3.0))
+        });
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(super::PACKED_GET_EMPTY);
+
+        // The OWN-key miss — the read every megamorphic site takes, and the
+        // one the ladder skip was measured on. It resolves in the keys scan
+        // and returns before the handler's by-name tail.
+        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let hit = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            present.with_const_ptr(|k| super::get_field_ic_miss_impl(o, k, &mut slot, &packed))
+        });
+        assert_eq!(hit, 3.0, "test premise: the own key is answered");
+        assert_eq!(
+            crate::typedarray::test_typed_array_registry_probe_count(),
+            before,
+            "a GC_TYPE_OBJECT receiver must skip the closure/buffer/typed-array \
+             ladder: its kind byte already rules all three out (#10828, rule 3)"
+        );
+        // An ABSENT key falls through to `js_object_get_field_by_name`, whose
+        // own dispatch still probes the registries for an object receiver (8
+        // probes, measured) — a separate ladder this change does not touch,
+        // so its count is deliberately not asserted here.
+        let missing = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            absent.with_const_ptr(|k| super::get_field_ic_miss_impl(o, k, &mut slot, &packed))
+        });
+        assert_eq!(missing.to_bits(), crate::value::TAG_UNDEFINED);
+
+        // The ladder still runs for a receiver that is not an object: a dense
+        // array asked for a non-`length` key reaches the typed-array probe.
+        let arr = crate::array::js_array_alloc(2);
+        let before = crate::typedarray::test_typed_array_registry_probe_count();
+        let v = absent.with_const_ptr(|k| {
+            super::get_field_ic_miss_impl(arr as *const ObjectHeader, k, &mut slot, &packed)
+        });
+        assert_eq!(v.to_bits(), crate::value::TAG_UNDEFINED);
+        assert!(
+            crate::typedarray::test_typed_array_registry_probe_count() > before,
+            "test premise: a non-object receiver still walks the ladder, so the \
+             counter this test reads is live"
+        );
+    }
+}
 
 #[cfg(test)]
 mod sso_tests_1781 {
@@ -1732,9 +2066,198 @@ mod private_evaluation_brand_tests {
 mod poly_pic_tests {
     use super::{pic_prime_get, PicCache, PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE, PIC_WAY_STATE};
     use crate::object::shapes::PIC_ID_TOKEN_BIT;
+    use crate::proxy::IC_SLOT_OVERFLOW_BIT;
 
     fn id_tok(n: u64) -> i64 {
         (n | PIC_ID_TOKEN_BIT) as i64
+    }
+
+    /// A slot word for a field past the inline region, exactly as the miss
+    /// handler primes one.
+    fn enc_slot(i: u32) -> i64 {
+        i64::from(i | IC_SLOT_OVERFLOW_BIT)
+    }
+
+    /// THE constraint (#9287): the emitted way path computes
+    /// `obj + header + slot * 8` from the raw slot word, so an encoded slot in
+    /// a way is a wild load. Checked after every prime in the tests below, not
+    /// once at the end — a violation that heals before the assertion is still
+    /// a violation on the reads in between.
+    fn assert_no_encoded_slot_in_a_way(c: &PicCache, where_: &str) {
+        for w in 0..PIC_WAYS {
+            let tok = c[PIC_WAY_BASE + w * 2];
+            let slot = c[PIC_WAY_BASE + w * 2 + 1];
+            assert!(
+                tok == 0 || (slot as u64) & u64::from(IC_SLOT_OVERFLOW_BIT) == 0,
+                "way {w} holds an overflow-encoded slot {slot:#x} ({where_}); \
+                 the emitted way path would compute a wild address from it: {c:?}"
+            );
+        }
+    }
+
+    /// One pass of the site as the emitted code would actually run it: a read
+    /// the MRU entry or a live way answers never reaches `pic_prime_get` at
+    /// all. Returns the `PIC_WAY_STATE` the prime saw, or `None` when the read
+    /// hit and no prime happened.
+    unsafe fn read(c: &mut PicCache, tok: i64, slot: i64) -> Option<i64> {
+        if c[0] == tok {
+            return None;
+        }
+        if c[PIC_WAY_STATE] > 0 && (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == tok) {
+            return None;
+        }
+        let state = c[PIC_WAY_STATE];
+        pic_prime_get(c, tok, slot);
+        assert_no_encoded_slot_in_a_way(c, "after a prime");
+        Some(state)
+    }
+
+    /// #10863: a read site whose hot key lives in the overflow region could
+    /// never latch megamorphic, however many shapes it rotated. The cascade
+    /// suppression that keeps encoded slots out of the ways (#9287, correct
+    /// and kept) also kept the site out of the LATCH, because one `return`
+    /// served both — so the site held the armed state it earned during warm-up
+    /// for the life of the process and the emitted gate ran four dependent
+    /// loads and a compare tree on every read, all of which could only ever
+    /// miss. Measured on a 64-shape rotation: `megamorphic=0` across 16.8M
+    /// primes, every single one of them `armed`.
+    ///
+    /// The rotation modelled here is the one from the issue: 64 shapes, the
+    /// hot key in overflow on 63 of them and at an inline slot on the first —
+    /// which is what arms the site in the first place.
+    #[test]
+    fn an_overflow_rotation_latches_instead_of_staying_armed_forever() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        let (mut fresh, mut armed, mut megamorphic) = (0u32, 0u32, 0u32);
+        unsafe {
+            for _ in 0..400 {
+                for i in 0..64u64 {
+                    let (tok, slot) = if i == 0 {
+                        (id_tok(9_000), 1) // the one shape with the key inline
+                    } else {
+                        (id_tok(9_000 + i), enc_slot(3 + i as u32))
+                    };
+                    match read(&mut c, tok, slot) {
+                        None => {}
+                        Some(state) if state < 0 => megamorphic += 1,
+                        Some(0) => fresh += 1,
+                        Some(_) => armed += 1,
+                    }
+                }
+            }
+        }
+        let primes = fresh + armed + megamorphic;
+        assert!(
+            primes > 10_000,
+            "the rotation must actually prime: {primes}"
+        );
+        // The count is what settles it. Before the fix this was armed=100.0 %,
+        // megamorphic=0.0 %.
+        let pct = |n: u32| 100.0 * f64::from(n) / f64::from(primes);
+        assert!(
+            pct(megamorphic) > 90.0,
+            "an overflow rotation must spend its life latched: \
+             fresh={fresh} armed={armed} megamorphic={megamorphic}"
+        );
+        assert!(
+            pct(armed) < 2.0,
+            "the emitted gate runs the way compares while armed; a rotation \
+             the ways cannot hold must not stay armed: \
+             fresh={fresh} armed={armed} megamorphic={megamorphic}"
+        );
+        assert_no_encoded_slot_in_a_way(&c, "at the end of the rotation");
+    }
+
+    /// The other half of the same rule: a site the ways were never armed for
+    /// must not be latched either. With no inline-slot shape in the rotation
+    /// nothing ever cascades, `PIC_WAY_STATE` stays 0, and the emitted gate is
+    /// already skipping the compares — there is nothing to turn off and no
+    /// reason to spend the site's recovery window.
+    #[test]
+    fn a_pure_overflow_rotation_never_arms_and_never_latches() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for _ in 0..200 {
+                for i in 0..64u64 {
+                    read(&mut c, id_tok(9_500 + i), enc_slot(3 + i as u32));
+                    assert_eq!(
+                        c[PIC_WAY_STATE], 0,
+                        "a site that never armed must stay at state 0: {c:?}"
+                    );
+                }
+            }
+        }
+        for w in 0..PIC_WAYS {
+            assert_eq!(c[PIC_WAY_BASE + w * 2], 0, "no way may be populated: {c:?}");
+        }
+    }
+
+    /// The risk the #10863 arm introduces, pinned: an overflow shape passing
+    /// through a site that otherwise FITS the ways must not latch it. The
+    /// eviction run stays consecutive — any prime that cascades resets it — so
+    /// three inline shapes plus one overflow shape keep their ways for good.
+    #[test]
+    fn an_overflow_shape_in_a_fitting_rotation_does_not_latch_it() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            for _ in 0..400 {
+                read(&mut c, id_tok(9_700), 0);
+                read(&mut c, id_tok(9_701), 1);
+                read(&mut c, id_tok(9_702), 2);
+                read(&mut c, id_tok(9_703), enc_slot(11));
+            }
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a rotation well inside capacity must keep its ways even when one \
+             of its shapes carries the key in overflow: {c:?}"
+        );
+        assert!(
+            (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] != 0),
+            "…and the ways must actually be populated: {c:?}"
+        );
+        assert_no_encoded_slot_in_a_way(&c, "fitting rotation with one overflow shape");
+    }
+
+    /// A latched overflow site still recovers: `PIC_LATCH_RETRY` counts down
+    /// and the ways get another chance, exactly as they do for an inline
+    /// rotation. "Megamorphic" stays a property of a program phase.
+    #[test]
+    fn a_latched_overflow_site_still_counts_down_and_re_arms() {
+        let mut c: PicCache = [0; PIC_CACHE_WORDS];
+        unsafe {
+            // Arm the site with an inline slot, then rotate overflow shapes
+            // until it latches.
+            pic_prime_get(&mut c, id_tok(9_800), 1);
+            let mut i = 0u64;
+            while c[PIC_WAY_STATE] >= 0 {
+                i += 1;
+                assert!(i < 1_000, "an overflow rotation must latch: {c:?}");
+                pic_prime_get(&mut c, id_tok(9_900 + i), enc_slot(5 + i as u32));
+            }
+            for w in 0..PIC_WAYS {
+                assert_eq!(
+                    c[PIC_WAY_BASE + w * 2],
+                    0,
+                    "a latched site must leave no readable way: {c:?}"
+                );
+            }
+            // Count it back out, then hand it a rotation the ways can hold.
+            let mut guard = 0u64;
+            while c[PIC_WAY_STATE] < 0 {
+                guard += 1;
+                assert!(guard < 100_000, "the latch must not be permanent: {c:?}");
+                pic_prime_get(&mut c, id_tok(9_800), 1);
+                pic_prime_get(&mut c, id_tok(9_801), 2);
+            }
+            pic_prime_get(&mut c, id_tok(9_800), 1);
+            pic_prime_get(&mut c, id_tok(9_801), 2);
+        }
+        assert!(
+            c[PIC_WAY_STATE] > 0,
+            "a latched overflow site must re-arm after its countdown: {c:?}"
+        );
+        assert_no_encoded_slot_in_a_way(&c, "after re-arming");
     }
 
     /// Paired with `pic_cache_layout_matches_runtime` in

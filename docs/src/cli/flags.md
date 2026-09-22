@@ -297,6 +297,7 @@ the generating asset module where applicable.
 | `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
 | `--debug-symbols` | Retain symbols/DWARF (and emit a Windows PDB) instead of stripping the result. |
+| `--function-source <full\|header>` | How much `Function.prototype.toString` source to keep. `full` (default) stores interned original source (nested functions share one module blob). `header` stores `function name(params) { /* source elided */ }` instead — enough for name/parameter extraction, much smaller. Also `PERRY_FUNCTION_SOURCE`. |
 | `--no-cache` | Disable the per-module object cache for this build; also `PERRY_NO_CACHE=1`. |
 | `--cache-dir <PATH>` | Override the machine-local cache root; see [Cache Directory](cache-dir.md). |
 | `--verify-native-regions` | Run native-representation lowering invariants and force codegen instead of cache reuse. |

@@ -608,7 +608,19 @@ impl CopyingNurseryCollector {
         (*header).gc_flags &= !GC_FLAG_MARKED;
         gc_type_after_payload_move((*header).obj_type, old_user as usize, new_user as usize);
 
-        self.worklist.push(new_header);
+        // #10362: an object that provably yields no child slot is marked and
+        // moved, but not QUEUED — the drain would build an iterator and find
+        // nothing. See `gc_object_yields_no_child_slots` for what "no child
+        // slot" has to mean for this to be sound; the copying minor needs no
+        // proxy term because it ignores `PointerFreeRange`.
+        //
+        // `moved_headers` below is NOT part of this and must keep EVERY
+        // survivor: `clear_marks` walks it, so a header missing from it carries
+        // GC_FLAG_MARKED past the end of the cycle and reads as live to the
+        // next full sweep. Only the worklist push is skipped.
+        if !gc_object_yields_no_child_slots(new_header) {
+            self.worklist.push(new_header);
+        }
         self.survival_push();
         if let Some(d) = self.survival.as_mut() {
             d.record((*new_header).obj_type, total, promote);

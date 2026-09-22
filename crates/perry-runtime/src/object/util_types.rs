@@ -18,14 +18,12 @@ fn nanbox_bool(v: bool) -> f64 {
     )
 }
 
+/// Candidate object address of a predicate argument; 0 for every primitive.
+/// #10479: the old `tag >= 0x7FF8 ⇒ payload` decode handed an inline SSO
+/// string's packed bytes to `isMapIterator`/`isSetIterator` as an address.
 #[inline]
 fn jsvalue_addr(v: f64) -> usize {
-    let bits = v.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        bits as usize
-    }
+    crate::value::addr_class::object_ref_addr(v)
 }
 
 fn jsvalue_extends_data_view(value: f64) -> bool {

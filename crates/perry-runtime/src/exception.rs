@@ -692,6 +692,9 @@ pub fn scan_exception_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
         if (*s).has_exception {
             visitor.visit_nanbox_f64_raw_slot(&raw mut (*s).current_exception);
         }
+        // #10564 review finding: every open `try`'s captured implicit-`this`/
+        // `new.target` snapshot is a second root for whatever it holds.
+        savepoints::scan_pending_trap_roots_mut(&mut (*s).savepoints, (*s).try_depth, visitor);
     });
 }
 
@@ -785,6 +788,54 @@ mod tests {
 
         assert_eq!(test_try_depth(), base_try);
         assert_eq!(RuntimeHandleScope::active_len_for_tests(), base_handles);
+    }
+
+    /// PR #10564 review finding, reproduced without touching the new
+    /// `implicit_this`/`new_target` savepoints directly: a bare
+    /// save/call/restore pair — no RAII guard — around a call that throws.
+    /// This is exactly the shape at the 4 named sites (fetch_globals.rs's
+    /// Temporal/Intl subclass bridges, handle_methods.rs's prototype-walk
+    /// accessor dispatch, the stdlib listener/getter dispatchers) before this
+    /// fix: the restore statement textually follows the call, so neither
+    /// `longjmp` nor a system unwind ever reaches it once the call throws.
+    ///
+    /// Deliberately uses only pre-existing public entry points
+    /// (`js_implicit_this_set`/`js_new_target_set`/`catch_js_throw`/
+    /// `js_throw`) that this fix does not change, so the same test body
+    /// fails on the unfixed tree (nothing restores either cell across the
+    /// inner `js_throw`) and passes once `implicit_this`/`new_target` join
+    /// `catch_savepoints!` — the fail-before/pass-after proof for the
+    /// mechanism every one of the 4 sites shares.
+    #[test]
+    fn a_bare_save_call_restore_site_is_made_exception_safe_by_the_savepoint() {
+        let base_this = crate::object::js_implicit_this_get().to_bits();
+        let base_nt = crate::object::js_new_target_get().to_bits();
+
+        let outcome: Result<(), f64> = catch_js_throw(|| {
+            // The caller's open `try` around the guarded call, e.g. user code
+            // wrapping `obj.method()` in `try {}`.
+            let inner: Result<(), f64> = catch_js_throw(|| {
+                // The bare save/call/restore pair itself: set, call something
+                // that throws, restore — except the restore is unreachable.
+                let _prev_this = crate::object::js_implicit_this_set(11.0);
+                let _prev_nt = crate::object::js_new_target_set(22.0);
+                js_throw(99.0)
+            });
+            assert_eq!(inner, Err(99.0));
+            assert_eq!(
+                crate::object::js_implicit_this_get().to_bits(),
+                base_this,
+                "the try open around the bare site must have restored IMPLICIT_THIS"
+            );
+            assert_eq!(
+                crate::object::js_new_target_get().to_bits(),
+                base_nt,
+                "the try open around the bare site must have restored new.target"
+            );
+        });
+        assert_eq!(outcome, Ok(()));
+        assert_eq!(crate::object::js_implicit_this_get().to_bits(), base_this);
+        assert_eq!(crate::object::js_new_target_get().to_bits(), base_nt);
     }
 
     #[test]

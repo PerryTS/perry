@@ -681,6 +681,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_array_buffer_new", I64, &[I32]);
     module.declare_function("js_shared_array_buffer_new", I64, &[I32]);
     module.declare_function("js_array_buffer_new_value", I64, &[DOUBLE]);
+    // #10873: `new ArrayBuffer(length, { maxByteLength })`.
+    module.declare_function("js_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
@@ -753,15 +755,12 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // js_has_exception() returns i32 (1 if exception is active, 0 otherwise).
     // js_enter_finally() / js_leave_finally() bracket finally blocks.
     // Invoke-EH (#7302): handlers are armed by js_eh_try_push (savepoints
-    // only, no jmp_buf) and entered through landing pads (Itanium) or
-    // catchpads (SEH on windows-msvc — decided by the TARGET triple, not
-    // host cfg!, so cross-compiles emit the target's EH shape).
+    // only, no jmp_buf) and entered through landing pads. One shape on every
+    // target, windows-msvc included — the SEH/catchpad variant was removed in
+    // #7354 because funclet EH cannot coexist with rewrite-statepoints-for-gc
+    // (see `stmt/try_stmt.rs::emit_eh_dispatch`).
     module.declare_function("js_eh_try_push", VOID, &[]);
-    if module.target_triple.contains("-windows-") {
-        module.declare_seh_machinery();
-    } else {
-        module.declare_personality();
-    }
+    module.declare_personality();
     module.declare_function("js_try_end", VOID, &[]);
     module.declare_function("js_get_exception", DOUBLE, &[]);
     module.declare_function("js_clear_exception", VOID, &[]);

@@ -307,24 +307,6 @@ pub(crate) fn active_factory_stack_restore(depth: usize) {
     ACTIVE_FACTORY_SITES.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
-struct ImplicitThisGuard<'scope> {
-    previous: crate::gc::RuntimeHandle<'scope>,
-}
-
-impl<'scope> ImplicitThisGuard<'scope> {
-    fn bind(scope: &'scope crate::gc::RuntimeHandleScope, receiver: f64) -> Self {
-        Self {
-            previous: scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver)),
-        }
-    }
-}
-
-impl Drop for ImplicitThisGuard<'_> {
-    fn drop(&mut self) {
-        crate::object::js_implicit_this_set(self.previous.get_nanbox_f64());
-    }
-}
-
 fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callee = scope.root_nanbox_f64(callee);
@@ -338,7 +320,7 @@ fn call_value_at_site(site_key: usize, callee: f64, this_value: Option<f64>) -> 
     let this_value = this_value.map(|value| scope.root_nanbox_f64(value));
     let this_guard = this_value
         .as_ref()
-        .map(|value| ImplicitThisGuard::bind(&scope, value.get_nanbox_f64()));
+        .map(|value| crate::object::ImplicitThisScope::bind(&scope, value.get_nanbox_f64()));
     let active = ActiveFactoryGuard::push(site_key, expected_identity);
     let result = unsafe {
         crate::closure::js_native_call_value(callee.get_nanbox_f64(), std::ptr::null(), 0)
@@ -492,7 +474,7 @@ fn site_test_dispatch_impl(receiver: f64, method: f64, argument: f64) -> f64 {
     }
 
     let method = scope.root_nanbox_f64(method);
-    let _this_guard = ImplicitThisGuard::bind(&scope, receiver.get_nanbox_f64());
+    let _this_guard = crate::object::ImplicitThisScope::bind(&scope, receiver.get_nanbox_f64());
     let args = [argument.get_nanbox_f64()];
     unsafe { crate::closure::js_native_call_value(method.get_nanbox_f64(), args.as_ptr(), 1) }
 }

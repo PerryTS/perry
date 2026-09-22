@@ -86,10 +86,10 @@
       "why": "The #8168 fix: retains on the GC_TYPE_CLOSURE-narrowed predicate over the POINTER_TAG'd closure address (class_registry/gc_roots.rs:530). This helper is the rekey path for both scan_function_class_id_keys_mut and its budgeted twin."
     },
     {
-      "site": "crates/perry-runtime/src/object/descriptor_state.rs::rewrite_descriptor_owner",
+      "site": "crates/perry-runtime/src/object/descriptor_state/owner_lifecycle.rs::rewrite_descriptor_owner",
       "table": "state().descriptors.property_descriptors + .accessor_descriptors",
       "death": "dead_owner:prune_dead_descriptor_owner_entries",
-      "why": "Registered prune retains both maps on !is_dead_owner (object/descriptor_state.rs:1035-1055); handle-band ids in the same maps are skipped by the probe as unattributable."
+      "why": "Registered prune retains both maps on !is_dead_owner (object/descriptor_state/owner_lifecycle.rs:34-52); handle-band ids in the same maps are skipped by the probe as unattributable. Both this rekey and the prune it names moved out of descriptor_state.rs in the 2000-line-cap split; the function body is byte-identical apart from its visibility widening to pub(super), so the custody argument is unchanged."
     },
     {
       "site": "crates/perry-runtime/src/object/mod.rs::scan_overflow_fields_roots_mut",

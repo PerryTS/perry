@@ -120,6 +120,7 @@ _CODEGEN_SUITES = [
     "class_keys_gc_root",
     "constructor_recursion",
     "destructure_call_location",
+    "error_subclass_field_init",
     "export_function_alias_identity",
     "generated_inline_budget",
     "i64_spec_ternary_recursion",
@@ -133,6 +134,7 @@ _CODEGEN_SUITES = [
     "padding_single_evaluation",
     "shadow_slot_hygiene",
     "size_function_attributes",
+    "typed_collection_receiver_guard",
     "typed_feedback",
     # #7506/#7245: held out until its one failing test was triaged. The
     # composition it guards had drifted from three named callees to three

@@ -832,6 +832,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // checks work; calling those values via stored references would
         // need a separate runtime path that this commit doesn't add.
         Expr::ExternFuncRef { name, .. } => {
+            // A synthetic deferred require evaluates its dependency at the
+            // original call site. Do this before the class/namespace fast
+            // paths too: those values can depend on module initialization.
+            if name.starts_with("_lazyreq_") {
+                if let Some(source_prefix) = ctx.import_function_prefixes.get(name) {
+                    let init_fn = format!("{}__init", source_prefix);
+                    ctx.pending_declares
+                        .push((init_fn.clone(), crate::types::VOID, vec![]));
+                    ctx.block().call_void(&init_fn, &[]);
+                }
+            }
             // Imported class references (refs #420 / drizzle): when `name`
             // resolves to a class registered in `ctx.class_ids` (populated
             // from `opts.imported_classes` for imported classes too), emit
@@ -884,18 +895,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
             if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
-                // Next.js lazy-require: a `_lazyreq_N` binding is the CJS require
-                // shim's handle to a FUNCTION-LOCAL `require('S')`. S is
-                // `Deferred` (never eager-initialized), so before reading its
-                // default-export getter, fire `<S>__init()` — idempotent, so
-                // re-reads cost a guard check. This is the moment Node would run
-                // S's module body: when `require('S')` is actually called.
-                if name.starts_with("_lazyreq_") {
-                    let init_fn = format!("{}__init", source_prefix);
-                    ctx.pending_declares
-                        .push((init_fn.clone(), crate::types::VOID, vec![]));
-                    ctx.block().call_void(&init_fn, &[]);
-                }
                 // Issue #678 followup: a V8-fallback import used as a value
                 // (rather than called directly) has no native singleton
                 // wrapper to point at — the `__perry_wrap_extern_*` for V8

@@ -102,8 +102,14 @@ pub(crate) fn lower_in_presence_ic(ctx: &mut FnCtx<'_>, obj_box: &str, key_box: 
     let shape_word = ctx.block().zext(I32, &shape_id, I64);
     let cached_shape_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
     let cached_shape = ctx.block().load(I64, &cached_shape_ptr);
-    // An unarmed cache reads 0, which no stamped shape word can equal, so the
-    // "is this site armed?" question needs no test of its own.
+    // The "is this site armed?" question has no test of its own: the runtime
+    // resolves this cache with word 0 already holding `IN_PRESENCE_UNARMED`
+    // (`1 << 32`, above every zero-extended `+4` word), so an unarmed site
+    // matches nothing. It is NOT enough that no stamped shape word is 0 — an
+    // UNSTAMPED receiver's `+4` is its `parent_class_id`, which is 0 for an
+    // anonymous object literal, and a site resolved by a prototype-chain
+    // `true` (resolved, budget counted, never armed) used to read 0 there and
+    // answer `"k" in {}` with `true`. Same flaw #10833 took off the read tower.
     let shape_matches = ctx.block().icmp_eq(I64, &shape_word, &cached_shape);
     let present = ctx.block().and(I1, &is_object, &not_forwarded);
     let present = ctx.block().and(I1, &present, &ordinary);

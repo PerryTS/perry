@@ -381,7 +381,16 @@ fn pic_cache_layout_matches_runtime() {
     );
     for def in &ic_defs {
         if def.contains("_packed_get =") {
-            assert!(def.ends_with(" = private global i64 0, align 8"), "{def}");
+            // NOT zero — see `PACKED_GET_EMPTY`. A zero word would be matched
+            // by an unstamped receiver's `parent_class_id`, which is why the
+            // hit path used to carry a separate "is this site primed?" test.
+            assert!(
+                def.ends_with(&format!(
+                    " = private global i64 {}, align 8",
+                    crate::expr::property_get::generic_dispatch::PACKED_GET_EMPTY
+                )),
+                "{def}"
+            );
             continue;
         }
         assert!(
@@ -589,18 +598,41 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
         "the small-handle sentinel select only existed because an invalid \
          receiver could reach the way compares; it must be gone:\n{ir}"
     );
-    // The header predicates: each load/compare pair must appear exactly once.
-    for (needle, what) in [
-        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare"),
-        ("icmp eq i32 %", "the ShapeId identity compare"),
+    // The receiver predicates, exactly once each. `icmp eq i32 %` is two: the
+    // ShapeId identity compare on the hit path and the spill compare in
+    // `pic.token.miss` that replaced the hit path's overflow-bit test. There
+    // is no GC-kind compare at all any more (#10828), so a single `icmp eq
+    // i8` would mean the header load has crept back somewhere.
+    for (needle, what, expect) in [
+        ("icmp eq i8 ", "the GC_TYPE_OBJECT compare", 0),
+        ("icmp eq i32 %", "the ShapeId identity compare", 2),
     ] {
         let n = main.matches(needle).count();
-        assert!(
-            n <= 2,
-            "{what} appears {n} times — the miss block is re-deriving the \
-             receiver header again:\n{ir}"
+        assert_eq!(
+            n, expect,
+            "{what} appears {n} times, expected {expect} — a receiver \
+             predicate is being re-derived or has crept back:\n{ir}"
         );
     }
+    // The ONE re-derivation that is deliberate: `pic.token.miss` re-reads the
+    // ShapeId word through an atomic load rather than reusing the hot load's
+    // value, so that the hot load has a single use and isel folds it into
+    // the compare (`cmp %ecx, 4(%rdi)`). A plain second load would be merged
+    // back into the first by GVN and the hot word would be live into the
+    // cold blocks again.
+    let token_miss = main
+        .find("\npic.token.miss")
+        .unwrap_or_else(|| panic!("expected a pic.token.miss block:\n{ir}"));
+    let token_miss_body = &main[token_miss
+        ..main[token_miss + 1..]
+            .find("\npic.")
+            .map(|o| o + token_miss + 1)
+            .unwrap_or(main.len())];
+    assert!(
+        token_miss_body.contains("load atomic i32"),
+        "pic.token.miss must re-read the ShapeId word atomically so the hot \
+         load stays single-use:\n{token_miss_body}"
+    );
 }
 
 /// #8067: an exact ShapeId match proves the cached slot's descriptor facts, so
@@ -764,6 +796,7 @@ mod nested_namespace_members {
 ///      with a constant, or deleting a predicate, turns it red).
 #[test]
 fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
+    use crate::expr::property_get::generic_dispatch::{PACKED_GET_EMPTY, PACKED_SPILL_FLIP};
     let ir = emit(false, None);
 
     // Register names restart at %r1 in every function, so the walk MUST be
@@ -906,34 +939,107 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         .find(|(_, rhs)| rhs.starts_with("load atomic i64") && rhs.contains("_packed_get"))
         .map(|(reg, _)| reg)
         .expect("compact MRU load");
+    // "Has this site primed?" is answered BY the ShapeId compare, not by a
+    // test of its own: the site's word is born holding `PACKED_GET_EMPTY`, a
+    // value the word at `+4` of a receiver cannot hold. That word is either a
+    // ShapeId ([0x8000_0000, 0xC000_0000)), a synthetic class id (at or above
+    // 0x8000_0000 today, [0xC000_0000, 0xFFFF_0000) under #10824) or an
+    // ordinary HIR class id, which is a counter from 1 — so 0xFFFF_FFFF is
+    // above every one of them under BOTH id schemes.
+    //
+    // This replaces the old `icmp ne i64 %packed, 0` assertion. It is not a
+    // weakening: that assertion proved a guard existed, and these three prove
+    // the guard is UNNECESSARY — the sentinel is emitted, it is out of range,
+    // and the compare that subsumes it still gates the load. Re-introducing a
+    // zero initializer turns the first one red.
     assert!(
-        chain.contains(&format!("icmp ne i64 {packed}, 0")),
-        "the initial zero cache must not reach a field load: {chain}"
+        ir.contains(&format!(
+            "_packed_get = private global i64 {PACKED_GET_EMPTY}, align 8"
+        )),
+        "the compact MRU must be born holding PACKED_GET_EMPTY, not zero:\n{ir}"
+    );
+    assert!(
+        !(0x8000_0000..0xC000_0000).contains(&PACKED_GET_EMPTY),
+        "PACKED_GET_EMPTY must sit outside the ShapeId range so no stamped \
+         receiver's shape word can equal an unprimed site"
+    );
+    assert!(
+        !(0x4000_0000..0x8000_0000).contains(&PACKED_GET_EMPTY),
+        "and outside the band a SPILL entry is flipped into, or an unprimed \
+         site would be decoded as one"
+    );
+    assert_eq!(
+        PACKED_GET_EMPTY, 0xFFFF_FFFF,
+        "and above every class id: synthetic ids are at or above 0x8000_0000 \
+         today and [0xC000_0000, 0xFFFF_0000) under #10824, and an ordinary \
+         HIR class id is a counter from 1"
     );
     assert!(
         chain.contains(&format!("trunc i64 {packed} to i32")),
         "the exact packed ShapeId must gate the field load: {chain}"
     );
+    // The overflow-bit test is no longer a guard on the inline load: a
+    // SPILL-located key publishes its ShapeId with PACKED_SPILL_FLIP flipped
+    // in, which lands it in [0x4000_0000, 0x8000_0000) — neither a ShapeId nor
+    // any class id — so the compare above refuses it without a question of its
+    // own. If the bit test comes back it is 10 bytes of `movabs`, a `test` and
+    // a branch on every read.
+    assert!(
+        !chain.contains(&PACKED_SPILL_FLIP.to_string()),
+        "the overflow-bit test must not gate the inline slot load — a spill \
+         entry is refused by the ShapeId compare itself:\n{chain}"
+    );
+    // The inherited-read hook (#10834/#10842) lives on the DECLINED edge. Its
+    // answer must never be a condition on the way to the own slot load: if it
+    // were, an own read would pay a call, and this walk would have collected
+    // the call's result in the chain.
+    assert!(
+        !chain.contains("js_inherited_read_cache_hit_f64"),
+        "the inherited-read hook must not gate the inline slot load:\n{chain}"
+    );
 
-    if func.contains(", 134217983") {
-        let masked = defs
-            .iter()
-            .find(|(_, rhs)| rhs.starts_with("and i32 ") && rhs.ends_with(", 134217983"))
-            .map(|(reg, _)| reg)
-            .expect("packed kind/descriptor mask");
+    // The GC header is not read on the way to the slot load at all: neither
+    // the kind byte (#10828 closed rule 3 — a `+4` word equal to a live
+    // ShapeId proves `GC_TYPE_OBJECT`) nor the descriptor flag (#10824 closed
+    // rule 1 — every descriptor change transitions the ShapeId). The chain is
+    // therefore EXACTLY three branches: the receiver-tag test, the
+    // small-handle test and the ShapeId compare. Each retired predicate is
+    // asserted absent from the WHOLE function, not merely off the chain, or
+    // it could be tested somewhere the walk does not see.
+    assert_eq!(
+        conds.len(),
+        3,
+        "the guard chain must be exactly tag test, small-handle test and \
+         ShapeId compare, found {conds:?}\n{func}"
+    );
+    assert!(
+        !defs
+            .values()
+            .any(|rhs| rhs.starts_with("icmp eq i8 %") && rhs.ends_with(", 2")),
+        "the GC_TYPE_OBJECT kind compare must not be emitted — the ShapeId \
+         compare proves the kind since #10828:\n{func}"
+    );
+    for (gone, what) in [
+        (", 134217983", "the packed kind+descriptor mask"),
+        (", 2048", "the OBJ_FLAG_HAS_DESCRIPTORS mask"),
+        ("load i16", "the reserved-halfword load"),
+        ("load i8", "the GC-kind byte load"),
+    ] {
         assert!(
-            chain.contains(&format!("icmp eq i32 {masked}, 2")),
-            "both kind and descriptor bits must gate the slot load: {chain}"
-        );
-    } else {
-        assert!(
-            chain.contains("icmp eq i8") && chain.contains("2048"),
-            "native-endian kind/descriptor guards must gate the slot load: {chain}"
+            !func.contains(gone),
+            "{what} must not be emitted any more — kind and descriptor state \
+             are shape-carried since #10824/#10828 (found `{gone}`):\n{func}"
         );
     }
 
     for (needle, what) in [
-        ("32765", "the POINTER/STRING receiver-tag test"),
+        // The exact POINTER test is `(bits ^ POINTER_TAG) >> 48 == 0`, on the
+        // value the pointer path then uses as its handle; the tag constant is
+        // the xor's operand.
+        (
+            crate::nanbox::POINTER_TAG_I64,
+            "the POINTER receiver-tag test",
+        ),
         ("1048575", "the small-handle (native registry id) test"),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
@@ -944,6 +1050,40 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
              conditions: {conds:?}\nreached def chain:\n{chain}\n\nIR:\n{func}"
         );
     }
+
+    // The loaded value is the answer: no `TAG_HOLE` compare follows the slot
+    // load in the hit block. #10826 made every successful delete a shape
+    // transition, so a ShapeId hit proves the slot it names is live, and the
+    // four-instruction hole check was the patch for exactly that operation.
+    // The compare is asserted PRESENT on the way path, which keeps it: that
+    // pins that the constant did not merely vanish from the IR, and that the
+    // way path's removal is the separate, measured change the emitter says
+    // it is.
+    let hit_body = blocks
+        .iter()
+        .find(|(l, _)| *l == load_label)
+        .map(|(_, body)| body.join("\n"))
+        .expect("the hit block was found above");
+    assert!(
+        !hit_body.contains(crate::nanbox::TAG_HOLE_I64),
+        "the hit block must not compare the loaded slot against TAG_HOLE — a \
+         ShapeId hit proves the slot live since #10826:\n{hit_body}"
+    );
+    assert!(
+        hit_body.contains("load double") && hit_body.contains("br label %"),
+        "the hit block must end in the slot load and an unconditional branch \
+         to the merge:\n{hit_body}"
+    );
+    let way_body = blocks
+        .iter()
+        .find(|(l, _)| l.starts_with("pic.way.load"))
+        .map(|(_, body)| body.join("\n"))
+        .expect("the way load block");
+    assert!(
+        way_body.contains(crate::nanbox::TAG_HOLE_I64),
+        "the way path keeps its TAG_HOLE compare (removing it is a separate \
+         change):\n{way_body}"
+    );
 }
 
 /// A module whose init reads `o.<property>` where `o` is an `Any` local — the
@@ -1046,23 +1186,35 @@ fn generic_non_length_read_keeps_the_whole_tower() {
             "only `.length` may grow an inline string arm, found `{gone}`:\n{ir}"
         );
     }
-    // 32765 = (STRING_TAG|POINTER_TAG) & 0xFFFD: the one test that decides
-    // whether the receiver may be dereferenced at all. Its false edge must be
-    // the NON-POINTER exit — a distinct block with a distinct callee, which is
-    // what stops SimplifyCFG folding this guard into the next one.
-    let tag_branch = ir
-        .lines()
-        .find(|l| l.contains("icmp eq i64") && l.contains("32765"))
-        .unwrap_or_else(|| panic!("expected the receiver-tag test:\n{ir}"));
-    let cond = tag_branch
-        .trim()
-        .split_once(" = ")
-        .map(|(lhs, _)| lhs.to_string())
-        .unwrap_or_else(|| panic!("malformed tag test: {tag_branch}"));
+    // The receiver-tag test is the one test that decides whether the receiver
+    // may be dereferenced at all, and for every key but `.length` it is the
+    // EXACT POINTER test, spelled `(bits ^ POINTER_TAG) >> 48 == 0` on the
+    // value that becomes the handle. Its false edge must be the NON-POINTER
+    // exit — a distinct block with a distinct callee, which is what stops
+    // SimplifyCFG folding this guard into the next one.
     let branch = ir
         .lines()
-        .find(|l| l.trim_start().starts_with(&format!("br i1 {cond},")))
-        .unwrap_or_else(|| panic!("expected a branch on the receiver tag:\n{ir}"));
+        .find(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %pget.recv_other"))
+        .unwrap_or_else(|| panic!("expected a branch to the non-pointer exit:\n{ir}"));
+    let cond = branch
+        .trim()
+        .strip_prefix("br i1 ")
+        .and_then(|rest| rest.split_once(','))
+        .map(|(c, _)| c.to_string())
+        .unwrap_or_else(|| panic!("malformed branch: {branch}"));
+    let tag_test = ir
+        .lines()
+        .find(|l| l.trim().starts_with(&format!("{cond} = ")))
+        .unwrap_or_else(|| panic!("expected the receiver-tag test defining {cond}:\n{ir}"));
+    assert!(
+        tag_test.contains("icmp eq i64 ") && tag_test.trim_end().ends_with(", 0"),
+        "the exact POINTER test compares the xor-ed tag half-word to zero:\n{tag_test}"
+    );
+    assert!(
+        ir.contains("xor i64 %") && ir.contains(crate::nanbox::POINTER_TAG_I64),
+        "the handle must be `bits ^ POINTER_TAG`, the value the tag test is \
+         computed from:\n{ir}"
+    );
     assert!(
         branch.contains("label %pget.recv_other") && !branch.contains("label %pic.miss.call"),
         "a non-pointer receiver must leave for its OWN exit — sharing the \
@@ -1111,7 +1263,7 @@ fn generic_size_read_serves_native_collections_inline() {
 fn generic_non_size_read_has_no_collection_layout_load() {
     let ir = emit_read("other");
     assert!(
-        !ir.contains("pget.collection_size") && !ir.contains("pic.recv_object_check"),
+        !ir.contains("pget.collection_size") && !ir.contains("pget.collection_kind"),
         "only `.size` may grow the native collection fast path:\n{ir}"
     );
 }
@@ -1139,44 +1291,62 @@ fn the_length_tier_probes_the_elements_store_before_the_shape_ic() {
     );
 }
 
+/// The GC header is not read by a generic property read on ANY target: the
+/// kind byte is proved by the ShapeId compare (#10828, rule 3) and the
+/// descriptor flag is shape-carried (#10824, rule 1). With the header load
+/// went the only reason this tower ever cared about endianness — the packed
+/// `i32` kind+descriptor word on little-endian targets versus the byte +
+/// `i16` reserved-halfword pair elsewhere.
+///
+/// Renamed from `packed_pic_header_guard_is_endianness_aware`: that test
+/// pinned the packed mask's PRESENCE on x86-64/aarch64, which is now the
+/// regression this one exists to catch.
 #[test]
-fn packed_pic_header_guard_is_endianness_aware() {
-    for (target, packed) in [
-        ("aarch64-apple-darwin", true),
-        ("x86_64-unknown-linux-gnu", true),
-        ("powerpc64-unknown-linux-gnu", false),
+fn no_gc_header_load_on_any_target() {
+    for target in [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "powerpc64-unknown-linux-gnu",
     ] {
         let mut opts = ir_opts(false, None);
         opts.target = Some(target.to_string());
         let ir =
             String::from_utf8(compile_module(&module_with_nullish_read(), opts).unwrap()).unwrap();
-        assert_eq!(ir.contains(", 134217983"), packed, "{target}: {ir}");
-        if !packed {
+        let main = ir
+            .split("\ndefine ")
+            .find(|f| f.contains("\npic.token"))
+            .unwrap_or_else(|| panic!("{target}: no function contains the tower:\n{ir}"));
+        for (gone, what) in [
+            (", 134217983", "the packed kind+descriptor mask"),
+            (", 2048", "the OBJ_FLAG_HAS_DESCRIPTORS mask"),
+            ("load i16", "the reserved-halfword load"),
+            ("load i8", "the GC-kind byte load"),
+            ("icmp eq i8", "the GC-kind compare"),
+        ] {
             assert!(
-                ir.contains("load i16"),
-                "descriptor guard must retain native endianness: {ir}"
-            );
-            assert!(
-                ir.contains(", 2048"),
-                "the native-endian arm must still test OBJ_FLAG_HAS_DESCRIPTORS: {ir}"
+                !main.contains(gone),
+                "{target}: {what} must not be emitted (found `{gone}`):\n{main}"
             );
         }
-        // T1: the descriptor-bearing fallback is the one exit. It must still
-        // be a distinct EDGE — a descriptor-bearing receiver may never take
-        // the raw-slot hit — and the runtime keeps the Array-subclass
-        // named-prefix exception behind it.
+        // The tower still ends in the one exit: a receiver that is not a
+        // shaped ordinary object, or one whose descriptor install transitioned
+        // its ShapeId, reaches it by FAILING THE SHAPE COMPARE, and the runtime
+        // keeps the Array-subclass named-prefix exception behind it.
         assert!(
-            ir.contains("@js_object_get_field_ic_slow(") && ir.contains("\npic.miss.call"),
-            "descriptor fallback must remain, through the one exit: {ir}"
+            main.contains("@js_object_get_field_ic_slow(") && main.contains("\npic.miss.call"),
+            "{target}: the slow exit must remain:\n{main}"
         );
     }
 }
 
 #[test]
 fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
+    use crate::expr::property_get::generic_dispatch::PACKED_GET_EMPTY;
     let ir = emit(false, None);
     assert!(
-        ir.contains("_packed_get = private global i64 0, align 8"),
+        ir.contains(&format!(
+            "_packed_get = private global i64 {PACKED_GET_EMPTY}, align 8"
+        )),
         "{ir}"
     );
     assert!(
@@ -1184,9 +1354,23 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
         "{ir}"
     );
     assert!(ir.contains("@js_object_get_field_ic_slow("), "{ir}");
+    // The `trunc` is the ShapeId half of the compact word. There is no
+    // `icmp ne i64 %packed, 0` beside it any more: the sentinel above makes
+    // the ShapeId compare prove the site is primed as well. Named by the
+    // packed word's register: a blanket "no `icmp ne i64`" would now also
+    // forbid the inherited-read hook's decline compare on the exit edge,
+    // which is a different question about a different value.
+    let packed = ir
+        .lines()
+        .find(|l| l.contains("load atomic i64") && l.contains("_packed_get"))
+        .and_then(|l| l.trim().split_once(" = "))
+        .map(|(reg, _)| reg.to_string())
+        .expect("the compact MRU load");
     assert!(
-        ir.contains("trunc i64") && ir.contains("icmp ne i64"),
-        "{ir}"
+        ir.contains("trunc i64")
+            && !ir.contains(&format!("icmp ne i64 {packed}, 0"))
+            && !ir.contains(&format!("icmp eq i64 {packed}, 0")),
+        "the compact word must not be tested against zero:\n{ir}"
     );
     assert!(
         ir.contains("pic.token.miss"),
@@ -1212,6 +1396,49 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
 /// instructions on every HIT (measured). The separate non-pointer callee is
 /// what keeps that guard chain branchy, so the count below is 2 — and a change
 /// that makes it 1 is a hit-path regression, not a size win.
+/// A SPILL-located key must still be RECOGNISED — just not on the hit path.
+///
+/// Taking the overflow-bit test off the hit path is only sound if the entry it
+/// used to catch is caught somewhere else. `pic.token.miss` un-flips
+/// `PACKED_SPILL_FLIP` and branches straight to the one exit, skipping the
+/// full cache's resolution and the ways (neither can hold an encoded slot).
+/// Without this test, deleting the spill compare would leave every spill read
+/// correct-but-slow — it would walk the ways, miss, call out, and re-scan the
+/// keys array on every read, which is invisible in program output.
+#[test]
+fn a_spill_entry_is_recognised_in_the_token_miss_block_and_nowhere_else() {
+    use crate::expr::property_get::generic_dispatch::PACKED_SPILL_FLIP;
+    let ir = emit(false, None);
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\npic.token.miss"))
+        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
+
+    // Split the function into blocks and find `pic.token.miss`'s body.
+    let mut body: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in func.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            inside = line.trim_end_matches(':').starts_with("pic.token.miss");
+            continue;
+        }
+        if inside {
+            body.push(line);
+        }
+    }
+    let body = body.join("\n");
+    assert!(
+        body.contains("xor i32 ") && body.contains(&PACKED_SPILL_FLIP.to_string()),
+        "`pic.token.miss` must un-flip PACKED_SPILL_FLIP to recognise a spill \
+         entry:\n{body}"
+    );
+    assert!(
+        body.contains("pic.miss.call"),
+        "a recognised spill entry must branch straight to the one exit, not \
+         walk the ways:\n{body}"
+    );
+}
+
 #[test]
 fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
     let ir = emit(false, None);
@@ -1257,20 +1484,33 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         "pget.recv_ok",
         // the non-pointer exit, off the tag test's false edge
         "pget.recv_other",
-        "pic.recv_hdr",
+        // `pic.recv_hdr` is GONE: it existed to load the GC header word, and
+        // the ShapeId compare in `pic.token` now proves the kind (#10828) and
+        // the descriptor state (#10824) that word was loaded for.
         "pic.token",
         "pic.token.miss",
+        // The spill entry's landing block. `pic.token.miss` recognises a
+        // SPILL-located key by un-flipping PACKED_SPILL_FLIP and branches
+        // straight to the one exit; everything else continues here to the full
+        // cache and the ways. `pic.hit.inline` is GONE: with spill entries
+        // refused by the ShapeId compare itself, the hit block has nothing to
+        // decide between and the load sits directly in `pic.hit`.
+        "pic.token.ways",
+        // The hit block ends in the slot load and a branch to the merge:
+        // `pic.hit.deleted` is GONE with the `TAG_HOLE` compare (#10826 made
+        // delete a shape transition, so a ShapeId hit proves the slot live);
+        // `pic.hit.live` exists only when typed feedback has something to
+        // record on the live edge.
         "pic.hit",
-        "pic.hit.inline",
-        // The hit's hole edge keeps its own landing block so its tail is not
-        // congruent with `pic.way.load`'s; `pic.hit.live` exists only when
-        // typed feedback has something to record on the live edge.
-        "pic.hit.deleted",
         // the polymorphic ways, deliberately still inline (#7753)
         "pic.miss",
         "pic.ways",
         "pic.way.load",
         "pic.way.live",
+        // the inherited-read hook, on the never-primed edge out of
+        // `pic.token.ways` and nowhere else (`js_inherited_read_cache_hit_f64`,
+        // a leaf); a decline continues to the one exit
+        "pic.miss.inherited",
         // the one exit, and the join
         "pic.miss.call",
         "pget.recv_merge",
@@ -1292,5 +1532,200 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         normalized,
         expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         "the emitted tower's block set changed:\n{func}"
+    );
+}
+
+/// The inherited-read cache (#10834/#10842) is asked on the NEVER-PRIMED edge
+/// and nowhere else. A read whose key lives on the prototype chain is never an
+/// own slot on the receiver's shape, so a site that only reads such a key never
+/// resolves its per-site cache, and every read of it reaches `pic.token.ways`
+/// with `present` false. That edge — which used to go straight to the exit —
+/// now asks the cache before calling out. The first placement asked on EVERY
+/// path into the exit and charged each own-key miss a declining probe (+88 on
+/// a megamorphic site, +89 on a spill read, measured); this one costs every
+/// other path zero instructions.
+///
+/// Five things are pinned, each of which would otherwise fail silently (the
+/// program still computes the right value through the slow entry):
+///
+/// 1. the hook call sits in `pic.miss.inherited` and in no other block, in
+///    particular NOT on any path to the inline slot load (the CFG-walk test
+///    asserts the same from the other side);
+/// 2. that block is reached from `pic.token.ways` on the FALSE edge of the
+///    cache-present test, and from nowhere else;
+/// 3. its result is branched on with the SERVED edge as the true edge, the
+///    tower's rule for every guard-passing edge, and the false edge is the
+///    one exit;
+/// 4. the slow entry is still called from `pic.miss.call` only, with the same
+///    four operands;
+/// 5. the merge phi takes the served value from `pic.miss.inherited`.
+#[test]
+fn the_inherited_read_cache_is_asked_on_the_never_primed_edge_only() {
+    let ir = emit(false, None);
+    let func = ir
+        .split("\ndefine ")
+        .find(|f| f.contains("\npic.miss.call"))
+        .unwrap_or_else(|| panic!("no function contains the generic tower:\n{ir}"));
+    let mut blocks: Vec<(String, Vec<String>)> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    for line in func.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            if let Some(b) = cur.take() {
+                blocks.push(b);
+            }
+            cur = Some((line.trim_end_matches(':').to_string(), Vec::new()));
+            continue;
+        }
+        if let Some((_, body)) = cur.as_mut() {
+            body.push(line.trim().to_string());
+        }
+    }
+    if let Some(b) = cur.take() {
+        blocks.push(b);
+    }
+    // 1. one caller block, and it is the inherited arm.
+    let holders: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| {
+            body.iter()
+                .any(|l| l.contains("call double @js_inherited_read_cache_hit_f64("))
+        })
+        .map(|(l, _)| l.as_str())
+        .collect();
+    assert_eq!(
+        holders.len(),
+        1,
+        "the inherited hook must be called from exactly one block: {holders:?}\n{func}"
+    );
+    let inh_label = holders[0];
+    assert!(
+        inh_label.starts_with("pic.miss.inherited"),
+        "the hook belongs on the never-primed edge, found it in `{inh_label}`:\n{func}"
+    );
+    let (_, inh_body) = blocks.iter().find(|(l, _)| l == inh_label).unwrap();
+    let hook_line = inh_body
+        .iter()
+        .find(|l| l.contains("@js_inherited_read_cache_hit_f64("))
+        .unwrap();
+    assert!(
+        hook_line.contains("(ptr %") && hook_line.matches(", ptr %").count() == 1,
+        "the hook takes the masked receiver and the interned key as two \
+         pointers:\n{hook_line}"
+    );
+    // 2. reached only from `pic.token.ways`, on the FALSE edge of `present`.
+    let preds: Vec<(&str, &str)> = blocks
+        .iter()
+        .flat_map(|(l, body)| {
+            body.iter()
+                .filter(|t| t.starts_with("br ") && t.contains(&format!("label %{inh_label}")))
+                .map(move |t| (l.as_str(), t.as_str()))
+        })
+        .collect();
+    assert_eq!(
+        preds.len(),
+        1,
+        "exactly one edge may reach the hook: {preds:?}\n{func}"
+    );
+    let (pred_label, pred_term) = preds[0];
+    assert!(
+        pred_label.starts_with("pic.token.ways"),
+        "the hook's one predecessor must be the cache-present test: {pred_label}"
+    );
+    let parts: Vec<&str> = pred_term
+        .strip_prefix("br i1 ")
+        .unwrap()
+        .split(", ")
+        .collect();
+    assert!(
+        parts[1].starts_with("label %pic.miss") && !parts[1].starts_with("label %pic.miss.inh"),
+        "the TRUE edge of `present` must still be the way compares: {pred_term}"
+    );
+    assert!(
+        parts[2].starts_with(&format!("label %{inh_label}")),
+        "the hook must sit on the FALSE (never-primed) edge: {pred_term}"
+    );
+    let present_def = blocks
+        .iter()
+        .find(|(l, _)| l == pred_label)
+        .and_then(|(_, body)| {
+            body.iter()
+                .find(|l| l.starts_with(&format!("{} = ", parts[0])))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the branch condition {} must be defined in {pred_label}",
+                parts[0]
+            )
+        });
+    assert!(
+        present_def.contains("icmp ne ptr ") && present_def.ends_with(", null"),
+        "`present` is the cache slot's non-null test:\n{present_def}"
+    );
+    // 3. polarity: `icmp ne <bits>, TAG_HOLE` is "served", served is the TRUE
+    //    edge and lands on the merge; the false edge is the one exit.
+    let served = inh_body
+        .iter()
+        .find(|l| l.contains("icmp ne i64 ") && l.ends_with(crate::nanbox::TAG_HOLE_I64))
+        .unwrap_or_else(|| panic!("the decline compare against TAG_HOLE:\n{func}"));
+    let cond = served.split_once(" = ").map(|(c, _)| c).unwrap();
+    let term = inh_body
+        .iter()
+        .rev()
+        .find(|l| l.starts_with("br "))
+        .unwrap();
+    let parts: Vec<&str> = term
+        .strip_prefix("br i1 ")
+        .unwrap_or_else(|| panic!("the arm must branch on the hook's answer: {term}"))
+        .split(", ")
+        .collect();
+    assert_eq!(
+        parts[0], cond,
+        "the branch must be on the served predicate: {term}"
+    );
+    assert!(
+        parts[1].starts_with("label %pget.recv_merge"),
+        "the SERVED edge must be the true edge and land on the merge: {term}"
+    );
+    assert!(
+        parts[2].starts_with("label %pic.miss.call"),
+        "the decline must be the false edge into the one exit: {term}"
+    );
+    // 4. the slow entry: one caller, the exit, same operands.
+    let slow_callers: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, body)| {
+            body.iter()
+                .any(|l| l.contains("@js_object_get_field_ic_slow("))
+        })
+        .map(|(l, _)| l.as_str())
+        .collect();
+    assert_eq!(slow_callers.len(), 1, "{slow_callers:?}");
+    assert!(
+        slow_callers[0].starts_with("pic.miss.call"),
+        "the slow entry must be called from the one exit: {slow_callers:?}"
+    );
+    let (_, slow_body) = blocks.iter().find(|(l, _)| l == slow_callers[0]).unwrap();
+    let slow_line = slow_body
+        .iter()
+        .find(|l| l.contains("@js_object_get_field_ic_slow("))
+        .unwrap();
+    assert!(
+        slow_line.contains("ptr @perry_ic_") && slow_line.contains("_packed_get"),
+        "the slow entry must still receive the cache slot and the packed \
+         word:\n{slow_line}"
+    );
+    // 5. the merge takes the served value from the inherited arm.
+    let (_, merge_body) = blocks
+        .iter()
+        .find(|(l, _)| l.starts_with("pget.recv_merge"))
+        .unwrap();
+    let phi = merge_body
+        .iter()
+        .find(|l| l.contains(" = phi double "))
+        .unwrap();
+    let served_value = hook_line.split_once(" = ").map(|(v, _)| v).unwrap();
+    assert!(
+        phi.contains(&format!("[ {served_value}, %{inh_label} ]")),
+        "the merge must take the hook's value from `{inh_label}`:\n{phi}"
     );
 }

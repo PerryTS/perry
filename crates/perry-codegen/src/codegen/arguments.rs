@@ -50,6 +50,34 @@ pub(crate) fn store_param_slot(
     slot
 }
 
+/// #10464: a boxed parameter's cell is minted by this frame's entry block
+/// (`store_param_slot`), so the frame releases it before every `ret`.
+/// `materialize_arguments_object` withdraws a slot it maps into a sloppy-mode
+/// `arguments` object, which holds the raw cell without a counted edge.
+pub(crate) fn release_boxed_param_slots_at_exit(
+    lf: &mut crate::function::LlFunction,
+    params: &[Param],
+    boxed_vars: &HashSet<u32>,
+    slots: &std::collections::HashMap<u32, String>,
+) {
+    for p in params {
+        if !boxed_vars.contains(&p.id) || p.arguments_object.is_some() {
+            continue;
+        }
+        if let Some(slot) = slots.get(&p.id) {
+            lf.add_pre_return_box_release(slot, "js_box_scope_release");
+        }
+    }
+}
+
+/// The parameter ids a synthesized `arguments` object aliases.
+pub(crate) fn mapped_parameter_ids(params: &[Param]) -> HashSet<u32> {
+    mapped_arguments_params(params)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect()
+}
+
 pub(crate) fn materialize_arguments_object(
     ctx: &mut FnCtx<'_>,
     params: &[Param],
@@ -110,6 +138,8 @@ pub(crate) fn materialize_arguments_object(
     );
     for (arg_index, param_id) in mapped_arguments_params(params) {
         if let Some(param_slot) = ctx.locals.get(&param_id).cloned() {
+            // #10464: the object aliases the cell for its own lifetime.
+            ctx.func.forget_pre_return_box_release(&param_slot);
             let box_ptr = ctx.block().load(I64, &param_slot);
             ctx.block().call_void(
                 "js_arguments_object_map_index",

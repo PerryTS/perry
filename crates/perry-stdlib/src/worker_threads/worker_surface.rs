@@ -387,16 +387,32 @@ fn stream_emit_event(event: f64, arg: f64) -> f64 {
     let Some(arr) = array_ptr_from_value(get_object_field_from_value(this, &key)) else {
         return js_bool(false);
     };
-    let args = [arg];
-    let len = perry_runtime::array::js_array_length(arr);
+    // #10600: `this`, `arr` and `arg` are plain Rust locals, not GC roots.
+    // `arr` is the listener array's own raw pointer, so a stale copy after a
+    // listener allocates enough to trigger a moving minor collection
+    // corrupts every read for the rest of this loop, not just one listener.
+    // Root all three through one handle scope and re-read the current bits
+    // before every dispatch.
+    //
+    // #10490: the displaced `this` crosses every listener (user code) too.
+    // Root it ONCE in that same scope, before the first
+    // `js_implicit_this_set`, and restore it from that root rather than from
+    // a plain per-iteration local.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let arr_h = scope.root_raw_mut_ptr(arr);
+    let arg_h = scope.root_nanbox_f64(arg);
+    let prev_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
+    let len = perry_runtime::array::js_array_length(arr_h.get_raw_mut_ptr());
     for i in 0..len {
-        let callback = perry_runtime::array::js_array_get_f64(arr, i);
-        let prev_this = perry_runtime::object::js_implicit_this_set(this);
+        let callback = perry_runtime::array::js_array_get_f64(arr_h.get_raw_mut_ptr(), i);
+        perry_runtime::object::js_implicit_this_set(this_h.get_nanbox_f64());
         unsafe {
+            let args = [arg_h.get_nanbox_f64()];
             let _ =
                 perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len());
         }
-        perry_runtime::object::js_implicit_this_set(prev_this);
+        perry_runtime::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
     js_bool(len > 0)
 }

@@ -15,10 +15,8 @@ use std::sync::LazyLock;
 mod async_decimal;
 mod bun;
 mod databases;
-mod dates;
 mod events_dispatch_parity_tests;
 mod extras;
-mod fastify;
 mod http_client;
 mod http_http2;
 mod http_server;
@@ -33,7 +31,6 @@ mod node_dns;
 mod node_domain;
 mod node_misc;
 mod parcel_watcher;
-mod qs;
 mod thread_lodash;
 mod tls_events;
 mod tui;
@@ -44,7 +41,7 @@ mod ws_events;
 mod yoga;
 
 // ============================================================================
-// Native stdlib module dispatch (fastify, mysql2, ws, pg, ioredis, mongodb,
+// Native stdlib module dispatch (fastify, ws, ioredis, mongodb,
 // better-sqlite3, etc.). Ported from the old Cranelift codegen's dispatch
 // table that was lost in the v0.5.0 LLVM cutover.
 // ============================================================================
@@ -180,7 +177,6 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(node_core_util::NODE_CORE_UTIL_ROWS);
     v.extend_from_slice(node_dns::NODE_DNS_ROWS);
     v.extend_from_slice(node_domain::NODE_DOMAIN_ROWS);
-    v.extend_from_slice(fastify::FASTIFY_ROWS);
     v.extend_from_slice(databases::DATABASES_ROWS);
     v.extend_from_slice(ws_events::WS_EVENTS_ROWS);
     v.extend_from_slice(net_events::NET_EVENTS_ROWS);
@@ -190,11 +186,9 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(async_decimal::ASYNC_DECIMAL_ROWS);
     v.extend_from_slice(utils_crypto::UTILS_CRYPTO_ROWS);
     v.extend_from_slice(thread_lodash::THREAD_LODASH_ROWS);
-    v.extend_from_slice(dates::DATES_ROWS);
     v.extend_from_slice(media::MEDIA_ROWS);
     v.extend_from_slice(native_profile::NATIVE_PROFILE_ROWS);
     v.extend_from_slice(parcel_watcher::PARCEL_WATCHER_ROWS);
-    v.extend_from_slice(qs::QS_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
     v.extend_from_slice(typescript::TYPESCRIPT_ROWS);
     v.extend_from_slice(yoga::YOGA_ROWS);

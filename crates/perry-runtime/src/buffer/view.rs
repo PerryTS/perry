@@ -15,10 +15,29 @@ pub(crate) struct ViewInfo {
     pub offset: u32,
 }
 
+/// What the registry stores per view: the hot `ViewInfo` (what every byte
+/// access copies out through `lookup`) plus the resizable-backing bookkeeping
+/// (#10873), which only `resize` and the reflective getters read. Kept apart so
+/// the per-access copy stays the two words it always was.
+#[derive(Debug)]
+struct ViewRecord {
+    info: ViewInfo,
+    /// Construction-time byte length. Only consulted when the backing is a
+    /// resizable ArrayBuffer: a fixed-length view reads as length 0 while it
+    /// does not fit, and gets THIS length back when the buffer grows.
+    fixed_len: u32,
+    /// Constructed without an explicit length over a resizable ArrayBuffer, so
+    /// its length follows the buffer's `byteLength`.
+    length_tracking: bool,
+    /// ES2024 IsTypedArrayOutOfBounds / IsViewOutOfBounds, as of the last
+    /// resize. Always false over a fixed-length backing.
+    out_of_bounds: bool,
+}
+
 crate::perry_thread_local! {
     // Boxed records keep GC slot addresses stable across registry growth.
     // Keys and backing addresses are non-moving GC_TYPE_BUFFER objects.
-    static VIEW_REGISTRY: RefCell<PtrHashMap<usize, Box<ViewInfo>>> =
+    static VIEW_REGISTRY: RefCell<PtrHashMap<usize, Box<ViewRecord>>> =
         RefCell::new(new_ptr_hash_map());
     // Weak reverse index, used for detach and death pruning, never for writes.
     static BACKING_TO_VIEWS: RefCell<PtrHashMap<usize, PtrHashSet<usize>>> =
@@ -27,7 +46,7 @@ crate::perry_thread_local! {
 
 #[inline]
 pub(crate) fn lookup(view_ptr: usize) -> Option<ViewInfo> {
-    VIEW_REGISTRY.with(|r| r.borrow().get(&view_ptr).map(|info| **info))
+    VIEW_REGISTRY.with(|r| r.borrow().get(&view_ptr).map(|rec| rec.info))
 }
 
 #[inline]
@@ -39,13 +58,88 @@ pub(crate) fn backing_of(buf_ptr: usize) -> usize {
 pub(crate) fn byte_offset_of(buf_ptr: usize) -> u32 {
     lookup(buf_ptr)
         .map(|v| {
-            if super::detach::is_detached_buffer(v.backing) {
+            // A view that no longer fits its resized buffer reports byteOffset
+            // 0, like a view over a detached one.
+            if super::detach::is_detached_buffer(v.backing) || is_out_of_bounds_view(buf_ptr) {
                 0
             } else {
                 v.offset
             }
         })
         .unwrap_or(0)
+}
+
+/// True when `view_ptr` is a view whose resizable backing has shrunk past it.
+/// `resize` has already zeroed its header length; this is what tells a
+/// DataView accessor to raise the spec's TypeError rather than a RangeError.
+#[inline]
+pub(crate) fn is_out_of_bounds_view(view_ptr: usize) -> bool {
+    super::any_resizable_buffer()
+        && VIEW_REGISTRY.with(|r| {
+            r.borrow()
+                .get(&view_ptr)
+                .is_some_and(|rec| rec.out_of_bounds)
+        })
+}
+
+/// Mark a just-constructed view as length-tracking (`new Uint8Array(rab)`,
+/// `new DataView(rab, off)`). A no-op over a fixed-length backing.
+pub(crate) fn mark_length_tracking(view_ptr: usize) {
+    if !super::any_resizable_buffer() {
+        return;
+    }
+    VIEW_REGISTRY.with(|r| {
+        if let Some(rec) = r.borrow_mut().get_mut(&view_ptr) {
+            if super::resizable::is_resizable_buffer(rec.info.backing) {
+                rec.length_tracking = true;
+            }
+        }
+    });
+}
+
+#[inline]
+pub(crate) fn is_length_tracking(view_ptr: usize) -> bool {
+    super::any_resizable_buffer()
+        && VIEW_REGISTRY.with(|r| {
+            r.borrow()
+                .get(&view_ptr)
+                .is_some_and(|rec| rec.length_tracking)
+        })
+}
+
+/// `ArrayBuffer.prototype.resize` support: recompute the header length of every
+/// Buffer-shaped view (Uint8Array / Buffer / DataView — byte-granular) over
+/// `backing`, whose byteLength is now `buffer_len`. Eager, like detach zeroing
+/// them, so every reader of a view's length stays oblivious to resizing.
+pub(crate) fn relength_views_of_resized_backing(backing: usize, buffer_len: u32) {
+    let views: Vec<usize> = BACKING_TO_VIEWS.with(|m| {
+        m.borrow()
+            .get(&backing)
+            .map(|views| views.iter().copied().collect())
+            .unwrap_or_default()
+    });
+    if views.is_empty() {
+        return;
+    }
+    VIEW_REGISTRY.with(|r| {
+        let mut r = r.borrow_mut();
+        for view in views {
+            let Some(rec) = r.get_mut(&view) else {
+                continue;
+            };
+            let len = super::resizable::view_length_after_resize(
+                buffer_len,
+                rec.info.offset,
+                1,
+                rec.length_tracking,
+                rec.fixed_len,
+            );
+            rec.out_of_bounds = len.is_none();
+            unsafe {
+                (*(view as *mut BufferHeader)).length = len.unwrap_or(0);
+            }
+        }
+    });
 }
 
 /// `buf_ptr` must be a live buffer. All runtime/native span consumers use the
@@ -69,7 +163,7 @@ pub(crate) fn for_each_view<F: FnMut(usize, ViewInfo)>(backing_ptr: usize, mut f
 /// O(1) per dead view, with no tombstones. If the backing is finalized first,
 /// remove its dead children in one pass; total sweep work stays linear.
 pub(crate) fn remove_entries_for_dead_buffer(addr: usize) {
-    let info = VIEW_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
+    let info = VIEW_REGISTRY.with(|r| r.borrow_mut().remove(&addr).map(|rec| rec.info));
     BACKING_TO_VIEWS.with(|m| {
         let mut m = m.borrow_mut();
         if let Some(info) = info {
@@ -155,14 +249,21 @@ fn register(view_ptr: usize, backing_ptr: usize, offset: u32) {
         .map(|parent| (parent.backing, parent.offset + offset))
         .unwrap_or((backing_ptr, offset));
     super::header::u8_inline_cache_invalidate(view_ptr);
-    let mut info = Box::new(ViewInfo { backing, offset });
+    // Every caller sets the view's header length before registering it.
+    let fixed_len = unsafe { (*(view_ptr as *const BufferHeader)).length };
+    let mut rec = Box::new(ViewRecord {
+        info: ViewInfo { backing, offset },
+        fixed_len,
+        length_tracking: false,
+        out_of_bounds: false,
+    });
     crate::gc::runtime_write_barrier_external_slot(
         view_ptr,
-        &mut info.backing as *mut usize as usize,
+        &mut rec.info.backing as *mut usize as usize,
         backing as u64,
     );
     VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().insert(view_ptr, info);
+        r.borrow_mut().insert(view_ptr, rec);
     });
     BACKING_TO_VIEWS.with(|m| {
         m.borrow_mut()
@@ -177,8 +278,8 @@ fn register(view_ptr: usize, backing_ptr: usize, offset: u32) {
 /// visible to the collector's rewrite and verification walks.
 pub(crate) fn visit_backing_slot(addr: usize, mut visit: impl FnMut(*mut u64)) {
     VIEW_REGISTRY.with(|r| {
-        if let Some(info) = r.borrow_mut().get_mut(&addr) {
-            visit(&mut info.backing as *mut usize as *mut u64);
+        if let Some(rec) = r.borrow_mut().get_mut(&addr) {
+            visit(&mut rec.info.backing as *mut usize as *mut u64);
         }
     });
 }

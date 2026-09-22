@@ -55,12 +55,13 @@ pub fn is_set_iterator_addr(addr: usize) -> bool {
 }
 
 fn iterator_class_id(addr: usize) -> Option<u32> {
-    if addr < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
+    // `util.types.isMapIterator(v)` / `isSetIterator(v)` hand any value's
+    // candidate address here. The canonical header read rejects the handle
+    // band and out-of-window bits before touching memory (#10479: the old
+    // `addr < GC_HEADER_SIZE + 0x1000` floor let a proxy/fetch id through).
     unsafe {
-        let gc_header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        let header = crate::value::addr_class::try_read_gc_header(addr)?;
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
             return None;
         }
         Some((*(addr as *const ObjectHeader)).class_id)

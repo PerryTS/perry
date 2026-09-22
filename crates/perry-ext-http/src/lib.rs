@@ -58,6 +58,8 @@ mod tls_client;
 
 // Raw-socket trailer-aware HTTP/1.1 client (`TE: trailers` bypass) +
 // response parser, extracted to keep `lib.rs` under the 2000-line lint cap.
+mod client_connect_override;
+mod client_upgrade;
 mod plain_client;
 use plain_client::{dispatch_plain_http_request, parse_http_response};
 
@@ -75,6 +77,8 @@ use client_dispatch::dispatch_request;
 // Client-request event drain helpers (#4905) — extracted from this file
 // to stay under the 2000-line lint cap.
 mod client_abort;
+// #10428: erased-receiver dispatch for client handles without the stdlib pump.
+mod client_dispatch_ext;
 mod client_events;
 mod client_surface;
 pub(crate) use client_surface::*;
@@ -150,6 +154,7 @@ pub(crate) enum PendingHttpEvent {
         headers: Vec<(String, String)>,
         trailers: Vec<(String, String)>,
         body: Vec<u8>,
+        http_version: (u8, u8),
     },
     /// Streaming delivery (reqwest path): the response head arrived — fire
     /// the `http.request` callback / `'response'` listeners now; body
@@ -161,6 +166,7 @@ pub(crate) enum PendingHttpEvent {
         status: u16,
         status_message: String,
         headers: Vec<(String, String)>,
+        http_version: (u8, u8),
     },
     /// One streamed body chunk following a `ResponseHead`. Carried as a
     /// refcounted `Bytes` (reqwest hands `chunk()` out this way) so the
@@ -173,6 +179,15 @@ pub(crate) enum PendingHttpEvent {
     /// The streamed body finished — `'end'` on the message, `'close'` on
     /// the request.
     ResponseEnd { request_handle: Handle },
+    /// #10468 — a `101` fires `'upgrade'` instead of `'response'` (`client_upgrade.rs`).
+    Upgrade {
+        request_handle: Handle,
+        status: u16,
+        status_message: String,
+        headers: Vec<(String, String)>,
+        socket_handle: Handle,
+        head: Vec<u8>,
+    },
     Error {
         request_handle: Handle,
         error_message: String,
@@ -409,6 +424,7 @@ pub(crate) fn ensure_gc_scanner_registered() {
         unsafe {
             js_register_http_agent_handle_probe(http_agent_probe);
         }
+        client_dispatch_ext::ensure_registered();
     });
 }
 
@@ -491,6 +507,8 @@ pub struct ClientRequestHandle {
     /// options object. HTTPS TLS identity fields are lost if this is
     /// reconstructed from the URL at release time.
     agent_key: String,
+    /// `options.createConnection` (#10469, only when `agent_handle == 0`).
+    request_create_connection: i64,
     /// Agent pool bookkeeping. Exactly one of these is true after `end()`
     /// admits the request; terminal events clear `agent_active`, while a
     /// maxSockets waiter stays queued until the active request releases it.
@@ -573,6 +591,10 @@ pub struct IncomingMessageHandle {
     /// ClientRequest that produced this response (`res.req`). Server-side
     /// IncomingMessages live in a separate registry and never populate this.
     pub request_handle: Handle,
+    /// `res.httpVersion*` (#10467); `(major, minor)`, default `(1, 1)`.
+    pub http_version: (u8, u8),
+    /// `res.complete` (#10467) — set once the body is fully received.
+    pub complete: bool,
 }
 
 unsafe impl Send for IncomingMessageHandle {}
@@ -692,6 +714,7 @@ fn make_request_handle(
     callback: i64,
     agent_handle: Handle,
     agent_key: String,
+    request_create_connection: i64,
 ) -> Handle {
     let async_id = unsafe {
         js_async_hooks_provider_init(b"HTTPCLIENTREQUEST".as_ptr(), b"HTTPCLIENTREQUEST".len())
@@ -715,6 +738,7 @@ fn make_request_handle(
         close_emitted: false,
         agent_handle,
         agent_key,
+        request_create_connection,
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -792,6 +816,7 @@ fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
     match event {
         PendingHttpEvent::Socket { request_handle }
         | PendingHttpEvent::SignalAbort { request_handle }
+        | PendingHttpEvent::Upgrade { request_handle, .. }
         | PendingHttpEvent::Response { request_handle, .. }
         | PendingHttpEvent::ResponseHead { request_handle, .. }
         | PendingHttpEvent::ResponseChunk { request_handle, .. }
@@ -811,6 +836,7 @@ fn terminal_http_event(event: &PendingHttpEvent) -> bool {
     matches!(
         event,
         PendingHttpEvent::SignalAbort { .. }
+            | PendingHttpEvent::Upgrade { .. }
             | PendingHttpEvent::Response { .. }
             | PendingHttpEvent::ResponseEnd { .. }
             | PendingHttpEvent::Error { .. }
@@ -923,166 +949,6 @@ fn tls_servername_from_host_header(value: &str) -> Option<String> {
     }
 }
 
-/// Serialize an HTTP/1.1 request (request line + headers + body) into the
-/// bytes to write onto a socket. Forces `Connection: close` (the raw socket
-/// path reads until EOF), drops any caller-supplied `Connection`/`Host`
-/// header (we set `Host` from the URL), and adds `Content-Length` when a
-/// body is present and the caller didn't.
-fn serialize_http_request(
-    method: &str,
-    path: &str,
-    host_header: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-) -> Vec<u8> {
-    let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
-    let mut has_content_length = false;
-    for (k, v) in headers {
-        if k.eq_ignore_ascii_case("content-length") {
-            has_content_length = true;
-        }
-        if k.eq_ignore_ascii_case("connection") || k.eq_ignore_ascii_case("host") {
-            continue;
-        }
-        req.push_str(k);
-        req.push_str(": ");
-        req.push_str(v);
-        req.push_str("\r\n");
-    }
-    req.push_str("Connection: close\r\n");
-    if !body.is_empty() && !has_content_length {
-        req.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    }
-    req.push_str("\r\n");
-    let mut out = req.into_bytes();
-    out.extend_from_slice(body);
-    out
-}
-
-/// #2154 — run an HTTP exchange over a socket that the agent's
-/// `createConnection` override produced (`socket_id`), instead of through
-/// reqwest. Writes the serialized request, reads the response until the peer
-/// closes (we force `Connection: close`), parses it with
-/// [`parse_http_response`], and pushes the same `Response` / `Error` event
-/// the reqwest path produces — so the IncomingMessage surface is identical.
-///
-/// The socket I/O goes through perry-ffi's raw-net vtable (published by
-/// perry-ext-net), so this crate needs no link edge to perry-ext-net. If no
-/// net backend is linked the request errors out (the override couldn't have
-/// produced a socket without `net`, so this is a defensive guard).
-fn dispatch_request_over_socket(
-    request_handle: Handle,
-    method: String,
-    url: String,
-    headers: HashMap<String, String>,
-    body: Vec<u8>,
-    timeout_ms: Option<u64>,
-    socket_id: i64,
-) {
-    let parsed = match reqwest::Url::parse(&url) {
-        Ok(u) => u,
-        Err(e) => {
-            push_event(PendingHttpEvent::Error {
-                request_handle,
-                error_message: e.to_string(),
-            });
-            return;
-        }
-    };
-    let host = parsed.host_str().unwrap_or("localhost").to_string();
-    let host_header = match parsed.port() {
-        Some(p) => format!("{}:{}", host, p),
-        None => host,
-    };
-    let mut path = parsed.path().to_string();
-    if path.is_empty() {
-        path.push('/');
-    }
-    if let Some(q) = parsed.query() {
-        path.push('?');
-        path.push_str(q);
-    }
-    let req_bytes = serialize_http_request(&method, &path, &host_header, &headers, &body);
-    let deadline = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
-
-    spawn_blocking(move || {
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            push_event(PendingHttpEvent::Error {
-                request_handle,
-                error_message: "http client runtime unavailable".to_string(),
-            });
-            return;
-        }
-        let handle = tokio::runtime::Handle::current();
-        // #5779 follow-up: keep this fetch counted in-flight for its whole
-        // lifetime so the idle-kick recovers a lost worker-unpark.
-        let inflight_guard = ClientInflightGuard::new(request_handle);
-        let jh = handle.spawn(async move {
-            let _inflight = inflight_guard;
-            let vtable = match perry_ffi::raw_net() {
-                Some(v) => v,
-                None => {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message: "agent.createConnection requires node:net (not linked)"
-                            .to_string(),
-                    });
-                    return;
-                }
-            };
-            // Attach is idempotent — the request path also attaches on the
-            // main thread before this task runs, to close any data race.
-            (vtable.attach)(socket_id);
-            if (vtable.write)(socket_id, req_bytes.as_ptr(), req_bytes.len()) == 0 {
-                push_event(PendingHttpEvent::Error {
-                    request_handle,
-                    error_message: "failed to write request to agent socket".to_string(),
-                });
-                return;
-            }
-
-            let mut raw = Vec::new();
-            let mut chunk = [0u8; 16 * 1024];
-            let start = tokio::time::Instant::now();
-            loop {
-                let n = (vtable.poll_read)(socket_id, chunk.as_mut_ptr(), chunk.len());
-                if n > 0 {
-                    raw.extend_from_slice(&chunk[..n as usize]);
-                } else if n == 0 {
-                    break; // clean EOF — peer closed after the response
-                } else {
-                    if start.elapsed() >= deadline {
-                        (vtable.close)(socket_id);
-                        push_event(PendingHttpEvent::Timeout { request_handle });
-                        return;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                }
-            }
-            (vtable.close)(socket_id);
-
-            match parse_http_response(&raw) {
-                Ok(parsed) => push_event(PendingHttpEvent::Response {
-                    request_handle,
-                    status: parsed.status,
-                    status_message: parsed.status_message,
-                    headers: parsed.headers,
-                    trailers: parsed.trailers,
-                    body: parsed.body,
-                }),
-                Err(error_message) => push_event(PendingHttpEvent::Error {
-                    request_handle,
-                    error_message,
-                }),
-            }
-        });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
-    });
-}
-
 /// #2154 — invoke a user `createSocket(req, options, cb)` override on the
 /// request path (Node's `Agent.prototype.addRequest` semantics). Builds the
 /// three arguments Node passes:
@@ -1133,7 +999,12 @@ unsafe fn invoke_create_socket(
     let cb = (cb_val.get().to_bits() & PTR_MASK) as *mut perry_ffi::ClosureHeader;
     perry_ffi::set_closure_capture_f64(cb, 0, request_handle as f64);
     let req_val = f64::from_bits(POINTER_TAG | (request_handle as u64 & PTR_MASK));
-    let options = scope.root_nanbox(agent::build_connect_options(agent_handle, host, port, path));
+    let options = scope.root_nanbox(agent::build_connect_options(
+        Some(agent_handle),
+        host,
+        port,
+        path,
+    ));
 
     let closure = JsClosure::from_raw(cs.get() as *const RawClosureHeader);
     closure.call3(req_val, options.get(), cb_val.get());
@@ -1207,7 +1078,7 @@ unsafe extern "C" fn http_create_socket_cb(
         if let Some(vt) = perry_ffi::raw_net() {
             (vt.attach)(socket_id);
         }
-        dispatch_request_over_socket(
+        client_connect_override::dispatch_request_over_socket(
             request_handle,
             method,
             url,
@@ -1259,6 +1130,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         agent_handle
     };
     let agent_key = agent::request_key_from_options(agent_handle, arg_f64, &url);
+    let request_create_connection = agent::request_create_connection_from_options(arg_f64); // #10469
     let handle = make_request_handle(
         method,
         url,
@@ -1267,6 +1139,7 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         callback,
         agent_handle,
         agent_key,
+        request_create_connection,
     );
     client_abort::attach_request_signal(handle, arg_f64);
     attach_tls_options(handle, arg_f64); // #4906
@@ -1324,6 +1197,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         agent_handle
     };
     let agent_key = agent::request_key_from_options(agent_handle, arg_f64, &url);
+    let request_create_connection = agent::request_create_connection_from_options(arg_f64); // #10469
     let handle = make_request_handle(
         "GET".to_string(),
         url,
@@ -1332,6 +1206,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         callback,
         agent_handle,
         agent_key,
+        request_create_connection,
     );
     client_abort::attach_request_signal(handle, arg_f64);
     attach_tls_options(handle, arg_f64); // #4906
@@ -1385,6 +1260,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
         agent_handle
     };
     let agent_key = agent::request_key_from_options(agent_handle, parsed.opts, &url);
+    let request_create_connection = agent::request_create_connection_from_options(parsed.opts); // #10469
     let handle = make_request_handle(
         method,
         url,
@@ -1393,6 +1269,7 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
         parsed.callback,
         agent_handle,
         agent_key,
+        request_create_connection,
     );
     client_abort::attach_request_signal(handle, parsed.opts);
     attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
@@ -1703,11 +1580,21 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
                 if let Some(vt) = perry_ffi::raw_net() {
                     (vt.attach)(socket_id);
                 }
-                dispatch_request_over_socket(
+                client_connect_override::dispatch_request_over_socket(
                     handle, method, url, headers, body, timeout_ms, socket_id,
                 );
                 return;
             }
+        }
+    }
+
+    // #10469 — request-level `createConnection` (no explicit Agent).
+    if agent_handle == 0 {
+        if let Some(socket_id) = client_connect_override::dispatch_for_handle(handle, &url) {
+            client_connect_override::dispatch_request_over_socket(
+                handle, method, url, headers, body, timeout_ms, socket_id,
+            );
+            return;
         }
     }
 

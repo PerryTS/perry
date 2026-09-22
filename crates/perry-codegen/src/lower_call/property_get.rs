@@ -21,6 +21,7 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I1, I64};
 
+mod builtin_kind_guard;
 mod dynamic_dispatch;
 mod fetch_chain;
 mod helpers;
@@ -216,6 +217,19 @@ pub fn try_lower_property_get_method_call(
     if let Some(value) =
         try_lower_tag_guarded_string_method(ctx, object, property, args, call_byte_offset)?
     {
+        return Ok(Some(value));
+    }
+
+    // #10476: the same guard for Date / Number method names. HIR folds a
+    // Date intrinsic only for a proven Date and number_string.rs claims only
+    // a proven number; any other receiver checks its runtime kind here.
+    if let Some(value) = builtin_kind_guard::try_lower_kind_guarded_builtin_method(
+        ctx,
+        object,
+        property,
+        args,
+        call_byte_offset,
+    )? {
         return Ok(Some(value));
     }
 

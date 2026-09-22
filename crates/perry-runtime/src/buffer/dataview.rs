@@ -104,6 +104,13 @@ fn throw_dataview_oob() -> ! {
     super::numeric::throw_dataview_offset_out_of_bounds()
 }
 
+/// A DataView whose resizable buffer shrank past it (ES2024 IsViewOutOfBounds).
+fn throw_dataview_out_of_bounds_view() -> ! {
+    crate::collection_iter::throw_type_error(
+        "Cannot perform DataView operation on an out-of-bounds view",
+    )
+}
+
 fn throw_dataview_detached() -> ! {
     crate::collection_iter::throw_type_error(
         "Cannot perform DataView access on a detached ArrayBuffer",
@@ -178,6 +185,12 @@ unsafe fn read_bytes<const N: usize>(buf: *const BufferHeader, offset: i64) -> [
     }
     let len = (*buf).length as i64;
     if offset + (N as i64) > len {
+        // Failure path only: a view its resizable buffer shrank past has a
+        // zeroed length, and the spec's answer for it is a TypeError
+        // (IsViewOutOfBounds), not the ordinary RangeError (#10873).
+        if len == 0 && super::view::is_out_of_bounds_view(buf as usize) {
+            throw_dataview_out_of_bounds_view();
+        }
         throw_dataview_oob();
     }
     let base = super::view::resolve_data_ptr(buf).add(offset as usize);
@@ -198,6 +211,9 @@ unsafe fn write_bytes(buf: *mut BufferHeader, offset: i64, bytes: &[u8]) {
     // needs to distinguish detached TypeError from ordinary RangeError.
     if len == 0 && super::detach::is_detached_buffer(super::view::backing_of(buf as usize)) {
         throw_dataview_detached();
+    }
+    if len == 0 && super::view::is_out_of_bounds_view(buf as usize) {
+        throw_dataview_out_of_bounds_view();
     }
     if offset + (bytes.len() as i64) > len {
         throw_dataview_oob();
@@ -302,21 +318,24 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
                     u32::from_be_bytes(b) as f64
                 }
             }
+            // #10779: same reasoning as `typedarray::load_at` — these two are
+            // the only `get*` kinds that can return a NaN, and the bytes are
+            // whatever the program wrote.
             DataViewKind::Float32 => {
                 let b = read_bytes::<4>(buf, offset);
-                if little {
+                crate::array::canonical_raw_f64(if little {
                     f32::from_le_bytes(b) as f64
                 } else {
                     f32::from_be_bytes(b) as f64
-                }
+                })
             }
             DataViewKind::Float64 => {
                 let b = read_bytes::<8>(buf, offset);
-                if little {
+                crate::array::canonical_raw_f64(if little {
                     f64::from_le_bytes(b)
                 } else {
                     f64::from_be_bytes(b)
-                }
+                })
             }
             DataViewKind::BigInt64 => {
                 let b = read_bytes::<8>(buf, offset);

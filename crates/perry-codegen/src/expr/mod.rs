@@ -43,13 +43,14 @@ mod buffer_views;
 mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
+mod collection_receiver;
 #[cfg(test)]
 mod conforming_layout_note_tests;
 mod helpers;
 mod i32_fast_path;
 mod in_presence_ic;
 mod index;
-mod nanbox_inline;
+pub(crate) mod nanbox_inline;
 mod native_memory;
 mod native_record;
 mod object_literal;
@@ -85,6 +86,7 @@ pub(crate) use channel::{
     extract_array_of_object_shape, lower_channel_reduction, try_match_channel_reduction,
     variant_name,
 };
+pub(crate) use collection_receiver::unbox_collection_receiver;
 pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
     class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
@@ -146,7 +148,7 @@ pub(crate) use write_barrier::{
     emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
     emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
     lower_event_emitter_async_resource_subclass_init, lower_event_emitter_subclass_init,
-    lower_lru_cache_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
+    lower_node_stream_super_init, lower_stream_super_init,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
@@ -170,6 +172,8 @@ mod entry_block_alloca_tests;
 mod hit_path_access_tests;
 #[cfg(test)]
 mod index_set_barrier_tests;
+#[cfg(test)]
+mod instanceof_imported_rhs_tests;
 mod record_value;
 mod repsel_gates;
 mod scalar_slot_root;
@@ -212,7 +216,8 @@ pub(crate) use slot_rep::{
     collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
     deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed, local_is_canonical_str,
     local_rep_is_canonical_i32, note_canonical_local, ptr_shape_context_rule_text,
-    store_canonical_local_from_double, CanonicalI32Denial, SlotRep, PTR_SHAPE_SCALAR_REPLACED,
+    store_canonical_local_from_double, CanonicalI32Denial, SlotRep, PTR_SHAPE_NO_ACCESS_SITE,
+    PTR_SHAPE_SCALAR_REPLACED,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};
@@ -3048,7 +3053,7 @@ mod math_simple;
 mod misc_methods;
 mod new_dynamic;
 mod objects_arrays_lit;
-mod os_uri_dates;
+pub(crate) mod os_uri_dates;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) mod proxy_reflect;

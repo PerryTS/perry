@@ -32,11 +32,32 @@ pub(crate) fn array_length_from_property_value_or_throw(value: f64) -> u32 {
     array_length_from_number_or_throw(number)
 }
 
+/// RULE 3 (single-path object model, `object/shape_rule3.rs`): an
+/// `ArrayHeader`'s `capacity` occupies payload `+4`, the word the emitted
+/// property-read path loads and compares against a cached ShapeId. A capacity
+/// at or above `SHAPE_ID_BASE` would be indistinguishable from shape #1.
+///
+/// Rejected with the same `RangeError: Invalid array length` an out-of-range
+/// `length` already raises, and BEFORE any memory is reserved. The bound is
+/// 2^31-1 ELEMENTS — a dense backing block of 16 GiB — and is not reachable
+/// through `new Array(n)`, which stops materialising holes at one million
+/// (`js_array_constructor_single`) and represents a larger fresh array as a
+/// logical length over a small store. Reaching it requires actually writing
+/// 2^31 live elements.
+#[inline]
+#[must_use]
+pub(crate) fn array_capacity_or_throw(capacity: u32) -> u32 {
+    if capacity > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD {
+        throw_invalid_array_length()
+    }
+    capacity
+}
+
 /// Allocate a new array with the given initial capacity
 #[no_mangle]
 pub extern "C" fn js_array_alloc(capacity: u32) -> *mut ArrayHeader {
     // Use at least MIN_ARRAY_CAPACITY to reduce reallocations for growing arrays
-    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
     let ptr = arena_alloc_gc(
         array_byte_size(actual_capacity as usize),
         8,
@@ -80,7 +101,7 @@ pub(crate) fn js_array_alloc_named_props_reserved(
     set: crate::array::InlineKeySet,
 ) -> *mut ArrayHeader {
     let (header_word, reserve) = crate::array::inline_reserve_layout(set);
-    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
     let ptr = arena_alloc_gc(
         array_byte_size(actual_capacity as usize + reserve),
         8,
@@ -120,7 +141,7 @@ pub(crate) fn js_array_alloc_named_props_reserved(
 /// keeps the all-pointer layout precise if allocation triggers a collection
 /// while the result is being materialized.
 pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader {
-    let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
     let ptr = arena_alloc_gc(
         array_byte_size(actual_capacity as usize),
         8,
@@ -164,6 +185,7 @@ pub extern "C" fn js_array_create() -> i64 {
 /// that forgets to overwrite.
 #[no_mangle]
 pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader {
+    let capacity = array_capacity_or_throw(capacity);
     let actual_capacity = capacity.max(MIN_ARRAY_CAPACITY);
     let ptr = arena_alloc_gc(
         array_byte_size(actual_capacity as usize),
@@ -193,6 +215,7 @@ pub extern "C" fn js_array_alloc_with_length(capacity: u32) -> *mut ArrayHeader 
 /// the spill buffer used by JSON tape materialization does, and padding every
 /// parsed object to 16 side slots would otherwise dominate the object itself.
 pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeader {
+    let capacity = array_capacity_or_throw(capacity);
     let ptr = arena_alloc_gc(
         array_byte_size(capacity as usize),
         8,
@@ -273,6 +296,7 @@ pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
 /// (shapes are immutable once built).
 #[no_mangle]
 pub extern "C" fn js_array_alloc_with_length_longlived(capacity: u32) -> *mut ArrayHeader {
+    let capacity = array_capacity_or_throw(capacity);
     let ptr = crate::arena::arena_alloc_gc_longlived(
         array_byte_size(capacity as usize),
         8,
@@ -549,6 +573,7 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
 /// uninitialized; only pure LLVM stores may execute in that window.
 #[no_mangle]
 pub extern "C" fn js_array_alloc_literal(capacity: u32) -> *mut ArrayHeader {
+    let capacity = array_capacity_or_throw(capacity);
     let ptr = arena_alloc_gc(
         array_byte_size(capacity as usize),
         8,

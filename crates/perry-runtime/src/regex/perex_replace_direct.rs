@@ -20,7 +20,9 @@ use super::perex_api::{self as api, ExecOutput, Reuse};
 use super::perex_match_search::advance;
 use super::perex_memory::{MemoryBudget, StorageError};
 use super::perex_owner::HeapSubject;
-use super::perex_replace_storage::{boxed, call, length, text, List, Pieces, Units};
+use super::perex_replace_storage::{
+    boxed, call, call_native, length, text, List, NativeArgs, Pieces, Units,
+};
 use super::perex_runtime::{self as host, EngineError};
 use super::perex_strings::SpanCopies;
 use super::RegExpHeader;
@@ -71,6 +73,16 @@ pub(super) fn admissible(receiver: &RuntimeHandle<'_>, reuse: &Reuse<'_, '_>) ->
         && crate::object::regex_proto_thunks::regexp_view_uses_builtin(value)
         && reuse.name_count(re) == Some(0)
 }
+
+/// One collection-loop round in this many runs the GC safepoint poll.
+///
+/// The value matches `PRE_SEARCH_POLL_STRIDE`, and deliberately so: both count
+/// one search, so they are parallel on the same unit rather than nested. Note
+/// that 64 is a chosen margin in #10494, not a derived one -- the evidence
+/// there (removing the poll left `cycle_starts`, `completions` and `steps`
+/// identical across 48,000,000 calls) argues for removal and does not pick a
+/// stride. Nothing here relies on 64 being the right number; see the call site.
+const COLLECT_POLL_STRIDE: usize = 64;
 
 /// One piece of a template: a span of the template itself, or a part of the
 /// current match. Parsed once; the capture count is the program's.
@@ -235,7 +247,27 @@ pub(super) fn replace(
             let next = advance(bound, index, input_length, unicode, budget)?;
             super::perex_dispatch::set_last_index(receiver, next)?;
         }
-        host::poll()?;
+        // One collection-loop round in COLLECT_POLL_STRIDE runs the safepoint.
+        //
+        // This loop writes each match's spans into a native buffer and creates
+        // no JS garbage, so its poll enables no collection: nulling it moves
+        // peak RSS by +0.0% median over nine interleaved rounds of an
+        // allocating replace at n=1,000,000. (For contrast, polling 8x less
+        // often in `Pieces::finish`, which does produce garbage, moved the same
+        // figure +13.2%.)
+        //
+        // Worst-case work between executed polls does not grow. Every search
+        // this loop performs goes through `find_near`, which either polls
+        // unconditionally (the owned path, and any lent fallback) or ticks
+        // `PRE_SEARCH_POLL_TICK` and polls on one search in 64 (#10494). That
+        // tick advances once per search, which is once per iteration of this
+        // loop, so the two strides run in parallel on the same unit rather than
+        // composing: the bound stays 64 searches whether this poll is strided
+        // or not. Striding a site whose own counter advanced on a *different*
+        // unit would not be safe on this argument.
+        if searches % COLLECT_POLL_STRIDE == 0 {
+            host::poll()?;
+        }
     }
     if spans.values.is_empty() {
         return Ok(boxed(input));
@@ -251,6 +283,16 @@ pub(super) fn replace(
     } else {
         Pieces::new(scope)?
     };
+    // An ordinary replacer's arguments never reach user code as an array, so
+    // they are produced straight into shadow-stack slots. A proxy replacer's do
+    // reach it, through the `apply` trap, and keep the JS array. Sized once:
+    // the program's capture count fixes the argument count for every match.
+    let mut native_args =
+        if tokens.is_some() || crate::proxy::js_proxy_is_proxy(replacement.get_nanbox_f64()) == 1 {
+            None
+        } else {
+            Some(NativeArgs::new(captures + 3)?)
+        };
     let mut next_source = 0;
     for record in spans.values.chunks_exact(width) {
         let local = RuntimeHandleScope::new();
@@ -283,6 +325,30 @@ pub(super) fn replace(
                         }
                     }
                 }
+            }
+        } else if let Some(args) = native_args.as_mut() {
+            let this = local.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
+            let copies = &mut copies;
+            let value = call_native(replacement, &this, args, memory, |set| {
+                let matched = copies.copy(start, end, budget)?;
+                set(0, js_nanbox_string(matched as i64));
+                let mut slot = 1;
+                for pair in record[2..].as_chunks::<2>().0 {
+                    // An unset capture is the `undefined` the slot already holds.
+                    if pair[0] != u32::MAX {
+                        let capture = copies.copy(pair[0] as usize, pair[1] as usize, budget)?;
+                        set(slot, js_nanbox_string(capture as i64));
+                    }
+                    slot += 1;
+                }
+                set(slot, position as f64);
+                set(slot + 1, boxed(input));
+                Ok(())
+            })?;
+            let value = local.root_nanbox_f64(value);
+            let value = text(&local, &value)?;
+            if accepted {
+                output.whole(&value, budget)?;
             }
         } else {
             let mut args = List::new(&local)?;

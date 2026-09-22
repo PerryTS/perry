@@ -125,6 +125,18 @@ pub extern "C" fn js_object_get_field_ic_nonptr(
     let tag = bits >> 48;
     let obj_unmasked = bits as usize as *const ObjectHeader;
 
+    // Heap STRING receiver. Only a `.length` site still tests the two
+    // pointer-ish tags together (`(tag & 0xFFFD) == 0x7FFD`) and keeps its
+    // inline string arm; every other key now emits the EXACT POINTER test, so
+    // a string receiver arrives here instead of being unmasked, admitted by
+    // the tag test, and rejected by the GC-kind guard four loads later. The
+    // answer is the same one the object exit produced — the by-name helper —
+    // but the pointer must be MASKED first: that helper normalizes only the
+    // 0x7FFD tag, so handing it a 0x7FFF-tagged box would be a wild pointer.
+    if tag == crate::value::STRING_TAG >> 48 {
+        let masked = (bits & 0x0000_FFFF_FFFF_FFFF) as usize as *const ObjectHeader;
+        return super::js_object_get_field_by_name_f64(masked, key);
+    }
     // SSO receiver (SHORT_STRING_TAG): the SSO-aware by-name helper reads
     // `.length` from the NaN-box payload and answers undefined otherwise.
     // A `.length` site keeps serving this inline and never gets here.
@@ -189,9 +201,9 @@ unsafe fn overflow_arm(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
     cache_slot: *mut PicCacheSlot,
-    slot: u32,
+    index: u32,
 ) -> f64 {
-    let idx = (slot & !crate::proxy::IC_SLOT_OVERFLOW_BIT) as usize;
+    let idx = index as usize;
     if let Some(v) = crate::object::overflow_get(obj as usize, idx) {
         if v != crate::value::TAG_HOLE {
             return f64::from_bits(v);
@@ -244,18 +256,20 @@ pub extern "C" fn js_object_get_field_ic_slow(
                     // only re-derive what the equality already proves (#809's
                     // keyless receiver fails the equality, not the range test).
                     let word = (*packed).load(Ordering::Relaxed);
-                    if word != 0 && (*obj).parent_class_id == word as u32 {
-                        let slot = (word >> 32) as u32;
-                        if slot & crate::proxy::IC_SLOT_OVERFLOW_BIT != 0 {
-                            return overflow_arm(obj, key, cache_slot, slot);
+                    if let Some((stamp, index, is_spill)) = super::ic_miss::packed_get_decode(word)
+                    {
+                        if (*obj).parent_class_id == stamp {
+                            if is_spill {
+                                return overflow_arm(obj, key, cache_slot, index);
+                            }
+                            // An inline slot that reached this entry on a token hit
+                            // was a `TAG_HOLE` — the field was deleted since
+                            // priming. The emitted `pic.hit.deleted` edge took the
+                            // ordinary miss WITH the packed word.
+                            return super::ic_miss::get_field_ic_miss_impl(
+                                obj, key, cache_slot, packed,
+                            );
                         }
-                        // An inline slot that reached this entry on a token hit
-                        // was a `TAG_HOLE` — the field was deleted since
-                        // priming. The emitted `pic.hit.deleted` edge took the
-                        // ordinary miss WITH the packed word.
-                        return super::ic_miss::get_field_ic_miss_impl(
-                            obj, key, cache_slot, packed,
-                        );
                     }
                 }
                 // --- 3. the Array-subclass named-prefix proof --------------
@@ -401,9 +415,10 @@ mod tests {
         assert_eq!(read(&mut slot, &packed), 3.0, "the priming read");
         let word = packed.load(Ordering::Relaxed);
         assert_ne!(word, 0, "test premise: the site primed");
-        assert_ne!(
-            (word >> 32) as u32 & crate::proxy::IC_SLOT_OVERFLOW_BIT,
-            0,
+        let (_, _, is_spill) = super::super::ic_miss::packed_get_decode(word)
+            .expect("test premise: the priming read published a compact entry");
+        assert!(
+            is_spill,
             "test premise: the fourth field must live past the inline region, \
              or this test never reaches the overflow arm (packed word {word:#x})"
         );

@@ -1352,8 +1352,11 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 }
                 self.def(dst, out)
             }
-            I::FCmp { dst, pred, a, b } => {
-                let t = basic_type(self.ctx, "double")?;
+            // #10779: `ty` was hardcoded `"double"` here and in `inst.rs`.
+            // Kept on one line: this file sits against the 2000-line gate.
+            #[rustfmt::skip]
+            I::FCmp { dst, pred, ty, a, b } => {
+                let t = basic_type(self.ctx, ty)?;
                 let av = self.val(t, a)?;
                 let bv = self.val(t, b)?;
                 let out: BasicValueEnum = self

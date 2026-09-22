@@ -95,15 +95,55 @@ pub(crate) unsafe fn has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool
 /// `resolve_proto_chain_symbol`, which walks prototype objects itself and must
 /// therefore NOT recurse into the full chain-walking getter.
 pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
-    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
-        if acc.get != 0 {
-            let closure =
-                (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
-            if !closure.is_null() {
-                return Some(crate::closure::js_closure_call0(closure));
+    own_symbol_property_for_receiver(obj_f64, sym_f64, obj_f64)
+}
+
+/// #10481: [`own_symbol_property`] on `obj_f64` for a `[[Get]]` whose
+/// receiver is `receiver` — the object the read started from, which differs
+/// from `obj_f64` whenever a prototype walk found the property on an ancestor.
+/// An accessor's getter runs with `this === receiver` (spec `[[Get]](P,
+/// Receiver)`). The getter used to be called with no receiver at all, so it
+/// observed whatever `IMPLICIT_THIS` the caller happened to leave behind:
+/// fastify's inherited `Reply.prototype[kRouteContext]` getter saw
+/// `this === undefined` on every request.
+pub(crate) unsafe fn own_symbol_property_for_receiver(
+    obj_f64: f64,
+    sym_f64: f64,
+    receiver: f64,
+) -> Option<f64> {
+    own_symbol_slot(obj_f64, sym_f64).map(|slot| slot.read(receiver))
+}
+
+/// An own symbol-keyed property as stored, before any accessor runs (#10481).
+/// Lets a prototype walk locate the holder once and leave the decision to its
+/// caller: a `[[Get]]` reads it for the original receiver, a `[[Set]]` runs
+/// an accessor's setter or stops at a data property.
+#[derive(Clone, Copy)]
+pub(crate) enum OwnSymbolSlot {
+    Accessor { get: u64, set: u64 },
+    Data(u64),
+}
+
+impl OwnSymbolSlot {
+    /// `[[Get]]` of this property with `this === receiver`.
+    pub(crate) unsafe fn read(self, receiver: f64) -> f64 {
+        match self {
+            OwnSymbolSlot::Accessor { get, .. } => {
+                accessors::invoke_symbol_accessor_getter(get, receiver)
             }
+            OwnSymbolSlot::Data(bits) => f64::from_bits(bits),
         }
-        return Some(f64::from_bits(TAG_UNDEFINED));
+    }
+}
+
+/// The two lookups [`has_own_symbol_property`] mirrors (accessor table, then
+/// the raw `SYMBOL_PROPERTIES` data table), returning what they found.
+pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSymbolSlot> {
+    if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
+        return Some(OwnSymbolSlot::Accessor {
+            get: acc.get,
+            set: acc.set,
+        });
     }
     let obj_key = obj_key_from_f64(obj_f64);
     let sym_key = sym_key_from_f64(sym_f64);
@@ -115,7 +155,7 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
         if let Some(entries) = map.get(&obj_key) {
             for &(sk, vb) in entries.iter() {
                 if sk == sym_key {
-                    return Some(f64::from_bits(vb));
+                    return Some(OwnSymbolSlot::Data(vb));
                 }
             }
         }
@@ -404,14 +444,26 @@ unsafe fn heap_ptr_and_type_from_value_bits(bits: u64) -> Option<(usize, u8)> {
     Some((raw, (*gc_header).obj_type))
 }
 
-/// Walk the explicit static prototype chain to find an inherited symbol property.
-/// Used by `Object.prototype.toString` to implement the spec's
-/// `Get(O, @@toStringTag)` prototype-chain walk.
+/// Walk the prototype chains to find an inherited symbol property. Used by
+/// `Object.prototype.toString` to implement the spec's `Get(O, @@toStringTag)`
+/// prototype-chain walk; an accessor runs with `this === obj_f64` (#10481).
 pub(crate) unsafe fn inherited_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
-    resolve_explicit_object_prototype_symbol(obj_f64, sym_f64)
+    inherited_symbol_slot(obj_f64, sym_f64).map(|slot| slot.read(obj_f64))
 }
 
-unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+/// `receiver` is the `this` an inherited accessor runs with (#10481).
+unsafe fn resolve_explicit_object_prototype_symbol(
+    obj_f64: f64,
+    sym_f64: f64,
+    receiver: f64,
+) -> Option<f64> {
+    explicit_prototype_symbol_slot(obj_f64, sym_f64).map(|slot| slot.read(receiver))
+}
+
+/// The explicit-static-prototype walk behind
+/// [`resolve_explicit_object_prototype_symbol`], stopping at the nearest
+/// holder without invoking it.
+unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSymbolSlot> {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     // #9192: the receiver may be a real ARRAY with a retargeted `[[Prototype]]`
     // (`Object.setPrototypeOf(arr, {[S]: v})`). Its address is only a lookup
@@ -426,9 +478,8 @@ unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -
         if proto_bits == TAG_NULL {
             return None;
         }
-        let proto_f64 = f64::from_bits(proto_bits);
-        if let Some(v) = own_symbol_property(proto_f64, sym_f64) {
-            return Some(v);
+        if let Some(slot) = own_symbol_slot(f64::from_bits(proto_bits), sym_f64) {
+            return Some(slot);
         }
         let proto_ptr = object_header_ptr_from_value_bits(proto_bits)?;
         // Cycle detection.
@@ -450,8 +501,8 @@ unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -
         let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
         let cid = crate::object::js_object_get_class_id(proto_obj);
         if cid != 0 {
-            if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
-                return Some(v);
+            if let Some(slot) = crate::object::proto_chain_symbol_slot(cid, sym_f64) {
+                return Some(slot);
             }
         }
         owner = proto_ptr;
@@ -518,8 +569,49 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
     Some(f64::from_bits(TAG_UNDEFINED))
 }
 
+/// `Symbol.toStringTag` for Perry's Web/runtime built-ins that have no
+/// registered prototype-chain or class-id hook reachable from the generic
+/// resolvers below (#10555) -- see `web_builtin_to_string_tag`'s doc comment
+/// for the full inventory and why each kind needs this. An own override
+/// (`Object.defineProperty(x, Symbol.toStringTag, …)`) still wins: the
+/// side-table read is a pointer-KEYED lookup, safe even for the
+/// handle-backed kinds since it never dereferences `obj_f64` as a pointer.
+unsafe fn web_builtin_to_string_tag_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
+    let sym_key = sym_key_from_f64(sym_f64);
+    if sym_key == 0 {
+        return None;
+    }
+    let to_string_tag = well_known_symbol("toStringTag");
+    if to_string_tag.is_null() {
+        return None;
+    }
+    let ts_f64 = f64::from_bits(crate::value::JSValue::pointer(to_string_tag as *const u8).bits());
+    if sym_key != sym_key_from_f64(ts_f64) {
+        return None;
+    }
+    if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+        return Some(v);
+    }
+    let tag = crate::object::web_builtin_to_string_tag(obj_f64)?;
+    let str_ptr = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
+    Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
+    js_object_get_symbol_property_with_receiver(obj_f64, sym_f64, obj_f64)
+}
+
+/// `[[Get]](sym_f64, receiver_f64)` on `obj_f64`: the property is resolved on
+/// `obj_f64` and its prototype chain, and every accessor found along the way
+/// runs with `this === receiver_f64` (#10481). `Reflect.get(target, sym,
+/// receiver)` is the caller whose receiver differs from the holder of the
+/// lookup; every ordinary `obj[sym]` read passes `obj_f64` itself.
+pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
+    obj_f64: f64,
+    sym_f64: f64,
+    receiver_f64: f64,
+) -> f64 {
     #[cfg(feature = "regex-engine")]
     if crate::regex::is_registered_regex(crate::value::js_nanbox_get_pointer(obj_f64) as usize) {
         // RegExpHeader is not an ObjectHeader. Resolve its own symbols and
@@ -527,13 +619,12 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_nanbox_f64(obj_f64);
         let symbol = scope.root_nanbox_f64(sym_f64);
-        if let Some(acc) =
-            accessors::symbol_accessor_property(receiver.get_nanbox_f64(), symbol.get_nanbox_f64())
-        {
-            return accessors::invoke_symbol_accessor_getter(acc.get, receiver.get_nanbox_f64());
-        }
-        if let Some(value) = own_symbol_property(receiver.get_nanbox_f64(), symbol.get_nanbox_f64())
-        {
+        let this_h = scope.root_nanbox_f64(receiver_f64);
+        if let Some(value) = own_symbol_property_for_receiver(
+            receiver.get_nanbox_f64(),
+            symbol.get_nanbox_f64(),
+            this_h.get_nanbox_f64(),
+        ) {
             return value;
         }
         let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
@@ -545,7 +636,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         return crate::proxy::js_reflect_get(
             proto.get_nanbox_f64(),
             symbol.get_nanbox_f64(),
-            receiver.get_nanbox_f64(),
+            this_h.get_nanbox_f64(),
         );
     }
     // A Proxy is a small registered id (its band overlaps the small-handle
@@ -566,12 +657,17 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     // installed `[Symbol.toPrimitive]`). This is the DateCell analogue of the
     // ordinary object's own-then-prototype symbol walk.
     if crate::date::is_date_value(obj_f64) {
-        if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
+        if let Some(v) = own_symbol_property_for_receiver(obj_f64, sym_f64, receiver_f64) {
             return v;
         }
+        // Materializing `Date.prototype` can allocate; the receiver outlives it.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_h = scope.root_nanbox_f64(receiver_f64);
         let proto = crate::object::builtin_prototype_value("Date");
         if (proto.to_bits() >> 48) == 0x7FFD {
-            if let Some(v) = own_symbol_property(proto, sym_f64) {
+            if let Some(v) =
+                own_symbol_property_for_receiver(proto, sym_f64, receiver_h.get_nanbox_f64())
+            {
                 return v;
             }
         }
@@ -585,7 +681,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
             if let Some(v) =
-                crate::object::class_symbol_getter_value(class_id, sym_key, obj_f64, true)
+                crate::object::class_symbol_getter_value(class_id, sym_key, receiver_f64, true)
             {
                 return v;
             }
@@ -640,7 +736,8 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         // #1758: a class ref whose own static symbols miss may inherit the
         // symbol from a class-expression parent (`class Sub extends make(...) {}`
         // → `Sub[TypeId]`). Walk the CLASS_PROTOTYPE_OBJECTS chain.
-        if let Some(v) = crate::object::resolve_proto_chain_symbol(class_id, sym_f64) {
+        if let Some(v) = crate::object::resolve_proto_chain_symbol(class_id, sym_f64, receiver_f64)
+        {
             return v;
         }
         // #36 / #321: the subclass extends a FUNCTION value
@@ -653,7 +750,11 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         if let Some(closure_ptr) = crate::object::parent_closure_in_chain(class_id) {
             let closure_f64 =
                 f64::from_bits(crate::value::js_nanbox_pointer(closure_ptr as i64).to_bits());
-            let v = js_object_get_symbol_property(closure_f64, sym_f64);
+            // #10481: preserve the caller's receiver here too — without it, an
+            // accessor reached through the parent closure's own symbol walk
+            // would see the closure as `this` instead of the original
+            // receiver (e.g. `Reflect.get(Child, sym, other)`).
+            let v = js_object_get_symbol_property_with_receiver(closure_f64, sym_f64, receiver_f64);
             if v.to_bits() != TAG_UNDEFINED {
                 return v;
             }
@@ -668,30 +769,13 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     if let Some(v) = web_stream_symbol_property(obj_f64, sym_f64) {
         return v;
     }
-    // #1213: Timeout/Immediate handles expose `Symbol.dispose` so
-    // `using t = setTimeout(...)` and `t[Symbol.dispose]()` clear the timer.
-    // The handle is a small id NaN-boxed as POINTER; the symbol-keyed read
-    // otherwise misses the side table and returns undefined.
-    if (bits >> 48) == 0x7FFD {
-        let id = (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
-        if crate::value::addr_class::is_small_handle(id as usize)
-            && crate::timer::is_known_timer_id(id)
-        {
-            let dispose = well_known_symbol("dispose");
-            if !dispose.is_null() {
-                let dispose_f64 =
-                    f64::from_bits(crate::value::JSValue::pointer(dispose as *const u8).bits());
-                if sym_key_from_f64(sym_f64) == sym_key_from_f64(dispose_f64) {
-                    let mname = b"@@__perry_wk_dispose";
-                    return crate::object::js_class_method_bind(
-                        obj_f64,
-                        mname.as_ptr(),
-                        mname.len(),
-                    );
-                }
-            }
-        }
+    if let Some(v) = web_builtin_to_string_tag_symbol_property(obj_f64, sym_f64) {
+        return v;
     }
+    // #340/#341: the Timeout/Immediate `Symbol.dispose` arm is gone — the
+    // timer prototypes carry a real symbol-keyed method, so `using t =
+    // setTimeout(...)` (#1213) resolves it through the ordinary symbol-property
+    // walk instead of a small-id special case.
     // Generic small-handle `Symbol.dispose` support. Subsystems that expose
     // a dispose method through HANDLE_PROPERTY_DISPATCH can bind it here
     // without adding a runtime-specific special case.
@@ -822,7 +906,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         }
     }
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
-        return accessors::invoke_symbol_accessor_getter(acc.get, obj_f64);
+        return accessors::invoke_symbol_accessor_getter(acc.get, receiver_f64);
     }
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
@@ -848,11 +932,13 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_nanbox_f64(obj_f64);
     let sym_h = scope.root_nanbox_f64(sym_f64);
+    let receiver_h = scope.root_nanbox_f64(receiver_f64);
     if let Some(v) = req_handle_symbol_fallback(obj_h.get_nanbox_f64(), sym_h.get_nanbox_f64()) {
         return v;
     }
     let obj_f64 = obj_h.get_nanbox_f64();
     let sym_f64 = sym_h.get_nanbox_f64();
+    let receiver_f64 = receiver_h.get_nanbox_f64();
     let bits = obj_f64.to_bits();
     let sym_key = sym_key_from_f64(sym_f64);
     if sym_key != 0 {
@@ -862,9 +948,12 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
                 let class_id = crate::object::js_object_get_class_id(ptr);
                 if class_id != 0 {
-                    if let Some(v) =
-                        crate::object::class_symbol_getter_value(class_id, sym_key, obj_f64, false)
-                    {
+                    if let Some(v) = crate::object::class_symbol_getter_value(
+                        class_id,
+                        sym_key,
+                        receiver_f64,
+                        false,
+                    ) {
                         return v;
                     }
                     // #5128: a symbol-keyed instance METHOD — `*[Symbol.iterator]()`
@@ -879,9 +968,12 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                         if let Some(owner) =
                             crate::object::method_owner_class_id(class_id, method_name)
                         {
-                            if let Some(value) =
-                                class_iterator_prototype_override(obj_f64, sym_f64, class_id, owner)
-                            {
+                            if let Some(value) = class_iterator_prototype_override(
+                                receiver_f64,
+                                sym_f64,
+                                class_id,
+                                owner,
+                            ) {
                                 return value;
                             }
                             return crate::object::js_class_method_bind(
@@ -926,7 +1018,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
             }
         }
     }
-    if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64) {
+    if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64) {
         return v;
     }
     // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
@@ -1016,7 +1108,8 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 if proto_ptr == 0 || proto_ptr == cur {
                     break;
                 }
-                if let Some(v) = own_symbol_property(proto_f64, sym_f64) {
+                if let Some(v) = own_symbol_property_for_receiver(proto_f64, sym_f64, receiver_f64)
+                {
                     return v;
                 }
                 // A class-object proto may carry the symbol through ITS own
@@ -1027,7 +1120,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 if !proto_obj.is_null() {
                     let cid = crate::object::js_object_get_class_id(proto_obj);
                     if cid != 0 {
-                        if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
+                        if let Some(v) =
+                            crate::object::resolve_proto_chain_symbol(cid, sym_f64, receiver_f64)
+                        {
                             return v;
                         }
                     }
@@ -1054,7 +1149,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         if ptr != 0 && crate::closure::is_closure_ptr(ptr) {
             let func_proto = crate::object::builtin_prototype_value("Function");
             if (func_proto.to_bits() >> 48) == 0x7FFD {
-                if let Some(v) = own_symbol_property(func_proto, sym_f64) {
+                // Re-read: materializing `Function.prototype` can allocate.
+                let receiver = receiver_h.get_nanbox_f64();
+                if let Some(v) = own_symbol_property_for_receiver(func_proto, sym_f64, receiver) {
                     return v;
                 }
             }
@@ -1196,7 +1293,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         if !obj_ptr.is_null() {
             let cid = crate::object::js_object_get_class_id(obj_ptr);
             if cid != 0 {
-                if let Some(v) = crate::object::resolve_proto_chain_symbol(cid, sym_f64) {
+                if let Some(v) =
+                    crate::object::resolve_proto_chain_symbol(cid, sym_f64, receiver_f64)
+                {
                     return v;
                 }
                 // A symbol-keyed property added to a DECLARED class's
@@ -1210,7 +1309,9 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 // so drizzle-orm's `applyEffectWrapper` (effect's
                 // `Effectable.Prototype` assigned onto query classes) left
                 // `yield* query` with no iterator ("next is not a function").
-                if let Some(v) = declared_prototype_chain_symbol(obj_f64, sym_f64, cid) {
+                if let Some(v) =
+                    declared_prototype_chain_symbol(obj_f64, sym_f64, cid, receiver_f64)
+                {
                     return v;
                 }
                 // #1838: a class can define a computed well-known-symbol METHOD
@@ -1242,12 +1343,14 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
 /// Accessors run with the original receiver; data properties are returned as
 /// stored. Nearest class first, so a subclass's prototype write shadows a
 /// base class's.
-unsafe fn declared_prototype_chain_symbol(receiver: f64, sym: f64, class_id: u32) -> Option<f64> {
-    let holder = declared_prototype_symbol_holder(receiver, sym, class_id)?;
-    if let Some(acc) = accessors::symbol_accessor_property(holder, sym) {
-        return Some(accessors::invoke_symbol_accessor_getter(acc.get, receiver));
-    }
-    own_symbol_property(holder, sym)
+unsafe fn declared_prototype_chain_symbol(
+    obj: f64,
+    sym: f64,
+    class_id: u32,
+    receiver: f64,
+) -> Option<f64> {
+    let holder = declared_prototype_symbol_holder(obj, sym, class_id)?;
+    own_symbol_property_for_receiver(holder, sym, receiver)
 }
 
 /// Locate a declared prototype property without invoking its getter. An
@@ -1279,6 +1382,36 @@ unsafe fn declared_prototype_symbol_holder(
         }
     }
     None
+}
+
+/// #10481: the accessor an ordinary `[[Set]]` of `sym` on `obj` must run when
+/// `obj` has no own property under it — the nearest inherited holder along
+/// the chains the getter reads (the recorded `[[Prototype]]` chain, the
+/// synthetic class-id prototype chain, the declared class prototypes), as its
+/// `(get, set)` bits. `None` when that holder is a data property or nothing on
+/// those chains carries `sym`. Nothing is invoked.
+pub(crate) unsafe fn inherited_symbol_accessor(obj: f64, sym: f64) -> Option<(u64, u64)> {
+    match inherited_symbol_slot(obj, sym)? {
+        OwnSymbolSlot::Accessor { get, set } => Some((get, set)),
+        OwnSymbolSlot::Data(_) => None,
+    }
+}
+
+/// The nearest inherited holder of `sym` for an ordinary object `obj`, in the
+/// order the getter consults these chains, without invoking it.
+unsafe fn inherited_symbol_slot(obj: f64, sym: f64) -> Option<OwnSymbolSlot> {
+    if let Some(slot) = explicit_prototype_symbol_slot(obj, sym) {
+        return Some(slot);
+    }
+    let ptr = object_header_ptr_from_value_bits(obj.to_bits())?;
+    let class_id = crate::object::js_object_get_class_id(ptr as *const _);
+    if class_id == 0 {
+        return None;
+    }
+    if let Some(slot) = crate::object::proto_chain_symbol_slot(class_id, sym) {
+        return Some(slot);
+    }
+    own_symbol_slot(declared_prototype_symbol_holder(obj, sym, class_id)?, sym)
 }
 
 /// Presence of the declared-prototype properties handled above, including

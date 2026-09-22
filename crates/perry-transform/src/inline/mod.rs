@@ -12,6 +12,7 @@ mod call_inliner;
 mod clamp;
 mod closure_analysis;
 mod cross_module;
+mod discarded_result;
 mod exact_receivers;
 mod factory_specialize;
 mod imul;
@@ -43,7 +44,9 @@ pub(crate) use exact_receivers::{
     collect_module_prototype_facts, intersect_exact_receiver_facts,
     invalidate_exact_receivers_for_expr, kill_referenced_exact_receivers,
 };
-pub(crate) use factory_specialize::specialize_captured_class_factories;
+pub(crate) use factory_specialize::{
+    fresh_export_dynamic_heritage_factories, specialize_captured_class_factories,
+};
 pub(crate) use imul::{detect_math_imul_polyfill, rewrite_imul_calls_in_stmts};
 pub(crate) use substitute::{
     collect_body_local_ids, substitute_locals, substitute_locals_in_stmts, substitute_this,
@@ -495,6 +498,14 @@ fn inline_functions_inner(
     // above the Let's init is no longer a Call, so the regular path is a
     // no-op for the rewritten sites.
     specialize_captured_class_factories(module);
+
+    // #10455: same-module call sites above are cloned per call site;
+    // an EXPORTED factory also needs real per-evaluation identity for
+    // callers outside this module, which no per-module call-site pass
+    // can see. See `fresh_export_dynamic_heritage_factories`'s own doc
+    // comment for the exact shape and why it's safe to run after the
+    // pass above.
+    fresh_export_dynamic_heritage_factories(module);
 
     // Phases 0 + 1 fused (Tier 4.1, v0.5.335): single iteration over
     // module.functions collects both Math.imul polyfill ids AND
@@ -1473,6 +1484,42 @@ mod tests {
             .push(("withinLimit".to_string(), 1));
 
         assert!(gather_cross_module_functions(&source).is_empty());
+    }
+
+    #[test]
+    fn cross_module_enum_members_stay_in_the_source_module() {
+        let enum_member = Expr::EnumMember {
+            enum_name: "CharacterCode".to_string(),
+            member_name: "Lt".to_string(),
+        };
+
+        let mut source = Module::new("/src/utils.ts");
+        let mut helper = function(1, vec![Stmt::Return(Some(enum_member.clone()))]);
+        helper.name = "isHtml".to_string();
+        helper.is_exported = true;
+        source.functions.push(helper.clone());
+        source
+            .exported_functions
+            .push(("isHtml".to_string(), helper.id));
+
+        assert!(
+            gather_cross_module_functions(&source).is_empty(),
+            "free functions that depend on a source enum must remain outlined"
+        );
+
+        let mut class = anon_class(2, "Probe");
+        class.is_exported = true;
+        class.methods.push(helper);
+        source.classes.push(class);
+
+        assert!(
+            gather_cross_module_methods(&source).is_empty(),
+            "strict method harvesting must reject source enum references"
+        );
+        assert!(
+            gather_cross_module_methods_with_extern_imports(&source).is_empty(),
+            "extern-aware method harvesting must reject source enum references"
+        );
     }
 
     #[test]

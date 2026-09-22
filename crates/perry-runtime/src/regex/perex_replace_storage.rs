@@ -130,6 +130,107 @@ pub(super) fn call(
     result
 }
 
+/// Arguments for a replacer call, produced straight into shadow-stack slots.
+///
+/// `call` builds its slots by copying a JS array the caller filled one push at
+/// a time. For a replacer invoked once per match that array is pure overhead:
+/// it is allocated, grown as each argument is pushed, read back out, and
+/// dropped, and no user code can observe it. Here the slots are bound to the
+/// shadow stack *before* any argument is produced, so a value is a traced root
+/// from the moment it is written and producing the next one may allocate and
+/// collect freely. The buffer is sized once and outlives the match loop.
+///
+/// Not usable for a proxy replacer: `js_proxy_apply` takes the arguments as a
+/// JS array, which the `apply` trap observes, so that path keeps `List`.
+pub(super) struct NativeArgs {
+    slots: Vec<std::cell::UnsafeCell<f64>>,
+}
+
+impl NativeArgs {
+    pub(super) fn new(count: usize) -> Result<Self, EngineError> {
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(count)
+            .map_err(|_| StorageError::Allocation)?;
+        for _ in 0..count {
+            slots.push(std::cell::UnsafeCell::new(f64::from_bits(
+                crate::value::TAG_UNDEFINED,
+            )));
+        }
+        Ok(Self { slots })
+    }
+}
+
+/// `call` for an ordinary replacer, with the arguments produced by `fill`
+/// directly into `args`.
+///
+/// Every slot is reset to `undefined` and bound before `fill` runs, so an
+/// argument `fill` does not write stays `undefined` (an unset capture), and one
+/// it does write is rooted immediately. `fill` may therefore allocate between
+/// arguments, which is what producing a match's capture strings does.
+pub(super) fn call_native(
+    method: &RuntimeHandle<'_>,
+    receiver: &RuntimeHandle<'_>,
+    args: &mut NativeArgs,
+    memory: &MemoryBudget,
+    fill: impl FnOnce(&mut dyn FnMut(usize, f64)) -> Result<(), EngineError>,
+) -> Result<f64, EngineError> {
+    struct Frame(u64);
+    impl Drop for Frame {
+        fn drop(&mut self) {
+            crate::gc::js_shadow_frame_pop(self.0);
+        }
+    }
+    let scope = RuntimeHandleScope::new();
+    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    let slots = &args.slots;
+    for slot in slots {
+        // SAFETY: nothing else holds a reference to these cells, and the
+        // shadow stack is not yet bound to them.
+        unsafe { *slot.get() = f64::from_bits(crate::value::TAG_UNDEFINED) };
+    }
+    let frame = Frame(crate::gc::js_shadow_frame_push(slots.len() as u32));
+    for (i, slot) in slots.iter().enumerate() {
+        crate::gc::js_shadow_slot_bind(i as u32, slot.get().cast());
+    }
+    // SAFETY as above; the slots are bound, so a write publishes a root.
+    let mut set = |i: usize, value: f64| unsafe { *slots[i].get() = value };
+    fill(&mut set)?;
+    let reservation = Reservation::new(
+        memory,
+        slots.len().checked_mul(8).ok_or(StorageError::Limit)?,
+    )?;
+    let result = api::caught(|| unsafe {
+        crate::object::js_implicit_this_set(receiver.get_nanbox_f64());
+        crate::closure::js_native_call_value(
+            method.get_nanbox_f64(),
+            slots.as_ptr().cast(),
+            slots.len(),
+        )
+    });
+    crate::object::js_implicit_this_set(previous.get_nanbox_f64());
+    drop(reservation);
+    drop(frame);
+    result
+}
+
+/// How many units of output a `Pieces::finish` pass may read between GC
+/// safepoint polls.
+///
+/// The passes walk the output's pieces, and a piece is usually a handful of
+/// units, so polling per piece ran the whole budgeted trigger ladder (~436
+/// instructions, no cheap "nothing is due" precheck) thousands of times per
+/// QUANTUM of real reading. But these passes are downstream of the replacement's
+/// traced pieces and its replacer's strings, so unlike the collection loop in
+/// `perex_replace_direct` they DO produce garbage, and polling far less often
+/// costs peak RSS: at `api::QUANTUM` (4096) it was +13.2% median on an
+/// allocating replace at n=1,000,000, over the accepted +10% budget.
+///
+/// This value is therefore a measured trade rather than a bound inherited from
+/// elsewhere: small enough to keep the collector's openings, large enough that
+/// a piece of two or three units no longer buys a poll of its own.
+const POLL_UNITS: usize = 512;
+
 /// A reusable original-input reader. A read retains only Perex offsets across
 /// collection, and adjacent reads do not repeat the initial Unicode seek.
 pub(super) struct Units<'a, 's> {
@@ -440,13 +541,17 @@ impl<'a> Pieces<'a> {
             u32::MAX as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<StringHeader>() - 7,
         );
         let mut measured = Encoder::default();
+        let mut measured_polled_at = 0usize;
         self.walk(original, template, budget, |reader, budget| loop {
             let p = reader
                 .try_fold(api::QUANTUM, budget, |u| {
                     measured.push(u, limit, &mut |_| Ok(()))
                 })
                 .map_err(|e| read_error(e, |e| e))?;
-            host::poll()?;
+            if measured.units.saturating_sub(measured_polled_at) >= POLL_UNITS {
+                measured_polled_at = measured.units;
+                host::poll()?;
+            }
             if p == ReadProgress::Complete {
                 return Ok(());
             }
@@ -466,6 +571,7 @@ impl<'a> Pieces<'a> {
         let output = scope.root_string_ptr(output);
         let mut encoded = Encoder::default();
         let mut written = 0usize;
+        let mut encoded_polled_at = 0usize;
         self.walk(original, template, budget, |reader, budget| loop {
             let p = output.with_mut_ptr::<StringHeader, _>(|header| {
                 let mut emit = |bytes: &[u8]| {
@@ -498,7 +604,10 @@ impl<'a> Pieces<'a> {
                 }
                 p
             })?;
-            host::poll()?;
+            if encoded.units.saturating_sub(encoded_polled_at) >= POLL_UNITS {
+                encoded_polled_at = encoded.units;
+                host::poll()?;
+            }
             if p == ReadProgress::Complete {
                 return Ok(());
             }

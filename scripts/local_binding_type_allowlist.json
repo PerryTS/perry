@@ -403,6 +403,14 @@
     },
     {
       "path": "crates/perry-codegen/src/stmt/loops.rs",
+      "function": "local_array_binding_element_type_is_erased",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "#10718: the declared/inferred type only selects which read-only range loops are OFFERED to the packed-f64 range tier; it licenses no load. Every offered loop enters through js_typed_feedback_packed_f64_range_loop_guard, which re-proves the live receiver at loop entry - plain-array GC type, no forwarding, no index descriptors, no Array.prototype/Object.prototype index pollution, no recorded custom array prototype, not frozen/sealed/non-extensible, capacity and length sanity, the whole index window inside the LIVE length, and raw-f64-or-holes packedness of every slot - and the matched body admits no call, closure or await, so nothing can invalidate that between the guard and the last iteration. A stale or reassigned binding fails the guard and runs the unchanged slow loop."
+    },
+    {
+      "path": "crates/perry-codegen/src/stmt/loops.rs",
       "function": "local_array_element_type",
       "access": "local_type_hint",
       "count": 1,
@@ -472,6 +480,14 @@
       "count": 1,
       "classification": "representation-proven",
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/numeric.rs",
+      "function": "is_declared_number_expr",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "A declared local number selects only js_string_concat_chain's part-classifier elision (chain_part_without_redundant_coerce); that helper tag-dispatches every part itself and falls back to js_jsvalue_to_string/js_string_materialize_to_heap for any shape that isn't a plain number, the same calls js_string_coerce forwards to for those shapes, so a lying annotation still produces byte-identical output."
     },
     {
       "path": "crates/perry-codegen/src/type_analysis/numeric.rs",

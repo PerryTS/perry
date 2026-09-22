@@ -141,10 +141,12 @@ pub(crate) use self::generic_object::{
     object_pop as generic_object_pop, object_shift as generic_object_shift, object_sort,
     object_splice,
 };
+pub(crate) use self::header::canonical_raw_f64;
 pub(crate) use self::header::{
-    array_has_arguments_object_flag, js_array_is_numeric_f64_layout_resolved,
-    mark_array_as_arguments_object, rebuild_array_numeric_raw_f64_allow_holes,
-    rebuild_array_numeric_raw_f64_dense_window, rebuild_array_numeric_raw_f64_dense_window_i32,
+    array_has_arguments_object_flag, array_window_is_numeric_raw_f64_allow_holes,
+    js_array_is_numeric_f64_layout_resolved, mark_array_as_arguments_object,
+    rebuild_array_numeric_raw_f64_allow_holes, rebuild_array_numeric_raw_f64_dense_window,
+    rebuild_array_numeric_raw_f64_dense_window_i32,
 };
 pub use self::header::{
     js_array_clear_numeric_layout, js_array_declare_all_pointer_elements,

@@ -1,0 +1,7 @@
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: '@socketsecurity/sdk@4.1.4',
+npm warn EBADENGINE   required: { node: '>=24', npm: '>=12.0.1', pnpm: '>=11.0.5' },
+npm warn EBADENGINE   current: { node: 'v26.8.1', npm: '11.19.0' }
+npm warn EBADENGINE }
+
+added 32 packages in 575ms

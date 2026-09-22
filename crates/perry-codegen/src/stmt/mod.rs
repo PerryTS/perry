@@ -13,12 +13,17 @@ use crate::types::DOUBLE;
 
 #[cfg(test)]
 mod boxed_continuation_tests;
+pub(crate) mod boxed_frame_release;
+#[cfg(test)]
+mod boxed_frame_release_tests;
 mod boxed_local_init;
 #[cfg(test)]
 mod boxed_slot_no_root_tests;
 mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
+#[cfg(test)]
+mod compound_alias_fold_tests;
 mod counter_range;
 mod element_shape_carried;
 mod element_shape_loop;
@@ -30,6 +35,8 @@ mod let_buffer_views;
 mod let_object_facts;
 mod let_stmt;
 mod let_stmt_facts;
+#[cfg(test)]
+mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
 #[cfg(test)]
@@ -665,6 +672,14 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
 }
 
 fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result<()> {
+    // #10464: a generator/async activation frame's list names its
+    // compiler-private control cells. That list runs once per frame, and a
+    // plain-async step closure holds its cells without a counted capture edge,
+    // so it never releases a "previous iteration" cell.
+    let activation_frame = ids.iter().any(|id| {
+        ctx.compiler_private_async_i32_control_locals.contains(id)
+            || ctx.compiler_private_async_i1_control_locals.contains(id)
+    });
     for id in ids {
         // #7521: a module-level binding promoted to `@perry_global_<mod>__<id>`
         // ALREADY has the shared, forward-visible, GC-rooted cell a prealloc box
@@ -701,41 +716,35 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         }
         let is_i32_control = crate::expr::is_compiler_private_async_i32_control_local(ctx, *id);
         let is_i1_control = crate::expr::is_compiler_private_async_i1_control_local(ctx, *id);
-        let blk = ctx.block();
-        let (box_ptr, cell_note) = if is_i32_control {
+        // Seed the JSValue box with TAG_TDZ (Temporal Dead Zone) when
+        // requested -- a read before the declaration runs throws a spec
+        // ReferenceError via the runtime `js_box_get_bits` choke point.
+        // Compiler-private i32/i1 control cells are never TDZ.
+        let seed_bits = if tdz {
+            crate::nanbox::TAG_TDZ_I64.to_string()
+        } else {
+            crate::nanbox::TAG_UNDEFINED_I64.to_string()
+        };
+        use boxed_frame_release as frame_release;
+        let (alloc_fn, alloc_arg, release_fn, cell_note) = if is_i32_control {
             (
-                blk.call(
-                    crate::types::I64,
-                    "js_i32_box_alloc",
-                    &[(crate::types::I32, "0")],
-                ),
+                "js_i32_box_alloc",
+                (crate::types::I32, "0"),
+                frame_release::I32_BOX_SCOPE_RELEASE,
                 "primitive_i32_control_cell",
             )
         } else if is_i1_control {
             (
-                blk.call(
-                    crate::types::I64,
-                    "js_bool_box_alloc",
-                    &[(crate::types::I32, "0")],
-                ),
+                "js_bool_box_alloc",
+                (crate::types::I32, "0"),
+                frame_release::BOOL_BOX_SCOPE_RELEASE,
                 "primitive_i1_control_cell",
             )
         } else {
-            // Seed the JSValue box with TAG_TDZ (Temporal Dead Zone) when
-            // requested -- a read before the declaration runs throws a spec
-            // ReferenceError via the runtime `js_box_get_bits` choke point.
-            // Compiler-private i32/i1 control cells are never TDZ.
-            let seed_bits = if tdz {
-                crate::nanbox::TAG_TDZ_I64.to_string()
-            } else {
-                crate::nanbox::TAG_UNDEFINED_I64.to_string()
-            };
             (
-                blk.call(
-                    crate::types::I64,
-                    "js_box_alloc_bits",
-                    &[(crate::types::I64, &seed_bits)],
-                ),
+                "js_box_alloc_bits",
+                (crate::types::I64, seed_bits.as_str()),
+                frame_release::JS_BOX_SCOPE_RELEASE,
                 "jsvalue_box_cell",
             )
         };
@@ -762,7 +771,12 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
                 .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
             slot
         };
+        if !activation_frame {
+            frame_release::release_previous_iteration_cell(ctx, &slot, release_fn);
+        }
+        let box_ptr = ctx.block().call(crate::types::I64, alloc_fn, &[alloc_arg]);
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
+        frame_release::release_at_frame_exit(ctx, &slot, release_fn);
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
         if cell_note != "jsvalue_box_cell" {
             let lowered = LoweredValue::js_value_bits(&box_ptr);

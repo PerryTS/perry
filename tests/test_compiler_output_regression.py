@@ -3,6 +3,7 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -599,6 +600,149 @@ entry:
             workloads={"dynamic_arithmetic": {}},
         )
         self.assertEqual(report["status"], "pass", report["errors"])
+
+    # ---- #10784: no_dynamic_property_runtime is function-scoped -------------
+    #
+    # It used to be a raw substring sweep of the whole module. Two things it
+    # was never meant to police tripped it: a module-scope `declare` for a
+    # helper nothing calls, and the cold arm of a guarded access inside a
+    # fixture function that exists precisely to RECORD a fallback. The sweep
+    # now walks function bodies and exempts a function whose own native-rep
+    # record declares a fallback the workload listed in
+    # `native_rep_checks.allow_materialization_reasons`.
+
+    DYNAMIC_PROPERTY_SCOPE_IR = """
+declare double @js_dyn_index_set_strict(double, double, double, i32)
+
+define double @perry_fn_mod_ts__provenPath() {
+entry:
+  %v = load double, ptr %p
+  ret double %v
+}
+
+define double @perry_fn_mod_ts__declaredFallback() {
+entry:
+  br i1 %guard, label %tav.set.fast.1, label %tav.set.slow.2
+
+tav.set.fast.1:
+  store double 3.5, ptr %p
+  br label %tav.set.merge.3
+
+tav.set.slow.2:
+  %r = call double @js_dyn_index_set_strict(double %v, double 0.0, double 3.5, i32 1)
+  br label %tav.set.merge.3
+
+tav.set.merge.3:
+  ret double 0.0
+}
+"""
+
+    @staticmethod
+    def _dynamic_property_scope_workloads(allowed_reasons):
+        return {
+            "dyn_scope": {
+                "native_rep_checks": {
+                    "allow_materialization_reasons": list(allowed_reasons),
+                }
+            }
+        }
+
+    @staticmethod
+    def _dynamic_property_scope_reps(function):
+        return [
+            {
+                "records": [
+                    {
+                        "function": function,
+                        "source_function": "declaredFallback",
+                        "expr_kind": "TypedArraySet",
+                        "consumer": "TypedArraySet.slow_path",
+                        "access_mode": "dynamic_fallback",
+                        "materialization_reason": "mutable_alias",
+                        "fallback_reason": "mutable_alias",
+                    }
+                ]
+            }
+        ]
+
+    def _dynamic_property_check(self, ir, workloads, native_reps):
+        report = HARNESS.verify_artifacts(
+            workload="dyn_scope",
+            ir_before=ir,
+            ir_after=ir,
+            assembly=GOOD_ASM,
+            benchmark=None,
+            vectorization={"vectorized_count": 0, "missed_reason_kinds": {}},
+            native_reps=native_reps,
+            workloads=workloads,
+        )
+        return next(
+            check
+            for check in report["checks"]
+            if check["name"] == "no_dynamic_property_runtime"
+        )
+
+    def test_dynamic_property_helper_in_a_declared_fallback_is_allowed(self):
+        check = self._dynamic_property_check(
+            self.DYNAMIC_PROPERTY_SCOPE_IR,
+            self._dynamic_property_scope_workloads(["mutable_alias"]),
+            self._dynamic_property_scope_reps("perry_fn_mod_ts__declaredFallback"),
+        )
+        self.assertEqual(check["status"], "pass", check["detail"])
+
+    def test_dynamic_property_helper_without_a_declared_fallback_still_fails(self):
+        # The whole point of the check: the SAME helper, in a function that
+        # records no fallback, is still an error. Without this the refreshed
+        # expectation would be unable to fail.
+        ir = self.DYNAMIC_PROPERTY_SCOPE_IR.replace(
+            "  %v = load double, ptr %p",
+            "  %v = call double @js_dyn_index_set_strict(double 0.0, double 0.0,"
+            " double 0.0, i32 1)",
+        )
+        check = self._dynamic_property_check(
+            ir,
+            self._dynamic_property_scope_workloads(["mutable_alias"]),
+            self._dynamic_property_scope_reps("perry_fn_mod_ts__declaredFallback"),
+        )
+        self.assertEqual(check["status"], "fail", check["detail"])
+        self.assertIn("perry_fn_mod_ts__provenPath", check["detail"])
+
+    def test_dynamic_property_exemption_follows_the_declared_reason_list(self):
+        # Withdraw the reason the record carries and the exemption goes with
+        # it -- the licence comes from the workload's own written allowance,
+        # not from the helper's name or its block label.
+        check = self._dynamic_property_check(
+            self.DYNAMIC_PROPERTY_SCOPE_IR,
+            self._dynamic_property_scope_workloads(["runtime_api"]),
+            self._dynamic_property_scope_reps("perry_fn_mod_ts__declaredFallback"),
+        )
+        self.assertEqual(check["status"], "fail", check["detail"])
+        self.assertIn("perry_fn_mod_ts__declaredFallback", check["detail"])
+
+    def test_dynamic_property_declare_line_alone_is_not_a_call(self):
+        ir = """
+declare double @js_dyn_index_set_strict(double, double, double, i32)
+
+define double @perry_fn_mod_ts__provenPath() {
+entry:
+  ret double 0.0
+}
+"""
+        check = self._dynamic_property_check(ir, {"dyn_scope": {}}, None)
+        self.assertEqual(check["status"], "pass", check["detail"])
+
+    def test_dynamic_property_helper_in_an_unlabelled_entry_block_is_seen(self):
+        # Optimized IR routinely leaves the entry block unlabelled; a sweep
+        # keyed on label lines silently drops it.
+        ir = """
+define double @perry_fn_mod_ts__provenPath() {
+  %v = call double @js_dyn_index_set_strict(double 0.0, double 0.0, double 0.0, i32 1)
+  ret double %v
+}
+"""
+        check = self._dynamic_property_check(ir, {"dyn_scope": {}}, None)
+        self.assertEqual(check["status"], "fail", check["detail"])
+        self.assertIn("perry_fn_mod_ts__provenPath", check["detail"])
 
     def test_function_scoped_ir_check_does_not_include_callers(self):
         ir = """
@@ -1416,6 +1560,95 @@ idxset.bounded_numeric_merge.5:
         env = CAPTURE_MODULE._compile_env("clang", enable_gc_trace=True)
         self.assertEqual(env["PERRY_GC_TRACE"], "1")
         self.assertNotIn("PERRY_GC_TRACE", CAPTURE_MODULE._compile_env("clang"))
+
+    def test_compile_env_suppresses_auto_optimize_only_when_asked(self):
+        # #10782: the knob is opt-in per call site, so a new `perry compile`
+        # subprocess inherits the SAFE default (auto-optimize on) and has to
+        # argue for suppression rather than acquire it by accident.
+        with unittest.mock.patch.dict(CAPTURE_MODULE.os.environ):
+            CAPTURE_MODULE.os.environ.pop("PERRY_NO_AUTO_OPTIMIZE", None)
+            self.assertNotIn(
+                "PERRY_NO_AUTO_OPTIMIZE", CAPTURE_MODULE._compile_env("clang")
+            )
+            self.assertEqual(
+                CAPTURE_MODULE._compile_env(
+                    "clang", suppress_auto_optimize=True
+                )["PERRY_NO_AUTO_OPTIMIZE"],
+                "1",
+            )
+
+    def test_only_the_no_link_hir_probe_suppresses_auto_optimize(self):
+        """#10782: the HIR probe opts out of auto-optimize; the linker does not.
+
+        Auto-optimize rebuilds the runtime from source, which does not fit in
+        `--compile-timeout`, so the `--no-link` probe must not trigger it. The
+        linking compile must still trigger it: it produces the binary whose
+        `PERRY_GC_TRACE` output backs the `*_traced` runtime budgets, and
+        `optimized_libs/freshness.rs` adds `perry-runtime/diagnostics` to the
+        rebuild only on the auto-optimize path. Those budgets are maxima, so a
+        trace-less runtime would pass all of them vacuously -- this test is
+        what stops the two call sites being "simplified" into one.
+        """
+        calls: list[tuple[list[str], dict[str, str]]] = []
+
+        class _StopAfterSecondCompile(Exception):
+            pass
+
+        class _FakeResult:
+            def to_json(self):
+                return {}
+
+        def fake_run_command(argv, *, cwd, env=None, timeout=None, **kwargs):
+            calls.append((list(argv), dict(env or {})))
+            if len(calls) == 2:
+                raise _StopAfterSecondCompile
+            return _FakeResult()
+
+        original = CAPTURE_MODULE.run_command
+        CAPTURE_MODULE.run_command = fake_run_command
+        try:
+            with unittest.mock.patch.dict(CAPTURE_MODULE.os.environ):
+                CAPTURE_MODULE.os.environ.pop("PERRY_NO_AUTO_OPTIMIZE", None)
+                with tempfile.TemporaryDirectory() as temp:
+                    args = SimpleNamespace(
+                        workload="h1_native_rep_equivalence",
+                        out_dir=temp,
+                        perry="/nonexistent/perry",
+                        clang="/nonexistent/clang",
+                        target=None,
+                        clang_arg=None,
+                        runs=1,
+                        benchmark_mode="smoke",
+                        compile_timeout=300,
+                        run_timeout=300,
+                        skip_run=True,
+                        no_gc_trace=False,
+                        fast_math=False,
+                        fp_contract=None,
+                        verify_native_regions=True,
+                        expect_fma="auto",
+                        perf_counters="off",
+                        gate=False,
+                        print_summary=False,
+                    )
+                    with self.assertRaises(_StopAfterSecondCompile):
+                        CAPTURE_MODULE.capture(args)
+        finally:
+            CAPTURE_MODULE.run_command = original
+
+        self.assertEqual(len(calls), 2, "expected the HIR probe then the link")
+        hir_argv, hir_env = calls[0]
+        link_argv, link_env = calls[1]
+
+        # Assert the subjects are the steps we think they are, so this cannot
+        # pass by classifying the wrong two commands.
+        self.assertIn("--no-link", hir_argv)
+        self.assertIn("--print-hir", hir_argv)
+        self.assertNotIn("--no-link", link_argv)
+        self.assertNotIn("--print-hir", link_argv)
+
+        self.assertEqual(hir_env.get("PERRY_NO_AUTO_OPTIMIZE"), "1")
+        self.assertNotIn("PERRY_NO_AUTO_OPTIMIZE", link_env)
 
     def test_auto_optimize_enables_diagnostics_for_gc_trace_evidence(self):
         # The PERRY_GC_TRACE -> perry-runtime/diagnostics wiring lives in the

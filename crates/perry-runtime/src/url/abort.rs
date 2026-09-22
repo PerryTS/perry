@@ -10,8 +10,8 @@ use super::*;
 /// Field 0: signal (object-ptr NaN-boxed)
 /// Field 1: aborted flag (NaN-boxed bool)
 /// Field 2: abort method (closure)
-pub(crate) const ABORT_CONTROLLER_CLASS_ID: u32 = 0xFFFF_2401;
-pub(crate) const ABORT_SIGNAL_CLASS_ID: u32 = 0xFFFF_2402;
+pub(crate) const ABORT_CONTROLLER_CLASS_ID: u32 = crate::native_class_ids::ABORT_CONTROLLER;
+pub(crate) const ABORT_SIGNAL_CLASS_ID: u32 = crate::native_class_ids::ABORT_SIGNAL;
 const ABORT_CONTROLLER_FIELD_COUNT: u32 = 3;
 const ABORT_SIGNAL_FIELD: u32 = 0;
 const ABORT_ABORTED_FIELD: u32 = 1;

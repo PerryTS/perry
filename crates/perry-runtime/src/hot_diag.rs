@@ -862,6 +862,8 @@ struct SiteStat {
     /// cache held the right answer in a way and the read came back to the miss
     /// handler regardless. See [`IcDiag::prime_in_ways`].
     prime_in_ways: u64,
+    /// Per-site hit count; see [`IcDiag::hits`].
+    hits: u64,
 }
 
 #[derive(Default)]
@@ -908,10 +910,72 @@ pub struct IcDiag {
     /// * `new_token` + not `in_ways` — a shape neither the MRU entry nor the
     ///   ways had (genuine polymorphism, or a first sighting).
     pub prime_in_ways: u64,
+    /// #10863: primes taken while one of the site's ways held an
+    /// OVERFLOW-ENCODED slot. The emitted way path computes an inline address
+    /// straight from the slot word, so a way holding an encoded slot is a wild
+    /// load, not a slow read. #9287 keeps them out by suppressing the cascade;
+    /// this counter is the standing proof that it still does, on real programs
+    /// rather than in a unit test alone. It must read 0 in every run, and a
+    /// nonzero value is a revert, not a regression.
+    pub prime_way_encoded_slot: u64,
+    /// The HIT side of the property-get IC, so a hit rate can be quoted
+    /// instead of a miss count.
+    ///
+    /// Everything else in this group is recorded from the runtime miss
+    /// handler, because that is the only part of a property read the runtime
+    /// sees: a hit is served entirely by the emitted diamond and never calls
+    /// in. Counting hits therefore needs an emitted probe, which is what
+    /// [`js_ic_diag_note_hit`] is — one `#[cold]`-guarded call on the hit
+    /// edge, behind the same `PERRY_IC_DIAG` arming as the misses, so an
+    /// unarmed run pays one relaxed load.
+    ///
+    /// This matters for the single-path object-model work: a fast path that
+    /// stops being taken is correct-but-slow and invisible in program output.
+    /// `hits` next to `misses` is the only way to tell "the guard was removed
+    /// and reads now hit" from "the guard was removed and every read falls to
+    /// the miss handler, still producing the right answer".
+    pub hits: u64,
+    /// Hits served from the MRU packed word versus one of the four ways.
+    pub hits_in_ways: u64,
 }
 
 crate::perry_thread_local! {
     static IC_DIAG: RefCell<IcDiag> = RefCell::new(IcDiag::default());
+}
+
+/// Record one property-get IC HIT. See [`IcDiag::hits`].
+///
+/// Callers must gate on [`ic_on`] first — emitted code should load the
+/// arming byte and branch, never call unconditionally.
+pub fn ic_note_hit(site: usize, in_ways: bool) {
+    IC_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.started.is_none() {
+            d.started = Some(Instant::now());
+            d.last_dump = d.started;
+        }
+        d.hits += 1;
+        if in_ways {
+            d.hits_in_ways += 1;
+        }
+        let s = d.sites.entry(site).or_default();
+        s.hits += 1;
+    });
+}
+
+/// Emitted-code entry point for [`ic_note_hit`]: `site` is the per-site cache
+/// address the hit path already holds, `in_ways` is 0 for an MRU hit and 1 for
+/// a polymorphic-way hit.
+///
+/// Diagnostic only — nothing may branch on the counters, and the call must sit
+/// behind an `ic_on()` test in the emitted code so an unarmed run never
+/// reaches it.
+#[no_mangle]
+pub extern "C" fn js_ic_diag_note_hit(site: i64, in_ways: i32) {
+    if !ic_on() {
+        return;
+    }
+    ic_note_hit(site as usize, in_ways != 0);
 }
 
 /// Record one `pic_prime_get`, splitting it by whether the token the site is
@@ -922,7 +986,14 @@ crate::perry_thread_local! {
 /// Diagnostic only: called from `pic_prime_get` behind [`ic_on`], and every
 /// value it reads (`prev_tok`, `token`, `state`, the ways) is one the caller
 /// already has in a register or in the cache line it has just touched.
-pub fn ic_note_prime(site: usize, prev_tok: i64, token: i64, state: i64, in_ways: bool) {
+pub fn ic_note_prime(
+    site: usize,
+    prev_tok: i64,
+    token: i64,
+    state: i64,
+    in_ways: bool,
+    way_encoded: bool,
+) {
     IC_DIAG.with(|d| {
         let mut d = d.borrow_mut();
         if d.started.is_none() {
@@ -937,6 +1008,9 @@ pub fn ic_note_prime(site: usize, prev_tok: i64, token: i64, state: i64, in_ways
         }
         if in_ways {
             d.prime_in_ways += 1;
+        }
+        if way_encoded {
+            d.prime_way_encoded_slot += 1;
         }
         match state.cmp(&0) {
             std::cmp::Ordering::Less => d.prime_while_megamorphic += 1,
@@ -997,10 +1071,19 @@ impl IcDiag {
         use std::fmt::Write as _;
         let mut out = String::with_capacity(4096);
         let secs = self.started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let reads = self.hits + self.misses;
         let _ = write!(
             out,
-            "[ic-diag] t={secs:.1}s misses={} sites={}",
+            "[ic-diag] t={secs:.1}s misses={} hits={} ({:.1} % of {reads} reads, \
+             {} via ways) sites={}",
             self.misses,
+            self.hits,
+            if reads == 0 {
+                0.0
+            } else {
+                100.0 * self.hits as f64 / reads as f64
+            },
+            self.hits_in_ways,
             self.sites.len()
         );
         for (i, name) in IC_REASON_NAMES.iter().enumerate() {
@@ -1018,7 +1101,8 @@ impl IcDiag {
             let _ = writeln!(
                 out,
                 "  primes={primes} same_token={} ({:.1} %) new_token={} ({:.1} %) \
-                 in_ways={} ({:.1} %) | way_state: fresh={} armed={} megamorphic={}",
+                 in_ways={} ({:.1} %) | way_state: fresh={} armed={} megamorphic={} \
+                 | way_encoded_slot={}",
                 self.prime_same_token,
                 pct(self.prime_same_token),
                 self.prime_new_token,
@@ -1027,14 +1111,31 @@ impl IcDiag {
                 pct(self.prime_in_ways),
                 self.prime_while_fresh,
                 self.prime_while_armed,
-                self.prime_while_megamorphic
+                self.prime_while_megamorphic,
+                self.prime_way_encoded_slot
+            );
+        }
+        // Lane 3's inherited-read cache, on the SAME arming rather than an
+        // env var of its own. A cache that primes and then declines every
+        // lookup returns exactly the values the chain walk would and is
+        // invisible in a program's output; this row is what tells a real
+        // program's run apart from that.
+        let inh_hits = crate::object::inherited_read_cache::inherited_read_cache_hits();
+        let inh_primes = crate::object::inherited_read_cache::inherited_read_cache_primes();
+        let inh_declines = crate::object::inherited_read_cache::inherited_read_cache_declines();
+        let inh_neg = crate::object::inherited_read_cache::inherited_read_cache_neg_served();
+        if (inh_hits | inh_primes | inh_declines | inh_neg) != 0 {
+            let _ = writeln!(
+                out,
+                "  inherited: hits={inh_hits} primes={inh_primes} \
+                 declines={inh_declines} declines_cached={inh_neg}"
             );
         }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
             out,
-            "  misses   same/new/inways   fresh/armed/mega   key  reasons"
+            "  misses   hits   same/new/inways   fresh/armed/mega   key  reasons"
         );
         for s in rows.iter().take(40) {
             let mut reasons = String::new();
@@ -1047,8 +1148,9 @@ impl IcDiag {
             }
             let _ = writeln!(
                 out,
-                "  {:6}  {:>8}/{}/{:<8}  {:>7}/{}/{:<8}  {:<24}{reasons}",
+                "  {:6}  {:6}  {:>8}/{}/{:<8}  {:>7}/{}/{:<8}  {:<24}{reasons}",
                 s.misses,
+                s.hits,
                 s.prime_same_token,
                 s.prime_new_token,
                 s.prime_in_ways,

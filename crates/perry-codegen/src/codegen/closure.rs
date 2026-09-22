@@ -639,6 +639,7 @@ pub(super) fn compile_closure(
         }
         map
     };
+    super::arguments::release_boxed_param_slots_at_exit(lf, params, &closure_boxed_vars, &locals);
 
     // Start with the closure's own params as local_types, then
     // merge in the module-wide map so captured-from-outer ids have

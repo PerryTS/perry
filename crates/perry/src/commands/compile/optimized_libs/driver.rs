@@ -52,18 +52,6 @@ pub(crate) fn build_optimized_libs(
     let use_well_known = std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none();
     let iteration_set = well_known_iteration_set(ctx);
 
-    // fastify has no in-stdlib fallback (the bundled adapter was removed): it can
-    // only be served by perry-ext-fastify *and* a stdlib rebuilt with
-    // `external-fastify-pump` (the per-tick bridge that drains its request queue).
-    // Two fallback paths can't provide that pair, so fail clearly up front instead
-    // of producing a binary that hangs or fails to link with `js_fastify_*`:
-    //   - `PERRY_DISABLE_WELL_KNOWN` — the flip never routes fastify at all.
-    //   - `PERRY_NO_AUTO_OPTIMIZE` — uses the prebuilt `full` stdlib, which is NOT
-    //     built with `external-fastify-pump` (and isn't rebuilt), so even though
-    //     perry-ext-fastify links, requests would never drain (silent hang).
-    let imports_fastify = iteration_set
-        .iter()
-        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "fastify");
     let imports_undici = iteration_set
         .iter()
         .any(|m| m.strip_prefix("node:").unwrap_or(m) == "undici");
@@ -79,44 +67,25 @@ pub(crate) fn build_optimized_libs(
         );
         std::process::exit(1);
     }
-    // turnloop P8 group H: same shape as fastify/undici. perry-stdlib's bundled
-    // pg / mysql2 / ioredis / mongodb copies were deleted, so with the flip
-    // disabled there is nothing left to define `js_pg_*` / `js_mysql_*` /
+    // turnloop P8 group H: perry-stdlib's bundled ioredis / mongodb copies were
+    // deleted, so with the flip disabled there is nothing left to define
     // `js_ioredis_*` / `js_mongodb_*` and the link would fail with a wall of
     // undefined symbols. Say so up front instead.
+    //
+    // pg / mysql2 / fastify are NOT listed: main's npm-binding strip removed
+    // their well-known rows entirely, so those imports compile the real npm
+    // package from source and never reach a wrapper either way.
     if let Some(module) = iteration_set
         .iter()
         .map(|m| m.strip_prefix("node:").unwrap_or(m))
-        .find(|m| {
-            matches!(
-                *m,
-                "pg" | "mysql2" | "mysql2/promise" | "ioredis" | "redis" | "iovalkey" | "mongodb"
-            )
-        })
+        .find(|m| matches!(*m, "ioredis" | "redis" | "iovalkey" | "mongodb"))
         .filter(|_| !use_well_known)
     {
         eprintln!(
             "error: `import '{module}'` requires an external perry-ext-* wrapper, but the \
              well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). perry-stdlib's bundled \
-             pg / mysql2 / ioredis / mongodb copies were removed; unset \
-             PERRY_DISABLE_WELL_KNOWN so the import routes to its wrapper crate."
-        );
-        std::process::exit(1);
-    }
-    if imports_fastify && !use_well_known {
-        eprintln!(
-            "error: `import 'fastify'` requires the external perry-ext-fastify wrapper, but the \
-             well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). The in-stdlib fastify adapter \
-             was removed; unset PERRY_DISABLE_WELL_KNOWN so fastify routes to perry-ext-fastify."
-        );
-        std::process::exit(1);
-    }
-    if imports_fastify && std::env::var_os("PERRY_NO_AUTO_OPTIMIZE").is_some() {
-        eprintln!(
-            "error: `import 'fastify'` is not supported with PERRY_NO_AUTO_OPTIMIZE: the prebuilt \
-             stdlib is not compiled with `external-fastify-pump`, so fastify requests would never \
-             drain (the request loop hangs). The in-stdlib fastify adapter was removed; build \
-             without PERRY_NO_AUTO_OPTIMIZE so the stdlib is rebuilt with the fastify pump wired in."
+             ioredis / mongodb copies were removed; unset PERRY_DISABLE_WELL_KNOWN so the \
+             import routes to its wrapper crate."
         );
         std::process::exit(1);
     }
@@ -288,29 +257,11 @@ pub(crate) fn build_optimized_libs(
                 // exists on disk first (so we can actually build it).
                 let crate_dir = workspace_root.join("crates").join(&binding.krate);
                 if !crate_dir.is_dir() {
-                    // fastify has no in-stdlib fallback (the bundled adapter was
-                    // removed) — it can only be served by perry-ext-fastify. Fail
-                    // clearly instead of silently falling back to a copy that no
-                    // longer exists (which would link with unresolved js_fastify_*).
-                    if module_normalized == "fastify" {
-                        eprintln!(
-                            "error: `import 'fastify'` requires the external perry-ext-fastify \
-                             wrapper, but its source crate was not found at `{}`. The in-stdlib \
-                             fastify adapter was removed; build or restore perry-ext-fastify.",
-                            crate_dir.display()
-                        );
-                        std::process::exit(1);
-                    }
-                    // turnloop P8 group H removed the bundled db copies too, so
+                    // turnloop P8 group H removed the bundled db copies, so
                     // the fall-back below has nothing to fall back to.
                     if matches!(
                         module_normalized,
-                        "pg" | "mysql2"
-                            | "mysql2/promise"
-                            | "ioredis"
-                            | "redis"
-                            | "iovalkey"
-                            | "mongodb"
+                        "ioredis" | "redis" | "iovalkey" | "mongodb"
                     ) {
                         eprintln!(
                             "error: `import '{}'` requires the external {} wrapper, but its \
@@ -497,15 +448,6 @@ pub(crate) fn build_optimized_libs(
             // `external-ws-pump` here for the shared async runtime.
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-ws-pump");
-            }
-            // Same shape for fastify. fastify is served exclusively by
-            // perry-ext-fastify (the in-stdlib adapter was removed), so this
-            // fires whenever `import 'fastify'` is routed here — not off a
-            // (now-gone) `bundled-fastify` feature. `external-fastify-pump`
-            // retains Fastify's dispatch adapters and shared async runtime;
-            // perry-ext-fastify self-registers its pump and keepalive callback.
-            if module_normalized == "fastify" {
-                features.insert("external-fastify-pump");
             }
             // Closes #604 — when the well-known flip routes `node:http` /
             // `node:https` / `node:http2` to perry-ext-http, activate

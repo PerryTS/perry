@@ -79,6 +79,13 @@ pub extern "C" fn js_set_native_bun_tcp_dispatch(func: JsNativeBunTcpDispatchFn)
     JS_NATIVE_BUN_TCP_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the node:net export dispatcher. perry-ext-net registers it from the
+/// `net` namespace install, so it is live before any value-form call can run.
+#[no_mangle]
+pub extern "C" fn js_set_native_net_dispatch(func: JsNativeNetDispatchFn) {
+    JS_NATIVE_NET_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:events MODULE-level helper dispatcher (`events.listenerCount`,
 /// `events.once`, …). Registered by perry-stdlib at startup so a captured,
 /// type-erased or spread-called module helper reaches the same `js_events_*`
@@ -111,10 +118,11 @@ pub extern "C" fn js_set_native_tls_dispatch(func: JsNativeTlsDispatchFn) {
     JS_NATIVE_TLS_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
-/// Set the node:http/https/http2 server-factory dispatcher. Registered by
-/// perry-stdlib at startup (under `external-http-server-pump`) so a captured /
-/// aliased `createServer` reaches the perry-ext-http impls, which this
-/// crate can't call directly. Stays null when the http ext crate isn't linked. (#2533)
+/// Set the node:http/https/http2 export dispatcher. perry-ext-http registers it
+/// from the http namespace install (perry-stdlib also does at startup under
+/// `external-http-server-pump`) so a captured / aliased `createServer` reaches
+/// the perry-ext-http impls, which this crate can't call directly. Stays null
+/// when the http ext crate isn't linked. (#2533, #10428)
 #[no_mangle]
 pub extern "C" fn js_set_native_http_dispatch(func: JsNativeHttpDispatchFn) {
     JS_NATIVE_HTTP_DISPATCH.store(func as *mut (), Ordering::SeqCst);
@@ -138,6 +146,17 @@ pub extern "C" fn js_set_native_events_construct(func: JsNativeEventsConstructFn
 #[no_mangle]
 pub extern "C" fn js_set_native_async_hooks_construct(func: JsNativeEventsConstructFn) {
     JS_NATIVE_ASYNC_HOOKS_CONSTRUCT.store(func as *mut (), Ordering::SeqCst);
+}
+
+/// Register the AsyncLocalStorage subclass-init dispatcher. See
+/// `JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT` for why perry-runtime needs
+/// this indirection instead of calling perry-stdlib's
+/// `js_async_local_storage_subclass_init` directly. (#10625)
+#[no_mangle]
+pub extern "C" fn js_set_native_async_local_storage_subclass_init(
+    func: JsNativeAsyncLocalStorageSubclassInitFn,
+) {
+    JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT.store(func as *mut (), Ordering::SeqCst);
 }
 
 /// Set the native module JS property loader (called by perry-jsruntime)

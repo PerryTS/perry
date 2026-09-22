@@ -333,6 +333,16 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
             | ("net", "SocketAddress")
             | ("net", "_normalizeArgs")
             | ("net", "_createServerHandle")
+            // #10429: the IP helpers and Happy-Eyeballs accessors read as
+            // callable values too (`const { isIP } = require('net')`); calls
+            // route to perry-ext-net's registered dispatcher.
+            | ("net", "isIP")
+            | ("net", "isIPv4")
+            | ("net", "isIPv6")
+            | ("net", "getDefaultAutoSelectFamily")
+            | ("net", "setDefaultAutoSelectFamily")
+            | ("net", "getDefaultAutoSelectFamilyAttemptTimeout")
+            | ("net", "setDefaultAutoSelectFamilyAttemptTimeout")
             | ("tls", "connect")
             | ("tls", "convertALPNProtocols")
             | ("tls", "createServer")

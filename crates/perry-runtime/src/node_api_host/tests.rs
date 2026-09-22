@@ -38,6 +38,63 @@ fn reports_supported_node_api_version() {
 }
 
 #[test]
+fn last_error_info_tracks_each_status_and_message() {
+    let env = test_env();
+    let read = || {
+        let mut info = std::ptr::null();
+        assert_eq!(
+            unsafe { napi_get_last_error_info(env, &mut info) },
+            NapiStatus::Ok
+        );
+        let info = unsafe { &*info };
+        let message = unsafe { std::ffi::CStr::from_ptr(info.error_message) };
+        (info.error_code, message.to_str().unwrap().to_string())
+    };
+    let number = int32(env, 1);
+    assert_eq!(read(), (NapiStatus::Ok, "napi_ok".to_string()));
+    let mut ignored = false;
+    assert_eq!(
+        unsafe { napi_get_value_bool(env, number, &mut ignored) },
+        NapiStatus::BooleanExpected
+    );
+    assert_eq!(
+        read(),
+        (
+            NapiStatus::BooleanExpected,
+            "value must be a boolean".to_string()
+        )
+    );
+    let mut string = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_coerce_to_string(env, number, &mut string) },
+        NapiStatus::Ok
+    );
+    assert_eq!(read(), (NapiStatus::Ok, "napi_ok".to_string()));
+    assert_eq!(
+        unsafe { napi_get_value_double(env, number, std::ptr::null_mut()) },
+        NapiStatus::InvalidArg
+    );
+    assert_eq!(
+        read(),
+        (
+            NapiStatus::InvalidArg,
+            "result must not be null".to_string()
+        )
+    );
+    assert_eq!(
+        unsafe { napi_get_value_bool(env, std::ptr::null_mut(), &mut ignored) },
+        NapiStatus::InvalidArg
+    );
+    assert_eq!(
+        read(),
+        (
+            NapiStatus::InvalidArg,
+            "value is not a live handle".to_string()
+        )
+    );
+}
+
+#[test]
 fn primitive_values_round_trip_and_report_types() {
     let env = test_env();
     let number = int32(env, -42);

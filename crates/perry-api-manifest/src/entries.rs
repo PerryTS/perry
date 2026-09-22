@@ -29,40 +29,26 @@ use crate::{ApiEntry, ApiKind, ApiSource, ParamSpec, TypeSpec};
 /// `perry-hir`. Order matches the original list to keep diffs minimal.
 pub const NATIVE_MODULES: &[&str] = &[
     // ── Third-party npm packages (native wrappers; see well_known_bindings.toml) ──
-    "mysql2",         // MySQL/MariaDB client
-    "mysql2/promise", // mysql2's promise-API subpath
-    "pg",             // PostgreSQL client
-    "uuid",           // RFC-4122 UUID generation
-    "qs",             // nested query-string parser/stringifier (Stripe dependency)
-    "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
-    "argon2",         // Argon2 password hashing (replaces the N-API addon)
-    "ioredis",        // Redis/Valkey client
+    "bcrypt",  // bcrypt password hashing (replaces the N-API addon)
+    "argon2",  // Argon2 password hashing (replaces the N-API addon)
+    "ioredis", // Redis/Valkey client
     // iovalkey: the Valkey fork of ioredis (valkey-io/iovalkey), served by the
     // same perry-ext-ioredis surface — see well_known_bindings.toml.
     "iovalkey",
-    "axios",          // HTTP client (routes onto the native fetch/http stack)
     "node-fetch",     // WHATWG fetch client
     "ws",             // WebSocket client/server
     "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
     "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
-    "dotenv",         // .env file loader
-    "dotenv/config",  // dotenv's auto-load-on-import subpath
-    "jsonwebtoken",   // JWT sign/verify
-    "nanoid",         // compact URL-safe ID generation
-    "validator",      // string validators/sanitizers
     "ethers",         // Ethereum library (utils/wallet/ABI)
     "mongodb",        // MongoDB driver
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
     "sqlite",         // node:sqlite builtin surface
-    "tursodb",        // Turso/libSQL client (legacy in-tree; now @perryts/tursodb)
-    "iroh",           // iroh p2p (legacy in-tree; now @perryts/iroh)
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier
     // (unlike `node:`, which is stripped) — `import { dlopen } from "bun:ffi"`.
     "bun:ffi",
     "bun:jsc",
     "ffi",        // node:ffi (the node: prefix is normalized away)
     "bun:sqlite", // Bun facade over Perry's native SQLite engine
-    "node-cron",  // cron-style scheduler (npm node-cron; aliases `cron`)
     "nodemailer", // SMTP email sending
     // ── Node.js builtin modules ──
     "http",               // HTTP client + server
@@ -98,19 +84,11 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dns/promises",       // (duplicate — kept for parity)
     "url",                // URL / URLSearchParams
     // ── More third-party npm packages ──
-    "lru-cache",           // LRU cache
-    "commander",           // CLI argument parser
-    "decimal.js",          // arbitrary-precision decimals
-    "bignumber.js",        // arbitrary-precision big numbers
-    "exponential-backoff", // retry-with-backoff helper
-    "lodash",              // general utility library
-    "dayjs",               // date/time library
-    "date-fns",            // functional date utilities
-    "moment",              // (legacy) date/time library
-    "sharp",               // image processing (replaces the N-API addon)
-    "cheerio",             // server-side jQuery-style HTML parsing
-    "cron",                // cron scheduler (aliases node-cron)
-    "fastify",             // HTTP server framework
+    "decimal.js",   // arbitrary-precision decimals
+    "bignumber.js", // arbitrary-precision big numbers
+    "lodash",       // general utility library
+    "sharp",        // image processing (replaces the N-API addon)
+    "cheerio",      // server-side jQuery-style HTML parsing
     // ── Node.js builtins (cont.) ──
     "async_hooks", // async context tracking
     // #2875: internal module backing DisposableStack/AsyncDisposableStack
@@ -156,9 +134,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/audio",             // audio surface
     "perry/background",        // background-task surface
     // ── More third-party npm packages ──
-    "redis",                 // npm `redis` client (aliases ioredis)
-    "rate-limiter-flexible", // rate limiting
-    "fetch",                 // bare-name alias for the node-fetch surface
+    "redis", // npm `redis` client (aliases ioredis)
     // `undici` (#466) — served by perry's native fetch stack via the
     // bundled perry-ext-undici wrapper (ProxyAgent / Agent /
     // setGlobalDispatcher / getGlobalDispatcher / fetch subset).
@@ -187,11 +163,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "node-pty",
     "bun-pty",
     "@lydell/node-pty", // API-identical node-pty fork (see above)
-    // #466: node-forge PKI subset (RSA keygen, X.509 build/sign, PEM).
-    // Bundled wrapper at `crates/perry-ext-node-forge`; served natively
-    // for Socket Firewall's TLS-MITM CA so forge's pure-JS crypto isn't
-    // AOT-compiled.
-    "node-forge",
     // @parcel/watcher's root binding and the eight published Node-API
     // sidecars. HIR canonicalizes sidecars to the root dispatch table.
     "@parcel/watcher",
@@ -231,9 +202,13 @@ pub const NODE_SUBMODULES: &[&str] = &[
 ];
 
 /// Internal manifest keys used by dispatch/property gates but not importable
-/// module specifiers.
+/// module specifiers. `fetch` covers the built-in Web Fetch API's value-typed
+/// dispatch tag (`Response`/`Headers`/`Request`/`Blob`/`FormData` + the bare
+/// global `fetch()` call) — real fetch/HTTP-client I/O, distinct from the
+/// removed bare-name `"fetch"` alias for the `node-fetch` npm package that
+/// used to double as its NATIVE_MODULES entry (see well_known_bindings.toml).
 #[cfg(test)]
-pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycode.ucs2"];
+pub(crate) const INTERNAL_MODULE_KEYS: &[&str] = &["inspector.Network", "punycode.ucs2", "fetch"];
 
 /// Modules handled entirely by `perry-runtime` — the linker doesn't
 /// need to pull in `perry-stdlib` for these. Migrated from

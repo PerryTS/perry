@@ -356,8 +356,8 @@ pub(crate) use dispatch_d_i::{
     nm_dispatch_http, nm_dispatch_inspector,
 };
 pub(crate) use dispatch_m_p::{
-    nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty, nm_dispatch_os, nm_dispatch_path,
-    nm_dispatch_perf, nm_dispatch_process,
+    nm_ctor_net, nm_dispatch_module, nm_dispatch_net, nm_dispatch_node_pty, nm_dispatch_os,
+    nm_dispatch_path, nm_dispatch_perf, nm_dispatch_process,
 };
 pub(crate) use dispatch_q_u::{
     nm_dispatch_punycode, nm_dispatch_querystring, nm_dispatch_readline, nm_dispatch_repl,

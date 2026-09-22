@@ -5,10 +5,56 @@ use super::*;
 /// Ensure a key appears in the object's keys_array. Used by `Object.defineProperty`
 /// so the property is enumerable-filterable and discoverable by `getOwnPropertyNames`
 /// even when the value is undefined or the property is an accessor (no underlying slot).
-#[allow(unused_assignments)]
+/// Claim a keys slot for `key` WITHOUT writing a value: an accessor install, a
+/// built-in getter, a generic descriptor that only adjusts attributes.
+///
+/// Such a claim may not adopt or publish a transition edge whose slot lives in
+/// the overflow region, because the overflow entry the edge implies is never
+/// created — see [`ensure_key_in_keys_array_inner`].
 pub(crate) unsafe fn ensure_key_in_keys_array(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
+) {
+    ensure_key_in_keys_array_inner(obj, key, false)
+}
+
+/// [`ensure_key_in_keys_array`] for a claim the caller will follow with a value
+/// store — `define_property_force_store_value`, the data-descriptor path.
+///
+/// #10868 lever (iii). `INLINE_SLOT_FLOOR` is 2 and #7916 documents it as a
+/// pure FOOTPRINT dial ("a growth-headroom dial for objects that gain
+/// properties by name after birth"), so a two-field literal allocates exactly
+/// two slots and the first key added after birth lands in overflow. The
+/// publication and adoption gates below both refused an overflow-located edge,
+/// so every `Object.defineProperty` receiver forked onto a private keys array
+/// and re-minted the whole chain: measured at 3 ids per object on `accd` and
+/// 4 on `acc`, linear and unbounded, with the transition cache reporting
+/// lookups and **zero** inserts.
+///
+/// The `[[Set]]` tail already publishes an overflow-located edge with no such
+/// gate (`field_set_by_name/tail.rs`, the overflow arm), which is why the
+/// `pool` control — the same objects grown by name instead — mints a constant
+/// 4,534 ids however much work it does. This is the missing wiring, not a
+/// missing capability.
+///
+/// The refusal was correct for a keys-only claim and over-broad for a data
+/// one, which is exactly the distinction this split draws.
+pub(crate) unsafe fn ensure_key_in_keys_array_for_value(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) {
+    ensure_key_in_keys_array_inner(obj, key, true)
+}
+
+/// `refresh_define_property_roots!` re-reads BOTH roots at every allocation
+/// boundary and some paths read only one of them before the next boundary, so
+/// the dead writes are deliberate: making the refresh conditional would make
+/// the GC idiom conditional. (The attribute sat on the pre-split entry point.)
+#[allow(unused_assignments)]
+unsafe fn ensure_key_in_keys_array_inner(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    writes_value: bool,
 ) {
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
@@ -68,7 +114,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
                     let live = crate::object::object_live_slot_count(obj);
                     let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
                     if next_keys != 0
-                        && slot_idx < alloc_limit
+                        && (writes_value || slot_idx < alloc_limit)
                         && cached_target_fits(target_shape_id, alloc_limit)
                     {
                         if !super::super::shapes::install_cached_object_shape_transition(
@@ -79,7 +125,9 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
                         ) {
                             set_object_keys_array(obj, next_keys as *mut ArrayHeader);
                         }
-                        if slot_idx >= live {
+                        // Only an INLINE slot advances the live bound; see the
+                        // same guard in the existing-keys arm below.
+                        if slot_idx >= live && slot_idx < alloc_limit {
                             set_object_live_slot_count(obj, slot_idx + 1);
                         }
                         return;
@@ -196,11 +244,13 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         if let Some((next_keys, slot_idx, target_shape_id)) = probe {
             let live = crate::object::object_live_slot_count(obj);
             let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
-            // An overflow target stays on the private path below: a keys-only
-            // install (an accessor claiming its slot) writes no value, so the
-            // overflow entry such an edge implies would never be created.
+            // An overflow target stays on the private path below for a
+            // KEYS-ONLY install (an accessor claiming its slot): it writes no
+            // value, so the overflow entry such an edge implies would never be
+            // created. A data-descriptor claim does write it, so the objection
+            // does not apply and refusing it forked every receiver (#10868).
             if next_keys != 0
-                && slot_idx < alloc_limit
+                && (writes_value || slot_idx < alloc_limit)
                 && cached_target_fits(target_shape_id, alloc_limit)
             {
                 if !super::super::shapes::install_cached_object_shape_transition(
@@ -211,7 +261,12 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
                 ) {
                     set_object_keys_array(obj, next_keys as *mut ArrayHeader);
                 }
-                if slot_idx >= live {
+                // Only an INLINE slot advances the live bound. An
+                // overflow-located adoption must not, or the descriptor would
+                // claim payload slots past the allocation and the collector
+                // would trace them (`cached_target_fits`' hazard, from the
+                // other side).
+                if slot_idx >= live && slot_idx < alloc_limit {
                     set_object_live_slot_count(obj, slot_idx + 1);
                 }
                 return;
@@ -302,10 +357,30 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     // private keys array of its own. Inline targets only, for the reason given
     // there. `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on the
     // published array, so any later growth on either receiver clones first.
+    #[cfg(feature = "shape-mint-diag")]
+    crate::object::shape_mint_census::note_define_outcome(if interned_handle.is_none() {
+        "no publish: no interned handle"
+    } else if prev_shape_id == 0 {
+        "no publish: prev_shape_id == 0"
+    } else if new_index >= inline_capacity {
+        "no publish: new_index >= inline_capacity"
+    } else {
+        "publish: reached the edge site"
+    });
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
-        if new_index < inline_capacity {
+        if writes_value || new_index < inline_capacity {
             let target_shape_id = super::super::shapes::object_shape_stamp(obj);
             let published_keys = crate::object::object_keys_array(obj);
+            #[cfg(feature = "shape-mint-diag")]
+            crate::object::shape_mint_census::note_define_outcome(if target_shape_id == 0 {
+                "no publish: target_shape_id == 0"
+            } else if target_shape_id == prev_shape_id {
+                "no publish: target == prev"
+            } else if published_keys.is_null() {
+                "no publish: published keys null"
+            } else {
+                "PUBLISHED an edge"
+            });
             if target_shape_id != 0 && target_shape_id != prev_shape_id && !published_keys.is_null()
             {
                 handle.with_const_ptr::<crate::StringHeader, _>(|interned_key| {
@@ -365,6 +440,8 @@ unsafe fn define_append_transition_eligible(
     keys: *const ArrayHeader,
 ) -> bool {
     let Some(gc) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_define_outcome("ineligible: no gc header");
         return false;
     };
     const BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
@@ -377,6 +454,18 @@ unsafe fn define_append_transition_eligible(
         || gc._reserved & BLOCKING != 0
         || !crate::object::object_is_regular(obj)
     {
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_define_outcome(
+            if gc.obj_type != crate::gc::GC_TYPE_OBJECT {
+                "ineligible: not GC_TYPE_OBJECT"
+            } else if gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+                "ineligible: forwarded"
+            } else if gc._reserved & BLOCKING != 0 {
+                "ineligible: frozen/sealed/noextend/taproto/tombstones"
+            } else {
+                "ineligible: not object_is_regular"
+            },
+        );
         return false;
     }
     let class_id = (*obj).class_id;
@@ -390,21 +479,40 @@ unsafe fn define_append_transition_eligible(
         || crate::url::is_url_object_shape(obj)
         || crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
     {
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_define_outcome(
+            "ineligible: class object / native / reserved / proto / url / TA",
+        );
         return false;
     }
     let value = crate::value::js_nanbox_pointer(obj as i64);
     if crate::object::exotic_expando::exotic_expando_kind_of_value(value).is_some() {
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_define_outcome("ineligible: exotic expando");
         return false;
     }
     if crate::object::prototype_chain::object_has_prototype_divergence(obj as usize) {
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_define_outcome("ineligible: prototype divergence");
         return false;
     }
-    match super::super::shapes::object_shape_descriptor(obj) {
+    let verdict = match super::super::shapes::object_shape_descriptor(obj) {
         // A keyless receiver has no descriptor yet on some paths; the tail
         // learns its keyless→one-key edge from the same stamp.
         None => keys.is_null(),
         Some(shape) => shape.hole_count == 0 && shape.keys == keys as u64,
-    }
+    };
+    #[cfg(feature = "shape-mint-diag")]
+    crate::object::shape_mint_census::note_define_outcome(if verdict {
+        "eligible"
+    } else {
+        match super::super::shapes::object_shape_descriptor(obj) {
+            None => "ineligible: no descriptor and keys non-null",
+            Some(shape) if shape.hole_count != 0 => "ineligible: shape has holes",
+            _ => "ineligible: shape.keys != receiver keys",
+        }
+    });
+    verdict
 }
 
 #[cfg(test)]

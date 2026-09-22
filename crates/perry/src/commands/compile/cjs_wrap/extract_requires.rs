@@ -293,19 +293,40 @@ pub fn identifier_is_declared_binding(source: &str, name: &str) -> bool {
     false
 }
 
-/// Next.js lazy-require classification (single forward pass). Returns the set
-/// of specifiers whose EVERY `require('<spec>')` call site is lexically inside
-/// a FUNCTION body — never at module top level, and never inside a top-level
-/// control-flow block that runs at module load. Node loads such a module
-/// lazily (only when the enclosing function runs), so Perry must not eager-init
-/// it.
+/// Deferred-require classification (single forward pass). Returns the set of
+/// specifiers whose EVERY `require('<spec>')` call site is NOT guaranteed to
+/// run the moment the module loads — a function body (never called, or called
+/// later: #Next.js lazy-require), a control-flow block that may not run every
+/// time its enclosing scope runs (`if`/`for`/`while`/`switch`/`catch`/`with`/
+/// `else`/`try`/`do`/`finally`), or a braceless/operator-guarded equivalent of
+/// the same thing (`cond && require(...)`, `cond ? require(...) : x`, `for
+/// (...) require(...)` with no block). Node only ever loads such a module when
+/// control flow actually reaches the call, so Perry must not eager-init it
+/// either (issue #10437: `pg` guards its optional `pg-native` binding exactly
+/// this way, behind `if (forceNative) { require('./native') }`).
 ///
-/// Conservative by construction: a spec with any top-level call site (including
-/// top-level `if`/`for`/`try` blocks, which execute during module evaluation)
-/// is excluded and keeps the default eager behavior. A misclassification is
-/// self-correcting at runtime — the require shim triggers the target's init
-/// when `require()` is actually called — so this only governs eager-init-loop
-/// membership.
+/// An ordinary object literal (`{ key: require(...) }`), a class body, or a
+/// bare grouping block do NOT count — their contents run unconditionally
+/// whenever the enclosing statement/expression is reached, same as top level,
+/// so nesting inside one of those must not flip a spec to lazy (that would be
+/// the common `module.exports = { fs: require('fs'), path: require('path') }`
+/// barrel-export shape, which really is eager).
+///
+/// The ternary ALTERNATE arm (`cond ? x : require(...)`) is deliberately NOT
+/// matched — a bare `:` immediately before `require(` is indistinguishable
+/// from an object-literal property value or a `switch` case label without a
+/// real parse, and guessing wrong there risks the same barrel-export
+/// misclassification the object-literal exclusion above avoids. That shape
+/// keeps the conservative eager default (a known, narrow gap — not in scope
+/// for #10437's reproduction).
+///
+/// A false POSITIVE here (treating a genuinely-unconditional require as
+/// conditional) is harmless: the require shim still triggers the target's
+/// init at the exact point the call is lexically reached, which for an
+/// unconditional call is essentially the same moment eager pre-init would
+/// have run it. A false NEGATIVE (missing a genuinely-conditional call) is
+/// the actual bug class — the target loads (and can throw) before its
+/// guarding condition was ever evaluated.
 ///
 /// Brace/paren scanning runs on a comment/string/regex-masked copy (same
 /// length, code structure preserved) so literal braces never corrupt the scope
@@ -337,30 +358,65 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
         return HashSet::new();
     }
 
+    // #10437 followup: a spec whose ONLY conditionality is a
+    // `process.platform === /!== '<literal>'` if/else guard (either branch —
+    // e.g. node-pty's `./windowsTerminal` / `./unixTerminal` split) must NOT
+    // be downgraded to lazy by the broader control-flow classification below.
+    // The platform is a build TARGET resolved at compile time, not a runtime
+    // unknown — `wrap_commonjs_for_target`'s `inactive_platform_guarded_requires`
+    // already prunes the dead branch's spec outright for a known target, and
+    // the live branch's spec keeps the eager `_req_N` classification it had
+    // before this fix. Treating a compile-time-resolved platform check as
+    // conditional the way a genuinely runtime-unknown check (env var,
+    // arbitrary function result) is would only add needless deferral, not
+    // fix a bug — #10437 is about conditions Perry cannot resolve at compile
+    // time.
+    let platform_guarded_specs = process_platform_guarded_specs(source);
+
     let mbytes = masked.as_bytes();
     let is_ident = |c: u8| c == b'_' || c == b'$' || c.is_ascii_alphanumeric();
     let control_keywords = ["if", "for", "while", "switch", "catch", "with", "else"];
+    // Bare-keyword control blocks with no parens (`try {`, `else {`, `do {`,
+    // `} finally {`) — as opposed to an object literal / class body / plain
+    // grouping block, whose opening `{` is also not preceded by `)`/`=>` but
+    // whose contents are NOT conditional (see doc comment above).
+    let bare_control_keywords = ["try", "else", "do", "finally"];
 
     #[derive(PartialEq)]
     enum Scope {
+        /// Function/method/arrow/IIFE body: reachability depends on whether,
+        /// and when, the function is ever called.
         Function,
+        /// A control-flow block that may not run every time its enclosing
+        /// scope runs.
         Block,
+        /// Anything else brace-delimited whose contents run unconditionally
+        /// when reached (object literal, class body, bare grouping block).
+        /// Nesting here does not itself make an enclosed `require()`
+        /// conditional.
+        Other,
     }
     let mut scopes: Vec<Scope> = Vec::new();
-    // spec → (seen any site, all sites so far in-function).
+    // spec → (seen any site, all sites so far conditionally-reached).
     let mut state: HashMap<&str, (bool, bool)> = HashMap::new();
     let mut next_site = 0usize;
-    let in_function = |scopes: &[Scope]| scopes.contains(&Scope::Function);
+    let gates_reachability = |scopes: &[Scope]| {
+        scopes
+            .iter()
+            .any(|s| matches!(s, Scope::Function | Scope::Block))
+    };
 
     let mut i = 0usize;
     while i < mbytes.len() {
         // Record any require site at this offset before processing the char.
         while next_site < sites.len() && sites[next_site].0 == i {
             let (_, spec) = sites[next_site];
-            let here = in_function(&scopes);
+            let conditional = !platform_guarded_specs.contains(spec)
+                && (gates_reachability(&scopes)
+                    || site_is_conditionally_guarded(&masked, mbytes, i, &is_ident));
             let e = state.entry(spec).or_insert((false, true));
             e.0 = true;
-            e.1 = e.1 && here;
+            e.1 = e.1 && conditional;
             next_site += 1;
         }
         match mbytes[i] {
@@ -381,7 +437,18 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
                         Scope::Function
                     }
                 } else {
-                    Scope::Block
+                    // Not preceded by `)` or `=>`: a bare control keyword
+                    // (`try`/`else`/`do`/`finally`) is conditional; an object
+                    // literal, class body, or plain grouping block is not.
+                    let mut w = p;
+                    while w > 0 && is_ident(mbytes[w - 1]) {
+                        w -= 1;
+                    }
+                    if bare_control_keywords.iter().any(|k| *k == &masked[w..p]) {
+                        Scope::Block
+                    } else {
+                        Scope::Other
+                    }
                 };
                 scopes.push(kind);
             }
@@ -395,22 +462,96 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
     // Any sites at EOF offset (defensive).
     while next_site < sites.len() {
         let (_, spec) = sites[next_site];
+        let conditional = !platform_guarded_specs.contains(spec)
+            && (gates_reachability(&scopes)
+                || site_is_conditionally_guarded(&masked, mbytes, mbytes.len(), &is_ident));
         let e = state.entry(spec).or_insert((false, true));
         e.0 = true;
-        e.1 = e.1 && in_function(&scopes);
+        e.1 = e.1 && conditional;
         next_site += 1;
     }
 
     state
         .into_iter()
-        .filter_map(|(spec, (seen, all_in_fn))| {
-            if seen && all_in_fn {
+        .filter_map(|(spec, (seen, all_conditional))| {
+            if seen && all_conditional {
                 Some(spec.to_string())
             } else {
                 None
             }
         })
         .collect()
+}
+
+/// Is the `require(` call whose match starts at masked-source offset
+/// `call_start` reached only conditionally by a nearby operator or a
+/// braceless control-flow header, even though it has no enclosing `{ }`
+/// scope of its own? Brace-scope tracking (above) can't see these shapes:
+/// `cond && require(...)` / `cond || require(...)` / `cond ?? require(...)`,
+/// the ternary CONSEQUENT arm `cond ? require(...) : x`, a braceless arrow
+/// `() => require(...)`, and a braceless control-flow body — `if (...)
+/// require(...)`, `for (...) require(...)`, `while (...) require(...)`,
+/// `else require(...)`, `do require(...)`.
+fn site_is_conditionally_guarded(
+    masked: &str,
+    mbytes: &[u8],
+    call_start: usize,
+    is_ident: &impl Fn(u8) -> bool,
+) -> bool {
+    let mut p = call_start;
+    while p > 0 && (mbytes[p - 1] as char).is_whitespace() {
+        p -= 1;
+    }
+    if p == 0 {
+        return false;
+    }
+    if p >= 2 {
+        let two = &masked[p - 2..p];
+        if two == "&&" || two == "||" || two == "??" || two == "=>" {
+            return true;
+        }
+    }
+    // Ternary consequent (`cond ? require(...) : x`) — a lone `?`, not the
+    // second char of `??` (already handled above).
+    if mbytes[p - 1] == b'?' && !(p >= 2 && mbytes[p - 2] == b'?') {
+        return true;
+    }
+    // Braceless control-flow header: `if (...)`, `for (...)`, `while (...)`
+    // immediately followed by the require call (no block).
+    if mbytes[p - 1] == b')' {
+        let head = matched_open_head(masked, mbytes, p - 1, is_ident);
+        return matches!(head.as_str(), "if" | "for" | "while");
+    }
+    // Bare `else`/`do` immediately before, with no parens and no block.
+    let mut w = p;
+    while w > 0 && is_ident(mbytes[w - 1]) {
+        w -= 1;
+    }
+    matches!(&masked[w..p], "else" | "do")
+}
+
+/// Every `require('<spec>')` specifier textually inside EITHER branch of a
+/// `if (process.platform === /!== '<literal>') { … } else { … }` guard.
+/// Mirrors the pattern `wrap.rs`'s `inactive_platform_guarded_requires`
+/// matches to prune the DEAD branch's spec for a known build target — this
+/// helper is target-independent and returns BOTH branches' specs, so the
+/// LIVE branch's spec (which `inactive_platform_guarded_requires` keeps) can
+/// be exempted from the general conditional-require classification above.
+fn process_platform_guarded_specs(source: &str) -> std::collections::HashSet<String> {
+    let re = perry_perex::tooling::Regex::new(
+        r#"(?s)if\s*\(\s*process\.platform\s*(?:===|!==)\s*['"][^'"]+['"]\s*\)\s*\{(?P<then>.*?)\}\s*else\s*\{(?P<else>.*?)\}"#,
+    )
+    .unwrap();
+    let mut specs = std::collections::HashSet::new();
+    for cap in re.captures_iter(source) {
+        if let Some(then) = cap.name("then") {
+            specs.extend(extract_require_specifiers(then.as_str()));
+        }
+        if let Some(els) = cap.name("else") {
+            specs.extend(extract_require_specifiers(els.as_str()));
+        }
+    }
+    specs
 }
 
 /// Given the index of a `)` in the masked source, walk back to its matching

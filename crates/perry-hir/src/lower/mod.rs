@@ -37,6 +37,7 @@
 pub(crate) mod ambient;
 pub(crate) mod builder_fold;
 mod context;
+mod context_new;
 pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod expr_assign;
 mod expr_call;
@@ -136,6 +137,8 @@ pub(crate) use crate::lower_types::*;
 mod bun_sql_tests;
 #[cfg(test)]
 mod collection_view_tests;
+#[cfg(test)]
+mod compound_assign_temp_type_tests;
 #[cfg(test)]
 mod for_multi_decl_tests;
 #[cfg(test)]

@@ -100,6 +100,8 @@ fn emit_class_expression_value_binding(
     // The binding's local holds ITS OWN class — `new <bind_name>()` must keep
     // the static construct path (see `inferred_class_bindings`).
     ctx.inferred_class_bindings.insert(bind_name.to_string());
+    ctx.inferred_class_bindings
+        .record_binding(id, bind_name.to_string());
     module.init.push(Stmt::Let {
         id,
         name: bind_name.to_string(),
@@ -1025,10 +1027,6 @@ pub(crate) fn lower_stmt(
                                 } = inner.as_ref()
                                 {
                                     let class_name = match (mod_name.as_str(), method.as_str()) {
-                                        (
-                                            "axios",
-                                            "get" | "post" | "put" | "delete" | "patch" | "request",
-                                        ) => Some("Response"),
                                         ("mongodb", "connect") => Some("MongoClient"),
                                         ("pg", "connect") => Some("Client"),
                                         _ => None,

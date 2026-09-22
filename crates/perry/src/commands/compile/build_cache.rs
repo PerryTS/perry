@@ -32,6 +32,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "HARMONYOS_SDK_HOME",
     "PERRY_DEBUG_INIT",
     "PERRY_DEBUG_SYMBOLS",
+    "PERRY_FUNCTION_SOURCE",
     "PERRY_LLVM_CLANG",
     // exp/llvm-inprocess: selects the in-process LLVM backend for .ll -> .o;
     // a different backend means different object bytes.
@@ -60,6 +61,12 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // machine pipeline for bounded ISel/regalloc. That changes object bytes,
     // so both the build and object caches must distinguish its settings.
     "PERRY_LL_FAST_EMIT_MAX_INSTRS",
+    // #10777: gates computing numeric-by-construction provenance AFTER the
+    // `Ptr<Shape>` receiver proofs it depends on. On, an accumulator written
+    // `h = h + o.a` is admitted and the `+` routes to INLINE_FADD; off, the
+    // shape inputs are empty and it stays GUARDED. Different emitted code, so
+    // an object built one way must not be served to a build of the other.
+    "PERRY_L14_NBC_ORDER",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.
@@ -151,6 +158,7 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_GC_MOVING_LOOP_POLLS",
     "PERRY_CANONICAL_I32_LOCALS",
     "PERRY_CANONICAL_STR_LOCALS",
+    "PERRY_NANBOX_CANON",
     "PERRY_CONCAT_SITE_CACHE",
     "PERRY_CODEGEN_UNITS",
     "PERRY_CODEGEN_UNIT_BYTES",
@@ -233,6 +241,9 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // returns `None` either way — the rejection is what the caller already got
     // without the flag, so the emitted code is identical. An input, rather than
     // an exclusion, would make every trace run miss the cache for nothing.
+    // #10743 added the positive twin, `range_loop_trace`, on the same terms: it
+    // prints which admission a matched loop took and returns nothing, so the
+    // emitted object is byte-identical with the flag on and off.
     "PERRY_PACKED_LOOP_TRACE",
     // Entry outlining report output is observational only.
     "PERRY_OUTLINE_ENTRY_REPORT",

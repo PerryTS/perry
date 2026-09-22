@@ -229,11 +229,21 @@ fn test_raw_numeric_array_layout_transfers_on_copying_minor_and_skips_payload() 
     }
     assert_eq!(test_layout_pointer_slot_count(after, 4), Some(0));
     assert_eq!(test_heap_child_slot_count(after as *mut u8), 0);
-    assert!(
-        trace.layout_scans.raw_numeric_array_slots_skipped >= 4,
-        "copied raw numeric array payload should be skipped by layout scan: {:?}",
-        trace.layout_scans
-    );
+    // #10362 changed WHERE this payload stops being scanned, and therefore what
+    // the evidence for it is. The layout-scan counters are charged BY the walk;
+    // a copied raw-numeric array is now not walked at all, so
+    // `raw_numeric_array_slots_skipped` no longer counts it. The subject of this
+    // test is unchanged and in fact stronger — the payload is not scanned — so
+    // it is asserted against the mechanism that now decides it, which is
+    // falsifiable in a way `>= 0` would not be.
+    unsafe {
+        assert!(
+            crate::gc::gc_object_yields_no_child_slots(header),
+            "a copied raw numeric array must be admitted by the zero-slot skip, \
+             which is what now keeps its payload off the scan: reserved={:#x}",
+            (*header)._reserved
+        );
+    }
 }
 
 #[test]

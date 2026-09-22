@@ -110,6 +110,19 @@ macro_rules! buffer_method_names {
     };
 }
 
+/// ES2024 `ArrayBuffer.prototype` methods that exist ONLY on an ArrayBuffer —
+/// `typeof u8.resize` must stay `"undefined"`, so they are kept out of the
+/// shared [`buffer_method_name_static`] table that every Buffer-shaped receiver
+/// consults. Same `'static`-name contract as that table.
+pub fn array_buffer_only_method_name_static(name: &str) -> Option<&'static str> {
+    match name {
+        "resize" => Some("resize"),
+        "transfer" => Some("transfer"),
+        "transferToFixedLength" => Some("transferToFixedLength"),
+        _ => None,
+    }
+}
+
 buffer_method_names!(
     "toString",
     "inspect",
@@ -243,7 +256,42 @@ buffer_method_names!(
     "getBigUint64",
     "setBigInt64",
     "setBigUint64",
+    // #10426: Node's internal fixed-encoding slice/write pair, present as
+    // real own methods on `Buffer.prototype` (`buf.write(str, off, enc)` /
+    // `buf.toString(enc, start, end)` dispatch through these internally in
+    // Node; Perry exposes the same names so duck-typed reads and direct
+    // calls both work, matching `Object.getOwnPropertyNames(Buffer.prototype)`).
+    "asciiSlice",
+    "asciiWrite",
+    "base64Slice",
+    "base64Write",
+    "base64urlSlice",
+    "base64urlWrite",
+    "hexSlice",
+    "hexWrite",
+    "latin1Slice",
+    "latin1Write",
+    "ucs2Slice",
+    "ucs2Write",
+    "utf8Slice",
+    "utf8Write",
 );
+
+/// Fixed encoding tag for one of Node's internal `Buffer.prototype`
+/// `<encoding>Slice`/`<encoding>Write` methods (#10426). Tags match
+/// `js_encoding_tag_from_value`'s numbering (0=utf8 … 6=utf16le/ucs2).
+fn fixed_slice_write_encoding(method_name: &str) -> Option<i32> {
+    Some(match method_name {
+        "utf8Slice" | "utf8Write" => 0,
+        "hexSlice" | "hexWrite" => 1,
+        "base64Slice" | "base64Write" => 2,
+        "base64urlSlice" | "base64urlWrite" => 3,
+        "latin1Slice" | "latin1Write" => 4,
+        "asciiSlice" | "asciiWrite" => 5,
+        "ucs2Slice" | "ucs2Write" => 6,
+        _ => return None,
+    })
+}
 
 unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
     let raw = bits.to_bits();
@@ -521,7 +569,17 @@ pub unsafe fn dispatch_buffer_method(
                 && !crate::buffer::is_shared_array_buffer(addr)
                 && !crate::buffer::is_data_view(addr) =>
         {
-            crate::buffer::array_buffer_transfer(addr, args)
+            crate::buffer::array_buffer_transfer(addr, args, method_name == "transfer")
+        }
+        // ES2024 `ArrayBuffer.prototype.resize` (#10873). Same receiver scope
+        // as `transfer`; a fixed-length ArrayBuffer reaches the helper too and
+        // gets the spec's TypeError rather than "resize is not a function".
+        "resize"
+            if crate::buffer::is_array_buffer(addr)
+                && !crate::buffer::is_shared_array_buffer(addr)
+                && !crate::buffer::is_data_view(addr) =>
+        {
+            crate::buffer::array_buffer_resize(addr, args)
         }
         "slice" | "subarray" => {
             let source_is_array_buffer = crate::buffer::is_array_buffer(addr);
@@ -597,6 +655,17 @@ pub unsafe fn dispatch_buffer_method(
                     crate::buffer::js_buffer_slice(buf, start, end)
                 }
             });
+            // #10873 (ES2024 %TypedArray%.prototype.subarray): a subarray of a
+            // length-tracking view taken WITHOUT an `end` is itself
+            // length-tracking; with an `end` it is fixed-length (the default
+            // every view over a resizable buffer is registered with).
+            if method_name == "subarray"
+                && !source_is_any_array_buffer
+                && (args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined())
+                && crate::buffer::view::is_length_tracking(addr)
+            {
+                crate::buffer::view::mark_length_tracking(result as usize);
+            }
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
             // false and a subsequent `new Uint8Array(slice)` aliases it.
@@ -679,6 +748,44 @@ pub unsafe fn dispatch_buffer_method(
             };
             crate::buffer::js_buffer_copy(buf_ptr, dst_ptr, target_start, source_start, source_end)
                 as f64
+        }
+        // #10426: Node's internal `<encoding>Slice(start, end)` /
+        // `<encoding>Write(string, offset, length)` pair — the same
+        // operation as `toString(encoding, start, end)` / `write(string,
+        // offset, length, encoding)` with the encoding fixed by the method
+        // name instead of an argument.
+        "asciiSlice" | "base64Slice" | "base64urlSlice" | "hexSlice" | "latin1Slice"
+        | "ucs2Slice" | "utf8Slice" => {
+            let enc = fixed_slice_write_encoding(method_name).unwrap_or(0);
+            let len = (*buf_ptr).length as i32;
+            let start = if !args.is_empty() { arg_i32(0) } else { 0 };
+            let end = if args.len() >= 2 { arg_i32(1) } else { len };
+            let str_ptr = crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end);
+            f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+        }
+        "asciiWrite" | "base64Write" | "base64urlWrite" | "hexWrite" | "latin1Write"
+        | "ucs2Write" | "utf8Write" => {
+            if args.is_empty() || !is_buffer_dispatch_string(args[0]) {
+                throw_buffer_type_error_with_code(
+                    "argument must be a string",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
+            let enc = fixed_slice_write_encoding(method_name).unwrap_or(0);
+            let str_bits = args[0].to_bits();
+            let str_addr = if (str_bits >> 48) >= 0x7FF8 {
+                str_bits & 0x0000_FFFF_FFFF_FFFF
+            } else {
+                str_bits
+            };
+            let str_ptr = str_addr as *const crate::string::StringHeader;
+            let offset = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let max_len = if args.len() >= 3 {
+                arg_i32(2)
+            } else {
+                (*buf_ptr).length as i32 - offset
+            };
+            crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }
         "toJSON" => crate::buffer::js_buffer_to_json(buf_f64),
         // `buf.write(string, offset?, length?, encoding?)` — writes the

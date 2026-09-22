@@ -1078,3 +1078,79 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
     // Flush new specialized classes.
     module.classes.extend(new_classes);
 }
+
+/// #10455: `specialize_captured_class_factories` above only rewrites a
+/// factory's CALL SITES, and only visits the module the Call expression
+/// appears in — a caller in ANOTHER module reaches the factory through an
+/// ordinary cross-module call this pass never sees. An exported factory
+/// (`export function withCommands(Base) { return class extends Base {}; }`,
+/// redis's `commander.js` `attachConfig` mixin shape) then keeps returning
+/// the ONE shared-template `ClassRef` every local call above would
+/// otherwise have cloned, and each call's `RegisterClassParentDynamic`
+/// silently re-parents that single shared class in place: `withCommands(A)
+/// === withCommands(B)` where the spec requires two distinct classes, and
+/// an earlier caller's result is corrupted by a later call.
+///
+/// Give an exported factory real per-EVALUATION identity directly, instead
+/// of relying on caller-side cloning that cannot reach outside the module:
+/// when its body is nothing but `return class extends <expr> {…}` — lowered
+/// to `Sequence([RegisterClassParentDynamic { class_name, parent_expr },
+/// ClassRef(class_name)])` by `crates/perry-hir/src/lower/lower_expr/
+/// arm_class.rs` — upgrade the trailing `ClassRef` to `ClassExprFresh`,
+/// exactly what the same class expression would have lowered to had it
+/// needed per-evaluation statics/captures/a private brand.
+/// `named_statics`/`computed_keys`/`captured_args`/static blocks/private
+/// elements/self-binding are all empty here by construction: any of those
+/// would already have forced `arm_class.rs` onto the `ClassExprFresh` route
+/// at lowering time, so a class that still presents as a bare `ClassRef`
+/// never had them.
+///
+/// Scoped to this exact single-statement direct-return shape — the filed
+/// repro's own pattern. A Let-bound intermediate variable, computed-name
+/// evaluations, or Effect's object-literal wrapper shape are left to the
+/// same-module handling above; those still work correctly for a caller in
+/// the SAME module as the factory (the specialization this file already
+/// performs), just not yet for a caller reached only across modules.
+pub fn fresh_export_dynamic_heritage_factories(module: &mut Module) {
+    if module.exported_functions.is_empty() {
+        return;
+    }
+    let exported: HashSet<FuncId> = module
+        .exported_functions
+        .iter()
+        .map(|(_, id)| *id)
+        .collect();
+    for f in &mut module.functions {
+        if !exported.contains(&f.id) {
+            continue;
+        }
+        let [Stmt::Return(Some(Expr::Sequence(parts)))] = f.body.as_mut_slice() else {
+            continue;
+        };
+        if parts.len() != 2 {
+            continue;
+        }
+        let is_dynamic_heritage_classref = matches!(
+            (&parts[0], &parts[1]),
+            (
+                Expr::RegisterClassParentDynamic { class_name: reg, .. },
+                Expr::ClassRef(rf),
+            ) if reg == rf
+        );
+        if !is_dynamic_heritage_classref {
+            continue;
+        }
+        let Expr::ClassRef(template) = parts.remove(1) else {
+            unreachable!("matched Expr::ClassRef(_) above");
+        };
+        parts.push(Expr::ClassExprFresh {
+            template,
+            evaluation_owner: None,
+            named_statics: Vec::new(),
+            computed_keys: Vec::new(),
+            computed_statics: Vec::new(),
+            static_init_order: Vec::new(),
+            captured_args: Vec::new(),
+        });
+    }
+}

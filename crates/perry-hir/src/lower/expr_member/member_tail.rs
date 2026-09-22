@@ -434,6 +434,47 @@ pub(crate) fn lower_member_tail(
                                 crate::analysis::is_builtin_static_function_member(property, member)
                             })
                             .unwrap_or(false);
+                    // #10483: a computed non-literal key (`Math[k]`, `JSON[op]`)
+                    // cannot resolve to an intrinsic static at lowering time —
+                    // `outer_static_member` is `None` for it, which only zeros out
+                    // the `outer_is_reified_*`/`outer_is_inherited_*` flags above
+                    // rather than blocking the undo below. Left unguarded, the undo
+                    // hands codegen a bare `GlobalGet(0)` receiver and `Math[k]`
+                    // reads a property of the number 0 instead of the
+                    // namespace/constructor object. Keep the reified receiver for
+                    // any dynamic key so the runtime property lookup runs against
+                    // the real object. (`Array` already keeps its receiver for a
+                    // dynamic key via `receiver_is_array_ctor_unknown_static`
+                    // above — same `outer_static_member == None` trapdoor, fixed
+                    // there first for a different reason (#5898); this flag is
+                    // redundant-but-harmless for `Array` and load-bearing for
+                    // every other builtin.)
+                    //
+                    // `console` is deliberately NOT excluded, despite `console[m]`
+                    // having its own legacy workaround a few dozen lines down (the
+                    // `js_console_method_by_value` IndexGet arm, added for the
+                    // Next.js `prefixedLog` wall back when this same undo collapsed
+                    // the receiver to the bare `GlobalGet(0)` sentinel for a
+                    // call-position dynamic key). Verified rather than assumed:
+                    // with this flag applied uniformly (no console carve-out),
+                    // `console[method](msg)` lowers to a plain
+                    // `IndexGet { PropertyGet{GlobalGet(0),"console"}, key }`
+                    // dynamic call (confirmed via `--trace hir --focus`) instead of
+                    // routing through `js_console_method_by_value` — and it runs
+                    // correctly, because the real `console` receiver this flag now
+                    // preserves is exactly what that generic dynamic-dispatch path
+                    // needs. The old workaround only existed to compensate for the
+                    // receiver being lost; once the receiver survives, the
+                    // workaround's branch simply goes unreached for this shape.
+                    // Confirmed byte-identical against Node for both the call form
+                    // (`console[m](...)`) and the value-read form (`console[m]`,
+                    // separately guarded by `receiver_is_detached_console_read`
+                    // above) in `test_gap_10483_computed_key_namespace_member.ts`.
+                    let outer_is_dynamic_computed_key = matches!(
+                        &member.prop,
+                        ast::MemberProp::Computed(c)
+                            if !matches!(c.expr.as_ref(), ast::Expr::Lit(ast::Lit::Str(_)))
+                    );
                     if !outer_is_prototype_or_proto
                         && !outer_is_constructor_property
                         && !receiver_is_namespace_value
@@ -449,6 +490,7 @@ pub(crate) fn lower_member_tail(
                         && !outer_is_inherited_object_proto_method
                         && !outer_is_inherited_function_proto_method
                         && !receiver_is_detached_console_read
+                        && !outer_is_dynamic_computed_key
                     {
                         object_expr = Expr::GlobalGet(0);
                     }

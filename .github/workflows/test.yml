@@ -613,6 +613,24 @@ jobs:
           python3 scripts/check_node_version_consistency.py --self-test
           python3 scripts/check_node_version_consistency.py
 
+      # perry-codegen does NOT depend on perry-runtime, yet it bakes the
+      # collector's header layout into emitted code: the inline `new` path
+      # stores a packed GcHeader word as a compile-time constant (#8122) and
+      # every class-field / element-shape guard masks that word against a
+      # literal. Both sides carried their own copy of GC_TYPE_OBJECT,
+      # GC_FLAG_FORWARDED, GC_OBJ_TYPED_LAYOUT_INTACT and friends, held together
+      # only by a comment -- the `debug_assert_eq!` that looks like it checks
+      # them compares codegen's constant to a string literal (a tautology) and
+      # is compiled out of release and perry-dev anyway. A renumbering in the
+      # runtime therefore compiled clean, passed every suite, and shipped a
+      # binary whose objects the collector misreads. Build-free, so it belongs
+      # in `lint`, which IS a required context.
+      - name: GC header constant consistency
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_gc_header_constants.py --self-test
+          python3 scripts/check_gc_header_constants.py
+
       # #7341 layer 3. A RuntimeHandleScope gives an object liveness; it does
       # nothing for a raw pointer already read out of the slot. Every rooting bug
       # in the quarantine sweep had rooting ALREADY -- what was missing was
@@ -2217,6 +2235,131 @@ jobs:
         if: ${{ !cancelled() }}
         run: python3 -m unittest tests.test_native_abi_evidence_report
 
+      # #10782: pay auto-optimize's cold runtime builds HERE, under a budget of
+      # their own, instead of inside whichever gate step below happens to
+      # compile first.
+      #
+      # `perry compile` resolves `optimized_libs` unconditionally
+      # (run_pipeline.rs:6169), so the first LINKING compile in this job blocks
+      # on a nested `cargo build --release -p perry-runtime-static -p
+      # perry-stdlib-static` into `target/perry-auto-<hash>/`. That build does
+      # not fit the 300s `--compile-timeout` every gate step below runs under,
+      # and the failure surfaces as `TimeoutExpired` on whichever workload
+      # happened to compile first (`h1_native_rep_equivalence`, the head of
+      # both suites). `PERRY_RUNTIME_DIR` does not suppress the rebuild.
+      #
+      # TWO cold builds, not one. Every gated workload shares a single
+      # `target/perry-auto-<hash>/`, because the directory hash does not
+      # include the cross-feature set -- but the BUILD STAMP inside it does,
+      # and a stamp mismatch re-runs cargo. The harness
+      # sets `PERRY_GC_TRACE=1` only for workloads carrying `*_traced` runtime
+      # budgets, and `PERRY_GC_TRACE` adds `perry-runtime/diagnostics`
+      # (optimized_libs/freshness.rs). `loop_bound_semantics` is the one gated
+      # workload with no `*_traced` budget, so it is the one compile in the job
+      # that wants the OTHER feature set. Measured with a debug compiler on an
+      # M-series mini: 244.6s for the diagnostics variant and 242.1s for the
+      # non-diagnostics one, each against a 300s budget; every later flip
+      # between the two is ~4s, because cargo keeps both variants' artifacts.
+      # Warming only the first variant just moves the timeout from
+      # `h1_native_rep_equivalence` to `loop_bound_semantics`.
+      #
+      # This goes through the HARNESS rather than a bare `perry compile`
+      # precisely because the harness is what decides `PERRY_GC_TRACE` per
+      # workload: a hand-rolled compile would warm a stamp no gate step wants.
+      # `--skip-run` keeps it to the compile; the gate steps own the execution
+      # and the verdicts, and keep their 300s and their subjects unchanged.
+      #
+      # The trap this closes: a pre-warm that silently no-ops is WORSE than no
+      # pre-warm, because the gates then fail exactly as they do today while
+      # looking like they were warmed. The two assertions below are the gate on
+      # the gate.
+      - name: Pre-warm auto-optimized runtime
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          prewarm() {
+            python3 scripts/compiler_output_regression.py capture \
+              --perry target/debug/perry \
+              --workload "$1" \
+              --benchmark-mode smoke \
+              --runs 1 \
+              --perf-counters off \
+              --skip-run \
+              --compile-timeout 2400 \
+              --out-dir "target/compiler-output-regression/$2"
+          }
+
+          # Variant A -- `*_traced` budgets, so PERRY_GC_TRACE=1, so
+          # +perry-runtime/diagnostics. Every gated compile in the job but one.
+          prewarm h1_native_rep_equivalence prewarm-trace
+          # Variant B -- no `*_traced` budget, so no PERRY_GC_TRACE.
+          prewarm loop_bound_semantics prewarm-notrace
+          # Flip back to A. This leaves the stamp on the variant almost every
+          # gate step wants, AND it is the liveness probe: a flip is only cheap
+          # if BOTH variants are in cargo's cache, so its duration is what the
+          # second assertion below reads.
+          prewarm h1_native_rep_equivalence prewarm-verify
+
+          # Liveness assertion -- the point of the step, not decoration.
+          #
+          # `perry compile` EXITS 0 when auto-optimize fails: the driver prints
+          # "using prebuilt libraries" and returns `OptimizedLibs::empty()`
+          # (optimized_libs/driver.rs). So the three captures above exiting 0
+          # says nothing about whether anything was warmed, and a pre-warm that
+          # quietly warmed nothing is worse than no pre-warm at all -- the
+          # gates below then fail exactly as they do today while the log shows
+          # a green "Pre-warm" step above them.
+          #
+          # Two things are required, and neither alone is enough. Cargo creates
+          # `target/perry-auto-<hash>/` (and a zero-byte
+          # `.perry-auto-build.lock`) BEFORE it builds anything into it, so the
+          # directory existing proves nothing; and the build stamp is written
+          # only after `cargo build` reports success
+          # (driver.rs, `write(&build_stamp_path, ...)` past the
+          # `status.success()` check), which is also what the NEXT compile
+          # consults for freshness. Require a stamped directory holding a
+          # non-empty `libperry_runtime.a`.
+          warm=$(
+            for dir in target/perry-auto-*/; do
+              [ -s "${dir}.perry-auto-build.stamp" ] || continue
+              find "$dir" -maxdepth 3 -name 'libperry_runtime.a' -size +0c 2>/dev/null
+            done
+          ) || true
+          if [ -z "$warm" ]; then
+            echo "::error::pre-warm warmed nothing: no target/perry-auto-*/ holds both a build stamp and a non-empty libperry_runtime.a. Auto-optimize fell back to prebuilt libraries (perry exits 0 when it does), so every gate step below would pay the cold runtime build inside its 300s --compile-timeout." >&2
+            echo "--- target/perry-auto-* ---" >&2
+            ls -la target/perry-auto-*/ 2>&1 | head -60 >&2 || true
+            exit 1
+          fi
+          echo "pre-warmed auto-optimized runtime:"
+          printf '%s\n' "$warm" | while read -r archive; do ls -l "$archive"; done
+
+          # Second assertion: warm, not merely present. The check above proves
+          # a runtime was built; it cannot tell one warmed variant from two,
+          # and a job warmed for only one feature set fails at
+          # `loop_bound_semantics` instead of at `h1_native_rep_equivalence`.
+          # The third pre-warm above flipped the stamp back to variant A, which
+          # re-runs cargo -- that is cheap ONLY if variant B is also cached. So
+          # require that flip to have fitted comfortably inside the budget the
+          # gate steps get. A cold build here is ~240s; a warm flip is seconds.
+          python3 - <<'EOF'
+          import json, sys
+          budget_s = 300   # every gate step's --compile-timeout
+          limit_s = budget_s / 2
+          m = json.load(open("target/compiler-output-regression/prewarm-verify/manifest.json"))
+          took = m["commands"]["compile"]["duration_ms"] / 1000
+          print(f"post-warm flip compile: {took:.1f}s (must be < {limit_s:.0f}s)")
+          if took >= limit_s:
+              print(
+                  f"::error::pre-warm left the runtime cold: a compile after the "
+                  f"warm-up still took {took:.1f}s, more than half the {budget_s}s "
+                  f"--compile-timeout every gate step below runs under. Auto-optimize "
+                  f"is still rebuilding, so a gate step will time out.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          EOF
+
       - name: Gate native-region proof compiler output
         if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
@@ -3046,7 +3189,7 @@ jobs:
         # a "no reactor running" panic. `test_issue_414_mysql_query_params`
         # was the single compile-smoke failure this caused. Same set the
         # doc-tests job already builds together.
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-nodemailer
 
       - name: Issue #945 scalar method IR guard
         run: |
@@ -3898,7 +4041,7 @@ jobs:
         # Build them in this SAME Cargo graph as perry-stdlib: otherwise each
         # no-auto fallback build bundles a distinct tokio TLS/runtime and the
         # linker rejects the unsafe pair (#507, #7629).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer -p perry-ext-net
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-nodemailer -p perry-ext-net
 
       - name: Verify macOS application bundle packaging
         if: matrix.os == 'macos-14'

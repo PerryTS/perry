@@ -56,10 +56,30 @@ pub(super) fn subject(
     api::bind_heap_subject(input)
 }
 
-fn match_flags(
+/// `(global, unicode)` for an operation that needs only those two bits.
+///
+/// The spec reads `rx.flags` here. On a pristine RegExp that Get runs no user
+/// code — the builtin getter derives its string from the very header bits this
+/// reads — so it is skippable by the argument the direct replace path already
+/// makes about `exec`. Doing it generically cost about 36% of a short
+/// `String.prototype.replace`: `js_reflect_get`, an accessor-descriptor lookup,
+/// a shape lookup, a setjmp trap frame, a freshly allocated flags string and a
+/// `from_utf8` scan of it, to recover two booleans (#10518).
+///
+/// `js_regexp_new` stores `unicode` as `contains('u') || contains('v')`, which
+/// is exactly what `scan_flags` derives, so the two agree by construction.
+pub(super) fn match_flags(
     receiver: &RuntimeHandle<'_>,
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
+    let value = receiver.get_nanbox_f64();
+    let re = crate::value::js_nanbox_get_pointer(value) as *const super::RegExpHeader;
+    if super::is_valid_regex_ptr(re)
+        && crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(value)
+    {
+        // Nothing between the check and the read allocates or calls out.
+        return Ok(unsafe { ((*re).global, (*re).unicode) });
+    }
     let scope = RuntimeHandleScope::new();
     let flags = scope.root_nanbox_f64(dispatch::get(receiver, b"flags")?);
     let flags = scope.root_string_ptr(dispatch::to_string(&flags)?);

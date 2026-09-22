@@ -23,6 +23,158 @@ fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
+crate::perry_thread_local! {
+    /// The process ENTRY module's own CJS `module` record — Node's
+    /// `require.main` / `process.mainModule`. Set exactly once, by the entry
+    /// module's own preamble (see `cjs_wrap::wrap_commonjs_with_body_offset`
+    /// in the compiler), before that module's body runs any `require()` of
+    /// its own — so every dependency it (transitively) requires observes
+    /// this already published. Every OTHER CJS-wrapped module reads it back
+    /// via [`js_get_cjs_main_module`] instead of assigning its own local
+    /// `module`, which is the #10735 bug this replaces (`require.main ===
+    /// module` was trivially true in every compiled CommonJS module, not
+    /// just the real entry point).
+    ///
+    /// Stays `None` (JS `undefined`) for the lifetime of the heap when the
+    /// process entry is ESM — matching Node, where a CJS module reached only
+    /// via `import` from an ESM entry has `require.main === undefined`
+    /// (there is no CommonJS "main" in that process).
+    static CJS_MAIN_MODULE: std::cell::RefCell<Option<u64>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Codegen FFI: publish the process entry module's own CJS `module` record as
+/// the shared "main module". Emitted ONCE, in the entry module's preamble,
+/// before its body runs any `require()` of a dependency — so every later read
+/// on this heap sees it already set. First call wins (idempotent): there
+/// should never be a second, but a re-entrant load must not let a later
+/// module overwrite the true entry.
+#[no_mangle]
+pub extern "C" fn js_set_cjs_main_module(module_value: f64) {
+    CJS_MAIN_MODULE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(module_value.to_bits());
+        }
+    });
+}
+
+/// Codegen FFI: `require.main` for a NON-entry CJS module — the value
+/// [`js_set_cjs_main_module`] published, or JS `undefined` if this heap's
+/// process entry never called it (an ESM entry, or a heap whose entry point
+/// was never CommonJS-wrapped).
+#[no_mangle]
+pub extern "C" fn js_get_cjs_main_module() -> f64 {
+    CJS_MAIN_MODULE.with(|slot| slot.borrow().map(f64::from_bits).unwrap_or_else(undefined))
+}
+
+/// Codegen FFI: emitted ONCE, in `main()`, before ANY module's `__init` runs
+/// — including the entry's own, since ESM's static-import evaluation order
+/// runs every hoisted dependency's top-level code before the importing
+/// module's (see `cjs_wrap`'s `require('./x')` -> `import` hoist). Node's
+/// loader sets up `require.main`/`process.mainModule` before invoking the
+/// entry's script body at all, so no CommonJS module - not even one loaded
+/// before the entry's own preamble textually runs - ever observes it unset.
+/// Perry can't replicate that ordering directly (the entry's real `module`
+/// record is built by JS the entry's own preamble emits, which necessarily
+/// runs LAST among a CJS entry's static imports), so this allocates a bare
+/// placeholder object and publishes THAT via [`js_set_cjs_main_module`]
+/// up front. Every non-entry module's `require.main` resolves to this same
+/// object from heap birth. When the entry's own preamble finally runs, it
+/// reclaims this exact object (via [`js_get_cjs_main_module`]) and fills in
+/// its real fields in place — same identity throughout, so a dependency that
+/// captured `require.main` before the entry ran still `===`-matches the
+/// entry's `module` afterward (JS identity survives mutation).
+///
+/// Codegen emits the call only when the entry module is itself CJS-wrapped
+/// (`collectors::is_cjs_wrapped_module`); an ESM entry never calls this, so
+/// [`js_get_cjs_main_module`] stays `undefined` for the lifetime of the heap
+/// — matching Node, where a CJS module reached only via `import` from an ESM
+/// entry has no CommonJS "main" at all.
+#[no_mangle]
+pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
+    let placeholder = object_value(js_object_alloc(0, 0));
+    js_set_cjs_main_module(placeholder);
+}
+
+/// GC root scanner for [`CJS_MAIN_MODULE`]: a raw heap pointer cached outside
+/// any shadow frame, so a moving collection must mark and rewrite it like any
+/// other mutable root. Registered in `gc::gc_init` beside
+/// `scan_module_path_roots_mut`.
+pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CJS_MAIN_MODULE.with(|slot| {
+        if let Some(bits) = slot.borrow_mut().as_mut() {
+            let rewritten = visitor.visit_nanbox_u64_slot(bits);
+            // #10735: `visit_nanbox_u64_slot` returns true only when it
+            // actually rewrote the slot (the cached object moved this
+            // cycle). A diagnostic-only counter distinguishing "the
+            // placeholder happened never to move" from "it moved and the
+            // cache followed it" -- the load-bearing question for this
+            // holder's identity guarantee, not visible from the generic
+            // per-cycle counters.
+            if rewritten && crate::gc::gc_diag_enabled() {
+                CJS_MAIN_MODULE_REWRITES.with(|c| c.set(c.get() + 1));
+                eprintln!(
+                    "[cjs-main-module] rewritten: new_bits={:#018x} total_rewrites={}",
+                    *bits,
+                    CJS_MAIN_MODULE_REWRITES.with(std::cell::Cell::get)
+                );
+            }
+        }
+    });
+}
+
+crate::perry_thread_local! {
+    /// Diagnostic-only (`PERRY_GC_DIAG=1`) count of how many times
+    /// [`scan_cjs_main_module_root_mut`] actually rewrote the cached
+    /// placeholder's bits (i.e. the object moved while cached). Never
+    /// read for behaviour.
+    static CJS_MAIN_MODULE_REWRITES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod cjs_main_module_tests {
+    use super::*;
+
+    // Each `#[test]` fn runs on its own harness-spawned thread, so
+    // `CJS_MAIN_MODULE` (thread-local) starts fresh here regardless of test
+    // execution order — no explicit reset needed.
+
+    #[test]
+    fn defaults_to_undefined_when_no_entry_has_published() {
+        assert_eq!(js_get_cjs_main_module().to_bits(), TAG_UNDEFINED);
+    }
+
+    #[test]
+    fn published_value_reads_back_identically() {
+        let entry_module = string_value("entry-module-marker");
+        js_set_cjs_main_module(entry_module);
+        assert_eq!(js_get_cjs_main_module().to_bits(), entry_module.to_bits());
+    }
+
+    #[test]
+    fn first_publication_wins_a_later_call_cannot_overwrite_it() {
+        let first = string_value("first-entry");
+        let second = string_value("second-entry-should-be-ignored");
+        js_set_cjs_main_module(first);
+        js_set_cjs_main_module(second);
+        assert_eq!(js_get_cjs_main_module().to_bits(), first.to_bits());
+    }
+}
+
+/// Test-only accessors used from `gc::tests::cjs_main_module` (a sibling
+/// module tree that cannot see `cjs_main_module_tests`'s items, and needs
+/// its own file to reach the `CopyingNurseryTestGuard` apparatus a real
+/// forced-evacuation witness test requires -- see that file for why).
+#[cfg(test)]
+pub(crate) fn test_cjs_main_module_bits() -> Option<u64> {
+    CJS_MAIN_MODULE.with(|s| *s.borrow())
+}
+
+#[cfg(test)]
+pub(crate) fn test_cjs_main_module_rewrite_count() -> u64 {
+    CJS_MAIN_MODULE_REWRITES.with(std::cell::Cell::get)
+}
+
 fn null() -> f64 {
     f64::from_bits(TAG_NULL)
 }
@@ -874,23 +1026,28 @@ fn canonical_dir(dir: &std::path::Path) -> std::path::PathBuf {
     if let Some(hit) = CANONICAL_MODULE_DIRS.with(|memo| memo.borrow().get(&key).cloned()) {
         return hit;
     }
-    // Resolve the parent first (memoized), then this one component, so a deep
-    // tree costs one lookup per NEW directory rather than a full walk each time.
-    let resolved = match (dir.parent(), dir.file_name()) {
-        (Some(parent), Some(name)) if parent != dir => {
-            let base = canonical_dir(parent);
-            let joined = base.join(name);
-            match std::fs::read_link(&joined) {
-                // Not a symlink (the common case): the parent is already
-                // canonical, so the join is canonical too — no deeper walk.
-                Err(_) => joined,
-                // A symlink: hand it to the real resolver rather than
-                // re-implementing chain and relative-target semantics.
-                Ok(_) => std::fs::canonicalize(&joined).unwrap_or(joined),
-            }
-        }
-        _ => std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()),
-    };
+    // One `canonicalize` per NEW directory, memoized — the same budget the
+    // parent-join form had (it spent a `read_link` per new directory), and the
+    // same answer on Unix, where a canonical parent joined to a non-symlink
+    // component is already canonical.
+    //
+    // #10851: the join form was WRONG on Windows. It rebuilt the path from
+    // literal component names, so an 8.3 short name survived: a path typed
+    // `C:\Users\RUNNER~1\...` stayed short, while the same file reached via a
+    // `..` component took the `canonicalize` branch and came back long
+    // (`runneradmin`). `PathModuleRegistry` is keyed on this string, so two
+    // spellings of one module produced two keys and two initializers —
+    // breaking CJS singleton identity. `canonicalize` resolves short names,
+    // casing and symlinks in one step, which is what this function claims to
+    // return.
+    //
+    // Falls back to the literal path when the directory does not exist, as
+    // before: callers treat an unresolvable path as itself.
+    let resolved =
+        std::fs::canonicalize(dir).unwrap_or_else(|_| match (dir.parent(), dir.file_name()) {
+            (Some(parent), Some(name)) if parent != dir => canonical_dir(parent).join(name),
+            _ => dir.to_path_buf(),
+        });
     CANONICAL_MODULE_DIRS.with(|memo| {
         memo.borrow_mut().insert(key, resolved.clone());
     });

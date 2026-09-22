@@ -34,7 +34,6 @@ implementations, organized by category:
 ### HTTP & Networking
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
-| `axios` | [reqwest](https://crates.io/crates/reqwest) | HTTP client with full method support |
 | `node-fetch` | [reqwest](https://crates.io/crates/reqwest) | Fetch API implementation |
 | `ws` | [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) | WebSocket client |
 | `nodemailer` | [lettre](https://crates.io/crates/lettre) | SMTP email sending |
@@ -50,10 +49,7 @@ implementations, organized by category:
 ### Date & Time
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
-| `dayjs` | [chrono](https://crates.io/crates/chrono) | Lightweight date manipulation |
 | `moment` | [chrono](https://crates.io/crates/chrono) | Full-featured date library |
-| `date-fns` | [chrono](https://crates.io/crates/chrono) | Functional date utilities |
-| `node-cron` | [cron](https://crates.io/crates/cron) | Cron job scheduling |
 
 ### Utilities
 | npm Package | Rust Backend | Description |
@@ -63,7 +59,6 @@ implementations, organized by category:
 | `slugify` | Native Rust | URL-friendly string conversion |
 | `validator` | [validator](https://crates.io/crates/validator) | String validation (email, URL, etc.) |
 | `dotenv` | Native Rust | Environment variable loading |
-| `rate-limiter-flexible` | [dashmap](https://crates.io/crates/dashmap) | In-memory rate limiting |
 
 ## Quick Start
 
@@ -115,14 +110,11 @@ Click any library name to jump to its documentation:
 
 | Library | Category | Jump |
 |---------|----------|------|
-| axios | HTTP Client | [docs](#axios) |
 | argon2 | Security | [docs](#argon2) |
 | bcrypt | Security | [docs](#bcrypt) |
 | better-sqlite3 | Database | [docs](#better-sqlite3) |
 | cheerio | HTML Parsing | [docs](#cheerio) |
 | crypto | Security | [docs](#crypto) |
-| date-fns | Date/Time | [docs](#date-fns) |
-| dayjs | Date/Time | [docs](#dayjs) |
 | dotenv | Config | [docs](#dotenv) |
 | ioredis | Database | [docs](#ioredis) |
 | jsonwebtoken | Security | [docs](#jsonwebtoken) |
@@ -131,11 +123,9 @@ Click any library name to jump to its documentation:
 | mongodb | Database | [docs](#mongodb) |
 | mysql2 | Database | [docs](#mysql2) |
 | nanoid | Utilities | [docs](#nanoid) |
-| node-cron | Scheduling | [docs](#node-cron) |
 | node-fetch | HTTP Client | [docs](#node-fetch) |
 | nodemailer | Email | [docs](#nodemailer) |
 | pg | Database | [docs](#pg) |
-| rate-limiter-flexible | Rate Limiting | [docs](#rate-limiter-flexible) |
 | sharp | Image Processing | [docs](#sharp) |
 | slugify | Utilities | [docs](#slugify) |
 | uuid | Utilities | [docs](#uuid) |
@@ -801,171 +791,6 @@ const isValid = await transporter.verify();
 
 ---
 
-## dayjs
-
-**npm package:** [dayjs](https://www.npmjs.com/package/dayjs)
-**Rust backend:** [chrono](https://crates.io/crates/chrono) v0.4
-
-### Supported API
-
-```typescript
-import dayjs from 'dayjs';
-
-// Create instances
-const now = dayjs();                        // Current time
-const fromTimestamp = dayjs(1609459200000); // From Unix timestamp (ms)
-const parsed = dayjs('2021-01-01');         // Parse ISO string
-
-// Format dates
-const formatted = now.format('YYYY-MM-DD HH:mm:ss');
-const iso = now.toISOString();              // ISO 8601 format
-
-// Get values
-now.valueOf();      // Unix timestamp (ms)
-now.unix();         // Unix timestamp (seconds)
-now.year();         // Year (e.g., 2024)
-now.month();        // Month (0-11)
-now.date();         // Day of month (1-31)
-now.day();          // Day of week (0=Sunday)
-now.hour();         // Hour (0-23)
-now.minute();       // Minute (0-59)
-now.second();       // Second (0-59)
-now.millisecond();  // Millisecond (0-999)
-
-// Manipulate dates
-const tomorrow = now.add(1, 'day');
-const lastWeek = now.subtract(7, 'day');
-const startOfMonth = now.startOf('month');
-const endOfYear = now.endOf('year');
-
-// Compare dates
-const diff = now.diff(parsed, 'day');       // Difference in days
-now.isBefore(parsed);                       // Returns boolean
-now.isAfter(parsed);                        // Returns boolean
-now.isSame(parsed, 'day');                  // Same day?
-now.isValid();                              // Is valid date?
-```
-
-### Supported Units
-
-For `add()`, `subtract()`, `startOf()`, `endOf()`, `diff()`, `isSame()`:
-- `year`, `years`, `y`
-- `month`, `months`, `M`
-- `day`, `days`, `d`
-- `hour`, `hours`, `h`
-- `minute`, `minutes`, `m`
-- `second`, `seconds`, `s`
-- `millisecond`, `milliseconds`, `ms`
-
-### Notes
-- All dates are UTC internally
-- Immutable API (methods return new instances)
-- Format tokens: `YYYY`, `MM`, `DD`, `HH`, `mm`, `ss`, etc.
-
----
-
-## date-fns
-
-**npm package:** [date-fns](https://www.npmjs.com/package/date-fns)
-**Rust backend:** [chrono](https://crates.io/crates/chrono) v0.4
-
-### Supported API
-
-```typescript
-import {
-  format,
-  parseISO,
-  addDays,
-  addMonths,
-  addYears,
-  differenceInDays,
-  differenceInHours,
-  differenceInMinutes,
-  isAfter,
-  isBefore,
-  startOfDay,
-  endOfDay
-} from 'date-fns';
-
-// Format a date
-const formatted = format(new Date(), 'yyyy-MM-dd HH:mm:ss');
-
-// Parse ISO string
-const date = parseISO('2021-01-01T00:00:00Z');
-
-// Add time
-const tomorrow = addDays(new Date(), 1);
-const nextMonth = addMonths(new Date(), 1);
-const nextYear = addYears(new Date(), 1);
-
-// Calculate differences
-const daysDiff = differenceInDays(date1, date2);
-const hoursDiff = differenceInHours(date1, date2);
-const minutesDiff = differenceInMinutes(date1, date2);
-
-// Compare dates
-const after = isAfter(date1, date2);
-const before = isBefore(date1, date2);
-
-// Day boundaries
-const dayStart = startOfDay(new Date());
-const dayEnd = endOfDay(new Date());
-```
-
-### Notes
-- Uses Unix timestamps (milliseconds) internally
-- Format tokens differ from dayjs: `yyyy` (not `YYYY`), etc.
-- Functions are pure (no mutation)
-- All times are UTC
-
----
-
-## axios
-
-**npm package:** [axios](https://www.npmjs.com/package/axios)
-**Rust backend:** [reqwest](https://crates.io/crates/reqwest) v0.12
-
-### Supported API
-
-```typescript
-import axios from 'axios';
-
-// Simple requests
-const response = await axios.get('https://jsonplaceholder.typicode.com/posts/1');
-const postResponse = await axios.post('https://jsonplaceholder.typicode.com/posts', { title: 'hello' });
-const putResponse = await axios.put('https://jsonplaceholder.typicode.com/posts/1', { title: 'updated' });
-const deleteResponse = await axios.delete('https://jsonplaceholder.typicode.com/posts/1');
-
-// Full request with config
-const response2 = await axios.request({
-  method: 'POST',
-  url: 'https://jsonplaceholder.typicode.com/posts',
-  headers: { 'Content-Type': 'application/json' },
-  data: { title: 'hello' }
-});
-
-// Create instance with defaults
-const api = axios.create({
-  baseURL: 'https://jsonplaceholder.typicode.com',
-  timeout: 5000,
-  headers: { 'Authorization': 'Bearer token' }
-});
-```
-
-### Response Properties
-
-- `response.status` - HTTP status code
-- `response.statusText` - HTTP status text
-- `response.data` - Response body (JSON parsed)
-- `response.headers` - Response headers
-
-### Notes
-- HTTPS supported via rustls
-- JSON bodies automatically serialized/parsed
-- Timeouts supported via config
-
----
-
 ## argon2
 
 **npm package:** [argon2](https://www.npmjs.com/package/argon2)
@@ -1338,124 +1163,6 @@ const diff = now.diff(parsed, 'day');  // Difference in days
 - Immutable operations (returns new instances)
 - All times are UTC internally
 - Consider using dayjs for new projects (smaller footprint)
-
----
-
-## node-cron
-
-**npm package:** [node-cron](https://www.npmjs.com/package/node-cron)
-**Rust backend:** [cron](https://crates.io/crates/cron) v0.12
-
-### Supported API
-
-```typescript
-import cron from 'node-cron';
-
-// Validate cron expression
-const isValid = cron.validate('* * * * *');  // true
-
-// Schedule a job
-const job = cron.schedule('*/5 * * * *', () => {
-  console.log('Running every 5 minutes');
-});
-
-// Control the job
-job.start();           // Start the job
-job.stop();            // Stop the job
-const running = job.isRunning();  // Check if running
-
-// Get next execution times
-const next = job.nextDate();      // ISO string of next run
-const nextFive = job.nextDates(5); // Array of next 5 run times
-
-// Get human-readable description
-const desc = cron.describe('0 0 * * *');
-// "At second 0 minute 0 of hour *, on day * of month *, on weekday *"
-
-// Timer helpers (setTimeout/setInterval alternative)
-const interval = cron.setInterval(() => {
-  console.log('Every second');
-}, 1000);
-cron.clearInterval(interval);
-
-const timeout = cron.setTimeout(() => {
-  console.log('After 5 seconds');
-}, 5000);
-cron.clearTimeout(timeout);
-```
-
-### Cron Expression Format
-
-```
-┌────────────── second (0-59) [optional]
-│ ┌──────────── minute (0-59)
-│ │ ┌────────── hour (0-23)
-│ │ │ ┌──────── day of month (1-31)
-│ │ │ │ ┌────── month (1-12)
-│ │ │ │ │ ┌──── day of week (0-6, Sunday=0)
-│ │ │ │ │ │
-* * * * * *
-```
-
-### Notes
-- Both 5-field and 6-field (with seconds) formats supported
-- Callback ID is used internally (actual callbacks not yet implemented)
-- Job timing is based on UTC
-
----
-
-## rate-limiter-flexible
-
-**npm package:** [rate-limiter-flexible](https://www.npmjs.com/package/rate-limiter-flexible)
-**Rust backend:** [governor](https://crates.io/crates/governor) v0.6
-
-### Supported API
-
-```typescript
-import { RateLimiterMemory } from 'rate-limiter-flexible';
-
-// Create rate limiter
-const limiter = RateLimiterMemory.create({
-  points: 10,        // Number of points
-  duration: 1        // Per second
-});
-
-// Consume points
-try {
-  const result = await limiter.consume('user_123', 1);
-  console.log('Remaining points:', result.remainingPoints);
-} catch (rateLimiterRes) {
-  console.log('Rate limited! Retry after:', rateLimiterRes.msBeforeNext);
-}
-
-// Get current state
-const info = await limiter.get('user_123');
-
-// Delete key
-await limiter.delete('user_123');
-
-// Block a key for duration
-await limiter.block('user_123', 60);  // Block for 60 seconds
-
-// Add penalty points
-await limiter.penalty('user_123', 2);  // Consume 2 extra points
-
-// Reward points (restore consumed points)
-await limiter.reward('user_123', 1);   // Give back 1 point
-```
-
-### Result Properties
-
-- `remainingPoints` - Points remaining in current window
-- `msBeforeNext` - Milliseconds until points reset
-- `consumedPoints` - Points consumed so far
-- `isFirstInDuration` - Whether this is first request in window
-
-### Notes
-- Memory-based storage (resets on restart)
-- Uses token bucket algorithm
-- Thread-safe for concurrent requests
-- Consider Redis-backed limiter for distributed systems
 
 ---
 

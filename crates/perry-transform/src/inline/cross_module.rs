@@ -20,6 +20,7 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
             | Expr::ExternFuncRef { .. }
             | Expr::GlobalGet(_)
             | Expr::GlobalSet(_, _)
+            | Expr::EnumMember { .. }
             | Expr::NativeModuleRef(_) => false,
             // Closures are out of scope for cross-module inlining: the
             // closure body has its own LocalIds, captures lists, and may
@@ -163,6 +164,25 @@ pub fn gather_cross_module_functions(module: &Module) -> HashMap<String, Functio
         .collect();
     source_class_names.extend(imported_binding_names(module));
 
+    // #10554: a function referenced BY VALUE (`Expr::FuncRef`, not just
+    // called) from a candidate's dependency graph must resolve to the SAME
+    // closure singleton every importer sees. Bundling a clone of a
+    // SEPARATELY EXPORTED sibling breaks that -- the clone gets its own
+    // `__perry_xmod_inline_<id>_<name>` wrapper symbol, a different
+    // `js_closure_alloc_singleton` key than the sibling's own canonical
+    // `__perry_wrap_perry_fn_<src>__<name>`, so `x === exportedSibling`
+    // inside the inlined body silently disagrees with every importer's view
+    // of `exportedSibling`. `exported_ids` gates `collect_function_graph`'s
+    // dependency walk below: a graph that would need to bundle a
+    // separately-exported function is refused entirely (no candidate),
+    // falling back to the ordinary cross-module call, which shares the
+    // source module's own canonical wrapper.
+    let exported_ids: HashSet<FuncId> = module
+        .exported_functions
+        .iter()
+        .map(|(_, id)| *id)
+        .collect();
+
     let mut out = HashMap::new();
     for (exported_name, root_id) in &module.exported_functions {
         let mut visiting = HashSet::new();
@@ -174,6 +194,7 @@ pub fn gather_cross_module_functions(module: &Module) -> HashMap<String, Functio
             &mut visiting,
             &mut visited,
             &mut graph_ids,
+            &exported_ids,
         ) {
             continue;
         }
@@ -244,6 +265,7 @@ fn collect_function_graph(
     visiting: &mut HashSet<FuncId>,
     visited: &mut HashSet<FuncId>,
     out: &mut Vec<FuncId>,
+    exported_ids: &HashSet<FuncId>,
 ) -> bool {
     if visited.contains(&id) {
         return true;
@@ -268,7 +290,15 @@ fn collect_function_graph(
     refs.sort_unstable();
     refs.dedup();
     for dependency in refs {
-        if !collect_function_graph(dependency, functions, visiting, visited, out) {
+        // #10554: a dependency pulled in only because the body reads it as a
+        // VALUE (`Expr::FuncRef`) -- not merely calls it -- must not be
+        // bundled as a private clone when it is ALSO independently exported.
+        // `dependency != id` lets a function's own export status not block
+        // its (already-permitted) self-recursion.
+        if dependency != id && exported_ids.contains(&dependency) {
+            return false;
+        }
+        if !collect_function_graph(dependency, functions, visiting, visited, out, exported_ids) {
             return false;
         }
         if visited.len() > MAX_CROSS_MODULE_FUNCTION_GRAPH {
@@ -367,6 +397,7 @@ fn cross_function_expr_is_safe(
         }
         Expr::GlobalGet(_)
         | Expr::GlobalSet(_, _)
+        | Expr::EnumMember { .. }
         | Expr::NativeModuleRef(_)
         // These nodes carry source-module-relative path sets. Codegen resolves
         // those sets through the current module's dynamic-target map, so a
@@ -1152,6 +1183,7 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
             Expr::FuncRef(_)
             | Expr::GlobalGet(_)
             | Expr::GlobalSet(_, _)
+            | Expr::EnumMember { .. }
             | Expr::NativeModuleRef(_) => false,
             Expr::Closure { .. } => false,
             Expr::ExternFuncRef { name, .. } => {

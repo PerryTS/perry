@@ -15,6 +15,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const ADDON_C: &str = include_str!("fixtures/node_api_host/addon.c");
+#[cfg(unix)]
+const ADDON_V10_C: &str = include_str!("fixtures/node_api_host/addon_v10.c");
+#[cfg(unix)]
+const ADDON_V10_MAIN: &str = include_str!("fixtures/node_api_host/addon_v10_main.js");
+#[cfg(unix)]
+const ADDON_V10_EXPECTED: &str = include_str!("fixtures/node_api_host/addon_v10_expected.txt");
 #[cfg(windows)]
 const ADDON_DEF: &str = include_str!("fixtures/node_api_host/addon.def");
 const HOST_SYMBOLS: &str = include_str!("../../perry-runtime/src/node_api_host/symbols.txt");
@@ -388,7 +394,7 @@ console.log("node-api-cache", direct.exports === addon)
         std::fs::read(sidecar.join("manifest.json")).expect("read Node-API sidecar manifest");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&manifest_bytes).expect("parse sidecar manifest");
-    assert_eq!(manifest["napi_version"], 8);
+    assert_eq!(manifest["napi_version"], 10);
     assert_eq!(
         manifest["addons"][0]["logical_id"],
         "fixture-addon/addon.node"
@@ -537,6 +543,134 @@ console.log("node-api-cache", direct.exports === addon)
         denied_diagnostic.contains("perry.nativeAddons"),
         "denied compile omitted policy guidance: {denied_diagnostic}"
     );
+}
+
+/// #10456 / #10461: addons declaring Node-API 9 and 10 load, the version 9
+/// and 10 entry points behave like Node 26, per-module facts follow the addon
+/// whose code runs, and `napi_typeof` reports compiled classes as functions.
+/// The same fixture runs under Node when it provides Node-API 10, and both
+/// must print the checked-in transcript.
+#[cfg(unix)]
+#[test]
+fn node_api_10_addons_match_node() {
+    if !require_tool("clang") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package = root.join("node_modules/fixture-v10");
+    std::fs::create_dir_all(&package).expect("create fixture package");
+    std::fs::write(
+        root.join("package.json"),
+        r#"{
+  "name": "perry-node-api-v10-e2e",
+  "private": true,
+  "perry": {
+    "compilePackages": ["fixture-v10"],
+    "allow": { "compilePackages": ["fixture-v10"] },
+    "nativeAddons": ["fixture-v10"]
+  }
+}"#,
+    )
+    .expect("write project manifest");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"fixture-v10","version":"1.0.0","main":"index.js"}"#,
+    )
+    .expect("write addon manifest");
+    std::fs::write(
+        package.join("index.js"),
+        r#"exports.current = require("./current.node")
+exports.legacy = require("./legacy.node")
+exports.loadNewer = () => require("./newer.node")
+"#,
+    )
+    .expect("write addon wrapper");
+    let source = root.join("addon_v10.c");
+    std::fs::write(&source, ADDON_V10_C).expect("write Node-API 10 fixture");
+    for (version, name) in [(10, "current"), (8, "legacy"), (11, "newer")] {
+        let mut clang = Command::new("clang");
+        clang.current_dir(root).arg("-shared");
+        #[cfg(not(target_os = "macos"))]
+        clang.arg("-fPIC");
+        #[cfg(target_os = "macos")]
+        clang.args(["-undefined", "dynamic_lookup"]);
+        clang
+            .arg(format!("-DFIXTURE_API_VERSION={version}"))
+            .arg("-o")
+            .arg(package.join(format!("{name}.node")))
+            .arg(&source);
+        run(clang, "Node-API 10 fixture build");
+    }
+    let entry = root.join("main.js");
+    std::fs::write(&entry, ADDON_V10_MAIN).expect("write Node-API 10 entry");
+
+    let executable = root.join("app");
+    let compile = compile_app(root, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "Node-API 10 compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let sidecar = root.join("app.perry-native");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(sidecar.join("manifest.json")).expect("read Node-API 10 manifest"),
+    )
+    .expect("parse Node-API 10 manifest");
+    assert_eq!(manifest["napi_version"], 10);
+
+    let perry = Command::new(&executable)
+        .current_dir(root)
+        .output()
+        .expect("run Node-API 10 executable");
+    assert_eq!(
+        String::from_utf8_lossy(&perry.stdout),
+        ADDON_V10_EXPECTED,
+        "Perry must print Node's Node-API 10 transcript\nstderr:\n{}",
+        String::from_utf8_lossy(&perry.stderr)
+    );
+    assert!(perry.status.success(), "status: {:?}", perry.status);
+
+    let newer = Command::new(&executable)
+        .current_dir(root)
+        .env("FIXTURE_LOAD_NEWER", "1")
+        .output()
+        .expect("run Node-API 11 rejection");
+    let newer_stdout = String::from_utf8_lossy(&newer.stdout);
+    assert!(
+        newer_stdout.contains("newer rejected ERR_DLOPEN_FAILED")
+            && newer_stdout.contains(
+                "addon requests Node-API version 11, but Perry supports versions 1 through 10"
+            ),
+        "a Node-API 11 addon must be rejected before it initializes: {newer_stdout}"
+    );
+
+    let node_api_version = Command::new("node")
+        .args(["-p", "process.versions.napi"])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|version| version.trim().parse::<u32>().ok());
+    match node_api_version {
+        Some(version) if version >= 10 => {
+            let node = run(
+                {
+                    let mut command = Command::new("node");
+                    command.current_dir(root).arg(&entry);
+                    command
+                },
+                "Node-API 10 Node differential",
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&node.stdout),
+                ADDON_V10_EXPECTED,
+                "the checked-in transcript must still be Node's"
+            );
+        }
+        _ => eprintln!("SKIP: Node with Node-API 10 is unavailable for the differential"),
+    }
 }
 
 #[test]

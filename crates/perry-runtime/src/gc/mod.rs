@@ -49,6 +49,10 @@ pub(crate) use policy::young_generation_holds_a_nursery;
 pub use policy::*;
 mod progress;
 pub use progress::*;
+mod collection_points;
+pub(crate) use collection_points::collection_point;
+#[cfg(test)]
+pub(crate) use collection_points::{arm_collection_point, arm_collection_point_after};
 mod heap_budget;
 pub(crate) use heap_budget::*;
 mod pressure;
@@ -995,6 +999,11 @@ pub fn gc_init() {
     // Runtime path-module exports and cached initialization errors live in a
     // per-heap Rust registry, so moving GC must mark and rewrite them.
     reg_scanner!(crate::module_require::scan_module_path_roots_mut);
+    // #10735: the shared CJS "main module" (`require.main` / Node's
+    // `process.mainModule`) is a raw heap pointer cached in a thread-local
+    // outside any shadow frame — a moving collection must mark and rewrite
+    // it like any other mutable root.
+    reg_scanner!(crate::module_require::scan_cjs_main_module_root_mut);
     reg_budgeted_scanner!(
         promise_mutable_root_scanner,
         crate::promise::scan_promise_roots_mut_step,
@@ -1049,6 +1058,11 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
+    // Lane 3: the inherited-read cache records a holder ADDRESS per entry and
+    // a hit LOADS through it, so the slots are STRONG roots: marked, so the
+    // address cannot be recycled under the entry, and rewritten, so a
+    // compacting or copying pass leaves it pointing at the same object.
+    reg_scanner!(crate::object::inherited_read_cache::scan_inherited_read_cache_roots_mut);
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);

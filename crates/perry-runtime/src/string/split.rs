@@ -9,7 +9,6 @@ use crate::array::ArrayHeader;
 /// a per-element layout-map update. The write barrier remains necessary if a
 /// collection has promoted the rooted result array while it is being built.
 #[inline]
-#[cfg(not(feature = "regex-engine"))]
 unsafe fn store_split_string(arr: *mut ArrayHeader, index: usize, string: *mut StringHeader) {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -298,8 +297,12 @@ pub extern "C" fn js_string_to_upper_case_split_part_utf16_length(
 /// `limit < 0` → no limit (matches `js_string_split`).
 /// `limit == 0` → empty array.
 /// `limit > 0` → at most `limit` substrings.
-#[cfg(not(feature = "regex-engine"))]
-#[no_mangle]
+// Compiled in both builds. Linking `regex-engine` re-exports the engine's
+// `split` from `crate::string` instead of this one (see `string::mod`), but the
+// engine path delegates back here once it has ruled out `@@split`, so the
+// implementation must exist either way. Only the exported C symbols are
+// conditional -- they would collide with the engine's.
+#[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_n(
     s: *const StringHeader,
     delimiter: *const StringHeader,
@@ -357,7 +360,10 @@ pub extern "C" fn js_string_split_n(
     let (src_all_ascii, src_has_lone_surrogates) = unsafe {
         let bytes = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
         (
-            bytes.iter().all(|&b| b < 0x80),
+            // `is_ascii` is the same predicate as `all(|b| b < 0x80)`, but std
+            // tests a word at a time. The byte-at-a-time form was ~74% of this
+            // function's own time splitting a 211-byte JWT on "." (#10519).
+            bytes.is_ascii(),
             (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0,
         )
     };
@@ -485,10 +491,19 @@ pub extern "C" fn js_string_split_n(
     // stale address is the #5062 class. Offsets stay valid across a move; the
     // source address is re-read from a rooted handle on every iteration.
     let src_base = str_data.as_ptr() as usize;
-    let mut part_ranges: Vec<(usize, usize)> = str_data
-        .split(delim)
-        .map(|part| (part.as_ptr() as usize - src_base, part.len()))
-        .collect();
+    let range = |part: &str| (part.as_ptr() as usize - src_base, part.len());
+    // A one-byte delimiter is ASCII (WTF-8 spells every non-ASCII unit, lone
+    // surrogates included, in two or more bytes), so a `char` pattern names
+    // exactly the same occurrences as the `&str` one. It takes std's
+    // memchr-based searcher instead of the two-way `StrSearcher`, whose
+    // per-call setup is paid in full for a single-character needle -- the
+    // common `split(".")`, `split(",")`, `split(" ")` shape (#10519).
+    let mut part_ranges: Vec<(usize, usize)> = match delim.as_bytes() {
+        // `byte < 0x80` is not implied: storage can hold malformed bytes, and
+        // `0x80 as char` is U+0080, which is two bytes wide.
+        &[byte] if byte < 0x80 => str_data.split(byte as char).map(range).collect(),
+        _ => str_data.split(delim).map(range).collect(),
+    };
     if limit > 0 && (part_ranges.len() as i64) > (limit as i64) {
         part_ranges.truncate(limit as usize);
     }
@@ -539,7 +554,6 @@ pub extern "C" fn js_string_split_n(
 /// `ToUint32(ToNumber(value))` (ECMA-262 §7.1.7). Runs the full `ToNumber`
 /// (so a boxed `{ valueOf }` / `{ toString }` argument is coerced and may
 /// throw), then reduces mod 2^32. `NaN`/`±Infinity`/`0` → 0.
-#[cfg(not(feature = "regex-engine"))]
 fn split_limit_to_uint32(boxed: f64) -> u32 {
     let n = crate::builtins::js_number_coerce(boxed);
     if !n.is_finite() || n == 0.0 {
@@ -550,7 +564,6 @@ fn split_limit_to_uint32(boxed: f64) -> u32 {
 
 /// Build the single-element array `[S]` (the `separator === undefined` result
 /// of `String.prototype.split`).
-#[cfg(not(feature = "regex-engine"))]
 fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
     const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -579,14 +592,17 @@ fn split_single_element(s: *const StringHeader) -> *mut ArrayHeader {
 ///   - `limit === 0` ⇒ empty array;
 ///   - `separator === undefined` ⇒ single-element `[S]`;
 ///   - otherwise split by `ToString(separator)`, capped at `lim`.
-#[cfg(not(feature = "regex-engine"))]
-#[no_mangle]
+#[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_value(
     s: *const StringHeader,
     separator: f64,
     limit: f64,
 ) -> *mut ArrayHeader {
     use crate::value::JSValue;
+    // Only the regex-engine arm below reads this; binding it unconditionally
+    // makes `cargo check -p perry --bins` warn, and fail under -D warnings, in
+    // a build without that feature. A whole-workspace build unifies the feature
+    // and hides it, which is why it survived review.
     #[cfg(feature = "regex-engine")]
     let sep_jv = JSValue::from_bits(separator.to_bits());
     let lim_jv = JSValue::from_bits(limit.to_bits());
@@ -661,8 +677,7 @@ pub extern "C" fn js_string_split_value(
     js_string_split_n(s, r_str, limit_i32)
 }
 
-#[cfg(not(feature = "regex-engine"))]
-#[no_mangle]
+#[cfg_attr(not(feature = "regex-engine"), no_mangle)]
 pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);

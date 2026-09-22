@@ -155,7 +155,7 @@ pub(crate) fn class_field_subclass_arms(
         seen_ids.push(sub_id);
         arms.push(ClassFieldSubclassArm {
             class_id: sub_id,
-            shape_id_global: crate::typed_shape::shape_id_global_name_from_keys_global(
+            shape_id_global: crate::typed_shape::guard_shape_global_name_from_keys_global(
                 &keys_global,
             ),
         });
@@ -441,12 +441,14 @@ pub(crate) fn emit_class_field_inline_precheck(
     obj_bits: &str,
     obj_handle: &str,
     expected_class_id: &str,
-    expected_shape_id: &str,
     require_raw_f64: bool,
     set_value_bits: Option<&str>,
     fast_label: &str,
     subclass_arms: &[ClassFieldSubclassArm],
+    keys_global_name: &str,
 ) -> String {
+    let guard_shape_global =
+        crate::typed_shape::guard_shape_global_name_from_keys_global(keys_global_name);
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -467,14 +469,11 @@ pub(crate) fn emit_class_field_inline_precheck(
     // relaxed-atomic read the guard itself performs.
     {
         let blk = ctx.block();
-        let flag = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
-        let flag_ok = blk.icmp_eq(I8, &flag, "0");
         let tag = blk.lshr(I64, obj_bits, "48");
         let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
         let above_band = blk.icmp_ugt(I64, obj_handle, HANDLE_BAND_TOP);
         let ptr_safe = blk.and(I1, &is_ptr, &above_band);
-        let can_inline = blk.and(I1, &ptr_safe, &flag_ok);
-        blk.cond_br(&can_inline, &deref_label, &guardcall_label);
+        blk.cond_br(&ptr_safe, &deref_label, &guardcall_label);
     }
 
     ctx.current_block = deref_idx;
@@ -522,13 +521,20 @@ pub(crate) fn emit_class_field_inline_precheck(
         // ObjectHeader word 0 is class_id @0 and the authoritative ShapeId @4
         // (#8113): one 64-bit compare against `(shape << 32) | class_id`.
         let identity = blk.load(I64, &obj_ptr);
-        let declared = expected_class_identity(blk, expected_class_id, expected_shape_id);
+        // The displaced latch's authority lives here now: this expectation is
+        // what `disable_class_field_inline_guard` poisons, so the compare the
+        // guard already had to make now also answers "is the inline path still
+        // open?". VOLATILE for exactly the reason the latch load was — the
+        // runtime flips it mid-execution and a cached expectation would take a
+        // fast path the process has closed.
+        let live_shape = blk.load_volatile(I32, &format!("@{guard_shape_global}"));
+        let declared = expected_class_identity(blk, expected_class_id, &live_shape);
         let mut shape_ok = blk.icmp_eq(I64, &identity, &declared);
         // The declared class's own (class id, ShapeId) pair, OR any subclass
         // arm's. Each arm is a full pair — matching a class id without its
         // canonical descriptor would accept a diverged layout.
         for arm in subclass_arms {
-            let arm_shape = blk.load(I32, &format!("@{}", arm.shape_id_global));
+            let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
             let arm_expected = expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
             let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
             shape_ok = blk.or(I1, &shape_ok, &arm_ok);

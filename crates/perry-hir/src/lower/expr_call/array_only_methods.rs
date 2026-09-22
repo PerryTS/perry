@@ -698,17 +698,24 @@ pub(super) fn try_array_only_methods(
                 // with positive Array evidence. This mirrors the bare-local
                 // gate in `local_array_methods.rs` instead of reviving the old
                 // any-receiver fallback for property/call receivers.
-                let recv_is_proven_array = matches!(method_name, "entries" | "keys" | "values")
-                    && {
-                        let recv_ty = crate::lower_types::infer_type_from_expr(&member.obj, ctx);
-                        matches!(recv_ty, Type::Array(_) | Type::Tuple(_))
-                            || matches!(
-                                &recv_ty,
-                                Type::Generic { base, .. }
-                                    if base == "Array" || base == "ReadonlyArray"
-                            )
-                            || chain_roots_at_array(ctx, &member.obj)
-                    };
+                //
+                // #10476: `reduceRight` / `toReversed` / `toSorted` are the same
+                // case — a user class, prototype or object literal owns them
+                // (a vector's `toSorted()`), and the dense fold read that
+                // object as an empty ArrayHeader, so the user method never ran.
+                let recv_is_proven_array = matches!(
+                    method_name,
+                    "entries" | "keys" | "values" | "reduceRight" | "toReversed" | "toSorted"
+                ) && {
+                    let recv_ty = crate::lower_types::infer_type_from_expr(&member.obj, ctx);
+                    matches!(recv_ty, Type::Array(_) | Type::Tuple(_))
+                        || matches!(
+                            &recv_ty,
+                            Type::Generic { base, .. }
+                                if base == "Array" || base == "ReadonlyArray"
+                        )
+                        || chain_roots_at_array(ctx, &member.obj)
+                };
                 // thisArg routing: the dense `Expr::Array<Method>` fast paths
                 // carry only the callback and silently drop a 2nd positional
                 // `thisArg` argument, so `[x].every(cb, thisArg)` ran the
@@ -1174,7 +1181,7 @@ pub(super) fn try_array_only_methods(
                             array: Box::new(array_expr),
                         }));
                     }
-                    "reduceRight" if !args.is_empty() => {
+                    "reduceRight" if !args.is_empty() && recv_is_proven_array => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         let mut args_iter = args.into_iter();
                         let callback = args_iter.next().unwrap();
@@ -1185,13 +1192,13 @@ pub(super) fn try_array_only_methods(
                             initial,
                         }));
                     }
-                    "toReversed" => {
+                    "toReversed" if recv_is_proven_array => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayToReversed {
                             array: Box::new(array_expr),
                         }));
                     }
-                    "toSorted" => {
+                    "toSorted" if recv_is_proven_array => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         let comparator = args.into_iter().next().map(Box::new);
                         return Ok(Ok(Expr::ArrayToSorted {

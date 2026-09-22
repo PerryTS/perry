@@ -15,6 +15,67 @@ fn make_ctx() -> LoweringContext {
     LoweringContext::new("test.ts")
 }
 
+#[test]
+fn a_computed_instance_field_key_is_not_a_constructor_capture() {
+    let source = r#"
+        function make() {
+            const items = Symbol("items");
+            const payload = { ok: true };
+            class Base {
+                [items] = [];
+                getPayload() { return payload; }
+            }
+            return Base;
+        }
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "computed-field-key.ts").expect("source parses");
+    let hir = super::lower_module(&module, "computed-field-key", "computed-field-key.ts")
+        .expect("source lowers");
+    let class = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "Base")
+        .expect("nested class is lowered");
+
+    assert_eq!(
+        class
+            .fields
+            .iter()
+            .filter(|field| field.name.starts_with("__perry_cap_"))
+            .count(),
+        1,
+        "the method value is captured, but the definition-time key is not"
+    );
+    assert!(class.fields[0].key_expr.is_some());
+    assert!(
+        class.constructor.is_some(),
+        "the unrelated method capture keeps a synthesized constructor"
+    );
+}
+
+#[test]
+fn a_lexical_fetch_result_is_not_registered_as_a_native_response() {
+    let source = r#"
+        function fetch(_url: string) {
+            return Promise.resolve({ text() { return "userland"; } });
+        }
+        async function run() {
+            const response = await fetch("http://localhost/");
+            return response.text();
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "fetch-shadow.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "fetch-shadow", "fetch-shadow.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("NativeMethodCall { module: \"fetch\", class_name: Some(\"Response\")"),
+        "a lexical fetch function must keep userland Response dispatch: {dump}"
+    );
+}
+
+mod instanceof_rhs;
 mod literal_shape;
 
 #[test]
@@ -1737,39 +1798,14 @@ fn test_function_require_with_body_still_shadows_the_namespace_fast_path() {
     );
 }
 
-/// A compilePackages CJS module receives Perry's synthetic `require` function.
-/// Native npm shims do not materialize a complete runtime namespace object, so
-/// destructuring their constructor from that function must become the same
-/// static native alias as an ESM named import.  hosted-git-info uses this exact
-/// shape for lru-cache at module initialization.
-#[test]
-fn test_cjs_wrapper_lru_cache_destructure_uses_static_constructor() {
-    let source = r#"
-        function __perry_cjs_require_error(kind: string, code: string, message: string): any {
-            return { kind, code, message };
-        }
-        function __perry_cjs_require_is_builtin(specifier: string): boolean {
-            return false;
-        }
-        function require(specifier: string): any {
-            return undefined;
-        }
-        const { LRUCache } = require("lru-cache");
-        const cache = new LRUCache({ max: 2 });
-        cache.set("answer", 42);
-    "#;
-    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
-    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
-    let dump = format!("{hir:?}");
-    assert!(
-        dump.contains("New { class_name: \"LRUCache\""),
-        "the CJS shim destructure must lower to the static LRUCache constructor: {dump}"
-    );
-    assert!(
-        !dump.contains("name: \"LRUCache\", ty: Any") && !dump.contains("NewDynamic"),
-        "the unreified runtime namespace local must not survive: {dump}"
-    );
-}
+// `test_cjs_wrapper_lru_cache_destructure_uses_static_constructor` removed
+// here -- it asserted `const { LRUCache } = require("lru-cache"); new
+// LRUCache(...)` lowers to the static native constructor
+// (`cjs_wrapper_static_native_destructure` in `var_decl_sources.rs`), which
+// no longer exists now that lru-cache's native binding is gone (#10685).
+// The same CJS-destructure shape now goes through the ordinary
+// resolvable-native-module path (any Node-builtin or well-known module,
+// not lru-cache specifically), unaffected by this removal.
 
 /// #8470: the plain, non-reactive documented form
 /// `widget.animateOpacity(target, dur)` must lower to the perry/ui animation
@@ -1933,64 +1969,22 @@ fn aliased_native_imports_canonicalize_class_heritage() {
     assert!(watcher.extends_expr.is_none());
 }
 
-/// #8882: a module-level class constructing a sibling class that is declared
-/// inside a function body lowered LATER. This is the shape the CJS wrap
-/// produces for Next's `server/lib/lru-cache.js`: `LRUCache` is hoisted out of
-/// the module IIFE while `SentinelNode` (whose doc comment closes on the
-/// `class` line, so the textual hoister never sees it) stays inside the
-/// `__perry_cjs_factory` closure. JS binds the constructor reference when the
-/// `new` executes; the #8643 guard instead lowered it to an unconditional,
-/// nameless `ReferenceError` that killed the application at init.
-#[test]
-fn hoisted_class_constructs_sibling_declared_inside_a_later_closure() {
-    let source = r#"
-        class LRUCache {
-            constructor() {
-                this.head = new SentinelNode();
-                this.tail = new SentinelNode();
-            }
-        }
-        const _cjs = (function () {
-            class SentinelNode {
-                constructor() {
-                    this.prev = null;
-                    this.next = null;
-                }
-            }
-            return { SentinelNode };
-        })();
-    "#;
-    let module = perry_parser::parse_typescript(source, "lru-cache.js").expect("source parses");
-    let hir = super::lower_module(&module, "lru-cache", "lru-cache.js").expect("source lowers");
-    let lru_cache = hir
-        .classes
-        .iter()
-        .find(|class| class.name == "LRUCache")
-        .expect("LRUCache class is lowered");
-    let debug = format!("{lru_cache:?}");
-
-    assert!(
-        !debug.contains("js_throw_reference_error_unresolved_get")
-            && !debug.contains("js_global_get_or_throw_unresolved"),
-        "a sibling class declared later in the module must not lower to a \
-         compile-time ReferenceError:\n{debug}"
-    );
-    assert_eq!(
-        debug.matches(r#"New { class_name: "SentinelNode""#).count(),
-        2,
-        "both `new SentinelNode()` sites must stay late-bound by-name constructs:\n{debug}"
-    );
-}
-
 mod ambient_declare;
 mod unresolved_new_global;
 
 mod global_this_new_shadowed;
 
 mod capture_stash;
+mod class_member_var_captures;
 mod function_ctor_runtime_routing;
 mod mixin_parent_chain;
 mod native_module_sync;
 
+mod class_expr_subclass_captures;
 mod nullish_over_optional_chain;
+mod subclass_ctor_inherited_method;
 mod ui_widget_add_child;
+
+mod issue_10623_require_destructured_native_super;
+
+mod hoisted_sibling_in_later_closure;

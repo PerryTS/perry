@@ -39,19 +39,19 @@ CODEGEN_DEST_RE = re.compile(
 CODEGEN_EMIT_RAW_STORE_RE = re.compile(r'emit_raw\(format!\("store\b')
 
 RUST_FIELD_STORE_RE = re.compile(
-    r"\(\*[^)\n]+\)\.(?P<field>keys_array|entries|elements)\s*="
+    r"\(\*[^)\n]+\)\.(?P<field>keys_array|entries|elements)\s*=(?!=)"
 )
 RUST_PROMISE_FIELD_STORE_RE = re.compile(
-    r"\(\*[^)\n]+\)\.(?P<field>on_fulfilled|on_rejected|next)\s*="
+    r"\(\*[^)\n]+\)\.(?P<field>on_fulfilled|on_rejected|next)\s*=(?!=)"
 )
 RUST_POINTER_FIELD_STORE_RE = re.compile(
     r"\b(?P<owner>[A-Za-z_][A-Za-z0-9_]*)\.(?P<field>string_ptr)\s*=(?!=)"
 )
 RUST_GLOBAL_INDEX_STORE_RE = re.compile(
-    r"\b(?P<target>[A-Z][A-Z0-9_]*)\s*\[[^\]]+\]\s*="
+    r"\b(?P<target>[A-Z][A-Z0-9_]*)\s*\[[^\]]+\]\s*=(?!=)"
 )
 RUST_TLS_INDEX_STORE_RE = re.compile(
-    r"\(\*[A-Za-z_][A-Za-z0-9_]*\.get\(\)\)\[[^\]]+\]\s*="
+    r"\(\*[A-Za-z_][A-Za-z0-9_]*\.get\(\)\)\[[^\]]+\]\s*=(?!=)"
 )
 
 RUST_PTR_STORE_RE = re.compile(r"\b(?:std::)?ptr::write(?:_unaligned)?\s*\(")

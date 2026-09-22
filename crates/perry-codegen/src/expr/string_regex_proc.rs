@@ -19,8 +19,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::SetClear(s) => {
             let s_box = lower_expr(ctx, s)?;
+            let s_handle = super::unbox_collection_receiver(ctx, &s_box, "clear");
             let blk = ctx.block();
-            let s_handle = unbox_to_i64(blk, &s_box);
             blk.call_void("js_set_clear", &[(I64, &s_handle)]);
             Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
         }

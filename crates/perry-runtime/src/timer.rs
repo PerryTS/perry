@@ -41,7 +41,7 @@ use mock::{
 };
 use std::any::Any;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
     Mutex,
 };
 use std::time::{Duration, Instant};
@@ -379,6 +379,7 @@ enum CallbackTimerKind {
 static NEXT_TIMER_ID: Mutex<i64> = Mutex::new(1);
 
 mod gc_scan;
+mod handle_object;
 mod ref_states;
 #[cfg(test)] // #7680: not re-exported; reach via `crate::timer::test_shared_queues::`
 pub(crate) mod test_shared_queues;
@@ -386,6 +387,16 @@ pub(crate) mod test_shared_queues;
 pub use gc_scan::scan_timer_roots_mut;
 pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 pub use ref_states::is_known_timer_id;
+use ref_states::register_scheduled_timer;
+
+pub(crate) use handle_object::scan_timer_prototype_roots_mut;
+// `crate::timer::`-qualified only from unit tests (`timer/tests_inline.rs`,
+// `gc/tests/handle_bound_method_name.rs`, `timer/ref_states.rs`'s test module);
+// an unconditional `pub(crate) use` would be an unused import in a lib build
+// and `-D warnings` would reject it.
+use handle_object::{timer_handle_id, timer_object};
+#[cfg(test)]
+pub(crate) use handle_object::{timer_handle_parts, TIMEOUT_CLASS_ID};
 
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
@@ -598,39 +609,11 @@ fn record_timer_ref_state(id: i64, has_ref: bool) {
     ref_states::set_timer_ref_state(id, has_ref);
 }
 
-/// Synthetic constructor object for `Timeout`/`Immediate` native handles.
-/// Timer ids outlive queue removal, so the registry retains recent retired ids
-/// after clear/fire just as Node retains the wrapper's prototype — and since
-/// #10447 a still-SCHEDULED id is pinned and never evicted, which is what makes
-/// `.constructor` keep working on a live timer.
-pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
-    let kind = ref_states::timer_handle_kind(id)?;
-    let name = match kind {
-        CallbackTimerKind::Timeout => b"Timeout".as_slice(),
-        CallbackTimerKind::Immediate => b"Immediate".as_slice(),
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
-    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"name".as_ptr(), 4));
-    let value = scope.root_string_ptr(crate::string::js_string_from_bytes(
-        name.as_ptr(),
-        name.len() as u32,
-    ));
-    let (_, obj_ptr) = obj.across_mut::<crate::object::ObjectHeader, _>(|| {
-        obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
-            key.with_mut_ptr::<crate::StringHeader, _>(|key_ptr| {
-                value.with_mut_ptr::<crate::StringHeader, _>(|value_ptr| {
-                    crate::object::js_object_set_field_by_name(
-                        obj_ptr,
-                        key_ptr,
-                        f64::from_bits(crate::value::JSValue::string_ptr(value_ptr).bits()),
-                    );
-                });
-            });
-        });
-    });
-    Some(crate::value::js_nanbox_pointer(obj_ptr as i64))
-}
+// #340/#341: `timer_constructor_value` stood here. It fabricated a fresh
+// `{ name: "Timeout" }` object on EVERY `t.constructor` read, because a small
+// registry id has no prototype to carry one. The handle is an ordinary object
+// now and its prototype owns a real `constructor`, so that read is an ordinary
+// property lookup and the per-read allocation is gone with it.
 
 #[no_mangle]
 pub extern "C" fn js_timer_has_ref(timer_id: i64) -> i32 {
@@ -756,26 +739,28 @@ fn raw_closure_pointer(bits: u64) -> Option<usize> {
 }
 #[no_mangle]
 pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         delay_ms,
         Vec::new(),
         "Timeout",
         Class::Timeout,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         0.0,
         Vec::new(),
         "Immediate",
         Class::Immediate,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Immediate)
 }
 
 fn schedule_callback_timer(
@@ -814,12 +799,13 @@ fn schedule_callback_timer(
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
-    // #10447: registering PINS this id in the handle registry — it records the
-    // kind and marks it scheduled, so it cannot be evicted while queued. The
-    // returned guard is handed to the queue entry below and retires the id when
-    // that entry is dropped. This replaces `record_timer_handle_kind`, whose
-    // own table had the same evicting cap plus an O(n) `min()` scan per insert.
-    let scheduled = ref_states::register_scheduled_timer(id, handle_kind);
+    // #10447: registering PINS this id in the handle registry — it marks the id
+    // scheduled, so it cannot be evicted while queued. The returned guard is
+    // handed to the queue entry below and retires the id when that entry is
+    // dropped. This replaces `record_timer_handle_kind`, whose own table had the
+    // same evicting cap plus an O(n) `min()` scan per insert. (#340/#341 took
+    // the KIND out of this registry — the handle object carries it now.)
+    let scheduled = register_scheduled_timer(id);
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
@@ -871,14 +857,15 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         delay_ms,
         args_from_raw(args_ptr, n_args),
         "Timeout",
         Class::Timeout,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 #[no_mangle]
@@ -887,14 +874,15 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         0.0,
         args_from_raw(args_ptr, n_args),
         "Immediate",
         Class::Immediate,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Immediate)
 }
 
 /// Copy a codegen-supplied trailing-argument buffer; the caller may free it as
@@ -961,14 +949,17 @@ pub fn schedule_native_callback_chain(
 /// JS-style setInterval that takes a callback function and interval.
 #[no_mangle]
 pub extern "C" fn setInterval(callback: i64, interval_ms: f64) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         interval_ms,
         Vec::new(),
         "Timeout",
         Class::Interval,
         None,
-    )
+    );
+    // node names an interval handle `Timeout` too, and `clearTimeout` /
+    // `clearInterval` are interchangeable on it.
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 #[no_mangle]
@@ -978,14 +969,15 @@ pub unsafe extern "C" fn js_set_interval_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
-    schedule_callback_timer(
+    let id = schedule_callback_timer(
         callback,
         interval_ms,
         args_from_raw(args_ptr, n_args),
         "Timeout",
         Class::Interval,
         None,
-    )
+    );
+    timer_object(id, CallbackTimerKind::Timeout)
 }
 
 /// How many `setTimeout`/`setInterval` handles this agent has outstanding —
@@ -1047,6 +1039,12 @@ pub extern "C" fn clearImmediate(timer_id: i64) {
 /// primitive numeric id (`+timeout`), so `clearTimeout(+t)` works (#1213).
 /// Returns `None` for nullish/other values (a no-op clear, matching Node).
 fn arg_to_timer_id(arg: f64) -> Option<i64> {
+    // #340/#341: the handle is an ordinary object carrying its id, so resolve
+    // that first. The raw-id arms below stay for `clearTimeout(+t)` (#1213) and
+    // for any value minted before this family migrated.
+    if let Some(id) = timer_handle_id(arg) {
+        return Some(id);
+    }
     let v = crate::value::JSValue::from_bits(arg.to_bits());
     if v.is_int32() {
         Some(v.as_int32() as i64)

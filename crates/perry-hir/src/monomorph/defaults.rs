@@ -34,6 +34,16 @@ pub(crate) fn fill_default_arguments(module: &mut Module) {
     let mut ctors: HashMap<String, Vec<Option<Expr>>> = HashMap::new();
     for class in &module.classes {
         if let Some(ref ctor) = class.constructor {
+            // #10484: a constructor that reads `arguments` observes the call
+            // site's argument COUNT, and an appended `undefined` is
+            // indistinguishable from one the caller wrote (`new C("x")`
+            // reported `arguments.length === 2` for `constructor(p, q)`).
+            // Every constructor call path already binds an omitted parameter
+            // to `undefined` itself, so skip these exactly like the
+            // synth-`arguments` free functions below.
+            if ctor.params.iter().any(|p| p.arguments_object.is_some()) {
+                continue;
+            }
             // Stop at a trailing rest parameter. `constructor(...e)` (or
             // `constructor(a, b = 5, ...e)`) accepts zero or more trailing
             // args, so the call-site padding below must never synthesize an

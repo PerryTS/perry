@@ -159,17 +159,29 @@ pub(crate) enum SlotRep {
 ///   `register_module_globals_as_gc_roots`) reads `@perry_global_*` cells and
 ///   never `ctx.locals`.
 ///
-/// ## What is still excluded, and why
+/// ## What was also excluded, and no longer is (#10769)
 ///
-/// `Ptr<Shape>` receiver proofs. Phase 5a reused
+/// `Ptr<Shape>` receiver proofs used to be excluded here too. Phase 5a reused
 /// `repsel_context_allows_canonical_i32` as its context gate, so lifting that
-/// flag would silently have enabled guard-free `this.field` / `obj.field`
-/// lowering in entry bodies as a side effect of an unrelated phase. That is not
-/// a representation this issue measured, and #6991 is an open rooting bug in
-/// exactly that position: a compiled receiver goes stale across the
-/// `globalThis`-population collection, which runs around module init. So the
-/// flag is split (`repsel_context_allows_ptr_shape`) and entry bodies keep
-/// `Ptr<Shape>` off, still naming this rule in `--opt-report`.
+/// flag would have enabled guard-free `this.field` / `obj.field` lowering in
+/// entry bodies as a side effect of an unrelated phase; the flag was split
+/// (`repsel_context_allows_ptr_shape`) and `Entry` pinned its own arm off,
+/// citing #6991 — "a compiled receiver goes stale across the
+/// `globalThis`-population collection, which runs around module init".
+///
+/// **#6991 is closed.** It was fixed by #7249 (`64c1f56fb`) in the runtime, not
+/// by this gate: `populate_global_this_builtins` now runs inside a
+/// `GcSuppressScope`, because it builds an immortal object graph through raw
+/// `*mut ObjectHeader` locals held across its own ~1.15 MB of allocations, so
+/// under an 8 MB heap limit minor #0 landed in the middle of it. The closing
+/// comment re-verified `test_gap_repsel_ptr_shape_locals` at 10/10 on the
+/// evacuating arm and 3/3 under `PERRY_GC_ZEAL=1`, at 3.4x the movement level
+/// the crash was observed at. The entry arm now derives `allows_ptr_shape` from
+/// its knob like every other body (`expr/repsel_gates.rs`).
+///
+/// `MODULE_INIT_CONTEXT` is retained: it is still a rule name the
+/// `--opt-report` renderer resolves, and removing a denial string would break
+/// reports archived from older builds.
 pub(crate) const MODULE_INIT_CONTEXT: &str = "module_init_context";
 
 /// Why an ordinary body context forbids canonical (i32/u32/Str) selection, or
@@ -438,7 +450,15 @@ pub(crate) fn deny_canonical_i32(ctx: &FnCtx<'_>, id: u32, name: &str, denial: C
 }
 
 /// Tracking issue for "a module-level binding can never take a canonical slot".
-const MODULE_GLOBAL_ISSUE: &str = "#7109";
+///
+/// This pointed at #7109 until #10803. #7109 is a *different* mechanism — the
+/// module-init / program-entry context gate, which `MODULE_INIT_CONTEXT` below
+/// still cites correctly — and it is closed, as is #10774 which lifted that
+/// gate. A reader who followed this denial's own pointer therefore landed on a
+/// closed issue about something else and could reasonably conclude the
+/// module-global class was already handled; that is how one optimisation pass
+/// came to record module-global storage as "less important".
+const MODULE_GLOBAL_ISSUE: &str = "#10803";
 /// Tracking issue for the index-use / i32-bound precondition.
 const NOT_BOUNDED_ISSUE: &str = "#7123";
 /// Tracking issue for the profitability refusal — the one denial in this list
@@ -479,6 +499,33 @@ fn context_rule_text(rule: &str) -> (&'static str, &'static str) {
 /// promotion that was wasted, and the two mean opposite things.
 pub(crate) const PTR_SHAPE_SCALAR_REPLACED: &str = "scalar_replaced";
 
+/// `Ptr<Shape>` consumption rule: the proven local is never itself the object
+/// of a property access, so no representation-selection lowering ever consults
+/// it (#10793).
+///
+/// A candidate survives rule 2 only through uses that PRESERVE containment: a
+/// bare `return <local>`, a contained `A.push(<local>)` into an
+/// element-shape-proven array (#7034 §3), and single-`Let` alias bindings. Any
+/// other bare reference disqualifies it. So a selected local whose uses are
+/// exclusively of that kind is proven and then has nowhere to spend the proof.
+/// `buildRows`'s `row` in `benchmarks/app-patterns/kernels/batch.ts` is the
+/// corpus example: its only use is `rows.push(row)`. The field reads happen
+/// later, through the array's own element-shape fact, on a different value.
+///
+/// This is the mechanism `repsel_census.check_unconsumed_is_explained` called
+/// "a promotion with no access site at all is dropped by nobody" and then
+/// tolerated as an unnamed residue. Nobody is a mechanism; it just had no
+/// recorder. #10769 made that visible by CONSUMING `batch`'s other wasted
+/// promotion (`totals`, until then dropped by [`MODULE_INIT_CONTEXT`]), which
+/// left this residue as the workload's only wasted promotion — and a wasted
+/// promotion that names no rule is indistinguishable from an honest zero, which
+/// is the one state that census exists to refuse.
+///
+/// Not a defect in the analysis: the proof is sound and costs a report entry,
+/// not an emitted byte. The defect was that it looked exactly like a promotion
+/// codegen had silently refused to apply.
+pub(crate) const PTR_SHAPE_NO_ACCESS_SITE: &str = "no_access_site";
+
 /// `(reason, issue)` for a rule that stopped a *selected* `Ptr<Shape>` proof
 /// from being consumed by codegen.
 pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static str) {
@@ -499,6 +546,15 @@ pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static
              nothing",
             PTR_SHAPE_SCALAR_REPLACED_ISSUE,
         ),
+        PTR_SHAPE_NO_ACCESS_SITE => (
+            "the local is never itself the object of a property access: every use \
+             that survived rule 2 is containment-preserving (a bare `return`, a \
+             contained `A.push(x)` into an element-shape-proven array, an alias \
+             binding), so no representation-selection lowering ever consults the \
+             fact. The proof is sound and cost nothing to emit — it simply had \
+             nowhere to be spent",
+            PTR_SHAPE_NO_ACCESS_SITE_ISSUE,
+        ),
         _ => (
             "async / generator bodies set `repsel_context_allows_canonical_i32: \
              false`, and `FnCtx::ptr_shape_receiver_fact` returns None for the \
@@ -511,6 +567,9 @@ pub(crate) fn ptr_shape_context_rule_text(rule: &str) -> (&'static str, &'static
 
 /// Tracking issue for the scalar-replacement consumption mechanism.
 const PTR_SHAPE_SCALAR_REPLACED_ISSUE: &str = "#7115";
+
+/// Tracking issue for the no-access-site consumption mechanism.
+const PTR_SHAPE_NO_ACCESS_SITE_ISSUE: &str = "#10793";
 
 pub(crate) fn deny_canonical_context(
     ctx: &FnCtx<'_>,

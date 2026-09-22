@@ -62,20 +62,6 @@ const decompressed = zlib.gunzipSync(compressed);
 console.log(decompressed.toString()); // "Hello, World!"
 ```
 
-## cron / node-cron (Job Scheduling)
-
-Native bindings via `perry-ext-cron` (v0.5.564). Both `cron` and `node-cron`
-package names route to the same backend.
-
-```typescript,no-test
-import { CronJob } from "cron";
-
-const job = new CronJob("*/5 * * * *", () => {
-  console.log("Runs every 5 minutes");
-});
-job.start();
-```
-
 ## ethers (Ethereum)
 
 Native bindings via `perry-ext-ethers` (v0.5.556) — backed by
@@ -103,20 +89,6 @@ ee.on("data", (chunk) => console.log("got:", chunk));
 ee.emit("data", "hello");
 ```
 
-## exponential-backoff (Retry Logic)
-
-Native bindings via `perry-ext-exponential-backoff` (v0.5.542).
-
-```typescript,no-test
-import { backOff } from "exponential-backoff";
-
-const result = await backOff(() => fetchUnstableEndpoint(), {
-  numOfAttempts: 5,
-  startingDelay: 200,
-  timeMultiple: 2,
-});
-```
-
 ## decimal.js / bignumber.js (Arbitrary Precision)
 
 Native bindings via `perry-ext-decimal` (v0.5.547). Both package names route
@@ -124,48 +96,6 @@ to the same backend — `Decimal` and `BigNumber` are both exposed.
 
 ```typescript,no-test
 {{#include ../../examples/stdlib/other/snippets.ts:decimal}}
-```
-
-## dayjs / date-fns (Date Manipulation)
-
-Native bindings via `perry-ext-dayjs` (v0.5.548). Both package names route to
-the same Rust backend — same parse/format/diff surface.
-
-```typescript,no-test
-import dayjs from "dayjs";
-
-const now = dayjs();
-const tomorrow = now.add(1, "day");
-console.log(tomorrow.format("YYYY-MM-DD"));
-```
-
-## moment (Legacy Date)
-
-Native bindings via `perry-ext-moment` (v0.5.549). `moment` is in maintenance
-mode upstream — prefer `dayjs` for new code, but Perry supports both for
-existing codebases.
-
-```typescript,no-test
-import moment from "moment";
-
-const m = moment().add(7, "days");
-console.log(m.format());
-```
-
-## rate-limiter-flexible
-
-Native bindings via `perry-ext-ratelimit` (v0.5.552). In-memory limiter is
-wired; Redis / cluster backing stores are follow-ups.
-
-```typescript,no-test
-import { RateLimiterMemory } from "rate-limiter-flexible";
-
-const limiter = new RateLimiterMemory({ points: 5, duration: 1 });
-try {
-  await limiter.consume("ip-1.2.3.4");
-} catch (rateLimitErr) {
-  console.warn("blocked:", rateLimitErr);
-}
 ```
 
 ## worker_threads
@@ -292,27 +222,6 @@ per path; unsupported or over-budget helpers emit a diagnostic and throw if the
 Worker is constructed. The original filename expression still runs at runtime.
 Static `file:` URLs are decoded before file lookup, including Bun embedded paths
 such as `file:///$bunfs/root/worker.js` mapped through `--bunfs-root`.
-## commander (CLI Parsing)
-
-```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:commander}}
-```
-
-## lru-cache
-
-The wired constructor takes the npm v7+ options-object shape
-(`new LRUCache({ max: 100 })`) and validates it the way npm does, throwing
-the same errors rather than clamping: `max` must be a positive integer no
-larger than the JS array-length limit, `ttl` must be a positive integer,
-and at least one of `max` or `ttl` is required — so `new LRUCache()` and
-the older positional form `new LRUCache(100)` both throw a `TypeError`,
-exactly as they do on npm. `ttl`, `updateAgeOnGet` and `peek` are honored;
-`maxSize`/`sizeCalculation`, `dispose`, `fetch`, `allowStale` and the
-iterator surface are not yet implemented.
-
-```typescript,no-test
-{{#include ../../examples/stdlib/other/snippets.ts:lru-cache}}
-```
 
 ## child_process
 

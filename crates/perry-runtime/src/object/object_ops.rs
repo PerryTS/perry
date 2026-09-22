@@ -10,6 +10,7 @@
 use super::*;
 
 mod accessors;
+mod define_class_accessor;
 mod define_get_accessor;
 mod define_properties;
 mod define_property;
@@ -49,7 +50,8 @@ pub(crate) use descriptor_helpers::{
 // re-exported, so `crate::object::value_is_callable` resolves uniquely to the
 // `instanceof.rs` definition (preserves the pre-split resolution).
 pub(crate) use keys_array::{
-    ensure_key_in_keys_array, install_builtin_getter, own_key_present, own_key_present_via_index,
+    ensure_key_in_keys_array, ensure_key_in_keys_array_for_value, install_builtin_getter,
+    own_key_present, own_key_present_via_index,
 };
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.

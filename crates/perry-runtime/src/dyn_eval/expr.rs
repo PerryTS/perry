@@ -7,8 +7,12 @@
 //! sequence operators, `typeof`/`instanceof`/`in`/`delete`, assignments
 //! (plain, compound, logical, destructuring), member + computed access,
 //! optional chaining, calls (host functions, host methods, interpreted
-//! closures — with `this` bound like the runtime binds it), and `new` on
-//! host constructors / builtin error types / RegExp.
+//! closures — with `this` bound like the runtime binds it), `new` on
+//! host constructors / builtin error types / RegExp, and #10661 class
+//! expressions restricted to: a constructor plus regular (non-getter/setter,
+//! non-generator/async) instance/static methods with identifier, string, or
+//! numeric keys — see `interp::eval_class_expr` for exactly what is and
+//! isn't covered.
 //!
 //! Everything else throws the #6559 diagnostic naming the construct.
 
@@ -94,7 +98,7 @@ pub(crate) fn eval_expr(ctx: &Ctx, expr: &ast::Expr, env_idx: usize) -> f64 {
         OptChain(o) => eval_opt_chain(ctx, o, env_idx),
         Await(_) => throw_unsupported("await (async interpreted code)"),
         Yield(_) => throw_unsupported("yield (generator interpreted code)"),
-        Class(_) => throw_unsupported("class expression"),
+        Class(c) => super::interp::eval_class_expr(ctx, c, env_idx),
         TaggedTpl(_) => throw_unsupported("tagged template literal"),
         SuperProp(_) => throw_unsupported("super property access"),
         MetaProp(_) => throw_unsupported("new.target / import.meta"),

@@ -300,6 +300,15 @@ pub extern "C" fn js_native_arena_view(
     if kind > typedarray::KIND_BIGUINT64 {
         throw_range_error(b"NativeArena view kind is invalid");
     }
+    // RULE 3 (`object/shape_rule3.rs`): the element count lands in
+    // `NativeTypedViewHeader::capacity` at payload `+4`, the word the emitted
+    // property-read path compares against a cached ShapeId. Checked HERE,
+    // before the owner is resolved, so the diagnosis is the length rather than
+    // the "out of bounds" every over-range view would also report — and so the
+    // bound is reachable by a test without a 2 GiB arena.
+    if length > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as i64 {
+        throw_range_error(b"NativeArena view length exceeds Perry's maximum");
+    }
     let elem_size = typedarray::elem_size_for_kind(kind) as u64;
     let byte_offset = byte_offset as u64;
     let length = length as u64;
@@ -315,7 +324,7 @@ pub extern "C" fn js_native_arena_view(
         let end = byte_offset
             .checked_add(byte_length)
             .unwrap_or_else(|| throw_range_error(b"NativeArena view is out of bounds"));
-        if end > (*owner).byte_length || length > u32::MAX as u64 {
+        if end > (*owner).byte_length {
             throw_range_error(b"NativeArena view is out of bounds");
         }
         let view = crate::gc::gc_malloc(
@@ -323,6 +332,10 @@ pub extern "C" fn js_native_arena_view(
             crate::gc::GC_TYPE_NATIVE_TYPED_VIEW,
         ) as *mut NativeTypedViewHeader;
         (*view).length = length as u32;
+        crate::object::shape_rule3::debug_assert_not_shape_id_word(
+            "NativeTypedViewHeader::capacity",
+            length as u32,
+        );
         (*view).capacity = length as u32;
         (*view).kind = kind;
         (*view).elem_size = elem_size as u8;

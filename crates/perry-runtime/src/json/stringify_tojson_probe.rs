@@ -14,7 +14,7 @@ pub(crate) const PROTO_TOJSON_DIRTY: u8 = 0;
 const PROTO_TOJSON_ABSENT: u8 = 1;
 const PROTO_TOJSON_PRESENT: u8 = 2;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ObjectProtoToJsonSignature {
     proto_addr: usize,
     keys_addr: usize,
@@ -247,16 +247,111 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
     })
 }
 
+/// Re-derive the same six fields as [`object_proto_tojson_signature`] and
+/// compare them to `cached`, WITHOUT re-running `try_read_tracked_gc_header`'s
+/// allocator-ownership proof. It answers the identical question; only the
+/// *proof that the addresses are ours* is skipped, and only because a prior
+/// full validation already established it for these exact addresses. The
+/// cheap magnitude classification is NOT skipped: both header reads go
+/// through `addr_class::try_read_gc_header`.
+///
+/// The ordering is the safety argument, and it is compare-then-dereference at
+/// every step:
+///
+/// * `proto_addr` is re-read from `CACHED_OBJECT_PROTO_BITS` — a GC MUTABLE
+///   root (`scan_parse_roots_mut`), so an evacuation rewrites it — and is
+///   compared BEFORE anything is dereferenced. A match means the root still
+///   names the very allocation `object_proto_tojson_signature` proved to be a
+///   live, non-forwarded `GC_TYPE_OBJECT` when the verdict was recorded. A
+///   relocation rewrites the root and lands here as a MISMATCH, which falls
+///   through to the full recompute. That is the same moving-GC defence the
+///   validated builder relies on, stated as a comparison instead of a probe.
+/// * the keys array address is likewise re-read out of the live prototype's
+///   keys slot and compared before `length` / `capacity` are touched.
+/// * a header address is `addr - GC_HEADER_SIZE` for arena and malloc
+///   allocations alike (`value::addr_class::classify_tracked_gc_header_with`),
+///   so no address is taken FROM the cache and dereferenced: every dereference
+///   is of an address just re-derived from a live root, after that address
+///   compared equal to a validated one.
+/// * that ordering establishes the addresses are the *validated* ones. It does
+///   not establish they are addresses at all if the root is corrupted or has
+///   been zeroed under us, which is why the magnitude classification stays:
+///   `try_read_gc_header` rejects the handle band and out-of-range garbage
+///   before `addr - GC_HEADER_SIZE` is formed, and it is the module-owned
+///   predicate rather than a re-typed literal
+///   (`scripts/addr_class_inventory.py` enforces that).
+///
+/// Worth 584 instructions per object visited, 260 of them the two arena-range
+/// classifications this skips (#10696). Keeping the magnitude guard costs 10
+/// of those back: the executed fast path is 49 instructions with a bare cast
+/// and 59 with `try_read_gc_header`, at `-C opt-level=3` for
+/// `aarch64-apple-darwin` — 0.7 % of the 1,472 Ir/object the memoised probe
+/// costs. `try_read_gc_header_known_plausible` is deliberately NOT used here:
+/// `buffer::is_small_buf_slab_addr` has been a constant `false` since the
+/// 2026-07-09 slab audit, so that spelling compiles to byte-identical code to
+/// the bare cast (LLVM folds the two into one symbol) — it would clear the
+/// ratchet while checking nothing.
+#[inline]
+unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignature) -> bool {
+    let proto_bits = CACHED_OBJECT_PROTO_BITS.with(|c| c.get());
+    if proto_bits == 0 {
+        return false;
+    }
+    let proto_addr = (proto_bits & POINTER_MASK) as usize;
+    if proto_addr != cached.proto_addr
+        || crate::object::prop_plan::prop_plan_semantic_epoch() != cached.semantic_epoch
+    {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(proto_addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved != cached.obj_flags
+    {
+        return false;
+    }
+    let proto = proto_addr as *const crate::ObjectHeader;
+    if (*proto).class_id != cached.class_id {
+        return false;
+    }
+    let keys = crate::object::object_keys_array(proto);
+    let keys_addr = keys as usize;
+    if keys_addr != cached.keys_addr {
+        return false;
+    }
+    if keys_addr == 0 {
+        return cached.keys_len == 0;
+    }
+    let Some(keys_header) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
+        return false;
+    };
+    keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
+        && keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (*keys).length == cached.keys_len
+        && (*keys).length <= (*keys).capacity
+}
+
 #[inline]
 pub(super) unsafe fn object_proto_may_have_to_json() -> bool {
     let state = OBJECT_PROTO_TOJSON_STATE.with(|c| c.get());
     if state != PROTO_TOJSON_DIRTY {
-        let now = object_proto_tojson_signature();
-        if now.is_some() && OBJECT_PROTO_TOJSON_SIGNATURE.with(|signature| signature.get()) == now {
-            return state == PROTO_TOJSON_PRESENT;
+        if let Some(cached) = OBJECT_PROTO_TOJSON_SIGNATURE.with(std::cell::Cell::get) {
+            if object_proto_tojson_signature_matches(&cached) {
+                return state == PROTO_TOJSON_PRESENT;
+            }
         }
     }
+    object_proto_may_have_to_json_recompute()
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn object_proto_may_have_to_json_recompute() -> bool {
     let computed = compute_object_proto_tojson_state();
+    // Record under the FULLY VALIDATED signature: the cheap comparison above
+    // is only sound against an entry whose addresses were once proven.
     let signature = object_proto_tojson_signature();
     if signature.is_some() {
         OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(computed));
@@ -283,7 +378,7 @@ pub(super) unsafe fn object_proto_may_have_to_json() -> bool {
 ///   parent chain defers to the slow path. Both tables are lazily populated
 ///   (only a reflective `C.prototype` read or an `Object.create` materializes
 ///   an entry), so plain literals' anonymous shape classes never hit this.
-fn class_chain_may_have_to_json(class_id: u32) -> bool {
+fn class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
     if crate::object::class_instance_has_member(class_id, "toJSON") {
         return true;
     }
@@ -307,6 +402,153 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
         }
     }
     false
+}
+
+// ─── per-`class_id` chain verdict memo (#10696) ──────────────────────────────
+
+/// A memoized [`class_chain_may_have_to_json_uncached`] answer.
+///
+/// The walk it replaces costs **448 instructions per object visited** — five
+/// by-name/by-id lookups across five separate registries — and its only input
+/// is the class id, which is a property of the SHAPE, not of the instance.
+/// (Witness, #10696: allocating a fresh `{a:{b:1}}` every iteration costs a
+/// byte-identical probe to a hoisted one.)
+///
+/// The dangerous staleness direction is a cached `false` — "nothing on this
+/// chain can produce a `toJSON`" — that should have become `true`; a stale
+/// `true` only costs the slow path, which is the correct answer path. Every
+/// route that can flip the answer that way is covered by one of the three
+/// generations keyed on here:
+///
+/// | route to a newly reachable `toJSON` | caught by |
+/// |---|---|
+/// | `class C { toJSON() {} }`, a getter or a setter registered for this class or any ancestor (`CLASS_VTABLE_REGISTRY`) | `VTABLE_GEN` — `js_register_class_method` / `_getter` / `_setter`, `js_register_class_computed_method` / `_accessor`, and the bound-method vtable copy in `object_ops/define_property.rs` all bump it |
+/// | `C.prototype.toJSON = fn` (`CLASS_PROTOTYPE_METHODS`, possibly with no prototype object at all) | `VTABLE_GEN` — `class_prototype_method_root_store` bumps it through `invalidate_class_prototype_fast_guards_for_method` |
+/// | a NEW parent edge splicing in an ancestor that carries any of the above | the SEMANTIC property epoch — `class_registry::parent_static::register_class` is the only writer of the parent map and calls `prop_plan_epoch_bump` before publishing |
+/// | `Object.setPrototypeOf`, a descriptor install, or a `delete` anywhere | the SEMANTIC property epoch |
+/// | a prototype OBJECT materializing for this class or an ancestor — the very thing the walk looks for, since such an object can carry arbitrary later-added properties | `CLASS_LOOKUP_SURFACE_GEN`, bumped inside `class_prototype_object_root_store` and `class_decl_prototype_object_root_store` |
+/// | `js_register_class_generic_origin`, which redirects both prototype-object readers and `lookup_prototype_method`'s chain hop | `CLASS_LOOKUP_SURFACE_GEN` |
+/// | re-exposing a `delete`d prototype key through the in-place `CLASS_DELETED_KEYS` un-mark in `class_dynamic_prop_root_store` | `CLASS_LOOKUP_SURFACE_GEN` |
+///
+/// Garbage collection is deliberately NOT an input. The class side-table
+/// scanners only rewrite EXISTING slots, so no collection can add a registry
+/// key; the dead-owner prune only removes entries, which can make a cached
+/// `true` conservative but never a cached `false` wrong. Keying a per-object
+/// cache on a GC-bumped counter is a measured performance CLIFF rather than
+/// mere waste — `object::prop_plan`'s module docs record +35 % from exactly
+/// that mistake (#7910).
+///
+/// Thread-local, like `promise::then_probe`'s `ADMISSIBLE_MEMO`: two of the
+/// four tables summarized here are themselves `perry_thread_local!`, so a
+/// process-global table would be unsound against another thread's stores.
+#[derive(Clone, Copy)]
+struct ClassChainToJsonEntry {
+    class_id: u32,
+    vtable_gen: u64,
+    semantic_epoch: u64,
+    surface_gen: u64,
+    may_have: bool,
+}
+
+/// Sized for the distinct object-literal SHAPES a serialization walk touches,
+/// not for classes: `{a:{b:{c:{d:{e:1}}}}}` alone is five anon shape ids, and
+/// an evicting pair costs a full 448-instruction walk on EVERY operation. That
+/// is not hypothetical — a 16-slot table indexed by `>> 12` did exactly that
+/// on `z_nest4`, and the collision was visible as a per-object registry cost
+/// that refused to go to zero while the other shapes' went (#10696).
+const CLASS_CHAIN_TOJSON_SLOTS: usize = 64;
+
+const EMPTY_CLASS_CHAIN_TOJSON: ClassChainToJsonEntry = ClassChainToJsonEntry {
+    // Class id 0 is answered by the caller without consulting the memo, so it
+    // is a safe "empty" tag.
+    class_id: 0,
+    vtable_gen: 0,
+    semantic_epoch: 0,
+    surface_gen: 0,
+    may_have: false,
+};
+
+crate::perry_thread_local! {
+    /// Per-slot `Cell`s rather than a `Cell<[…; N]>`: the latter copies the
+    /// whole table in and out on every probe, and this path runs once per
+    /// object visited by `JSON.stringify`.
+    static CLASS_CHAIN_TOJSON_MEMO: [std::cell::Cell<ClassChainToJsonEntry>;
+        CLASS_CHAIN_TOJSON_SLOTS] =
+        const { [const { std::cell::Cell::new(EMPTY_CLASS_CHAIN_TOJSON) }; CLASS_CHAIN_TOJSON_SLOTS] };
+    #[cfg(test)]
+    static CLASS_CHAIN_TOJSON_RECOMPUTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Index a class id into the memo. The multiply mixes the whole 32-bit id into
+/// the HIGH bits and the shift takes them from there, so ids that differ only
+/// in their low bits — which is exactly how consecutive anon shape ids are
+/// minted — land in different slots.
+#[inline]
+fn class_chain_tojson_slot(class_id: u32) -> usize {
+    const SLOT_BITS: u32 = CLASS_CHAIN_TOJSON_SLOTS.trailing_zeros();
+    ((class_id as u64).wrapping_mul(0x9E37_79B1_85EB_CA87) >> (64 - SLOT_BITS)) as usize
+}
+
+#[inline]
+fn class_chain_may_have_to_json(class_id: u32) -> bool {
+    debug_assert_ne!(class_id, 0, "class id 0 is answered by the caller");
+    let vtable_gen = crate::object::vtable_generation();
+    let semantic_epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
+    let surface_gen = crate::object::class_lookup_surface_generation();
+    let slot = class_chain_tojson_slot(class_id);
+    let entry = CLASS_CHAIN_TOJSON_MEMO.with(|table| table[slot].get());
+    if entry.class_id == class_id
+        && entry.vtable_gen == vtable_gen
+        && entry.semantic_epoch == semantic_epoch
+        && entry.surface_gen == surface_gen
+    {
+        return entry.may_have;
+    }
+    class_chain_to_json_memo_fill(class_id, vtable_gen, semantic_epoch, surface_gen, slot)
+}
+
+#[cold]
+#[inline(never)]
+fn class_chain_to_json_memo_fill(
+    class_id: u32,
+    vtable_gen: u64,
+    semantic_epoch: u64,
+    surface_gen: u64,
+    slot: usize,
+) -> bool {
+    #[cfg(test)]
+    CLASS_CHAIN_TOJSON_RECOMPUTES.with(|count| count.set(count.get() + 1));
+    let may_have = class_chain_may_have_to_json_uncached(class_id);
+    CLASS_CHAIN_TOJSON_MEMO.with(|table| {
+        table[slot].set(ClassChainToJsonEntry {
+            class_id,
+            vtable_gen,
+            semantic_epoch,
+            surface_gen,
+            may_have,
+        })
+    });
+    may_have
+}
+
+#[cfg(test)]
+pub(super) fn test_reset_class_chain_tojson_recomputes() {
+    CLASS_CHAIN_TOJSON_RECOMPUTES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn test_class_chain_tojson_recomputes() -> u64 {
+    CLASS_CHAIN_TOJSON_RECOMPUTES.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn test_class_chain_may_have_to_json(class_id: u32) -> bool {
+    class_chain_may_have_to_json(class_id)
+}
+
+#[cfg(test)]
+pub(super) fn test_class_chain_may_have_to_json_uncached(class_id: u32) -> bool {
+    class_chain_may_have_to_json_uncached(class_id)
 }
 
 /// #6009: prove that resolving `toJSON` on

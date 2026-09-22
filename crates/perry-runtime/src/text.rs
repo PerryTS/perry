@@ -8,11 +8,23 @@
 //! the IEEE-754 byte pattern of the first byte instead of the byte itself
 //! (issue #584).
 //!
-//! `TextEncoder` / `TextDecoder` are stateless wrappers — the encoder is
-//! always UTF-8, so we return a small sentinel integer NaN-boxed as a
-//! pointer on the codegen side. The runtime doesn't need per-instance state.
+//! `TextEncoder` / `TextDecoder` instances are ORDINARY objects — a
+//! `GC_TYPE_OBJECT` with a real ShapeId, a family class id and a per-family
+//! prototype — identical in kind to an object TypeScript itself creates. That
+//! is the honest-tag invariant of #340/#341: a `POINTER_TAG` value is always a
+//! dereferenceable GC cell, and a runtime-made object is not a second kind of
+//! thing.
+//!
+//! They used to be small registry integers wearing `POINTER_TAG`, which made a
+//! value's identity its registry id: every `TextEncoder` shared one sentinel,
+//! so two of them were `===`, two collapsed into one `Map`/`Set`/`WeakMap` key,
+//! and `JSON.stringify` gave `null` where node gives `{}` (#10821).
+//!
+//! A decoder's entire state is three scalars, so it rides in the object's own
+//! `ObjectMeta.native_state` word (packing below) and `DECODER_REGISTRY` — a
+//! mutex-guarded map that grew one entry per `new TextDecoder()` and was never
+//! pruned — is gone outright, taking a leak and a lock off the decode path.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 use crate::buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array, BufferHeader};
@@ -37,6 +49,7 @@ enum DecoderEncoding {
     Utf16Le,
 }
 
+#[derive(Clone, Copy)]
 struct DecoderState {
     encoding: DecoderEncoding,
     /// WHATWG-canonical label reported by `decoder.encoding`.
@@ -45,9 +58,184 @@ struct DecoderState {
     ignore_bom: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Honest tags (#340/#341, #10821): instances are ORDINARY objects.
+//
+// `js_object_alloc(CLASS_ID, 0)` gives a `GC_TYPE_OBJECT` with a real ShapeId
+// and ZERO own keys, linked to the per-family prototype that carries
+// `decode` / `encode` / `encodeInto` as methods and `encoding` / `fatal` /
+// `ignoreBOM` as accessors. Reads take the ordinary prototype path — this
+// family has no handle-dispatch arm any more — so node parity follows from the
+// object's shape rather than from a dispatch table: `typeof` is `"object"`,
+// `Object.keys` is `[]`, `JSON.stringify` is `{}`, `instanceof` works, and two
+// instances are two objects (#10821).
+//
+// Per-instance state lives in `ObjectMeta.native_state`, packed as
+//     bit 0       present
+//     bit 1       fatal
+//     bit 2       ignoreBOM
+//     bits 8..    index into `ENCODINGS`
+//
+// `ENCODINGS` interns the DISTINCT encodings a program actually names. It is
+// bounded by the compile-time label set (~40 entries), never grows per decoder,
+// and therefore needs no pruning when a decoder dies. It replaces
+// `DECODER_REGISTRY`, which grew one entry per `new TextDecoder()` and was
+// never released — so this also removes a leak and a mutex from `decode`.
+// ---------------------------------------------------------------------------
+
+/// Class ids in the web-builtin block (`0xFFFF_24xx`); `0x2401..=0x2406` are
+/// AbortController/AbortSignal/Event/CustomEvent/DOMException/EventTarget.
+pub(crate) const TEXT_ENCODER_CLASS_ID: u32 = crate::native_class_ids::TEXT_ENCODER;
+pub(crate) const TEXT_DECODER_CLASS_ID: u32 = crate::native_class_ids::TEXT_DECODER;
+
+const STATE_PRESENT: u64 = 1;
+const STATE_FATAL: u64 = 1 << 1;
+const STATE_IGNORE_BOM: u64 = 1 << 2;
+const STATE_ENCODING_SHIFT: u32 = 8;
+
 lazy_static::lazy_static! {
-    static ref DECODER_REGISTRY: Mutex<HashMap<i64, DecoderState>> = Mutex::new(HashMap::new());
-    static ref NEXT_DECODER_ID: Mutex<i64> = Mutex::new(2);
+    /// Distinct `(encoding, canonical label)` pairs named so far. Append-only,
+    /// bounded by the compile-time label set — NOT a per-instance registry.
+    static ref ENCODINGS: Mutex<Vec<(DecoderEncoding, &'static str)>> =
+        Mutex::new(vec![(DecoderEncoding::Utf8, "utf-8")]);
+}
+
+fn intern_encoding(encoding: DecoderEncoding, label: &'static str) -> u64 {
+    let mut table = ENCODINGS.lock().unwrap();
+    // Compared by VALUE: two occurrences of the same canonical label are not
+    // guaranteed to be one address (thin LTO may duplicate a literal), and an
+    // address compare would then mint a second row for one encoding.
+    if let Some(index) = table
+        .iter()
+        .position(|(e, l)| *e == encoding && *l == label)
+    {
+        return index as u64;
+    }
+    table.push((encoding, label));
+    (table.len() - 1) as u64
+}
+
+fn encoding_at(index: u64) -> (DecoderEncoding, &'static str) {
+    ENCODINGS
+        .lock()
+        .unwrap()
+        .get(index as usize)
+        .copied()
+        .unwrap_or((DecoderEncoding::Utf8, "utf-8"))
+}
+
+fn pack_decoder_state(state: &DecoderState) -> u64 {
+    let index = intern_encoding(state.encoding, state.label);
+    let mut word = STATE_PRESENT | (index << STATE_ENCODING_SHIFT);
+    if state.fatal {
+        word |= STATE_FATAL;
+    }
+    if state.ignore_bom {
+        word |= STATE_IGNORE_BOM;
+    }
+    word
+}
+
+fn unpack_decoder_state(word: u64) -> Option<DecoderState> {
+    if word & STATE_PRESENT == 0 {
+        return None;
+    }
+    let (encoding, label) = encoding_at(word >> STATE_ENCODING_SHIFT);
+    Some(DecoderState {
+        encoding,
+        label,
+        fatal: word & STATE_FATAL != 0,
+        ignore_bom: word & STATE_IGNORE_BOM != 0,
+    })
+}
+
+/// The `native_state` word of a text instance, or `None` for any other value.
+/// Gated on the class id in the object header, so a foreign receiver
+/// (`TextDecoder.prototype.decode.call({})`) is rejected rather than
+/// misinterpreted — the same brand check node performs.
+fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) != crate::value::POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    let obj = addr as *mut ObjectHeader;
+    unsafe {
+        if (*obj).class_id != class_id {
+            return None;
+        }
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return Some(0);
+        }
+        Some((*meta).native_state)
+    }
+}
+
+/// Decoder state for a receiver, or the utf-8 non-fatal default for a receiver
+/// that carries none (matching the previous "unknown handle" behaviour).
+fn decoder_state_of(value: f64) -> DecoderState {
+    text_native_state(value, TEXT_DECODER_CLASS_ID)
+        .and_then(unpack_decoder_state)
+        .unwrap_or(DecoderState {
+            encoding: DecoderEncoding::Utf8,
+            label: "utf-8",
+            fatal: false,
+            ignore_bom: false,
+        })
+}
+
+/// Allocate a text instance: an ordinary object with no own keys, linked to
+/// its family prototype so methods and accessors resolve by ordinary lookup.
+///
+/// The prototype is where this family's whole surface lives, so it is not
+/// optional: without it `d.decode` and `d.encoding` are `undefined`. It is
+/// built by `populate_builtin_prototype_methods` under `global-text`, which the
+/// compiler's feature analysis must therefore enable for any program that
+/// constructs one — see the `TextEncoder`/`TextDecoder` arm of
+/// `collect_modules/feature_detect.rs`, which matches the folded HIR nodes and
+/// not just a quoted type name for this reason.
+fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
+    let obj = js_object_alloc(class_id, 0);
+    if obj.is_null() {
+        return 0;
+    }
+    // Everything below can allocate -- materializing the prototype builds
+    // `globalThis` lazily and the meta record is its own allocation -- and
+    // `GC_TYPE_OBJECT` is movable, so the instance is re-read through its
+    // handle after each one rather than carried as a raw pointer.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let proto_value = crate::object::builtin_prototype_value(builtin_name);
+    debug_assert!(
+        crate::value::JSValue::from_bits(proto_value.to_bits()).is_pointer(),
+        "{builtin_name}.prototype is missing: the instance would have no methods"
+    );
+    if crate::value::JSValue::from_bits(proto_value.to_bits()).is_pointer() {
+        obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            crate::object::prototype_chain::object_link_class_default_prototype(
+                obj as usize,
+                proto_value.to_bits(),
+            );
+        });
+    }
+    if state != 0 {
+        obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+            let meta = crate::object::object_meta_ensure(obj);
+            // A decoder whose state word never landed would read back as the
+            // lenient utf-8 default -- wrong label, wrong `fatal` -- rather than
+            // fail, so the only way this stays honest is that the meta exists.
+            debug_assert!(!meta.is_null(), "a text instance must carry its meta");
+            if !meta.is_null() {
+                (*meta).native_state = state;
+            }
+        });
+    }
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| obj as i64)
 }
 
 /// Map a user-supplied encoding label to (enum, canonical-name).
@@ -96,37 +284,23 @@ pub(crate) fn text_encoder_string_ptr(value: f64) -> *const StringHeader {
     crate::value::js_jsvalue_to_string(value) as *const StringHeader
 }
 
-/// `new TextEncoder()` — returns a non-null sentinel integer pointer.
-///
-/// The returned value is a small integer (`1`) that the codegen NaN-boxes
-/// with `POINTER_TAG`. TextEncoder has no state beyond "I encode UTF-8",
-/// so any non-null sentinel works. We use a distinct value from the
-/// decoder sentinel purely for debuggability.
+/// `new TextEncoder()` — an ordinary object with no own keys, linked to
+/// `TextEncoder.prototype`. It carries no state (it always encodes UTF-8), but
+/// it is still one object per construction: every encoder used to share one
+/// sentinel id, which made `new TextEncoder() === new TextEncoder()` true and
+/// collapsed two encoders into one `Map` key (#10821).
 #[no_mangle]
 pub extern "C" fn js_text_encoder_new() -> i64 {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Text);
     }
-    TEXT_ENCODER_SENTINEL_ID
+    alloc_text_object(TEXT_ENCODER_CLASS_ID, "TextEncoder", 0)
 }
 
-/// The stateless `TextEncoder` sentinel handle returned by
-/// `js_text_encoder_new` — see its doc comment.
-pub const TEXT_ENCODER_SENTINEL_ID: i64 = 1;
-
-/// Whether `id` is a live `TextDecoder` registry handle. Used by the
-/// dynamic method-call / property-GET handle arms
-/// (`native_call_method.rs` / `get_field_by_name_tail.rs`) to route
-/// `decode`/`encoding`/… on a type-erased receiver to the text natives.
-pub fn is_known_text_decoder_id(id: i64) -> bool {
-    DECODER_REGISTRY.lock().unwrap().contains_key(&id)
-}
-
-/// `new TextDecoder(label?, { fatal?, ignoreBOM? })` — validates the
-/// label, stores per-instance decode state in `DECODER_REGISTRY`, and
-/// returns a small-int handle that the codegen NaN-boxes with
-/// `POINTER_TAG`. An unsupported label throws a `RangeError`
-/// (`ERR_ENCODING_NOT_SUPPORTED`).
+/// `new TextDecoder(label?, { fatal?, ignoreBOM? })` — validates the label and
+/// returns an ordinary object linked to `TextDecoder.prototype`, carrying its
+/// decode state in the object's own meta word. An unsupported label throws a
+/// `RangeError` (`ERR_ENCODING_NOT_SUPPORTED`).
 ///
 /// `label` arrives as a NaN-boxed f64 (`undefined` for the no-arg form);
 /// `fatal` / `ignore_bom` arrive as NaN-boxed booleans (truthy → on).
@@ -168,56 +342,30 @@ fn register_decoder(
         fatal: crate::value::js_is_truthy(fatal) != 0,
         ignore_bom: crate::value::js_is_truthy(ignore_bom) != 0,
     };
-    let id = {
-        let mut next = NEXT_DECODER_ID.lock().unwrap();
-        let id = *next;
-        *next += 1;
-        id
-    };
-    DECODER_REGISTRY.lock().unwrap().insert(id, state);
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Text);
     }
-    id
-}
-
-fn decoder_handle_id(handle: f64) -> i64 {
-    let bits = handle.to_bits();
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-    const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-    const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-    if (bits & TAG_MASK) == POINTER_TAG {
-        (bits & POINTER_MASK) as i64
-    } else if !handle.is_nan() && bits != 0 && bits < 0x0001_0000_0000_0000 {
-        bits as i64
-    } else {
-        0
-    }
+    // The whole per-instance state is three scalars, so it rides in the
+    // object's own meta word — there is no registry entry to allocate here and
+    // nothing to release when the decoder dies.
+    alloc_text_object(
+        TEXT_DECODER_CLASS_ID,
+        "TextDecoder",
+        pack_decoder_state(&state),
+    )
 }
 
 /// `decoder.encoding` — WHATWG-canonical label.
 #[no_mangle]
 pub extern "C" fn js_text_decoder_encoding(handle: f64) -> *mut StringHeader {
-    let id = decoder_handle_id(handle);
-    let label = DECODER_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|s| s.label)
-        .unwrap_or("utf-8");
+    let label = decoder_state_of(handle).label;
     js_string_from_bytes(label.as_ptr(), label.len() as u32)
 }
 
 /// `decoder.fatal` — boolean (NaN-boxed by codegen).
 #[no_mangle]
 pub extern "C" fn js_text_decoder_fatal(handle: f64) -> f64 {
-    let id = decoder_handle_id(handle);
-    let fatal = DECODER_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|s| s.fatal)
-        .unwrap_or(false);
+    let fatal = decoder_state_of(handle).fatal;
     if fatal {
         f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
     } else {
@@ -228,13 +376,7 @@ pub extern "C" fn js_text_decoder_fatal(handle: f64) -> f64 {
 /// `decoder.ignoreBOM` — boolean (NaN-boxed by codegen).
 #[no_mangle]
 pub extern "C" fn js_text_decoder_ignore_bom(handle: f64) -> f64 {
-    let id = decoder_handle_id(handle);
-    let ignore = DECODER_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|s| s.ignore_bom)
-        .unwrap_or(false);
+    let ignore = decoder_state_of(handle).ignore_bom;
     if ignore {
         f64::from_bits(0x7FFC_0000_0000_0004) // TAG_TRUE
     } else {
@@ -475,13 +617,8 @@ pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i6
 pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
     // Pull the decoder state (encoding / fatal). Unknown handle → utf-8,
     // non-fatal (matches the old stateless default).
-    let id = decoder_handle_id(handle);
-    let (encoding, fatal, label) = DECODER_REGISTRY
-        .lock()
-        .unwrap()
-        .get(&id)
-        .map(|s| (s.encoding, s.fatal, s.label))
-        .unwrap_or((DecoderEncoding::Utf8, false, "utf-8"));
+    let state = decoder_state_of(handle);
+    let (encoding, fatal, label) = (state.encoding, state.fatal, state.label);
 
     // Node `TextDecoder.prototype.decode(input)` input contract:
     //   - omitted / undefined → decode empty (returns "").
@@ -642,85 +779,321 @@ static KEEP_TEXT_DECODER_IGNORE_BOM: extern "C" fn(f64) -> f64 = js_text_decoder
 /// "Bind must be called on a function"). Methods reify as bound methods —
 /// the dynamic-call arm in `native_call_method.rs` executes them on call —
 /// and accessors return their values directly.
-/// A `TextDecoder.prototype` method key, as a `'static` byte string.
-///
-/// #8133 — the bind below used to hand `js_class_method_bind` the caller's
-/// `key_ptr`, which every caller derives as
-/// `key_string + size_of::<StringHeader>()`: the interior of a movable GC heap
-/// string, unreachable the moment the read returns. The closure captures that
-/// pointer and `dispatch_bound_method` re-reads it at CALL time, so a copying
-/// minor could relocate or reclaim the bytes the closure names. #7747 fixed the
-/// same defect on the Buffer path.
-///
-/// `text_handle_property` no longer TAKES the caller's pointer at all, so the
-/// bug is not merely fixed here, it is unwritable.
-pub(crate) fn text_decoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
-    // A named static has one identity across codegen units. Anonymous byte
-    // literals may be duplicated by thin LTO even within this lookup.
-    static DECODE: [u8; 6] = *b"decode";
-    match key {
-        b"decode" => Some(&DECODE),
-        _ => None,
+// ---------------------------------------------------------------------------
+// Prototype thunks.
+//
+// A native method or accessor installed on a shared prototype is a
+// `ClosureHeader` whose ABI carries no receiver; it reads one from
+// `js_implicit_this_get()`. `temporal_proto_getter_thunk` is the template.
+// Each thunk brand-checks its receiver against the family class id, so
+// `TextDecoder.prototype.decode.call({})` throws a TypeError exactly as node
+// does, instead of silently decoding as utf-8.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "global-text")]
+fn require_text_brand(value: f64, class_id: u32, message: &[u8]) {
+    if text_native_state(value, class_id).is_none() {
+        throw_type_error(message);
     }
 }
 
-/// A `TextEncoder.prototype` method key, as a `'static` byte string. See
-/// [`text_decoder_method_name_static`].
-pub(crate) fn text_encoder_method_name_static(key: &[u8]) -> Option<&'static [u8]> {
-    static ENCODE: [u8; 6] = *b"encode";
-    static ENCODE_INTO: [u8; 10] = *b"encodeInto";
-    match key {
-        b"encode" => Some(&ENCODE),
-        b"encodeInto" => Some(&ENCODE_INTO),
-        _ => None,
-    }
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_decoder_decode_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_DECODER_CLASS_ID,
+        b"TextDecoder.prototype.decode called on an incompatible receiver",
+    );
+    let s = js_text_decoder_decode_llvm(this, input);
+    f64::from_bits(crate::value::JSValue::string_ptr(s as *mut StringHeader).bits())
 }
 
-/// Bind `method` — always a `'static` literal from the two lookups above — as a
-/// bound-method value on `this_f64`.
-fn bind_static_method(this_f64: f64, method: &'static [u8]) -> crate::value::JSValue {
-    let result = crate::object::js_class_method_bind(this_f64, method.as_ptr(), method.len());
-    crate::value::JSValue::from_bits(result.to_bits())
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_decoder_encoding_getter(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_DECODER_CLASS_ID,
+        b"TextDecoder.prototype.encoding called on an incompatible receiver",
+    );
+    let s = js_text_decoder_encoding(this);
+    f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
 }
 
-pub(crate) unsafe fn text_handle_property(
-    raw: usize,
-    key_bytes: &[u8],
-) -> Option<crate::value::JSValue> {
-    let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
-    if is_known_text_decoder_id(raw as i64) {
-        if let Some(method) = text_decoder_method_name_static(key_bytes) {
-            return Some(bind_static_method(this_f64, method));
-        }
-        match key_bytes {
-            b"encoding" => {
-                let s = js_text_decoder_encoding(this_f64);
-                return Some(crate::value::JSValue::string_ptr(s));
-            }
-            b"fatal" => {
-                return Some(crate::value::JSValue::from_bits(
-                    js_text_decoder_fatal(this_f64).to_bits(),
-                ));
-            }
-            b"ignoreBOM" => {
-                return Some(crate::value::JSValue::from_bits(
-                    js_text_decoder_ignore_bom(this_f64).to_bits(),
-                ));
-            }
-            _ => {}
-        }
-    }
-    if raw as i64 == TEXT_ENCODER_SENTINEL_ID {
-        if let Some(method) = text_encoder_method_name_static(key_bytes) {
-            return Some(bind_static_method(this_f64, method));
-        }
-    }
-    None
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_decoder_fatal_getter(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_DECODER_CLASS_ID,
+        b"TextDecoder.prototype.fatal called on an incompatible receiver",
+    );
+    js_text_decoder_fatal(this)
+}
+
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_decoder_ignore_bom_getter(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_DECODER_CLASS_ID,
+        b"TextDecoder.prototype.ignoreBOM called on an incompatible receiver",
+    );
+    js_text_decoder_ignore_bom(this)
+}
+
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_encoder_encoding_getter(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_ENCODER_CLASS_ID,
+        b"TextEncoder.prototype.encoding called on an incompatible receiver",
+    );
+    let s = js_string_from_bytes(b"utf-8".as_ptr(), 5);
+    f64::from_bits(crate::value::JSValue::string_ptr(s).bits())
+}
+
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_encoder_encode_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    input: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_ENCODER_CLASS_ID,
+        b"TextEncoder.prototype.encode called on an incompatible receiver",
+    );
+    crate::value::js_nanbox_pointer(js_text_encoder_encode_llvm(input))
+}
+
+#[cfg(feature = "global-text")]
+pub(crate) extern "C" fn text_encoder_encode_into_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    source: f64,
+    dest: f64,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    require_text_brand(
+        this,
+        TEXT_ENCODER_CLASS_ID,
+        b"TextEncoder.prototype.encodeInto called on an incompatible receiver",
+    );
+    crate::value::js_nanbox_pointer(js_text_encoder_encode_into_llvm(source, dest))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #10821 / #340 / #341 -- instances are ORDINARY objects.
+    ///
+    /// The representation invariant: a text receiver is a `GC_TYPE_OBJECT`
+    /// with the family class id, above the small-handle band, carrying ZERO
+    /// own keys. That last part is what keeps `Object.keys` / `JSON.stringify`
+    /// matching node without a per-kind arm anywhere.
+    #[test]
+    fn text_instances_are_ordinary_objects_with_no_own_keys() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let cases = [
+            (js_text_encoder_new(), TEXT_ENCODER_CLASS_ID),
+            (
+                js_text_decoder_new(undef, undef, undef),
+                TEXT_DECODER_CLASS_ID,
+            ),
+        ];
+        for (raw, class_id) in cases {
+            let addr = raw as usize;
+            assert!(
+                !crate::value::addr_class::is_handle_band(addr),
+                "an instance must be a real heap object, got {addr:#x}"
+            );
+            let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+                .expect("instances carry a GcHeader");
+            assert_eq!(header.obj_type, crate::gc::GC_TYPE_OBJECT);
+            let obj = addr as *mut ObjectHeader;
+            assert_eq!(unsafe { (*obj).class_id }, class_id);
+            let keys = unsafe { crate::object::object_keys_array(obj) };
+            let key_count = if keys.is_null() {
+                0
+            } else {
+                unsafe { (*keys).length }
+            };
+            assert_eq!(key_count, 0, "an instance must have no own keys");
+        }
+    }
+
+    /// The COMPILED read path, which is not the one the other tests take.
+    /// An emitted `td.decode` value read is a per-site inline cache whose miss
+    /// edge calls `js_object_get_field_ic_slow` with the receiver's 48-bit
+    /// payload — not `js_object_get_field_by_name`. The method has to resolve
+    /// on the family prototype through THAT entry too, and nothing else in this
+    /// file would notice if it did not: measured, a program whose reads took
+    /// this edge answered `undefined` while every by-name test passed.
+    #[test]
+    fn a_method_value_read_resolves_through_the_ic_miss_entry() {
+        use crate::object::{PicCache, PicCacheSlot, PIC_CACHE_WORDS};
+        use std::sync::atomic::AtomicU64;
+
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        for (raw, name) in [
+            (js_text_decoder_new(undef, undef, undef), "decode"),
+            (js_text_encoder_new(), "encode"),
+            (js_text_encoder_new(), "encodeInto"),
+        ] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+            let mut slot: PicCacheSlot = &mut cache;
+            let packed = AtomicU64::new(0);
+            let value = crate::object::js_object_get_field_ic_slow(
+                (raw as u64 & crate::value::POINTER_MASK) as i64,
+                key,
+                &mut slot,
+                &packed,
+            );
+            let jsv = crate::value::JSValue::from_bits(value.to_bits());
+            assert!(
+                jsv.is_pointer(),
+                "{name}: the IC miss edge must answer the prototype method, got {:#018x}",
+                value.to_bits()
+            );
+            let ptr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+            assert!(
+                crate::closure::is_closure_ptr(ptr),
+                "{name}: the answer must be callable"
+            );
+        }
+    }
+
+    /// Two constructions are two objects. Every `TextEncoder` used to be the
+    /// same sentinel id, which made `e1 === e2` true and collapsed two
+    /// encoders into one `Map` key (#10821).
+    #[test]
+    fn text_instances_are_distinct_objects() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        assert_ne!(js_text_encoder_new(), js_text_encoder_new());
+        assert_ne!(
+            js_text_decoder_new(undef, undef, undef),
+            js_text_decoder_new(undef, undef, undef)
+        );
+    }
+
+    /// The whole per-instance state round-trips through the meta word, so
+    /// there is no registry entry behind a decoder and nothing to release.
+    #[test]
+    fn decoder_state_round_trips_through_the_meta_word() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let truthy = f64::from_bits(crate::value::TAG_TRUE);
+        let label = crate::string::js_string_from_bytes(b"latin1".as_ptr(), 6);
+        let label_value = f64::from_bits(crate::value::JSValue::string_ptr(label).bits());
+        let raw = js_text_decoder_new(label_value, undef, truthy);
+        let boxed = crate::value::js_nanbox_pointer(raw);
+
+        let state = decoder_state_of(boxed);
+        assert_eq!(state.label, "windows-1252");
+        assert!(!state.fatal);
+        assert!(state.ignore_bom);
+
+        // …and through the public natives the prototype accessors call.
+        let encoding = js_text_decoder_encoding(boxed);
+        let got = unsafe {
+            let len = (*encoding).byte_len as usize;
+            let data = (encoding as *const u8).add(std::mem::size_of::<StringHeader>());
+            std::str::from_utf8(std::slice::from_raw_parts(data, len))
+                .expect("ASCII")
+                .to_string()
+        };
+        assert_eq!(got, "windows-1252");
+        assert_eq!(
+            js_text_decoder_ignore_bom(boxed).to_bits(),
+            crate::value::TAG_TRUE
+        );
+        assert_eq!(
+            js_text_decoder_fatal(boxed).to_bits(),
+            crate::value::TAG_FALSE
+        );
+    }
+
+    /// The encoding intern is bounded by the compile-time label set: naming the
+    /// same encoding again must NOT grow it. This is the property that lets
+    /// `DECODER_REGISTRY` go away -- that table grew one entry per decoder and
+    /// was never pruned, so a long-running program leaked one entry per
+    /// `new TextDecoder()`.
+    #[test]
+    fn the_encoding_intern_does_not_grow_per_decoder() {
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let decoder = |label: &str| {
+            let s = crate::string::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+            let value = f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+            js_text_decoder_new(value, undef, undef)
+        };
+        // Warm every label this test names, so the measurement below is only
+        // about REPEATS.
+        let _ = js_text_decoder_new(undef, undef, undef);
+        for label in ["latin1", "utf-16le", "ibm866"] {
+            let _ = decoder(label);
+        }
+        let before = ENCODINGS.lock().unwrap().len();
+        for _ in 0..64 {
+            let _ = js_text_decoder_new(undef, undef, undef);
+            for label in ["latin1", "utf-16le", "ibm866", "windows-1252"] {
+                let _ = decoder(label);
+            }
+        }
+        assert_eq!(
+            ENCODINGS.lock().unwrap().len(),
+            before,
+            "interning is per ENCODING, not per decoder"
+        );
+        // …and the counter-direction: a label the program has not named yet
+        // MUST add exactly one row, or the assertion above would pass on an
+        // implementation that simply never grows.
+        assert!(
+            resolve_decoder_label("koi8-r").is_some(),
+            "koi8-r has to be a supported label for the rest of this to mean anything"
+        );
+        let fresh = decoder("koi8-r");
+        assert_ne!(fresh, 0);
+        assert_eq!(
+            ENCODINGS.lock().unwrap().len(),
+            before + 1,
+            "a newly named encoding interns exactly once"
+        );
+        let _ = decoder("koi8-r");
+        assert_eq!(
+            ENCODINGS.lock().unwrap().len(),
+            before + 1,
+            "…and naming it again does not"
+        );
+    }
+
+    /// A foreign receiver is refused rather than silently decoded as utf-8 --
+    /// the brand check the prototype thunks make, matching node's
+    /// `TextDecoder.prototype.decode.call({})`.
+    #[test]
+    fn text_native_state_rejects_a_foreign_receiver() {
+        let plain = crate::object::js_object_alloc(0, 0);
+        let boxed = crate::value::js_nanbox_pointer(plain as i64);
+        assert!(text_native_state(boxed, TEXT_DECODER_CLASS_ID).is_none());
+        assert!(text_native_state(boxed, TEXT_ENCODER_CLASS_ID).is_none());
+        // …and an encoder is not a decoder.
+        let enc = crate::value::js_nanbox_pointer(js_text_encoder_new());
+        assert!(text_native_state(enc, TEXT_DECODER_CLASS_ID).is_none());
+        assert!(text_native_state(enc, TEXT_ENCODER_CLASS_ID).is_some());
+    }
 
     /// `TextDecoder.decode(dataView)` must read the backing store, not the
     /// DataView's construction-time snapshot. A `Uint32Array` over the same

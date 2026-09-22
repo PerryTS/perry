@@ -107,23 +107,23 @@ fn uppercase_imported_builder_chain_stays_generic() {
     );
 }
 
-#[test]
-fn native_fluent_chain_still_dispatches_through_native_methods() {
-    let module = lower_result(
-        r#"
-        export const out = new Decimal(1).plus(2).times(3).toString();
-        "#,
-    )
-    .expect("native fluent chain should lower");
-    let debug = format!("{module:#?}");
-    assert!(
-        debug.contains("module: \"decimal.js\""),
-        "Decimal chain should dispatch through decimal.js native methods: {debug}"
-    );
-    for method in ["plus", "times", "toString"] {
-        assert!(
-            debug.contains(&format!("method: \"{method}\"")),
-            "Decimal chain should preserve native method {method}: {debug}"
-        );
-    }
-}
+// `native_fluent_chain_still_dispatches_through_native_methods` removed here
+// (was `new Decimal(1).plus(2).times(3).toString()`, no import).
+//
+// It asserted ambient/no-import, spelling-based native dispatch:
+// `detect_native_instance_expr` used to match a bare `Decimal`/`Big`/
+// `BigNumber`/`LRUCache`/`Command` identifier by spelling alone, with no
+// import required. This commit tightens that (the #10439 fix this PR makes)
+// to require `ctx.lookup_native_module(class_name)` to actually resolve to
+// the expected module -- deciding by what the identifier resolves to, not
+// by its bare spelling. This test was never updated for that change and
+// went red on this same commit; verified against this commit's parent,
+// where it still passes (with no import, `new Decimal(1)` on that side
+// resolves an unknown ambient identifier by name rather than raising).
+//
+// With no import, `new Decimal(1)` (or `Command`/`LRUCache`/...) now lowers
+// to an unresolved-global reference instead -- correct, Node-matching
+// behavior (a real ReferenceError on a genuinely undefined global), not a
+// regression. Deleted rather than re-pointed at a still-present native name
+// because none of them retain this ambient no-import dispatch any more;
+// asserting it would assert the same already-fixed bug.

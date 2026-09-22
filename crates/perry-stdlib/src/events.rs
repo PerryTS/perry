@@ -261,6 +261,27 @@ struct Listener {
     once: bool,
 }
 
+/// #10600: `Listener.callback` is a raw, untagged heap pointer to a closure.
+/// `snapshot` (cloned out of the live event map before dispatch, so a
+/// once-listener removal mid-dispatch doesn't affect the emit already in
+/// progress) is a plain Rust `Vec`, not a GC root. A listener can allocate
+/// enough to trigger a moving minor collection; an unrooted `snapshot` entry
+/// then holds a retired from-space address for the NEXT listener in the same
+/// dispatch loop. Root every live callback through `scope` up front and read
+/// each one back through its handle — never through `snapshot` itself — at
+/// call time.
+fn root_listener_callbacks<'scope>(
+    scope: &'scope perry_runtime::gc::RuntimeHandleScope,
+    snapshot: &[Listener],
+) -> Vec<perry_runtime::gc::RuntimeHandle<'scope>> {
+    let raw: Vec<u64> = snapshot
+        .iter()
+        .filter(|l| l.callback != 0)
+        .map(|l| l.callback as u64)
+        .collect();
+    scope.root_heap_word_u64_slice(&raw)
+}
+
 #[derive(Copy, Clone)]
 struct PendingOnce {
     promise: *mut Promise,
@@ -406,11 +427,17 @@ impl EventEmitterHandle {
         let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         let event_arg = js_nanbox_string(str_ptr as i64);
         let listener_arg = js_nanbox_pointer(listener_arg);
-        for l in snapshot {
-            if l.callback != 0 {
-                let closure_ptr = l.callback as *const ClosureHeader;
-                js_closure_call2(closure_ptr, event_arg, listener_arg);
-            }
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let event_arg_h = scope.root_nanbox_f64(event_arg);
+        let listener_arg_h = scope.root_nanbox_f64(listener_arg);
+        let callback_handles = root_listener_callbacks(&scope, &snapshot);
+        for handle in &callback_handles {
+            let closure_ptr = handle.get_heap_word_u64() as *const ClosureHeader;
+            js_closure_call2(
+                closure_ptr,
+                event_arg_h.get_nanbox_f64(),
+                listener_arg_h.get_nanbox_f64(),
+            );
         }
     }
 
@@ -778,14 +805,15 @@ unsafe fn dispatch_error_monitor(emitter: &mut EventEmitterHandle, arg: Option<f
         emitter.prune_event_if_empty(ERROR_MONITOR_EVENT_NAME);
     }
 
-    for l in snapshot {
-        if l.callback != 0 {
-            let closure_ptr = l.callback as *const ClosureHeader;
-            if let Some(arg) = arg {
-                js_closure_call1(closure_ptr, arg);
-            } else {
-                js_closure_call0(closure_ptr);
-            }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arg_handle = arg.map(|a| scope.root_nanbox_f64(a));
+    let callback_handles = root_listener_callbacks(&scope, &snapshot);
+    for handle in &callback_handles {
+        let closure_ptr = handle.get_heap_word_u64() as *const ClosureHeader;
+        if let Some(arg_handle) = &arg_handle {
+            js_closure_call1(closure_ptr, arg_handle.get_nanbox_f64());
+        } else {
+            js_closure_call0(closure_ptr);
         }
     }
 }
@@ -969,10 +997,13 @@ unsafe fn call_emitter_listener(
             arr_handle.get_raw_mut_ptr::<ArrayHeader>() as i64,
         );
     }
-    let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
+    // #10490: root the displaced `this` across the listener (user code).
+    let this_scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let previous_this =
+        this_scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(receiver));
     let result =
         perry_runtime::closure::js_native_call_value(callback_value, args.as_ptr(), args.len());
-    perry_runtime::object::js_implicit_this_set(previous_this);
+    perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     result
 }
 
@@ -1070,13 +1101,20 @@ pub unsafe extern "C" fn js_event_emitter_emit(
 
             let capture_rejections = emitter.capture_rejections && event_name != "error";
             let async_handle = emitter.async_resource_handle;
-            for l in snapshot {
-                if l.callback != 0 {
-                    let result =
-                        call_emitter_listener(handle, async_handle, l.callback, &emitted_args);
-                    if capture_rejections {
-                        capture_listener_rejection(handle, result);
-                    }
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let arg_handles = scope.root_nanbox_f64_slice(&emitted_args);
+            let callback_handles = root_listener_callbacks(&scope, &snapshot);
+            for handle_cb in &callback_handles {
+                let live_args =
+                    perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+                let result = call_emitter_listener(
+                    handle,
+                    async_handle,
+                    handle_cb.get_heap_word_u64() as i64,
+                    &live_args,
+                );
+                if capture_rejections {
+                    capture_listener_rejection(handle, result);
                 }
             }
         }
@@ -1143,12 +1181,17 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
 
             let capture_rejections = emitter.capture_rejections && event_name != "error";
             let async_handle = emitter.async_resource_handle;
-            for l in snapshot {
-                if l.callback != 0 {
-                    let result = call_emitter_listener(handle, async_handle, l.callback, &[]);
-                    if capture_rejections {
-                        capture_listener_rejection(handle, result);
-                    }
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let callback_handles = root_listener_callbacks(&scope, &snapshot);
+            for handle_cb in &callback_handles {
+                let result = call_emitter_listener(
+                    handle,
+                    async_handle,
+                    handle_cb.get_heap_word_u64() as i64,
+                    &[],
+                );
+                if capture_rejections {
+                    capture_listener_rejection(handle, result);
                 }
             }
         }

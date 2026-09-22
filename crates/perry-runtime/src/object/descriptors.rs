@@ -521,15 +521,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     super::class_registry::class_own_static_accessor_ptrs(class_id, &method_name)
                 };
                 if let Some((g, s)) = accessor {
-                    return build_accessor_descriptor(
-                        super::class_registry::class_accessor_function_value(
-                            g,
-                            false,
-                            &method_name,
-                        ),
-                        super::class_registry::class_accessor_function_value(s, true, &method_name),
-                        false,
-                        true,
+                    let is_static = super::class_prototype_ref_id(obj_value).is_none();
+                    return super::class_registry::class_accessor_descriptor(
+                        class_id,
+                        is_static,
+                        &method_name,
+                        g,
+                        s,
                     );
                 }
                 if super::class_prototype_ref_id(obj_value).is_some()
@@ -946,11 +944,8 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 } else if let Some((g, s)) =
                     super::class_registry::class_own_accessor_ptrs(cid, name)
                 {
-                    return build_accessor_descriptor(
-                        super::class_registry::class_accessor_function_value(g, false, name),
-                        super::class_registry::class_accessor_function_value(s, true, name),
-                        false,
-                        true,
+                    return super::class_registry::class_accessor_descriptor(
+                        cid, false, name, g, s,
                     );
                 }
             }

@@ -60,6 +60,18 @@ if [[ ! "$PERRY_RUN_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid PERRY_RUN_TIMEOUT '$PERRY_RUN_TIMEOUT' (want a positive integer)" >&2
     exit 1
 fi
+# #10757: the COMPILE step below had no timeout at all (only the executed-
+# binary run did, via PERRY_RUN_TIMEOUT above) — a compiler hang/superlinear
+# blowup on one fixture wedged the whole harness rather than failing that one
+# test. 300s is generous enough to absorb a legitimate cold-cache
+# auto-optimize runtime/stdlib rebuild (which the fast-mode/PERRY_SKIP_BUILD
+# tiers don't pay per test, but a from-scratch full-tier run can on its first
+# test) while still bounding a genuine defect to minutes, not "forever".
+PERRY_COMPILE_TIMEOUT="${PERRY_COMPILE_TIMEOUT:-300}"
+if [[ ! "$PERRY_COMPILE_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid PERRY_COMPILE_TIMEOUT '$PERRY_COMPILE_TIMEOUT' (want a positive integer)" >&2
+    exit 1
+fi
 # Per-run scratch dir for compiled test binaries (2026-07-02 audit): the old
 # fixed /tmp/perry_parity_<test-id> paths meant two concurrent suite runs
 # (two agents / two worktrees on one machine) executed EACH OTHER'S compiler
@@ -78,6 +90,9 @@ BACKEND_LABEL="LLVM"
 #   ./run_parity_tests.sh --filter parity_url
 #   ./run_parity_tests.sh --filter parity_     # all parity-inventory tests
 TEST_FILTER=""
+# Every --filter must match (AND), so a wrapper's filter cannot be dropped by a
+# caller's. TEST_FILTER keeps the joined form for the journal key and messages.
+TEST_FILTERS=()
 # Optional suite selector. The historical default (`all`) keeps running the
 # top-level test-files/*.ts corpus. The granular `node-suite` selector runs
 # curated Node-compatibility cases under test-parity/node-suite/<module>/...
@@ -105,8 +120,8 @@ RESUME_RUN=0
 PARITY_JOURNAL="${PERRY_PARITY_JOURNAL:-}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --filter) TEST_FILTER="$2"; shift 2 ;;
-        --filter=*) TEST_FILTER="${1#--filter=}"; shift ;;
+        --filter) TEST_FILTERS+=("$2"); shift 2 ;;
+        --filter=*) TEST_FILTERS+=("${1#--filter=}"); shift ;;
         --suite) TEST_SUITE="$2"; shift 2 ;;
         --suite=*) TEST_SUITE="${1#--suite=}"; shift ;;
         --module) MODULE_FILTER="$2"; shift 2 ;;
@@ -119,6 +134,9 @@ while [[ $# -gt 0 ]]; do
         *) shift ;;
     esac
 done
+
+# The joined form drives the journal key, the wasm special-case and messages.
+TEST_FILTER="$(IFS=+; echo "${TEST_FILTERS[*]-}")"
 
 # Parse/validate the optional shard spec into 1-based index + total. Kept as a
 # hard input check: a malformed shard (e.g. "3/0" or "9/8") that silently ran
@@ -1254,7 +1272,14 @@ for test_file in "${TEST_FILES[@]}"; do
 
     # Optional --filter flag: only run tests whose basename or suite id
     # contains it.
-    if [[ -n "$TEST_FILTER" ]] && [[ "$test_name" != *"$TEST_FILTER"* ]] && [[ "$test_id" != *"$TEST_FILTER"* ]]; then
+    filtered_out=0
+    for f in ${TEST_FILTERS[@]+"${TEST_FILTERS[@]}"}; do
+        if [[ "$test_name" != *"$f"* ]] && [[ "$test_id" != *"$f"* ]]; then
+            filtered_out=1
+            break
+        fi
+    done
+    if [[ "$filtered_out" == "1" ]]; then
         continue
     fi
 
@@ -1432,10 +1457,10 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     # be pulling QuickJS in), and if the error names `perry-jsruntime`,
     # retry once with `--enable-js-runtime`. Avoids hand-curating a list
     # of test names that need V8.
-    compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
+    compile_output=$(run_with_timeout "$PERRY_COMPILE_TIMEOUT" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" "$parity_test_file" -o "$perry_binary" 2>&1)
     compile_exit=$?
     if [[ $compile_exit -ne 0 ]] && grep -q "perry-jsruntime" <<<"$compile_output"; then
-        compile_output=$(env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
+        compile_output=$(run_with_timeout "$PERRY_COMPILE_TIMEOUT" env $compile_env "${parity_env[@]}" "$PERRY_BIN" "${perry_compile_command[@]}" "${compile_flags[@]}" --enable-js-runtime "$parity_test_file" -o "$perry_binary" 2>&1)
         compile_exit=$?
     fi
 
@@ -1737,7 +1762,7 @@ echo ""
 
 if [[ "$PARITY_INTERRUPTED" != "0" ]]; then
     resume_cmd="$0"
-    [[ -n "$TEST_FILTER" ]] && resume_cmd="$resume_cmd --filter $TEST_FILTER"
+    for f in ${TEST_FILTERS[@]+"${TEST_FILTERS[@]}"}; do resume_cmd="$resume_cmd --filter $f"; done
     [[ "$TEST_SUITE" != "all" ]] && resume_cmd="$resume_cmd --suite $TEST_SUITE"
     [[ -n "$MODULE_FILTER" ]] && resume_cmd="$resume_cmd --module $MODULE_FILTER"
     [[ -n "$SHARD_SPEC" ]] && resume_cmd="$resume_cmd --shard $SHARD_SPEC"

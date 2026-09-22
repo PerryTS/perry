@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2095 entries across 138 modules
+// Coverage: 2016 entries across 115 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -257,44 +257,6 @@ declare module "async_hooks" {
   export function triggerAsyncId(...args: any[]): any;
 }
 
-declare module "axios" {
-  /** stdlib */
-  export function all(...args: any[]): any;
-  /** stdlib */
-  export function create(...args: any[]): any;
-  /** stdlib */
-  function _delete(...args: any[]): any;
-  export { _delete as delete };
-  /** stdlib */
-  export function get(...args: any[]): any;
-  /** stdlib */
-  export function head(...args: any[]): any;
-  /** stdlib */
-  export function options(...args: any[]): any;
-  /** stdlib */
-  export function patch(...args: any[]): any;
-  /** stdlib */
-  export function post(...args: any[]): any;
-  /** stdlib */
-  export function put(...args: any[]): any;
-  /** stdlib */
-  export function request(...args: any[]): any;
-  /** stdlib */
-  const _default: ((...args: any[]) => any) & {
-    all: typeof all;
-    create: typeof create;
-    delete: typeof _delete;
-    get: typeof get;
-    head: typeof head;
-    options: typeof options;
-    patch: typeof patch;
-    post: typeof post;
-    put: typeof put;
-    request: typeof request;
-  };
-  export default _default;
-}
-
 declare module "bcrypt" {
   /** stdlib */
   export function compare(plaintext: string, hash: string): any;
@@ -528,11 +490,6 @@ declare module "cluster" {
   export function setupMaster(...args: any[]): any;
   /** stdlib */
   export function setupPrimary(...args: any[]): any;
-}
-
-declare module "commander" {
-  /** stdlib */
-  export const args: any;
 }
 
 declare module "console" {
@@ -1066,17 +1023,6 @@ declare module "constants" {
   export const defaultCoreCipherList: any;
 }
 
-declare module "cron" {
-  /** stdlib */
-  export class CronJob { [key: string]: any; }
-  /** stdlib */
-  export function describe(expr: string): string;
-  /** stdlib */
-  export function schedule(expr: string, handler: any): any;
-  /** stdlib */
-  export function validate(expr: string): boolean;
-}
-
 declare module "crypto" {
   /** stdlib */
   export class Cipheriv { [key: string]: any; }
@@ -1214,40 +1160,6 @@ declare module "crypto" {
   export function timingSafeEqual(...args: any[]): any;
   /** stdlib */
   export function verify(...args: any[]): any;
-}
-
-declare module "date-fns" {
-  /** stdlib */
-  export function addDays(...args: any[]): any;
-  /** stdlib */
-  export function addMonths(...args: any[]): any;
-  /** stdlib */
-  export function addYears(...args: any[]): any;
-  /** stdlib */
-  export function differenceInDays(...args: any[]): any;
-  /** stdlib */
-  export function differenceInHours(...args: any[]): any;
-  /** stdlib */
-  export function differenceInMinutes(...args: any[]): any;
-  /** stdlib */
-  export function endOfDay(...args: any[]): any;
-  /** stdlib */
-  export function format(...args: any[]): any;
-  /** stdlib */
-  export function isAfter(...args: any[]): any;
-  /** stdlib */
-  export function isBefore(...args: any[]): any;
-  /** stdlib */
-  export function parseISO(...args: any[]): any;
-  /** stdlib */
-  export function startOfDay(...args: any[]): any;
-}
-
-declare module "dayjs" {
-  /** stdlib */
-  export function dayjs(input?: any): any;
-  /** stdlib */
-  export default function (input?: any): any;
 }
 
 declare module "dgram" {
@@ -1563,13 +1475,6 @@ declare module "domain" {
   export function createDomain(...args: any[]): any;
 }
 
-declare module "dotenv" {
-  /** stdlib */
-  export function config(...args: any[]): any;
-  /** stdlib */
-  export function parse(src: string): any;
-}
-
 declare module "ethers" {
   /** stdlib */
   export function formatEther(p0: any): string;
@@ -1621,16 +1526,6 @@ declare module "events" {
   export function once(...args: any[]): any;
   /** stdlib */
   export function setMaxListeners(...args: any[]): any;
-}
-
-declare module "exponential-backoff" {
-  /** stdlib */
-  export function backOff(p0: any, p1: any): any;
-}
-
-declare module "fastify" {
-  /** stdlib */
-  export default function (p0: any): any;
 }
 
 declare module "fetch" {
@@ -2096,20 +1991,6 @@ declare module "iovalkey" {
   export function createClient(...args: any[]): any;
 }
 
-declare module "iroh" {
-  /** stdlib */
-  export function bind(...args: any[]): any;
-}
-
-declare module "jsonwebtoken" {
-  /** stdlib */
-  export function decode(token: string): any;
-  /** stdlib */
-  export function sign(payload: any, secret: string, options?: any, kid?: string): string;
-  /** stdlib */
-  export function verify(token: string, secret: string): any;
-}
-
 declare module "lodash" {
   /** stdlib */
   export function camelCase(p0: string): string;
@@ -2167,11 +2048,6 @@ declare module "lodash" {
   export function times(p0: any): any;
   /** stdlib */
   export function uniq(p0: any): any;
-}
-
-declare module "lru-cache" {
-  /** stdlib */
-  export default function (p0: any): any;
 }
 
 declare module "module" {
@@ -2244,39 +2120,9 @@ declare module "module" {
   export function syncBuiltinESMExports(...args: any[]): any;
 }
 
-declare module "moment" {
-  /** stdlib */
-  export default function (input?: any): any;
-  /** stdlib */
-  export function moment(input?: any): any;
-}
-
 declare module "mongodb" {
   /** stdlib */
   export function connect(p0: any): any;
-}
-
-declare module "mysql2" {
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function createConnection(p0: any): any;
-  /** stdlib */
-  export function createPool(p0: any): any;
-}
-
-declare module "mysql2/promise" {
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function createConnection(p0: any): any;
-  /** stdlib */
-  export function createPool(p0: any): any;
-}
-
-declare module "nanoid" {
-  /** stdlib */
-  export function nanoid(size: number): string;
 }
 
 declare module "net" {
@@ -2326,13 +2172,6 @@ declare module "net" {
   export function setDefaultAutoSelectFamilyAttemptTimeout(...args: any[]): any;
 }
 
-declare module "node-cron" {
-  /** stdlib */
-  export function schedule(...args: any[]): any;
-  /** stdlib */
-  export function validate(...args: any[]): any;
-}
-
 declare module "node-fetch" {
   /** stdlib */
   export class Blob { [key: string]: any; }
@@ -2346,25 +2185,6 @@ declare module "node-fetch" {
   export class Response { [key: string]: any; }
   /** stdlib */
   export default function (...args: any[]): any;
-}
-
-declare module "node-forge" {
-  /** stdlib */
-  export function certificateFromPem(...args: any[]): any;
-  /** stdlib */
-  export function certificateToPem(...args: any[]): any;
-  /** stdlib */
-  export function create(...args: any[]): any;
-  /** stdlib */
-  export function createCertificate(...args: any[]): any;
-  /** stdlib */
-  export function generateKeyPair(...args: any[]): any;
-  /** stdlib */
-  export function privateKeyFromPem(...args: any[]): any;
-  /** stdlib */
-  export function privateKeyToPem(...args: any[]): any;
-  /** stdlib */
-  export function publicKeyToPem(...args: any[]): any;
 }
 
 declare module "node-pty" {
@@ -3455,17 +3275,6 @@ declare module "perry/yoga" {
   export function unsetMeasureFunc(...args: any[]): any;
 }
 
-declare module "pg" {
-  /** stdlib */
-  export class Client { [key: string]: any; }
-  /** stdlib */
-  export class Pool { [key: string]: any; }
-  /** stdlib */
-  export function Pool(p0: any): any;
-  /** stdlib */
-  export function connect(p0: any): any;
-}
-
 declare module "process" {
   /** stdlib */
   export const _eval: any;
@@ -3655,13 +3464,6 @@ declare module "punycode" {
   export function toUnicode(...args: any[]): any;
 }
 
-declare module "qs" {
-  /** stdlib */
-  export function parse(input: string, options: any): any;
-  /** stdlib */
-  export function stringify(value: any, options: any): string;
-}
-
 declare module "querystring" {
   /** stdlib */
   const _default: any;
@@ -3680,13 +3482,6 @@ declare module "querystring" {
   export function unescape(...args: any[]): any;
   /** stdlib */
   export function unescapeBuffer(...args: any[]): any;
-}
-
-declare module "rate-limiter-flexible" {
-  /** stdlib */
-  export class RateLimiterAbstract { [key: string]: any; }
-  /** stdlib */
-  export class RateLimiterMemory { [key: string]: any; }
 }
 
 declare module "readline" {
@@ -4141,11 +3936,6 @@ declare module "tty" {
   export function isatty(...args: any[]): any;
 }
 
-declare module "tursodb" {
-  /** stdlib */
-  export function open(...args: any[]): any;
-}
-
 declare module "typescript" {
   /** stdlib */
   export const DiagnosticCategory: any;
@@ -4381,23 +4171,6 @@ declare module "util/types" {
   export function isWeakSet(...args: any[]): any;
 }
 
-declare module "uuid" {
-  /** stdlib */
-  export function v1(): string;
-  /** stdlib */
-  export function v3(name: string, namespace: string): string;
-  /** stdlib */
-  export function v4(): string;
-  /** stdlib */
-  export function v5(name: string, namespace: string): string;
-  /** stdlib */
-  export function v7(): string;
-  /** stdlib */
-  export function validate(id: string): boolean;
-  /** stdlib */
-  export function version(id: string): number;
-}
-
 declare module "v8" {
   /** stdlib */
   export class DefaultDeserializer { [key: string]: any; }
@@ -4445,19 +4218,6 @@ declare module "v8" {
   export function takeCoverage(...args: any[]): any;
   /** stdlib */
   export function writeHeapSnapshot(...args: any[]): any;
-}
-
-declare module "validator" {
-  /** stdlib */
-  export function isEmail(s: string): boolean;
-  /** stdlib */
-  export function isEmpty(s: string): boolean;
-  /** stdlib */
-  export function isJSON(s: string): boolean;
-  /** stdlib */
-  export function isURL(s: string): boolean;
-  /** stdlib */
-  export function isUUID(s: string): boolean;
 }
 
 declare module "vm" {

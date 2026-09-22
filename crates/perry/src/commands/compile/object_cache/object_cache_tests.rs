@@ -354,6 +354,7 @@ fn key_stable_for_nested_type_hashmap_order() {
         constructor_param_count: 0,
         has_own_constructor: false,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: true,
         method_names: vec![],
         proven_this_method_names: vec![],
@@ -404,6 +405,17 @@ fn key_changes_with_embedded_entry_source_path() {
 }
 
 #[test]
+fn key_changes_with_native_provider_installs() {
+    let a = empty_opts();
+    let mut b = empty_opts();
+    b.app_metadata.native_provider_installs = vec!["js_ext_net_nm_install".to_string()];
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
+    );
+}
+
+#[test]
 fn key_changes_with_imported_class_signature() {
     let mut a = empty_opts();
     let mut b = empty_opts();
@@ -415,6 +427,7 @@ fn key_changes_with_imported_class_signature() {
         constructor_param_count: 1,
         has_own_constructor: true,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: true,
         method_names: vec!["bar".into()],
         proven_this_method_names: vec![],
@@ -449,6 +462,7 @@ fn key_changes_with_imported_class_signature() {
         constructor_param_count: 2, // different arity
         has_own_constructor: true,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: true,
         method_names: vec!["bar".into()],
         proven_this_method_names: vec![],
@@ -491,6 +505,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         constructor_param_count: 1,
         has_own_constructor: true,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: true,
         method_names: vec!["bar".into()],
         proven_this_method_names: vec![],
@@ -726,6 +741,7 @@ fn key_changes_with_codegen_env_vars() {
     let opts = empty_opts();
     for var in [
         "PERRY_DEBUG_SYMBOLS",
+        "PERRY_FUNCTION_SOURCE",
         "PERRY_LLVM_CLANG",
         "PERRY_LLVM_INPROCESS",
         "PERRY_WRITE_BARRIERS",

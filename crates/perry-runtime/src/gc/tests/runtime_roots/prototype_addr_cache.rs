@@ -341,6 +341,15 @@ fn a_second_agents_prototype_addresses_are_its_own() {
         move || -> (usize, usize) {
             let addrs = {
                 let _serialized = gate.lock().expect("bootstrap gate");
+                // Bootstrap this agent's realm EXPLICITLY. The comment above
+                // already says each agent writes `GLOBAL_THIS_PTR`; it used to
+                // happen as a side effect of the two accessors below, because
+                // `resolve_prototype_addr` materialized `globalThis` to answer.
+                // v0.5.1627 removed that side effect (it cost ~5 ms on the
+                // first `setTimeout`), so the accessors now honestly return 0
+                // on a thread with no realm — and the liveness assertion in the
+                // caller catches exactly that, which is what it is for.
+                let _ = crate::object::js_get_global_this();
                 (
                     crate::array::array_prototype_addr(),
                     crate::array::object_prototype_addr(),

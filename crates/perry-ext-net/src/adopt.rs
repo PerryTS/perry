@@ -62,6 +62,10 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             remote_addr: remote,
             raw: None,
             destroyed: false,
+            connecting: false,
+            has_opened: true,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
@@ -124,6 +128,14 @@ pub fn adopt_turnloop_upgrade(id: i64) -> bool {
             remote_addr: remote,
             raw: None,
             destroyed: false,
+            // #10465: an accepted socket never went through a connect attempt
+            // and is open the moment it is registered, so it starts
+            // `connecting: false` / `has_opened: true`; neither half has been
+            // ended yet.
+            connecting: false,
+            has_opened: true,
+            writable_ended: false,
+            readable_ended: false,
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,

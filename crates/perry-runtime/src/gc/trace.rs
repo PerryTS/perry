@@ -1359,8 +1359,27 @@ pub(super) unsafe fn mark_field_into_worklist(
     let forwarded = flags & GC_FLAG_FORWARDED != 0;
     #[cfg(test)]
     let forwarded = flags & GC_FLAG_FORWARDED != 0 && !leaf_mark_sabotage::ignoring_forwarding();
+    // #10362: a pointer-free array yields no slot either, and on a chain-node
+    // heap it is half the traced objects — the obj_type-keyed leaf test above
+    // cannot see them, because they are arrays and not the strings it was
+    // written for.
+    //
+    // ONLY WHEN NO PROXY TRACE IS ACTIVE. `trace_heap_rewrite_slots` reads
+    // every word of a POINTER-FREE payload through `gc_observe_traced_value`
+    // when `proxy_trace_active`, because a proxy id is a POINTER_TAG value in
+    // the proxy-id band and not a heap pointer — which is exactly why the
+    // layout mask calls that payload pointer free. Skipping the object would
+    // leave the entry unobserved, `gc_finish_full_trace` would prune it, and a
+    // LIVE proxy's target and handler would be collected. The other two
+    // consumers of this predicate ignore `PointerFreeRange` and carry no such
+    // term; the asymmetry is deliberate.
+    #[cfg(not(test))]
+    let proxy_gate = proxy_trace_active;
+    #[cfg(test)]
+    let proxy_gate = proxy_trace_active && !zero_slot_skip_sabotage::respecting_proxy_gate();
     if !forwarded
-        && gc_type_rewrite_descriptor_kind((*header).obj_type) == GcRewriteDescriptorKind::Leaf
+        && (gc_type_rewrite_descriptor_kind((*header).obj_type) == GcRewriteDescriptorKind::Leaf
+            || (!proxy_gate && gc_object_yields_no_child_slots(header)))
     {
         return true;
     }
@@ -1371,6 +1390,41 @@ pub(super) unsafe fn mark_field_into_worklist(
     // already owns and consumes this worklist.
     worklist.push(header);
     true
+}
+
+/// Sabotage switches for the zero-slot skip (#10362). Test builds only.
+///
+/// `respecting_proxy_gate` DISARMS the `!proxy_trace_active` term, i.e. makes
+/// the full mark skip a pointer-free array even while a proxy trace is running.
+/// That is the defect the gate exists to prevent, and
+/// `gc::tests::zero_slot_skip` requires it to strand a live proxy's target.
+#[cfg(test)]
+pub(crate) mod zero_slot_skip_sabotage {
+    use std::cell::Cell;
+
+    thread_local! {
+        static IGNORE_PROXY_GATE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[inline]
+    pub(crate) fn respecting_proxy_gate() -> bool {
+        IGNORE_PROXY_GATE.with(Cell::get)
+    }
+
+    pub(crate) struct Guard(bool);
+
+    impl Guard {
+        pub(crate) fn arm() -> Self {
+            Self(IGNORE_PROXY_GATE.with(|s| s.replace(true)))
+        }
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let prior = self.0;
+            IGNORE_PROXY_GATE.with(|s| s.set(prior));
+        }
+    }
 }
 
 /// Sabotage switch for the leaf-mark test: a forwarded pointer-free object is

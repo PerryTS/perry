@@ -611,6 +611,16 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                     }
                 }
                 if let Some(type_args) = new_expr.type_args.as_ref() {
+                    // #10894: `new Uint8Array<ArrayBuffer>(n)` — the argument
+                    // is the backing buffer's type and has no runtime meaning,
+                    // so the instance is the same `Named` class the bare
+                    // spelling yields (see `is_buffer_backed_builtin_name`).
+                    if !type_args.params.is_empty()
+                        && crate::ir::is_buffer_backed_builtin_name(&name)
+                        && !ctx.classes_index.contains_key(name.as_str())
+                    {
+                        return Type::Named(name);
+                    }
                     if !type_args.params.is_empty() {
                         // ★ Resolve through `ctx` — NOT the context-free
                         // `extract_ts_type`. Monomorphization keys a class
@@ -1546,6 +1556,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
 }
 
 mod branded_intersection_tests;
+mod buffer_backed_generic_tests;
 mod extract;
 mod generic_alias_specialization_tests;
 

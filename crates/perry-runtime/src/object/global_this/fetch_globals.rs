@@ -67,6 +67,25 @@ pub extern "C" fn js_module_top_this() -> f64 {
 #[used(compiler)]
 static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 
+/// Does THIS thread already own its `globalThis`?
+///
+/// Answers WITHOUT materializing it, which is the whole point:
+/// [`js_get_global_this`] allocates the realm global and then runs
+/// `populate_global_this_builtins`, and that population is ~5 ms of one-time
+/// work (its own `[gc-globalthis-bootstrap]` diagnostic reports the figure).
+/// A caller that only needs to know whether some address *is* one of the
+/// realm's intrinsics must not pay that to be told "there are no intrinsics
+/// yet" — see `array::prototype_addr::resolve_prototype_addr`, where forcing
+/// it put the whole bootstrap on a program's first `setTimeout` (#10836).
+///
+/// `true` from the moment the global object is allocated, i.e. BEFORE
+/// population finishes — deliberately, so a caller that runs *during*
+/// population (the descriptor bookkeeping does) behaves exactly as it did
+/// before this predicate existed.
+pub(crate) fn global_this_is_materialized() -> bool {
+    THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
+}
+
 /// Issue #611: lazily allocate `globalThis` for computed global access.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
@@ -461,9 +480,10 @@ pub(crate) unsafe fn temporal_subclass_super(
     let this_scope = crate::gc::RuntimeHandleScope::new();
     let this_h = this_scope.root_nanbox_f64(this_box);
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_box));
-    let prev_nt = crate::object::js_new_target_set(parent_val);
+    // #10490: the displaced `new.target` crosses the same call.
+    let prev_nt = this_scope.root_nanbox_f64(crate::object::js_new_target_set(parent_val));
     let cell = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
-    crate::object::js_new_target_set(prev_nt);
+    crate::object::js_new_target_set(prev_nt.get_nanbox_f64());
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if crate::temporal::is_temporal_value(cell) {
         attach_temporal_cell_to_this(this_h.get_nanbox_f64(), cell);
@@ -654,7 +674,13 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             b"Super constructor null is not a constructor",
         );
     }
-    let wasi_parent = super::super::native_module::bound_native_callable_module_and_method(
+    // Resolve the parent to a bound native-module export VALUE, independent
+    // of how the heritage expression reached it: a bare import, a local
+    // alias, a namespace member, and a CJS destructured `require()` all
+    // produce the identical bound-closure representation (see
+    // `bound_native_callable_module_and_method`), even though only the bare
+    // import shape is recognized statically at HIR-lowering time.
+    let bound_native_parent = super::super::native_module::bound_native_callable_module_and_method(
         parent_val,
     )
     .or_else(|| {
@@ -664,10 +690,13 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             crate::object::class_registry::js_get_dynamic_parent_value(cid),
         )
     });
-    if wasi_parent.is_some_and(|(module, method)| {
-        super::super::native_module::normalize_native_module_alias(&module) == "wasi"
-            && method == "WASI"
-    }) {
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str()) == "wasi"
+                && method.as_str() == "WASI"
+        })
+    {
         let arg0 = if args_len >= 1 && !args_ptr.is_null() {
             *args_ptr
         } else {
@@ -675,6 +704,151 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
         };
         crate::wasi::js_wasi_init_subclass(this_box, arg0);
         return undef;
+    }
+    // #10453: `class X extends AsyncResource` threw "Class constructor
+    // AsyncResource cannot be invoked without 'new'" for every heritage
+    // shape EXCEPT a bare `import { AsyncResource } from "node:async_hooks"`
+    // — the only shape `canonical_native_parent_name` recognizes statically
+    // (`crates/perry-hir/src/lower_decl/class_decl.rs`), which routes to the
+    // dedicated `js_async_resource_subclass_init` codegen
+    // (`crates/perry-codegen/src/expr/this_super_call.rs`). A local alias
+    // (`const Alias = AsyncResource`), a namespace member
+    // (`ah.AsyncResource`), and a CJS destructured
+    // `require('node:async_hooks')` all resolve `parent_val` to the exact
+    // same bound-native-export value the canonical import does, but HIR
+    // lowering can't see that statically for those shapes, so `super()` fell
+    // through to the ordinary value-super dispatch below — a plain CALL of
+    // the bound export, which `AsyncResource` throws on by design when
+    // invoked without `new` (`nm_dispatch_async_hooks`). Recognize the value
+    // here instead, exactly as the WASI arm above does, and run the same
+    // native-backing init the canonical path uses.
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str())
+                == "async_hooks"
+                && method.as_str() == "AsyncResource"
+        })
+    {
+        let type_value = if args_len >= 1 && !args_ptr.is_null() {
+            *args_ptr
+        } else {
+            undef
+        };
+        let options = if args_len >= 2 && !args_ptr.is_null() {
+            *args_ptr.add(1)
+        } else {
+            undef
+        };
+        crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
+        return undef;
+    }
+    // #10625: `class X extends AsyncLocalStorage` reached indirectly (local
+    // alias, namespace member, CJS destructured `require()`) hits the same gap
+    // #10453/#10621 fixed for AsyncResource: only the canonical bare
+    // `import { AsyncLocalStorage } from "node:async_hooks"` binding is
+    // recognized statically at HIR-lowering time
+    // (`crates/perry-hir/src/lower_decl/class_decl.rs`), which routes to
+    // perry-stdlib's `js_async_local_storage_subclass_init` via a
+    // codegen-declared extern symbol
+    // (`crates/perry-codegen/src/expr/this_super_call.rs`). Every other
+    // heritage shape resolves `parent_val` to the identical bound native
+    // export here, but this crate cannot call that stdlib helper directly —
+    // perry-runtime cannot depend on perry-stdlib, where the helper (and the
+    // `Handle` registry backing it) live — so route through the registration
+    // hook perry-stdlib installs at startup instead, exactly like the WASI arm
+    // above.
+    if bound_native_parent
+        .as_ref()
+        .is_some_and(|(module, method)| {
+            super::super::native_module::normalize_native_module_alias(module.as_str())
+                == "async_hooks"
+                && method.as_str() == "AsyncLocalStorage"
+        })
+    {
+        let ptr = crate::value::JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeAsyncLocalStorageSubclassInitFn =
+                std::mem::transmute(ptr);
+            return dispatch(this_box);
+        }
+    }
+    // #10448: `class X extends Transform` (and Readable/Writable/Duplex)
+    // never called the subclass's `_transform`/`_write`/`_read` override
+    // unless the heritage was a shape `is_genuine_node_stream_parent`
+    // recognizes statically (`crates/perry-hir/src/lower_decl/class_decl.rs`)
+    // — a local alias (`const Alias = Transform`), a namespace member reached
+    // through a CJS destructured `require('stream')`, or an indirect
+    // subclass all fell through to the ordinary-call dispatch below,
+    // which invokes the bound `stream` export as a plain constructor and
+    // drops the result — `this` stayed an empty object, so `write()` threw
+    // `ERR_METHOD_NOT_IMPLEMENTED`. Recognize the resolved bound-export
+    // value here, exactly as the WASI arm above does, and run the same
+    // runtime shim the static `extends Transform` path already uses
+    // (`js_node_stream_*_subclass_init`, `crates/perry-codegen/src/expr/write_barrier.rs`'s
+    // `lower_node_stream_super_init`), so every heritage shape installs the
+    // override onto `this` identically.
+    //
+    // `PassThrough` is deliberately NOT handled here: HIR never recognizes
+    // it as a node:stream native parent at all, even via a bare import
+    // (`canonical_native_parent_name` lists Readable/Writable/Duplex/
+    // Transform but not PassThrough), so the hidden `_transform` field this
+    // shim reads is never pre-seeded for ANY `PassThrough` heritage shape —
+    // that's a separate, deeper HIR-level gap needing its own fix; adding an
+    // arm here alone was confirmed (empirically) to change nothing.
+    //
+    // #10798: `Stream` (the legacy `node:stream` base that `Readable` and
+    // friends themselves derive from) is a DIFFERENT shape than
+    // `PassThrough`: it carries no hidden per-instance state at all — in
+    // Node it is literally `EventEmitter` plus a `pipe()` prototype method
+    // (`lib/internal/streams/legacy.js`: `Stream(opts) { EventEmitter.call(this,
+    // opts); }`), so there is no `_readableState`/`_transform`-shaped field
+    // that needs pre-seeding, and no `js_node_stream_stream_subclass_init`
+    // is needed (there isn't one, and adding one would duplicate
+    // `js_event_emitter_subclass_init` for no reason). `canonical_native_parent_name`
+    // does not list `Stream` either, so — unlike Readable/Writable/Duplex/
+    // Transform, which have a fast STATIC path for a plain `import` and only
+    // fall here for the aliased/namespace/CJS-destructured shapes — every
+    // `extends Stream` heritage shape (bare ident, namespace member,
+    // destructured CJS `require`) already reaches this dynamic dispatch
+    // uniformly. Reuse the existing EventEmitter shim rather than adding a
+    // stream-specific one: it installs the identical `.on`/`.emit`/`.once`/…
+    // surface Stream needs, and `pipe()` resolves through the ordinary
+    // prototype chain once the parent edge is wired (unaffected by this
+    // arm). `Stream` IS a real constructor with a usable prototype in
+    // Perry's runtime (`bound_native_callable_export_value("stream",
+    // "Stream")`, #10430's `new Stream()` fix), so — unlike `PassThrough` —
+    // this one-line dispatch arm is not a no-op.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if super::super::native_module::normalize_native_module_alias(module.as_str()) == "stream" {
+            let opts = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            let handled = match method.as_str() {
+                "Readable" => Some(crate::node_stream::js_node_stream_readable_subclass_init(
+                    this_box, opts,
+                )),
+                "Writable" => Some(crate::node_stream::js_node_stream_writable_subclass_init(
+                    this_box, opts,
+                )),
+                "Duplex" => Some(crate::node_stream::js_node_stream_duplex_subclass_init(
+                    this_box, opts,
+                )),
+                "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
+                    this_box, opts,
+                )),
+                "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(
+                    this_box,
+                )),
+                _ => None,
+            };
+            if handled.is_some() {
+                return undef;
+            }
+        }
     }
     // `class X extends Temporal.<Type>` (non-spread `super(a, b)`): a Temporal
     // constructor returns a fresh NaN-boxed cell and does NOT mutate the

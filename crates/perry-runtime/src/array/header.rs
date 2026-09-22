@@ -874,6 +874,32 @@ pub extern "C" fn js_array_numeric_value_to_raw_f64(value: f64) -> f64 {
     value_bits_to_number(value.to_bits()).unwrap_or(f64::NAN)
 }
 
+/// Collapse ANY NaN to the single canonical quiet NaN.
+///
+/// #10779: Perry's tag band is the positive qNaN range `0x7FF8..=0x7FFF`, so a
+/// genuine IEEE-754 `f64` NaN whose high mantissa nibble is >= 8 is
+/// bit-indistinguishable from a NaN-boxed string / pointer / int32 / singleton.
+/// The band cannot be moved — every 64-bit pattern with `exp == 0x7FF` and a
+/// non-zero mantissa is a NaN some program may legitimately store — so the
+/// invariant has to be established at the SOURCE: the only NaN allowed to enter
+/// a NaN-boxed slot is this one.
+///
+/// Collapsing EVERY NaN (not only the ones already inside the band) is load
+/// bearing, and two hardware behaviours are why:
+///
+/// * a **signalling** NaN quiets under arithmetic by setting mantissa bit 51,
+///   so `0x7FF7_0000_FFFF_FFFF * 1` becomes `0x7FFF_…` — a forged
+///   `StringHeader*`. Every positive sNaN in `0x7FF1..=0x7FF7` maps into the
+///   band this way.
+/// * `fneg` / `fabs` clear the sign bit, so a NEGATIVE payload NaN such as
+///   `0xFFFE_0000_1234_5678` becomes `0x7FFE_…` — a forged int32 — under `-x`
+///   or `Math.abs(x)`.
+///
+/// With every source canonicalised the only NaN in circulation is
+/// `0x7FF8_0000_0000_0000`; quieting it is a no-op and negating it gives
+/// `0xFFF8_…`, both outside the band. The property then holds inductively,
+/// which is exactly the contract
+/// `perry-codegen::type_analysis::expr_produces_canonical_raw_f64` documents.
 #[inline]
 pub(crate) fn canonical_raw_f64(value: f64) -> f64 {
     if value.is_nan() {
@@ -1208,6 +1234,72 @@ pub(crate) unsafe fn rebuild_array_numeric_raw_f64_allow_holes(arr: *mut ArrayHe
         set_array_raw_f64_holes_flag(arr);
     }
     crate::gc::layout_init_pointer_free(arr as *mut u8);
+    true
+}
+
+/// #10718: WINDOW-scoped variant of
+/// [`rebuild_array_numeric_raw_f64_allow_holes`], for the classic
+/// (hole-tolerant, side-exiting) packed-f64 range loop.
+///
+/// The array-wide rebuild proves an invariant over `[0, length)` and, on
+/// success, records it in the header so later loop entries are O(1). That is
+/// exactly right when it succeeds — and needlessly fatal when it does not: a
+/// single non-numeric slot ANYWHERE disqualifies a loop that only ever reads
+/// `[min_idx, max_idx_exclusive)`, and because the failure clears the layout
+/// flags, every re-entry walks the array again. Measured: an untyped
+/// 400-element array holding one string at index 399, read by
+/// `for (i = 0; i < 399; i++) s += a[i]` inside an outer loop, paid a full
+/// 400-slot walk per outer iteration.
+///
+/// This checks only the slots the guarded clone can touch. It canonicalizes
+/// numeric slots in the window exactly as the array-wide walk does (an
+/// INT32-boxed integer becomes raw f64 bits), tolerates `TAG_HOLE` — the
+/// classic tier's loads hole-check and side-exit — and fails on the first slot
+/// that is neither.
+///
+/// It deliberately records NOTHING in the header and does NOT call
+/// `layout_init_pointer_free`: slots outside the window are unexamined and may
+/// still hold heap pointers, which the collector must keep tracing. The cost
+/// is that a window-only admission re-walks its window on each loop entry;
+/// that is bounded by the window, and the array-wide fast path above still
+/// serves every array that really is numeric throughout.
+///
+/// # Safety
+///
+/// `arr` must be a live, non-forwarded `GC_TYPE_ARRAY` head whose
+/// `length <= capacity`, and `[min_idx, max_idx_exclusive)` must lie within
+/// `[0, length)` — `packed_f64_array_loop_range_guard` proves all of that
+/// before calling.
+pub(crate) unsafe fn array_window_is_numeric_raw_f64_allow_holes(
+    arr: *mut ArrayHeader,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> bool {
+    if arr.is_null() || min_idx < 0 {
+        return false;
+    }
+    let len = i64::from((*arr).length);
+    let min = i64::from(min_idx);
+    let max = i64::from(max_idx_exclusive).min(len);
+    if min >= max {
+        // An empty window: the clone runs zero iterations, so there is nothing
+        // to prove. (The caller has already rejected `max_idx_exclusive > len`.)
+        return true;
+    }
+    let elements = array_elements_ptr(arr);
+    for i in min..max {
+        let slot_bits = array_slot_bits(arr, i as usize);
+        if slot_bits == crate::value::TAG_HOLE {
+            continue;
+        }
+        let Some(number) = value_bits_to_number(slot_bits) else {
+            return false;
+        };
+        if number.to_bits() != slot_bits {
+            // GC_STORE_AUDIT(POINTER_FREE): raw-f64 rewrite stores numeric payloads only.
+            std::ptr::write(elements.add(i as usize) as *mut f64, number);
+        }
+    }
     true
 }
 

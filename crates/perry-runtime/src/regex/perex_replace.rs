@@ -66,9 +66,7 @@ pub(crate) fn regexp(receiver: f64, argument: f64, replacement: f64) -> Result<f
     };
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     let mut budget = Budget::new(api::WORK);
-    let flags = scope.root_nanbox_f64(dispatch::get(&receiver, b"flags")?);
-    let flags = text(&scope, &flags)?;
-    let (global, unicode) = scan_flags(&flags, &mut budget)?;
+    let (global, unicode) = super::perex_match_search::match_flags(&receiver, &mut budget)?;
     if global {
         dispatch::set_last_index(&receiver, 0.0)?;
     }

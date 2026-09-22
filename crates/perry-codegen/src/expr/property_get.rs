@@ -590,8 +590,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object, property, ..
         } if property == "size" && is_set_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
+            let recv_handle = super::unbox_collection_receiver(ctx, &recv_box, "size");
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_set_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
@@ -599,8 +599,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object, property, ..
         } if property == "size" && is_map_expr(ctx, object) => {
             let recv_box = lower_expr(ctx, object)?;
+            let recv_handle = super::unbox_collection_receiver(ctx, &recv_box, "size");
             let blk = ctx.block();
-            let recv_handle = unbox_to_i64(blk, &recv_box);
             let i32_v = blk.call(I32, "js_map_size", &[(I64, &recv_handle)]);
             Ok(blk.sitofp(I32, &i32_v, DOUBLE))
         }
@@ -1712,11 +1712,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 &obj_bits,
                                 &obj_handle,
                                 &expected_class_id_str,
-                                &expected_shape_id,
                                 requires_raw_f64,
                                 None,
                                 &fast_label,
                                 &subclass_arms,
+                                &keys_global_name,
                             );
                         // ONE EXIT. Everything the pre-check could not prove —
                         // the guard call, the guard-PASS slot load, the nullish
@@ -1757,6 +1757,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let key_bits = blk.bitcast_double_to_i64(&key_box);
                             blk.and(I64, &key_bits, POINTER_MASK_I64)
                         };
+                        // Loaded HERE, not through the function-entry cache
+                        // `load_class_shape_id` keeps: since the inline
+                        // precheck moved to the poisonable
+                        // `@perry_class_guard_shape_*` expectation, the
+                        // truthful ShapeId is a cold-arm-only operand, and an
+                        // entry-block load of it is two instructions the fast
+                        // path pays and never reads.
+                        let ic_shape_id = {
+                            let global = crate::typed_shape::shape_id_global_name_from_keys_global(
+                                &keys_global_name,
+                            );
+                            ctx.block().load(I32, &format!("@{global}"))
+                        };
                         let val_ic = ctx.block().call(
                             DOUBLE,
                             "js_class_field_get_ic",
@@ -1764,7 +1777,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &site_id),
                                 (DOUBLE, &recv_box),
                                 (I32, &expected_class_id_str),
-                                (I32, &expected_shape_id),
+                                (I32, &ic_shape_id),
                                 (I64, &key_raw),
                                 (I32, &field_idx_str),
                                 (I32, requires_raw_f64_str),

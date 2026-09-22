@@ -1203,11 +1203,11 @@ pub(super) fn emit_guarded_direct_method_call(
                         &obj_bits,
                         &obj_handle,
                         &expected_class_id_str,
-                        &expected_shape_id,
                         true,
                         None,
                         &proven_label,
                         &[],
+                        &keys_global_name,
                     );
                 // Created after the precheck's own blocks so the merge (and the
                 // typed/generic branch it feeds) follows the per-field guard

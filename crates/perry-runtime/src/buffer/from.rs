@@ -110,7 +110,11 @@ fn latin1_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-fn utf16le_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
+/// #10426: made `pub(crate)` so `copy_write.rs`'s `js_buffer_write_len`
+/// can reuse it for the new `ucs2Write` method (and to close the same gap
+/// in the pre-existing generic `buf.write(str, offset, 'utf16le')` path,
+/// which silently wrote raw UTF-8 bytes instead of UTF-16LE before this).
+pub(crate) fn utf16le_string_bytes(str_bytes: &[u8]) -> Vec<u8> {
     let decoded = String::from_utf8_lossy(str_bytes);
     let mut out = Vec::with_capacity(decoded.len() * 2);
     for unit in decoded.encode_utf16() {
@@ -596,6 +600,9 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                     let view = js_buffer_slice(src, 0, len);
                     mark_as_uint8array(view as usize);
                     set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
+                    // No explicit length: over a resizable ArrayBuffer the
+                    // view's length follows `byteLength` (#10873).
+                    super::view::mark_length_tracking(view as usize);
                     return view;
                 }
             }
@@ -719,6 +726,9 @@ pub extern "C" fn js_uint8array_view(
         let view = js_buffer_slice(src, start, end);
         mark_as_uint8array(view as usize);
         set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
+        if requested.is_none() {
+            super::view::mark_length_tracking(view as usize);
+        }
         view
     }
 }
@@ -937,6 +947,9 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     let start = offset as u32;
     let len = view_len as u32;
     let view = super::view::alloc_data_view(src, start, len);
+    if length_jv.is_undefined() {
+        super::view::mark_length_tracking(view as usize);
+    }
     mark_as_data_view(view as usize);
     set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
     f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())

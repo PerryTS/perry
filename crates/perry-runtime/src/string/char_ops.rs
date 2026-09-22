@@ -104,6 +104,14 @@ fn utf16_unit_at(s: *const StringHeader, idx: usize) -> Option<u16> {
     utf16_index::unit_at(s, idx)
 }
 
+/// Byte offset of the code point containing UTF-16 index `idx`, plus whether
+/// `idx` is its low surrogate half, resolved through the same cached index.
+/// `None` means the caller should fall back to its own walk (short payloads,
+/// `idx == 0`, or an index past the last decodable unit).
+pub(super) fn utf16_boundary_at(s: *const StringHeader, idx: usize) -> Option<(usize, bool)> {
+    utf16_index::boundary_at(s, idx)
+}
+
 /// SSO-safe `s[key]`: takes the receiver as a **NaN-boxed JSValue** rather than
 /// an already-unboxed `StringHeader*`.
 ///
@@ -695,26 +703,45 @@ pub extern "C" fn js_string_code_point_at(s: *const StringHeader, index: i32) ->
         }
     }
 
-    // Non-ASCII: bounded WTF-8 walk (#6085) — the old `str_data.chars()` loop
-    // read continuation bytes past an exact-sized payload ending in a truncated
-    // multi-byte lead. Allocation-free either way.
-    let bytes = unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) };
-    let mut utf16_pos = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        let (advance, units, cp) = crate::string::wtf8_step(bytes, i);
-        if units > 0 && utf16_pos + units > idx {
-            if units == 1 || utf16_pos == idx {
-                // Either a BMP code point, or the START of a surrogate pair —
-                // which per spec is the whole code point.
-                return cp as f64;
-            }
-            // Index lands on the low surrogate half — return the bare unit.
-            let v = cp.wrapping_sub(0x10000);
-            return (0xDC00 + (v & 0x3FF)) as f64;
-        }
-        utf16_pos += units;
-        i += advance;
+    // Non-ASCII: go through the same lazy sparse index + cursor `charCodeAt`
+    // uses (#10055/#10067). This function used to walk the WTF-8 payload from
+    // byte 0 on every call, so a sequential scan over a string holding even one
+    // non-ASCII character was O(n^2) — #10656. `charCodeAt` and `s[i]` were
+    // moved off that walk by #10067; `codePointAt` was left on it, which is why
+    // a natively compiled `tsc` spent ~85% of its run in this function
+    // (`lib.dom.d.ts` carries 45 non-ASCII characters in 1.87 MB).
+    //
+    // No bespoke decoding is needed: `codePointAt` is *defined* on code units,
+    // so the spec algorithm is two indexed reads. `unit_at` keeps the bounded
+    // WTF-8 stepping that #6085 needs, so the truncated-payload guarantee is
+    // preserved — a missing continuation byte still decodes from what is
+    // present rather than over-reading.
+    let first = match utf16_unit_at(s, idx) {
+        Some(unit) => unit,
+        None => return f64::from_bits(crate::value::TAG_UNDEFINED),
+    };
+    // A lone/low surrogate, a BMP code point, or a leading surrogate with
+    // nothing after it: the unit is the answer.
+    if !is_leading_surrogate(first) || idx + 1 >= u16len {
+        return first as f64;
     }
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    match utf16_unit_at(s, idx + 1) {
+        Some(second) if is_trailing_surrogate(second) => {
+            let high = (first as u32 - 0xD800) << 10;
+            let low = second as u32 - 0xDC00;
+            (0x10000 + high + low) as f64
+        }
+        // Unpaired leading surrogate — per spec the code unit itself.
+        _ => first as f64,
+    }
+}
+
+#[inline]
+fn is_leading_surrogate(unit: u16) -> bool {
+    (0xD800..0xDC00).contains(&unit)
+}
+
+#[inline]
+fn is_trailing_surrogate(unit: u16) -> bool {
+    (0xDC00..0xE000).contains(&unit)
 }

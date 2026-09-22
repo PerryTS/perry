@@ -237,7 +237,7 @@ impl JsEmitter {
                     .push_str("(console.warn('spawnBackground not available in browser'), 0)");
             }
             // --- Fastify/HTTP (throw in browser) ---
-            "fastify" | "ws" | "mysql2" | "mysql2/promise" | "pg" | "net" | "worker_threads" => {
+            "fastify" | "ws" | "net" | "worker_threads" => {
                 let _ = write!(
                     self.output,
                     "((() => {{ throw new Error('{} not available in browser'); }})())",

@@ -214,28 +214,33 @@ pub extern "C" fn js_buffer_read_int32_le(buf_ptr: f64, offset: i32) -> f64 {
 pub extern "C" fn js_buffer_read_float_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw(buf, offset, 4);
-    f32::from_be_bytes([s[0], s[1], s[2], s[3]]) as f64
+    // #10779: buffer bytes are arbitrary; see `array::canonical_raw_f64`.
+    crate::array::canonical_raw_f64(f32::from_be_bytes([s[0], s[1], s[2], s[3]]) as f64)
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_float_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw(buf, offset, 4);
-    f32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64
+    crate::array::canonical_raw_f64(f32::from_le_bytes([s[0], s[1], s[2], s[3]]) as f64)
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_double_be(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw_bounds(buf, offset, 8);
-    f64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]])
+    crate::array::canonical_raw_f64(f64::from_be_bytes([
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+    ]))
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_read_double_le(buf_ptr: f64, offset: i32) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
     let s = buffer_slice_at_or_throw_bounds(buf, offset, 8);
-    f64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]])
+    crate::array::canonical_raw_f64(f64::from_le_bytes([
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+    ]))
 }
 
 #[no_mangle]

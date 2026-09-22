@@ -688,8 +688,6 @@ pub(crate) fn lower_module_decl(
                                                 Some("ws".to_string())
                                             }
                                             "Redis" => Some("ioredis".to_string()),
-                                            "LRUCache" => Some("lru-cache".to_string()),
-                                            "Command" => Some("commander".to_string()),
                                             "Big" => Some("big.js".to_string()),
                                             "Decimal" => Some("decimal.js".to_string()),
                                             "BigNumber" => Some("bignumber.js".to_string()),
@@ -756,8 +754,6 @@ pub(crate) fn lower_module_decl(
                                                     Some("ws".to_string())
                                                 }
                                                 "Redis" => Some("ioredis".to_string()),
-                                                "LRUCache" => Some("lru-cache".to_string()),
-                                                "Command" => Some("commander".to_string()),
                                                 "Big" => Some("big.js".to_string()),
                                                 "Decimal" => Some("decimal.js".to_string()),
                                                 "BigNumber" => Some("bignumber.js".to_string()),
@@ -833,16 +829,6 @@ pub(crate) fn lower_module_decl(
                                                             Some("Socket")
                                                         }
                                                         ("dgram", "createSocket") => Some("Socket"),
-                                                        // node-cron's `cron.schedule(expr, cb)` returns a job
-                                                        // handle whose `start()`/`stop()`/`isRunning()` etc.
-                                                        // dispatch via the ("node-cron", true, METHOD) entries
-                                                        // in expr.rs's native_module dispatch table. Without
-                                                        // registering the handle as a "CronJob" native instance,
-                                                        // `job.stop()` falls through to dynamic dispatch and the
-                                                        // stop never reaches js_cron_job_stop.
-                                                        ("node-cron", "schedule") => {
-                                                            Some("CronJob")
-                                                        }
                                                         // node:http server (issue #577) — `http.createServer(...)`
                                                         // returns an HttpServer handle whose `.listen(...)` /
                                                         // `.close()` / `.address()` / `.on(...)` dispatches via
@@ -1007,11 +993,6 @@ pub(crate) fn lower_module_decl(
                                                                 "http" | "https",
                                                                 "request" | "get",
                                                             ) => Some("ClientRequest"),
-                                                            (
-                                                                "axios",
-                                                                "get" | "post" | "put" | "delete"
-                                                                | "patch" | "request",
-                                                            ) => Some("Response"),
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = class_name {
@@ -1166,19 +1147,6 @@ pub(crate) fn lower_module_decl(
                                                             ("sqlite", "createSession") => {
                                                                 Some("Session")
                                                             }
-                                                            // dayjs / moment manipulation
-                                                            // methods return a NEW date
-                                                            // handle (see native_new.rs).
-                                                            (
-                                                                "dayjs",
-                                                                "add" | "subtract" | "startOf"
-                                                                | "endOf",
-                                                            ) => Some("App"),
-                                                            (
-                                                                "moment",
-                                                                "add" | "subtract" | "startOf"
-                                                                | "endOf" | "clone",
-                                                            ) => Some("App"),
                                                             _ => None,
                                                         };
                                                         if let Some(class_name) = returns_handle {
@@ -1491,6 +1459,52 @@ pub(crate) fn lower_module_decl(
                                     }
                                 })
                                 .unwrap_or_else(|| local.clone());
+
+                            // A Node builtin has no compiled source module for the
+                            // driver to follow through a normal ReExport edge. Model
+                            // the forwarding binding as a synthetic named import so
+                            // codegen can publish a live getter for the builtin ESM
+                            // export cell. The synthetic local is compiler-private:
+                            // `export { x } from "node:m"` does not introduce `x`
+                            // into this module's lexical scope.
+                            let native_source = canonicalize_native_import_source(&source);
+                            if perry_api_manifest::is_node_core_module(&native_source) {
+                                if !perry_api_manifest::module_has_public_named_export(
+                                    &native_source,
+                                    &local,
+                                ) {
+                                    crate::lower_bail!(
+                                        named.span,
+                                        "The requested module '{}' does not provide an export named '{}'",
+                                        source,
+                                        local
+                                    );
+                                }
+                                let synthetic_local =
+                                    format!("__perry_builtin_reexport_{}", ctx.fresh_local());
+                                init_named_cell(module, &native_source, &local, Some(&local));
+                                module.imports.push(Import {
+                                    source: native_source,
+                                    specifiers: vec![ImportSpecifier::Named {
+                                        imported: local,
+                                        local: synthetic_local.clone(),
+                                    }],
+                                    is_native: true,
+                                    module_kind: ModuleKind::NativeRust,
+                                    resolved_path: None,
+                                    type_only: false,
+                                    runtime_erased: false,
+                                    is_dynamic: false,
+                                    is_dynamic_target: false,
+                                    is_deferred_require: false,
+                                    is_adopted_require: false,
+                                });
+                                module.exports.push(Export::Named {
+                                    local: synthetic_local,
+                                    exported,
+                                });
+                                continue;
+                            }
                             module.exports.push(Export::ReExport {
                                 source: source.clone(),
                                 imported: local,

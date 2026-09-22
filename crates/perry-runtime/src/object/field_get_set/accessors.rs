@@ -288,7 +288,12 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
-    if ((*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0 {
+    // #10827: this asked only whether the RECEIVER was born without a
+    // prototype. A receiver whose chain was ended higher up — an instance of a
+    // class whose `prototype` was `setPrototypeOf(..., null)`, or one pointed
+    // at an `Object.create(null)` — reached `Object.prototype` anyway and
+    // answered `toString` from it while `"toString" in o` said false.
+    if super::super::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize) {
         return None;
     }
     if super::super::prototype_chain::object_static_prototype(obj as usize).is_some() {
@@ -637,7 +642,25 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
             }
         }
     }
+    // #10482: the direct-accessor short-circuit just above only covers an
+    // accessor installed ON `proto_ptr` itself (`Number.prototype`). A key
+    // inherited from FURTHER up the chain — `Object.prototype.__proto__`,
+    // now a real accessor — resolves through this generic fallback instead,
+    // which recurses into `js_object_get_field_by_name(proto_ptr, key)`.
+    // That recursive walk finds the accessor on the ancestor and invokes it,
+    // but with no override in place it binds `this` to whichever prototype
+    // object the walk was probing (`Number.prototype`) rather than the
+    // original primitive `receiver` — so `(5).__proto__` was answering
+    // `Object.getPrototypeOf(Number.prototype)` (`Object.prototype`) instead
+    // of `Object.getPrototypeOf(5)` (`Number.prototype`). Stash the real
+    // receiver in the same thread-local override
+    // `resolve_inherited_field_from_prototype` uses for the identical
+    // problem one level up, so `invoke_accessor_getter` (reached from
+    // inside the recursive call) picks it up via `ACCESSOR_RECEIVER_OVERRIDE`
+    // instead of the prototype object it was handed.
+    let prev_override = accessor_receiver_override_begin(receiver);
     let value = js_object_get_field_by_name(proto_ptr, key);
+    accessor_receiver_override_end(prev_override);
     if value.is_undefined() {
         return None;
     }

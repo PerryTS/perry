@@ -1317,7 +1317,22 @@ pub fn is_process_env_object(value: f64) -> bool {
 ///
 /// The pointer form of [`is_process_env_object`], for call sites that have
 /// already unboxed the target (`Object.assign`'s write funnel).
+/// Sticky: has a `process.env` object ever been materialised in this process?
+/// See [`is_process_env_ptr`].
+static ANY_PROCESS_ENV_OBJECT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn is_process_env_ptr(addr: usize) -> bool {
+    // Asked once per dynamic property read, from `native_get::try_data_get_bytes`.
+    // Reading `CACHED_ENV` is a thread-local access — `_tlv_get_addr` was 14.1%
+    // of an `o[k]` loop with half of it from here — and in a program that never
+    // materialises `process.env` the answer is always `false`. The latch is set
+    // the moment such an object is created, so the TLS is touched only once one
+    // exists. Monotone and never cleared: a stale `true` costs the old TLS read,
+    // never a wrong answer. `AtomicBool` holds no heap pointer, so not a GC root.
+    if !ANY_PROCESS_ENV_OBJECT.load(std::sync::atomic::Ordering::Acquire) {
+        return false;
+    }
     let cached = CACHED_ENV.with(|c| c.get());
     if cached == 0.0 {
         return false;
@@ -1327,7 +1342,13 @@ pub fn is_process_env_ptr(addr: usize) -> bool {
     } else {
         addr
     };
-    crate::value::js_nanbox_get_pointer(cached) as usize == addr
+    let is_env = crate::value::js_nanbox_get_pointer(cached) as usize == addr;
+    debug_assert!(
+        !is_env || unsafe { crate::object::proto_validity::object_is_exotic_read_receiver(addr) },
+        "the process.env object without OBJECT_META_FLAG_EXOTIC_READ_RECEIVER: \
+         it was published without the registration that sets it"
+    );
+    is_env
 }
 
 /// Intercept a generic property read on an aliased `process.env` object.
@@ -1428,7 +1449,11 @@ fn js_process_env_impl() -> f64 {
         crate::object::js_object_set_field_by_name(obj, key, val_f64);
     }
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    // The per-OBJECT half of `ANY_PROCESS_ENV_OBJECT`, for the same reason the
+    // arguments registry sets it beside its insert.
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
+    ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
     boxed
 }
 

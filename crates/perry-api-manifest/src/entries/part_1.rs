@@ -14,122 +14,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     //  drift guarded by perry-codegen's manifest_consistency test)
     // ===========================================================
     method_sig(
-        "fastify",
-        "default",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("fastify", "get", true, None),
-    method("fastify", "post", true, None),
-    method("fastify", "put", true, None),
-    method("fastify", "delete", true, None),
-    method("fastify", "patch", true, None),
-    method("fastify", "head", true, None),
-    method("fastify", "options", true, None),
-    method("fastify", "all", true, None),
-    method("fastify", "route", true, None),
-    method("fastify", "addHook", true, None),
-    method("fastify", "setErrorHandler", true, None),
-    method("fastify", "register", true, None),
-    method("fastify", "listen", true, None),
-    method("fastify", "close", true, None),
-    // #1113 — `app.server` is a Node-compatible getter returning the
-    // FastifyApp handle (pointer-tagged) so `typeof app.server ===
-    // "object"`. Lowered as a zero-arg NativeMethodCall by the HIR
-    // property-as-method path; the runtime side is
-    // `js_fastify_app_server`. `app.server.on(event, cb)` then
-    // dispatches against the same handle (the `"on"` arm below).
-    // Today only `"upgrade"` is stored; bidirectional WebSocket
-    // upgrade through hyper is the tracked follow-up.
-    method("fastify", "server", true, None),
-    method("fastify", "on", true, None),
-    method("fastify", "method", true, None),
-    method("fastify", "url", true, None),
-    // Manifest-consistency catch-up (release-sweep gate).
-    method("fastify", "type", true, None),
-    method("fastify", "params", true, None),
-    method("fastify", "param", true, None),
-    method("fastify", "query", true, None),
-    method("fastify", "rawBody", true, None),
-    method("fastify", "headers", true, None),
-    method("fastify", "header", true, None),
-    method("fastify", "user", true, None),
-    method("fastify", "status", true, None),
-    method("fastify", "code", true, None),
-    method("fastify", "send", true, None),
-    method("fastify", "text", true, None),
-    method("fastify", "html", true, None),
-    method("fastify", "redirect", true, None),
-    method("fastify", "json", true, None),
-    method("fastify", "body", true, None),
-    method_sig(
-        "mysql2",
-        "createConnection",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "mysql2",
-        "createPool",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "mysql2/promise",
-        "createConnection",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "mysql2/promise",
-        "createPool",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("mysql2", "query", true, Some("Pool")),
-    method("mysql2", "execute", true, Some("Pool")),
-    method("mysql2", "end", true, Some("Pool")),
-    method("mysql2/promise", "query", true, Some("Pool")),
-    method("mysql2/promise", "execute", true, Some("Pool")),
-    method("mysql2/promise", "end", true, Some("Pool")),
-    method("mysql2", "query", true, Some("PoolConnection")),
-    method("mysql2", "execute", true, Some("PoolConnection")),
-    method("mysql2/promise", "query", true, Some("PoolConnection")),
-    method("mysql2/promise", "execute", true, Some("PoolConnection")),
-    method("mysql2", "query", true, None),
-    method("mysql2", "execute", true, None),
-    method("mysql2", "end", true, None),
-    method("mysql2", "getConnection", true, None),
-    method("mysql2", "release", true, None),
-    method("mysql2", "beginTransaction", true, None),
-    method("mysql2", "commit", true, None),
-    method("mysql2", "rollback", true, None),
-    method("mysql2/promise", "query", true, None),
-    method("mysql2/promise", "execute", true, None),
-    method("mysql2/promise", "end", true, None),
-    method("mysql2/promise", "getConnection", true, None),
-    method("mysql2/promise", "release", true, None),
-    method("mysql2/promise", "beginTransaction", true, None),
-    method("mysql2/promise", "commit", true, None),
-    method("mysql2/promise", "rollback", true, None),
-    method_sig("pg", "connect", false, None, &[p_any("p0")], TypeSpec::Any),
-    method_sig("pg", "Pool", false, None, &[p_any("p0")], TypeSpec::Any),
-    method("pg", "connect", true, Some("Client")),
-    method("pg", "query", true, Some("Pool")),
-    method("pg", "end", true, Some("Pool")),
-    method("pg", "query", true, None),
-    method("pg", "end", true, None),
-    method_sig(
         "ioredis",
         "createClient",
         false,
@@ -303,35 +187,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("sqlite", "setAllowUnknownNamedParameters", true, None),
     method("sqlite", "sourceSQL", true, None),
     method("sqlite", "expandedSQL", true, None),
-    // tursodb (#424). open / exec / execBatch / close /
-    // lastInsertRowid / isAutocommit shipped in v0.5.543; queryAll /
-    // queryOne shipped in v0.5.553 (close the row-as-object gap by
-    // building shapes inside spawn_blocking and resolving with
-    // POINTER_TAG'd JsValues).
-    method("tursodb", "open", false, None),
-    method("tursodb", "exec", true, None),
-    method("tursodb", "execBatch", true, None),
-    method("tursodb", "queryAll", true, None),
-    method("tursodb", "queryOne", true, None),
-    method("tursodb", "close", true, None),
-    method("tursodb", "lastInsertRowid", true, None),
-    method("tursodb", "isAutocommit", true, None),
-    // iroh (#425). bind / nodeId / close shipped in v0.5.544; the
-    // peer connection + stream surface (connect / acceptOne /
-    // openBi / acceptBi / streamWrite / streamFinish /
-    // streamReadToEnd / connClose) shipped in v0.5.554. ALPN is
-    // hardcoded to `b"perry-iroh/0"` for v0.
-    method("iroh", "bind", false, None),
-    method("iroh", "nodeId", true, None),
-    method("iroh", "close", true, None),
-    method("iroh", "connect", true, None),
-    method("iroh", "acceptOne", true, None),
-    method("iroh", "openBi", true, None),
-    method("iroh", "acceptBi", true, None),
-    method("iroh", "streamWrite", true, None),
-    method("iroh", "streamFinish", true, None),
-    method("iroh", "streamReadToEnd", true, None),
-    method("iroh", "connClose", true, None),
     property("sea", "default"),
     method("sea", "isSea", false, None),
     method("sea", "getAsset", false, None),
@@ -790,6 +645,26 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("net", "getX509Certificate", true, Some("Socket")),
     method("net", "getPeerX509Certificate", true, Some("Socket")),
     method("net", "setKeyCert", true, Some("Socket")),
+    // #10441/#10442 — front-inserting listener variants (net.Socket is
+    // an EventEmitter), and #10444 pipe/unpipe (net.Socket is a
+    // stream.Duplex). Absent entirely pre-fix: a typed `net.Socket`
+    // receiver fell through to a plain property read for these names
+    // and got `undefined` instead of dispatching.
+    method("net", "prependListener", true, Some("Socket")),
+    method("net", "prependOnceListener", true, Some("Socket")),
+    method("net", "pipe", true, Some("Socket")),
+    method("net", "unpipe", true, Some("Socket")),
+    // #10465 — writable/readable/writableEnded/readableEnded/
+    // _writableState/_readableState state accessors. No class_filter
+    // in the dispatch table (native_table/net_events.rs) — same
+    // class_filter: None shape the generic `stream` module rows use
+    // for their own writable/readable/writableEnded/readableEnded.
+    method("net", "writable", true, None),
+    method("net", "readable", true, None),
+    method("net", "writableEnded", true, None),
+    method("net", "readableEnded", true, None),
+    method("net", "_writableState", true, None),
+    method("net", "_readableState", true, None),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
@@ -1029,40 +904,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("domain", "remove", true, None),
     method("domain", "enter", true, None),
     method("domain", "exit", true, None),
-    method_sig(
-        "lru-cache",
-        "default",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("lru-cache", "get", true, None),
-    method("lru-cache", "set", true, None),
-    method("lru-cache", "has", true, None),
-    method("lru-cache", "delete", true, None),
-    method("lru-cache", "clear", true, None),
-    method("lru-cache", "size", true, None),
-    // `peek(key)` — read without refreshing recency (#7136).
-    method("lru-cache", "peek", true, None),
-    method("commander", "name", true, None),
-    method("commander", "description", true, None),
-    method("commander", "version", true, None),
-    method("commander", "command", true, None),
-    method("commander", "option", true, None),
-    method("commander", "requiredOption", true, None),
-    method("commander", "action", true, None),
-    method("commander", "parse", true, None),
-    method("commander", "opts", true, None),
-    method("commander", "argument", true, None),
-    // `program.args` is a bare member read modeled as a property for the
-    // `.d.ts` surface (`export const args`), but the dispatch table lowers
-    // it to a 0-arg instance getter row (`commander::args`, has_receiver).
-    // The drift gate (every_dispatch_entry_has_manifest_counterpart) wants
-    // a Method counterpart for that row; keep both — the has_receiver
-    // method isn't emitted as a module export, so docs are unchanged (#5137).
-    method("commander", "args", true, None),
-    property("commander", "args"),
     property("async_hooks", "default"),
     property("async_hooks", "asyncWrapProviders"),
     method("async_hooks", "createHook", false, None),
@@ -1130,136 +971,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("decimal.js", "isZero", true, None),
     method("decimal.js", "isPositive", true, None),
     method("decimal.js", "isNegative", true, None),
-    method_sig("uuid", "v4", false, None, &[], TypeSpec::String),
-    method_sig("uuid", "v1", false, None, &[], TypeSpec::String),
-    method_sig("uuid", "v7", false, None, &[], TypeSpec::String),
-    method_sig(
-        "uuid",
-        "v5",
-        false,
-        None,
-        &[
-            ParamSpec::Named {
-                name: "name",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-            ParamSpec::Named {
-                name: "namespace",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-        ],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "uuid",
-        "v3",
-        false,
-        None,
-        &[
-            ParamSpec::Named {
-                name: "name",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-            ParamSpec::Named {
-                name: "namespace",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-        ],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "uuid",
-        "validate",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "id",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "uuid",
-        "version",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "id",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Number,
-    ),
-    method_sig(
-        "jsonwebtoken",
-        "sign",
-        false,
-        None,
-        &[
-            ParamSpec::Named {
-                name: "payload",
-                ty: TypeSpec::Any,
-                optional: false,
-            },
-            ParamSpec::Named {
-                name: "secret",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-            ParamSpec::Named {
-                name: "options",
-                ty: TypeSpec::Any,
-                optional: true,
-            },
-            // #915: FFI's 4th arg is `kid_ptr: *const StringHeader` — the
-            // dispatch table padding zeroes it when the user doesn't pass
-            // it. Surfacing the slot in the manifest keeps the
-            // #512 arity-drift assertion happy without forcing every
-            // caller to write a 4th positional arg.
-            ParamSpec::Named {
-                name: "kid",
-                ty: TypeSpec::String,
-                optional: true,
-            },
-        ],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "jsonwebtoken",
-        "verify",
-        false,
-        None,
-        &[
-            ParamSpec::Named {
-                name: "token",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-            ParamSpec::Named {
-                name: "secret",
-                ty: TypeSpec::String,
-                optional: false,
-            },
-        ],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "jsonwebtoken",
-        "decode",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "token",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Any,
-    ),
     method_sig(
         "nodemailer",
         "createTransport",
@@ -1270,111 +981,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     ),
     method("nodemailer", "sendMail", true, None),
     method("nodemailer", "verify", true, None),
-    method_sig("dotenv", "config", false, None, &[], TypeSpec::Any),
-    // `dotenv.parse(src)` — the native impl (`js_dotenv_parse`) has shipped
-    // since the module was added, but the manifest never registered the
-    // symbol, so the #463 gate compiled every call site to a deferred
-    // throw-on-reach error. Callers that wrap config loading in
-    // `try { … } catch {}` swallowed that throw and silently got no config
-    // at all, which is why this is registered as a data-loss fix, not a
-    // missing-feature one. The extern returns a JSON string; the dispatch
-    // row's `NR_OBJ_FROM_JSON_STR` pipes it through `js_json_parse` so the
-    // user-visible value is a real object.
-    method_sig(
-        "dotenv",
-        "parse",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "src",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "nanoid",
-        "nanoid",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "size",
-            ty: TypeSpec::Number,
-            optional: false,
-        }],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "validator",
-        "isEmail",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isURL",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isUUID",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isJSON",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    method_sig(
-        "validator",
-        "isEmpty",
-        false,
-        None,
-        &[ParamSpec::Named {
-            name: "s",
-            ty: TypeSpec::String,
-            optional: false,
-        }],
-        TypeSpec::Bool,
-    ),
-    // #4917 — real retry semantics: options (numOfAttempts/startingDelay/
-    // timeMultiple/maxDelay/delayFirstAttempt/jitter/retry) honored;
-    // Promise-returning tasks retry on rejection via promise reactions.
-    method_sig(
-        "exponential-backoff",
-        "backOff",
-        false,
-        None,
-        &[p_any("p0"), p_any("p1")],
-        TypeSpec::Any,
-    ),
     method_sig(
         "argon2",
         "hash",

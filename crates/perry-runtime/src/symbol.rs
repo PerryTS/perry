@@ -27,6 +27,8 @@ pub(crate) use accessors::{
 mod constructors;
 mod gc_roots;
 mod get;
+#[cfg(test)]
+mod inherited_accessor_tests;
 mod iterator;
 mod properties;
 
@@ -56,7 +58,11 @@ pub use properties::{
 
 // Symbol-keyed property reads.
 pub(crate) use get::has_declared_prototype_symbol_property;
-pub(crate) use get::{has_own_symbol_property, inherited_symbol_property, own_symbol_property};
+pub(crate) use get::{
+    has_own_symbol_property, inherited_symbol_property,
+    js_object_get_symbol_property_with_receiver, own_symbol_property, own_symbol_slot,
+    OwnSymbolSlot,
+};
 pub use get::{
     js_object_get_symbol_property, js_object_get_symbol_property_ic_miss,
     js_object_get_symbol_then_field_ic_miss, SymbolPicCache, SymbolPicCacheSlot, SYMBOL_PIC_WORDS,

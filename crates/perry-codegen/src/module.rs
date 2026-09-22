@@ -222,18 +222,6 @@ impl LlModule {
     /// contains try/catch, i.e. when its EH lowering is
     /// `catchswitch`/`catchpad`/`catchret` rather than Itanium landing pads.
     ///
-    /// The in-process LLVM reader can build `invoke`/`landingpad` but NOT
-    /// the funclet forms: inkwell 0.9 exposes no `build_catch_switch` /
-    /// `build_catch_pad` / `build_catch_ret` (only an opcode enum for
-    /// reading them), so constructing them needs raw `llvm-sys` FFI. Until
-    /// that lands, such modules take the textual path — declining costs
-    /// nothing but the in-process speedup, whereas letting the reader hit
-    /// the instruction is a hard compile error.
-    pub fn needs_eh_funclets(&self) -> bool {
-        self.target_triple.contains("-windows-")
-            && self.functions.iter().any(|f| f.personality.is_some())
-    }
-
     /// Invoke-EH (#7302): declare the personality routine referenced by
     /// every `define ... personality ptr @perry_eh_personality`. Declared
     /// varargs — the symbol is only ever *named* on define lines and in the
@@ -247,40 +235,6 @@ impl LlModule {
         self.declarations.push((
             "perry_eh_personality".to_string(),
             "declare i32 @perry_eh_personality(...)".to_string(),
-        ));
-    }
-
-    /// Invoke-EH on windows-msvc (#7302): the SEH personality plus the
-    /// module-local `__except` filter every catchpad names. The filter
-    /// accepts exactly Perry's `RaiseException` code 0xE0504A53 ("PJS" |
-    /// 0xE0000000, `perry-runtime/src/eh.rs`), so foreign SEH exceptions
-    /// (access violations etc.) keep unwinding past JS handlers — the
-    /// setjmp path never caught those either. Rendered among the
-    /// declarations; LLVM accepts interleaved declares/defines.
-    pub fn declare_seh_machinery(&mut self) {
-        if self.declared_names.contains("__C_specific_handler") {
-            return;
-        }
-        self.declared_names
-            .insert("__C_specific_handler".to_string());
-        self.declarations.push((
-            "__C_specific_handler".to_string(),
-            "declare i32 @__C_specific_handler(...)".to_string(),
-        ));
-        self.declared_names.insert("perry_seh_filter".to_string());
-        self.declarations.push((
-            "perry_seh_filter".to_string(),
-            concat!(
-                "define internal i32 @perry_seh_filter(ptr %eptrs, ptr %frame) {\n",
-                "entry:\n",
-                "  %rec = load ptr, ptr %eptrs\n",
-                "  %code = load i32, ptr %rec\n",
-                "  %ok = icmp eq i32 %code, -531609005\n",
-                "  %r = zext i1 %ok to i32\n",
-                "  ret i32 %r\n",
-                "}"
-            )
-            .to_string(),
         ));
     }
 

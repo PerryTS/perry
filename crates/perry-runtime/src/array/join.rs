@@ -738,6 +738,23 @@ pub extern "C" fn js_array_join(
     arr: *const ArrayHeader,
     separator: *const StringHeader,
 ) -> *mut StringHeader {
+    // #10894 (the #8137 family): a Buffer-backed `Uint8Array` receiver. Perry's
+    // `new Uint8Array(…)` is a `BufferHeader` — one BYTE per element, absent
+    // from the typed-array registry — so the `lookup_typed_array_kind` arm
+    // below never answers for it, `normalize_array_receiver` lets it through,
+    // and the payload was joined eight bytes at a time as f64s
+    // (`5.09e-313-1.27e-313-…`). Reached by a receiver the compiler took for a
+    // plain Array: `Uint8Array<ArrayBuffer>` before its lowering was fixed,
+    // and still `Readonly<Uint8Array>` or an `as unknown as number[]` cast.
+    // Asked above the funnel; see `array::buffer_receiver`.
+    let separator_arg = if separator.is_null() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        f64::from_bits(STRING_TAG | (separator as u64 & POINTER_MASK))
+    };
+    if let Some(joined) = crate::array::buffer_receiver_dispatch(arr, "join", &[separator_arg]) {
+        return crate::value::js_get_string_pointer_unified(joined) as *mut StringHeader;
+    }
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return crate::string::js_string_from_bytes(ptr::null(), 0);

@@ -1186,3 +1186,153 @@ fn a_method_the_uint8_dispatcher_does_not_implement_falls_through() {
         "an unimplemented method must fall through, not answer"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #10894: `indexOf` / `lastIndexOf` / `includes` on a Buffer-backed
+// `Uint8Array` that reaches the ARRAY helpers.
+//
+// The three search entry points were the members of this family #8137 left
+// out: they re-dispatch on `lookup_typed_array_kind`, which never answers for
+// a `BufferHeader`, and `normalize_array_receiver` lets a registered Buffer
+// through. The generic walk then read a ONE-byte-per-element payload as
+// eight-byte NaN-boxed `JSValue`s, so a byte that is present came back -1 /
+// false — silently, with `length` still correct.
+//
+// The receiver that exposed it was annotated `Uint8Array<ArrayBuffer>`: HIR
+// kept that as `Type::Generic`, no typed-array recognizer matched, and
+// `m.indexOf(44, from)` folded to `Expr::ArrayIndexOf`. Measured against node
+// v26.5.1 (perry 0.5.1632, Linux x86_64):
+//
+//   annotation                 node                     perry pre-fix
+//   Uint8Array                 50 90 50 false 100 44    50 90 50 false 100 44
+//   Uint8Array<ArrayBuffer>    50 90 50 false 100 44    -1 -1 -1 false 100 44
+//
+// Every expectation below is a POSITION, never a bare "found something": the
+// pre-fix answer is -1 / 0 for all of them, so none can pass by accident.
+// ---------------------------------------------------------------------------
+
+use crate::array::{
+    js_array_includes_jsvalue, js_array_indexOf_jsvalue, js_array_last_index_of_jsvalue,
+};
+
+/// `[10, 44, 7, 44, 9]` — the needle (44, `,`) twice, so forward and backward
+/// searches and both `fromIndex` directions have distinct right answers.
+fn search_subject() -> *mut ArrayHeader {
+    uint8_buffer(&[10.0, 44.0, 7.0, 44.0, 9.0])
+}
+
+#[test]
+fn js_array_index_of_searches_a_buffer_backed_uint8array_by_byte() {
+    let _serialized = crate::array::test_serialize();
+    let buf = search_subject();
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.0, 0.0, 0), 1);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 9.0, 0.0, 0), 4);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 99.0, 0.0, 0), -1);
+    // fromIndex: skip the first hit; negative counts from the end; past the
+    // end (and +Infinity) finds nothing.
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.0, 2.0, 1), 3);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.0, -2.0, 1), 3);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.0, -1.0, 1), -1);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.0, 5.0, 1), -1);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.0, f64::INFINITY, 1), -1);
+    // Strict equality over BYTES: a needle no byte can equal is absent, it is
+    // not reduced mod 256 (300 & 0xFF == 44) or truncated (44.5 -> 44).
+    assert_eq!(js_array_indexOf_jsvalue(buf, 300.0, 0.0, 0), -1);
+    assert_eq!(js_array_indexOf_jsvalue(buf, 44.5, 0.0, 0), -1);
+}
+
+#[test]
+fn js_array_last_index_of_searches_a_buffer_backed_uint8array_by_byte() {
+    let _serialized = crate::array::test_serialize();
+    let buf = search_subject();
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 44.0, 0.0, 0), 3);
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 10.0, 0.0, 0), 0);
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 99.0, 0.0, 0), -1);
+    // fromIndex bounds the search from the right.
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 44.0, 2.0, 1), 1);
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 44.0, -3.0, 1), 1);
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 44.0, 0.0, 1), -1);
+    // `has_from == 0` must mean "no argument" (default length - 1), NOT a
+    // forwarded `fromIndex` of 0 — that would answer -1 here.
+    assert_eq!(js_array_last_index_of_jsvalue(buf, 9.0, 0.0, 0), 4);
+}
+
+#[test]
+fn js_array_includes_searches_a_buffer_backed_uint8array_by_byte() {
+    let _serialized = crate::array::test_serialize();
+    let buf = search_subject();
+    assert_eq!(js_array_includes_jsvalue(buf, 44.0, 0.0, 0), 1);
+    assert_eq!(js_array_includes_jsvalue(buf, 7.0, 2.0, 1), 1);
+    assert_eq!(js_array_includes_jsvalue(buf, 7.0, 3.0, 1), 0);
+    assert_eq!(js_array_includes_jsvalue(buf, 10.0, -4.0, 1), 0);
+    assert_eq!(js_array_includes_jsvalue(buf, 99.0, 0.0, 0), 0);
+}
+
+#[test]
+fn the_buffer_search_arm_leaves_plain_arrays_and_registry_typed_arrays_alone() {
+    let _serialized = crate::array::test_serialize();
+    // Plain Array control: same values, ordinary NaN-boxed slots.
+    let values = [10.0, 44.0, 7.0, 44.0, 9.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    assert_eq!(js_array_indexOf_jsvalue(arr, 44.0, 2.0, 1), 3);
+    assert_eq!(js_array_last_index_of_jsvalue(arr, 44.0, 2.0, 1), 1);
+    assert_eq!(js_array_includes_jsvalue(arr, 7.0, 3.0, 1), 0);
+    // A plain Array holds any number, so 300 is findable there — the byte
+    // rule above must not have leaked into the ordinary path.
+    let wide = [300.0, 44.5];
+    let wide = crate::array::js_array_from_f64(wide.as_ptr(), wide.len() as u32);
+    assert_eq!(js_array_indexOf_jsvalue(wide, 300.0, 0.0, 0), 0);
+    assert_eq!(js_array_includes_jsvalue(wide, 44.5, 0.0, 0), 1);
+
+    // Registry typed array control (`Uint16Array`): still answered by the
+    // `lookup_typed_array_kind` arm, with its own element width.
+    let ta = crate::typedarray::js_typed_array_new_empty(UINT16 as i32, 3);
+    for (i, v) in [300.0, 44.0, 300.0].iter().enumerate() {
+        js_typed_array_set(ta, i as i32, *v);
+    }
+    let ta = ta as *const ArrayHeader;
+    assert_eq!(js_array_indexOf_jsvalue(ta, 300.0, 1.0, 1), 2);
+    assert_eq!(js_array_last_index_of_jsvalue(ta, 300.0, 1.0, 1), 0);
+    assert_eq!(js_array_includes_jsvalue(ta, 44.0, 0.0, 0), 1);
+}
+
+#[test]
+fn the_buffer_search_arm_declines_array_buffer_and_data_view_receivers() {
+    let _serialized = crate::array::test_serialize();
+    // Neither has `%TypedArray%.prototype`; node throws `… is not a function`
+    // rather than answering bytes, so the arm must not invent a hit for them.
+    let ab = crate::buffer::buffer_alloc(4);
+    unsafe {
+        (*ab).length = 4;
+        *crate::buffer::buffer_data_mut(ab) = 44;
+    }
+    crate::buffer::mark_as_array_buffer(ab as usize);
+    assert!(
+        crate::array::buffer_receiver_dispatch(ab as *const ArrayHeader, "indexOf", &[44.0])
+            .is_none(),
+        "an ArrayBuffer receiver must not be served a Uint8Array search"
+    );
+}
+
+#[test]
+fn js_array_join_joins_a_buffer_backed_uint8array_by_byte() {
+    let _serialized = crate::array::test_serialize();
+    // Pre-fix this read the five payload bytes (plus whatever follows them)
+    // as f64 slots: `5.09279032885e-313-1.2731974749e-313-…` on the #10894
+    // fixture. The expectation is the literal node answer, so a join over
+    // reinterpreted storage cannot match it.
+    let buf = search_subject();
+    let joined = crate::array::js_array_join(buf, std::ptr::null());
+    assert_eq!(crate::string::string_as_str(joined), "10,44,7,44,9");
+
+    let buf = search_subject();
+    let dash = crate::string::js_string_from_bytes(b"-".as_ptr(), 1);
+    let joined = crate::array::js_array_join(buf, dash);
+    assert_eq!(crate::string::string_as_str(joined), "10-44-7-44-9");
+
+    // Plain Array control: the arm above must decline it.
+    let values = [10.0, 44.0];
+    let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+    let joined = crate::array::js_array_join(arr, std::ptr::null());
+    assert_eq!(crate::string::string_as_str(joined), "10,44");
+}

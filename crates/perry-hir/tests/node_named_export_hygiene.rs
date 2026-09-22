@@ -175,6 +175,38 @@ fn valid_node_named_imports_keep_compiling() {
 }
 
 #[test]
+fn node_named_reexports_lower_to_synthetic_native_imports() {
+    let module = lower_result(r#"export { createHash as hash } from "node:crypto";"#)
+        .expect("valid builtin re-export should lower");
+
+    assert!(module.imports.iter().any(|import| {
+        import.is_native
+            && import.source == "crypto"
+            && matches!(
+                import.specifiers.as_slice(),
+                [perry_hir::ImportSpecifier::Named { imported, local }]
+                    if imported == "createHash"
+                        && local.starts_with("__perry_builtin_reexport_")
+            )
+    }));
+    assert!(module.exports.iter().any(|export| {
+        matches!(
+            export,
+            perry_hir::Export::Named { local, exported }
+                if local.starts_with("__perry_builtin_reexport_") && exported == "hash"
+        )
+    }));
+    assert!(format!("{module:#?}").contains("js_native_module_named_esm_export_value"));
+}
+
+#[test]
+fn invalid_node_named_reexports_are_rejected() {
+    let error = lower_result(r#"export { definitelyMissing } from "node:crypto";"#)
+        .expect_err("invalid builtin re-export should fail during lowering");
+    assert!(error.contains("does not provide an export named 'definitelyMissing'"));
+}
+
+#[test]
 fn worker_threads_parent_port_call_keeps_property_call_shape() {
     let module = lower_result(
         r#"

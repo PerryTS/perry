@@ -697,6 +697,14 @@ mod tests {
     #[test]
     fn transition_fast_rejects_object_prototype_even_with_a_cached_edge() {
         let _lock = crate::gc::global_side_table_test_lock();
+        // Establish the premise instead of assuming it. `Object.prototype` does
+        // not exist until the realm global is built, and since #10836's fix
+        // `object_prototype_addr()` correctly answers 0 rather than
+        // materializing it as a side effect. Without this the test passed only
+        // when some EARLIER test in the same process had built the global —
+        // i.e. it passed in the full suite and failed run alone, which is a
+        // pass that depends on test order rather than on the code under test.
+        let _ = crate::object::js_get_global_this();
         let scope = crate::gc::RuntimeHandleScope::new();
         let prototype = crate::array::object_prototype_addr() as *mut ObjectHeader;
         assert!(!prototype.is_null(), "test premise: Object.prototype");

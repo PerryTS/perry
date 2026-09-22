@@ -189,6 +189,78 @@ fn lookup_class_constructor_flags(class_id: u32) -> (bool, bool) {
         .unwrap_or((false, false))
 }
 
+/// Bind the USER parameter slots of `ctor_cid`'s registered constructor (every
+/// slot before its trailing `__perry_cap_*` params) from a construct call's
+/// full argument list.
+///
+/// Codegen lowers the trailing array parameters as
+/// `[fixed..., user_rest?, synthesized_arguments?]` and registers the position
+/// of the first one in the closure-rest table (`ctor_rest_regs`). The flags say
+/// which arrays follow: a user rest receives the arguments from that position
+/// on, the synthesized `arguments` slot receives EVERY argument.
+///
+/// #10484: the dynamic construct paths used to pack only a user-rest tail at
+/// that position, so a constructor reading `arguments` saw just the arguments
+/// past its declared parameters. `new K("x")` for `constructor(p, q)` reported
+/// `arguments.length === 0`, which is how undici's `new Request(url)` failed
+/// its own `argumentLengthCheck(arguments, 1)`.
+///
+/// The returned words are not rooted. Callers hand them to the constructor call
+/// without allocating in between.
+unsafe fn constructor_user_arg_slots(
+    ctor_ptr: usize,
+    ctor_cid: u32,
+    user_params: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Vec<f64> {
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg = |i: usize| {
+        if !args_ptr.is_null() && i < args_len {
+            *args_ptr.add(i)
+        } else {
+            undef
+        }
+    };
+    let (has_synth, flagged_rest) = lookup_class_constructor_flags(ctor_cid);
+    // An unflagged registration is a plain `constructor(a, ...rest)`.
+    let has_rest = flagged_rest || !has_synth;
+    let trailing = usize::from(has_rest) + usize::from(has_synth);
+    let Some(fixed) = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
+        .map(|fixed| fixed as usize)
+        .filter(|fixed| fixed + trailing <= user_params)
+    else {
+        return (0..user_params).map(arg).collect();
+    };
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let supplied: Vec<f64> = (0..args_len).map(arg).collect();
+    let supplied_handles = scope.root_nanbox_f64_slice(&supplied);
+    let user_rest = has_rest.then(|| {
+        let refreshed =
+            crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&supplied_handles);
+        let tail = &refreshed[fixed.min(refreshed.len())..];
+        scope.root_nanbox_f64(crate::closure::build_rest_array(tail, false))
+    });
+    let arguments = has_synth.then(|| {
+        let refreshed =
+            crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&supplied_handles);
+        scope.root_nanbox_f64(crate::closure::build_rest_array(&refreshed, true))
+    });
+
+    let mut slots = Vec::with_capacity(user_params);
+    for i in 0..fixed {
+        slots.push(
+            supplied_handles
+                .get(i)
+                .map_or(undef, |handle| handle.get_nanbox_f64()),
+        );
+    }
+    slots.extend(user_rest.map(|handle| handle.get_nanbox_f64()));
+    slots.extend(arguments.map(|handle| handle.get_nanbox_f64()));
+    slots
+}
+
 crate::perry_thread_local! {
     /// Decl-site snapshots of a function-nested class DECLARATION's captured
     /// outer locals, keyed by class_id. Filled by the codegen-emitted
@@ -461,6 +533,46 @@ pub unsafe extern "C" fn js_super_construct_apply(
     }
     let arr =
         (args_array.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    // A replayed class expression has an exact, per-evaluation heritage edge.
+    // Resolve it before consulting the template-wide class-id registry: two
+    // evaluations of one template can form a parent chain, while the registry
+    // can retain only the most recently registered edge. Reusing that edge at
+    // every level re-enters the same constructor forever (#10660).
+    if let Some(parent_value) =
+        crate::object::class_registry::active_class_evaluation_parent(child_cid)
+    {
+        let n = if arr.is_null() {
+            0
+        } else {
+            crate::array::js_array_length(arr)
+        } as usize;
+        let args: Vec<f64> = (0..n)
+            .map(|i| crate::array::js_array_get_f64(arr, i as u32))
+            .collect();
+        if crate::object::class_registry::is_class_object_value(parent_value) {
+            let parent_ptr = crate::value::JSValue::from_bits(parent_value.to_bits())
+                .as_pointer::<ObjectHeader>();
+            if !parent_ptr.is_null() {
+                let parent_cid = super::js_object_get_class_id(parent_ptr);
+                if parent_cid != 0 {
+                    let _ = replay_class_object_super_constructor(
+                        parent_value,
+                        parent_cid,
+                        this_raw as *mut ObjectHeader,
+                        args.as_ptr(),
+                        args.len(),
+                    );
+                    return undef;
+                }
+            }
+        }
+        let parent_cid = crate::object::class_registry::dynamic_value_class_id(parent_value);
+        if parent_cid != 0 {
+            let _ =
+                run_class_constructor_on_this_flat(parent_cid, this_raw, args.as_ptr(), args.len());
+            return undef;
+        }
+    }
     let mut cur = crate::object::get_parent_class_id(child_cid).unwrap_or(0);
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
@@ -514,37 +626,16 @@ pub unsafe extern "C" fn js_super_construct_apply(
                 // would swallow) — then append exactly `sig_caps` snapshot
                 // values. Call with synth/rest OFF since we packed the trailing
                 // slot manually.
-                let mut fa: Vec<f64> = Vec::with_capacity(total_params as usize);
-                let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
-                    .map(|ri| ri as usize)
-                    .filter(|ri| *ri < user_params);
-                if let Some(ri) = rest_idx {
-                    for i in 0..ri {
-                        fa.push(if i < n {
-                            crate::array::js_array_get_f64(arr, i as u32)
-                        } else {
-                            undef
-                        });
-                    }
-                    let mut rest_arr = crate::array::js_array_alloc(0);
-                    let mut i = ri;
-                    while i < n {
-                        rest_arr = crate::array::js_array_push_f64(
-                            rest_arr,
-                            crate::array::js_array_get_f64(arr, i as u32),
-                        );
-                        i += 1;
-                    }
-                    fa.push(crate::value::js_nanbox_pointer(rest_arr as i64));
-                } else {
-                    for i in 0..user_params {
-                        fa.push(if i < n {
-                            crate::array::js_array_get_f64(arr, i as u32)
-                        } else {
-                            undef
-                        });
-                    }
-                }
+                let spread: Vec<f64> = (0..n)
+                    .map(|i| crate::array::js_array_get_f64(arr, i as u32))
+                    .collect();
+                let mut fa = constructor_user_arg_slots(
+                    ctor_ptr,
+                    cur,
+                    user_params,
+                    spread.as_ptr(),
+                    spread.len(),
+                );
                 for slot in 0..sig_caps as usize {
                     fa.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
                 }
@@ -923,33 +1014,8 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
                     crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
                 );
             }
-            let get = |i: usize| -> f64 {
-                if !args_ptr.is_null() && i < args_len {
-                    unsafe { *args_ptr.add(i) }
-                } else {
-                    undef
-                }
-            };
-            let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
-            let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
-                .map(|ri| ri as usize)
-                .filter(|ri| *ri < user_params);
-            if let Some(ri) = rest_idx {
-                for i in 0..ri {
-                    final_args.push(get(i));
-                }
-                let mut rest_arr = crate::array::js_array_alloc(0);
-                let mut i = ri;
-                while i < args_len {
-                    rest_arr = crate::array::js_array_push_f64(rest_arr, get(i));
-                    i += 1;
-                }
-                final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
-            } else {
-                for i in 0..user_params {
-                    final_args.push(get(i));
-                }
-            }
+            let mut final_args =
+                constructor_user_arg_slots(ctor_ptr, cur, user_params, args_ptr, args_len);
             for slot in 0..sig_caps as usize {
                 final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
             }
@@ -1178,11 +1244,47 @@ pub(crate) unsafe fn replay_class_object_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    replay_class_object_constructor_impl(classobj_value, class_cid, inst, args_ptr, args_len, true)
+}
+
+unsafe fn replay_class_object_super_constructor(
+    classobj_value: f64,
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    replay_class_object_constructor_impl(classobj_value, class_cid, inst, args_ptr, args_len, false)
+}
+
+unsafe fn replay_class_object_constructor_impl(
+    classobj_value: f64,
+    class_cid: u32,
+    inst: *mut ObjectHeader,
+    args_ptr: *const f64,
+    args_len: usize,
+    pin_constructing_class: bool,
+) -> f64 {
     // Callers scope their argument read with `with_mut_ptr`; establish this
     // function's own roots before any constructor-replay path can allocate.
     let scope = crate::gc::RuntimeHandleScope::new();
     let classobj_handle = scope.root_nanbox_f64(classobj_value);
     let inst_handle = scope.root_raw_mut_ptr(inst);
+    // #10624: remember which specific evaluation of this template built
+    // `inst`, so a later `instanceof` check against it can walk THAT
+    // evaluation's own pinned heritage instead of the shared, possibly
+    // since-overwritten class_id registry (`object/instanceof.rs`'s
+    // `class_chain_reaches_dynamic`). Runs before anything below can
+    // allocate/collect and return early, so `inst` is pinned regardless of
+    // which path this replay takes.
+    if pin_constructing_class {
+        inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            super::class_registry::pin_instance_constructing_class(
+                inst,
+                classobj_handle.get_nanbox_f64(),
+            );
+        });
+    }
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // must run with the same argument list. `lookup_class_constructor` holds
@@ -1276,45 +1378,17 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // exists, and the old `max(per-eval, snapshot)` subtraction ate user args).
     let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
     // #wall3: a `constructor(...args)` (rest param) called via the dynamic
     // member-new path (`new ns.Sub(opts)` → js_new_function_construct →
     // is_class_object_value → here) must BUNDLE the trailing call args into a JS
     // array for the rest slot. call_vtable_method's own `has_rest` can't do it
     // because the rest param is NOT last here — the positional `__perry_cap_*`
-    // capture params follow it — so we pack the rest array ourselves at the rest
-    // index, then append caps. Without this the rest binds to the first arg as a
+    // capture params follow it — so the trailing arrays are packed before the
+    // caps are appended. Without this the rest binds to the first arg as a
     // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
     // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
-    let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
-        .map(|ri| ri as usize)
-        .filter(|ri| *ri < user_params);
-    if let Some(ri) = rest_idx {
-        for i in 0..ri {
-            if !args_ptr.is_null() && i < args_len {
-                final_args.push(*args_ptr.add(i));
-            } else {
-                final_args.push(undef);
-            }
-        }
-        let mut rest_arr = crate::array::js_array_alloc(0);
-        if !args_ptr.is_null() {
-            let mut i = ri;
-            while i < args_len {
-                rest_arr = crate::array::js_array_push_f64(rest_arr, *args_ptr.add(i));
-                i += 1;
-            }
-        }
-        final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
-    } else {
-        for i in 0..user_params {
-            if !args_ptr.is_null() && i < args_len {
-                final_args.push(*args_ptr.add(i));
-            } else {
-                final_args.push(undef);
-            }
-        }
-    }
+    let mut final_args =
+        constructor_user_arg_slots(ctor_ptr, ctor_cid, user_params, args_ptr, args_len);
     // Exactly `sig_caps` trailing cap slots: per-evaluation snapshot first
     // (class EXPRESSIONS carry `__perry_ctor_caps`), decl-site snapshot second
     // (class DECLARATIONS reached as heap values), undefined last.
@@ -1407,46 +1481,18 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let mut final_args: Vec<f64> = Vec::with_capacity(total_params as usize);
     // #wall3: a `constructor(...args)` reached via the dynamic class-REF member-new
     // path (`new ns.Sub(opts)` where ns.Sub resolves to an INT32 ClassRef at
     // runtime → js_new_function_construct → constructor_class_ref_id →
     // construct_registered_class_ref → here) must BUNDLE trailing call args into a
     // JS array for the rest slot. The rest is NOT the last ctor param (positional
     // `__perry_cap_*` capture params follow it), so call_vtable_method's own
-    // `has_rest` can't pack it — we pack the rest array ourselves at the rest
-    // index, then append caps. Without this the rest binds to the first arg as a
+    // `has_rest` can't pack it — the trailing arrays are packed before the caps
+    // are appended. Without this the rest binds to the first arg as a
     // scalar (`args`=opts, not [opts]) and `super(...args)` spreads a bare object
     // → 0x400000000 mis-box → crash (Next.js `new c.AppPageRouteModule({...})`).
-    let rest_idx = crate::closure::lookup_closure_rest(ctor_ptr as *const u8)
-        .map(|ri| ri as usize)
-        .filter(|ri| *ri < user_params);
-    if let Some(ri) = rest_idx {
-        for i in 0..ri {
-            if !args_ptr.is_null() && i < args_len {
-                final_args.push(*args_ptr.add(i));
-            } else {
-                final_args.push(undef);
-            }
-        }
-        let mut rest_arr = crate::array::js_array_alloc(0);
-        if !args_ptr.is_null() {
-            let mut i = ri;
-            while i < args_len {
-                rest_arr = crate::array::js_array_push_f64(rest_arr, *args_ptr.add(i));
-                i += 1;
-            }
-        }
-        final_args.push(crate::value::js_nanbox_pointer(rest_arr as i64));
-    } else {
-        for i in 0..user_params {
-            if !args_ptr.is_null() && i < args_len {
-                final_args.push(*args_ptr.add(i));
-            } else {
-                final_args.push(undef);
-            }
-        }
-    }
+    let mut final_args =
+        constructor_user_arg_slots(ctor_ptr, ctor_cid, user_params, args_ptr, args_len);
     for slot in 0..sig_caps as usize {
         final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
     }
@@ -1459,4 +1505,108 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         false,
         false,
     )
+}
+
+#[cfg(test)]
+mod constructor_arg_slot_tests {
+    use super::*;
+
+    /// Distinct registry keys per case: `CLASS_CONSTRUCTOR_FLAGS` is
+    /// process-global and the closure-rest table is keyed by function pointer.
+    fn key(case: u32) -> (usize, u32) {
+        // Any stable non-null address works — the helper only READS the
+        // registrations under this key, it never calls through the pointer.
+        let ptr = (0x10_484_000usize) + case as usize * 0x40;
+        (ptr, 10_484_000 + case)
+    }
+
+    fn array_of(value: f64) -> (usize, u32) {
+        let arr = crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader;
+        assert!(!arr.is_null(), "expected a packed array, got {value}");
+        let len = crate::array::js_array_length(arr);
+        (arr as usize, len)
+    }
+
+    fn element(value: f64, index: u32) -> f64 {
+        let arr = crate::value::js_nanbox_get_pointer(value) as *const crate::array::ArrayHeader;
+        crate::array::js_array_get_f64(arr, index)
+    }
+
+    #[test]
+    fn the_synthesized_arguments_slot_takes_every_argument() {
+        let (ptr, cid) = key(1);
+        // `constructor(p, q)` reading `arguments`: two fixed slots, then the
+        // synthesized array at index 2.
+        js_register_class_constructor_flags(cid as i64, 1, 0);
+        crate::closure::js_register_closure_rest(ptr as *const u8, 2);
+
+        let args = [11.0, 22.0, 33.0];
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0], 11.0);
+        assert_eq!(slots[1], 22.0);
+        let (arr, len) = array_of(slots[2]);
+        assert_eq!(len, 3, "`arguments` must hold every supplied argument");
+        assert_eq!(element(slots[2], 2), 33.0);
+        assert!(
+            unsafe {
+                crate::array::array_has_arguments_object_flag(
+                    arr as *const crate::array::ArrayHeader,
+                )
+            },
+            "the packed array must be marked as an Arguments object"
+        );
+
+        // Fewer arguments than declared parameters: the fixed slots pad with
+        // `undefined` while `arguments.length` stays at what was passed.
+        let one = [11.0];
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, one.as_ptr(), one.len()) };
+        assert_eq!(slots[1].to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(array_of(slots[2]).1, 1);
+
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, std::ptr::null(), 0) };
+        assert_eq!(array_of(slots[2]).1, 0);
+    }
+
+    #[test]
+    fn a_user_rest_and_arguments_constructor_fills_both_arrays() {
+        let (ptr, cid) = key(2);
+        // `constructor(first, ...rest)` reading `arguments`: one fixed slot,
+        // the rest array at index 1, the full argument list at index 2.
+        js_register_class_constructor_flags(cid as i64, 1, 1);
+        crate::closure::js_register_closure_rest(ptr as *const u8, 1);
+
+        let args = [11.0, 22.0, 33.0];
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 3, args.as_ptr(), args.len()) };
+        assert_eq!(slots.len(), 3);
+        assert_eq!(slots[0], 11.0);
+        assert_eq!(array_of(slots[1]).1, 2, "rest holds the tail only");
+        assert_eq!(element(slots[1], 0), 22.0);
+        assert_eq!(array_of(slots[2]).1, 3, "`arguments` holds all three");
+    }
+
+    #[test]
+    fn an_unflagged_rest_constructor_keeps_tail_only_packing() {
+        let (ptr, cid) = key(3);
+        // No flags registered at all — a plain `constructor(a, ...rest)`.
+        crate::closure::js_register_closure_rest(ptr as *const u8, 1);
+
+        let args = [11.0, 22.0, 33.0];
+        let slots = unsafe { constructor_user_arg_slots(ptr, cid, 2, args.as_ptr(), args.len()) };
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[0], 11.0);
+        assert_eq!(array_of(slots[1]).1, 2);
+    }
+
+    #[test]
+    fn a_constructor_with_no_trailing_array_stays_positional() {
+        let (_, cid) = key(4);
+        // An unregistered constructor pointer: positional, padded to the
+        // declared parameter count.
+        let args = [11.0];
+        let slots = unsafe { constructor_user_arg_slots(0x10_484_900, cid, 2, args.as_ptr(), 1) };
+        assert_eq!(slots.len(), 2);
+        assert_eq!(slots[0], 11.0);
+        assert_eq!(slots[1].to_bits(), crate::value::TAG_UNDEFINED);
+    }
 }

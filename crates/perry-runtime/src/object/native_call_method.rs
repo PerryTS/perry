@@ -1189,29 +1189,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
-/// Bind `IMPLICIT_THIS` for the duration of one call and restore the previous
-/// value on the way out — including when the callee unwinds, which this
-/// `extern "C-unwind"` dispatch surface makes an ordinary outcome rather than an
-/// exotic one. A plain set/restore pair would leak the receiver into every later
-/// implicit-`this` read once a method throws. #9244.
-struct ImplicitThisScope {
-    previous: f64,
-}
-
-impl ImplicitThisScope {
-    fn bind(receiver: f64) -> Self {
-        Self {
-            previous: crate::object::js_implicit_this_set(receiver),
-        }
-    }
-}
-
-impl Drop for ImplicitThisScope {
-    fn drop(&mut self) {
-        crate::object::js_implicit_this_set(self.previous);
-    }
-}
-
 #[no_mangle]
 // Dynamic native calls may synchronously throw from the selected module
 // implementation. Keep this bridge unwind-capable so a generated caller's JS
@@ -1369,10 +1346,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     ) as usize);
                 if resolved {
                     let method_handle = root_scope.root_nanbox_f64(f64::from_bits(method.bits()));
-                    let receiver = object();
                     let bound = crate::closure::clone_closure_rebind_this(
                         method_handle.get_nanbox_f64().to_bits(),
-                        receiver,
+                        object(),
                     );
                     let args = refreshed_args();
                     // `clone_closure_rebind_this` only rewrites a closure that
@@ -1385,8 +1361,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                     // saw no `this` ("called on null or undefined") and
                     // `Object(true).valueOf()` saw the wrong one ("called on
                     // incompatible receiver"). #9244. Restored on the way out,
-                    // including when the callee throws.
-                    let _this_scope = ImplicitThisScope::bind(receiver);
+                    // including when the callee throws — from a ROOT: the
+                    // displaced `this` is the caller's receiver and the callee
+                    // is user code that can move it (#10490). The receiver is
+                    // re-read here, after the clone above allocated.
+                    let _this_scope = crate::object::ImplicitThisScope::bind(&root_scope, object());
                     return crate::closure::js_native_call_value(
                         f64::from_bits(bound),
                         args.as_ptr(),
@@ -1409,8 +1388,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 method_name,
                 "empty object",
             );
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            return crate::object::null_stub_value();
         }
     };
 
@@ -1486,46 +1464,12 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             args_len > 0 && !args_ptr.is_null() && { crate::value::js_is_truthy(*args_ptr) != 0 };
         return js_using_check_disposable(object(), want_async);
     }
-    // TextDecoder / TextEncoder registry handles on a type-erased receiver —
-    // same wall class as the URLSearchParams / AbortSignal blocks below: the
-    // statically-typed `td.decode(buf)` lowers straight to
-    // `js_text_decoder_decode_llvm`, but a fused dynamic call (through an
-    // untyped local, or via the bound method the VALUE read in
-    // `get_field_by_name_tail.rs` reifies for `K.decode.bind(K)` — the shape
-    // a minified SDK's cached decodeText helper takes) lands here, and the
-    // generic field-scan would miss and throw "is not a function".
-    if matches!(method_name, "decode" | "encode" | "encodeInto") && jsval().is_pointer() {
-        let raw = (object().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        if crate::value::addr_class::is_small_handle(raw) {
-            let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let arg0 = if args_len > 0 && !args_ptr.is_null() {
-                *args_ptr
-            } else {
-                undef
-            };
-            if method_name == "decode" && crate::text::is_known_text_decoder_id(raw as i64) {
-                let sp = crate::text::js_text_decoder_decode_llvm(object(), arg0);
-                return f64::from_bits(
-                    JSValue::string_ptr(sp as *mut crate::string::StringHeader).bits(),
-                );
-            }
-            if raw as i64 == crate::text::TEXT_ENCODER_SENTINEL_ID {
-                if method_name == "encode" {
-                    let bp = crate::text::js_text_encoder_encode_llvm(arg0);
-                    return crate::value::js_nanbox_pointer(bp);
-                }
-                if method_name == "encodeInto" {
-                    let arg1 = if args_len > 1 && !args_ptr.is_null() {
-                        *args_ptr.add(1)
-                    } else {
-                        undef
-                    };
-                    let rp = crate::text::js_text_encoder_encode_into_llvm(arg0, arg1);
-                    return crate::value::js_nanbox_pointer(rp);
-                }
-            }
-        }
-    }
+    // #340/#341: TextDecoder / TextEncoder no longer need an arm here. Their
+    // instances are ordinary objects linked to a per-family prototype, so a
+    // fused dynamic call on a type-erased receiver resolves `decode` / `encode`
+    // / `encodeInto` through the generic prototype walk below, exactly as it
+    // does for a user class. The arm this replaces existed only because a
+    // small-handle receiver had no prototype to walk.
     // #5961/#6710: native URLSearchParams (class_id == 0, leading `_entries`
     // slot) AND `class X extends URLSearchParams` subclass instances resolve
     // their method surface via static type-directed lowering. A fused dynamic
@@ -2147,8 +2091,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
                 return result;
             }
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            return crate::object::null_stub_value();
         }
 
         if let Some(r) = crate::builtins::try_console_instance_method_dispatch(
@@ -2217,17 +2160,25 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             // numeric arithmetic on bit patterns. Truly garbage pointers
             // benefit too — chained calls hit a stable null stub instead
             // of mysterious numeric values.
-            if !is_valid_obj_ptr(obj as *const u8) {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
-            }
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            //
+            // #340/#341 row 4 collapsed an `is_valid_obj_ptr(obj)` branch that
+            // used to sit here: BOTH of its arms already returned the stub, so
+            // it could not change the answer -- a test that cannot fail. Its
+            // premise is gone too. It was written when the stub was a `.data`
+            // static, deliberately OUTSIDE the macOS heap window
+            // (`HEAP_MIN == 0x200_0000_0000`) that `is_valid_obj_ptr` requires,
+            // so a re-entrant `stub.raw().all(...)` reached this arm with
+            // `gc_type` read out of whatever bytes preceded the static. The
+            // stub is a real `GC_TYPE_OBJECT` now, so that re-entry takes the
+            // ordinary-object path below, finds a zero-key shape, matches no
+            // method and reaches the same catch-all at the end of this
+            // function. Same answer, decided by the object model rather than by
+            // the linker's layout.
+            return crate::object::null_stub_value();
         }
 
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            return crate::object::null_stub_value();
         };
         let keys = descriptor.keys as usize as *mut ArrayHeader;
 
@@ -2235,8 +2186,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             // Validate keys_array pointer before dereferencing
             let keys_ptr = keys as usize;
             if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                return crate::object::null_stub_value();
             }
             // Issue #62 phase B: removed macOS "ASCII-like pointer" heuristic —
             // mimalloc + arena strings produce valid heap pointers with bytes
@@ -2248,8 +2198,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             let key_count = descriptor.logical_key_count as usize;
             // Sanity check key_count
             if key_count > 65536 {
-                let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-                return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+                return crate::object::null_stub_value();
             }
             // Compare method_name bytes directly against each stored key
             // instead of allocating a transient StringHeader via

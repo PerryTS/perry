@@ -89,8 +89,6 @@ pub(crate) fn register_native_from_new_and_calls(
                         }
                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                         "Redis" => Some("ioredis".to_string()),
-                        "LRUCache" => Some("lru-cache".to_string()),
-                        "Command" => Some("commander".to_string()),
                         "Big" => Some("big.js".to_string()),
                         "Decimal" => Some("decimal.js".to_string()),
                         "BigNumber" => Some("bignumber.js".to_string()),
@@ -223,8 +221,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                 "AsyncResource" => Some("async_hooks".to_string()),
                                 "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
                                 "Redis" => Some("ioredis".to_string()),
-                                "LRUCache" => Some("lru-cache".to_string()),
-                                "Command" => Some("commander".to_string()),
                                 "Big" => Some("big.js".to_string()),
                                 "Decimal" => Some("decimal.js".to_string()),
                                 "BigNumber" => Some("bignumber.js".to_string()),
@@ -291,14 +287,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                     ("https", "createServer") => Some("HttpsServer"),
                                     ("tls", "createServer" | "Server") => Some("Server"),
                                     ("http2", "createSecureServer") => Some("Http2SecureServer"),
-                                    // node-cron's `cron.schedule(expr, cb)` returns a job
-                                    // handle whose `start()`/`stop()`/`isRunning()` methods
-                                    // dispatch via the ("node-cron", true, METHOD) entries
-                                    // in expr.rs's native_module dispatch table. Without
-                                    // registering the result as a "CronJob" native instance,
-                                    // `job.stop()` falls through to dynamic dispatch and the
-                                    // call never reaches js_cron_job_stop.
-                                    ("node-cron", "schedule") => Some("CronJob"),
                                     // readline.createInterface() returns a singleton
                                     // handle whose .question/.on/.close methods
                                     // dispatch via the ("readline", true, METHOD)
@@ -460,19 +448,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                             Some("Connection")
                                         }
                                         ("pg", "connect") => Some("Client"),
-                                        // axios.get/post/put/delete/patch/request — mirror
-                                        // the top-level decl arm in lower.rs:4011 so
-                                        // `await axios.get(...)` registers the result as
-                                        // an axios.Response inside async function bodies.
-                                        // Without this, `r.status` / `r.data` fall through
-                                        // to generic property dispatch and read the
-                                        // raw handle pointer as an ObjectHeader. Issue
-                                        // #604 followup — same pattern as the createServer
-                                        // registration above.
-                                        (
-                                            "axios",
-                                            "get" | "post" | "put" | "delete" | "patch" | "request",
-                                        ) => Some("Response"),
                                         _ => None,
                                     };
                                     if let Some(class_name) = class_name {
@@ -521,19 +496,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                     ("better-sqlite3", "prepare") => Some("Statement"),
                                     ("sqlite", "prepare") => Some("StatementSync"),
                                     ("sqlite", "createSession") => Some("Session"),
-                                    // dayjs / moment manipulation methods return a
-                                    // NEW date handle — without re-registering the
-                                    // binding, `const d2 = d.add(7, 'day');
-                                    // d2.format(...)` fell to generic dispatch
-                                    // (undefined). "App" matches the factory-result
-                                    // registration class.
-                                    ("dayjs", "add" | "subtract" | "startOf" | "endOf") => {
-                                        Some("App")
-                                    }
-                                    (
-                                        "moment",
-                                        "add" | "subtract" | "startOf" | "endOf" | "clone",
-                                    ) => Some("App"),
                                     _ => None,
                                 };
                                 if let Some(class_name) = returns_handle {

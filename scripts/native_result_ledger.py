@@ -23,8 +23,56 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # prose comments in fastify.rs, while one real row uses the positional `cr(...)`
 # helper, leaving 371 executable declarations. The scanner parses declarations,
 # not comments, and includes that helper row.
-EXPECTED_ROWS = 371
-EXPECTED_PROVIDERS = 322
+#
+# +5 rows / +4 providers since then (#10738): #10658's `net.Socket` surface
+# cluster landed in merge train 221 and grew `native_table/net_events.rs` from
+# 53 to 58 typed rows, carrying four new runtime symbols —
+# `js_ext_net_socket_on` (two rows: `on` and `addListener` share the symbol),
+# `js_net_socket_prepend_listener`, `js_net_socket_prepend_once_listener` and
+# `js_net_socket_unpipe`. Each returns its `handle: i64` argument unchanged, a
+# `next_id_or_throw()` registry id rather than a heap address, so all four are
+# NR_HANDLE_ID.
+#
+# -7 rows / -6 providers (native-binding removal campaign): the `fastify`
+# npm binding was removed (#466) — its six pointer-kind rows
+# (`js_fastify_app_server`/`create_with_opts`/`reply_header`/`reply_status`/
+# `reply_type`/`req_headers`) and their `native_table/fastify.rs` rows are
+# gone. The npm `typescript` binding is NOT removed in this PR (see #10765):
+# real `typescript.js` hits a compiler defect, so the binding stays until
+# that is fixed, and `js_typescript_*` plus Bun's `js_bun_transpiler_new`/
+# `js_bun_build` all remain classified.
+#
+# -13 rows / -13 providers (#10708 + #10712, same campaign): removing the
+# `lru-cache` binding dropped 2 pointer-kind rows / 2 providers
+# (`js_lru_cache_new`, `js_lru_cache_set`; its `get`/`has`/`delete`/`size`
+# rows were NR_F64 and never counted here), and removing `commander`
+# dropped 11 (`js_commander_name`/`description`/`version`/`command`/
+# `option`/`required_option`/`action`/`parse`/`opts`/`argument`/
+# `args_array`). 369 -> 367 -> 356 rows and 320 -> 318 -> 307 providers;
+# each figure is what `scripts/native_result_ledger.py` reports on the
+# resolved tree, not arithmetic (#10739).
+#
+# -7 rows / -7 providers (9-package binding-audit batch): removing
+# `node-forge` dropped 5 pointer-kind rows (`js_node_forge_certificate_
+# from_pem`/`create_certificate`/`generate_key_pair`/`md_sha256_create`/
+# `private_key_from_pem`), removing `cron` dropped 1
+# (`js_cron_schedule`), and removing `exponential-backoff` dropped 1
+# (`backOff`). `moment` had no rows in this ledger to begin with (its
+# NR_STR/NR_F64/NR_VOID-returning FFI never counted here). 356 -> 349
+# rows and 307 -> 300 providers; each figure is what the script reports
+# on the resolved tree, not arithmetic.
+#
+# -35 rows / -21 providers (#10677 + #10680, same campaign): removing the
+# `pg` binding dropped 7 pointer-kind rows / 7 providers (`js_pg_connect`/
+# `create_pool`/`client_connect`/`client_query`/`client_end`/`pool_query`/
+# `pool_end`), and removing `mysql2` dropped 28 rows across the `mysql2`
+# and `mysql2/promise` specifiers / 14 providers (the two `release` rows
+# were NR_VOID and never counted here, and each mysql2 provider serves both
+# specifiers, so rows fall by twice the provider count). 349 -> 314 rows and
+# 300 -> 279 providers; each figure is what the script reports on the
+# resolved tree, not arithmetic (#10739).
+EXPECTED_ROWS = 314
+EXPECTED_PROVIDERS = 279
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

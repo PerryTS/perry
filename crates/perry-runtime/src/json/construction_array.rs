@@ -33,7 +33,11 @@ impl ConstructionArray {
         let young_slots = (crate::gc::LARGE_OBJECT_STORAGE_YOUNG_BIRTH_CEILING_BYTES
             .saturating_sub(header))
             / slot;
-        let capacity = estimated_len.clamp(16, (u32::MAX / 2) as usize);
+        // The upper clamp is RULE 3's bound (`object/shape_rule3.rs`): this
+        // capacity is written to `ArrayHeader::capacity` at payload `+4`,
+        // which the emitted read path loads as a ShapeId.
+        let capacity =
+            estimated_len.clamp(16, crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize);
         if capacity <= young_slots {
             let _young = crate::gc::JsonWideBirthScope::arrays();
             return Self::new(batch, capacity as u32);
@@ -62,6 +66,10 @@ impl ConstructionArray {
         } else {
             let ptr = raw.cast::<ArrayHeader>();
             (*ptr).length = 0;
+            crate::object::shape_rule3::debug_assert_not_shape_id_word(
+                "ArrayHeader::capacity (json batch)",
+                capacity,
+            );
             (*ptr).capacity = capacity;
             let slots = crate::array::array_elements_ptr(raw as *const ArrayHeader).cast::<u64>();
             for index in 0..capacity as usize {

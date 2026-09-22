@@ -16,6 +16,27 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
+# #10868 measurement: `PERRY_SHAPE_MINT_DIAG`, the per-mint cause /
+# key-list-identity / call-site / transition-cache-outcome census.
+#
+# The feature covers the WHOLE instrument. Every call site is
+# `#[cfg(feature = "shape-mint-diag")]`, so a stock build emits none of it and
+# `PERRY_SHAPE_MINT_DIAG` measures NOTHING there — not the cache split, not the
+# call sites, and not mint volume either. Build with
+# `--features perry-runtime/shape-mint-diag` to measure anything at all. The
+# module itself always compiles, so its unit tests cannot bit-rot behind a
+# feature nobody builds.
+#
+# It is all-or-nothing on purpose, and the staging measurement is why. Gating
+# `#[track_caller]` alone, then the transition-cache probes as well — 1.4 M
+# lookups on one `transpileModule`, the probes that LOOK hot — still left
+# +0.32 % / +0.35 % on `accd` / `acc`. That residual tracked MINT VOLUME, not
+# call frequency: those fixtures mint 3 and 4 ids per object, while `pool` and
+# `same` mint almost none and were already at zero. Ranking hooks by how hot
+# they look gets this backwards, so every call site is gated rather than
+# argued about.
+shape-mint-diag = []
+
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain
 # `cargo build`/test full-featured. The auto-optimize path builds with
 # `--no-default-features` and re-adds only the features a given program
@@ -133,7 +154,13 @@ bun-cli-utils = [
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
 # (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8
 # heap-snapshot builder (`v8.getHeapSnapshot`/`writeHeapSnapshot`), and
-# `process.report`. None are on a hot path. The env-driven dev diagnostics
+# `process.report`. None of THOSE are on a hot path. Note this feature does
+# NOT gate `hot_diag`, which is declared unconditionally (`pub mod hot_diag;`
+# in lib.rs, no cfg) and whose `enum_on()` runs per string concat
+# (`string/concat.rs`) and per property enumeration in every build, shipped
+# included. Measured at under 0.4% of a short concat, i.e. below probe
+# resolution -- so this is a scope correction to the comment, not a
+# performance claim. The env-driven dev diagnostics
 # degrade gracefully when off (auto-optimize leaves this off unless the program
 # uses a heap-snapshot / `process.report` API, which the compiler detects).
 diagnostics = []

@@ -288,6 +288,7 @@ fn imported_class_from_hir(
     proven_this_method_names: Vec<String>,
     proven_this_tower_method_names: Vec<String>,
 ) -> perry_codegen::ImportedClass {
+    let ctor_abi = perry_codegen::context_free_ctor_abi(class).unwrap_or_default();
     perry_codegen::ImportedClass {
         name: class.name.clone(),
         local_alias,
@@ -300,11 +301,11 @@ fn imported_class_from_hir(
             .as_ref()
             .map_or(0, |ctor| ctor.params.len()),
         has_own_constructor: class.constructor.is_some(),
-        constructor_has_rest: class
-            .constructor
-            .as_ref()
-            .map(|ctor| ctor.params.iter().any(|param| param.is_rest))
-            .unwrap_or(false),
+        // Trailing array slots this class's own constructor declares. A
+        // no-own-ctor class emits a positional forwarder, so it reports none
+        // until the constructor contract resolves its ancestor's ABI (#10484).
+        constructor_has_rest: ctor_abi.has_rest,
+        constructor_has_synthetic_arguments: ctor_abi.has_synthetic_arguments,
         has_instance_fields: !class.fields.is_empty(),
         method_names: class
             .methods
@@ -436,6 +437,7 @@ fn imported_object_literal_from_capability(
         constructor_param_count: capability.field_names.len(),
         has_own_constructor: true,
         constructor_has_rest: false,
+        constructor_has_synthetic_arguments: false,
         has_instance_fields: !capability.field_names.is_empty(),
         method_names: Vec::new(),
         proven_this_method_names: Vec::new(),
@@ -615,6 +617,32 @@ pub fn run_with_parse_cache(
     // wants them for the rest of the session.
     if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
+    }
+
+    // #10574: `--function-source=header` elides function bodies from the
+    // image. Promote to `PERRY_FUNCTION_SOURCE` before rayon codegen so
+    // the object-cache key and the string-pool emitter observe one knob.
+    // Only set (never unset): an already-exported env value wins, matching
+    // `--debug-symbols` / `PERRY_DEBUG_SYMBOLS`.
+    // Precedence is CLI flag > env, matching `--cache-dir`/`PERRY_CACHE_DIR`
+    // and the rest of the CLI. An explicit `--function-source` always wins;
+    // only an omitted flag defers to an exported `PERRY_FUNCTION_SOURCE`.
+    match args.function_source.as_deref() {
+        Some(value) => std::env::set_var("PERRY_FUNCTION_SOURCE", value),
+        None => {
+            // An unknown exported value used to silently select full source, so
+            // a typo (`headeer`) quietly produced a binary with every function
+            // body retained and no diagnostic. `--function-source` is validated
+            // by clap; the env var has to be validated here.
+            if let Some(value) = std::env::var_os("PERRY_FUNCTION_SOURCE") {
+                let value = value.to_string_lossy().trim().to_string();
+                if !matches!(value.as_str(), "full" | "header" | "elide") {
+                    anyhow::bail!(
+                        "PERRY_FUNCTION_SOURCE must be `full` or `header` (got `{value}`)"
+                    );
+                }
+            }
+        }
     }
 
     // `--report-size` needs a symbol table to attribute size by crate, but not
@@ -1099,6 +1127,20 @@ pub fn run_with_parse_cache(
     classify_eager_modules(&mut ctx, &entry_path);
     let non_entry_module_names: Vec<String> =
         topo_sort_non_entry_modules(&ctx, &entry_path, format, verbose);
+    // #10428/#10429: every imported module the well-known flip serves from a
+    // provider crate (net, http/https/http2) gets that provider's install
+    // wrapper called from the entry prologue, so the provider's export
+    // dispatcher is live for module objects the runtime creates itself (a
+    // CommonJS `require('net')` goes through `createRequire`, not codegen).
+    // No flip, no provider on the link line: emit nothing.
+    let native_provider_installs: Vec<String> =
+        if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_some() {
+            Vec::new()
+        } else {
+            perry_codegen::native_provider_install_symbols(
+                ctx.native_module_imports.iter().map(String::as_str),
+            )
+        };
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>
@@ -1740,6 +1782,33 @@ pub fn run_with_parse_cache(
             }
             let key = (path_str.clone(), obj_name.clone());
             exported_var_names.insert(key);
+        }
+
+        // Named imports from Node builtins are runtime values, including when
+        // this module only forwards them. They have no user `Let`, so they do
+        // not appear in `exported_objects`; classify their public names as
+        // getter-backed exports explicitly. Codegen emits the corresponding
+        // live builtin-cell getter from the HIR Import + Export pair.
+        for export in &hir_module.exports {
+            let perry_hir::Export::Named { local, exported } = export else {
+                continue;
+            };
+            let is_named_builtin_import = hir_module.imports.iter().any(|import| {
+                import.is_native
+                    && perry_api_manifest::is_node_core_module(&import.source)
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named {
+                                local: import_local,
+                                ..
+                            } if import_local == local
+                        )
+                    })
+            });
+            if is_named_builtin_import {
+                exported_var_names.insert((path_str.clone(), exported.clone()));
+            }
         }
     }
 
@@ -5358,6 +5427,11 @@ pub fn run_with_parse_cache(
                     Some(path.to_string_lossy().into_owned())
                 } else {
                     None
+                },
+                native_provider_installs: if is_entry {
+                    native_provider_installs.clone()
+                } else {
+                    Vec::new()
                 },
                 ..ctx.app_metadata.clone()
             },

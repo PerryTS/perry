@@ -3,7 +3,7 @@
 //! (extracted from stdlib_ffi.rs).
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 pub(crate) fn declare_streams_events(module: &mut LlModule) {
     // ========== node:stream stubs (issue #631) ==========
@@ -222,93 +222,8 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
 
-    // ========== Fastify ==========
-    module.declare_function("js_fastify_add_hook", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_all", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_create", I64, &[]);
-    module.declare_function("js_fastify_create_with_opts", I64, &[DOUBLE]);
-    module.declare_function("js_fastify_ctx_html", DOUBLE, &[I64, I64, DOUBLE]);
-    module.declare_function("js_fastify_ctx_json", DOUBLE, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_fastify_ctx_redirect", DOUBLE, &[I64, I64, DOUBLE]);
-    module.declare_function("js_fastify_ctx_text", DOUBLE, &[I64, I64, DOUBLE]);
-    module.declare_function("js_fastify_delete", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_get", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_head", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_listen", VOID, &[I64, DOUBLE, I64]);
-    // `app.close()` — shuts every server bound to this FastifyApp.
-    // Declared so the dispatch-table arm in lower_call.rs can emit a
-    // call site. Returns void (Rust signature returns bool, but the
-    // codegen-side caller discards the result).
-    module.declare_function("js_fastify_app_close", VOID, &[I64]);
-    // #1113: `app.server` getter — returns the same FastifyApp handle
-    // id (raw i64). The `NATIVE_MODULE_TABLE` arm at
-    // `module: "fastify", method: "server"` declares the return as
-    // NR_PTR so the codegen NaN-boxes it with POINTER_TAG before it
-    // reaches the JS world, making `typeof app.server === "object"`
-    // and routing `.on(…)` back into the FastifyApp method dispatch.
-    module.declare_function("js_fastify_app_server", I64, &[I64]);
-    // #1113: `app.server.on(event, cb)` — registers an event handler.
-    // `event` arrives as a NaN-boxed string pointer (i64); `cb` as a
-    // raw ClosureHeader pointer (i64). Returns void at the C ABI
-    // (the FastifyApp dispatch wraps it to return the handle for
-    // chaining, matching Node's `EventEmitter.on` contract).
-    module.declare_function("js_fastify_app_on", VOID, &[I64, I64, I64]);
-    module.declare_function("js_fastify_options", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_patch", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_post", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_put", I32, &[I64, I64, I64]);
-    module.declare_function("js_fastify_register", I32, &[I64, I64, DOUBLE]);
-    module.declare_function("js_fastify_reply_header", I64, &[I64, I64, I64]);
-    module.declare_function("js_fastify_reply_send", I32, &[I64, DOUBLE]);
-    module.declare_function("js_fastify_reply_status", I64, &[I64, DOUBLE]);
-    module.declare_function("js_fastify_reply_type", I64, &[I64, I64]);
-    module.declare_function("js_fastify_req_body", I64, &[I64]);
-    module.declare_function("js_fastify_req_get_user_data", DOUBLE, &[I64]);
-    module.declare_function("js_fastify_req_header", I64, &[I64, I64]);
-    module.declare_function("js_fastify_req_headers", I64, &[I64]);
-    module.declare_function("js_fastify_req_json", DOUBLE, &[I64]);
-    module.declare_function("js_fastify_req_method", I64, &[I64]);
-    module.declare_function("js_fastify_req_param", I64, &[I64, I64]);
-    module.declare_function("js_fastify_req_params", I64, &[I64]);
-    module.declare_function("js_fastify_req_query", I64, &[I64]);
-    module.declare_function("js_fastify_req_query_object", DOUBLE, &[I64]);
-    module.declare_function("js_fastify_req_set_user_data", VOID, &[I64, DOUBLE]);
-    module.declare_function("js_fastify_req_url", I64, &[I64]);
-    module.declare_function("js_fastify_route", I32, &[I64, I64, I64, I64]);
-    module.declare_function("js_fastify_set_error_handler", I32, &[I64, I64]);
-
     // ========== Nodemailer ==========
     module.declare_function("js_nodemailer_create_transport", DOUBLE, &[I64]);
     module.declare_function("js_nodemailer_send_mail", I64, &[I64, I64]);
     module.declare_function("js_nodemailer_verify", I64, &[I64]);
-
-    // ========== Rate limit ==========
-    module.declare_function("js_ratelimit_block", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_ratelimit_consume", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_ratelimit_create", I64, &[I64]);
-    module.declare_function("js_ratelimit_delete", I64, &[I64, I64]);
-    module.declare_function("js_ratelimit_get", I64, &[I64, I64]);
-    // `new RateLimiterMemory({...})` ctor arm in lower_call/builtin.rs —
-    // takes the raw NaN-boxed options object bits.
-    module.declare_function("js_ratelimit_new_from_options", I64, &[I64]);
-    module.declare_function("js_ratelimit_penalty", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_ratelimit_reward", I64, &[I64, I64, DOUBLE]);
-
-    // ========== Validator ==========
-    module.declare_function("js_validator_contains", DOUBLE, &[I64, I64]);
-    module.declare_function("js_validator_equals", DOUBLE, &[I64, I64]);
-    module.declare_function("js_validator_is_alpha", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_alphanumeric", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_email", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_empty", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_float", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_hexadecimal", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_int", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_json", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_length", DOUBLE, &[I64, DOUBLE, DOUBLE]);
-    module.declare_function("js_validator_is_lowercase", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_numeric", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_uppercase", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_url", DOUBLE, &[I64]);
-    module.declare_function("js_validator_is_uuid", DOUBLE, &[I64]);
 }

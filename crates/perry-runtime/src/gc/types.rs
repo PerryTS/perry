@@ -1294,6 +1294,44 @@ pub const OBJ_FLAG_TYPED_ARRAY_PROTO: u16 = 0x100;
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.
 pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+/// #10362: this cell owns an entry in the residual static-prototype registry
+/// (`object::prototype_chain`) — i.e. an `Object.setPrototypeOf` whose receiver
+/// `meta_capable_object` turned away, so the prototype could not go in a meta
+/// record and went into the address-keyed table instead.
+///
+/// The registry's readers used to ask only the process-global
+/// `OBJECT_PROTOTYPES_NONEMPTY` latch, which is exact for a process that has
+/// never re-prototyped a non-object and useless for one that has: a single
+/// `Object.setPrototypeOf(anArray, p)` made EVERY traced cell of every
+/// owner-capable kind take the registry's global mutex and a SipHash probe, and
+/// every relocation of one call the rekey hook. Measured on a 200k-array
+/// fixture: 400,000 armed hook calls from three lines of setup, against 155
+/// unarmed. This bit answers the same question per OWNER, so an armed process
+/// pays only for the cells that actually have an entry.
+///
+/// Bit 6, shared with `OBJ_FLAG_NULL_PROTO` exactly as bits 7..12 are already
+/// shared between the OBJECT and ARRAY namespaces, and disjoint from it by
+/// `obj_type`: `OBJ_FLAG_NULL_PROTO` has one setter,
+/// `js_object_alloc_null_proto`, which returns `*mut ObjectHeader`, and every
+/// reader of it is behind an `obj_type == GC_TYPE_OBJECT` guard (audited:
+/// `field_get_set/accessors.rs`, `field_get_set/for_in_stable.rs`,
+/// `field_set_by_name.rs`, `field_set_by_name/tail.rs` via `object_is_regular`,
+/// `builtins/formatting.rs` via both callers' `gc_type` dispatch,
+/// `builtins/formatting/prototype_equality.rs` via `heap_object_addr`,
+/// `native_call_method/object_proto.rs` via `object_ptr_from_value`).
+/// So this bit is **only meaningful for `obj_type != GC_TYPE_OBJECT`**, and a
+/// `GC_TYPE_OBJECT` owner that reaches the registry anyway keeps the
+/// latch-only gate (see `residual_entry_possible_for`).
+///
+/// Set-only, like `GC_ARRAY_NAMED_PROPS` and for the same reason: an entry is
+/// never deleted while its owner lives (a second `setPrototypeOf` overwrites
+/// the same key; the prune only removes DEAD owners, whose header is gone; the
+/// two rekey paths remove-then-insert and the entry survives). So the error is
+/// on the safe side by construction — a stale-set bit costs one probe that the
+/// map answers `None` to, while the dangerous direction (entry present, bit
+/// absent) has no code path that can produce it, because the only writer of the
+/// entry is also the only writer of the bit, under one lock.
+pub(crate) const GC_RESIDUAL_PROTO_OWNER: u16 = 0x40;
 /// Array was synthesized for a function's `arguments` binding. This is only
 /// meaningful for `GC_TYPE_ARRAY`; it lets `util.types.isArgumentsObject`
 /// distinguish Perry's internal `arguments` arrays from user rest arrays.
@@ -1337,6 +1375,44 @@ pub(crate) const GC_ARRAY_NAMED_PROPS: u16 = 0x100;
 /// MUST match `PLAIN_ORDINARY_OBJ_FLAG` in
 /// `perry-codegen/src/expr/proxy_reflect.rs`, which emits it as a literal.
 pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
+/// # `GcHeader::_reserved` IS FULL — the authoritative bit map
+///
+/// Read this before spending a bit. It is the only place both namespaces are
+/// written down together, and the reason it exists is that they are not:
+/// `OBJ_FLAG_*` lives here, `GC_OBJ_TYPED_LAYOUT_INTACT` / `GC_LAYOUT_*` live
+/// in `gc/layout.rs`, and a comment in this file used to claim bits 12..13
+/// were "the last free bits" while `gc/layout.rs` already owned 12, 13, 14
+/// and 15.
+///
+/// | bit | OBJECT (`GC_TYPE_OBJECT`) | ARRAY | all kinds |
+/// |---|---|---|---|
+/// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
+/// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
+/// | 6 | `OBJ_FLAG_NULL_PROTO` | | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
+/// | 7 | `OBJ_FLAG_PACKED_NUMERIC_PROOF` | `GC_ARRAY_RAW_F64_LAYOUT` | |
+/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
+/// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
+/// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
+/// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
+/// | 12 | `GC_OBJ_TYPED_LAYOUT_INTACT` (`gc/layout.rs`) | `GC_ARRAY_RAW_F64_HOLES` | |
+/// | 13 | | | `GC_LAYOUT_ALL_POINTERS` (`gc/layout.rs`) |
+/// | 14..15 | | | `GC_LAYOUT_STATE_MASK` (`gc/layout.rs`) |
+///
+/// **There are no free bits.** Bits 12 and 13 are the dangerous ones to
+/// mistake for free, because `layout::set_layout_state` CLEARS bit 13 (and the
+/// typed-layout helpers clear bit 12) on transitions that have nothing to do
+/// with whatever a new flag would mean. A flag placed there is not merely
+/// shared — it is silently ERASED, so its reader answers `false` for an object
+/// the writer marked. #8690 hit this and left its warning in
+/// `ObjectMeta::flags`' doc comment; #10842 hit it again and left this table.
+///
+/// The next bit back is 10, `OBJ_FLAG_STABLE_TOMBSTONES`, which becomes dead
+/// when #10826 makes `delete` a shape transition. Until then, a new per-object
+/// fact belongs in **`ObjectMeta::flags`** (a `u64`, bits 5/6/7 free, out of
+/// reach of the layout machinery entirely) — and for any fact a hot read path
+/// consults, that is the better home anyway whenever the path already loads
+/// `meta`.
+pub const OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC: () = ();
 /// #6011: every element slot in `[0, length)` holds either canonical raw-f64
 /// number bits or `TAG_HOLE` — the hole-tolerant sibling of
 /// `GC_ARRAY_RAW_F64_LAYOUT`. Set when `new Array(n)` hole-initializes a

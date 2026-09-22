@@ -246,6 +246,38 @@ pub(super) unsafe fn instance_constructor_value(
     if let Some(func_value) = super::super::class_registry::function_value_for_class_id(class_id) {
         return Some(JSValue::from_bits(func_value.to_bits()));
     }
+    // #10478: an `Object.create(proto)` result is stamped with a synthetic
+    // class id that only indexes its prototype object
+    // (`CLASS_PROTOTYPE_OBJECTS`); unlike the function ids above it names no
+    // class VALUE. Its `constructor` is the inherited `proto.constructor`, so
+    // read it off that chain. The INT32 synthesis below minted a ClassRef for
+    // the synthetic id itself (`0x7FFE_0000_8000_0000`): unequal to `Object` /
+    // `A`, printed as `[object Function]`, and `C instanceof C` segfaulted
+    // (lodash `isEqual(cloneDeep(x), x)`).
+    let synthetic_proto = super::super::class_registry::synthetic_class_prototype_object(class_id);
+    if !synthetic_proto.is_null() {
+        // The prototype's OWN `constructor` data field answers the common
+        // shapes directly — `Object.prototype`, a declared `C.prototype`, a
+        // materialized `F.prototype`, a `{ constructor: F }` literal — so take
+        // it without the general chain walk, whose implicit-`this` juggling,
+        // accessor-receiver override and registry probes cost ~3000
+        // instructions per read. Skipped when an accessor owns the key, which
+        // must run through the walk to fire with the right receiver.
+        if get_accessor_descriptor(synthetic_proto as usize, "constructor").is_none() {
+            if let Some(value) = own_data_field_by_name(synthetic_proto, key) {
+                if !value.is_undefined() && !value.is_null() {
+                    return Some(value);
+                }
+            }
+        }
+        let receiver = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+        return Some(
+            super::super::class_registry::resolve_proto_chain_field_with_receiver(
+                class_id, key, receiver,
+            )
+            .unwrap_or_else(JSValue::undefined),
+        );
+    }
     if class_id != 0 && is_class_id_registered(class_id) {
         let bits = 0x7FFE_0000_0000_0000u64 | (class_id as u64);
         return Some(JSValue::from_bits(bits));

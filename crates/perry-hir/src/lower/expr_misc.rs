@@ -306,9 +306,26 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         return Ok(Expr::String(String::new()));
     }
 
-    // Start with the first quasi
+    // Start with the first quasi — but only when it's non-empty. Every
+    // *interior* quasi already skips itself below (`if !quasi_str.is_empty()`)
+    // — the leading one just never got the same guard, so `` `${x}...` `` (a
+    // template that OPENS on a substitution, the common case) unconditionally
+    // seeded the chain with `Expr::String("")`. That part survives HIR/codegen
+    // all the way to `js_string_concat_chain` as a real, always-empty entry: a
+    // wasted classification slot (tag decode + three `StringHeader` field
+    // loads for zero contributed bytes) on every single evaluation, and for a
+    // template with only one substitution and no other literal text
+    // (`` `${x}` ``) it also defeated the 3-part minimum for the n-way
+    // concat-chain fold, forcing the pairwise `js_string_concat_box` path to
+    // concatenate a literal empty string for no reason. Seed with `None`
+    // instead and only fall back to `Expr::String("")` once we know the whole
+    // template turned out to have no substitutions at all (`` ` ` ``).
     let first_raw = tpl.quasis.first().map(|q| q.raw.as_ref()).unwrap_or("");
-    let mut result = Expr::String(unescape_template(first_raw));
+    let mut result: Option<Expr> = if first_raw.is_empty() {
+        None
+    } else {
+        Some(Expr::String(unescape_template(first_raw)))
+    };
 
     // Interleave expressions and remaining quasis
     for (i, expr) in tpl.exprs.iter().enumerate() {
@@ -320,26 +337,30 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         // (the same `js_string_coerce`/ToString that `String(x)` uses), so it is
         // toString-first and the concat sees a plain string. No-op for
         // string/number substitutions; fixes the object case.
-        result = Expr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(result),
-            right: Box::new(Expr::StringCoerce(Box::new(lowered))),
-        };
+        let coerced = Expr::StringCoerce(Box::new(lowered));
+        result = Some(match result.take() {
+            None => coerced,
+            Some(prev) => Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(prev),
+                right: Box::new(coerced),
+            },
+        });
 
         // Add the next quasi (if it's non-empty)
         if let Some(quasi) = tpl.quasis.get(i + 1) {
             let quasi_str: &str = quasi.raw.as_ref();
             if !quasi_str.is_empty() {
-                result = Expr::Binary {
+                result = Some(Expr::Binary {
                     op: BinaryOp::Add,
-                    left: Box::new(result),
+                    left: Box::new(result.take().expect("substitution just set result")),
                     right: Box::new(Expr::String(unescape_template(quasi_str))),
-                };
+                });
             }
         }
     }
 
-    Ok(result)
+    Ok(result.unwrap_or_else(|| Expr::String(String::new())))
 }
 
 pub(super) fn lower_seq(ctx: &mut LoweringContext, seq: &ast::SeqExpr) -> Result<Expr> {

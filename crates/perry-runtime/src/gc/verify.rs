@@ -303,6 +303,12 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
     if !crate::arena::pointer_in_old_gen(user_ptr as usize) {
         return;
     }
+    // #10362: no child slot means no old->young edge to remember. This pass
+    // ignores `PointerFreeRange`, so unlike the full mark it needs no proxy
+    // term.
+    if crate::gc::gc_object_yields_no_child_slots(header) {
+        return;
+    }
     visit_gc_rewrite_slots(header, |slot| unsafe {
         if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
             return;

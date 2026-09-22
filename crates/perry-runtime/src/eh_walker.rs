@@ -945,7 +945,7 @@ fn find_handler(start: WalkRegs) -> Option<(u64, WalkRegs)> {
         let site = regs.pc.wrapping_sub(1);
         if let Some((lsda, func_start)) = guard.lsda_for(site) {
             if let Ok(Some(pad)) = unsafe {
-                crate::eh::find_landing_pad_in_lsda(
+                crate::eh_lsda::find_landing_pad_in_lsda(
                     lsda as *const u8,
                     site as usize,
                     func_start as usize,

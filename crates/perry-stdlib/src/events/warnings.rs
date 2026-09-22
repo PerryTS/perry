@@ -48,10 +48,30 @@ unsafe fn emit_warning(warning: f64) {
         let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
         let emit_warning = js_object_get_field_by_name_f64(process_obj, key_ptr);
         if closure_ptr_from_value(emit_warning).is_some() {
-            let args = [warning];
-            let previous_this = perry_runtime::object::js_implicit_this_set(process);
-            perry_runtime::closure::js_native_call_value(emit_warning, args.as_ptr(), args.len());
-            perry_runtime::object::js_implicit_this_set(previous_this);
+            // #10600: `emit_warning`, `process` and `warning` are plain Rust
+            // locals, not GC roots. `js_native_call_value` can itself
+            // allocate in its own dispatch preamble before it reads the
+            // callee/args, which would otherwise leave these pointing at a
+            // retired from-space address by the time they're dereferenced.
+            //
+            // #10490: the displaced `this` crosses the (user-replaceable)
+            // `process.emitWarning`, so root it in that same scope and
+            // restore it from the root, not from a plain local.
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let callback_h = scope.root_nanbox_f64(emit_warning);
+            let process_h = scope.root_nanbox_f64(process);
+            let arg_handles = scope.root_nanbox_f64_slice(&[warning]);
+            let previous_this = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_set(
+                process_h.get_nanbox_f64(),
+            ));
+            let live_args =
+                perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+            perry_runtime::closure::js_native_call_value(
+                callback_h.get_nanbox_f64(),
+                live_args.as_ptr(),
+                live_args.len(),
+            );
+            perry_runtime::object::js_implicit_this_set(previous_this.get_nanbox_f64());
             return;
         }
     }

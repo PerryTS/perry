@@ -977,13 +977,21 @@ pub fn closure_length(closure: *const ClosureHeader) -> Option<u32> {
 #[inline(always)]
 pub unsafe fn build_rest_array(values: &[f64], arguments_object: bool) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let value_handles: Vec<_> = values
-        .iter()
-        .map(|value| scope.root_nanbox_f64(*value))
-        .collect();
+    let value_handles = scope.root_nanbox_f64_slice(values);
+    build_rest_array_rooted(&value_handles, arguments_object)
+}
+
+/// [`build_rest_array`] for a caller that already holds its values in handles.
+/// The array allocation and every push can collect, so the values have to be
+/// read out of the handles anyway — a caller that has them keeps one rooting
+/// pass instead of two.
+pub unsafe fn build_rest_array_rooted(
+    values: &[crate::gc::RuntimeHandle<'_>],
+    arguments_object: bool,
+) -> f64 {
     let arr = crate::array::js_array_alloc(values.len() as u32);
     let mut cur = arr;
-    for handle in value_handles.iter() {
+    for handle in values.iter() {
         cur = crate::array::js_array_push_f64(cur, handle.get_nanbox_f64());
     }
     if arguments_object {
@@ -1021,19 +1029,30 @@ pub unsafe fn dispatch_rest_bundled(
         .map(|value| arg_scope.root_nanbox_f64(*value))
         .collect();
 
-    let rest_slice: &[f64] = if kind == RestDispatchKind::SyntheticArguments {
-        args
-    } else if provided > k {
-        &args[k..]
-    } else {
-        &[]
-    };
-    let rest_double = build_rest_array(rest_slice, kind == RestDispatchKind::SyntheticArguments);
-    let all_arguments_double = if kind == RestDispatchKind::UserRestAndArguments {
-        Some(build_rest_array(args, true))
+    // Both arrays are built from the arguments this scope already roots, so
+    // they read current values however many times the builder collects — and
+    // the second array's allocation can move the first, which the body is
+    // about to receive, so the first takes a handle too (#10532 review).
+    let rest_handles: &[crate::gc::RuntimeHandle<'_>] =
+        if kind == RestDispatchKind::SyntheticArguments {
+            &arg_handles
+        } else if provided > k {
+            &arg_handles[k..]
+        } else {
+            &[]
+        };
+    let rest_handle = arg_scope.root_nanbox_f64(build_rest_array_rooted(
+        rest_handles,
+        kind == RestDispatchKind::SyntheticArguments,
+    ));
+    crate::gc::collection_point("closure.rest_bundle.between_arrays");
+    let all_arguments_handle = if kind == RestDispatchKind::UserRestAndArguments {
+        Some(arg_scope.root_nanbox_f64(build_rest_array_rooted(&arg_handles, true)))
     } else {
         None
     };
+    let rest_double = rest_handle.get_nanbox_f64();
+    let all_arguments_double = all_arguments_handle.map(|handle| handle.get_nanbox_f64());
 
     // Read fixed args, padding with undefined when caller under-supplied.
     macro_rules! a {

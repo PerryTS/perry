@@ -1,5 +1,5 @@
 //! Third-party package stdlib FFI declarations (extracted from stdlib_ffi.rs):
-//! bcrypt/argon2, perry/ads, perry/thread, jsonwebtoken, axios, sharp, cron,
+//! bcrypt/argon2, perry/ads, perry/thread, jsonwebtoken, sharp, cron,
 //! async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer, child_process,
 //! cheerio.
 
@@ -63,51 +63,13 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_perry_native_f32", DOUBLE, &[DOUBLE]);
     module.declare_function("js_perry_native_f64", DOUBLE, &[DOUBLE]);
 
-    // ========== jsonwebtoken / JWT ==========
-    module.declare_function("js_jwt_decode", I64, &[I64]);
-    module.declare_function("js_jwt_sign", I64, &[I64, I64, DOUBLE, I64]);
-    module.declare_function("js_jwt_sign_es256", I64, &[I64, I64, DOUBLE, I64]);
-    module.declare_function("js_jwt_sign_rs256", I64, &[I64, I64, DOUBLE, I64]);
-    module.declare_function("js_jwt_verify", I64, &[I64, I64]);
-    module.declare_function("js_jwt_verify_es256", I64, &[I64, I64]);
-    module.declare_function("js_jwt_verify_rs256", I64, &[I64, I64]);
-    // #1074: runtime-algorithm dispatchers. The codegen `lower_jsonwebtoken_*`
-    // fast paths still hard-route literal `algorithm: "ES256"` to the typed
-    // helpers above; non-literal shapes (const-bound ident, spread, ternary)
-    // are routed here with the alg name lowered as a string at runtime.
-    module.declare_function("js_jwt_sign_dyn", I64, &[I64, I64, I64, DOUBLE, I64]);
-    module.declare_function("js_jwt_verify_dyn", I64, &[I64, I64, I64]);
-    // #1074 case C: options is a whole non-extractable expression
-    // (`const opts = { algorithm: "ES256" }; jwt.sign(p, k, opts)`). We
-    // pass `opts` as a NaN-boxed JSValue and the runtime helper extracts
-    // `algorithm` / `expiresIn` / `keyid` via `js_object_get_field_by_name`.
-    module.declare_function("js_jwt_sign_dyn_opts", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_jwt_verify_dyn_opts", I64, &[I64, I64, DOUBLE]);
-
-    // ========== axios / node-fetch ==========
-    module.declare_function("js_axios_create", DOUBLE, &[I64]);
-    module.declare_function("js_axios_delete", I64, &[I64]);
-    module.declare_function("js_axios_get", I64, &[I64]);
-    module.declare_function("js_axios_head", I64, &[I64]);
-    module.declare_function("js_axios_options", I64, &[I64]);
+    // ========== node-fetch ==========
     // #598: body arg is a NaN-boxed f64 (DOUBLE) so the runtime can
     // distinguish strings from objects via the tag and JSON.stringify
     // non-string bodies. Pre-fix this was I64 (raw unboxed pointer)
-    // which had no way to tell `axios.post(url, "raw json")` from
-    // `axios.post(url, {a: 1})`.
-    module.declare_function("js_axios_post", I64, &[I64, DOUBLE]);
-    module.declare_function("js_axios_put", I64, &[I64, DOUBLE]);
-    module.declare_function("js_axios_patch", I64, &[I64, DOUBLE]);
-    module.declare_function("js_axios_request", I64, &[I64]);
-    module.declare_function("js_axios_response_status", DOUBLE, &[I64]);
-    module.declare_function("js_axios_response_status_text", I64, &[I64]);
-    module.declare_function("js_axios_response_data", I64, &[I64]);
     // Issue #604 followup — JSON-auto-parsing variant of `.data`. Returns
     // a NaN-boxed JSValue (parsed object/array/number/bool/null when the
     // response body is JSON, raw string otherwise) so `r.data.ok` works
-    // the same way as npm `axios` does for `application/json` responses.
-    module.declare_function("js_axios_response_data_parsed", DOUBLE, &[I64]);
-
     // ========== sharp / image ==========
     module.declare_function("js_sharp_auto_orient", I64, &[I64]);
     module.declare_function("js_sharp_avif", I64, &[I64, DOUBLE]);
@@ -133,23 +95,12 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_sharp_to_format", I64, &[I64, I64]);
 
     // ========== cron / scheduler ==========
-    module.declare_function("js_cron_clear_interval", VOID, &[I64]);
-    module.declare_function("js_cron_clear_timeout", VOID, &[I64]);
-    module.declare_function("js_cron_describe", I64, &[I64]);
-    module.declare_function("js_cron_job_is_running", DOUBLE, &[I64]);
-    // npm `cron` CronJob ctor arm in lower_call/builtin.rs —
-    // (expr StringHeader, onTick closure bits, NaN-boxed start flag).
-    module.declare_function("js_cron_job_new", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_cron_job_start", VOID, &[I64]);
-    module.declare_function("js_cron_job_stop", VOID, &[I64]);
-    module.declare_function("js_cron_next_date", I64, &[I64]);
-    module.declare_function("js_cron_next_dates", I64, &[I64, DOUBLE]);
-    module.declare_function("js_cron_schedule", I64, &[I64, I64]);
-    module.declare_function("js_cron_set_interval", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_cron_set_timeout", I64, &[DOUBLE, DOUBLE]);
+    // The `cron` native binding was removed (real npm `cron` source now
+    // compiles via `perry.compilePackages`); only the two unconditional
+    // event-loop liveness symbols remain (see perry-stdlib/src/lib.rs and
+    // perry-runtime/src/stdlib_stubs.rs — always a 0-returning stub now).
     module.declare_function("js_cron_timer_has_pending", I32, &[]);
     module.declare_function("js_cron_timer_tick", I32, &[]);
-    module.declare_function("js_cron_validate", DOUBLE, &[I64]);
 
     // ========== async_hooks / AsyncLocalStorage ==========
     module.declare_function("js_async_hooks_create_hook", I64, &[DOUBLE]);

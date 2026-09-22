@@ -111,11 +111,16 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f6
             return;
         }
     } else {
+        // Un-marking re-exposes a previously `delete`d prototype key to
+        // `class_instance_has_member` / `lookup_prototype_method` — the one
+        // direction a cached "this chain resolves nothing" verdict must not
+        // survive (#10696).
         CLASS_DELETED_KEYS.with(|m| {
             if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
                 keys.remove(name);
             }
         });
+        super::class_lookup_surface_gen_bump();
     }
     CLASS_DYNAMIC_PROPS.with(|m| {
         let created = m
@@ -621,6 +626,26 @@ pub(crate) fn class_object_value_for_cid(class_id: u32) -> Option<f64> {
     })
 }
 
+/// # Any mark that allocates must be the LAST thing its caller does with the
+/// pointer
+///
+/// This function holds `proto_ptr` as a bare pointer and re-uses it AFTER the
+/// registry insert, for `class_prototype_object_addr_index_rekey` and for
+/// `runtime_write_barrier_root_raw_ptr`. Anything inserted here that can
+/// allocate — a mark, a hook, a counter that ensures a side record — can
+/// trigger a collection that MOVES the object, and both of those later uses
+/// then run on a stale address.
+///
+/// #10842 learned this by adding one line: marking the registered prototype
+/// with `proto_validity::mark_object_as_prototype`, which calls
+/// `object_meta_ensure`, SIGSEGV'd the runtime suite. The mark now happens at
+/// the `[[Prototype]]` install funnel and, as a self-healing backstop, inside
+/// the inherited-read cache's walk, which marks and then immediately abandons
+/// the walk precisely so that no pointer it was holding is touched afterwards.
+///
+/// If you need to add something here that allocates: root `proto_ptr` in a
+/// `RuntimeHandleScope` and reload it after, or do the work in the CALLER
+/// before it takes the pointer.
 pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;
@@ -634,6 +659,13 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
     });
     class_prototype_object_addr_index_rekey(old.unwrap_or(0), proto_ptr as usize);
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+    // A materialized prototype object can carry arbitrary later-added
+    // properties, so every cache that answered "this class chain resolves
+    // nothing" must retire. Bumped HERE rather than at the call sites: five
+    // of them (`ensure_function_prototype_object`, `js_object_create`,
+    // the per-evaluation class-object heritage path, and the lazy
+    // tls/tty/wasi installers) bump nothing of their own (#10696).
+    super::class_lookup_surface_gen_bump();
 }
 
 pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
@@ -720,6 +752,11 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
             .insert(class_id, proto_ptr as usize);
     });
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+    // Its sole caller, `class_decl_prototype_value`, argues at length against
+    // bumping VTABLE_GEN here (it would disarm dispatch speculation for a
+    // whole class hierarchy). The lookup-surface generation is the separate
+    // counter that exists for exactly this store (#10696).
+    super::class_lookup_surface_gen_bump();
 }
 
 pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {
@@ -953,6 +990,46 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
     (unsafe { crate::symbol::js_is_symbol(value) } == 0).then_some(bits)
 }
 
+/// #10599: resolve the real `.prototype` object for a RESERVED native-builtin
+/// parent class id -- one `builtin_parent_reserved_class_id` (perry-codegen)
+/// wires as a class-registry parent edge for a native base that has no
+/// declared-class registration of its own (`class Sub extends EventEmitter
+/// {}` has no `js_register_class_name` call for `EventEmitter`). Without this,
+/// `class_decl_prototype_value` bails immediately for such an id
+/// (`class_name_for_id` returns `None`), so `Sub.prototype`'s `[[Prototype]]`
+/// silently fell through to `Object.prototype` instead of
+/// `EventEmitter.prototype` -- `Object.getPrototypeOf(Sub.prototype) !==
+/// EventEmitter.prototype`, even though `new Sub() instanceof EventEmitter`
+/// (a different mechanism -- the class-chain walk in `js_instanceof`) already
+/// worked.
+///
+/// Scoped to the ids whose only registered subclassing surface is this
+/// generic declared-class-prototype path: EventEmitter and its
+/// AsyncResource variant, both bound as ordinary native-module callable
+/// exports (`bound_native_callable_export_value`) whose own `.prototype` is
+/// the same lazily-materialized, closure-identity-keyed object any bound
+/// function's `.prototype` read produces
+/// (`js_function_prototype_value_for_read`). Resolving through that exact
+/// helper -- the same one the dynamic-parent branch below already uses for a
+/// runtime function-valued superclass -- is what makes
+/// `Object.getPrototypeOf(Sub.prototype) === EventEmitter.prototype` hold by
+/// identity, not merely by shape. Array/Map/Set/Error/typed-array subclasses
+/// have their own dedicated instance/prototype modeling and don't reach this
+/// fallback the same way.
+fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
+    const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
+    const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
+    let (module, symbol) = match parent_id {
+        CLASS_ID_EVENT_EMITTER => ("events", "EventEmitter"),
+        CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
+        _ => return None,
+    };
+    let func_value =
+        super::super::native_module::bound_native_callable_export_value(module, symbol);
+    let parent_proto = super::function_prototype::js_function_prototype_value_for_read(func_value);
+    class_parent_prototype_bits(parent_proto)
+}
+
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // #7757: a specialization answers with its generic's prototype.
     let class_id = decl_prototype_identity_id(class_id);
@@ -1046,7 +1123,22 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
             .and_then(|parent_id| {
                 let parent_proto = class_decl_prototype_value(parent_id);
                 let parent_bits = parent_proto.to_bits();
-                ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
+                if (parent_bits >> 48) == 0x7FFD {
+                    return Some(parent_bits);
+                }
+                // #10599: `parent_id` may be a RESERVED native-builtin class id
+                // rather than a declared class -- `builtin_parent_reserved_class_id`
+                // in perry-codegen wires this edge for `class Sub extends
+                // EventEmitter {}`, which has no `js_register_class_name`
+                // registration of its own. `class_decl_prototype_value` bails
+                // immediately for such an id (`class_name_for_id` is `None`), so
+                // without this fallback the lookup above always misses and
+                // execution falls through to the runtime-function-valued branch
+                // below, which also misses (there is no dynamic-parent VALUE for
+                // a statically-resolved reserved id) -- landing `Sub.prototype`'s
+                // `[[Prototype]]` on `Object.prototype` instead of
+                // `EventEmitter.prototype`.
+                reserved_native_parent_prototype_bits(parent_id)
             });
         if registered_parent_proto.is_some() {
             registered_parent_proto

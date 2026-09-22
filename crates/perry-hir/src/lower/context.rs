@@ -26,7 +26,7 @@ use crate::ir::*;
 /// `b/util.ts` are `a_util_ts` and `b_util_ts` — distinct salts, and
 /// cross-module capture chains stay isolated exactly as before. Same module ⇒
 /// same salt ⇒ same-module inheritance keeps sharing parent stashes.
-fn stable_module_salt(module_identity: &str) -> u64 {
+pub(crate) fn stable_module_salt(module_identity: &str) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in module_identity.as_bytes() {
         h ^= u64::from(*b);
@@ -36,212 +36,6 @@ fn stable_module_salt(module_identity: &str) -> u64 {
 }
 
 impl LoweringContext {
-    // #854: single-arg constructor (delegates to `with_class_id_start`).
-    // Currently only exercised from the `#[cfg(test)]` lowering tests, so it
-    // reads as dead in a non-test build. Kept as the canonical entry point.
-    #[allow(dead_code)]
-    pub fn new(source_file_path: impl Into<String>) -> Self {
-        Self::with_class_id_start(source_file_path, 1)
-    }
-
-    pub fn with_class_id_start(
-        source_file_path: impl Into<String>,
-        start_class_id: ClassId,
-    ) -> Self {
-        // No module name available (the `#[cfg(test)]` lowering entry points).
-        // Salting on the path preserves the pre-#7177 behaviour for those; the
-        // production path below passes the module name.
-        let source_file_path = source_file_path.into();
-        let identity = source_file_path.clone();
-        Self::with_class_id_start_salted(source_file_path, identity, start_class_id)
-    }
-
-    /// #7177: as [`Self::with_class_id_start`], but salts the module's
-    /// `__perry_cap_*` names on `salt_identity` — the module NAME — instead of
-    /// its absolute source path, so the emitted symbols do not change with the
-    /// checkout location.
-    pub fn with_class_id_start_salted(
-        source_file_path: impl Into<String>,
-        salt_identity: impl Into<String>,
-        start_class_id: ClassId,
-    ) -> Self {
-        let source_file_path = source_file_path.into();
-        let module_identity = salt_identity.into();
-        let tagged_template_site_salt = stable_module_salt(&module_identity);
-        Self {
-            next_local_id: 0,
-            local_source_spans: HashMap::new(),
-            classic_for_lexical_bindings: HashSet::new(),
-            next_global_id: 0,
-            next_func_id: 0,
-            next_class_id: start_class_id, // Start from the provided ID to avoid collisions across modules
-            next_enum_id: 0,
-            next_interface_id: 0,
-            next_type_alias_id: 0,
-            tagged_template_site_salt,
-            next_tagged_template_site_id: 0,
-            locals: crate::lower::Locals::new(),
-            globals: Vec::new(),
-            functions: Vec::new(),
-            func_defaults: Vec::new(),
-            classes: Vec::new(),
-            class_statics: Vec::new(),
-            class_field_names: HashMap::new(),
-            class_accessor_names: HashMap::new(),
-            class_native_extends: Vec::new(),
-            class_field_types: HashMap::new(),
-            enums: Vec::new(),
-            pending_body_enums: Vec::new(),
-            interfaces: Vec::new(),
-            type_aliases: Vec::new(),
-            native_profile_type_aliases: HashMap::new(),
-            immutable_locals: HashSet::new(),
-            interface_source_keys: std::collections::HashMap::new(),
-            interface_object_types: std::collections::HashMap::new(),
-            imported_functions: Vec::new(),
-            builtin_named_imports: Vec::new(),
-            native_modules: Vec::new(),
-            builtin_module_aliases: Vec::new(),
-            subns_path_aliases: HashMap::new(),
-            type_param_scopes: Vec::new(),
-            type_param_constraints: Vec::new(),
-            native_instances: Vec::new(),
-            param_native_hints: HashMap::new(),
-            current_strict: false,
-            ui_widget_type_aliases: HashMap::new(),
-            deferred_unknown_native_imports: HashMap::new(),
-            current_class: None,
-            current_class_scope_depth: None,
-            current_class_inner_name: None,
-            pending_class_inner_name: None,
-            class_expr_self_bindings: Vec::new(),
-            current_class_member_is_static: false,
-            private_scopes: Vec::new(),
-            object_super_home_stack: Vec::new(),
-            extern_func_types: Vec::new(),
-            source_file_path,
-            empty_site_width_hints: std::collections::HashMap::new(),
-            exportable_object_vars: HashSet::new(),
-            pending_functions: Vec::new(),
-            closure_display_names: HashMap::new(),
-            class_display_names: HashMap::new(),
-            gen_param_prologue_len: HashMap::new(),
-            assignment_inferred_name: None,
-            inferred_class_bindings: std::collections::HashSet::new(),
-            closure_source_text: HashMap::new(),
-            class_source_text: HashMap::new(),
-            func_return_native_instances: Vec::new(),
-            pending_classes: Vec::new(),
-            func_return_types: Vec::new(),
-            resolved_types: None,
-            pre_registered_module_vars: HashSet::new(),
-            pre_registered_module_var_decls: HashSet::new(),
-            script_var_decl_names: HashSet::new(),
-            module_level_ids: HashSet::new(),
-            sloppy_implicit_globals: Vec::new(),
-            sloppy_implicit_global_ids: HashSet::new(),
-            with_sloppy_implicit_ids: std::collections::HashMap::new(),
-            pending_with_implicit_inits: Vec::new(),
-            scope_depth: 0,
-            scope_local_marks: Vec::new(),
-            scope_module_shadow_marks: Vec::new(),
-            inside_block_scope: 0,
-            for_of_force_lazy: false,
-            namespace_vars: Vec::new(),
-            current_namespace: None,
-            module_native_instances: Vec::new(),
-            local_id_native_instances: HashMap::new(),
-            uses_fetch: false,
-            uses_webassembly: false,
-            react_default_import_local: None,
-            suppress_stdlib_dispatch_guard_once: false,
-            lowering_call_callee: false,
-            unresolved_ident_as_global: false,
-            global_intrinsic_new_once: false,
-            with_env_stack: Vec::new(),
-            var_hoisted_ids: HashSet::new(),
-            tdz_forward_ids: HashSet::new(),
-            forward_lexical_names: HashSet::new(),
-            forward_lexical_saves: Vec::new(),
-            catch_param_scopes: Vec::new(),
-            annexb_block_fn_var_ids: HashMap::new(),
-            annexb_block_fn_names_all: HashSet::new(),
-            block_fn_decl_bindings: HashMap::new(),
-            lexical_forward_decls: HashMap::new(),
-            nested_forward_scope_ids: HashSet::new(),
-            functions_index: HashMap::new(),
-            classes_index: HashMap::new(),
-            imported_functions_index: HashMap::new(),
-            builtin_module_aliases_index: HashMap::new(),
-            native_instances_index: HashMap::new(),
-            module_native_instances_index: HashMap::new(),
-            func_return_native_instances_index: HashMap::new(),
-            prescan_protected_native_params: std::collections::HashMap::new(),
-            native_modules_index: HashMap::new(),
-            module_shadow_stack: Vec::new(),
-            class_statics_index: HashMap::new(),
-            weakref_locals: HashSet::new(),
-            finreg_locals: HashSet::new(),
-            weakmap_locals: HashSet::new(),
-            weakset_locals: HashSet::new(),
-            namespace_import_locals: HashSet::new(),
-            fetch_call_response_locals: HashSet::new(),
-            namespace_import_sources: std::collections::HashMap::new(),
-            generator_func_names: HashSet::new(),
-            async_generator_func_names: HashSet::new(),
-            nested_generator_forward_referenced: HashSet::new(),
-            iterator_func_for_class: std::collections::HashMap::new(),
-            proxy_locals: HashSet::new(),
-            proxy_local_ids: HashSet::new(),
-            builtin_proto_method_locals: HashMap::new(),
-            plain_object_locals: HashSet::new(),
-            proxy_revoke_locals: HashMap::new(),
-            class_expr_aliases: HashMap::new(),
-            in_constructor_class: None,
-            current_class_is_derived: false,
-            in_class_field_init: false,
-            current_class_super_ident: None,
-            mixin_funcs: HashMap::new(),
-            anon_shape_classes: HashMap::new(),
-            anon_shape_fields: HashMap::new(),
-            closed_shape_literal_locals: HashMap::new(),
-            prefer_exported_method_shape_seed: false,
-            forward_class_names: std::collections::HashSet::new(),
-            forward_class_decl_depth: std::collections::HashMap::new(),
-            class_renames: std::collections::HashMap::new(),
-            next_class_rename_id: 0,
-            module_class_decl_names: std::collections::HashSet::new(),
-            class_decl_names_any_depth: std::collections::HashSet::new(),
-            next_anon_shape_id: 0,
-            class_method_return_types: Vec::new(),
-            class_captures: Vec::new(),
-            body_class_expr_captures: Vec::new(),
-            let_class_aliases: Vec::new(),
-            global_this_aliases: HashSet::new(),
-            prototype_aliases: HashMap::new(),
-            prototype_function_aliases: HashMap::new(),
-            function_valued_locals: HashSet::new(),
-            prototype_function_locals: HashMap::new(),
-            object_static_method_aliases: HashMap::new(),
-            array_static_method_aliases: HashMap::new(),
-            is_entry_module: false,
-            platform_globals: HashSet::new(),
-            saw_global_this_expr: false,
-            reassigned_top_level_identifiers: HashSet::new(),
-            module_strict: false,
-            strict_mode_stack: Vec::new(),
-            is_external_module: false,
-            optional_require_try_depth: 0,
-            require_local_is_create_require: false,
-            import_meta_require_local: None,
-            fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
-            dynamic_function_subclasses: HashMap::new(),
-            expr_lower_depth: 0,
-            prelowered_member_receiver: None,
-            in_nonarrow_fn: false,
-        }
-    }
-
     pub(crate) fn fresh_tagged_template_site_id(&mut self) -> u64 {
         let local_id = self.next_tagged_template_site_id;
         self.next_tagged_template_site_id = self.next_tagged_template_site_id.wrapping_add(1);
@@ -591,10 +385,9 @@ impl LoweringContext {
         self.class_accessor_names.insert(class_name, accessor_names);
     }
 
-    /// Look up the accessor property names registered for a
-    /// class. The stored list includes inherited accessors (mirroring how
-    /// `class_field_names` stores the own+inherited union), so callers do
-    /// not need to walk the parent chain themselves.
+    /// Look up the accessor property names for a class. Includes inherited
+    /// accessors (mirroring `class_field_names`'s own+inherited union), so
+    /// callers do not need to walk the parent chain themselves.
     pub(crate) fn lookup_class_accessor_names(
         &self,
         class_name: &str,

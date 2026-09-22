@@ -158,30 +158,6 @@
       "plan": "J"
     },
     {
-      "crate": "perry-ext-mysql2",
-      "dep": "sqlx",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed. A TLS connection no longer declines.",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mysql2` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: sqlx::mysql is the only path that serves a UDS host. TLS is done (perry-db-turnloop installs a client session when the core raises its SSLRequest); a client that asks for `ssl` and still declines now gets a REFUSAL from sqlx \u2014 `to_url` emits `ssl-mode=REQUIRED` and this crate's sqlx has no TLS backend \u2014 rather than a silent plaintext downgrade.",
-      "issue": "#10339, #10341",
-      "plan": "J"
-    },
-    {
-      "crate": "perry-ext-mysql2",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mysql2` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: `spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
-      "issue": "#10339",
-      "plan": "J"
-    },
-    {
       "crate": "perry-ext-net",
       "dep": "tokio",
       "kind": "normal",
@@ -204,30 +180,6 @@
       "blocker": "goes with the tokio socket task -- `transport.rs`'s `Transport::Tls(tokio_rustls::client::TlsStream<TcpStream>)` and `tls.rs`'s `TlsConnector`. NO LONGER also the rustls re-export: `build_client_config`, the one piece of `tls.rs` both transports share, names `rustls` through this crate's own direct dependency now.",
       "issue": "unfiled \u2014 P8",
       "plan": "A"
-    },
-    {
-      "crate": "perry-ext-pg",
-      "dep": "sqlx",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed, plus a Unix-domain-socket host (turnloop's driver submits a TCP connect). A TLS connection no longer declines.",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `pg` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: sqlx::postgres is the only path that serves a UDS host. TLS is done, SCRAM-SHA-256-PLUS with RFC 5929 `tls-server-end-point` channel binding included; a client that asks for `ssl` and still declines now gets a REFUSAL from sqlx \u2014 `to_url` emits `sslmode=verify-full` and this crate's sqlx has no TLS backend \u2014 rather than a silent plaintext downgrade.",
-      "issue": "#10337, #10338, #10339, #10341",
-      "plan": "J"
-    },
-    {
-      "crate": "perry-ext-pg",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new Client()` / `new Pool()` (pg) or `createConnection()` / `createPool()` (mysql2)",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, the `tokio-wait-driver` A/B arm, or a host where Loop::new failed",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `pg` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: `spawn_blocking` + `Handle::current().block_on` per statement. Goes with sqlx.",
-      "issue": "#10339",
-      "plan": "J"
     },
     {
       "crate": "perry-stdlib",
@@ -303,26 +255,11 @@
     "reqwest": [
       "0.12.28"
     ],
-    "sqlx": [
-      "0.9.0"
-    ],
-    "sqlx-core": [
-      "0.9.0"
-    ],
-    "sqlx-mysql": [
-      "0.9.0"
-    ],
-    "sqlx-postgres": [
-      "0.9.0"
-    ],
     "tokio": [
       "1.53.1"
     ],
     "tokio-rustls": [
       "0.26.5"
-    ],
-    "tokio-stream": [
-      "0.1.18"
     ],
     "tokio-util": [
       "0.7.18"
@@ -342,13 +279,10 @@
     "perry": 3,
     "perry-container-compose": 14,
     "perry-ext-ads": 5,
-    "perry-ext-axios": 2,
-    "perry-ext-http": 99,
+    "perry-ext-http": 103,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
-    "perry-ext-mysql2": 35,
     "perry-ext-net": 54,
-    "perry-ext-pg": 20,
     "perry-ffi": 2,
     "perry-stdlib": 73,
     "perry-ui-gtk4": 6

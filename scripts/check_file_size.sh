@@ -80,6 +80,12 @@ crates/perry-hir/src/lower_decl/body_stmt.rs
 # finally-wrapper tail (~790 lines) into a sibling module — is a mechanical
 # cut deferred to a focused follow-up, same pattern as body_stmt.rs above.
 crates/perry-runtime/src/promise/then.rs
+# #10595 shadowed-field fix: `get_field_ic_miss_impl`'s inline own-key scan
+# now walks back-to-front (1 line) with a 1-line rationale comment, matching
+# the compile-time-typed path's most-derived-wins rule. The file was already
+# exactly at the 2000-line gate; a structural split of the IC-miss ladder
+# into a sibling module is deferred to a focused follow-up.
+crates/perry-runtime/src/object/field_get_set/ic_miss.rs
 # --- Representation-aware type lowering (#5466 / #5464) ---
 # These files crossed the gate on the type-lowering branch (native i32/u32/f64/
 # i128/StringRef reps, guarded fast/fallback splits, and the material-evidence
@@ -165,6 +171,15 @@ third_party/windows-winui/windows-reactor/src/bindings.rs
 # Upstream Windows Reactor XAML backend: the single Element -> Microsoft.UI.Xaml
 # realization/diff trunk shipped as one module by upstream.
 third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs
+# Module-collection trunk: `collect_module_one` is a single ~1,890-line walk
+# (lines 111-1999) beneath 15 already-peeled sibling modules, so the remaining
+# bulk is one function, not a group of arms that can be lifted out. It sat at
+# EXACTLY 2000 lines on main -- the cap with zero headroom -- so the next PR to
+# add any line to it fails; that is what caught #10874/#10867's module
+# resolution work. Splitting the walk into phases is real surgery and does not
+# belong folded into an in-flight resolution fix, same rationale as the #1435
+# block above. Follow-up: peel `collect_module_one` into phase submodules.
+crates/perry/src/commands/compile/collect_modules.rs
 EOF
 )
 

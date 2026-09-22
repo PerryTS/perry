@@ -319,8 +319,9 @@ fn os_eol_and_path_sep_compile() {
 
 /// As of #513, every module in `NATIVE_MODULES` has at least one
 /// manifest entry, so the permissive fall-through is unreachable for
-/// supported modules. `axios.foo` (which used to silently compile under
-/// the pre-#513 zero-entries-permissive shape) now errors.
+/// supported modules. `node-fetch`'s bogus member (which used to
+/// silently compile under the pre-#513 zero-entries-permissive shape)
+/// now errors.
 ///
 /// The drift test `every_native_module_has_at_least_one_manifest_entry`
 /// in `crates/perry-codegen/tests/manifest_consistency.rs` makes this
@@ -330,14 +331,14 @@ fn os_eol_and_path_sep_compile() {
 fn supported_module_with_unknown_member_is_rejected() {
     let result = lower_result_strict(
         r#"
-        import axios from "axios";
-        const x = axios.foo;
+        import fetch from "node-fetch";
+        const x = fetch.foo;
     "#,
     );
-    let err = result.expect_err("axios.foo should error post-#513");
+    let err = result.expect_err("node-fetch.foo should error post-#513");
     assert!(
-        err.contains("axios.foo") && err.contains("not implemented"),
-        "expected error naming `axios.foo` and `not implemented`, got: {err}"
+        err.contains("fetch.foo") && err.contains("not implemented"),
+        "expected error naming `fetch.foo` and `not implemented`, got: {err}"
     );
 }
 
@@ -364,21 +365,9 @@ fn perry_native_namespace_rejects_unknown_call_in_strict_mode() {
 ///
 /// Side-effect-only sub-paths (`dotenv/config`) are skipped — they have
 /// no value binding to read properties off, so the gate doesn't apply.
-/// `tursodb` and `iroh` are external bindings (live in standalone
-/// `@perryts/*` repos as of v0.5.557) — their manifest entries exist
-/// but the in-tree resolver doesn't recognise them as a `NativeModuleRef`
-/// without `node_modules/<pkg>/package.json` declaring `perry.nativeLibrary`,
-/// so the gate's prerequisite shape never triggers in this isolated
-/// HIR test.
 #[test]
 fn every_supported_module_rejects_bogus_member() {
-    const SKIP: &[&str] = &[
-        // Side-effect-only — no value binding to access.
-        "dotenv/config",
-        // External (non-bundled) bindings — out-of-tree as of v0.5.557.
-        "tursodb",
-        "iroh",
-    ];
+    const SKIP: &[&str] = &[];
 
     let mut failures: Vec<String> = Vec::new();
     for &module in perry_api_manifest::NATIVE_MODULES {
@@ -452,13 +441,7 @@ fn every_supported_module_rejects_bogus_member() {
 /// land at the rejection.
 #[test]
 fn every_supported_module_rejects_bogus_call() {
-    const SKIP: &[&str] = &[
-        // Side-effect-only — no value binding to access.
-        "dotenv/config",
-        // External (non-bundled) bindings — out-of-tree as of v0.5.557.
-        "tursodb",
-        "iroh",
-    ];
+    const SKIP: &[&str] = &[];
 
     let mut failures: Vec<String> = Vec::new();
     for &module in perry_api_manifest::NATIVE_MODULES {

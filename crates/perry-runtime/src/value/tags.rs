@@ -144,6 +144,12 @@ pub(crate) type JsNativeQuerystringDispatchFn =
 /// runtime-to-extension dependency indirect for captured callable exports.
 pub(crate) type JsNativeBunTcpDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// node:net export dispatcher registered by perry-ext-net (the only provider of
+/// sockets and `isIP`) when a `net` namespace is materialized. Serves the
+/// value-read forms (`require('net').connect(...)`, `const { isIP } = net`,
+/// `new (net.Socket)()`) that never reach the static codegen table. (#10429)
+pub(crate) type JsNativeNetDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:sqlite module-method/constructor dispatcher. Same dependency-boundary
 /// pattern as crypto/zlib, with an extra construct flag so dynamic `new
 /// DatabaseSync(...)` can reach the real stdlib constructor.
@@ -157,14 +163,14 @@ pub(crate) type JsNativeDomainDispatchFn =
 /// implementation without perry-runtime depending on perry-stdlib.
 pub(crate) type JsNativeTlsDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
-/// node:http / node:https / node:http2 server-factory dispatcher (registered
-/// by perry-stdlib under the `external-http-server-pump` feature, which is
-/// enabled whenever a program imports one of those modules). Lets a captured /
+/// node:http / node:https / node:http2 export dispatcher, owned by
+/// perry-ext-http and registered by its namespace install (and by
+/// perry-stdlib's startup under `external-http-server-pump`). Lets a captured /
 /// aliased `createServer` (`const cs = createServer; cs(handler)`, or
 /// `@hono/node-server`'s `const createServer = options.createServer ||
 /// createServerHTTP`) reach the perry-ext-http impls. Unlike crypto/zlib
 /// it also takes the module name so one callback can route http vs https vs
-/// http2. Stays null when the http ext crate isn't linked. (#2533)
+/// http2. Stays null when the http ext crate isn't linked. (#2533, #10428)
 pub(crate) type JsNativeHttpDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const u8, usize, *const f64, usize) -> f64;
 /// node:events class-constructor dispatcher (registered by perry-stdlib under
@@ -194,6 +200,7 @@ pub static JS_NATIVE_WEBCRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr
 pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_BUN_TCP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_NET_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
@@ -211,3 +218,19 @@ pub static JS_NATIVE_EVENTS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 // (method_name_ptr, method_name_len, args_ptr, args_len), returns the NaN-boxed
 // instance. Next.js standalone server startup blocker.
 pub static JS_NATIVE_ASYNC_HOOKS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+// Subclass-init hook for `class X extends <bound async_hooks.AsyncLocalStorage
+// export>` reached through anything OTHER than the canonical bare
+// `import { AsyncLocalStorage } from "node:async_hooks"` binding (a local
+// alias, a namespace member, or a CJS destructured `require()`). Codegen
+// already routes the canonical shape statically, straight to perry-stdlib's
+// `js_async_local_storage_subclass_init` (declared as an extern symbol by
+// codegen, which has no crate-dependency constraint); every other shape only
+// resolves at runtime, inside `js_fetch_or_value_super` in THIS crate, which
+// cannot depend on perry-stdlib (where the helper — and the `Handle` registry
+// it needs — live). Registered by perry-stdlib at startup; stays null when
+// stdlib isn't linked. Takes/returns the subclass instance (this_value) as a
+// NaN-boxed f64, matching `js_async_local_storage_subclass_init`'s own
+// signature. (#10625)
+pub(crate) type JsNativeAsyncLocalStorageSubclassInitFn = unsafe extern "C" fn(f64) -> f64;
+pub static JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT: AtomicPtr<()> =
+    AtomicPtr::new(std::ptr::null_mut());

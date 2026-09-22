@@ -20,6 +20,7 @@ pub(crate) struct FinalizerRecord {
     pub callback: unsafe extern "C" fn(NapiEnv, *mut c_void, *mut c_void),
     pub data: usize,
     pub hint: usize,
+    pub module: Option<u32>,
 }
 
 static NEXT_FINALIZER_ID: AtomicU64 = AtomicU64::new(1);
@@ -55,6 +56,7 @@ pub(crate) fn finalizer(
         callback,
         data: data as usize,
         hint: hint as usize,
+        module: super::modules::current_active_module(),
     })
 }
 
@@ -208,19 +210,20 @@ pub(crate) fn drain_pending_finalizers() -> i32 {
         let env = current_env();
         let mut scope = std::ptr::null_mut();
         let opened = unsafe { napi_open_handle_scope(env, &mut scope) } == NapiStatus::Ok;
-        unsafe {
+        with_active_module(env, callback.module, || unsafe {
             (callback.callback)(
                 env,
                 callback.data as *mut c_void,
                 callback.hint as *mut c_void,
             );
-        }
+        });
         if opened {
             unsafe {
                 napi_close_handle_scope(env, scope);
             }
         }
         ran = ran.saturating_add(1);
+        settle_callback_exception(env, callback.module, true);
     }
     ran
 }

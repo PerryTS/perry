@@ -767,6 +767,30 @@ fn reflect_value_is_symbol(value: f64) -> bool {
         && unsafe { crate::symbol::js_is_symbol(value) != 0 }
 }
 
+/// #6828/#10482: Annex B §B.3.1 `set __proto__` semantics — shared by the
+/// real accessor descriptor installed on `Object.prototype`
+/// (`object/global_this/proto_methods.rs`'s setter closure, reached via
+/// `own_set_descriptor` + `call_setter_with_receiver` above) and this
+/// function's own caller (the walk's defensive fallback for the same key).
+/// Both must behave identically, so both call this one implementation
+/// instead of keeping the logic written out twice.
+///
+/// Per spec: a non-object/non-null `value` or a non-object `receiver` is
+/// silently ignored (no throw, unlike `Object.setPrototypeOf`); a genuine
+/// `[[SetPrototypeOf]]` failure (cyclic / non-extensible) still throws via
+/// `js_object_set_prototype_of` itself, matching `Object.setPrototypeOf`'s
+/// failure behavior for that case.
+pub(crate) fn legacy_dunder_proto_set(receiver: f64, value: f64) {
+    let value_bits = value.to_bits();
+    let valid_proto = value_bits == TAG_NULL
+        || lookup(value).is_some()
+        || crate::object::class_ref_id(value).is_some()
+        || unsafe { crate::object::value_is_object_like(value) };
+    if valid_proto && reflect_value_is_object(receiver) {
+        crate::object::js_object_set_prototype_of(receiver, value);
+    }
+}
+
 /// Is `value` a Reflect-acceptable object? Heap objects, class refs (callable
 /// constructors), and proxies all count. Primitives / null / undefined do not.
 pub(crate) fn reflect_value_is_object(value: f64) -> bool {
@@ -884,15 +908,81 @@ fn create_list_from_array_like(value: f64) -> Vec<f64> {
     } else {
         0
     };
+    // Every index key allocates, and a property read can run a getter: the
+    // source object and the elements read so far must survive both, so the
+    // list handed back holds their post-collection addresses (#10532 review).
+    // Only values a collection can relocate take a handle — an all-primitive
+    // argument list pays one scope and a tag test per element.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(value);
     let mut out = Vec::with_capacity(len);
-    let obj_ptr = extract_pointer(value.to_bits()) as *const crate::ObjectHeader;
+    let mut moved: Vec<(usize, MovedElement<'_>)> = Vec::new();
     for i in 0..len {
         let idx_str = i.to_string();
+        crate::gc::collection_point("reflect.list_from_array_like.index_key");
         let key = crate::string::js_string_from_bytes(idx_str.as_ptr(), idx_str.len() as u32);
+        let obj_ptr =
+            extract_pointer(source.get_nanbox_f64().to_bits()) as *const crate::ObjectHeader;
         let v = crate::object::js_object_get_field_by_name_f64(obj_ptr, key);
+        match value_move_kind(v) {
+            ValueMoveKind::Tagged => {
+                moved.push((i, MovedElement::Tagged(scope.root_nanbox_f64(v))))
+            }
+            ValueMoveKind::RawHeapWord => moved.push((
+                i,
+                MovedElement::RawHeapWord(scope.root_heap_word_u64(v.to_bits())),
+            )),
+            ValueMoveKind::Immediate => {}
+        }
         out.push(v);
     }
+    for (index, handle) in moved {
+        out[index] = match handle {
+            MovedElement::Tagged(h) => h.get_nanbox_f64(),
+            MovedElement::RawHeapWord(h) => f64::from_bits(h.get_heap_word_u64()),
+        };
+    }
     out
+}
+
+/// Which rooting a `create_list_from_array_like` element needs, if any.
+enum ValueMoveKind {
+    /// No handle needed: an immediate value no collection can touch.
+    Immediate,
+    /// A NaN-boxed pointer/string/BigInt -- `root_nanbox_f64`'s `Nanbox` slot
+    /// rewrites these.
+    Tagged,
+    /// A raw, untagged heap-pointer bit pattern (`top16 == 0`) -- e.g. the
+    /// Promise executor's resolve/reject closures from
+    /// `js_promise_new_with_executor`, or a TypedArray/Buffer pointer handed
+    /// through as `bitcast i64 → double` on some platforms (see
+    /// `object/native_call_method.rs` and `value/dynamic_object.rs` for the
+    /// same representation). `root_nanbox_f64`'s scanner only rewrites
+    /// POINTER_TAG/STRING_TAG/BIGINT_TAG bit patterns and would silently do
+    /// nothing for one of these, so it needs the raw-aware `HeapWord` slot
+    /// instead (#10532 review).
+    RawHeapWord,
+}
+
+/// A value a moving collection can relocate, and therefore the only kind that
+/// needs a handle when a runtime helper holds it across an allocation. Numbers,
+/// booleans, `undefined`/`null`, int32s, short strings and class refs are
+/// immediate values that no collection can touch.
+#[inline]
+fn value_move_kind(value: f64) -> ValueMoveKind {
+    let jsvalue = crate::value::JSValue::from_bits(value.to_bits());
+    if jsvalue.is_pointer() || jsvalue.is_string() || jsvalue.is_bigint() {
+        return ValueMoveKind::Tagged;
+    }
+    if crate::value::addr_class::is_plausible_heap_addr(value.to_bits() as usize) {
+        return ValueMoveKind::RawHeapWord;
+    }
+    ValueMoveKind::Immediate
+}
+
+enum MovedElement<'a> {
+    Tagged(crate::gc::RuntimeHandle<'a>),
+    RawHeapWord(crate::gc::RuntimeHandle<'a>),
 }
 
 /// Invoke a callable `f64` value with the supplied positional args and an
@@ -903,7 +993,40 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     // A concise/object-literal method reads `this` from a baked capture slot,
     // not IMPLICIT_THIS; rebind to the explicit `Reflect.apply` receiver so it
     // is honored (no-op for arrows / plain fns / bound fns).
-    let f = crate::closure::rebind_explicit_this(f, this_arg);
+    //
+    // That rebind is also the one thing on this path that ALLOCATES, and the
+    // callee, the receiver and the whole argument list are live across it in
+    // plain Rust locals — not GC roots (#10532 review). The clone happens for
+    // exactly one callee shape, so ask first and hand that shape to the rooted
+    // path below; every other callee keeps the allocation-free dispatch.
+    if crate::closure::rebind_explicit_this_allocates(f) {
+        return call_rooted_across_rebind(f, this_arg, args);
+    }
+    dispatch_with_explicit_this(f, this_arg, args)
+}
+
+/// The `Reflect.apply` slow path: the rebind will clone, so root what the call
+/// still needs and re-read it from the handles below the allocation.
+#[cold]
+#[inline(never)]
+fn call_rooted_across_rebind(f: f64, this_arg: f64, args: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(this_arg);
+    let arg_handles: Vec<_> = args
+        .iter()
+        .map(|value| scope.root_nanbox_f64(*value))
+        .collect();
+    crate::gc::collection_point("reflect.apply.rebind");
+    // `rebind_explicit_this` roots the callee and the receiver it is given
+    // (`clone_closure_rebind_this`), so its result is already current.
+    let rebound = crate::closure::rebind_explicit_this(f, receiver.get_nanbox_f64());
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    dispatch_with_explicit_this(rebound, receiver.get_nanbox_f64(), &args)
+}
+
+/// Invoke an already-rebound callable with an explicit `this`. Nothing here
+/// allocates before the callee runs, so the arguments need no protection.
+fn dispatch_with_explicit_this(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     let closure = closure_from(f);
     if closure.is_null() {
         return throw_type_error("Reflect.apply target is not a function");
@@ -1362,6 +1485,19 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         // absent-property path and disappear on native AsyncResource handles.
         if !unsafe { crate::symbol::has_own_symbol_property(target, key) } {
             return None;
+        }
+        // #10481: a symbol ACCESSOR is not a data slot — report its setter so
+        // the walk runs it with the receiver instead of shadowing it.
+        let (owner, sym_key) = unsafe {
+            (
+                crate::symbol::obj_key_from_f64(target),
+                crate::symbol::sym_key_from_f64(key),
+            )
+        };
+        if let Some((_, setter_bits)) =
+            crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key)
+        {
+            return Some(OwnSetDescriptor::Accessor { setter_bits });
         }
         // An existing symbol-keyed own data property is non-writable when the
         // receiver is frozen or its per-symbol attrs say so — so a strict
@@ -2095,31 +2231,28 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 }
             };
         }
-        // #6828: `%Object.prototype%.__proto__` is a legacy accessor whose
-        // setter performs `SetPrototypeOf(Receiver, value)`. Perry exposes the
-        // getter intrinsically but does not materialize the built-in accessor
-        // in the ordinary descriptor table, so model it at the exact point in
-        // the [[Set]] walk where that descriptor would be found.
+        // #6828/#10482: `%Object.prototype%.__proto__` is a legacy accessor
+        // whose setter performs `SetPrototypeOf(Receiver, value)`.
+        // `object/global_this/proto_methods.rs` now materializes it as a
+        // REAL accessor descriptor on `Object.prototype` (#10482), so
+        // `own_set_descriptor` just above finds it and dispatches through
+        // `call_setter_with_receiver` before the walk ever reaches here —
+        // this arm is kept as a fallback for a walk that reaches
+        // `Object.prototype` without ever consulting the descriptor table
+        // (defensive; not known to be reachable). Both arms must behave
+        // identically, so both call the one shared implementation.
         //
         // Keep this AFTER `own_set_descriptor`: a user-installed own
         // `__proto__` data/accessor property on an object earlier in the chain
         // must win. A null-prototype receiver never reaches the canonical
         // Object.prototype and therefore still creates an ordinary own data
-        // property. Per Annex B, a primitive RHS is ignored rather than
-        // throwing (unlike `Object.setPrototypeOf`).
+        // property.
         let current_addr = extract_pointer(current.to_bits()) as usize;
         if current_addr != 0
             && current_addr == crate::array::object_prototype_addr()
             && key_to_rust_string(key).as_deref() == Some("__proto__")
         {
-            let value_bits = value.to_bits();
-            let valid_proto = value_bits == TAG_NULL
-                || lookup(value).is_some()
-                || crate::object::class_ref_id(value).is_some()
-                || unsafe { crate::object::value_is_object_like(value) };
-            if valid_proto && reflect_value_is_object(receiver) {
-                crate::object::js_object_set_prototype_of(receiver, value);
-            }
+            legacy_dunder_proto_set(receiver, value);
             return true;
         }
         if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {

@@ -24,18 +24,30 @@ pub(super) fn ensure_reused_box_is_initialized(ctx: &mut FnCtx<'_>, id: u32) {
     let ready_label = ctx.block_label(ready);
     ctx.block().cond_br(&missing, &allocate_label, &ready_label);
     ctx.current_block = allocate;
-    let cell = if crate::expr::is_compiler_private_async_i32_control_local(ctx, id) {
-        ctx.block().call(I64, "js_i32_box_alloc", &[(I32, "0")])
+    use super::boxed_frame_release as frame_release;
+    let (cell, release_fn) = if crate::expr::is_compiler_private_async_i32_control_local(ctx, id) {
+        (
+            ctx.block().call(I64, "js_i32_box_alloc", &[(I32, "0")]),
+            frame_release::I32_BOX_SCOPE_RELEASE,
+        )
     } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, id) {
-        ctx.block().call(I64, "js_bool_box_alloc", &[(I32, "0")])
+        (
+            ctx.block().call(I64, "js_bool_box_alloc", &[(I32, "0")]),
+            frame_release::BOOL_BOX_SCOPE_RELEASE,
+        )
     } else {
-        ctx.block().call(
-            I64,
-            "js_box_alloc_bits",
-            &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
+        (
+            ctx.block().call(
+                I64,
+                "js_box_alloc_bits",
+                &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
+            ),
+            frame_release::JS_BOX_SCOPE_RELEASE,
         )
     };
     ctx.block().store(I64, &cell, &slot);
+    // #10464: the cell is this frame's (a withdrawn slot stays withdrawn).
+    frame_release::release_at_frame_exit(ctx, &slot, release_fn);
     super::record_boxed_slot_js_value_bits(ctx, id, &cell, "boxed_let.reused_missing_box");
     ctx.block().br(&ready_label);
     ctx.current_block = ready;

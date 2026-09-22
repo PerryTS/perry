@@ -306,14 +306,38 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
 
     // Collect the partial-applied (bound) leading args, then append the
     // call-time args. `g = f.bind(obj, 2); g(3)` calls `f` with `(2, 3)`.
-    let mut combined: Vec<f64> = Vec::with_capacity(args.len() + 4);
-    if !bound_args_ptr.is_null() {
+    //
+    // The overwhelmingly common shape is `.bind(thisArg)` with NO partial
+    // args at all — a plain method reference (`arr.forEach(obj.method.bind(
+    // obj))`), the callback shape `direct.rs` cannot hoist out of a loop
+    // (BoundFunction is deliberately excluded from `resolve_direct_func_ptr`
+    // — see that module's doc), so this function runs on every element.
+    // `js_function_bind` leaves capture slot 2 (`bound_args_ptr`) null
+    // whenever `bound_arg_count == 0`, so that's exactly the free-to-detect
+    // case: skip the allocate-copy-free `Vec` and hand `js_native_call_value`
+    // the caller's own `args` slice directly. Only the actual
+    // partial-application shape (`.bind(obj, extra)`) still needs a combined
+    // buffer.
+    let mut combined: Vec<f64>;
+    let (call_ptr, call_len): (*const f64, usize) = if bound_args_ptr.is_null() {
+        if args.is_empty() {
+            (std::ptr::null(), 0)
+        } else {
+            (args.as_ptr(), args.len())
+        }
+    } else {
         let n = crate::array::js_array_length(bound_args_ptr) as usize;
+        combined = Vec::with_capacity(n + args.len());
         for i in 0..n {
             combined.push(crate::array::js_array_get_f64(bound_args_ptr, i as u32));
         }
-    }
-    combined.extend_from_slice(args);
+        combined.extend_from_slice(args);
+        if combined.is_empty() {
+            (std::ptr::null(), 0)
+        } else {
+            (combined.as_ptr(), combined.len())
+        }
+    };
 
     // A bound concise/object-literal method reads `this` from its baked capture
     // slot, not IMPLICIT_THIS — rebind it to the bound receiver so the bound
@@ -321,11 +345,6 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     let target = rebind_explicit_this(target, bound_this);
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(bound_this));
-    let (call_ptr, call_len) = if combined.is_empty() {
-        (std::ptr::null::<f64>(), 0usize)
-    } else {
-        (combined.as_ptr(), combined.len())
-    };
     let result = js_native_call_value(target, call_ptr, call_len);
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
@@ -412,6 +431,37 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
 ///   - bound functions and non-closure values
 ///     (`clone_closure_rebind_this` no-ops on these — it only rewrites a
 ///     `CAPTURES_THIS` slot).
+/// Does [`rebind_explicit_this`] ALLOCATE for this target?
+///
+/// Only the clone does, and it happens for one shape: a non-arrow closure that
+/// captures `this` in a reserved slot and may be re-bound. Everything else —
+/// a plain function, an arrow, a bound function, a non-closure value — comes
+/// back unchanged, allocation-free. A caller that has GC values in Rust locals
+/// can therefore skip rooting them entirely for the common callee, and pay for
+/// handles only on the shape that can collect underneath it.
+///
+/// Kept in step with `clone_closure_rebind_this`'s early-outs by
+/// `rebind_predicate_tests` below, which asserts the two agree on every shape.
+#[inline]
+pub(crate) fn rebind_explicit_this_allocates(target: f64) -> bool {
+    let bits = target.to_bits();
+    if bits & 0xFFFF_0000_0000_0000 != 0x7FFD_0000_0000_0000 {
+        return false;
+    }
+    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
+    if ptr < 0x100000 || !crate::closure::is_closure_ptr(ptr) {
+        return false;
+    }
+    let header = ptr as *const ClosureHeader;
+    if crate::closure::closure_is_arrow(header) {
+        return false;
+    }
+    let raw_count = unsafe { (*header).capture_count };
+    raw_count & CAPTURES_THIS_FLAG != 0
+        && raw_count & NO_THIS_REBIND_FLAG == 0
+        && crate::closure::real_capture_count(raw_count) > 0
+}
+
 #[inline]
 pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
     let bits = target.to_bits();
@@ -760,4 +810,83 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
     }
     crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *mut u8).bits())
+}
+
+#[cfg(test)]
+mod rebind_predicate_tests {
+    use super::*;
+
+    // Distinct bodies on purpose: arrow-ness is registered per func_ptr, and
+    // two `extern "C"` bodies with identical machine code get folded to one
+    // address by the linker — which silently makes every case in this test the
+    // same closure body.
+    extern "C" fn arrow_probe(_closure: *const ClosureHeader) -> f64 {
+        1.0
+    }
+
+    extern "C" fn method_probe(_closure: *const ClosureHeader) -> f64 {
+        2.0
+    }
+
+    fn closure_value(body: *const u8, capture_count: u32) -> f64 {
+        let closure = crate::closure::js_closure_alloc(body, capture_count);
+        f64::from_bits(crate::value::JSValue::pointer(closure as *mut u8).bits())
+    }
+
+    /// The predicate exists to let `Reflect.apply` skip rooting when nothing
+    /// can collect, so it has to answer exactly the question
+    /// `rebind_explicit_this` answers with its clone: saying "no" where the
+    /// rebind allocates is a rooting hole, and saying "yes" everywhere is the
+    /// per-call cost it was written to avoid.
+    #[test]
+    fn the_predicate_agrees_with_what_the_rebind_actually_does() {
+        let receiver = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let method_body = method_probe as *const u8;
+        let arrow_body = arrow_probe as *const u8;
+        crate::closure::js_register_closure_arrow_function(arrow_body);
+
+        // The one shape that clones, and the shapes that look like it but
+        // return the target untouched.
+        let method = closure_value(method_body, CAPTURES_THIS_FLAG | 1);
+        let cases = [
+            ("concise method with a reserved `this`", method, true),
+            (
+                "arrow with a captured this",
+                closure_value(arrow_body, CAPTURES_THIS_FLAG | 1),
+                false,
+            ),
+            (
+                "generator step closure (no rebind)",
+                closure_value(method_body, CAPTURES_THIS_FLAG | NO_THIS_REBIND_FLAG | 1),
+                false,
+            ),
+            (
+                "captures `this` but has no capture slots",
+                closure_value(method_body, CAPTURES_THIS_FLAG),
+                false,
+            ),
+            ("plain closure", closure_value(method_body, 0), false),
+            ("a plain number", 42.0, false),
+            (
+                "undefined",
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+                false,
+            ),
+        ];
+        for (what, value, clones) in cases {
+            let rebound_differs =
+                rebind_explicit_this(value, receiver).to_bits() != value.to_bits();
+            assert_eq!(
+                rebound_differs,
+                clones,
+                "premise: {what} must {} clone",
+                if clones { "" } else { "not" }
+            );
+            assert_eq!(
+                rebind_explicit_this_allocates(value),
+                rebound_differs,
+                "{what}: the predicate and the rebind must agree"
+            );
+        }
+    }
 }

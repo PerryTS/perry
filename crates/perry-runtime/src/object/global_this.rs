@@ -119,9 +119,9 @@ pub(crate) use fetch_globals::temporal_subclass_super;
 pub(crate) use fetch_globals::{
     attach_fetch_handle_for_construction, global_this_blob_thunk, global_this_builtin_noop_thunk,
     global_this_date_thunk, global_this_eval_thunk, global_this_file_thunk,
-    global_this_headers_thunk, global_this_request_thunk, global_this_response_error_thunk,
-    global_this_response_json_thunk, global_this_response_redirect_thunk,
-    global_this_response_thunk,
+    global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
+    global_this_response_error_thunk, global_this_response_json_thunk,
+    global_this_response_redirect_thunk, global_this_response_thunk,
 };
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
@@ -159,7 +159,10 @@ pub(crate) use proto_methods::{
     install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
-    array_buffer_byte_length_getter_thunk, array_buffer_is_view_thunk, array_buffer_slice_thunk,
+    array_buffer_byte_length_getter_thunk, array_buffer_detached_getter_thunk,
+    array_buffer_is_view_thunk, array_buffer_max_byte_length_getter_thunk,
+    array_buffer_resizable_getter_thunk, array_buffer_resize_thunk, array_buffer_slice_thunk,
+    array_buffer_transfer_thunk, array_buffer_transfer_to_fixed_length_thunk,
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
     shared_array_buffer_byte_length_getter_thunk, shared_array_buffer_slice_thunk,
     typed_array_constructor_this_kind, typed_array_intrinsic_proto_ptr,

@@ -100,6 +100,15 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // outside the GC heap (the `js_box_alloc_bits` precedent).
         | "perry_transition_cache_base"
         | "js_transition_ic_note_hit"
+        // `object/inherited_read_cache.rs` (#10834/#10842): a direct-mapped
+        // per-thread table probe — identity-word and ShapeId compares, a
+        // validity-word compare, then one load through the holder. It
+        // allocates nothing, never calls user code and never walks the
+        // chain (that is the miss handler's prime); every case it cannot
+        // serve answers TAG_HOLE and the emitted code takes its ordinary
+        // slow call. Listed so nothing is spilled or reloaded around it on
+        // the declined-guard edge of every generic property read.
+        | "js_inherited_read_cache_hit_f64"
         | "js_transition_ic_spill_append"
         | "js_write_barrier_slot"
         | "js_write_barrier_slot_validated_parent"
@@ -258,7 +267,13 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // collection trigger — the same audit as the accessors above.
         | "js_box_release"
         | "js_i32_box_release"
-        | "js_bool_box_release" => GcCallEffect::CannotCollect,
+        | "js_bool_box_release"
+        // #10464 scope-exit release: a registry probe, a capture-count
+        // lookup, then either the same publish (registry remove, cache evict,
+        // raw clear, TLS free-list push) or a TLS pending-map insert.
+        | "js_box_scope_release"
+        | "js_i32_box_scope_release"
+        | "js_bool_box_scope_release" => GcCallEffect::CannotCollect,
         // Audited allocate-but-never-reenter helpers (2026-07-31): each body
         // was checked for closure invocation, coercion (valueOf/toString),
         // and accessor dispatch — none present, and none takes a receiver
@@ -835,6 +850,9 @@ mod tests {
             "js_box_release",
             "js_i32_box_release",
             "js_bool_box_release",
+            "js_box_scope_release",
+            "js_i32_box_scope_release",
+            "js_bool_box_scope_release",
         ] {
             assert_eq!(
                 classify_direct_callee(name),

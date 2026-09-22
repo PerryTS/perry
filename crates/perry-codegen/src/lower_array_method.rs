@@ -363,67 +363,13 @@ pub(crate) fn lower_array_method(
                 if args.is_empty() {
                     bail!("perry-codegen: Array.copyWithin expects 1-3 args, got 0",);
                 }
-                let target_d = arg_vals[0].clone();
-                let start_d = if args.len() >= 2 {
-                    arg_vals[1].clone()
-                } else {
-                    double_literal(0.0)
-                };
-                let (has_end_str, end_d) = if args.len() >= 3 {
-                    ("1".to_string(), arg_vals[2].clone())
-                } else {
-                    ("0".to_string(), "0.0".to_string())
-                };
-                let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                let result = blk.call(
-                    I64,
-                    "js_array_copy_within",
-                    &[
-                        (I64, &recv_handle),
-                        (DOUBLE, &target_d),
-                        (DOUBLE, &start_d),
-                        (I32, &has_end_str),
-                        (DOUBLE, &end_d),
-                    ],
-                );
-                Ok(nanbox_pointer_inline(blk, &result))
+                Ok(emit_array_method_on_values(
+                    ctx, property, recv_box, arg_vals,
+                ))
             }
-            "flat" => {
-                // ECMA-262 §23.1.3.10 `arr.flat(depth?)`. Default depth = 1.
-                // The depth-aware path routes to `js_array_flat_depth` (handles
-                // 0 = shallow copy, Infinity = full recursion); 0-arg keeps
-                // the legacy `js_array_flat` fast path.
-                if args.is_empty() {
-                    let blk = ctx.block();
-                    let recv_handle = unbox_to_i64(blk, recv_box);
-                    let result = blk.call(I64, "js_array_flat", &[(I64, &recv_handle)]);
-                    Ok(nanbox_pointer_inline(blk, &result))
-                } else {
-                    let blk = ctx.block();
-                    let recv_handle = unbox_to_i64(blk, recv_box);
-                    let result = blk.call(
-                        I64,
-                        "js_array_flat_depth",
-                        &[(I64, &recv_handle), (DOUBLE, &arg_vals[0])],
-                    );
-                    Ok(nanbox_pointer_inline(blk, &result))
-                }
-            }
-            "flatMap" => {
-                // 0-arg → runtime TypeError (pad undefined), not compile-fail.
-                let cb_box = arg_or_undefined(arg_vals, 0);
-                let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                // #4091: throw TypeError for a non-callable callback before iterating.
-                let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-                let result = blk.call(
-                    I64,
-                    "js_array_flatMap",
-                    &[(I64, &recv_handle), (I64, &cb_handle)],
-                );
-                Ok(nanbox_pointer_inline(blk, &result))
-            }
+            "flat" | "flatMap" => Ok(emit_array_method_on_values(
+                ctx, property, recv_box, arg_vals,
+            )),
             // -------- Safety-net handlers for methods that normally arrive --------
             // as HIR variants but may reach here as generic MethodCall when
             // the HIR lowering doesn't recognize the pattern.
@@ -553,28 +499,8 @@ pub(crate) fn lower_array_method(
                         args.len()
                     );
                 }
-                // 0-arg → runtime TypeError (callback validation on undefined),
-                // not compile-fail.
-                let cb_box = arg_or_undefined(arg_vals, 0);
-                let (has_initial, initial_box) = if args.len() == 2 {
-                    (1i32, arg_vals[1].clone())
-                } else {
-                    (0i32, "0.0".to_string())
-                };
-                let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                // #4091: throw TypeError for a non-callable callback before iterating.
-                let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
-                let has_init_str = format!("{}", has_initial);
-                Ok(blk.call(
-                    DOUBLE,
-                    "js_array_reduce_right",
-                    &[
-                        (I64, &recv_handle),
-                        (I64, &cb_handle),
-                        (I32, &has_init_str),
-                        (DOUBLE, &initial_box),
-                    ],
+                Ok(emit_array_method_on_values(
+                    ctx, property, recv_box, arg_vals,
                 ))
             }
             "map" => {
@@ -1051,14 +977,17 @@ pub(crate) fn lower_array_method(
             // the array, not the joined locale string). Route through the runtime
             // dispatch tower, which walks elements and calls each element's own
             // `toLocaleString(locales, options)`.
-            //
-            // #2803 defensive: `toReversed` / `toSorted` / `toSpliced` normally fold
-            // to dedicated `Expr::ArrayTo*` nodes upstream, but if that fold ever
-            // bails for an `any`-typed receiver they would otherwise hit the
-            // receiver-returning catch-all below. Dispatching them dynamically here
-            // keeps the immutable-copy semantics (the runtime arms added in #2803).
-            "next" | "return" | "throw" | "toLocaleString" | "toReversed" | "toSorted"
-            | "toSpliced" => emit_native_method_dispatch(ctx, recv_box, property, arg_vals),
+            "next" | "return" | "throw" | "toLocaleString" => {
+                emit_native_method_dispatch(ctx, recv_box, property, arg_vals)
+            }
+            // #2803 / #10476: `toReversed` / `toSorted` / `toSpliced` fold to
+            // `Expr::ArrayTo*` upstream only for a receiver HIR proves is an
+            // Array (a method NAME is no proof). One this pass proves — e.g. an
+            // `any`-annotated binding of an array literal — arrives here and
+            // keeps the same direct helpers rather than paying for dispatch.
+            "toReversed" | "toSorted" | "toSpliced" => Ok(emit_array_method_on_values(
+                ctx, property, recv_box, arg_vals,
+            )),
             // #3148: TypedArray.prototype.set(source, offset?). Copies elements
             // from an Array/TypedArray source into this typed array. The runtime
             // helper no-ops for non-typed-array receivers, so it is safe under the
@@ -1117,6 +1046,154 @@ pub(crate) fn lower_array_method(
             _ => emit_native_method_dispatch(ctx, recv_box, property, arg_vals),
         }
     })
+}
+
+/// Whether [`emit_array_method_on_values`] lowers `property` called with
+/// `argc` arguments without a compile-time arity error.
+pub(crate) fn is_array_method_on_values(property: &str, argc: usize) -> bool {
+    match property {
+        "flat" | "flatMap" | "toReversed" | "toSorted" | "toSpliced" => true,
+        "reduceRight" => argc <= 2,
+        "copyWithin" => argc >= 1,
+        _ => false,
+    }
+}
+
+/// The dense-Array lowering of the ES2019+ flatten, right-fold and copy
+/// methods on an already-evaluated receiver and arguments — the runtime calls
+/// the `Expr::Array*` folds make. Shared by the arms above and by the
+/// plain-array arm of the receiver-kind guard (#10476). The receiver may be
+/// a typed array or Buffer here too; each helper re-dispatches on that before
+/// reading an ArrayHeader. Surplus arguments were evaluated and are ignored.
+///
+/// Only names [`is_array_method_on_values`] accepts reach this.
+pub(crate) fn emit_array_method_on_values(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    recv_box: &str,
+    arg_vals: &[String],
+) -> String {
+    let blk = ctx.block();
+    let recv_handle = unbox_to_i64(blk, recv_box);
+    let result = match property {
+        // ECMA-262 §23.1.3.10 `arr.flat(depth?)`. Default depth = 1. The
+        // depth-aware path routes to `js_array_flat_depth` (handles 0 = shallow
+        // copy, Infinity = full recursion); 0-arg keeps the `js_array_flat` fast
+        // path.
+        "flat" => match arg_vals.first() {
+            None => blk.call(I64, "js_array_flat", &[(I64, &recv_handle)]),
+            Some(depth) => blk.call(
+                I64,
+                "js_array_flat_depth",
+                &[(I64, &recv_handle), (DOUBLE, depth)],
+            ),
+        },
+        "flatMap" => {
+            // 0-arg → runtime TypeError (pad undefined), not compile-fail.
+            let cb_box = arg_or_undefined(arg_vals, 0);
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
+            blk.call(
+                I64,
+                "js_array_flatMap",
+                &[(I64, &recv_handle), (I64, &cb_handle)],
+            )
+        }
+        "reduceRight" => {
+            // 0-arg → runtime TypeError (callback validation on undefined),
+            // not compile-fail.
+            let cb_box = arg_or_undefined(arg_vals, 0);
+            let (has_initial, initial_box) = match arg_vals.get(1) {
+                Some(initial) => ("1", initial.clone()),
+                None => ("0", "0.0".to_string()),
+            };
+            // #4091: throw TypeError for a non-callable callback before iterating.
+            let cb_handle = blk.call(I64, "js_validate_array_callback", &[(DOUBLE, &cb_box)]);
+            return blk.call(
+                DOUBLE,
+                "js_array_reduce_right",
+                &[
+                    (I64, &recv_handle),
+                    (I64, &cb_handle),
+                    (I32, has_initial),
+                    (DOUBLE, &initial_box),
+                ],
+            );
+        }
+        "copyWithin" => {
+            let target = arg_or_undefined(arg_vals, 0);
+            let start = arg_vals
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| double_literal(0.0));
+            let (has_end, end) = match arg_vals.get(2) {
+                Some(end) => ("1", end.clone()),
+                None => ("0", "0.0".to_string()),
+            };
+            blk.call(
+                I64,
+                "js_array_copy_within",
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &target),
+                    (DOUBLE, &start),
+                    (I32, has_end),
+                    (DOUBLE, &end),
+                ],
+            )
+        }
+        "toSorted" => match arg_vals.first() {
+            None => blk.call(I64, "js_array_to_sorted_default", &[(I64, &recv_handle)]),
+            Some(comparator) => {
+                // #2796: the comparator must be a function or undefined.
+                let cmp = blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, comparator)]);
+                blk.call(
+                    I64,
+                    "js_array_to_sorted_with_comparator",
+                    &[(I64, &recv_handle), (I64, &cmp)],
+                )
+            }
+        },
+        "toSpliced" => {
+            // #2794: 0 args → shallow copy (start 0, deleteCount 0); 1 arg →
+            // delete through the end (deleteCount +Infinity, clamped by the
+            // runtime); 2+ → explicit count, the rest are inserted items.
+            let start = arg_vals
+                .first()
+                .cloned()
+                .unwrap_or_else(|| double_literal(0.0));
+            let delete_count = match (arg_vals.len(), arg_vals.get(1)) {
+                (_, Some(count)) => count.clone(),
+                (0, None) => double_literal(0.0),
+                (_, None) => double_literal(f64::INFINITY),
+            };
+            let items = arg_vals.get(2..).unwrap_or(&[]);
+            let (items_ptr, items_len) = if items.is_empty() {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf = ctx.func.alloca_entry_array(DOUBLE, items.len());
+                let blk = ctx.block();
+                for (i, item) in items.iter().enumerate() {
+                    let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                    blk.store(DOUBLE, item, &slot);
+                }
+                (buf, items.len().to_string())
+            };
+            ctx.block().call(
+                I64,
+                "js_array_to_spliced",
+                &[
+                    (I64, &recv_handle),
+                    (DOUBLE, &start),
+                    (DOUBLE, &delete_count),
+                    (PTR, &items_ptr),
+                    (I32, &items_len),
+                ],
+            )
+        }
+        _ => blk.call(I64, "js_array_to_reversed", &[(I64, &recv_handle)]),
+    };
+    nanbox_pointer_inline(ctx.block(), &result)
 }
 
 /// `js_native_call_method(recv, name, name_len, argv, argc)` over already-lowered

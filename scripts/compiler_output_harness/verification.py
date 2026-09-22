@@ -301,6 +301,104 @@ def _flatten_native_records(native_reps: list[dict[str, Any]] | None) -> list[di
     return records
 
 
+def _declared_fallback_functions(
+    native_records: list[dict[str, Any]], workload_info: dict[str, Any]
+) -> set[str]:
+    """LLVM functions whose own proof records declare an ALLOWED fallback.
+
+    `native_rep_checks.allow_materialization_reasons` is the workload's written
+    statement of which materialization fallbacks are legal for this fixture.
+    A function that recorded one is, by that statement, a designed negative
+    case -- the runtime helper in its cold arm is the fixture's subject, not a
+    regression. Functions with no such record stay swept.
+    """
+    allowed = {
+        str(reason)
+        for reason in (workload_info.get("native_rep_checks") or {}).get(
+            "allow_materialization_reasons", []
+        )
+    }
+    if not allowed:
+        return set()
+    functions: set[str] = set()
+    for record in native_records:
+        if record.get("access_mode") != "dynamic_fallback":
+            continue
+        reasons = {
+            str(record.get(key))
+            for key in ("fallback_reason", "materialization_reason")
+            if record.get(key) is not None
+        }
+        if not reasons & allowed:
+            continue
+        name = record.get("function")
+        if name:
+            functions.add(str(name))
+    return functions
+
+
+_DEFINE_RE = re.compile(r"^define\b.*@(?:\"([^\"]+)\"|([A-Za-z0-9_.$-]+))\(")
+
+
+def _llvm_function_bodies(ir: str) -> list[tuple[str, str]]:
+    """(name, body) for every `define` in the module, including its ENTRY block.
+
+    Deliberately not `extract_blocks_with_functions`: that one keys on label
+    lines, so an unlabelled entry block -- the usual shape in optimized IR --
+    is dropped entirely. A sweep built on it cannot see a call in the entry
+    block, which is exactly where an injected regression would land.
+    """
+    bodies: list[tuple[str, str]] = []
+    name: str | None = None
+    lines: list[str] = []
+    for line in ir.splitlines():
+        if name is None:
+            match = _DEFINE_RE.match(line)
+            if match:
+                name = match.group(1) or match.group(2)
+                lines = []
+            continue
+        if line.startswith("}"):
+            bodies.append((name, "\n".join(lines)))
+            name = None
+            continue
+        lines.append(line)
+    if name is not None:
+        bodies.append((name, "\n".join(lines)))
+    return bodies
+
+
+def _dynamic_property_offender_functions(
+    ir_after: str, native_records: list[dict[str, Any]], workload_info: dict[str, Any]
+) -> list[str]:
+    """Functions whose BODY calls a dynamic-property helper without a licence.
+
+    #10784: this used to be a raw substring sweep of the whole module, which
+    made it fire on two things it was never meant to police -- a module-scope
+    `declare` for a helper nothing calls, and the cold arm of a guarded access
+    inside a fixture function that exists precisely to record a fallback.
+    `native_owned_typed_views` hit the second: `d792c0a761` routed unproven
+    declared typed-array stores from a bare `js_typed_array_set` into the
+    guarded inline arms, whose cold exit is `js_dyn_index_set_strict`. The
+    alias analysis did not change -- `mutableAliasFallback`'s store recorded
+    `dynamic_fallback` / `mutable_alias` before that commit and records it
+    still -- only the shape of the fallback did, and the new helper name
+    happens to be on the watched list while the old one was not.
+
+    Scoping to function bodies and exempting functions with a declared,
+    allowed fallback keeps the check live where it matters: `nativeOwnedPositive`
+    records no fallback, so a dynamic helper appearing there is still an error.
+    """
+    exempt = _declared_fallback_functions(native_records, workload_info)
+    offenders: list[str] = []
+    for function, body in _llvm_function_bodies(ir_after):
+        if function in exempt or function in offenders:
+            continue
+        if any(helper in body for helper in DYNAMIC_PROPERTY_HELPERS):
+            offenders.append(function)
+    return offenders
+
+
 def _state_name(value: Any) -> str:
     if value is None:
         return ""
@@ -1163,11 +1261,19 @@ def verify_artifacts(
     ):
         add(f"{label}_present", bool(text.strip()), f"{label} is non-empty")
 
+    dynamic_property_offenders = (
+        []
+        if workload_info.get("allow_dynamic_property_runtime")
+        else _dynamic_property_offender_functions(ir_after, native_records, workload_info)
+    )
     add(
         "no_dynamic_property_runtime",
-        bool(workload_info.get("allow_dynamic_property_runtime"))
-        or not any(helper in ir_after for helper in DYNAMIC_PROPERTY_HELPERS),
-        "optimized IR has no dynamic property helper calls",
+        not dynamic_property_offenders,
+        "optimized IR has no dynamic property helper calls"
+        if not dynamic_property_offenders
+        else "optimized IR calls a dynamic property helper in "
+        + json.dumps(dynamic_property_offenders)
+        + ", which declare no allowed native-rep fallback",
     )
     add(
         "no_boxed_number_allocations",

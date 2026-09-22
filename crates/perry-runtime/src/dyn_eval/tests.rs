@@ -397,11 +397,16 @@ fn parse_error_throws_syntax_error() {
 
 #[test]
 fn unsupported_construct_diagnostic_names_the_construct() {
+    // #10661 narrowed what counts as "unsupported" here: a plain class
+    // expression is now interpreted (see the `class_expression_*` tests
+    // above). `extends` stays out of the supported subset (no superclass
+    // chain / `super()` machinery exists in this interpreter), so it is
+    // still the representative "diagnostic names the construct" case.
     let result = catch_throw(|| {
-        let f = dyn_fn(&["return class {}"]);
+        let f = dyn_fn(&["return class extends Array {}"]);
         call(f, &[])
     });
-    let exc = result.expect_err("class expression must be rejected");
+    let exc = result.expect_err("class expression with extends must be rejected");
     let msg = error_message(exc);
     assert!(
         msg.contains("unsupported construct") && msg.contains("class"),
@@ -1075,4 +1080,180 @@ fn promise_static_result_retains_intrinsic_prototype() {
         "a base-realm intrinsic prototype is the value's default — recording it \
          buys nothing and costs a process-wide fast-path invalidation"
     );
+}
+
+// ── class expressions (#10661) ──────────────────────────────────────────────
+//
+// mysql2's row parsers (`lib/parsers/text_parser.js` /
+// `binary_parser.js`, via `generate-function`) build EXACTLY this shape at
+// runtime — captured verbatim from a live `mysql2` `SELECT` against a real
+// server (`Function.apply(null, keys.concat(src)).apply(null, vals)`,
+// `generate-function/index.js:172`):
+//
+//   (function anonymous() {
+//     return ((function () {
+//       return class TextRow {
+//         constructor(fields) {}
+//         next(packet, fields, options) {
+//           this.packet = packet;
+//           const result = {};
+//           result["val"] = packet.readLengthCodedString(fields[0].encoding);
+//           return result;
+//         }
+//       };
+//     })())
+//   })
+//
+// The tests below exercise that shape (minus the host `packet` receiver,
+// which is out of unit-test scope the same way
+// `interpreted_code_constructs_host_class_parameter` above notes) plus the
+// rest of the documented subset, and confirm the documented boundary
+// (`extends`, getters/setters, private members, computed keys, class fields,
+// static blocks) still throws the #6559 diagnostic.
+
+#[test]
+fn class_expression_mysql2_row_parser_shape() {
+    let f = dyn_fn(&[r#"
+        return (function () {
+          return class TextRow {
+            constructor(fields) {
+              this.fields = fields;
+            }
+            next(extra) {
+              return this.fields + extra;
+            }
+          };
+        })();
+    "#]);
+    let ctor_idx = root_push(call(f, &[]));
+    let inst = super::bridge::construct(root_get(ctor_idx), &[num(3.0)]);
+    let inst_idx = root_push(inst);
+    let result = super::bridge::call_method(root_get(inst_idx), "next", &[num(4.0)]);
+    roots_truncate(ctor_idx);
+    assert_eq!(as_num(result), 7.0);
+}
+
+#[test]
+fn class_expression_default_constructor_and_instance_state() {
+    // No explicit constructor: synthesized empty one, matching a class with
+    // no `constructor(...)` member.
+    let f = dyn_fn(&[r#"
+        return class Empty {
+          set(v) { this.v = v; return this; }
+          get() { return this.v; }
+        };
+    "#]);
+    let ctor_idx = root_push(call(f, &[]));
+    let inst = super::bridge::construct(root_get(ctor_idx), &[]);
+    let inst_idx = root_push(inst);
+    super::bridge::call_method(root_get(inst_idx), "set", &[num(9.0)]);
+    let result = super::bridge::call_method(root_get(inst_idx), "get", &[]);
+    roots_truncate(ctor_idx);
+    assert_eq!(as_num(result), 9.0);
+}
+
+#[test]
+fn class_expression_static_method_and_string_numeric_keys() {
+    let f = dyn_fn(&[r#"
+        return class Keyed {
+          static make() { return new Keyed(); }
+          "str-key"() { return "s"; }
+          0() { return "n"; }
+        };
+    "#]);
+    let ctor_idx = root_push(call(f, &[]));
+    let made = super::bridge::call_method(root_get(ctor_idx), "make", &[]);
+    let made_idx = root_push(made);
+    assert_eq!(
+        as_str(super::bridge::call_method(
+            root_get(made_idx),
+            "str-key",
+            &[]
+        )),
+        "s"
+    );
+    assert_eq!(
+        as_str(super::bridge::call_method(root_get(made_idx), "0", &[])),
+        "n"
+    );
+    roots_truncate(ctor_idx);
+}
+
+#[test]
+fn class_expression_two_instances_do_not_share_state() {
+    let f = dyn_fn(&[r#"
+        return class Counter {
+          constructor() { this.n = 0; }
+          inc() { this.n = this.n + 1; return this.n; }
+        };
+    "#]);
+    let ctor_idx = root_push(call(f, &[]));
+    let a = super::bridge::construct(root_get(ctor_idx), &[]);
+    let a_idx = root_push(a);
+    let b = super::bridge::construct(root_get(ctor_idx), &[]);
+    let b_idx = root_push(b);
+    super::bridge::call_method(root_get(a_idx), "inc", &[]);
+    super::bridge::call_method(root_get(a_idx), "inc", &[]);
+    let a_result = super::bridge::call_method(root_get(a_idx), "inc", &[]);
+    let b_result = super::bridge::call_method(root_get(b_idx), "inc", &[]);
+    roots_truncate(ctor_idx);
+    assert_eq!(as_num(a_result), 3.0);
+    assert_eq!(as_num(b_result), 1.0);
+}
+
+#[test]
+fn class_expression_named_self_reference() {
+    // A named class expression sees its own name inside its body, same as a
+    // named function expression.
+    let f = dyn_fn(&[r#"
+        return (class Self {
+          static describe() { return typeof Self; }
+        }).describe();
+    "#]);
+    let r = call(f, &[]);
+    assert_eq!(as_str(r), "function");
+}
+
+#[test]
+fn class_expression_with_extends_is_unsupported() {
+    let f = dyn_fn(&["return class Sub extends Array {};"]);
+    let err = catch_throw(|| call(f, &[])).expect_err("extends must throw");
+    assert!(
+        error_message(err).contains("class expression with `extends`"),
+        "unexpected message: {}",
+        error_message(err)
+    );
+}
+
+#[test]
+fn class_expression_getter_is_unsupported() {
+    let f = dyn_fn(&["return class G { get x() { return 1; } };"]);
+    let err = catch_throw(|| call(f, &[])).expect_err("getter must throw");
+    assert!(error_message(err).contains("getter/setter in class body"));
+}
+
+#[test]
+fn class_expression_field_is_unsupported() {
+    let f = dyn_fn(&["return class F { x = 1; };"]);
+    let err = catch_throw(|| call(f, &[])).expect_err("class field must throw");
+    assert!(error_message(err).contains("class field"));
+}
+
+#[test]
+fn class_expression_computed_key_is_unsupported() {
+    let f = dyn_fn(&[r#"
+        const k = "m";
+        return class C { [k]() { return 1; } };
+    "#]);
+    let err = catch_throw(|| call(f, &[])).expect_err("computed key must throw");
+    assert!(error_message(err).contains("computed method name in class body"));
+}
+
+#[test]
+fn class_declaration_statement_remains_unsupported() {
+    // Only the class EXPRESSION form is in scope for #10661; a class
+    // declaration statement is untouched.
+    let f = dyn_fn(&["class D {} return D;"]);
+    let err = catch_throw(|| call(f, &[])).expect_err("class declaration must throw");
+    assert!(error_message(err).contains("class declaration"));
 }

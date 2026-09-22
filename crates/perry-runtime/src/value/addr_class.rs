@@ -238,6 +238,29 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
     if !is_plausible_heap_addr(addr) {
         return None;
     }
+    try_read_gc_header_known_plausible(addr)
+}
+
+/// [`try_read_gc_header`] for a caller that already ran
+/// [`is_plausible_heap_addr`] on this exact `addr` earlier in the same
+/// straight-line scope, with no intervening collection or reassignment of
+/// `addr`. Skips re-deriving that magnitude check.
+///
+/// `native_get::try_data_get_bytes`'s prototype-chain loop already branches
+/// on `is_plausible_heap_addr(addr)` (paired with the arena-generation
+/// classification) one statement above every call site this exists for, so
+/// the plain [`try_read_gc_header`] was re-running the same handle-band /
+/// heap-range compare a second time per step for free. `classify_heap_generation`
+/// runs in between and writes its own cache, which is enough to stop LLVM's
+/// CSE from eliding the duplicate call on its own (its side effect isn't
+/// provably unrelated to `is_plausible_heap_addr`'s inputs from the
+/// optimizer's point of view), so the redundancy was real, not just apparent.
+///
+/// # Safety
+/// As [`try_read_gc_header`], plus: `is_plausible_heap_addr(addr)` must be
+/// `true` for this `addr` already (unchecked here).
+#[inline(always)]
+pub(crate) unsafe fn try_read_gc_header_known_plausible(addr: usize) -> Option<&'static GcHeader> {
     // Small-buffer slab allocations are heap-plausible but carry NO GcHeader —
     // `addr - GC_HEADER_SIZE` is the previous slab entry's data bytes, so a
     // brand probe (Temporal/Date/Map/Set `obj_type` check) would read a
@@ -247,6 +270,53 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
         return None;
     }
     Some(&*((addr - GC_HEADER_SIZE) as *const GcHeader))
+}
+
+/// Candidate object address carried by a NaN-boxed JS value, decided by the
+/// value's TAG before any magnitude test (#10479).
+///
+/// Only two representations name an address: a `POINTER_TAG` payload and a
+/// legacy raw bitcast pointer (top 16 bits clear, above the null page). Every
+/// other tag is a primitive whose low 48 bits are not an address, and several
+/// of them land inside the heap window, so the old "tag band `>= 0x7FF8` ⇒
+/// payload" decode turned them into plausible-looking pointers:
+///
+/// * an inline SSO string packs its bytes plus a length byte — `"uri"` decodes
+///   to `0x0300_0069_7275`, and `meta_capable_object` read a GC header below it
+///   and segfaulted (ajv's `arg instanceof _Code`);
+/// * an INT32 value / class ref carries its id — `Object.create`'s first
+///   synthetic class id decodes to `0x8000_0000` (#10478's `C instanceof C`);
+/// * heap strings, bigints, JS handles and the undefined/null/boolean markers.
+///
+/// All of those answer 0. So does an ordinary number: a bare top-16-clear
+/// word is only the legacy raw-pointer shape when the allocator owns it
+/// ([`try_read_tracked_gc_header`], or a registered buffer) — a denormal
+/// double such as `1e-310` decodes into the heap window too.
+///
+/// A non-zero `POINTER_TAG` answer is a CANDIDATE, not a validity proof — it
+/// can still be a handle-band id — so pair it with a registry lookup or
+/// [`try_read_gc_header`] before touching memory.
+#[inline(always)]
+pub(crate) fn object_ref_addr(value: f64) -> usize {
+    let bits = value.to_bits();
+    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        (bits & crate::value::POINTER_MASK) as usize
+    } else if (bits >> 48) == 0 && bits != 0 {
+        raw_object_ref_addr(bits as usize)
+    } else {
+        0
+    }
+}
+
+#[cold]
+fn raw_object_ref_addr(addr: usize) -> usize {
+    let owned = crate::buffer::is_registered_buffer(addr)
+        || unsafe { try_read_tracked_gc_header(addr) }.is_some();
+    if owned {
+        addr
+    } else {
+        0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -379,6 +449,58 @@ mod tests {
         }
         // Tag remnants / out-of-range bits.
         assert!(unsafe { try_read_gc_header(0x7FFD_0000_0000_0000) }.is_none());
+    }
+
+    /// #10479: only a `POINTER_TAG` payload or a raw pointer names an address.
+    /// Every primitive band answers 0 — in particular the SSO and INT32 bands,
+    /// whose payloads decode into the heap window.
+    #[test]
+    fn object_ref_addr_classifies_by_tag_before_magnitude() {
+        use crate::value::{
+            BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
+            TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+        };
+        let heap_addr = 0x7F12_3456_7890usize;
+        let primitives = [
+            SHORT_STRING_TAG | 0x0300_0069_7275, // "uri"
+            SHORT_STRING_TAG | 0x0100_0000_0061, // "a"
+            SHORT_STRING_TAG,                    // ""
+            INT32_TAG | 0x8000_0000,             // synthetic class ref
+            INT32_TAG | 5,
+            STRING_TAG | heap_addr as u64,
+            BIGINT_TAG | heap_addr as u64,
+            JS_HANDLE_TAG | 7,
+            TAG_UNDEFINED,
+            TAG_NULL,
+            TAG_TRUE,
+            TAG_FALSE,
+            1.5f64.to_bits(),
+            f64::NAN.to_bits(),
+            (-0.0f64).to_bits(),
+            0,
+            // Denormal doubles: top 16 bits clear, low bits in the heap
+            // window, but no allocator owns them.
+            1e-310f64.to_bits(),
+        ];
+        for bits in primitives {
+            assert_eq!(
+                object_ref_addr(f64::from_bits(bits)),
+                0,
+                "{bits:#018x} is a primitive, not an address"
+            );
+        }
+        assert_eq!(
+            object_ref_addr(f64::from_bits(POINTER_TAG | heap_addr as u64)),
+            heap_addr
+        );
+        // A POINTER_TAG handle id is still a candidate; callers band-check it.
+        assert_eq!(
+            object_ref_addr(f64::from_bits(POINTER_TAG | 0x40001)),
+            0x40001
+        );
+        // The legacy raw-bitcast shape is kept for an allocator-owned object.
+        let obj = crate::object::js_object_alloc(0, 0) as usize;
+        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), obj);
     }
 
     #[test]

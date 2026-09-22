@@ -300,10 +300,14 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
 
 /// `instanceof` kind-probe for fetch handles (registered with the runtime at
 /// init via `js_register_fetch_handle_kind_probe`). Returns 0 = none,
-/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob, 5 = File. Lets
-/// `x instanceof Response` (etc.) resolve for the pointer-tagged small-integer
-/// handles these types use instead of heap objects. Lives here (not `mod.rs`)
-/// to keep that file under the 2,000-line lint gate.
+/// 1 = Response, 2 = Request, 3 = Headers, 4 = Blob, 5 = File, 6 = FormData.
+/// Lets `x instanceof Response` (etc.) resolve for the pointer-tagged
+/// small-integer handles these types use instead of heap objects. #10555
+/// additionally reuses this for `Object.prototype.toString` /
+/// `Symbol.toStringTag`; FormData (kind 6) is new here -- nothing previously
+/// needed to tell it apart from the other fetch-family handles by id alone.
+/// Lives here (not `mod.rs`) to keep that file under the 2,000-line lint
+/// gate.
 #[no_mangle]
 pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
     if FETCH_RESPONSES.lock().unwrap().contains_key(&id) {
@@ -317,6 +321,9 @@ pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
     }
     if let Some(blob) = BLOB_REGISTRY.lock().unwrap().get(&id) {
         return if blob.file_name.is_some() { 5 } else { 4 };
+    }
+    if super::body_metadata::is_registered_form_data(id) {
+        return 6;
     }
     0
 }

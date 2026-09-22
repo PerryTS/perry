@@ -561,10 +561,18 @@ impl LlBlock {
     /// Float comparison. `cond` is an LLVM predicate string: `olt`, `ole`,
     /// `ogt`, `oge`, `oeq`, `one`, `ord`, `uno`, …
     pub fn fcmp(&mut self, cond: &str, a: &str, b: &str) -> String {
+        self.fcmp_ty(crate::types::DOUBLE, cond, a, b)
+    }
+
+    /// `fcmp` on an operand type other than `double` — a `float` in the
+    /// native lattice, above all. The untyped [`Self::fcmp`] above assumes
+    /// `double`; calling it on a `float` emits IR LLVM rejects.
+    pub fn fcmp_ty(&mut self, ty: LlvmType, cond: &str, a: &str, b: &str) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::FCmp {
             dst: r.clone(),
             pred: cond.to_string(),
+            ty,
             a: a.to_string(),
             b: b.to_string(),
         });

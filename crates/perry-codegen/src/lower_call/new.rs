@@ -276,7 +276,24 @@ fn lower_new_impl_inner<'a>(
     // These are checked BEFORE the ctx.classes lookup because the user
     // code may shadow the name — if they do, the class lookup below
     // wins.
-    if !ctx.classes.contains_key(class_name) {
+    //
+    // #10589: that shadowing check only covered CLASSES — imported classes
+    // ARE registered in `ctx.classes` for the importing module, so they
+    // already skip this block. A user-imported PLAIN FUNCTION constructor
+    // of the same name (`import { Headers } from "./lib.ts"`) never lands
+    // in `ctx.classes`, so any builtin arm not gated by `required_sources`
+    // (`Headers`, `EventEmitter`, …) fired unconditionally and constructed
+    // the BUILTIN instead of the user's function — for a bare identifier
+    // callee exactly as much as for one wrapped in `(X as any)`, since
+    // `peel_new_callee` strips that cast before `lower_new` ever branches
+    // on the callee shape. Route a genuine imported-function-constructor
+    // name past the whole builtin block the same way `ctx.classes` already
+    // does for classes; it falls through to the `import_function_prefixes`
+    // arm below `ctx.classes.get(class_name)`, which constructs the user's
+    // function correctly via `js_new_function_construct`.
+    let user_owns_construction = ctx.import_function_prefixes.contains_key(class_name)
+        && !ctx.import_function_v8_specifiers.contains_key(class_name);
+    if !ctx.classes.contains_key(class_name) && !user_owns_construction {
         if matches!(class_name, "Crypto" | "CryptoKey" | "SubtleCrypto") {
             for a in args {
                 let _ = lower_expr(ctx, a)?;

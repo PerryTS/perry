@@ -28,6 +28,11 @@ pub(crate) mod lower_call;
 pub(crate) mod lower_conditional;
 pub(crate) mod lower_string_concat;
 pub(crate) mod lower_string_method;
+/// #463/#512 dispatch-table/manifest drift check — see the module docs
+/// for why this moved here from an integration test (#10668's 15-row
+/// drift, which nothing caught until it surfaced on an unrelated PR).
+#[cfg(test)]
+mod manifest_consistency;
 pub mod module;
 pub mod nanbox;
 #[cfg(feature = "llvm-inprocess")]
@@ -44,6 +49,7 @@ pub mod native_emit;
 mod native_root_coverage;
 pub(crate) mod native_value;
 pub(crate) mod nm_install;
+pub use nm_install::native_provider_install_symbols;
 pub mod opt_report;
 pub(crate) mod root_reload;
 pub mod rooting;
@@ -75,12 +81,13 @@ pub mod types;
 pub mod unit_cache;
 
 pub use codegen::{
-    compile_module, context_free_ctor_param_count, namespace_member_class_key,
-    namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
-    short_spread_method_capabilities, user_function_symbol, AppMetadata, CompileOptions,
-    ConstructorContracts, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ResolvedConstructorContracts, ShortSpreadMethodCandidate,
+    compile_module, context_free_ctor_abi, context_free_ctor_param_count,
+    namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
+    resolve_target_triple, short_spread_method_capabilities, user_function_symbol, AppMetadata,
+    CompileOptions, ConstructorContracts, CtorAbi, ExportedObjectLiteralCapability, FpContractMode,
+    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry,
+    NamespaceEntryKind, ObjectLiteralMethodCandidate, ResolvedConstructorContracts,
+    ShortSpreadMethodCandidate,
 };
 pub use collectors::CjsPreambleCensus;
 // #9843: the segment-view for-of matcher's counter. Exported so the

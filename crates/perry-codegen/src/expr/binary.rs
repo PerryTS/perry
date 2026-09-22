@@ -185,6 +185,29 @@ fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> Str
 /// precheck or a `js_typed_feedback_class_field_get_guard` call for its shape
 /// check regardless. Proven raw-f64 tiers need no guard at all.
 fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // #10904: this fold reads every leaf before the first addition converts
+    // anything, so it declines a tree whose specification order converts
+    // first and then reads a leaf that conversion could change. The decision
+    // lives HERE, not at a call site, because two entries reach the fold and
+    // both can hold such a tree: the fully dynamic tree, and the tree whose
+    // numeric proof only an annotation carries (`a: number[]`, then
+    // `a[0] + a[1] + a[2]` with an object in `a[0]`). A declined tree lowers
+    // node by node, which evaluates and converts in source order.
+    if let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    {
+        if !add_tree_evaluates_before_it_converts(ctx, expr) {
+            return lower_rooted_dynamic_binary(
+                ctx,
+                "js_dynamic_string_or_number_add",
+                left,
+                right,
+            );
+        }
+    }
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
     let needs_test: Vec<bool> = leaves
@@ -445,6 +468,14 @@ fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// is often a captured local plus fields read from interface-shaped objects,
 /// so every leaf is `Any` to codegen. The guard itself is the runtime proof;
 /// its cold arm preserves the original tree and exact dynamic `+` semantics.
+///
+/// This predicate is about COST only. Whether the fold is FAITHFUL to a tree
+/// (#10904) is decided inside `lower_guarded_numeric_add`, which every entry
+/// reaches; see `add_tree_evaluates_before_it_converts`. A left-leaning chain
+/// of property reads (`h += o.a + o.b + o.c`) is declined there and pays the
+/// per-node helper the fold exists to avoid — the regression #10904 declares.
+/// Correct and slower beats fast and wrong; step 4b's region guard (#10884) is
+/// what buys it back.
 fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
     if matches!(
         std::env::var("PERRY_DYNAMIC_ADD_PAIR_GUARD").as_deref(),
@@ -457,6 +488,115 @@ fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
     leaves.len() >= 2
+}
+
+/// #10904: may every leaf of this `+` tree be evaluated before any addition?
+///
+/// The fold evaluates all leaves up front. For `Add(L, R)` the specification
+/// evaluates `L`, evaluates `R`, and only then `ToPrimitive`s both — so when
+/// `L` is itself an `Add`, **`L`'s conversions run before any leaf of `R` is
+/// evaluated**, and a user `valueOf`/`toString` running in them can change
+/// what such a leaf reads. Measured before the fix: with
+/// `O.a = { valueOf() { O.c = 100; return 1 } }`, `O.a + O.b + O.c` (which
+/// parses as `(O.a + O.b) + O.c`) returned **9** where node returns **102**.
+///
+/// The fold departs from the specification only in WHEN it reads such a
+/// leaf. The conversions themselves still run in specification order: the
+/// cold arm (`rebuild_add_tree(.., fast = false)`) calls the spec-`+` helper
+/// node for node over the lowered values. So a tree is faithful exactly when
+/// every leaf the specification reads after an earlier conversion is one
+/// whose read time cannot be observed (`add_leaf_is_evaluation_invariant`).
+/// By induction:
+///
+/// `Add(L, R)` is faithful iff `L` and `R` are, and, when `L` is an `Add`,
+/// every leaf of `R` is evaluation-invariant.
+///
+/// * `h + (a + b)` — faithful whatever the leaves are, because no leaf
+///   follows a conversion. This is the accumulator shape the fold exists for
+///   (`sum += row.x + row.y` parses as `sum + (row.x + row.y)`).
+/// * `(o.a + o.b) + o.c` — NOT faithful: `o.c` follows the first conversion,
+///   and a property read sees whatever that conversion did.
+/// * `(r0 + r1) + r2` over `const` locals — faithful: no code a conversion
+///   runs can write `r2`'s storage, and reading it has no effect.
+///
+/// The cold arm cannot rescue an unfaithful tree, because it adds the values
+/// the fold ALREADY read. Making it re-read the late leaves would run a getter
+/// or a call twice; that is legal only once something has proven the leaves
+/// effect-free, which is what a region guard establishes (#10884).
+fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    let Expr::Binary {
+        op: BinaryOp::Add,
+        left,
+        right,
+    } = expr
+    else {
+        return true;
+    };
+    let left_converts = matches!(
+        left.as_ref(),
+        Expr::Binary {
+            op: BinaryOp::Add,
+            ..
+        }
+    );
+    if left_converts {
+        let mut late = Vec::new();
+        add_tree_leaves(right, &mut late);
+        if !late
+            .into_iter()
+            .all(|leaf| add_leaf_is_evaluation_invariant(ctx, leaf))
+        {
+            return false;
+        }
+    }
+    add_tree_evaluates_before_it_converts(ctx, right)
+        && add_tree_evaluates_before_it_converts(ctx, left)
+}
+
+/// #10904: may this `+` leaf be read before an earlier conversion instead of
+/// after it?
+///
+/// Yes when its value is the same whenever it is read and reading it has no
+/// effect: then the user code a conversion runs can neither change what the
+/// leaf yields nor observe that it was read early.
+///
+/// * Literals.
+/// * A local whose storage no other code can write. `boxed_vars` is exactly
+///   the set of locals that some other code CAN write: a local captured by a
+///   closure and assigned anywhere, a parameter that a sloppy-mode mapped
+///   `arguments` object aliases (`add_arguments_mapped_boxes`), and a
+///   TDZ-seeded binding, whose read can throw. Outside it a local is a stack
+///   slot that only this activation writes, or a capture slot written once
+///   when the closure is built — so `let` and `var` qualify too, not just
+///   `const`.
+///
+/// Not invariant:
+///
+/// * a module-level binding. Its storage is a module global that any function
+///   in the module can assign without capturing it
+///   (`let z = 1; function f() { z = 100 }`), so `boxed_vars` says nothing
+///   about it, and codegen carries no module-wide "never reassigned" fact at
+///   this point. Declining costs the old per-node lowering, never a wrong
+///   answer;
+/// * a POD-record local, whose read materializes an object;
+/// * everything else, property and element reads (a getter, a Proxy, or the
+///   very mutation #10904 is about) and calls included.
+fn add_leaf_is_evaluation_invariant(ctx: &FnCtx<'_>, leaf: &Expr) -> bool {
+    match leaf {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::WtfString(_) => true,
+        Expr::LocalGet(id) => {
+            !ctx.boxed_vars.contains(id)
+                && !ctx.module_globals.contains_key(id)
+                && !ctx.pod_records.contains_key(id)
+        }
+        _ => false,
+    }
 }
 
 /// Rebuild the `+` tree over already-lowered leaf values, node for node, so the

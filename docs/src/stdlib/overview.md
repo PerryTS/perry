@@ -54,10 +54,8 @@ for compatibility guarantees.
 - **validator** — String validation
 
 ### CLI & Data
-- **commander** — CLI argument parsing
 - **decimal.js** — Arbitrary precision decimals
 - **bignumber.js** — Big number math
-- **lru-cache** — LRU caching
 
 ### Other
 - **sharp** — Image processing

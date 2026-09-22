@@ -277,20 +277,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // method surface; only the constructor's default protocol differs.
     class("https", "Agent"),
     method("https", "Agent", false, None),
-    // --- axios (perry-ext-axios) — the npm `axios` HTTP client surface.
-    //     The default export is callable (`axios(config)`); both flow
-    //     through perry-ext-axios's `js_axios_*` symbols. ---
-    method("axios", "default", false, None),
-    method("axios", "get", false, None),
-    method("axios", "post", false, None),
-    method("axios", "put", false, None),
-    method("axios", "delete", false, None),
-    method("axios", "patch", false, None),
-    method("axios", "head", false, None),
-    method("axios", "options", false, None),
-    method("axios", "request", false, None),
-    method("axios", "create", false, None),
-    method("axios", "all", false, None),
     // --- node-fetch (perry-ext-fetch) — also exposes the Web Fetch
     //     API classes (Headers, Request, Response, Blob, FormData). ---
     method("node-fetch", "default", false, None),
@@ -320,9 +306,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // --- bignumber.js — alias surface for decimal.js. The wrapper
     //     dispatches to the same perry-ext-decimal implementation. ---
     class("bignumber.js", "BigNumber"),
-    // --- node-cron — alias for the cron wrapper.
-    method("node-cron", "schedule", false, None),
-    method("node-cron", "validate", false, None),
     // --- perry/ui constructors + setters. Auto-derivable from
     //     PERRY_UI_TABLE in crates/perry-dispatch/src/lib.rs. The
     //     reverse drift test enforces parity in both directions. ---
@@ -724,34 +707,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     //     (module_has_any_entries) and mirror the `redis` alias above. ---
     class("iovalkey", "Redis"),
     method("iovalkey", "createClient", false, None),
-    // --- date-fns — alias for dayjs (well-known routes both to
-    //     perry-ext-dayjs). Surface methods are the date-fns
-    //     functional API exposed by the wrapper. ---
-    method("date-fns", "format", false, None),
-    method("date-fns", "parseISO", false, None),
-    method("date-fns", "addDays", false, None),
-    method("date-fns", "addMonths", false, None),
-    method("date-fns", "addYears", false, None),
-    method("date-fns", "differenceInDays", false, None),
-    method("date-fns", "differenceInHours", false, None),
-    method("date-fns", "differenceInMinutes", false, None),
-    method("date-fns", "isAfter", false, None),
-    method("date-fns", "isBefore", false, None),
-    method("date-fns", "startOfDay", false, None),
-    method("date-fns", "endOfDay", false, None),
-    // --- rate-limiter-flexible — perry-ext-ratelimit. Surface mirrors
-    //     the npm package's RateLimiterMemory class. Construction is a
-    //     lower_builtin_new arm (js_ratelimit_new_from_options); the
-    //     instance methods dispatch via the NATIVE_MODULE_TABLE rows in
-    //     lower_call/native_table/extras.rs. ---
-    class("rate-limiter-flexible", "RateLimiterMemory"),
-    class("rate-limiter-flexible", "RateLimiterAbstract"),
-    method("rate-limiter-flexible", "consume", true, None),
-    method("rate-limiter-flexible", "get", true, None),
-    method("rate-limiter-flexible", "delete", true, None),
-    method("rate-limiter-flexible", "block", true, None),
-    method("rate-limiter-flexible", "penalty", true, None),
-    method("rate-limiter-flexible", "reward", true, None),
     // --- fetch — well-known alias for perry-ext-fetch. Same surface
     //     as node-fetch (the more common alias above). ---
     method("fetch", "default", false, None),
@@ -919,6 +874,16 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "statusMessage", true, Some("IncomingMessage")),
     method("http", "headers", true, Some("IncomingMessage")),
     method("http", "trailers", true, Some("IncomingMessage")),
+    // #10467 — client-side rawHeaders/httpVersionMajor/httpVersionMinor/
+    // complete bare-name accessors (paired with the __get_rawHeaders row
+    // below). Previously only the __get_* HIR-rewrite targets existed for
+    // httpVersionMajor/httpVersionMinor/complete and rawHeaders had no
+    // manifest row at all, so a typed `IncomingMessage` receiver reading
+    // the bare property missed dispatch entirely.
+    method("http", "rawHeaders", true, Some("IncomingMessage")),
+    method("http", "httpVersionMajor", true, Some("IncomingMessage")),
+    method("http", "httpVersionMinor", true, Some("IncomingMessage")),
+    method("http", "complete", true, Some("IncomingMessage")),
     method("http", "setStatus", true, Some("ServerResponse")),
     method("http", "getStatus", true, Some("ServerResponse")),
     method("http", "__get_method", true, Some("IncomingMessage")),
@@ -943,6 +908,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "__get_statusMessage", true, Some("IncomingMessage")),
     method("http", "__get_headers", true, Some("IncomingMessage")),
     method("http", "__get_trailers", true, Some("IncomingMessage")),
+    method("http", "__get_rawHeaders", true, Some("IncomingMessage")),
     method("http", "__get_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusCode", true, Some("ServerResponse")),
     method("http", "__set_statusMessage", true, Some("ServerResponse")),
@@ -1162,23 +1128,4 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     property("bun", "semver"),
     property("bun", "JSONL"),
     property("bun", "ant"),
-    // --- qs (issue #8751) ---
-    // Native nested query-string codec. This keeps Stripe's request encoder
-    // off qs' legacy get-intrinsic/ES-shims dependency chain.
-    method_sig(
-        "qs",
-        "stringify",
-        false,
-        None,
-        &[p_any("value"), p_any("options")],
-        TypeSpec::String,
-    ),
-    method_sig(
-        "qs",
-        "parse",
-        false,
-        None,
-        &[p_str("input"), p_any("options")],
-        TypeSpec::Any,
-    ),
 ];

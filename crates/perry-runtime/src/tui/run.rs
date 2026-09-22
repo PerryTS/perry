@@ -63,8 +63,12 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
 
         // Call the component to get a fresh widget tree.
         let widget_v = js_closure_call0(component_closure);
-        // Unbox the POINTER tag → raw handle (low 48 bits).
-        let widget_handle = (widget_v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        // #340/#341: the component returns a widget handle OBJECT, so resolve
+        // it through the brand instead of masking the tag off whatever came
+        // back. A component that returns a number or a string now paints
+        // nothing (tree id 0, "no such node") rather than addressing whichever
+        // tree node its low 48 bits happened to name.
+        let widget_handle = super::handle_object::tui_widget_id_from_bits(widget_v.to_bits());
 
         // Paint the tree into the back buffer + flush.
         super::ffi::paint_root_for_run(widget_handle);

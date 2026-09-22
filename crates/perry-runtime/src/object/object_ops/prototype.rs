@@ -118,8 +118,7 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                 || crate::regex::is_regex_pointer(proto_ptr as *const u8));
             let valid = modellable && is_valid_obj_ptr(proto_ptr as *const u8);
             if valid {
-                let cid =
-                    NEXT_SYNTHETIC_CLASS_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let cid = crate::object::class_registry::alloc_synthetic_class_id();
                 class_prototype_object_root_store(cid, proto_ptr);
                 unsafe { js_register_class_id(cid) };
                 // #1805: link the synthetic class_id into the original class's
@@ -617,6 +616,29 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                         )
                     {
                         return proto;
+                    }
+                }
+                // #10478: `Object.create(proto)` (and a plain-function `new
+                // F()`) records the exact `[[Prototype]]` object under the
+                // instance's SYNTHETIC class id. That link is authoritative, so
+                // prefer it over the `constructor`-derived guess below, which
+                // reads `obj.constructor` and answers `ctor.prototype`. The
+                // guess only happened to miss while an `Object.create` result's
+                // inherited `constructor` resolved to a bogus class ref; once it
+                // correctly answers `Object` / `A`, the guess returns
+                // `Object.prototype` / `A.prototype` and drops `proto` itself —
+                // with its inherited accessors, descriptors and non-writable
+                // slots. (The same lookup runs further down for receivers that
+                // reach it; this one only moves it ahead of the guess.)
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let synth_proto =
+                        super::super::class_registry::synthetic_class_prototype_object(
+                            (*obj).class_id,
+                        );
+                    if !synth_proto.is_null() && synth_proto as usize != raw_addr as usize {
+                        return f64::from_bits(
+                            crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
+                        );
                     }
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {

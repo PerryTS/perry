@@ -97,6 +97,18 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
     } else {
         receiver_handle.get_nanbox_f64()
     };
+    // #10481: the Symbol resolver invokes every accessor it finds with an
+    // explicit receiver, so hand it the one this call was given; an inherited
+    // getter must not see the target the lookup started from.
+    if unsafe { crate::symbol::js_is_symbol(property_key_handle.get_nanbox_f64()) } != 0 {
+        return unsafe {
+            crate::symbol::js_object_get_symbol_property_with_receiver(
+                target_handle.get_nanbox_f64(),
+                property_key_handle.get_nanbox_f64(),
+                recv,
+            )
+        };
+    }
     let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
     let result = target_get_property_key(
         target_handle.get_nanbox_f64(),

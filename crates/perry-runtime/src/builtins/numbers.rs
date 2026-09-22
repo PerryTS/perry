@@ -562,11 +562,15 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // identifiers, so test assertions like `typeof x === "number"`
         // hold). Gate on the timer registry so unrelated small handles
         // (UI widgets, drizzle, etc.) still fall through to toPrimitive.
-        if crate::value::addr_class::is_small_handle(id as usize)
-            && crate::timer::is_known_timer_id(id)
-        {
-            return id as f64;
-        }
+        // #10542: only a Timeout (setTimeout/setInterval) converts to its
+        // id this way -- an Immediate (setImmediate) has no numeric
+        // conversion in Node and must fall through to the generic
+        // toPrimitive/toString path below (which yields NaN, matching
+        // `+setImmediate(...)`).
+        // #340/#341: `+timeout` no longer needs an arm here. A Timeout is an
+        // ordinary object whose prototype carries `Symbol.toPrimitive`, so the
+        // generic ToPrimitive path below converts it — and an Immediate, whose
+        // prototype deliberately carries none, still yields `NaN` (#10542).
         // Array → ToPrimitive(number) finds no `valueOf` override, so it
         // falls to `Array.prototype.toString` = `join(",")`, then ToNumber on
         // that string: `Number([]) === 0`, `Number([5]) === 5`,
@@ -642,6 +646,22 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
+
+    // A plain IEEE double is the overwhelmingly common argument here —
+    // `String(n)` and every template substitution of a number land on it — and
+    // it was the LAST arm of the ladder below, so every one of them paid eight
+    // tag comparisons plus a jump table to reach the one line that answers it.
+    // `is_number()` is a single range test (perry's tags occupy the contiguous
+    // positive-qNaN band `0x7FF9..=0x7FFF`), and it is the exact complement of
+    // the arms it skips: undefined/null/bool are `0x7FFC`, short string
+    // `0x7FF9`, bigint `0x7FFA`, pointer `0x7FFD`, int32 `0x7FFE`, string
+    // `0x7FFF`. Every other bit pattern — including a JS handle (`0x7FFB`), a
+    // hole and a TDZ sentinel, none of which the ladder matches either —
+    // reaches the same `js_number_to_string` tail with or without this hoist,
+    // so the reorder is answer-for-answer identical on every input.
+    if jsval.is_number() {
+        return crate::string::js_number_to_string(value);
+    }
 
     let result = if jsval.is_undefined() {
         "undefined".to_string()

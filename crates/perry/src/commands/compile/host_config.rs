@@ -911,11 +911,11 @@ pub(super) fn apply_pkg_and_toml_config(
                 continue;
             }
             // #5137: don't let the `"*"` / `@scope/*` wildcard sweep in packages
-            // Perry ships a native stdlib shim for (commander, dayjs, lru-cache,
-            // …). The shim is the supported, optimized path; compiling the real
+            // Perry ships a native stdlib shim for (ioredis, mysql2, …). The
+            // shim is the supported, optimized path; compiling the real
             // npm source instead routes the import away from the native module
-            // table, so hardcoded lowerings like `new Command()` →
-            // `js_commander_new` no longer fire and the binding resolves to
+            // table, so hardcoded lowerings like `new Redis()` →
+            // `js_ioredis_new` no longer fire and the binding resolves to
             // `undefined` ("TypeError: undefined is not a constructor"). A user
             // who genuinely wants the real source still lists that package
             // explicitly in `perry.compilePackages` — that exact entry is added

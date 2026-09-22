@@ -75,6 +75,7 @@ pub(crate) fn bind_inline_constructor_params(
         .collect();
 
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
+    let mapped_param_ids = crate::codegen::arguments::mapped_parameter_ids(params);
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for ((param, arg_val), proof) in params
@@ -86,7 +87,21 @@ pub(crate) fn bind_inline_constructor_params(
         let slot = ctx
             .func
             .alloca_entry(if boxed_param { I64 } else { DOUBLE });
-        if boxed_param {
+        if boxed_param && !mapped_param_ids.contains(&param.id) {
+            // #10464: this frame mints the cell (again per iteration when the
+            // `new` sits in a loop), so it also releases it.
+            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
+            ctx.func
+                .entry_allocas_push_store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot);
+            use crate::stmt::boxed_frame_release as frame_release;
+            frame_release::mint_frame_cell(
+                ctx,
+                &slot,
+                "js_box_alloc_bits",
+                &[(I64, &arg_bits)],
+                frame_release::JS_BOX_SCOPE_RELEASE,
+            );
+        } else if boxed_param {
             let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
             let box_ptr = ctx
                 .block()
@@ -297,12 +312,13 @@ pub(super) fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<S
 /// Marshal the lowered `new`-site args into the value list a cross-module
 /// imported constructor symbol expects. The source module compiled the
 /// standalone `<class>_constructor(this, p0, …)` with `ctor.param_count`
-/// explicit slots. When the constructor's last param is `...rest`
-/// (`ctor.has_rest`), that final slot must receive a PACKED ARRAY of every
-/// trailing arg — not the first trailing arg passed raw. Mirrors the
-/// inline-ctor `inline_constructor_param_values` rest packing and the
-/// `method_has_rest` path for imported methods (#672). Returns exactly
-/// `ctor.param_count` value strings; missing leading args are padded with
+/// explicit slots, laid out as `[fixed..., user_rest?, arguments?]`. A user
+/// `...rest` slot (`ctor.has_rest`) must receive a PACKED ARRAY of every
+/// trailing arg — not the first trailing arg passed raw — and the synthesized
+/// `arguments` slot (`ctor.has_synthetic_arguments`, #10484) a packed array of
+/// EVERY arg. Mirrors the inline-ctor `inline_constructor_param_values`
+/// packing and the `method_has_rest` path for imported methods (#672). Returns
+/// exactly `ctor.param_count` value strings; missing fixed args are padded with
 /// `undefined`.
 pub(super) fn marshal_imported_ctor_args(
     ctx: &mut FnCtx<'_>,
@@ -311,10 +327,9 @@ pub(super) fn marshal_imported_ctor_args(
 ) -> Vec<String> {
     let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     let param_count = ctor.param_count;
-    if ctor.has_rest && param_count > 0 {
-        // The first `param_count - 1` slots are positional; the last slot is
-        // the rest array packing every remaining arg.
-        let n_positional = param_count - 1;
+    let trailing = usize::from(ctor.has_rest) + usize::from(ctor.has_synthetic_arguments);
+    if trailing > 0 && param_count >= trailing {
+        let n_positional = param_count - trailing;
         let mut out: Vec<String> = Vec::with_capacity(param_count);
         for i in 0..n_positional {
             out.push(
@@ -324,8 +339,13 @@ pub(super) fn marshal_imported_ctor_args(
                     .unwrap_or_else(|| undef.clone()),
             );
         }
-        let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
-        out.push(pack_lowered_args_array(ctx, &tail));
+        if ctor.has_rest {
+            let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
+            out.push(pack_lowered_args_array(ctx, &tail));
+        }
+        if ctor.has_synthetic_arguments {
+            out.push(pack_lowered_args_array(ctx, lowered_args));
+        }
         out
     } else {
         // No rest: positional, padded to `param_count` with `undefined`.

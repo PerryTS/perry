@@ -6,7 +6,7 @@
 // inventory into behavioral tests as each area gets deeper compatibility
 // coverage.
 //
-// Inventory entries: 81 unique FFI names, 82 declarations.
+// Inventory entries: 73 unique FFI names, 74 declarations.
 
 const testFfiSurfaceStdlibCoreVersion = 1;
 if (testFfiSurfaceStdlibCoreVersion !== 1) {
@@ -16,15 +16,6 @@ console.log("test_ffi_surface_stdlib_core: ok");
 
 /*
 @covers
-crates/perry-stdlib/src/axios.rs:
-  - js_axios_delete
-  - js_axios_get
-  - js_axios_patch
-  - js_axios_post
-  - js_axios_put
-  - js_axios_response_data
-  - js_axios_response_status
-  - js_axios_response_status_text
 crates/perry-stdlib/src/common/dispatch.rs:
   - js_handle_method_dispatch
   - js_handle_property_set_dispatch

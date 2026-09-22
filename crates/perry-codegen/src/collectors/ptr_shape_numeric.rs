@@ -440,6 +440,14 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     // #8619: view bindings proven to hold a numeric-kind typed array (spec-ABI
     // `TaPtr` params). Empty for the `Ptr<Shape>` type-analysis caller.
     numeric_ta_views: &HashSet<u32>,
+    // #10777: shape-proven receivers visible to THIS walk, and the property
+    // names numeric on all of them. Both were hardcoded empty here, so
+    // `expr_numeric_by_construction`'s `PropertyGet` arm — gated on
+    // `members.contains(id)` — could never fire for a function-scope walk. An
+    // accumulator written `h = h + o.a` was therefore never admitted, however
+    // completely `o`'s shape was proven. Empty for every pre-existing caller.
+    shape_members: &HashSet<u32>,
+    shape_numeric_fields: &HashSet<String>,
 ) -> HashSet<u32> {
     // ONE write walker for both fixpoints (`collect_not_bigint_locals` and
     // this one) — see its doc for why sharing is load-bearing. `None` = a
@@ -460,8 +468,8 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
             stable_local_inits.entry(id).or_insert(Some(*init));
         }
     }
-    let empty_members: HashSet<u32> = HashSet::new();
-    let empty_fields: HashSet<String> = HashSet::new();
+    let empty_members: HashSet<u32> = shape_members.clone();
+    let empty_fields: HashSet<String> = shape_numeric_fields.clone();
     let mut numeric: HashSet<u32> = let_bound
         .into_iter()
         .filter(|id| !boxed_vars.contains(id) && !module_globals.contains_key(id))
@@ -626,9 +634,26 @@ pub(super) fn expr_numeric_by_construction(
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => true,
         Expr::Unary { op, operand } => match op {
-            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot => {
-                rec(operand)
-            }
+            // Unary `+` is ToNumber, and ToNumber either COMPLETES with a
+            // Number or THROWS — there is no input for which `+x` finishes
+            // holding something else. A BigInt and a Symbol both throw a
+            // TypeError, an object goes through ToPrimitive and then ToNumber
+            // again (so a `valueOf` returning a string yields a Number, and
+            // one returning a BigInt throws), `undefined` is NaN, and NaN is
+            // a Number. A throw stores no value, so the store-universe
+            // question this fixpoint asks is vacuous on that path.
+            //
+            // So `Pos` needs no operand condition at all. Requiring
+            // `rec(operand)` here was not a soundness guard, it was a missed
+            // proof: `const v = +o.a; for (…) h += v` left the ACCUMULATOR
+            // unproven, and `h`'s add kept a per-iteration tag test — 20
+            // Ir/iteration where `o.a * 1` and `o.a - 0` reach 9 (#10777).
+            // `const v = +a[0]` on a Float64Array is the same 20 -> 9.
+            perry_hir::UnaryOp::Pos => true,
+            // `-x` and `~x` are ToNumeric, which is BigInt-preserving:
+            // `-1n` is `-1n` and `~1n` is `-2n`, both BigInts, neither a
+            // Number. They therefore keep their operand condition unchanged.
+            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => rec(operand),
             _ => false,
         },
         Expr::Binary { op, left, right } => match op {

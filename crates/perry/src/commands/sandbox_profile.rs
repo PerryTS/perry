@@ -60,7 +60,6 @@ pub fn build_macos_profile(ctx: &CompilationContext) -> String {
         || imports_module(ctx, "tls")
         || imports_module(ctx, "dns")
         || imports_module(ctx, "ws")
-        || imports_module(ctx, "axios")
         || imports_module(ctx, "node-fetch")
         || imports_module(ctx, "redis")
         || imports_module(ctx, "ioredis")

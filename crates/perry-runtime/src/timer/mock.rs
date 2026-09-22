@@ -5,6 +5,7 @@
 //! `Vec`-backed state and never touches the agent timer store.
 
 use super::gc_scan::{consume_timer_root_work, TimerRootScanState};
+use super::ref_states::ScheduledTimerId;
 use super::{
     call_timer_callback, next_timer_id, normalize_timer_delay, record_timer_ref_state,
     CallbackTimerKind,
@@ -21,7 +22,6 @@ pub const MOCK_TIMERS_ALL_APIS: u32 = MOCK_TIMERS_API_DATE
     | MOCK_TIMERS_API_SET_INTERVAL
     | MOCK_TIMERS_API_SET_IMMEDIATE;
 
-#[derive(Clone)]
 struct MockCallbackTimer {
     id: i64,
     kind: CallbackTimerKind,
@@ -30,11 +30,14 @@ struct MockCallbackTimer {
     args: Vec<f64>,
     context: crate::async_context::AsyncContextSnapshot,
     cleared: bool,
+    /// #10447: pins this id in the ref-state registry for as long as the entry
+    /// is queued. Not `Clone` — dropping it retires the id — which is why this
+    /// struct is not `Clone` either.
+    _scheduled: ScheduledTimerId,
 }
 
 unsafe impl Send for MockCallbackTimer {}
 
-#[derive(Clone)]
 struct MockIntervalTimer {
     id: i64,
     callback: i64,
@@ -43,6 +46,8 @@ struct MockIntervalTimer {
     args: Vec<f64>,
     context: crate::async_context::AsyncContextSnapshot,
     cleared: bool,
+    /// See `MockCallbackTimer::_scheduled`.
+    _scheduled: ScheduledTimerId,
 }
 
 unsafe impl Send for MockIntervalTimer {}
@@ -168,8 +173,10 @@ pub(super) fn schedule_mock_callback_timer(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay = normalize_timer_delay(delay_ms);
     let id = next_timer_id();
-    // #10447: the mock schedules a real id, so it pins it too.
-    let _scheduled = super::ref_states::register_scheduled_timer(id, kind);
+    // #10447: the mock schedules a real id, so it pins it too. The guard goes
+    // onto the queue entry below — a local `let _scheduled` would drop (and
+    // retire the id) at the end of THIS function, before the timer ever fires.
+    let scheduled = super::ref_states::register_scheduled_timer(id);
     let due_ms = state.current_ms + delay as f64;
     // `capture_context` allocates, and a struct literal evaluates its fields in
     // source order — reading the closure pointer first would leave a stale
@@ -185,6 +192,7 @@ pub(super) fn schedule_mock_callback_timer(
         args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
         context,
         cleared: false,
+        _scheduled: scheduled,
     });
     record_timer_ref_state(id, true);
     Some(id)
@@ -205,8 +213,8 @@ pub(super) fn schedule_mock_interval_timer(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let interval = normalize_timer_delay(interval_ms);
     let id = next_timer_id();
-    // #10447: the mock schedules a real id, so it pins it too.
-    let _scheduled = super::ref_states::register_scheduled_timer(id, CallbackTimerKind::Timeout);
+    // #10447: see `schedule_mock_callback_timer` — the guard rides the entry.
+    let scheduled = super::ref_states::register_scheduled_timer(id);
     let next_ms = state.current_ms + interval as f64;
     // See `schedule_mock_callback_timer`: the capture allocates, so the closure
     // pointer is reloaded after it rather than read before.
@@ -220,6 +228,7 @@ pub(super) fn schedule_mock_interval_timer(
         args: crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles),
         context,
         cleared: false,
+        _scheduled: scheduled,
     });
     record_timer_ref_state(id, true);
     Some(id)
@@ -260,17 +269,41 @@ pub(super) fn mock_timers_advance_to(target_ms: f64) {
             };
             state.current_ms = due_ms;
             if is_interval {
-                let timer = state.intervals[idx].clone();
-                let interval = timer.interval_ms.max(1) as f64;
-                state.intervals[idx].next_ms = due_ms + interval;
-                Some((timer.id, timer.callback, timer.args, timer.context))
+                // The interval entry stays in the queue (it re-fires), so its
+                // `_scheduled` pin is untouched here — nothing to carry.
+                let timer = &mut state.intervals[idx];
+                timer.next_ms = due_ms + timer.interval_ms.max(1) as f64;
+                Some((
+                    timer.id,
+                    timer.callback,
+                    timer.args.clone(),
+                    timer.context.clone(),
+                    None,
+                ))
             } else {
+                // #10447 follow-up: `remove` takes the WHOLE entry, including
+                // its `_scheduled` pin. Move that pin into the action too and
+                // hand it back below, instead of leaving it behind on `timer`
+                // to drop (and retire the id) right here — before
+                // `call_timer_callback` has even run, let alone finished. A
+                // one-shot mock timer otherwise loses its own registry entry
+                // if its callback churns more than the eviction cap's worth of
+                // other timers while it is still dispatching.
                 let timer = state.callbacks.remove(idx);
-                Some((timer.id, timer.callback, timer.args, timer.context))
+                Some((
+                    timer.id,
+                    timer.callback,
+                    timer.args,
+                    timer.context,
+                    Some(timer._scheduled),
+                ))
             }
         };
-        if let Some((id, callback, args, context)) = action {
+        if let Some((id, callback, args, context, _pin)) = action {
             call_timer_callback(id, callback, &args, &context);
+            // `_pin` (the one-shot case's `ScheduledTimerId`, moved out of the
+            // popped queue entry above) stays alive across that call and only
+            // retires the id here, after the callback has returned.
         }
     }
 }

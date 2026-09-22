@@ -122,6 +122,12 @@ pub(in crate::codegen) fn compile_static_method(
         }
         (this_slot, map)
     };
+    crate::codegen::arguments::release_boxed_param_slots_at_exit(
+        lf,
+        &f.params,
+        &static_boxed_vars,
+        &locals,
+    );
 
     // Seed with module-global declared types (mirrors compile_method /
     // compile_function): static-method bodies read module globals through

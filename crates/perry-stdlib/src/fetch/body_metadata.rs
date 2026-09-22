@@ -67,6 +67,15 @@ lazy_static::lazy_static! {
     static ref FORM_DATA_REGISTRY: Mutex<HashMap<usize, FormDataStore>> = Mutex::new(HashMap::new());
 }
 
+/// #10555: `instanceof FormData` / `Object.prototype.toString.call` /
+/// `x[Symbol.toStringTag]` membership probe, mirroring `dispatch.rs`'s
+/// `js_fetch_handle_kind` for the other Web Fetch handle kinds. Lives here
+/// (not `dispatch.rs`) because `FORM_DATA_REGISTRY` is private to this
+/// module; `dispatch.rs` reaches it via `super::body_metadata::…`.
+pub(super) fn is_registered_form_data(id: usize) -> bool {
+    FORM_DATA_REGISTRY.lock().unwrap().contains_key(&id)
+}
+
 fn alloc_form_data(store: FormDataStore) -> usize {
     let id = alloc_fetch_handle_id();
     FORM_DATA_REGISTRY.lock().unwrap().insert(id, store);

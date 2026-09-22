@@ -680,7 +680,7 @@ pub(crate) fn typeof_string_cache_cells_for_test() -> [*mut StringHeader; 8] {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
-enum ValueTypeofTag {
+pub(crate) enum ValueTypeofTag {
     Undefined = 0,
     Object = 1,
     Boolean = 2,
@@ -696,9 +696,10 @@ enum ValueTypeofTag {
 /// this one classifier makes the literal-comparison entry point below exactly
 /// agree with [`js_value_typeof`]: class refs, callable proxies, raw typed-array
 /// pointers, stream handles, Symbols, closures, and class-expression objects
-/// cannot drift between the two APIs.
+/// cannot drift between the two APIs. The Node-API host's `napi_typeof` reads
+/// the same classifier for the same reason (#10461).
 #[inline]
-fn classify_value_typeof(value: f64) -> ValueTypeofTag {
+pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() || jsval.bits() == crate::value::TAG_HOLE {

@@ -319,8 +319,14 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
             BufferElem::U16 => blk.uitofp(I16, &raw, DOUBLE),
             BufferElem::I32 => blk.sitofp(I32, &raw, DOUBLE),
             BufferElem::U32 => blk.uitofp(I32, &raw, DOUBLE),
-            BufferElem::F32 => blk.fpext(F32, &raw, DOUBLE),
-            BufferElem::F64 => raw,
+            // #10779: float lanes are arbitrary user bytes; canonicalise their
+            // NaNs so they cannot alias a NaN-box tag. Integer lanes cannot be
+            // NaN and pay nothing.
+            BufferElem::F32 => {
+                let widened = blk.fpext(F32, &raw, DOUBLE);
+                crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &widened)
+            }
+            BufferElem::F64 => crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &raw),
         };
         let end = blk.label.clone();
         blk.br(&merge_label);

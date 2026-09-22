@@ -339,10 +339,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_domain", VOID, &[]);
     module.declare_function("js_nm_install_events", VOID, &[]);
     module.declare_function("js_nm_install_fs", VOID, &[]);
-    module.declare_function("js_nm_install_http", VOID, &[]);
+    module.declare_function("js_ext_http_nm_install", VOID, &[]);
     module.declare_function("js_nm_install_inspector", VOID, &[]);
     module.declare_function("js_nm_install_module", VOID, &[]);
-    module.declare_function("js_nm_install_net", VOID, &[]);
+    module.declare_function("js_ext_net_nm_install", VOID, &[]);
     module.declare_function("js_nm_install_node_pty", VOID, &[]);
     module.declare_function("js_nm_install_os", VOID, &[]);
     module.declare_function("js_nm_install_path", VOID, &[]);
@@ -409,6 +409,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).
     module.declare_function("js_set_bun_platform", VOID, &[]);
+    // #10735: shared CJS "main module" (`require.main`) — the entry module
+    // publishes, every other CJS module reads back. See
+    // `__perry_runtime.setCjsMainModule` / `.getCjsMainModule`.
+    module.declare_function("js_set_cjs_main_module", VOID, &[DOUBLE]);
+    module.declare_function("js_get_cjs_main_module", DOUBLE, &[]);
+    // #10735: allocates and publishes the placeholder `require.main` object
+    // BEFORE any module's `__init` runs (called directly from `main()`, not
+    // from generated module JS — see `codegen::entry::compile_module_entry`).
+    module.declare_function("js_bootstrap_cjs_main_module_placeholder", VOID, &[]);
     // Next.js wall 54 (part 2): register a Deferred module's `__init` address by
     // path so a runtime `require(absolutePath)` can trigger its lazy init.
     module.declare_function("js_register_path_init", VOID, &[PTR, I64, I64]);
@@ -558,6 +567,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("perry_transition_cache_base", PTR, &[]);
     module.declare_function("js_transition_ic_note_hit", VOID, &[]);
+    // #10834/#10842: the inherited-read cache hit, asked on the generic
+    // property read's declined-guard edge (`expr/property_get/
+    // generic_dispatch.rs`): masked receiver + interned key -> NaN-boxed
+    // value, or `TAG_HOLE` for a decline. A pure state read (see
+    // `gc_call_effects.rs`).
+    module.declare_function("js_inherited_read_cache_hit_f64", DOUBLE, &[PTR, PTR]);
     module.declare_function(
         "js_put_value_set_dyn_ic",
         DOUBLE,

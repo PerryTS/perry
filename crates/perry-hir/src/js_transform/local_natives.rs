@@ -665,9 +665,6 @@ pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
         ("pg", "connect") => Some("PoolClient"),
         ("ioredis", "duplicate") => Some("Redis"),
-        // dayjs / moment manipulation methods return a NEW date handle.
-        ("dayjs", "add" | "subtract" | "startOf" | "endOf") => Some("App"),
-        ("moment", "add" | "subtract" | "startOf" | "endOf" | "clone") => Some("App"),
         _ => None,
     }
 }
@@ -1245,24 +1242,6 @@ pub fn fix_native_instance_expr_with_locals(
         Expr::PropertyGet {
             object, property, ..
         } => {
-            if let Expr::LocalGet(local_id) = object.as_ref() {
-                if matches!(property.as_str(), "status" | "statusText" | "data")
-                    && matches!(
-                        local_id_instances.get(local_id),
-                        Some((module, class)) if module == "axios" && class == "Response"
-                    )
-                {
-                    let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
-                    *expr = Expr::NativeMethodCall {
-                        module: "axios".to_string(),
-                        class_name: Some("Response".to_string()),
-                        object: Some(Box::new(object_expr)),
-                        method: property.clone(),
-                        args: Vec::new(),
-                    };
-                    return;
-                }
-            }
             // Recurse into the object first so any nested `$(sel)` Call has
             // been rewritten to a cheerio NativeMethodCall.
             fix_native_instance_expr_with_locals(object, native_instances, local_id_instances);
@@ -1369,23 +1348,13 @@ pub fn detect_native_instance_creation_with_context(
                 ("http", "createServer") => "HttpServer",
                 ("https", "createServer") => "HttpsServer",
                 ("http2", "createSecureServer") => "Http2SecureServer",
-                ("node-cron", "schedule") => "CronJob",
                 ("readline", "createInterface") => "Interface",
                 ("bun", "Transpiler") => "Transpiler",
-                (
-                    "axios",
-                    "get" | "post" | "put" | "delete" | "patch" | "head" | "options" | "request",
-                ) => "Response",
                 // Issue #1193: `const $ = load(html)` / `loadFragment(html)`
                 // returns the jQuery-like callable used as `$(selector)`.
                 // Tagging the local as CheerioAPI lets the rewriter below
                 // turn `$(sel)` into `NativeMethodCall(cheerio.select, $)`.
                 ("cheerio", "load" | "loadFragment") => "CheerioAPI",
-                // node-forge: `forge.pki.createCertificate()` returns a
-                // mutable cert builder whose instance methods
-                // (setSubject/setIssuer/setExtensions/sign) dispatch under
-                // class "Certificate" (see NATIVE_MODULE_TABLE).
-                ("node-forge", "createCertificate") => "Certificate",
                 _ => return None,
             };
             // For ("net", _) / ("tls", _) factories, `s` belongs to net.Socket's

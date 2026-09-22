@@ -190,7 +190,9 @@ mod closure_collect;
 mod constructor_contracts;
 pub use constructor_contracts::{ConstructorContracts, ResolvedConstructorContracts};
 mod ctor_arity;
-pub use ctor_arity::{context_free_ctor_param_count, UNRESOLVED_PARENT_FWD_ARITY};
+pub use ctor_arity::{
+    context_free_ctor_abi, context_free_ctor_param_count, CtorAbi, UNRESOLVED_PARENT_FWD_ARITY,
+};
 #[cfg(test)]
 mod declared_string_add_tests;
 #[cfg(test)]
@@ -199,6 +201,7 @@ mod entry;
 pub mod entry_outline;
 pub(crate) mod func_registry;
 mod function;
+mod function_source_header;
 #[cfg(test)]
 mod guarded_falsy_default_method_tests;
 #[cfg(test)]
@@ -1195,6 +1198,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             I32,
             "0",
         );
+        // The poisonable twin of the ShapeId global: same value, same linkage,
+        // but only ever COMPARED against — see
+        // `typed_shape::guard_shape_global_name_from_keys_global`.
+        llmod.add_global(
+            &crate::typed_shape::guard_shape_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
         // #8122: the inline-`new` header image, composed at module init
         // (`string_pool.rs`) for the classes `class_header_images` admits.
         llmod.add_internal_global(
@@ -1385,6 +1396,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         llmod.add_internal_global(&global_name, I64, "0");
         llmod.add_internal_global(
             &crate::typed_shape::shape_id_global_name_from_keys_global(&global_name),
+            I32,
+            "0",
+        );
+        llmod.add_internal_global(
+            &crate::typed_shape::guard_shape_global_name_from_keys_global(&global_name),
             I32,
             "0",
         );
@@ -2475,6 +2491,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         has_own_constructor: ic.has_own_constructor,
                         has_instance_fields: ic.has_instance_fields,
                         has_rest: ic.constructor_has_rest,
+                        has_synthetic_arguments: ic.constructor_has_synthetic_arguments,
                     },
                 )
             })
@@ -3595,7 +3612,23 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .exports
             .iter()
             .filter_map(|e| match e {
-                perry_hir::Export::Named { exported, .. } => Some(exported.clone()),
+                perry_hir::Export::Named { local, exported }
+                    if !hir.imports.iter().any(|import| {
+                        import.is_native
+                            && perry_api_manifest::is_node_core_module(&import.source)
+                            && import.specifiers.iter().any(|specifier| {
+                                matches!(
+                                    specifier,
+                                    perry_hir::ImportSpecifier::Named {
+                                        local: import_local,
+                                        ..
+                                    } if import_local == local
+                                )
+                            })
+                    }) =>
+                {
+                    Some(exported.clone())
+                }
                 _ => None,
             })
             .collect();
@@ -3859,12 +3892,9 @@ fn try_native_construction(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
-    // SEH funclets are the one EH shape the in-process reader cannot
-    // construct (see LlModule::needs_eh_funclets). Decline to the textual
-    // path rather than failing the compile.
-    if llmod.needs_eh_funclets() {
-        return None;
-    }
+    // No target emits funclet EH any more (#7354 put windows-msvc on the same
+    // invoke/landingpad shape as everywhere else), and the in-process reader
+    // builds landing pads fine — so there is nothing left to decline here.
     match crate::native_emit::native_mode() {
         crate::native_emit::NativeMode::Off => None,
         crate::native_emit::NativeMode::Native => Some(crate::native_emit::compile_module_native(

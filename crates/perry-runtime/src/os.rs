@@ -839,6 +839,8 @@ pub(crate) mod signal;
 pub(crate) use signal::ignore_sigpipe_at_startup;
 pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 
+#[path = "os_process_stream_write.rs"]
+mod process_stream_write;
 #[path = "os_process_streams.rs"]
 mod process_streams;
 pub(crate) use process_streams::process_stdin_needs_pump;

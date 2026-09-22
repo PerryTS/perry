@@ -164,8 +164,6 @@ pub(crate) fn register_native_fetch_and_streams(
                                 "big.js" => "Big",
                                 "decimal.js" => "Decimal",
                                 "bignumber.js" => "BigNumber",
-                                "lru-cache" => "LRUCache",
-                                "commander" => "Command",
                                 _ => "",
                             };
                             if !class_name.is_empty() {
@@ -191,7 +189,7 @@ pub(crate) fn register_native_fetch_and_streams(
         }
 
         // Check for: const response = fetch(url) / fetchWithAuth(url, auth) / fetchPostWithAuth(url, auth, body)
-        if let Some(module) = get_fetch_module(init_expr) {
+        if let Some(module) = get_fetch_module(ctx, init_expr) {
             ctx.register_native_instance(
                 name.to_string(),
                 module.to_string(),
@@ -200,7 +198,7 @@ pub(crate) fn register_native_fetch_and_streams(
         }
         // Check for: const response = await fetch(url) / await fetchWithAuth(...) / await fetchPostWithAuth(...)
         else if let ast::Expr::Await(await_expr) = init_expr.as_ref() {
-            if let Some(module) = get_fetch_module(&await_expr.arg) {
+            if let Some(module) = get_fetch_module(ctx, &await_expr.arg) {
                 ctx.register_native_instance(
                     name.to_string(),
                     module.to_string(),

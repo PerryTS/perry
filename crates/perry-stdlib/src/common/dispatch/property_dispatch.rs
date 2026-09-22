@@ -9,9 +9,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
-    #[cfg(feature = "external-fastify-pump")]
-    use perry_runtime::JSValue;
-
     let property_name = if property_name_ptr.is_null() || property_name_len == 0 {
         ""
     } else {
@@ -484,109 +481,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                     property_name.as_ptr(),
                     property_name.len(),
                 )
-            };
-        }
-    }
-
-    // Fastify request/reply property dispatch (#5037, #1113). fastify is served
-    // exclusively by the external perry-ext-fastify crate (the bundled in-stdlib
-    // adapter was removed). A `request`/`reply` handle that escaped into a user
-    // helper has its static type erased, so codegen emits a generic dynamic
-    // property read here rather than a `NativeMethodCall`. The handle lives in
-    // perry-ext-fastify's perry-ffi registry, so probe membership via the external
-    // `js_ext_fastify_is_context_handle` symbol (resolved at link time) and forward
-    // to perry-ext-fastify's `js_fastify_req_*` exports. Enabled by the well-known
-    // flip's `external-fastify-pump`, mirroring the `async_bridge.rs` pump.
-    // (`app.server` and statically-typed inline reads dispatch via codegen's static
-    // NATIVE_MODULE_TABLE; only this erased-receiver dynamic path needs an arm.)
-    #[cfg(feature = "external-fastify-pump")]
-    {
-        extern "C" {
-            fn js_ext_fastify_is_context_handle(handle: i64) -> i32;
-            fn js_fastify_req_query_object(handle: i64) -> f64;
-            fn js_fastify_req_params_object(handle: i64) -> f64;
-            fn js_fastify_req_json(handle: i64) -> f64;
-            fn js_fastify_req_body(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_fastify_req_headers(handle: i64) -> i64;
-            fn js_fastify_req_method(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_fastify_req_url(handle: i64) -> *mut perry_runtime::StringHeader;
-            fn js_fastify_req_get_user_data(handle: i64) -> f64;
-        }
-        if js_ext_fastify_is_context_handle(handle) != 0 {
-            return match property_name {
-                "query" => js_fastify_req_query_object(handle),
-                "params" => js_fastify_req_params_object(handle),
-                "body" => js_fastify_req_json(handle),
-                "rawBody" | "text" => {
-                    let ptr = js_fastify_req_body(handle);
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                "headers" => {
-                    // Returns NaN-boxed JS object bits — use directly.
-                    let bits = js_fastify_req_headers(handle);
-                    f64::from_bits(bits as u64)
-                }
-                "method" => {
-                    let ptr = js_fastify_req_method(handle);
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                "url" => {
-                    let ptr = js_fastify_req_url(handle);
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(perry_runtime::JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                "user" => js_fastify_req_get_user_data(handle),
-                _ => f64::from_bits(0x7FFC_0000_0000_0001), // undefined
-            };
-        }
-    }
-
-    // Issue #340: axios response — dispatch `r.status` / `r.data` /
-    // `r.statusText` / `r.headers` to the AxiosResponseHandle accessor
-    // shims. The handle id is registered in the common HANDLES
-    // registry; gate on registry membership AND a known property
-    // name so a colliding handle id doesn't silently return one of
-    // these slots when the user meant something else (same disjoint
-    // method-set discipline as the method dispatch above).
-    #[cfg(feature = "http-client")]
-    if matches!(property_name, "status" | "data" | "statusText" | "headers") {
-        if with_handle::<crate::axios::AxiosResponseHandle, bool, _>(handle, |_| true)
-            .unwrap_or(false)
-        {
-            use perry_runtime::JSValue;
-            return match property_name {
-                "status" => crate::axios::js_axios_response_status(handle),
-                "data" => {
-                    let ptr = crate::axios::js_axios_response_data(handle);
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                "statusText" => {
-                    let ptr = crate::axios::js_axios_response_status_text(handle);
-                    if ptr.is_null() {
-                        f64::from_bits(0x7FFC_0000_0000_0001)
-                    } else {
-                        f64::from_bits(JSValue::string_ptr(ptr).bits())
-                    }
-                }
-                // headers: Vec<(String, String)> — return undefined
-                // for now (header object materialisation is its own
-                // follow-up; status / data cover the issue).
-                _ => f64::from_bits(0x7FFC_0000_0000_0001),
             };
         }
     }

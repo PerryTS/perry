@@ -500,6 +500,44 @@ pub(crate) enum FieldInitMode {
     FromInclusive(String),
 }
 
+/// Does the inheritance-chain ROOT `root` install its own field initializers
+/// at its own `super()` call?
+///
+/// A root has no user-class parent. When it also owns a constructor body, that
+/// body's `super(...)` lowers through the non-user-parent block of
+/// `expr/this_super_call.rs` — a built-in base (`Error`, `EventEmitter`, `Map`,
+/// a stream, ...) or a runtime `extends <expr>` value — and every arm of that
+/// block applies the root's fields (`SelfOnly`) once the base constructor has
+/// returned, which is the spec position for a derived class.
+///
+/// The construction-time staging below (`AncestorsOnly` / `UpToInclusive`)
+/// must then leave the root out. Staging it as well ran every initializer
+/// twice when the root was built as an ANCESTOR (a private `#field` throws on
+/// the second install), and ahead of the base constructor. #10443: the `Error`
+/// arm was the one arm that did not apply the fields, so `class E extends
+/// Error { labels = new Set(); constructor(m) { super(m); } }` constructed
+/// directly never ran its initializers at all, while a subclass of `E` only
+/// got them through this up-front staging.
+fn root_fields_run_at_own_super(ctx: &FnCtx<'_>, root: &str) -> bool {
+    if ctx.imported_class_ctors.contains_key(root) {
+        return false;
+    }
+    let Some(class) = ctx.classes.get(root).copied() else {
+        return false;
+    };
+    if class.constructor.is_none() {
+        return false;
+    }
+    // Mirrors `this_super_call.rs`'s `static_parent_lookup`: a dynamic
+    // heritage value, or a parent name that is not a local class, reaches the
+    // non-user-parent block.
+    class.extends_expr.is_some()
+        || class
+            .extends_name
+            .as_deref()
+            .is_some_and(|parent| !ctx.classes.contains_key(parent))
+}
+
 /// Whether a named public field initializer can populate the allocation's
 /// predeclared own slot through the ordinary by-name store.
 ///
@@ -583,8 +621,11 @@ pub(crate) fn apply_field_initializers_recursive(
             // SuperCall site (`expr.rs::Expr::SuperCall`'s post-body
             // intermediate-walk added in this commit). Root's fields
             // need to be applied here because root has no super() and
-            // its body may reference its own fields directly.
-            if chain.len() <= 1 {
+            // its body may reference its own fields directly — unless the
+            // root's own constructor calls `super()` into a non-user parent,
+            // which installs them itself (#10443, see
+            // `root_fields_run_at_own_super`).
+            if chain.len() <= 1 || root_fields_run_at_own_super(ctx, &chain[0]) {
                 Vec::new()
             } else {
                 vec![chain[0].clone()]
@@ -599,7 +640,9 @@ pub(crate) fn apply_field_initializers_recursive(
         }
         FieldInitMode::UpToInclusive(stop_at) => {
             if let Some(idx) = chain.iter().position(|n| n == stop_at) {
-                chain[..=idx].to_vec()
+                // Same root exception as `AncestorsOnly` (#10443).
+                let start = usize::from(root_fields_run_at_own_super(ctx, &chain[0]));
+                chain[start..=idx].to_vec()
             } else {
                 Vec::new()
             }

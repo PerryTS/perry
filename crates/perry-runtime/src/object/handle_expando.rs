@@ -228,15 +228,11 @@ pub(crate) fn handle_expando_delete(handle: i64, name: &str) -> bool {
             props.retain(|(k, _)| k != name);
         }
     });
-    let st = crate::state::state();
-    st.descriptors
-        .property_descriptors
-        .borrow_mut()
-        .remove(&(handle as usize, name.to_string()));
-    st.descriptors
-        .accessor_descriptors
-        .borrow_mut()
-        .remove(&(handle as usize, name.to_string()));
+    // Through the funnel: a raw table `remove` left the owner index naming a
+    // key the tables no longer hold, so `accessor_descriptor_keys_for_obj`
+    // kept reporting a deleted expando accessor for the handle.
+    super::descriptor_state::clear_property_attrs(handle as usize, name);
+    super::descriptor_state::clear_accessor_descriptor(handle as usize, name);
     true
 }
 
@@ -436,10 +432,6 @@ mod tests {
         HANDLE_EXPANDO_PROPS.with(|cell| {
             cell.borrow_mut().remove(&h);
         });
-        crate::state::state()
-            .descriptors
-            .property_descriptors
-            .borrow_mut()
-            .remove(&(h as usize, "hid".to_string()));
+        crate::object::descriptor_state::clear_property_attrs(h as usize, "hid");
     }
 }

@@ -55,6 +55,8 @@ fn typed_array_lacks_array_method(name: &str) -> bool {
 mod array_only_methods;
 #[cfg(test)]
 mod array_only_methods_tests;
+#[cfg(test)]
+mod builtin_named_user_methods_tests;
 mod crypto;
 mod globals;
 mod imported_array_methods;
@@ -530,17 +532,6 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         byte_offset: call.span.lo.0,
                     });
                 }
-                // node-forge deeply-nested namespace calls
-                // (`forge.pki.rsa.generateKeyPair()`, `forge.pki.createCertificate()`,
-                // `forge.md.sha256.create()`). Must run before the generic
-                // namespace / `module.Class.staticMethod` dispatch, which would
-                // otherwise claim the 2-level `forge.pki.createCertificate()` shape
-                // and gate its `forge.pki` object-read as unimplemented.
-                args = match native_module::try_node_forge_namespace(ctx, expr, args) {
-                    Ok(e) => return Ok(e),
-                    Err(a) => a,
-                };
-
                 // Nested 3-level Member dispatch: process.hrtime.bigint(),
                 // crypto.subtle.<method>(), util.types.<method>(), and
                 // path.posix/win32.<method>().

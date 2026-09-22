@@ -361,6 +361,33 @@ min_vectorized_loops = 1
 scalar_baseline = ""
 allowed_missed_reason_kinds = [
   "call_instruction",
+  # #10784 -- THE CANONICAL NOTE FOR THIS ENTRY; the two other workloads that
+  # gained `control_flow` in the same change point back here.
+  #
+  # This remark is compiler BOILERPLATE, not this fixture. It comes from
+  # `main`'s compiler-emitted EVENT LOOP, which every Perry binary carries.
+  # b13a20095c (#9441, "the event loop looks before it sleeps") replaced the
+  # loop body's unconditional park with the `event_loop.body_check` /
+  # `event_loop.body_wait` diamond; LLVM cannot if-convert that diamond, so it
+  # reports "Control flow cannot be substituted for a select". Measured on
+  # this tree, three ways:
+  #   * `opt -passes='loop-simplify,print<loops>'` finds exactly ONE loop in
+  #     the whole module, in `main` -- event_loop.header / check_pending /
+  #     body / body_check / body_wait / exit;
+  #   * a bare `console.log(1)` program emits the identical five remarks;
+  #   * reconstructing the pre-#9441 three-block loop in the emitted IR
+  #     removes exactly this remark and leaves the other four, all of which
+  #     were already allowed here.
+  # (cb877d61f3, "resume event-loop work queued by beforeExit", later added a
+  # second conditional back edge from `event_loop.exit` to the header, which
+  # emits the same remark on its own -- so this is now over-determined.)
+  #
+  # `allowed_missed_reason_kinds` is a MODULE-WIDE sweep, so it cannot tell
+  # the event loop apart from the fixture; 22 of the 25 workloads had already
+  # accumulated this entry (#8490 and #8854 are the documented precedent) and
+  # these were the last three without it. The fixture's own positive half is
+  # untouched: `min_vectorized_loops = 1` still holds and still passes.
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -386,6 +413,13 @@ min_vectorized_loops = 1
 scalar_baseline = ""
 allowed_missed_reason_kinds = [
   "call_instruction",
+  # #10784: compiler boilerplate from `main`'s emitted event loop, not this
+  # fixture -- b13a20095c (#9441) added the `event_loop.body_check` /
+  # `event_loop.body_wait` diamond LLVM cannot if-convert. Full measurement
+  # and precedent in the identical note on
+  # `workloads.vectorized_buffer_transform.vectorization` above.
+  # `min_vectorized_loops = 1` still holds, so the positive half is unchanged.
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -1064,6 +1098,14 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: fractional dynamic array-index regression fixture is not a vector workload"
 allowed_missed_reason_kinds = [
   "call_instruction",
+  # #10784: compiler boilerplate from `main`'s emitted event loop, not this
+  # fixture -- b13a20095c (#9441) added the `event_loop.body_check` /
+  # `event_loop.body_wait` diamond LLVM cannot if-convert. This fixture is the
+  # clearest proof of the general point: `dynamic_fractional_array_index.ts`
+  # contains NO LOOP AT ALL, yet reports `control_flow: 1`. Full measurement
+  # and precedent in the identical note on
+  # `workloads.vectorized_buffer_transform.vectorization` above.
+  "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
   "uncountable_loop",
@@ -1156,9 +1198,27 @@ name = "raw_numeric_object_fields_checksum"
 equals = "raw_numeric_object_fields:26.25\n"
 detail = "raw numeric object field fixture stdout checksum"
 
+# #10784 / fc54e1b181 ("codegen: collapse the class-field GET tower to one
+# exit"): this check used to look for `js_typed_feedback_class_field_get_guard`
+# in the OPTIMIZED IR. That symbol is now emitted NOWHERE as a call -- the
+# one-exit tower replaced the old guard call + three miss-arm call sites with a
+# volatile load of the per-class `@perry_class_guard_shape_*` latch plus a
+# single `js_class_field_get_ic` miss exit. (A bare substring over the
+# unoptimized IR would still have "passed" on the leftover `declare` line
+# alone, which is why fc54e1b181's own codegen tests assert CALL forms.)
+#
+# The property this check names -- "reads are guarded before raw slot loads" --
+# still holds, so the check is re-pointed at the structure that now carries it
+# rather than deleted: the `class_field_inline.deref.N` block loads the guard
+# latch, compares it against the receiver's shape word, and branches INTO
+# `class_field_get.fast.N`. Scoped to the checksum function and read from
+# `llvm_before`, matching its sibling `raw_numeric_field_get_scoped_raw_load`,
+# which asserts the raw load on the other side of that branch.
 [[workloads.raw_numeric_object_fields.ir_checks]]
 name = "raw_numeric_field_get_guard"
-contains = "js_typed_feedback_class_field_get_guard"
+section = "llvm_before"
+function_contains = "rawNumericObjectFieldsChecksum"
+regex = '''class_field_inline\.deref\.\d+:(?:(?!\n\n)[\s\S])*?load volatile i32, ptr @perry_class_guard_shape_(?:(?!\n\n)[\s\S])*?br i1 %\w+, label %class_field_get\.fast\.\d+,'''
 detail = "class numeric field reads are guarded before raw slot loads"
 
 [[workloads.raw_numeric_object_fields.ir_checks]]
@@ -1225,11 +1285,20 @@ bounds_state = "proven_or_guarded"
 consumed_fact_kind = "bounds"
 consumed_fact_state = "consumed"
 
+# #10784 / fc54e1b181: the ClassFieldGet miss arm's `consumer` changed from
+# `js_object_get_field_by_name_f64` to `js_class_field_get_ic` when the GET
+# tower collapsed to one exit. Every other field of these three records --
+# access_mode, materialization_reason, fallback_reason, and all three
+# rejected-fact triples -- is recorded exactly as before; the consumer string
+# is the only difference, and fc54e1b181 updated its own codegen unit tests but
+# not this file. (This workload is a member of BOTH `native-region-proof` and
+# `native-abi-proof` with identical arguments, so one stale string showed up as
+# eight job-log occurrences.)
 [[workloads.raw_numeric_object_fields.native_rep_checks.require_records]]
 name = "raw_class_field_get_dynamic_fallback"
 source_function = "rawNumericObjectFieldsChecksum"
 expr_kind = "ClassFieldGet"
-consumer = "js_object_get_field_by_name_f64"
+consumer = "js_class_field_get_ic"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
 fallback_reason = "runtime_api"
@@ -1241,7 +1310,7 @@ rejected_fact_reason = "runtime_api"
 name = "raw_class_field_get_dynamic_fallback_invalidates_layout"
 source_function = "rawNumericObjectFieldsChecksum"
 expr_kind = "ClassFieldGet"
-consumer = "js_object_get_field_by_name_f64"
+consumer = "js_class_field_get_ic"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
 fallback_reason = "runtime_api"
@@ -1253,7 +1322,7 @@ rejected_fact_reason = "runtime_api"
 name = "raw_class_field_get_materialization_hazard_invalidated"
 source_function = "rawNumericObjectFieldsChecksum"
 expr_kind = "ClassFieldGet"
-consumer = "js_object_get_field_by_name_f64"
+consumer = "js_class_field_get_ic"
 access_mode = "dynamic_fallback"
 materialization_reason = "runtime_api"
 fallback_reason = "runtime_api"
@@ -1600,27 +1669,39 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: native-owned typed view fixture gates proof records and fallback reasons"
 allowed_missed_reason_kinds = [
   "call_instruction",
-  # #8489: three loops here miss vectorization for `control_flow`. ATTRIBUTED
-  # to 40e2ce86d (#8457, "make -Os the default native optimization level"),
-  # and it is legitimate rather than a codegen regression: perry's emitted IR
-  # is byte-identical across that commit (same sha256 at 526e0b502,
-  # f14a9e262 and 40e2ce86d). Only the clang args changed, -O3 -> -Os, and
-  # the harness's remark pass reuses the compile's own args. At -Os LLVM
-  # declines the SimplifyCFG speculation and if-conversion that at -O3
-  # flattened these branches into selects before the vectorizer ran, so the
-  # loops genuinely carry control flow it cannot if-convert — and vectorizing
-  # them would grow code size, which is exactly what -Os asks it not to do.
+  # #8489: three loops here miss vectorization for `control_flow`. Legitimate,
+  # and in all three cases the control flow is COMPILER-EMITTED rather than
+  # anything in the fixture.
+  #
+  # #10784 CORRECTS THE ATTRIBUTION THIS NOTE USED TO CARRY. It blamed
+  # 40e2ce86d (#8457, "make -Os the default native optimization level") on the
+  # theory that at -O3 SimplifyCFG if-converted these branches into selects
+  # before the vectorizer ran. Measured on the emitted IR at -O3, -O2, -Os and
+  # -Oz, that is not so: the remark appears IDENTICALLY (control_flow = 3) at
+  # -O3, -O2 and -Os. Only -Oz suppresses it, and only because -Oz disables
+  # the vectorizer wholesale -- the analysis remarks vanish with it, leaving
+  # three bare `-Rpass-missed` lines. The opt level is not the cause.
+  #
+  # What the three actually are, from `print<loops>` plus an IR A/B:
+  #   * 2 of 3 -- the GC loop safepoint poll in `nativeOwnedPositive`'s two
+  #     loops: `load volatile @PERRY_GC_POLL_ARMED`, then a conditional branch
+  #     around a `js_gc_loop_safepoint()` call. LLVM cannot if-convert a
+  #     branch guarding a call. Flattening just those two diamonds in the
+  #     emitted IR drops control_flow from 3 to 1. Loop back-edge polls are
+  #     default-ON since #7721.
+  #   * 1 of 3 -- `main`'s compiler-emitted event loop, present in every Perry
+  #     binary; see the canonical note on
+  #     `workloads.vectorized_buffer_transform.vectorization`.
+  #
   # This workload requires no vectorization (`min_vectorized_loops = 0`,
   # explicit scalar baseline), so this list is a change detector, and the
   # sibling `native_abi_packet_control` / `native_pod_layout_constants`
   # workloads already accept the same reason.
   #
-  # Earlier notes here said Linux-only, release-config, and caused by the
+  # Notes older than #8489 said Linux-only, release-config, and caused by the
   # string-codegen work. All three were wrong: the gate builds with
-  # `cargo build -p perry` (a DEBUG build, test.yml:1809), it reproduces on
-  # macOS with that profile, and control_flow=3 predates #8448/#8450/#8453/
-  # #8454. 40e2ce86d is an ancestor of the 3627657c7 baseline, which is why
-  # that baseline looked "pre-existing".
+  # `cargo build -p perry` (a DEBUG build), it reproduces on macOS with that
+  # profile, and control_flow=3 predates #8448/#8450/#8453/#8454.
   "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
