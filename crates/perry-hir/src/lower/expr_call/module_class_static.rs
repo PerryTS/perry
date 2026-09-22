@@ -39,6 +39,14 @@ pub(super) fn try_module_class_static(
                 if let Some((module_name, _)) = ctx.lookup_native_module(&mod_name) {
                     if let ast::MemberProp::Ident(class_ident) = &inner_member.prop {
                         let class_name = class_ident.sym.to_string();
+                        // The `node:process` namespace exposes stream VALUES,
+                        // not classes. Let the stream-call arm below handle
+                        // them, including a namespace import named `process`.
+                        let process_stream =
+                            matches!(
+                                module_name.strip_prefix("node:").unwrap_or(module_name),
+                                "process" | "process.namespace" | "process.default"
+                            ) && matches!(class_name.as_str(), "stdin" | "stdout" | "stderr");
                         let is_sub_namespace = matches!(
                             (module_name, class_name.as_str()),
                             ("fs", "promises")
@@ -84,7 +92,7 @@ pub(super) fn try_module_class_static(
                                 | ("bun", "JSONL")
                                 | ("bun", "hash")
                                 | ("bun", "plugin")
-                        );
+                        ) || process_stream;
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires
                         // for `mod.X` standalone but not when this arm
@@ -204,7 +212,14 @@ pub(super) fn try_module_class_static(
     if let ast::Expr::Member(outer_member) = expr {
         if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
             if let ast::Expr::Ident(root_ident) = inner_member.obj.as_ref() {
-                if root_ident.sym.as_ref() == "process" {
+                let root = root_ident.sym.as_ref();
+                let native_process_import = matches!(
+                    ctx.lookup_native_module(root),
+                    Some(("process" | "process.namespace" | "process.default", None))
+                );
+                if (root == "process" && !ctx.shadows_unqualified_global("process"))
+                    || native_process_import
+                {
                     if let ast::MemberProp::Ident(stream_ident) = &inner_member.prop {
                         let stream = stream_ident.sym.as_ref();
                         if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
