@@ -16,7 +16,7 @@ builtin, exactly as before this change. Guarding it costs the push its inline
 store -- +94 instructions per call, measured, against +6 for `indexOf` -- and
 the cheap absence proof every other kind has does not exist for an array: one
 that takes an own named property records nothing in its header that the inline
-push tier can test. That gap is filed as its own issue; until it is closed,
+push tier can test. That gap is filed as #11021; until it is closed,
 `push` stays out of the gate and this fix is 36 of 37 cases, not 37.
 
 The common case costs a flag test rather than a call: the guard performs the

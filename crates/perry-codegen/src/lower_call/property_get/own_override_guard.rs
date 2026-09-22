@@ -70,7 +70,7 @@ fn shadowable_builtin_name(property: &str) -> bool {
         // Array. `push` is ABSENT: guarding it costs the inline store (+94
         // instructions per call, against +6 for `indexOf`), and the cheap
         // absence proof every other kind has does not exist for an array --
-        // see the follow-up issue. An own `push` on a proven array therefore
+        // see #11021. An own `push` on a proven array therefore
         // still loses to the builtin, as it does on main.
             | "pop" | "shift" | "unshift" | "slice" | "splice" | "indexOf"
             | "lastIndexOf" | "includes" | "join" | "concat" | "reverse" | "sort" | "fill"

@@ -135,7 +135,7 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
         // call on both arms either way. The cheap alternative every other kind
         // has does not exist here -- an array that takes an own named property
         // records nothing in its header that the inline push tier can test, so
-        // the admission mask never sees the receiver. See the follow-up issue;
+        // the admission mask never sees the receiver. See #11021;
         // the diamond is not heavy-handed, it is the only instrument that can
         // see a receiver the flags cannot describe.
         Expr::ArrayIndexOf {
