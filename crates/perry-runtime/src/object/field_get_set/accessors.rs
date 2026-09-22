@@ -204,6 +204,28 @@ unsafe fn default_object_prototype_property_value(
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
     let _guard = object_prototype_lookup_guard()?;
+    // The address cache deliberately avoids constructing globalThis on array
+    // index-write hot paths. A real inherited Get/HasProperty miss cannot use
+    // that shortcut: an unmaterialized Object.prototype still has its methods.
+    // Bootstrap may allocate and collect, so keep both inputs rooted until the
+    // intrinsic address has been resolved. The existing hot path stays intact
+    // once this thread has a realm global.
+    if !super::super::global_this_is_materialized() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
+        let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+        super::super::js_get_global_this();
+        let proto_addr = crate::array::object_prototype_addr();
+        if proto_addr == 0 {
+            return None;
+        }
+        let receiver_addr =
+            crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
+        let key = crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64())
+            as *const crate::StringHeader;
+        return prototype_property_value_with_guard(proto_addr, receiver_addr, key);
+    }
     let proto_addr = crate::array::object_prototype_addr();
     if proto_addr == 0 {
         return None;
