@@ -9,7 +9,9 @@
 //! segment is the attributed crate. ELF carries a real per-symbol size;
 //! Mach-O does not, so its sizes come from sorting symbols by address
 //! within a section and taking the distance to the next one (an upper
-//! bound — it also counts any anonymous padding between them).
+//! bound — it also counts any anonymous padding between them). Symbols
+//! sharing a section and address are linker-folded aliases; their bytes are
+//! charged once to a deterministic representative.
 //!
 //! Deliberately does not attempt cargo-bsize's DWARF/LTO-provenance analysis
 //! (type layout, source-line attribution, assembly instruction patterns):
@@ -207,6 +209,21 @@ struct RawSymbol<'a> {
     exact: bool,
 }
 
+/// Linker identical-code folding leaves multiple symbol names at one address.
+/// Pick one stable representative per section/address so every aggregation
+/// charges the emitted bytes once. Prefer a real symbol size over an inferred
+/// one, then the largest size if the symbol table disagrees.
+fn unique_addresses(raw: &mut Vec<RawSymbol<'_>>) {
+    raw.sort_by(|a, b| {
+        (a.section, a.address)
+            .cmp(&(b.section, b.address))
+            .then_with(|| b.exact.cmp(&a.exact))
+            .then_with(|| b.size.cmp(&a.size))
+            .then_with(|| a.name.cmp(b.name))
+    });
+    raw.dedup_by(|a, b| (a.section, a.address) == (b.section, b.address));
+}
+
 fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     let data = fs::read(exe_path)?;
     let file = object::File::parse(&*data)?;
@@ -243,7 +260,10 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
         };
         bucket.push((section_index.0 as u64, symbol.address(), name));
         if symbol.size() != 0 {
-            sizes.insert((section_index.0 as u64, symbol.address()), symbol.size());
+            sizes
+                .entry((section_index.0 as u64, symbol.address()))
+                .and_modify(|size| *size = (*size).max(symbol.size()))
+                .or_insert(symbol.size());
         }
     }
 
@@ -281,6 +301,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
             });
         }
     }
+    unique_addresses(&mut raw);
 
     let code_section_indices: std::collections::HashSet<u64> = file
         .sections()
@@ -557,7 +578,7 @@ fn build_suggestions(
         out.push(Suggestion {
             kind: "generic-monomorphization",
             summary: format!(
-                "`{}::{}` is monomorphized {} times, {} total — consider a dynamic-dispatch (`dyn Trait`) or type-erased path if the call sites don't need static dispatch",
+                "`{}::{}` has {} distinct linked instantiations, {} total — consider a dynamic-dispatch (`dyn Trait`) or type-erased path if the call sites don't need static dispatch",
                 family.crate_name,
                 family.family,
                 family.instantiations,
@@ -984,6 +1005,46 @@ fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folded_symbol_aliases_are_charged_once() {
+        let mut symbols = vec![
+            RawSymbol {
+                section: 1,
+                address: 100,
+                name: "z_alias",
+                size: 16,
+                exact: true,
+            },
+            RawSymbol {
+                section: 1,
+                address: 100,
+                name: "a_alias",
+                size: 16,
+                exact: true,
+            },
+            RawSymbol {
+                section: 1,
+                address: 200,
+                name: "other_body",
+                size: 16,
+                exact: true,
+            },
+            RawSymbol {
+                section: 2,
+                address: 100,
+                name: "other_section",
+                size: 8,
+                exact: true,
+            },
+        ];
+        unique_addresses(&mut symbols);
+        assert_eq!(symbols.len(), 3);
+        assert_eq!(symbols.iter().map(|sym| sym.size).sum::<u64>(), 40);
+        assert_eq!(symbols[0].name, "a_alias");
+        assert_eq!(symbols[1].name, "other_body");
+        assert_eq!(symbols[2].name, "other_section");
+    }
 
     #[test]
     fn std_internal_backtrace_copy_detected_from_real_cfi_symbols() {
