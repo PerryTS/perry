@@ -900,6 +900,7 @@ pub(super) fn compile_method(
                 Some("Writable") => Some("js_node_stream_writable_subclass_init"),
                 Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
                 Some("Transform") => Some("js_node_stream_transform_subclass_init"),
+                Some("PassThrough") => Some("js_node_stream_passthrough_subclass_init"),
                 _ => None,
             };
             let mut effective_parent: Option<&str> = if builtin_parent_runtime.is_some() {
@@ -936,7 +937,8 @@ pub(super) fn compile_method(
             // inline path for dynamic-parent classes.
             if let Some(pname) = effective_parent.filter(|_| dynamic_parent_owner.is_none()) {
                 let pname_owned = pname.to_string();
-                let node_stream_kind = if pname_owned == "Readable" {
+                let node_stream_kind = if matches!(pname_owned.as_str(), "Readable" | "PassThrough")
+                {
                     node_stream_parent_kind(ctx.classes, class)
                 } else {
                     None
@@ -958,6 +960,7 @@ pub(super) fn compile_method(
                         "readable" => "js_node_stream_readable_subclass_init",
                         "duplex" => "js_node_stream_duplex_subclass_init",
                         "transform" => "js_node_stream_transform_subclass_init",
+                        "passthrough" => "js_node_stream_passthrough_subclass_init",
                         _ => unreachable!("node stream parent kind {}", kind),
                     };
                     ctx.block().call(
