@@ -1075,15 +1075,6 @@ pub fn gc_init() {
     // array, which made `subarray` hand back a garbage-length view.
     reg_scanner!(crate::typedarray_view::scan_typed_array_view_meta_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
-    // #10868 step 2.5 stage 1b: the canonical keys trie. WEAK, exactly like
-    // the transition cache above and for the same #6759 reason — rewritten on
-    // move so a probe never reads a stale address, never marked so a layout
-    // nothing uses does not pin its array or its descriptor.
-    reg_scanner!(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
-    // #10868 step 2.5: CLASS_KEYS_BY_ID remembers a class's keys array by
-    // ADDRESS. Weak, like the trie above — rewritten on move, dropped on
-    // death — so remembering a layout does not pin it.
-    reg_scanner!(crate::object::alloc::scan_class_keys_roots_mut);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
     reg_scanner!(crate::object::scan_arguments_object_roots_mut);
     // bun:ffi (#6562): the cached FFIType enum object.
