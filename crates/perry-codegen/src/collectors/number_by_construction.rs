@@ -790,10 +790,13 @@ pub(crate) fn nbc_order_enabled() -> bool {
 ///
 /// A union would be a WRONG ANSWER, not a weaker one: `a` numeric on `C` and
 /// not on `D` would license a bare `fadd` on `D.a`.
+/// The gate is passed in so both modes can be tested without changing the
+/// process environment shared by parallel unit tests.
 pub(crate) fn shape_numeric_inputs(
     shape_proven: &HashMap<u32, crate::collectors::ptr_shape::PtrShapeLocal>,
+    enabled: bool,
 ) -> (HashSet<u32>, HashSet<String>) {
-    if !nbc_order_enabled() || shape_proven.is_empty() {
+    if !enabled || shape_proven.is_empty() {
         return (HashSet::new(), HashSet::new());
     }
     let mut members: HashSet<u32> = HashSet::new();
@@ -813,4 +816,90 @@ pub(crate) fn shape_numeric_inputs(
         return (HashSet::new(), HashSet::new());
     }
     (members, fields)
+}
+
+#[cfg(test)]
+mod shape_input_tests {
+    use super::*;
+    use crate::collectors::ptr_shape::PtrShapeLocal;
+
+    fn property_local(id: u32, receiver: u32, property: &str) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("value_{id}"),
+            ty: HirType::Any,
+            mutable: false,
+            init: Some(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(receiver)),
+                property: property.to_string(),
+                byte_offset: 0,
+            }),
+        }
+    }
+
+    fn numeric_locals(
+        stmts: &[Stmt],
+        members: &HashSet<u32>,
+        fields: &HashSet<String>,
+    ) -> HashSet<u32> {
+        super::super::ptr_shape::collect_numeric_by_construction_locals_for_type_analysis(
+            stmts,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            members,
+            fields,
+        )
+    }
+
+    #[test]
+    fn nbc_order_intersects_numeric_fields_before_proving_property_locals() {
+        let shape_proven = HashMap::from([
+            (
+                10,
+                PtrShapeLocal {
+                    class_name: "First".to_string(),
+                    numeric_fields: HashSet::from(["shared".to_string(), "first_only".to_string()]),
+                    report_name: None,
+                },
+            ),
+            (
+                11,
+                PtrShapeLocal {
+                    class_name: "Second".to_string(),
+                    numeric_fields: HashSet::from(["shared".to_string()]),
+                    report_name: None,
+                },
+            ),
+        ]);
+        let stmts = [
+            property_local(20, 10, "shared"),
+            property_local(21, 11, "shared"),
+            property_local(22, 11, "first_only"),
+            property_local(23, 10, "first_only"),
+            property_local(24, 12, "shared"),
+        ];
+
+        let (members, fields) = shape_numeric_inputs(&shape_proven, true);
+        let numeric = numeric_locals(&stmts, &members, &fields);
+        assert!(numeric.contains(&20), "shared field on First is numeric");
+        assert!(numeric.contains(&21), "shared field on Second is numeric");
+        assert!(
+            !numeric.contains(&22),
+            "union would unsoundly admit Second.first_only"
+        );
+        assert!(
+            !numeric.contains(&23),
+            "function-wide inputs must be safe for both receivers"
+        );
+        assert!(
+            !numeric.contains(&24),
+            "an unproven receiver is not a numeric input"
+        );
+
+        let (off_members, off_fields) = shape_numeric_inputs(&shape_proven, false);
+        assert!(numeric_locals(&stmts, &off_members, &off_fields).is_empty());
+    }
 }
