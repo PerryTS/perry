@@ -53,7 +53,7 @@
       "reason": "node:http2 control-surface isolation (#10327). A server session's settings() and goaway() reach EVERY client session in the process: controls.rs scans the handle table with iter_handle_ids_of::<Http2SessionHandle> and its server-handle filter is unwrap_or(true) for a server caller. Node delivers each control frame to exactly one peer."
     },
     "test_gap_http2_wire_client_ping": {
-      "status": "crash",
+      "status": "parity_fail",
       "issue": "10327",
       "added": "2026-09-16",
       "category": "module-inventory",
@@ -74,14 +74,14 @@
       "reason": "node:http2 real transport (#10327). Every malformed frame is answered with GOAWAY(code=1) where Node distinguishes 6/1/2/9, and no session 'error' event is emitted at all (Node: ERR_HTTP2_ERROR, errno -505). Unknown frame types are correctly ignored."
     },
     "test_gap_http2_wire_goaway_recv": {
-      "status": "crash",
+      "status": "parity_fail",
       "issue": "10327",
       "added": "2026-09-16",
       "category": "module-inventory",
       "reason": "node:http2 real transport (#10327). A GOAWAY frame from a real peer fires no 'goaway' event and changes no session state. Node's third argument is undefined (not a zero-length Buffer) when the frame carried no opaque data. TIMEOUT: full output, then no exit."
     },
     "test_gap_http2_wire_goaway_send": {
-      "status": "crash",
+      "status": "parity_fail",
       "issue": "10327",
       "added": "2026-09-16",
       "category": "module-inventory",
@@ -116,14 +116,14 @@
       "reason": "node:http2 real transport (#10327). The server sends a hardcoded SETTINGS {3=200,4=1048576,5=16384,6=16384} whatever createServer({settings}) asks for, plus an unsolicited connection WINDOW_UPDATE inc=983041 Node never sends. Node sends an EMPTY SETTINGS by default and serialises configured keys in ascending identifier order."
     },
     "test_gap_http2_wire_session_lifecycle": {
-      "status": "crash",
+      "status": "parity_fail",
       "issue": "10327",
       "added": "2026-09-16",
       "category": "module-inventory",
       "reason": "node:http2 real transport (#10327). close() writes one GOAWAY instead of two; closed and destroyed are always both true (Node: destroy() leaves closed false); destroy(err, code) writes code=0 and emits no 'error'. TIMEOUT: full output, then no exit."
     },
     "test_gap_http2_wire_settings_ack": {
-      "status": "crash",
+      "status": "parity_fail",
       "issue": "10327",
       "added": "2026-09-16",
       "category": "module-inventory",

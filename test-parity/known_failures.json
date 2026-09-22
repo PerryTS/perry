@@ -108,7 +108,7 @@
     "issue": "10327",
     "added": "2026-09-16",
     "category": "module-inventory",
-    "reason": "node:http2 real transport (#10327). session.ping() puts nothing on the wire — the loopback shim in controls.rs pushes a synthetic callback at the caller's own handle — so the duration is 0.0 and every argument-validation case is a silent no-op where Node throws ERR_HTTP2_PING_LENGTH / ERR_INVALID_ARG_TYPE. TIMEOUT rather than parity_fail because the process prints its full output and then does not exit."
+    "reason": "node:http2 real transport (#10327). session.ping() puts nothing on the wire — the loopback shim in controls.rs pushes a synthetic callback at the caller's own handle — so the duration is 0.0 and every argument-validation case is a silent no-op where Node throws ERR_HTTP2_PING_LENGTH / ERR_INVALID_ARG_TYPE. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
   },
   "test_gap_http2_wire_flow_control": {
     "issue": "10327",
@@ -126,13 +126,13 @@
     "issue": "10327",
     "added": "2026-09-16",
     "category": "module-inventory",
-    "reason": "node:http2 real transport (#10327). A GOAWAY frame from a real peer fires no 'goaway' event and changes no session state. Node's third argument is undefined (not a zero-length Buffer) when the frame carried no opaque data. TIMEOUT: full output, then no exit."
+    "reason": "node:http2 real transport (#10327). A GOAWAY frame from a real peer fires no 'goaway' event and changes no session state. Node's third argument is undefined (not a zero-length Buffer) when the frame carried no opaque data. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
   },
   "test_gap_http2_wire_goaway_send": {
     "issue": "10327",
     "added": "2026-09-16",
     "category": "module-inventory",
-    "reason": "node:http2 real transport (#10327). Every goaway() form writes nothing to the wire. Node also drops a client goaway() whose lastStreamID is ODD, silently — see docs/src/testing/http2-conformance.md. TIMEOUT: full output, then no exit."
+    "reason": "node:http2 real transport (#10327). Every goaway() form writes nothing to the wire. Node also drops a client goaway() whose lastStreamID is ODD, silently — see docs/src/testing/http2-conformance.md. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
   },
   "test_gap_http2_wire_goaway_server": {
     "issue": "10327",
@@ -162,13 +162,13 @@
     "issue": "10327",
     "added": "2026-09-16",
     "category": "module-inventory",
-    "reason": "node:http2 real transport (#10327). close() writes one GOAWAY instead of two; closed and destroyed are always both true (Node: destroy() leaves closed false); destroy(err, code) writes code=0 and emits no 'error'. TIMEOUT: full output, then no exit."
+    "reason": "node:http2 real transport (#10327). close() writes one GOAWAY instead of two; closed and destroyed are always both true (Node: destroy() leaves closed false); destroy(err, code) writes code=0 and emits no 'error'. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
   },
   "test_gap_http2_wire_settings_ack": {
     "issue": "10327",
     "added": "2026-09-16",
     "category": "module-inventory",
-    "reason": "node:http2 real transport (#10327). settings() applies immediately and fires its callback with no peer ACK and no third (duration) argument; no SETTINGS frame reaches the wire; no remoteSettings at connect; a peer SETTINGS frame mid-session is answered with GOAWAY(code=1) instead of an ACK. TIMEOUT: full output, then no exit."
+    "reason": "node:http2 real transport (#10327). settings() applies immediately and fires its callback with no peer ACK and no third (duration) argument; no SETTINGS frame reaches the wire; no remoteSettings at connect; a peer SETTINGS frame mid-session is answered with GOAWAY(code=1) instead of an ACK. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
   },
   "test_gap_json_lazy_defineproperty_index": {
     "issue": "10097",
