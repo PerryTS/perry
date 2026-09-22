@@ -1,0 +1,1 @@
+Fixed `process.stdin.on("data"/"end", ...)` when `process` is a namespace import from `node:process`. Stream listeners now register and receive piped input, while locally shadowed `process` objects keep their own methods.
