@@ -259,6 +259,7 @@ pub(crate) struct DirectParser<'a> {
     input: &'a [u8],
     pos: usize,
     valid: bool,
+    first_error_pos: Option<usize>,
     /// Containers open on the native stack. The descent bounds itself at
     /// `MAX_RECURSIVE_NESTING_DEPTH` instead of relying on a whole-document
     /// nesting pre-scan, which re-read every byte of a large record document
@@ -306,6 +307,7 @@ impl<'a> DirectParser<'a> {
             input,
             pos: 0,
             valid: true,
+            first_error_pos: None,
             depth: 0,
             depth_exceeded: false,
             shape: None,
@@ -357,6 +359,7 @@ impl<'a> DirectParser<'a> {
             input,
             pos: 0,
             valid: true,
+            first_error_pos: None,
             depth: 0,
             depth_exceeded: false,
             shape: Some(shape),
@@ -454,6 +457,27 @@ impl<'a> DirectParser<'a> {
         self.valid && self.pos == self.input.len()
     }
 
+    /// First invalid byte, or the first trailing non-whitespace byte.
+    #[inline]
+    pub(crate) fn error_offset(&self) -> usize {
+        self.first_error_pos
+            .unwrap_or(self.pos)
+            .min(self.input.len())
+    }
+
+    #[inline]
+    fn mark_invalid_at(&mut self, pos: usize) {
+        if self.valid {
+            self.first_error_pos = Some(pos);
+        }
+        self.valid = false;
+    }
+
+    #[inline]
+    fn mark_invalid(&mut self) {
+        self.mark_invalid_at(self.pos);
+    }
+
     #[inline]
     pub(crate) fn expect(&mut self, ch: u8) -> bool {
         self.skip_whitespace();
@@ -461,14 +485,25 @@ impl<'a> DirectParser<'a> {
             self.advance();
             true
         } else {
-            self.valid = false;
+            self.mark_invalid();
             false
         }
     }
 
     #[inline]
     fn invalid_value(&mut self) -> JSValue {
-        self.valid = false;
+        self.mark_invalid();
+        JSValue::null()
+    }
+
+    #[inline]
+    fn invalid_literal(&mut self, expected: &[u8]) -> JSValue {
+        let mismatch = expected
+            .iter()
+            .enumerate()
+            .find(|(index, byte)| self.input.get(self.pos + *index).copied() != Some(**byte))
+            .map_or(self.pos, |(index, _)| self.pos + index);
+        self.mark_invalid_at(mismatch);
         JSValue::null()
     }
 
@@ -485,7 +520,7 @@ impl<'a> DirectParser<'a> {
     fn enter_container(&mut self) -> bool {
         if self.depth >= MAX_RECURSIVE_NESTING_DEPTH {
             self.depth_exceeded = true;
-            self.valid = false;
+            self.mark_invalid();
             return false;
         }
         self.depth += 1;
@@ -609,7 +644,7 @@ impl<'a> DirectParser<'a> {
     #[inline(never)]
     pub(crate) fn parse_string_bytes(&mut self) -> Option<ParsedStr<'a>> {
         if self.peek() != Some(b'"') {
-            self.valid = false;
+            self.mark_invalid();
             return None;
         }
         self.advance();
@@ -629,13 +664,13 @@ impl<'a> DirectParser<'a> {
                 return Some(ParsedStr::Borrowed(slice));
             }
             if ch < 0x20 {
-                self.valid = false;
+                self.mark_invalid();
                 return None;
             }
             // ch == b'\\' — slow path from here.
             return self.parse_string_bytes_slow(start);
         }
-        self.valid = false;
+        self.mark_invalid();
         None
     }
 
@@ -694,7 +729,7 @@ impl<'a> DirectParser<'a> {
                 }
                 scalar_end = self.input.len().min(self.pos.saturating_add(64));
                 if self.pos >= self.input.len() {
-                    self.valid = false;
+                    self.mark_invalid();
                     return None;
                 }
             }
@@ -705,7 +740,7 @@ impl<'a> DirectParser<'a> {
                 b'"' => return Some(ParsedStr::Owned(result)),
                 b'\\' => {
                     if self.pos >= self.input.len() {
-                        self.valid = false;
+                        self.mark_invalid();
                         return None;
                     }
                     let esc = self.input[self.pos];
@@ -721,12 +756,16 @@ impl<'a> DirectParser<'a> {
                         b'f' => result.push(0x0C),
                         b'u' => {
                             if self.pos + 4 > self.input.len() {
-                                self.valid = false;
+                                self.mark_invalid_at(self.input.len());
                                 return None;
                             }
                             let Some(code) = decode_hex_u16(&self.input[self.pos..self.pos + 4])
                             else {
-                                self.valid = false;
+                                let bad = self.input[self.pos..self.pos + 4]
+                                    .iter()
+                                    .position(|byte| !byte.is_ascii_hexdigit())
+                                    .unwrap_or(0);
+                                self.mark_invalid_at(self.pos + bad);
                                 return None;
                             };
                             self.pos += 4;
@@ -755,13 +794,13 @@ impl<'a> DirectParser<'a> {
                             }
                         }
                         _ => {
-                            self.valid = false;
+                            self.mark_invalid_at(self.pos - 1);
                             return None;
                         }
                     }
                 }
                 c if c < 0x20 => {
-                    self.valid = false;
+                    self.mark_invalid_at(self.pos - 1);
                     return None;
                 }
                 _ => result.push(ch),
@@ -1348,9 +1387,6 @@ impl<'a> DirectParser<'a> {
             Some(b'0') => {
                 self.advance();
                 if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                    while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
-                        self.advance();
-                    }
                     return self.invalid_value();
                 }
             }
@@ -1482,7 +1518,7 @@ impl<'a> DirectParser<'a> {
             self.pos += 4;
             JSValue::bool(true)
         } else {
-            self.invalid_value()
+            self.invalid_literal(b"true")
         }
     }
 
@@ -1491,7 +1527,7 @@ impl<'a> DirectParser<'a> {
             self.pos += 5;
             JSValue::bool(false)
         } else {
-            self.invalid_value()
+            self.invalid_literal(b"false")
         }
     }
 
@@ -1500,7 +1536,7 @@ impl<'a> DirectParser<'a> {
             self.pos += 4;
             JSValue::null()
         } else {
-            self.invalid_value()
+            self.invalid_literal(b"null")
         }
     }
 }
