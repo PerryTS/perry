@@ -66,7 +66,14 @@ dirs.workspace = true
 flate2.workspace = true
 tar.workspace = true
 base64.workspace = true
-zip.workspace = true
+# Keep zip's default codec set, but select its backend-neutral flate2 feature.
+# `zip`'s `deflate` feature forces flate2's zlib-rs backend across the whole
+# Cargo build; feature unification then makes node:zlib's default gzip output
+# almost twice as large (#10810).
+zip = { version = "8", default-features = false, features = [
+  "aes-crypto", "bzip2", "deflate64", "deflate-flate2", "deflate-zopfli",
+  "lzma", "ppmd", "time", "zstd", "xz",
+] }
 tempfile.workspace = true
 libc.workspace = true
 zstd.workspace = true
