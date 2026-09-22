@@ -180,6 +180,50 @@ impl LiveObject {
     }
 }
 
+/// Proof that a key list describes a **shared layout**, not one receiver's
+/// private list — the receiver side of `CanonicalKeys`.
+///
+/// `canonicalize` and `extend` REQUIRE one, so interning cannot run without
+/// it. That is deliberately a type and not an ordering: stage 1a added
+/// `ShapeObjectKind::Dictionary` precisely so a latched receiver would
+/// decline by construction, and stage 1b then added a path that never asked
+/// — three canonicalization calls sat ABOVE every `is_dictionary` guard, so
+/// a latched receiver had its private list interned and republished as a
+/// shared array and lost 407 of 8,192 keys. Hoisting those three guards
+/// would have fixed those three sites and left the fourth, next month, to
+/// someone as careful as I was.
+///
+/// Nobody holds the membership of this class in their head, including the
+/// author of the rule. So the rule is a constructor.
+pub(crate) struct SharedLayout(());
+
+impl SharedLayout {
+    /// The kind check, and the only way a receiver yields the proof.
+    /// `None` for a dictionary receiver: its keys are its own, it appends
+    /// them in place, and interning them would publish one object's private
+    /// list as every object's layout.
+    ///
+    /// # Safety
+    /// `obj` is a live object header, or null.
+    #[inline]
+    pub(crate) unsafe fn of_receiver(obj: *mut crate::object::ObjectHeader) -> Option<Self> {
+        if obj.is_null() || crate::object::dictionary::is_dictionary(obj) {
+            return None;
+        }
+        Some(SharedLayout(()))
+    }
+
+    /// The shape cache's entries are shared layouts by construction: they are
+    /// keyed by a STATIC shape id and handed to every receiver of that shape,
+    /// so there is no receiver whose kind could make them private. The one
+    /// place the proof is not a kind check, named so it is auditable rather
+    /// than implicit.
+    #[inline]
+    pub(crate) fn shape_cache_entry() -> Self {
+        SharedLayout(())
+    }
+}
+
 const NO_NODE: u32 = u32::MAX;
 /// The empty list. Never freed, owns no array.
 const ROOT_NODE: u32 = 0;
@@ -546,7 +590,11 @@ unsafe fn stamp_shared(arr: *mut ArrayHeader) {
 /// `parent` names a live canonical array (or is empty), `appended` is live,
 /// and the caller has rooted everything it holds across the allocation this
 /// may perform.
-pub(crate) unsafe fn extend(parent: CanonicalKeys, appended: Appended) -> CanonicalKeys {
+pub(crate) unsafe fn extend(
+    _proof: &SharedLayout,
+    parent: CanonicalKeys,
+    appended: Appended,
+) -> CanonicalKeys {
     let h = appended.edge_hash();
     let parent_len = parent.len();
     if let Some(hit) = probe(parent, parent_len, appended, h) {
@@ -656,8 +704,12 @@ pub(crate) unsafe fn extend(parent: CanonicalKeys, appended: Appended) -> Canoni
 /// # Safety
 /// As [`extend`].
 #[inline]
-pub(crate) unsafe fn extend_key(parent: CanonicalKeys, key: *const StringHeader) -> CanonicalKeys {
-    extend(parent, Appended::Key(key))
+pub(crate) unsafe fn extend_key(
+    proof: &SharedLayout,
+    parent: CanonicalKeys,
+    key: *const StringHeader,
+) -> CanonicalKeys {
+    extend(proof, parent, Appended::Key(key))
 }
 
 /// The canonical array for the ordered key list held in `keys[0..len]`.
@@ -670,7 +722,11 @@ pub(crate) unsafe fn extend_key(parent: CanonicalKeys, key: *const StringHeader)
 /// # Safety
 /// `keys` is a live keys array (or null) with at least `len` initialized
 /// slots, and the caller has rooted what it holds: this allocates.
-pub(crate) unsafe fn canonicalize(keys: *const ArrayHeader, len: u32) -> CanonicalKeys {
+pub(crate) unsafe fn canonicalize(
+    proof: &SharedLayout,
+    keys: *const ArrayHeader,
+    len: u32,
+) -> CanonicalKeys {
     if keys.is_null() || len == 0 {
         return CanonicalKeys::EMPTY;
     }
@@ -705,7 +761,7 @@ pub(crate) unsafe fn canonicalize(keys: *const ArrayHeader, len: u32) -> Canonic
             break;
         }
         let slot = JSValue::from_bits((*slots.add(i as usize)).to_bits());
-        out = extend(out, Appended::Slot(slot));
+        out = extend(proof, out, Appended::Slot(slot));
     }
     out
 }
@@ -864,8 +920,9 @@ mod canonical_keys_tests {
             let a = raw_list(&["alpha", "beta", "gamma"]);
             let b = raw_list(&["alpha", "beta", "gamma"]);
             assert_ne!(a, b, "test premise: two separately allocated arrays");
-            let ca = canonicalize(a, 3);
-            let cb = canonicalize(b, 3);
+            let proof = SharedLayout::shape_cache_entry();
+            let ca = canonicalize(&proof, a, 3);
+            let cb = canonicalize(&proof, b, 3);
             assert_eq!(
                 ca.addr(),
                 cb.addr(),
@@ -874,7 +931,12 @@ mod canonical_keys_tests {
             assert_eq!(ca.len(), 3);
             // And the grow path reaches the same node as the whole-list form.
             let grown = extend_key(
-                extend_key(extend_key(CanonicalKeys::EMPTY, key("alpha")), key("beta")),
+                &proof,
+                extend_key(
+                    &proof,
+                    extend_key(&proof, CanonicalKeys::EMPTY, key("alpha")),
+                    key("beta"),
+                ),
                 key("gamma"),
             );
             assert_eq!(
@@ -893,8 +955,9 @@ mod canonical_keys_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         reset_for_test();
         unsafe {
-            let ab = canonicalize(raw_list(&["a", "b"]), 2);
-            let ba = canonicalize(raw_list(&["b", "a"]), 2);
+            let proof = SharedLayout::shape_cache_entry();
+            let ab = canonicalize(&proof, raw_list(&["a", "b"]), 2);
+            let ba = canonicalize(&proof, raw_list(&["b", "a"]), 2);
             assert_ne!(
                 ab.addr(),
                 ba.addr(),
@@ -912,16 +975,13 @@ mod canonical_keys_tests {
         reset_for_test();
         unsafe {
             let full = raw_list(&["a", "b", "c"]);
-            let two = canonicalize(full, 2);
-            let three = canonicalize(full, 3);
-            assert_eq!(
-                two.len(),
-                2,
-                "the prefix array is exactly as long as its list"
-            );
+            let proof = SharedLayout::shape_cache_entry();
+            let two = canonicalize(&proof, full, 2);
+            let three = canonicalize(&proof, full, 3);
+            assert_eq!(two.len(), 2, "the prefix array is exactly as long as its list");
             assert_eq!(three.len(), 3);
             assert_ne!(two.addr(), three.addr());
-            let one = canonicalize(full, 1);
+            let one = canonicalize(&proof, full, 1);
             assert_eq!(one.len(), 1);
             assert_ne!(one.addr(), two.addr());
         }
@@ -937,13 +997,14 @@ mod canonical_keys_tests {
         unsafe {
             let names: Vec<String> = (0..40).map(|i| format!("k{i}")).collect();
             let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-            let long = canonicalize(raw_list(&refs), 40);
+            let proof = SharedLayout::shape_cache_entry();
+            let long = canonicalize(&proof, raw_list(&refs), 40);
             assert_eq!(long.len(), 40);
             let tail_key = key("k40");
             // Publish the edge, then measure the HIT.
-            let first = extend_key(long, tail_key);
+            let first = extend_key(&proof, long, tail_key);
             SLOT_READS.with(|c| c.set(0));
-            let again = extend_key(long, tail_key);
+            let again = extend_key(&proof, long, tail_key);
             let reads = SLOT_READS.with(|c| c.get());
             assert_eq!(first.addr(), again.addr(), "the second extend must hit");
             assert!(
@@ -964,16 +1025,21 @@ mod canonical_keys_tests {
             let hole = JSValue::from_bits(crate::value::TAG_HOLE);
             let a = key("a");
             let b = key("b");
+            let p = SharedLayout::shape_cache_entry();
             let hole_first = extend(
+                &p,
                 extend(
-                    extend(CanonicalKeys::EMPTY, Appended::Slot(hole)),
+                    &p,
+                    extend(&p, CanonicalKeys::EMPTY, Appended::Slot(hole)),
                     Appended::Key(a),
                 ),
                 Appended::Key(b),
             );
             let hole_middle = extend(
+                &p,
                 extend(
-                    extend(CanonicalKeys::EMPTY, Appended::Key(a)),
+                    &p,
+                    extend(&p, CanonicalKeys::EMPTY, Appended::Key(a)),
                     Appended::Slot(hole),
                 ),
                 Appended::Key(b),
@@ -996,7 +1062,11 @@ mod canonical_keys_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         reset_for_test();
         unsafe {
-            let c = extend_key(CanonicalKeys::EMPTY, key("only"));
+            let c = extend_key(
+                &SharedLayout::shape_cache_entry(),
+                CanonicalKeys::EMPTY,
+                key("only"),
+            );
             let gc = (c.as_ptr() as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
             assert!(

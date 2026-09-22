@@ -282,9 +282,22 @@ unsafe fn ensure_key_in_keys_array_inner(
     // census's `object_ops/keys_array.rs:318`, 5,334 `key_count` mints, and
     // it is the mechanism named in the #10287 comment above: a receiver that
     // defines one key can never again share a keys array with its siblings.
-    let canonical_parent = crate::object::canonical_keys::canonicalize(keys, key_count as u32);
-    refresh_define_property_roots!();
-    let new_keys = crate::object::canonical_keys::extend_key(canonical_parent, key).as_ptr();
+    // Two modes, as in the `[[Set]]` tail: an ordinary receiver's list is a
+    // shared layout and interns; a latched receiver owns its list.
+    let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
+        Some(proof) => {
+            let canonical_parent =
+                crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+            refresh_define_property_roots!();
+            crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).as_ptr()
+        }
+        None => {
+            let owned = scope.root_raw_mut_ptr(keys);
+            let grown = crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
+            let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
+            grown
+        }
+    };
     refresh_define_property_roots!();
     set_object_keys_array(obj, new_keys);
     // Keep the sidecar fresh (mirrors the [[Set]] append path): the entry is
