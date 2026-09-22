@@ -106,7 +106,7 @@ fslock = "0.2"
 # feature — listing them as direct deps just makes them callable from
 # the CLI module. ed25519-dalek 2.1 takes any CryptoRng; we use rand 0.9
 # for the keygen seed.
-ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
+ed25519-dalek = { version = "3.0", features = ["rand_core"], optional = true }
 sha2 = "0.11"
 hex.workspace = true
 rand = { version = "0.10", optional = true }
