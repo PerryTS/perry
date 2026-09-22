@@ -28,6 +28,12 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // one. Handlers that care receive it as an argument, because they consult
     // it after lowering their operands — by which point the field is gone.
     let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
+    if let Some(value) = crate::stmt::canonical_read_loop::lower_reduction(ctx, expr)? {
+        return Ok(value);
+    }
+    if let Some(value) = crate::stmt::canonical_read_loop::lower_generic_read(ctx, expr)? {
+        return Ok(value);
+    }
     if let Some(value) = super::suffix_cursor::try_lower(ctx, expr)? {
         return Ok(value);
     }

@@ -65,6 +65,56 @@ use crate::array::ArrayHeader;
 use crate::JSValue;
 use crate::StringHeader;
 
+// Resolve a compiler-predicted ordered key list through the canonical tree.
+// No receiver-derived cache or slot word is created: the result IS a shape.
+
+/// `packed` is a code-image byte string of NUL-terminated property names.
+/// Codegen declines names containing NUL. Empty names are preserved.
+#[no_mangle]
+pub unsafe extern "C" fn js_canonical_read_shape(packed: *const u8, len: u32) -> u32 {
+    let bytes = std::slice::from_raw_parts(packed, len as usize);
+    assert!(bytes.last() == Some(&0));
+    let proof = SharedLayout::shape_cache_entry();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let keys_root = scope.root_raw_mut_ptr(std::ptr::null_mut::<crate::ArrayHeader>());
+    let mut keys = CanonicalKeys::EMPTY;
+    for name in bytes[..bytes.len() - 1].split(|b| *b == 0) {
+        // Extend roots the appended key before allocating. A redundant key
+        // from a canonical hit is collectible, not a leaked immortal string.
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        keys = extend_key(
+            &proof,
+            CanonicalKeys(keys_root.get_raw_mut_ptr::<crate::ArrayHeader>()),
+            key,
+        );
+        keys_root.set_raw_mut_ptr(keys.as_ptr());
+    }
+    // The external-carrier bit roots the authoritative shape keys just as it
+    // does for a class expectation. IDs/layout survive GC; addresses do not.
+    super::shapes::js_object_shape_id_for_keys(keys.addr() as u64, keys.len())
+}
+
+/// Universal generic read, with no per-site cache and no second fast arm.
+#[no_mangle]
+pub extern "C" fn js_object_get_field_generic(bits: i64, key: *const crate::StringHeader) -> f64 {
+    if (bits as u64 >> 48) == crate::value::POINTER_TAG >> 48 {
+        super::js_object_get_field_by_name_f64(
+            (bits as u64 & crate::value::POINTER_MASK) as usize as *const super::ObjectHeader,
+            key,
+        )
+    } else {
+        super::js_object_get_field_ic_nonptr(bits, key, 0)
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_READ_SHAPE: unsafe extern "C" fn(*const u8, u32) -> u32 = js_canonical_read_shape;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_GENERIC_READ: extern "C" fn(i64, *const crate::StringHeader) -> f64 =
+    js_object_get_field_generic;
+
 /// A keys array this table owns.
 ///
 /// The enforcement half of the funnel, and the reason it is a type rather
@@ -908,3 +958,7 @@ pub(crate) fn reset_for_test() {
 #[cfg(test)]
 #[path = "canonical_keys_tests.rs"]
 mod canonical_keys_tests;
+
+#[cfg(test)]
+#[path = "canonical_read_shape_tests.rs"]
+mod canonical_read_shape_tests;

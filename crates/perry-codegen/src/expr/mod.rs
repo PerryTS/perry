@@ -1038,6 +1038,12 @@ pub(crate) struct FnCtx<'a> {
     /// current iteration.
     pub class_field_loop_facts: Vec<ClassFieldLoopFact>,
 
+    /// A canonical ordinary-shape proof scoped to a non-dispatching loop.
+    /// Carries local/key identities only, never a raw heap address.
+    pub canonical_read_loop: Option<crate::stmt::canonical_read_loop::Fact>,
+    /// The one generic clone of that loop bypasses all per-site read caches.
+    pub canonical_read_generic: bool,
+
     /// repsel #7480 / #5093: scoped loop-versioning facts for element-shape
     /// loops (`for (…) sum += arr[i].field`). Pushed only around the FAST
     /// clone of `lower_element_shape_versioned_for`
@@ -3049,6 +3055,7 @@ pub(crate) mod element_shape_guard;
 pub(crate) mod element_shape_reads;
 mod js_runtime;
 mod literals_vars;
+pub(crate) use literals_vars::bind_lowered_value_to_local;
 mod logical_collections;
 mod math_simple;
 mod misc_methods;

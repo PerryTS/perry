@@ -1468,6 +1468,9 @@ def is_collecting(callee):
 #          count and are deliberately NOT folded in here — same reasoning as
 #          ALLOC_RE's deleted `bigint_\w+_op`.
 POLL_CAPABLE_RUNTIME = {
+    # Canonical loop supplier allocates keys; the generic read can run a getter.
+    "js_canonical_read_shape",
+    "js_object_get_field_generic",
     "js_call_function",
     # Calling a JS closure. The four names this replaces
     # (`js_call_closure`, `js_invoke_closure`, `js_function_call`,

@@ -1257,6 +1257,8 @@ pub(super) fn compile_function(
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
+        canonical_read_loop: None,
+        canonical_read_generic: false,
         element_shape_loop_facts: Vec::new(),
         // Specialized entries seed the canonical-i32 registry with their raw
         // i32 params (empty otherwise — identical to the pre-phase behavior).

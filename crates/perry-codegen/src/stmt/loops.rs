@@ -7079,6 +7079,10 @@ pub(crate) fn lower_for(
         lower_stmt(ctx, init_stmt)?;
     }
 
+    if super::canonical_read_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array
     // access is a raw boxed-slot load and whose length dispatch is SSO/heap

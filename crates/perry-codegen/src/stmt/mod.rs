@@ -38,6 +38,9 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
+pub(crate) mod canonical_read_loop;
+#[cfg(test)]
+mod canonical_read_loop_tests;
 mod masked_window_region;
 #[cfg(test)]
 mod prealloc_module_global_tests;
