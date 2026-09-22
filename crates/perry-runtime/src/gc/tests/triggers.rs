@@ -240,8 +240,9 @@ fn old_reclaim_pressure_is_proportional_only() {
 #[test]
 fn old_reclaim_backoff_widens_band_on_futile_fulls() {
     use super::super::policy::{
-        test_old_reclaim_backoff_shift, test_price_old_reclaim_full,
-        test_set_old_reclaim_backoff_shift,
+        test_clear_old_reclaim_pre_in_use_bytes, test_old_reclaim_backoff_shift,
+        test_old_reclaim_pre_in_use_bytes, test_price_old_reclaim_full,
+        test_set_old_reclaim_backoff_shift, test_set_pacing_arena_in_use,
     };
     let previous = test_set_old_reclaim_backoff_shift(0);
     let baseline = 8 * 1024 * 1024;
@@ -267,6 +268,59 @@ fn old_reclaim_backoff_widens_band_on_futile_fulls() {
     test_price_old_reclaim_full(0, 0);
     assert_eq!(test_old_reclaim_backoff_shift(), 1);
 
+    // ---- THE WIRING --------------------------------------------------------
+    //
+    // Everything above this line exercises the arithmetic through a seam that
+    // sets the pre-full reading directly, and ALL OF IT PASSES against a
+    // predicate that never records one. Verified by mutation: deleting the
+    // `note_old_reclaim_cycle_started()` call - which is exactly the #10928
+    // defect, and exactly the state `GC_MAJOR_PACING_BACKOFF_SHIFT` shipped in
+    // for every old-reclaim full - left 11/11 of these tests green.
+    //
+    // So assert the wiring itself: the real predicate, when it says a full is
+    // due, must leave a reading behind for `update_old_reclaim_backoff` to
+    // price. This is the assertion that fails on the unwired mutant.
+    test_set_old_reclaim_backoff_shift(0);
+    let baseline_w = 8 * 1024 * 1024;
+    let due_at = baseline_w + gc_old_reclaim_growth_band_bytes(baseline_w);
+
+    // Inject a live reading first. In a unit test the arena is empty, so the
+    // real `pacing_arena_in_use_bytes()` is 0 -- and a recorded 0 is
+    // indistinguishable from never recording, which is precisely the thing
+    // this block exists to tell apart. Asserting `!= 0` against an empty arena
+    // fails on CORRECT code; asserting `== live` against an injected reading
+    // fails only on the unwired one.
+    let live = 64 * 1024 * 1024;
+    let prev_seam = test_set_pacing_arena_in_use(Some(live));
+
+    test_clear_old_reclaim_pre_in_use_bytes();
+    assert!(
+        old_reclaim_pressure_due(due_at, baseline_w),
+        "test setup: these values must be due"
+    );
+    assert_eq!(
+        test_old_reclaim_pre_in_use_bytes(),
+        live,
+        "a predicate that schedules a full must record the live set it is about \
+         to trace, or the productivity backoff can never price it"
+    );
+
+    // And the pure form must NOT record, or the debt arithmetic and the tests
+    // would move the pacing state just by asking the question.
+    test_clear_old_reclaim_pre_in_use_bytes();
+    assert!(old_reclaim_pressure_due_inner(due_at, baseline_w));
+    assert_eq!(
+        test_old_reclaim_pre_in_use_bytes(),
+        0,
+        "the pure predicate must have no pacing side effect"
+    );
+
+    // Not due: nothing recorded.
+    test_clear_old_reclaim_pre_in_use_bytes();
+    assert!(!old_reclaim_pressure_due(baseline_w, baseline_w));
+    assert_eq!(test_old_reclaim_pre_in_use_bytes(), 0);
+
+    test_set_pacing_arena_in_use(prev_seam);
     test_set_old_reclaim_backoff_shift(previous);
 }
 

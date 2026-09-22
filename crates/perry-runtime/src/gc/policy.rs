@@ -1524,6 +1524,17 @@ impl Drop for OldReclaimReentryGuard {
     }
 }
 
+/// #10928: DIAGNOSTIC ONLY - this no longer gates any collection.
+///
+/// It was the #7937 absolute first-crossing threshold. That arm is deleted
+/// (see `old_reclaim_pressure_due`), so the sole live old-reclaim input is
+/// `gc_old_reclaim_growth_band_bytes`. What remains here is the value the
+/// `[gc-trigger]` line prints as `old_threshold=`, kept so the parsers three
+/// lanes point at this trace keep working; `old_threshold_governs=0` is
+/// printed next to it. Delete both after the campaign.
+///
+/// Do not reach for this constant in new code: an orphaned tunable that
+/// still prints is worse than an inert arm, because it looks live.
 pub(super) const GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES: usize = 48 * 1024 * 1024;
 pub(super) const GC_OLD_GEN_RECLAIM_GROWTH_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const GC_COPY_PROMOTION_HANDOFF_MIN_BYTES: usize = 24 * 1024 * 1024;
@@ -2003,6 +2014,16 @@ pub(super) fn test_set_old_reclaim_backoff_shift(shift: u32) -> u32 {
 #[cfg(test)]
 pub(super) fn test_old_reclaim_backoff_shift() -> u32 {
     GC_OLD_RECLAIM_BACKOFF_SHIFT.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn test_old_reclaim_pre_in_use_bytes() -> usize {
+    GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn test_clear_old_reclaim_pre_in_use_bytes() {
+    GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(|b| b.set(0));
 }
 
 #[cfg(test)]

@@ -48,6 +48,14 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     let external_drained = policy::GC_EXTERNAL_SIDE_DRAINED_SINCE_FULL.with(Cell::get);
     let old_baseline = policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(Cell::get);
     let old_band = policy::gc_old_reclaim_growth_band_bytes(old_baseline);
+    // #10928: INERT. `old_threshold` gates nothing since the absolute
+    // first-crossing arm was deleted from `old_reclaim_pressure_due`; the
+    // only live pacing input is `old_band`. The key and its value are kept
+    // byte-identical because three lanes parse this line, and
+    // `old_threshold_governs=0` is printed beside it so a reader of the
+    // TRACE learns that without reading this file - which is where the
+    // damage was: a live-looking number with no behaviour behind it.
+    // Scheduled for deletion with the constant after the campaign.
     let old_threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
     let old_pending = policy::GC_OLD_RECLAIM_PENDING.with(Cell::get);
     let retaining = policy::GC_MAJOR_PACING_RETAINING.with(Cell::get);
@@ -60,7 +68,8 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
          from_space={from_space} nursery_cap={nursery_cap} old_in_use={old_in_use} old_free={old_free} \
          old_reclaimable={old_reclaimable} external_side={external} \
          external_drained={external_drained} old_baseline={old_baseline} \
-         old_band={old_band} old_threshold={old_threshold} old_pending={old_pending} retaining={retaining} \
+         old_band={old_band} old_threshold={old_threshold} old_threshold_governs=0 \
+         old_pending={old_pending} retaining={retaining} \
          malloc={malloc} next_malloc={next_malloc} promoted_since_full={} cohort_bound={}",
         promoted_cohort::promoted_since_full(),
         promoted_cohort::bound_bytes()

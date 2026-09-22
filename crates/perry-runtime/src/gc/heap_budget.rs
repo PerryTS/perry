@@ -153,6 +153,10 @@ pub(super) fn gc_block_pool_cap_with_budget(budget: Option<usize>) -> usize {
     budget_scaled_with(budget, BLOCK_POOL_CAP_DEFAULT_BYTES, 1, 8, 1024 * 1024)
 }
 budget_scaled_accessor!(
+    /// #10928: diagnostic only - see `GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES`.
+    /// Device scaling is retained so the printed value still matches what
+    /// the threshold WOULD have been, but nothing reads it to make a
+    /// decision any more.
     gc_old_gen_reclaim_threshold_dyn_bytes,
     GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
     1,

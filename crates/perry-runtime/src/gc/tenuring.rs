@@ -415,8 +415,10 @@ const NURSERY_CAP_OBJECT_SCALE_MIN_PERMILLE: usize = 500;
 ///   exactly today's behaviour.
 /// * The corpus response to the cap is threshold-dominated (which cycle *kinds*
 ///   fire), so *raising* a cap is the risky direction: it is how a program
-///   crosses `GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES` or lands in a #7909 budgeted
-///   stall. Every program at or above the reference — `retain_wide`,
+///   lands in a #7909 budgeted stall. (Until #10928 this also named
+///   `GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES` as a crossing a program could be
+///   pushed over; that threshold no longer gates anything - the live input
+///   is `gc_old_reclaim_growth_band_bytes`.) Every program at or above the reference — `retain_wide`,
 ///   `retain_wide1`, `push_num`, `shapes` — is left bit-identical.
 pub(super) fn nursery_cap_object_scale_permille(mean_surviving_object_bytes: usize) -> usize {
     if mean_surviving_object_bytes == 0 {
