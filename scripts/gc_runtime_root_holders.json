@@ -811,12 +811,6 @@
       "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
     },
     {
-      "file": "crates/perry-runtime/src/object/delete_rest.rs",
-      "name": "DELETE_TRANSITION_TEST_OVERRIDE",
-      "verdict": "test_only",
-      "why": "Cell<Option<bool>> holding a tri-state force/suppress flag for the delete-as-shape-transition path (#10826). The type cannot hold a heap pointer at all -- Option<bool> is a two-bit value, not a NaN box and not a *mut -- so there is nothing for a scanner to reach. Set only from #[cfg(test)] helpers; the shipping path reads it and finds None."
-    },
-    {
       "file": "crates/perry-runtime/src/object/descriptor_state.rs",
       "name": "TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE",
       "verdict": "not_a_gc_pointer",
