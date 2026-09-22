@@ -477,7 +477,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::String(_)
         | Expr::WtfString(_)
         | Expr::ArrayJoin { .. }
-        | Expr::StringCoerce(_)
+        | Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_)
         | Expr::StringFromCodePoint(_)
         | Expr::StringFromCharCode(_)
         | Expr::StringFromCharCodeSpread(_)

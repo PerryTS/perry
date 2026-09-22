@@ -1121,6 +1121,11 @@ impl JsEmitter {
                 self.emit_expr(val);
                 self.output.push(')');
             }
+            Expr::TemplateStringCoerce(val) => {
+                self.output.push_str("`${");
+                self.emit_expr(val);
+                self.output.push_str("}`");
+            }
             Expr::ObjectCoerce(val) => {
                 self.output.push_str("Object(");
                 self.emit_expr(val);

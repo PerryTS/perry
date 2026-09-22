@@ -96,7 +96,9 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
         match expr {
             Expr::Await(value) => self.resolve(value, depth + 1),
             Expr::String(value) => bounded(vec![value.clone()], &mut self.work),
-            Expr::StringCoerce(value) => self.strings(value, depth + 1).map(PathValues::strings),
+            Expr::StringCoerce(value) | Expr::TemplateStringCoerce(value) => {
+                self.strings(value, depth + 1).map(PathValues::strings)
+            }
             Expr::LocalGet(id) => {
                 if let Some(values) = self.arguments.get(id) {
                     return Ok(values.clone());

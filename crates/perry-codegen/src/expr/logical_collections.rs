@@ -1117,6 +1117,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
+        Expr::TemplateStringCoerce(operand) => {
+            let v = lower_expr(ctx, operand)?;
+            let blk = ctx.block();
+            let handle = blk.call(I64, "js_template_string_coerce", &[(DOUBLE, &v)]);
+            Ok(nanbox_string_inline(blk, &handle))
+        }
 
         // -------- Object(value) coercion (#3149) --------
         // js_object_coerce takes and returns a NaN-boxed JSValue (DOUBLE):

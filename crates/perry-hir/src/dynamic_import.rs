@@ -1266,13 +1266,15 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
         }
         // Template interpolation lowers through StringCoerce even when the
         // wrapped local has a finite string candidate set.
-        Expr::StringCoerce(value) => resolve_import_path_with_context(
-            value,
-            consts,
-            param_literals,
-            local_literals,
-            visiting,
-        ),
+        Expr::StringCoerce(value) | Expr::TemplateStringCoerce(value) => {
+            resolve_import_path_with_context(
+                value,
+                consts,
+                param_literals,
+                local_literals,
+                visiting,
+            )
+        }
         Expr::Call { callee, args, .. } => match static_string_replace_target(callee, args) {
             Some(string) => resolve_string_replace_parts(
                 string,

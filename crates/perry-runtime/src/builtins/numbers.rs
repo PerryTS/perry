@@ -716,6 +716,17 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
     js_string_from_bytes(result.as_ptr(), result.len() as u32)
 }
 
+/// Abstract ToString for template substitutions. `String(symbol)` is allowed,
+/// but an implicit conversion must reject a Symbol.
+#[no_mangle]
+pub extern "C" fn js_template_string_coerce(value: f64) -> *mut StringHeader {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_pointer() || (jsval.is_int32() && crate::object::class_ref_id(value).is_some()) {
+        return crate::value::to_string::js_jsvalue_to_string_impl(value, true);
+    }
+    js_string_coerce(value)
+}
+
 /// True when [`js_string_coerce`] provably neither allocates nor calls back
 /// into user JS for `value`, so a caller may hold a raw receiver / stored value
 /// across it without a [`RuntimeHandleScope`] (#6943).

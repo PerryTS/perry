@@ -185,6 +185,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand)
@@ -432,6 +433,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => {

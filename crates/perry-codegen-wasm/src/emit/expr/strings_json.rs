@@ -64,6 +64,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "jsvalue_to_string", 1);
             }
+            Expr::TemplateStringCoerce(val) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, val);
+                self.emit_memcall(func, "jsvalue_to_template_string", 1);
+            }
 
             // --- JSON ---
             Expr::JsonParse(val) => {

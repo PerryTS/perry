@@ -17,6 +17,7 @@ pub(super) struct RuntimeImports {
     pub(super) string_eq: u32,
     pub(super) string_len: u32,
     pub(super) jsvalue_to_string: u32,
+    pub(super) jsvalue_to_template_string: u32,
     pub(super) is_truthy: u32,
     pub(super) js_strict_eq: u32,
     pub(super) math_floor: u32,
