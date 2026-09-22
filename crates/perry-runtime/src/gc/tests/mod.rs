@@ -82,6 +82,7 @@ mod smoke;
 mod start_bitmap;
 mod step_bounds;
 pub(super) mod support;
+mod zero_slot_fixture;
 mod survival_diag;
 mod sweep_described_runs;
 mod sweep_hole_rebuild;
