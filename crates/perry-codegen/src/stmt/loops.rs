@@ -8525,7 +8525,19 @@ pub(crate) fn classify_for_local_bound(
     };
     // Counter must be provably integer-valued (initialized from integer
     // literal, only mutated by Update ++/--).
-    if !ctx.integer_locals.contains(&counter_id) {
+    // #11052: the i32 condition path is only valid when every update can keep
+    // its shadow in sync. A captured mutable counter lives in a heap box;
+    // `Update` writes that box and deliberately returns before touching
+    // `i32_counter_slots`. Installing a fresh stack shadow for such a counter
+    // leaves the condition reading its initial value forever. Captures and
+    // module globals likewise do not own ordinary local storage that this
+    // optimization may shadow.
+    if !ctx.integer_locals.contains(&counter_id)
+        || !local_has_readable_slot(ctx, counter_id)
+        || ctx.boxed_vars.contains(&counter_id)
+        || ctx.closure_captures.contains_key(&counter_id)
+        || ctx.module_globals.contains_key(&counter_id)
+    {
         return None;
     }
     // Bound is safe to hoist only when it is both i32-proven and loop
