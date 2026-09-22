@@ -464,6 +464,12 @@ jobs:
           python3 scripts/gc_root_dominance_check.py --self-test
           python3 scripts/gc_root_dominance_check.py --audit-poll-reach
 
+      # Corpus coverage must reject a flat run whose GC mechanism never ran.
+      # The parser suite has a minimum test count and planted negative cases.
+      - name: GC reclaim corpus coverage parser
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test_gc_reclaim_check.py
+
       # #8530. Mutable-root scanner registries are thread-local, so guarding a
       # registration call with a process-global Once/OnceLock/AtomicBool (or a
       # mutex boolean) leaves every heap after the first without those roots.
