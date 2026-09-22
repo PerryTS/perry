@@ -486,7 +486,14 @@ base64 = "0.22"
 # RFC 6455 §4.2.2's `Sec-WebSocket-Accept` digest. Already in the lockfile
 # through perry-stdlib's optional `sha1`, so naming it here adds no package.
 sha1 = "0.11"
-zip = "8"
+# Keep zip's default codec set, but select its backend-neutral flate2 feature.
+# `zip`'s `deflate` feature forces flate2's zlib-rs backend across the whole
+# Cargo build; feature unification then makes node:zlib's default gzip output
+# almost twice as large (#10810).
+zip = { version = "8", default-features = false, features = [
+  "aes-crypto", "bzip2", "deflate64", "deflate-flate2", "deflate-zopfli",
+  "lzma", "ppmd", "time", "zstd", "xz",
+] }
 # zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
 # Statically vendored (no system libzstd dependency on the user's machine).
 zstd = "0.13"
