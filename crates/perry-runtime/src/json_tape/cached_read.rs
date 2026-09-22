@@ -159,8 +159,14 @@ mod tests {
 
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    // The runtime suite is serial. This witness holds no managed values.
-    static ROOTED_READS: AtomicU32 = AtomicU32::new(0);
+    // #10944: this used to say "the runtime suite is serial", and it is not —
+    // libtest runs tests in one process on many threads, so a sibling test
+    // taking the same safepoint bumped this witness and the assertions below
+    // failed by exactly one. `per_test_global!` gives each test thread its own
+    // counter. The witness still holds no managed values.
+    per_test_global! {
+        static ROOTED_READS: AtomicU32 = AtomicU32::new(0);
+    }
 
     fn count_rooted_reads(point: JsonTapeSafepoint, _: usize) {
         if point == JsonTapeSafepoint::LazyGetHeaderRooted {

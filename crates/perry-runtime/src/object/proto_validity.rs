@@ -89,15 +89,29 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Monotonic counter standing for "nothing structural has changed on any
-/// object somebody inherits from, and no semantic property event has
-/// happened". Starts at 1 so a zeroed cache entry never matches.
-static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
+per_test_global! {
+    // #10944: a test asserts this counter's value, and libtest runs tests
+    // in one process — any sibling touching the same path made the
+    // assertion fail by one. `per_test_global!` gives each test thread its
+    // own instance in a TEST build and expands to the plain `static`,
+    // byte for byte, outside one.
+    /// Monotonic counter standing for "nothing structural has changed on any
+    /// object somebody inherits from, and no semantic property event has
+    /// happened". Starts at 1 so a zeroed cache entry never matches.
+    static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
+}
 
-/// Has any object ever been marked as a prototype? Until it has,
-/// [`note_object_shape_stamped`] cannot possibly need to bump, so it does not
-/// read the object's `GcHeader` at all.
-static ANY_PROTOTYPE_MARKED: AtomicBool = AtomicBool::new(false);
+per_test_global! {
+    // #10944: a test asserts this counter's value, and libtest runs tests
+    // in one process — any sibling touching the same path made the
+    // assertion fail by one. `per_test_global!` gives each test thread its
+    // own instance in a TEST build and expands to the plain `static`,
+    // byte for byte, outside one.
+    /// Has any object ever been marked as a prototype? Until it has,
+    /// [`note_object_shape_stamped`] cannot possibly need to bump, so it does not
+    /// read the object's `GcHeader` at all.
+    static ANY_PROTOTYPE_MARKED: AtomicBool = AtomicBool::new(false);
+}
 
 /// The current validity word. One relaxed load.
 #[inline]
