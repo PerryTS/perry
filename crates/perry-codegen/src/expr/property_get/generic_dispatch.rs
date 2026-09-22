@@ -717,10 +717,7 @@ pub(crate) fn lower_generic_property_get(
     // The hole stays in the SLOT, so every path that reaches a slot WITHOUT a
     // shape-hit proof — the spill arm, a keys-array scan, `object_field_at`,
     // every walker — must still treat it as absent, and does. The way path
-    // below keeps its compare too: a way hit is also an exact-ShapeId proof,
-    // so it is redundant there by the same argument, but it sits on the
-    // polymorphic path and not on the hit this tower is sized by; removing it
-    // is a separate, measured change.
+    // below no longer compares either: the argument is stated there.
     //
     // #10826 keeps `PERRY_DELETE_SHAPE_TRANSITION=0` as a kill switch that
     // restores the id-preserving publish. With this compare gone that switch
@@ -867,9 +864,7 @@ pub(crate) fn lower_generic_property_get(
         .pop()
         .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
     let way_load_idx = ctx.new_block("pic.way.load");
-    let way_live_idx = ctx.new_block("pic.way.live");
     let way_load_label = ctx.block_label(way_load_idx);
-    let way_live_label = ctx.block_label(way_live_idx);
     ctx.block().cond_br(&way_any, &way_load_label, &call_label);
 
     ctx.current_block = way_load_idx;
@@ -878,14 +873,24 @@ pub(crate) fn lower_generic_property_get(
     let way_field_addr = ctx.block().add(I64, &way_base, &way_offset);
     let way_field_ptr = ctx.block().inttoptr(I64, &way_field_addr);
     let val_way = ctx.block().load(DOUBLE, &way_field_ptr);
-    let val_way_bits = ctx.block().bitcast_double_to_i64(&val_way);
-    let way_deleted = ctx
-        .block()
-        .icmp_eq(I64, &val_way_bits, crate::nanbox::TAG_HOLE_I64);
-    ctx.block()
-        .cond_br(&way_deleted, &call_label, &way_live_label);
-
-    ctx.current_block = way_live_idx;
+    // The loaded value is the answer here too, for the reason the shape-gated
+    // hit above needs no `TAG_HOLE` compare (#10826: a successful delete
+    // ALWAYS moves the receiver's ShapeId, so an exact-id match proves the
+    // slot it names is live).
+    //
+    // A way pair is not a second kind of cache entry needing its own
+    // argument. `pic_prime_get` is the ONLY writer of a way, and the only
+    // values it ever writes into one are `prev_tok`/`prev_slot` — the pair
+    // that was sitting in the MRU entry. Every `(token, slot)` a way holds is
+    // therefore an MRU pair that aged out; the token it is compared against is
+    // the same receiver ShapeId word the MRU compare reads; and ShapeIds are
+    // never reused. Whatever makes the MRU pair safe to load without a hole
+    // check makes the way pair safe — the entry did not become weaker by
+    // moving one word over.
+    //
+    // The two ways in which a way pair differs from an MRU pair both narrow
+    // it: an overflow-encoded slot is refused entry to a way at all, and a way
+    // is consulted only after the MRU entry has already missed.
     let way_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

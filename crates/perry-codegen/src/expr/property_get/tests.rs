@@ -1055,10 +1055,10 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     // load in the hit block. #10826 made every successful delete a shape
     // transition, so a ShapeId hit proves the slot it names is live, and the
     // four-instruction hole check was the patch for exactly that operation.
-    // The compare is asserted PRESENT on the way path, which keeps it: that
-    // pins that the constant did not merely vanish from the IR, and that the
-    // way path's removal is the separate, measured change the emitter says
-    // it is.
+    // The way path is pinned the same way below: a way holds nothing but an
+    // aged MRU pair (`pic_prime_get` writes ways only from `prev_tok`/
+    // `prev_slot`) compared against the same ShapeId word, so it carries the
+    // same proof.
     let hit_body = blocks
         .iter()
         .find(|(l, _)| *l == load_label)
@@ -1080,9 +1080,16 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         .map(|(_, body)| body.join("\n"))
         .expect("the way load block");
     assert!(
-        way_body.contains(crate::nanbox::TAG_HOLE_I64),
-        "the way path keeps its TAG_HOLE compare (removing it is a separate \
-         change):\n{way_body}"
+        !way_body.contains(crate::nanbox::TAG_HOLE_I64),
+        "the way path must not compare the loaded slot against TAG_HOLE — a \
+         way holds an aged MRU pair and its token is the same ShapeId word, \
+         so a way hit carries the same liveness proof as an MRU hit:\n\
+         {way_body}"
+    );
+    assert!(
+        way_body.contains("load double") && way_body.contains("br label %"),
+        "the way load block must end in the slot load and an unconditional \
+         branch to the merge:\n{way_body}"
     );
 }
 
@@ -1505,8 +1512,9 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         // the polymorphic ways, deliberately still inline (#7753)
         "pic.miss",
         "pic.ways",
+        // `pic.way.live` is GONE with the way path's `TAG_HOLE` compare: the
+        // load block has nothing left to decide and branches to the merge.
         "pic.way.load",
-        "pic.way.live",
         // the inherited-read hook, on the never-primed edge out of
         // `pic.token.ways` and nowhere else (`js_inherited_read_cache_hit_f64`,
         // a leaf); a decline continues to the one exit
