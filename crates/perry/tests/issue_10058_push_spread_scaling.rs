@@ -153,7 +153,8 @@ fn spread_push_is_iterator_correct_and_gc_safe_on_reused_destinations() {
     assert_success("Node oracle", &node);
     for moving_gc in [false, true] {
         let perry = run(&binary, moving_gc);
-        assert_success("compiled fixture", &perry);
+        let mode = if moving_gc { "moving GC" } else { "plain" };
+        assert_success(&format!("compiled fixture ({mode})"), &perry);
         assert_eq!(
             perry.stdout,
             node.stdout,
