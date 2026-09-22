@@ -263,6 +263,8 @@ pub(crate) struct CanonicalTable {
     edges: HashMap<(u32, u64), u32>,
     minted: u64,
     reaped: u64,
+    #[cfg(test)]
+    edge_examinations: usize,
 }
 
 impl CanonicalTable {
@@ -283,6 +285,8 @@ impl CanonicalTable {
             edges: HashMap::new(),
             minted: 0,
             reaped: 0,
+            #[cfg(test)]
+            edge_examinations: 0,
         }
     }
 
@@ -324,72 +328,82 @@ impl CanonicalTable {
         id
     }
 
-    /// Unlink `id`, orphan its children and return its slot to the free list.
-    /// The children keep their arrays and stay adoptable; they merely stop
-    /// being reachable from the root. See the module note on orphans.
-    fn free_node(&mut self, id: u32) {
-        if id == ROOT_NODE || id as usize >= self.nodes.len() {
+    /// Retire a batch before reusing any id. Each edge bucket and collision
+    /// candidate is visited once, including children of dead parents. The
+    /// address-zero tombstone is enough to identify the dead set; no second
+    /// index or per-node scan of the edge table is needed.
+    fn free_nodes(&mut self, dead: &[u32]) {
+        let mut retired = Vec::with_capacity(dead.len());
+        for &id in dead {
+            if id == ROOT_NODE || id as usize >= self.nodes.len() {
+                continue;
+            }
+            let node = &mut self.nodes[id as usize];
+            if node.addr == 0 {
+                continue;
+            }
+            self.by_addr.remove(&node.addr);
+            node.addr = 0;
+            // Preserve `next` until all collision chains have been filtered.
+            retired.push(id);
+            self.reaped += 1;
+            CANON_REAPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            CANON_LIVE.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
+        }
+        if retired.is_empty() {
             return;
         }
-        let (parent, edge_hash, addr, next_sib, freed_len) = {
-            let n = &self.nodes[id as usize];
-            (n.parent, n.edge_hash, n.addr, n.next, n.len)
-        };
-        if addr == 0 {
-            return;
-        }
-        if parent != NO_NODE {
-            if let Some(&head) = self.edges.get(&(parent, edge_hash)) {
-                if head == id {
-                    if next_sib == NO_NODE {
-                        self.edges.remove(&(parent, edge_hash));
+
+        self.edges.retain(|&(parent, hash), head| {
+            #[cfg(test)]
+            {
+                self.edge_examinations += 1;
+            }
+            let orphan = parent != ROOT_NODE && self.nodes[parent as usize].addr == 0;
+            let mut cur = *head;
+            let mut tail = NO_NODE;
+            *head = NO_NODE;
+            while cur != NO_NODE {
+                #[cfg(test)]
+                {
+                    self.edge_examinations += 1;
+                }
+                let node = &mut self.nodes[cur as usize];
+                debug_assert_eq!((node.parent, node.edge_hash), (parent, hash));
+                let next = node.next;
+                if orphan {
+                    // A live child keeps its array and its own child edges,
+                    // but must not name a parent id that can now be reused.
+                    node.parent = NO_NODE;
+                    node.next = NO_NODE;
+                } else if node.addr != 0 {
+                    node.next = NO_NODE;
+                    if tail == NO_NODE {
+                        *head = cur;
                     } else {
-                        self.edges.insert((parent, edge_hash), next_sib);
+                        self.nodes[tail as usize].next = cur;
                     }
-                } else {
-                    let mut cur = head;
-                    while cur != NO_NODE {
-                        let n = self.nodes[cur as usize].next;
-                        if n == id {
-                            self.nodes[cur as usize].next = next_sib;
-                            break;
-                        }
-                        cur = n;
-                    }
+                    tail = cur;
                 }
+                cur = next;
             }
+            *head != NO_NODE
+        });
+
+        // Only now can `next` become a free-list link. No remaining edge or
+        // live child's parent can reference any of these retired slots.
+        for id in retired {
+            self.nodes[id as usize] = Node {
+                addr: 0,
+                parent: NO_NODE,
+                edge_hash: 0,
+                next: self.free,
+                len: 0,
+                all_ptr: true,
+            };
+            self.free = id;
         }
-        self.by_addr.remove(&addr);
-        // A freed slot may be reused by an unrelated node, so nothing may keep
-        // pointing at this id: detach every child bucket first.
-        let mut orphans: Vec<u32> = Vec::new();
-        for (key, head) in self.edges.iter() {
-            if key.0 == id {
-                let mut cur = *head;
-                while cur != NO_NODE {
-                    orphans.push(cur);
-                    cur = self.nodes[cur as usize].next;
-                }
-            }
-        }
-        self.edges.retain(|key, _| key.0 != id);
-        for child in orphans {
-            self.nodes[child as usize].parent = NO_NODE;
-            self.nodes[child as usize].next = NO_NODE;
-        }
-        self.nodes[id as usize] = Node {
-            addr: 0,
-            parent: NO_NODE,
-            edge_hash: 0,
-            next: self.free,
-            len: 0,
-            all_ptr: true,
-        };
-        self.free = id;
-        self.reaped += 1;
-        CANON_REAPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        CANON_LIVE.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        CANON_WORDS.fetch_sub(u64::from(freed_len), std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -861,9 +875,7 @@ pub(crate) fn prune_dead_canonical_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
         return;
     }
     try_with_table(|t| {
-        for id in dead {
-            t.free_node(id);
-        }
+        t.free_nodes(&dead);
     });
 }
 

@@ -229,3 +229,94 @@ fn every_canonical_array_is_shape_shared_from_birth() {
         );
     }
 }
+
+/// Exercise retirement without heap allocations: these opaque address-index
+/// tokens are never dereferenced. Count actual edge visits, not elapsed time.
+#[test]
+fn batch_prune_examines_linear_edges() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    const N: usize = 20_000;
+    const K: usize = 15_000;
+    let mut table = CanonicalTable::new();
+    let ids: Vec<u32> = (1..=N)
+        .map(|i| table.alloc_node(i, ROOT_NODE, i as u64, 1, true))
+        .collect();
+    table.edge_examinations = 0;
+    table.free_nodes(&ids[..K]);
+    let examined = table.edge_examinations;
+    eprintln!("prune n={N} k={K} edge_examinations={examined}");
+    assert_eq!(table.by_addr.len(), N - K);
+    assert_eq!(table.edges.len(), N - K);
+    assert_eq!(table.reaped, K as u64);
+    assert!(examined > 0, "the complexity counter must observe pruning");
+    assert!(
+        examined <= 4 * (N + K),
+        "prune examined {examined} edges for n={N}, k={K}; expected O(n + k)"
+    );
+    // Return the census contributions too; no local fixture outlives this test.
+    table.free_nodes(&ids[K..]);
+}
+
+/// All candidates share a hash: pruning must filter head, middle and tail
+/// in one walk even when the caller's death order is the reverse of the chain.
+#[test]
+fn batch_prune_filters_collision_chains_once() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    const N: usize = 20_000;
+    let mut table = CanonicalTable::new();
+    let ids: Vec<u32> = (1..=N)
+        .map(|i| table.alloc_node(i, ROOT_NODE, 7, 1, true))
+        .collect();
+    let dead: Vec<u32> = ids
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % 4 != 1)
+        .map(|(_, &id)| id)
+        .collect();
+    table.edge_examinations = 0;
+    table.free_nodes(&dead);
+    assert!(table.edge_examinations <= 2 * N);
+    let mut cur = table.edges[&(ROOT_NODE, 7)];
+    for &id in ids
+        .iter()
+        .enumerate()
+        .rev()
+        .filter(|(i, _)| i % 4 == 1)
+        .map(|(_, id)| id)
+    {
+        assert_eq!(cur, id);
+        cur = table.nodes[cur as usize].next;
+    }
+    assert_eq!(cur, NO_NODE);
+    table.free_nodes(&ids);
+    assert!(table.edges.is_empty());
+}
+
+#[test]
+fn batch_prune_orphans_children_before_reusing_ids() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let mut table = CanonicalTable::new();
+    let parent = table.alloc_node(1, ROOT_NODE, 10, 1, true);
+    let child = table.alloc_node(2, parent, 20, 2, true);
+    let dead_child = table.alloc_node(3, parent, 20, 2, true);
+    let sibling = table.alloc_node(4, parent, 20, 2, true);
+    let grandchild = table.alloc_node(5, child, 30, 3, true);
+    // Duplicate and invalid ids must not corrupt the free list or census.
+    table.free_nodes(&[parent, dead_child, parent, ROOT_NODE, NO_NODE]);
+    assert_eq!(table.reaped, 2);
+    assert_eq!(table.edges.len(), 1);
+    assert_eq!(table.edges[&(child, 30)], grandchild);
+    for id in [child, sibling] {
+        assert_eq!(table.nodes[id as usize].parent, NO_NODE);
+        assert_eq!(table.nodes[id as usize].next, NO_NODE);
+    }
+    let reused_child = table.alloc_node(6, ROOT_NODE, 40, 1, true);
+    let reused_parent = table.alloc_node(7, ROOT_NODE, 50, 1, true);
+    assert_eq!((reused_child, reused_parent), (dead_child, parent));
+    assert!(!table.edges.contains_key(&(reused_parent, 20)));
+    assert_eq!(table.by_addr[&2], child);
+    assert_eq!(table.by_addr[&4], sibling);
+    table.free_nodes(&[child, sibling, grandchild, reused_child, reused_parent]);
+    assert!(table.edges.is_empty());
+    assert!(table.by_addr.is_empty());
+}
