@@ -250,3 +250,76 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     };
     Ok(Some(value))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{folded_call, Receiver};
+    use perry_hir::Expr;
+
+    fn lit(n: f64) -> Expr {
+        Expr::Number(n)
+    }
+
+    /// Every entry answers the three things the diamond needs, and the method
+    /// name is the one a user would have to write to shadow the call.
+    #[test]
+    fn the_table_answers_receiver_method_and_arguments() {
+        let map_get = Expr::MapGet {
+            map: Box::new(Expr::LocalGet(1)),
+            key: Box::new(lit(1.0)),
+        };
+        let call = folded_call(&map_get).expect("MapGet is a folded `get`");
+        assert_eq!(call.method, "get");
+        assert_eq!(call.args.len(), 1);
+        assert!(matches!(call.receiver, Receiver::Expr(_)));
+
+        let map_set = Expr::MapSet {
+            map: Box::new(Expr::LocalGet(1)),
+            key: Box::new(lit(1.0)),
+            value: Box::new(lit(2.0)),
+        };
+        let call = folded_call(&map_set).expect("MapSet is a folded `set`");
+        assert_eq!((call.method, call.args.len()), ("set", 2));
+    }
+
+    /// A fold that captured the receiver as a LOCAL needs no materialisation:
+    /// re-reading a local is free and cannot be observed.
+    #[test]
+    fn a_local_receiver_is_not_materialized() {
+        let push = Expr::ArrayPush {
+            array_id: 7,
+            value: Box::new(lit(1.0)),
+            field_writeback: None,
+        };
+        let call = folded_call(&push).expect("ArrayPush is a folded `push`");
+        assert_eq!(call.method, "push");
+        assert!(matches!(call.receiver, Receiver::Local(7)));
+    }
+
+    /// An optional argument is part of the call when present and absent when
+    /// not — the dispatcher arm must pass exactly what the source passed.
+    #[test]
+    fn optional_arguments_follow_the_source() {
+        let one = Expr::ArraySlice {
+            array: Box::new(Expr::LocalGet(1)),
+            start: Box::new(lit(0.0)),
+            end: None,
+        };
+        assert_eq!(folded_call(&one).unwrap().args.len(), 1);
+        let two = Expr::ArraySlice {
+            array: Box::new(Expr::LocalGet(1)),
+            start: Box::new(lit(0.0)),
+            end: Some(Box::new(lit(2.0))),
+        };
+        assert_eq!(folded_call(&two).unwrap().args.len(), 2);
+    }
+
+    /// A node that is not a folded builtin method call is left alone: the
+    /// guard must not wrap arbitrary expressions in a diamond.
+    #[test]
+    fn a_non_call_node_is_not_guarded() {
+        assert!(folded_call(&lit(1.0)).is_none());
+        assert!(folded_call(&Expr::LocalGet(1)).is_none());
+        assert!(folded_call(&Expr::MapSize(Box::new(Expr::LocalGet(1)))).is_none());
+    }
+}
