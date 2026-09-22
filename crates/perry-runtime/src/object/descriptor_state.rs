@@ -1426,8 +1426,9 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
         // win before the walk reaches RegExp.prototype's builtin getter.
         if let Some(cid) = class_registry::class_id_for_decl_prototype_object(obj as usize) {
             // A later own data definition replaces the ClassBody accessor.
-            if unsafe { own_key_present(obj as *mut ObjectHeader, key_string.get_raw_const_ptr()) }
-            {
+            if key_string.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
+                own_key_present(obj as *mut ObjectHeader, key)
+            }) {
                 return None;
             }
             if let Some((getter, _)) =
