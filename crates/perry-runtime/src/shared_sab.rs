@@ -190,12 +190,13 @@ mod header_survival_tests {
 
         // The header must actually say what the fix intends, or "unchanged"
         // would be vacuous.
-        let header = header_addr as *const GcHeader;
-        assert_eq!(unsafe { (*header).obj_type }, GC_TYPE_BUFFER);
-        assert_eq!(
-            unsafe { (*header).gc_flags },
-            GC_FLAG_PINNED | GC_FLAG_TENURED
-        );
+        // The canonical read predicate, not a bare cast: this is an ordinary
+        // header READ and `try_read_gc_header` expresses it exactly, the same
+        // way `object::tombstone_tests` reads a keys array's flags.
+        let header = unsafe { crate::value::addr_class::try_read_gc_header(header_addr) }
+            .expect("the shared SAB block carries a GcHeader");
+        assert_eq!(header.obj_type, GC_TYPE_BUFFER);
+        assert_eq!(header.gc_flags, GC_FLAG_PINNED | GC_FLAG_TENURED);
 
         fn churn() {
             for _ in 0..8 {
