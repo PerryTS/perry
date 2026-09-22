@@ -28,6 +28,48 @@ fn unwrap_transparent_expr(expr: &ast::Expr) -> &ast::Expr {
     }
 }
 
+/// #10796: is `ty` a `Named`/`Generic` (i.e. class-shaped, non-`Array`) type
+/// — looking *through* `Union`, at any nesting depth, the way `class_typed`
+/// below wants. Before this recursed, a receiver typed as a `Union`
+/// containing a class (`Foo | undefined`, cheerio's `Cheerio<AnyNode> |
+/// undefined`) fell through `class_typed`'s plain `matches!(t, Type::Named(_)
+/// | Type::Generic { .. })` and read as "not class-typed", so a method name
+/// shared with `Array.prototype` (`find`, `map`, `filter`, …) folded to the
+/// array fast path even for a genuine class instance. This is the same
+/// defect as `local_array_methods.rs`'s `is_user_class_instance` (#10796) —
+/// present here too because this file keeps its own, independent
+/// class-vs-array classification rather than sharing that one.
+fn is_named_or_generic_non_array(ty: &Type) -> bool {
+    match ty {
+        Type::Named(_) | Type::Generic { .. } => !matches!(ty, Type::Array(_)),
+        Type::Union(variants) => variants.iter().any(is_named_or_generic_non_array),
+        _ => false,
+    }
+}
+
+/// #10796: does `ty` denote a receiver that may own its own `push` (a class
+/// instance, an interface-typed value, or an object type literal) — looking
+/// *through* `Union`, at any nesting depth, the way the `"push"` arm's
+/// `is_user_class_receiver` below wants. Same defect and same fix shape as
+/// `is_named_or_generic_non_array` just above: a `Foo | undefined` receiver
+/// fell through the plain `match ty { Type::Named(_) => …, Type::Generic {
+/// .. } => …, _ => false }` and read as "not class-typed", so `.push(x)` on
+/// it folded to the array fast path (`js_array_push`), which reads the
+/// class instance's `ObjectHeader` as an `ArrayHeader` and never runs the
+/// user's `push` method.
+fn is_push_owning_class_type(ty: &Type, ctx: &LoweringContext) -> bool {
+    match ty {
+        Type::Named(name) => ctx.lookup_class(name).is_some() || ctx.is_interface_type(name),
+        Type::Generic { base, .. } => {
+            let builtin = ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
+            !builtin.contains(&base.as_str()) && ctx.lookup_class(base).is_some()
+        }
+        Type::Object(_) => true, // object type literal with push property
+        Type::Union(variants) => variants.iter().any(|v| is_push_owning_class_type(v, ctx)),
+        _ => false,
+    }
+}
+
 fn is_stream_class_ref(expr: &ast::Expr) -> bool {
     let expr = unwrap_transparent_expr(expr);
     let name = match expr {
@@ -441,10 +483,7 @@ pub(super) fn try_array_only_methods(
                         }
                         let class_typed = ty
                             .as_ref()
-                            .map(|t| {
-                                matches!(t, Type::Named(_) | Type::Generic { .. })
-                                    && !matches!(t, Type::Array(_))
-                            })
+                            .map(|t| is_named_or_generic_non_array(t))
                             .unwrap_or(false);
                         let unknown_recv =
                             matches!(ty, None | Some(Type::Any) | Some(Type::Unknown));
@@ -1275,36 +1314,22 @@ pub(super) fn try_array_only_methods(
                         // GUARD: Skip if the receiver is a user-defined class instance
                         // (e.g. Stack<T>.push()), or an object type literal (e.g.
                         // { push: (v) => void, ... }), so its method dispatches correctly.
+                        // A class instance OR an interface-typed value is the
+                        // receiver's OWN object and may own a `push` method, so
+                        // never fold to the array intrinsic. Interfaces aren't
+                        // classes (`lookup_class` misses them), so the previous
+                        // `lookup_class(name).is_some()` folded an interface
+                        // receiver's `push` to the array fast path — reading the
+                        // object header as an ArrayHeader and dropping the call
+                        // (follow-up to #5139, which fixed only `any` receivers).
+                        // `is_push_owning_class_type` also looks through `Union`
+                        // (#10796), so `Foo | undefined` is caught the same way.
                         let is_user_class_receiver = match member.obj.as_ref() {
                             ast::Expr::This(_) => true,
-                            ast::Expr::Ident(ident) => {
-                                ctx.lookup_local_type(ident.sym.as_ref())
-                                    .map(|ty| {
-                                        match ty {
-                                            // A class instance OR an interface-typed value is the
-                                            // receiver's OWN object and may own a `push` method, so
-                                            // never fold to the array intrinsic. Interfaces aren't
-                                            // classes (`lookup_class` misses them), so the previous
-                                            // `lookup_class(name).is_some()` folded an interface
-                                            // receiver's `push` to the array fast path — reading the
-                                            // object header as an ArrayHeader and dropping the call
-                                            // (follow-up to #5139, which fixed only `any` receivers).
-                                            Type::Named(name) => {
-                                                ctx.lookup_class(name).is_some()
-                                                    || ctx.is_interface_type(name)
-                                            }
-                                            Type::Generic { base, .. } => {
-                                                let builtin =
-                                                    ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
-                                                !builtin.contains(&base.as_str())
-                                                    && ctx.lookup_class(base).is_some()
-                                            }
-                                            Type::Object(_) => true, // object type literal with push property
-                                            _ => false,
-                                        }
-                                    })
-                                    .unwrap_or(false)
-                            }
+                            ast::Expr::Ident(ident) => ctx
+                                .lookup_local_type(ident.sym.as_ref())
+                                .map(|ty| is_push_owning_class_type(ty, ctx))
+                                .unwrap_or(false),
                             ast::Expr::New(_) => true, // new ClassName().push()
                             _ => false,
                         };
@@ -1380,4 +1405,67 @@ pub(super) fn try_array_only_methods(
     }
 
     Ok(Err(args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #10796: both class-vs-array guards in this file must see a class
+    // *through* a `Union` — `Foo | undefined` is exactly as class-shaped as
+    // a bare `Foo` for the purpose of declining the array fast path.
+
+    #[test]
+    fn named_or_generic_non_array_sees_through_union() {
+        assert!(is_named_or_generic_non_array(&Type::Named(
+            "Foo".to_string()
+        )));
+        assert!(is_named_or_generic_non_array(&Type::Generic {
+            base: "Cheerio".to_string(),
+            type_args: vec![Type::Named("AnyNode".to_string())],
+        }));
+        // `Foo | undefined` — before the fix this fell through to `false`.
+        assert!(is_named_or_generic_non_array(&Type::Union(vec![
+            Type::Named("Foo".to_string()),
+            Type::Void,
+        ])));
+        // Nested union: `type_alias_resolve.rs` can produce these.
+        assert!(is_named_or_generic_non_array(&Type::Union(vec![
+            Type::Union(vec![Type::Named("Foo".to_string()), Type::Number]),
+            Type::Void,
+        ])));
+        // Negative controls: real arrays and non-class unions stay `false`.
+        assert!(!is_named_or_generic_non_array(&Type::Array(Box::new(
+            Type::Number
+        ))));
+        assert!(!is_named_or_generic_non_array(&Type::Union(vec![
+            Type::String,
+            Type::Number,
+        ])));
+    }
+
+    #[test]
+    fn push_owning_class_type_sees_through_union() {
+        let mut ctx = LoweringContext::new("array-only-methods-union-test.ts");
+        let id = ctx.fresh_class();
+        ctx.register_class("Foo".to_string(), id);
+
+        assert!(is_push_owning_class_type(
+            &Type::Named("Foo".to_string()),
+            &ctx
+        ));
+        // `Foo | undefined` — before the fix this fell through to `false`,
+        // so `f.push(x)` on an optional-typed `Foo` folded to the array
+        // intrinsic instead of dispatching to `Foo`'s own `push`.
+        assert!(is_push_owning_class_type(
+            &Type::Union(vec![Type::Named("Foo".to_string()), Type::Void]),
+            &ctx
+        ));
+        // An unregistered name behind a union must still decline (`false`),
+        // same as a bare unregistered `Named` would.
+        assert!(!is_push_owning_class_type(
+            &Type::Union(vec![Type::Named("NotAClass".to_string()), Type::Void]),
+            &ctx
+        ));
+    }
 }

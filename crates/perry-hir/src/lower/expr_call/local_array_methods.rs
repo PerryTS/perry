@@ -57,6 +57,100 @@ fn receiver_is_non_array_builtin_wrapper(recv_ty: Option<&Type>) -> bool {
     )
 }
 
+/// #10796: is `ty` a statically-known user or imported class/interface
+/// instance — the test `is_user_class_instance` (below, in
+/// `try_local_array_methods`) applies, extended to look *through*
+/// `Type::Union`.
+///
+/// A receiver typed as a union that includes a class (`Foo | undefined`,
+/// `Cheerio<AnyNode> | undefined`, …) is exactly as class-shaped as a bare
+/// `Foo`/`Cheerio<AnyNode>` receiver: if ANY member is class-shaped, a
+/// method call on it must still be able to reach that member's own method
+/// rather than being folded to the array fast path. Before this existed,
+/// the `Named`/`Generic` match arms had no `Union` arm, so `Union` fell to
+/// `_ => false` — a receiver typed `Cheerio<AnyNode> | undefined` (cheerio's
+/// `searchContext` in `load.ts`) read as "not a user class instance",
+/// `is_known_not_string` then read the union as array-ish, and
+/// `searchContext.find(selector)` (a CSS-selector method mixed onto
+/// `Cheerio.prototype` at runtime, sharing a name with `Array.prototype`)
+/// folded to `Expr::ArrayFind`, which calls its argument as a *callback* —
+/// `TypeError: string "..." is not a function`.
+///
+/// Recurses into nested `Union`s too: `type_alias_resolve.rs`'s
+/// `resolve_type_inner` can produce `Union([Union([...]), ...])` when one
+/// union member is itself an alias to a union type (a resolved member is
+/// pushed as-is, not flattened into the parent's variant list), so a single
+/// `.any()` over the top-level variants is not enough — the `Union` arm
+/// below calls back into this function for each variant, so nesting at any
+/// depth is handled rather than assumed away.
+fn type_is_class_instance(
+    ty: &Type,
+    ctx: &LoweringContext,
+    builtin_generic_bases: &[&str],
+) -> bool {
+    // Imported classes don't show up in `lookup_class`; treat any
+    // uppercase imported identifier as a candidate class so the array
+    // fast-path doesn't swallow `coll.find(filter)` etc.
+    let is_imported_class_name = |n: &str| -> bool {
+        if let Some(c) = n.chars().next() {
+            if c.is_uppercase() && ctx.lookup_imported_func(n).is_some() {
+                return true;
+            }
+        }
+        false
+    };
+    match ty {
+        // A class instance OR an interface-typed value is the receiver's
+        // own object — its method must be dispatched, not the array fast
+        // path. Interfaces aren't classes (so `lookup_class` misses them);
+        // without `is_interface_type`, an interface-typed receiver with
+        // e.g. an own `push` folded to `Expr::ArrayPush`, read the object
+        // header as an ArrayHeader, and silently dropped the call
+        // (follow-up to #5139, which fixed only `any`-typed receivers).
+        Type::Named(name) => {
+            ctx.lookup_class(name).is_some()
+                || ctx.is_interface_type(name)
+                || is_imported_class_name(name)
+                // A `function Q() {…}` used as a constructor (`new Q()`)
+                // types its instances `Named("Q")`, but it is not a class
+                // decl, so `lookup_class` misses it. Its methods live on
+                // `Q.prototype` (registered via
+                // `Expr::RegisterFunctionPrototypeMethod`), and when one of
+                // them shares an Array name — `Q.prototype.push`, the shape
+                // denque uses for mysql2's command queue — the array fast
+                // path folded `q.push(x)` to `Expr::ArrayPush`, read the
+                // instance's ObjectHeader as an ArrayHeader (silently
+                // corrupting it) and never ran the method.
+                || ctx.functions_index.contains_key(name.as_str())
+        }
+        Type::Generic { base, .. } => {
+            !builtin_generic_bases.contains(&base.as_str())
+                && (ctx.lookup_class(base).is_some() || is_imported_class_name(base))
+        }
+        Type::Union(variants) => variants
+            .iter()
+            .any(|v| type_is_class_instance(v, ctx, builtin_generic_bases)),
+        _ => false,
+    }
+}
+
+/// #10796: is `ty` a `Named`/`Generic` (i.e. class-shaped, non-`Array`) type
+/// — looking *through* `Union`, at any nesting depth. A narrower, `ctx`-free
+/// sibling of `type_is_class_instance` above: this one doesn't consult the
+/// class registry, it just asks "does this look like a class rather than an
+/// array", which is what the per-method-name match below (inside the array
+/// block) wants as its own belt-and-suspenders check. Duplicated in
+/// `array_only_methods.rs` as `is_named_or_generic_non_array` — both are
+/// six lines and `ctx`-free, so a shared home would cost more in
+/// cross-module plumbing than it saves.
+fn is_named_or_generic_non_array(ty: &Type) -> bool {
+    match ty {
+        Type::Named(_) | Type::Generic { .. } => !matches!(ty, Type::Array(_)),
+        Type::Union(variants) => variants.iter().any(is_named_or_generic_non_array),
+        _ => false,
+    }
+}
+
 pub(super) fn try_local_array_methods(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -141,48 +235,20 @@ pub(super) fn try_local_array_methods(
                 // to the class method, not runtime js_array_push. Map/Set/Promise are
                 // handled by explicit checks within the array block below.
                 let builtin_generic_bases = ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
-                // Imported classes don't show up in `lookup_class`; treat any
-                // uppercase imported identifier as a candidate class so the
-                // array fast-path doesn't swallow `coll.find(filter)` etc.
-                let is_imported_class_name = |n: &str| -> bool {
-                    if let Some(c) = n.chars().next() {
-                        if c.is_uppercase() && ctx.lookup_imported_func(n).is_some() {
-                            return true;
-                        }
-                    }
-                    false
-                };
-                let is_user_class_instance = match type_info {
-                    // A class instance OR an interface-typed value is the
-                    // receiver's own object — its method must be dispatched, not
-                    // the array fast path. Interfaces aren't classes (so
-                    // `lookup_class` misses them); without `is_interface_type`,
-                    // an interface-typed receiver with e.g. an own `push` folded
-                    // to `Expr::ArrayPush`, read the object header as an
-                    // ArrayHeader, and silently dropped the call (follow-up to
-                    // #5139, which fixed only `any`-typed receivers).
-                    Some(Type::Named(name)) => {
-                        ctx.lookup_class(name).is_some()
-                            || ctx.is_interface_type(name)
-                            || is_imported_class_name(name)
-                            // A `function Q() {…}` used as a constructor (`new Q()`)
-                            // types its instances `Named("Q")`, but it is not a class
-                            // decl, so `lookup_class` misses it. Its methods live on
-                            // `Q.prototype` (registered via
-                            // `Expr::RegisterFunctionPrototypeMethod`), and when one of
-                            // them shares an Array name — `Q.prototype.push`, the shape
-                            // denque uses for mysql2's command queue — the array fast
-                            // path folded `q.push(x)` to `Expr::ArrayPush`, read the
-                            // instance's ObjectHeader as an ArrayHeader (silently
-                            // corrupting it) and never ran the method.
-                            || ctx.functions_index.contains_key(name.as_str())
-                    }
-                    Some(Type::Generic { base, .. }) => {
-                        !builtin_generic_bases.contains(&base.as_str())
-                            && (ctx.lookup_class(base).is_some() || is_imported_class_name(base))
-                    }
-                    _ => false,
-                };
+                // #10796: `type_is_class_instance` carries the `Named`/
+                // `Generic` checks (plus a `Union` arm, recursed so nested
+                // unions are covered too — see its doc comment) that used to
+                // live inline here as a `match type_info { ... _ => false }`.
+                // A bare `match` on `type_info: Option<&Type>` only ever saw
+                // `Named`/`Generic` directly; a receiver typed as a `Union`
+                // containing a class (`Foo | undefined`, cheerio's
+                // `Cheerio<AnyNode> | undefined`) fell to `_ => false` and
+                // was treated as "not a class instance", letting a method
+                // name shared with `Array.prototype` (`find`, `map`, …) fold
+                // to the array fast path on a real class instance.
+                let is_user_class_instance = type_info
+                    .map(|ty| type_is_class_instance(ty, ctx, &builtin_generic_bases))
+                    .unwrap_or(false);
                 // When the receiver type is Any and the method name is one
                 // commonly defined on user classes too (e.g. mongo's
                 // `Collection.find(filter)`), skip the array fast-path so the
@@ -606,10 +672,7 @@ pub(super) fn try_local_array_methods(
                                 let is_class_instance = !is_typed_array
                                     && recv_ty
                                         .as_ref()
-                                        .map(|ty| {
-                                            matches!(ty, Type::Named(_) | Type::Generic { .. })
-                                                && !matches!(ty, Type::Array(_))
-                                        })
+                                        .map(|ty| is_named_or_generic_non_array(ty))
                                         .unwrap_or(false);
                                 // Issue #514: gate `.at()` ArrayAt
                                 // emission on a statically-known
@@ -1185,5 +1248,100 @@ mod tests {
         assert!(!receiver_is_non_array_builtin_wrapper(
             named("NumberLike").as_ref()
         ));
+    }
+
+    // #10796: `type_is_class_instance` must see a class *through* a `Union`,
+    // at any nesting depth — the guard this backs (`is_user_class_instance`
+    // in `try_local_array_methods`) is what stops a class's own
+    // `find`/`map`/`filter`/… method from folding to the `Array.prototype`
+    // fast path. A `LoweringContext` with a registered class stands in for
+    // a real module lowering; `builtin_generic_bases` mirrors the literal
+    // used at the real call site.
+    fn test_ctx_with_class(name: &str) -> LoweringContext {
+        let mut ctx = LoweringContext::new("union-class-instance-test.ts");
+        let id = ctx.fresh_class();
+        ctx.register_class(name.to_string(), id);
+        ctx
+    }
+
+    const NO_BUILTIN_GENERIC_BASES: &[&str] = &["Map", "Set", "WeakMap", "WeakSet", "Promise"];
+
+    #[test]
+    fn bare_named_class_is_class_instance() {
+        let ctx = test_ctx_with_class("Foo");
+        assert!(type_is_class_instance(
+            &Type::Named("Foo".to_string()),
+            &ctx,
+            NO_BUILTIN_GENERIC_BASES,
+        ));
+    }
+
+    #[test]
+    fn bare_generic_class_is_class_instance() {
+        // The real-world trigger: `Cheerio<AnyNode>` — a generic instance of
+        // an imported/registered class.
+        let ctx = test_ctx_with_class("Cheerio");
+        assert!(type_is_class_instance(
+            &Type::Generic {
+                base: "Cheerio".to_string(),
+                type_args: vec![Type::Named("AnyNode".to_string())],
+            },
+            &ctx,
+            NO_BUILTIN_GENERIC_BASES,
+        ));
+    }
+
+    #[test]
+    fn union_with_named_class_member_is_class_instance() {
+        // `Foo | undefined` — e.g. `function make(): Foo | undefined`.
+        // Before #10796's fix, `Type::Union` fell through the match's
+        // `_ => false` arm and this returned `false`.
+        let ctx = test_ctx_with_class("Foo");
+        let ty = Type::Union(vec![Type::Named("Foo".to_string()), Type::Void]);
+        assert!(type_is_class_instance(&ty, &ctx, NO_BUILTIN_GENERIC_BASES));
+    }
+
+    #[test]
+    fn union_with_generic_class_member_is_class_instance() {
+        // cheerio's real shape: `searchContext: Cheerio<AnyNode> | undefined`
+        // in `load.ts`, whose `.find(selector)` call is a CSS-selector
+        // method mixed onto `Cheerio.prototype` at runtime — not
+        // `Array.prototype.find`. A `Named`-only fix would miss this arm
+        // and leave cheerio broken.
+        let ctx = test_ctx_with_class("Cheerio");
+        let ty = Type::Union(vec![
+            Type::Generic {
+                base: "Cheerio".to_string(),
+                type_args: vec![Type::Named("AnyNode".to_string())],
+            },
+            Type::Void,
+        ]);
+        assert!(type_is_class_instance(&ty, &ctx, NO_BUILTIN_GENERIC_BASES));
+    }
+
+    #[test]
+    fn nested_union_with_class_member_is_class_instance() {
+        // `type_alias_resolve.rs`'s `resolve_type_inner` can push a resolved
+        // union member as-is (not flattened) when that member is itself an
+        // alias to a union type, producing `Union([Union([...]), ...])`. The
+        // `Union` arm must recurse, not just `.any()` one level deep.
+        let ctx = test_ctx_with_class("Foo");
+        let inner = Type::Union(vec![Type::Named("Foo".to_string()), Type::Number]);
+        let outer = Type::Union(vec![inner, Type::Void]);
+        assert!(type_is_class_instance(
+            &outer,
+            &ctx,
+            NO_BUILTIN_GENERIC_BASES
+        ));
+    }
+
+    #[test]
+    fn union_without_a_class_member_is_not_a_class_instance() {
+        // Negative control: a union of genuinely non-class types must stay
+        // `false`, so e.g. `string | number` doesn't spuriously skip the
+        // array fast path.
+        let ctx = test_ctx_with_class("Foo");
+        let ty = Type::Union(vec![Type::String, Type::Number]);
+        assert!(!type_is_class_instance(&ty, &ctx, NO_BUILTIN_GENERIC_BASES));
     }
 }
