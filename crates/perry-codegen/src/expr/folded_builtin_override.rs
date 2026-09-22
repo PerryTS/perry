@@ -3,7 +3,7 @@
 //! `lower_call/property_get/own_override_guard.rs` guards the calls codegen's
 //! ordered chain lowers. It is not where most of them are: HIR folds
 //! `m.get(k)`, `s.has(v)`, `a.push(x)` on a proven receiver into dedicated
-//! nodes (`Expr::MapGet`, `Expr::SetHas`, `Expr::ArrayPush`, …) long before
+//! nodes (`Expr::MapGet`, `Expr::SetHas`, `Expr::ArraySlice`, …) long before
 //! codegen sees a `PropertyGet` call, and those nodes lower straight to
 //! `js_map_get`/`js_set_has`/`js_array_push`. Measured on #10943's
 //! differential: with only the chain guarded, **3** guard calls were emitted
@@ -128,13 +128,16 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
             method: "add",
             args: vec![value],
         },
-        Expr::ArrayPush {
-            array_id, value, ..
-        } => FoldedCall {
-            receiver: Receiver::Local(*array_id),
-            method: "push",
-            args: vec![value],
-        },
+        // `Expr::ArrayPush` is deliberately ABSENT, and an own `push` on a
+        // proven array therefore still loses to the builtin, exactly as on
+        // main. A diamond around this node costs it the INLINE STORE: measured
+        // at +94 instructions per call, against +6 for `indexOf`, which is a
+        // call on both arms either way. The cheap alternative every other kind
+        // has does not exist here -- an array that takes an own named property
+        // records nothing in its header that the inline push tier can test, so
+        // the admission mask never sees the receiver. See the follow-up issue;
+        // the diamond is not heavy-handed, it is the only instrument that can
+        // see a receiver the flags cannot describe.
         Expr::ArrayIndexOf {
             array,
             value,
@@ -391,7 +394,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         };
         let receiver_is_array = matches!(
             expr,
-            Expr::ArrayPush { .. } | Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. }
+            Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. }
         ) || crate::type_analysis::is_array_expr(ctx, receiver_expr);
         emit_own_override_branch(
             ctx,
@@ -465,17 +468,38 @@ mod tests {
     }
 
     /// A fold that captured the receiver as a LOCAL needs no materialisation:
-    /// re-reading a local is free and cannot be observed.
+    /// re-reading a local is free and cannot be observed. `ArrayIndexOf`
+    /// carries its receiver as an expression, so the local case is pinned on
+    /// the node that still has one.
     #[test]
     fn a_local_receiver_is_not_materialized() {
+        let indexof = Expr::ArrayIndexOf {
+            array: Box::new(Expr::LocalGet(7)),
+            value: Box::new(lit(1.0)),
+            from_index: None,
+        };
+        let call = folded_call(&indexof).expect("a folded indexOf");
+        assert_eq!(call.method, "indexOf");
+        assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
+    }
+
+    /// `push` is OUT of the gate. The table must not carry it, or the diamond
+    /// comes back and with it the +94 instructions per call that made this one
+    /// node the exception: guarding `push` costs it the INLINE STORE, and the
+    /// cheap absence proof every other kind has does not exist for an array.
+    /// The differential row it would have fixed is still red, on this branch
+    /// and on main, and the follow-up issue says why.
+    #[test]
+    fn array_push_is_not_a_folded_guard_target() {
         let push = Expr::ArrayPush {
             array_id: 7,
             value: Box::new(lit(1.0)),
             field_writeback: None,
         };
-        let call = folded_call(&push).expect("ArrayPush is a folded `push`");
-        assert_eq!(call.method, "push");
-        assert!(matches!(call.receiver, Receiver::Local(7)));
+        assert!(
+            folded_call(&push).is_none(),
+            "ArrayPush must not be guarded: a diamond costs it the inline store"
+        );
     }
 
     /// An optional argument is part of the call when present and absent when
