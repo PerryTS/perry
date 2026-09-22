@@ -798,13 +798,32 @@ pub(crate) fn set_field_by_name_object_tail(
                 refresh_roots_after_alloc!();
                 let keys = crate::object::object_keys_array(obj);
                 prev_keys_usize = keys as usize;
-                let src_data = (keys as *const u8).add(8) as *const f64;
-                let dst_data = (cloned as *mut u8).add(8) as *mut f64;
-                for i in 0..key_count {
+                // #10939: a keys array's elements do not necessarily start
+                // at `header + 8`. `keys_array_dense_slots` resolves a
+                // grow-forward pointer and adds `array_front_offset`, which is
+                // nonzero for any array with a front reserve — #9019's
+                // reserved-floor keys arrays are BORN with leading holes, and a
+                // size-class round-up alone can make it nonzero. The clone
+                // declares every published slot a pointer, so copying from the
+                // wrong base does not merely read the wrong bytes: it promises
+                // the collector that `ArrayHeader` and reserve words are heap
+                // pointers. A missing property now, a SIGSEGV inside the next
+                // collection later, with a backtrace naming something else.
+                let (src_data, src_len) = crate::object::keys_array_dense_slots(keys);
+                let dst_data = crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
+                // A source shorter than the shape's count means the shape is already
+                // lying; copy what exists rather than publishing uninitialised words
+                // as traced pointers.
+                let copied = std::cmp::min(key_count, src_len);
+                debug_assert_eq!(
+                    copied, key_count,
+                    "the shape's key count outruns its keys array"
+                );
+                for i in 0..copied {
                     // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
-                    *dst_data.add(i) = *src_data.add(i);
+                    *dst_data.add(i) = (*src_data.add(i)).to_bits();
                 }
-                (*cloned).length = key_count as u32;
+                (*cloned).length = copied as u32;
                 super::rebuild_array_layout_from_slots(cloned);
                 set_object_keys_array(obj, cloned);
                 cloned
@@ -1011,13 +1030,32 @@ pub(crate) fn set_field_by_name_object_tail(
             refresh_roots_after_alloc!();
             let keys = crate::object::object_keys_array(obj);
             prev_keys_usize = keys as usize;
-            let src_data = (keys as *const u8).add(8) as *const f64;
-            let dst_data = (cloned as *mut u8).add(8) as *mut f64;
-            for i in 0..key_count {
+            // #10939: a keys array's elements do not necessarily start
+            // at `header + 8`. `keys_array_dense_slots` resolves a
+            // grow-forward pointer and adds `array_front_offset`, which is
+            // nonzero for any array with a front reserve — #9019's
+            // reserved-floor keys arrays are BORN with leading holes, and a
+            // size-class round-up alone can make it nonzero. The clone
+            // declares every published slot a pointer, so copying from the
+            // wrong base does not merely read the wrong bytes: it promises
+            // the collector that `ArrayHeader` and reserve words are heap
+            // pointers. A missing property now, a SIGSEGV inside the next
+            // collection later, with a backtrace naming something else.
+            let (src_data, src_len) = crate::object::keys_array_dense_slots(keys);
+            let dst_data = crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
+            // A source shorter than the shape's count means the shape is already
+            // lying; copy what exists rather than publishing uninitialised words
+            // as traced pointers.
+            let copied = std::cmp::min(key_count, src_len);
+            debug_assert_eq!(
+                copied, key_count,
+                "the shape's key count outruns its keys array"
+            );
+            for i in 0..copied {
                 // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
-                *dst_data.add(i) = *src_data.add(i);
+                *dst_data.add(i) = (*src_data.add(i)).to_bits();
             }
-            (*cloned).length = key_count as u32;
+            (*cloned).length = copied as u32;
             super::rebuild_array_layout_from_slots(cloned);
             set_object_keys_array(obj, cloned);
             cloned
