@@ -42,12 +42,40 @@
   const { a, b, ...rest } = src;
   console.log("rest-basic", a, b, JSON.stringify(rest));
 
-  // NOTE: a `{...rest}` of an object with a Symbol-keyed property is
-  // deliberately NOT covered here. Perry currently drops Symbol-keyed
-  // properties from the rest object entirely (`js_object_rest`'s own
-  // key-copy logic, unrelated to the `exclude_keys` array this file's
-  // perf change touches) — a pre-existing, separately-filed gap, not
-  // something this test should assert byte-identical parity on.
+  const kept = Symbol("kept");
+  const omitted = Symbol("omitted");
+  const hidden = Symbol("hidden");
+  const getter = Symbol("getter");
+  let getterCalls = 0;
+  const symbolSource: any = {
+    plain: 1,
+    [kept]: 2,
+    [omitted]: 3,
+    get [getter]() {
+      getterCalls++;
+      return 4;
+    },
+  };
+  Object.defineProperty(symbolSource, hidden, { value: 5, enumerable: false });
+  const { [omitted]: omittedValue, ...symbolRest } = symbolSource;
+  console.log(
+    "rest-symbols",
+    omittedValue,
+    symbolRest[kept],
+    symbolRest[omitted],
+    symbolRest[hidden],
+    symbolRest[getter],
+    getterCalls,
+    Object.getOwnPropertySymbols(symbolRest).map(String).join(","),
+  );
+
+  const only = Symbol("only");
+  const { ...symbolOnlyRest } = { [only]: 6 };
+  console.log(
+    "rest-symbol-only",
+    symbolOnlyRest[only],
+    Object.getOwnPropertySymbols(symbolOnlyRest).map(String).join(","),
+  );
 
   // computed-key exclusion (evaluated once) + rest
   let evalCount = 0;
