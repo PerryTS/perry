@@ -2618,8 +2618,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // into a flat `[N x i32]` LLVM constant so `X[i][j]` / `krow[j]` can
             // load directly from `.rodata` instead of chasing the arena array
             // header. Qualifying locals are `Let { mutable: false }`, have a
-            // rectangular int-literal 2D init, and are never mutated anywhere
-            // in the module (LocalSet/Update/IndexSet/mutating methods).
+            // rectangular int-literal 2D init, and are used only by direct
+            // element reads or read-only row aliases. Any observable row value
+            // or write keeps the normal heap representation authoritative.
             let mut map: std::collections::HashMap<u32, crate::expr::FlatConstInfo> =
                 std::collections::HashMap::new();
             for s in logical_entry_stmts.iter().copied() {
@@ -2631,35 +2632,39 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 } = s
                 {
                     if let Some((rows, cols, vals)) = crate::expr::try_flat_const_2d_int(init) {
-                        let mut mutated = false;
-                        if crate::collectors::has_any_mutation(&hir.init, *id) {
-                            mutated = true;
-                        }
-                        if !mutated {
+                        let mut safe =
+                            crate::collectors::flat_const_array_uses_are_read_only(&hir.init, *id);
+                        if safe {
                             for f in &hir.functions {
-                                if crate::collectors::has_any_mutation(&f.body, *id) {
-                                    mutated = true;
+                                if !crate::collectors::flat_const_array_uses_are_read_only(
+                                    &f.body, *id,
+                                ) {
+                                    safe = false;
                                     break;
                                 }
                             }
                         }
-                        if !mutated {
+                        if safe {
                             'outer: for c in &hir.classes {
                                 for m in &c.methods {
-                                    if crate::collectors::has_any_mutation(&m.body, *id) {
-                                        mutated = true;
+                                    if !crate::collectors::flat_const_array_uses_are_read_only(
+                                        &m.body, *id,
+                                    ) {
+                                        safe = false;
                                         break 'outer;
                                     }
                                 }
                                 if let Some(ctor) = &c.constructor {
-                                    if crate::collectors::has_any_mutation(&ctor.body, *id) {
-                                        mutated = true;
+                                    if !crate::collectors::flat_const_array_uses_are_read_only(
+                                        &ctor.body, *id,
+                                    ) {
+                                        safe = false;
                                         break;
                                     }
                                 }
                             }
                         }
-                        if !mutated {
+                        if safe {
                             let gname = format!("perry_flat_{}__{}", module_prefix, id);
                             let init_str = format!(
                                 "[{}]",

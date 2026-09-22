@@ -96,7 +96,10 @@ pub(crate) use integer_locals::{
     collect_flat_row_aliases, is_int32_producing_expr, static_index_window,
 };
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
-pub(crate) use mutation::{body_contains_call, body_contains_closure, has_any_mutation};
+pub(crate) use mutation::{
+    body_contains_call, body_contains_closure, flat_const_array_uses_are_read_only,
+    has_any_mutation,
+};
 pub(crate) use number_by_construction::collect_number_by_construction_locals;
 pub(crate) use object_literal_exports::exported_object_literal_capabilities;
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};

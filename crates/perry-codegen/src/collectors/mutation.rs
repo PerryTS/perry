@@ -15,6 +15,217 @@ pub fn has_any_mutation(stmts: &[perry_hir::Stmt], id: u32) -> bool {
     any_top_level_expr(stmts, &mut |e| expr_has_mutation(e, id))
 }
 
+/// Return `true` when every use of a candidate flat constant 2D array stays
+/// within the representation that codegen can substitute safely.
+///
+/// The flat table is a read-only copy of the JavaScript array.  It may replace
+/// `array[row][column]` and `const row = array[index]; row[column]`, but the
+/// real row object must remain observable for every other use.  In particular,
+/// returning a row, passing it to a call, comparing it by identity, or writing
+/// through it would let the heap array and flat table disagree.
+pub fn flat_const_array_uses_are_read_only(stmts: &[perry_hir::Stmt], id: u32) -> bool {
+    let mut row_aliases = std::collections::HashSet::new();
+    collect_flat_const_row_aliases(stmts, id, &mut row_aliases);
+    flat_const_stmts_are_safe(stmts, id, &row_aliases)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FlatConstUse {
+    Value,
+    IndexObject,
+    RowAliasInitializer,
+}
+
+fn collect_flat_const_row_aliases(
+    stmts: &[perry_hir::Stmt],
+    id: u32,
+    out: &mut std::collections::HashSet<u32>,
+) {
+    use perry_hir::{Expr, Stmt};
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let {
+                id: alias_id,
+                init: Some(Expr::IndexGet { object, .. }),
+                mutable: false,
+                ..
+            } if matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id) => {
+                out.insert(*alias_id);
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_flat_const_row_aliases(then_branch, id, out);
+                if let Some(else_branch) = else_branch {
+                    collect_flat_const_row_aliases(else_branch, id, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_flat_const_row_aliases(body, id, out);
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init) = init {
+                    collect_flat_const_row_aliases(std::slice::from_ref(init.as_ref()), id, out);
+                }
+                collect_flat_const_row_aliases(body, id, out);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_flat_const_row_aliases(body, id, out);
+                if let Some(catch) = catch {
+                    collect_flat_const_row_aliases(&catch.body, id, out);
+                }
+                if let Some(finally) = finally {
+                    collect_flat_const_row_aliases(finally, id, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_flat_const_row_aliases(&case.body, id, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_flat_const_row_aliases(std::slice::from_ref(body.as_ref()), id, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn flat_const_stmts_are_safe(
+    stmts: &[perry_hir::Stmt],
+    id: u32,
+    row_aliases: &std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Stmt;
+    for stmt in stmts {
+        let safe = match stmt {
+            Stmt::Let {
+                id: alias_id,
+                init: Some(init),
+                ..
+            } => {
+                let use_kind = if row_aliases.contains(alias_id) {
+                    FlatConstUse::RowAliasInitializer
+                } else {
+                    FlatConstUse::Value
+                };
+                flat_const_expr_is_safe(init, id, row_aliases, use_kind)
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => {
+                flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
+            }
+            Stmt::Return(Some(expr)) => {
+                flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                flat_const_expr_is_safe(condition, id, row_aliases, FlatConstUse::Value)
+                    && flat_const_stmts_are_safe(then_branch, id, row_aliases)
+                    && else_branch
+                        .as_ref()
+                        .is_none_or(|branch| flat_const_stmts_are_safe(branch, id, row_aliases))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                flat_const_expr_is_safe(condition, id, row_aliases, FlatConstUse::Value)
+                    && flat_const_stmts_are_safe(body, id, row_aliases)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref().is_none_or(|init| {
+                    flat_const_stmts_are_safe(std::slice::from_ref(init.as_ref()), id, row_aliases)
+                }) && condition.as_ref().is_none_or(|expr| {
+                    flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
+                }) && update.as_ref().is_none_or(|expr| {
+                    flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
+                }) && flat_const_stmts_are_safe(body, id, row_aliases)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                flat_const_stmts_are_safe(body, id, row_aliases)
+                    && catch
+                        .as_ref()
+                        .is_none_or(|catch| flat_const_stmts_are_safe(&catch.body, id, row_aliases))
+                    && finally
+                        .as_ref()
+                        .is_none_or(|finally| flat_const_stmts_are_safe(finally, id, row_aliases))
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                flat_const_expr_is_safe(discriminant, id, row_aliases, FlatConstUse::Value)
+                    && cases.iter().all(|case| {
+                        case.test.as_ref().is_none_or(|test| {
+                            flat_const_expr_is_safe(test, id, row_aliases, FlatConstUse::Value)
+                        }) && flat_const_stmts_are_safe(&case.body, id, row_aliases)
+                    })
+            }
+            Stmt::Labeled { body, .. } => {
+                flat_const_stmts_are_safe(std::slice::from_ref(body.as_ref()), id, row_aliases)
+            }
+            _ => true,
+        };
+        if !safe {
+            return false;
+        }
+    }
+    true
+}
+
+fn flat_const_expr_is_safe(
+    expr: &perry_hir::Expr,
+    id: u32,
+    row_aliases: &std::collections::HashSet<u32>,
+    use_kind: FlatConstUse,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::LocalGet(local_id) if *local_id == id || row_aliases.contains(local_id) => {
+            use_kind == FlatConstUse::IndexObject
+        }
+        Expr::IndexGet { object, index } => {
+            let produces_row =
+                matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id);
+            if produces_row
+                && !matches!(
+                    use_kind,
+                    FlatConstUse::IndexObject | FlatConstUse::RowAliasInitializer
+                )
+            {
+                return false;
+            }
+            flat_const_expr_is_safe(object, id, row_aliases, FlatConstUse::IndexObject)
+                && flat_const_expr_is_safe(index, id, row_aliases, FlatConstUse::Value)
+        }
+        Expr::Closure { body, .. } => flat_const_array_uses_are_read_only(body, id),
+        _ => {
+            let mut safe = true;
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                if safe && !flat_const_expr_is_safe(child, id, row_aliases, FlatConstUse::Value) {
+                    safe = false;
+                }
+            });
+            safe
+        }
+    }
+}
+
 /// (#8094) Does any call reach unknown code anywhere in `stmts`?
 ///
 /// A guarded parameter's descriptor is validated once, at entry. It describes
@@ -402,6 +613,58 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
 mod tests {
     use super::*;
     use perry_hir::{BinaryOp, Expr};
+
+    fn index(object: Expr, index: i64) -> Expr {
+        Expr::IndexGet {
+            object: Box::new(object),
+            index: Box::new(Expr::Integer(index)),
+        }
+    }
+
+    fn row_alias(id: u32, array_id: u32) -> perry_hir::Stmt {
+        perry_hir::Stmt::Let {
+            id,
+            name: "row".to_string(),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init: Some(index(Expr::LocalGet(array_id), 0)),
+        }
+    }
+
+    #[test]
+    fn flat_const_allows_direct_and_aliased_element_reads() {
+        let body = vec![
+            row_alias(8, 7),
+            perry_hir::Stmt::Expr(index(index(Expr::LocalGet(7), 0), 1)),
+            perry_hir::Stmt::Return(Some(index(Expr::LocalGet(8), 2))),
+        ];
+        assert!(flat_const_array_uses_are_read_only(&body, 7));
+    }
+
+    #[test]
+    fn flat_const_rejects_rows_used_as_javascript_values() {
+        let returned_directly = vec![perry_hir::Stmt::Return(Some(index(Expr::LocalGet(7), 0)))];
+        assert!(!flat_const_array_uses_are_read_only(&returned_directly, 7));
+
+        let returned_alias = vec![
+            row_alias(8, 7),
+            perry_hir::Stmt::Return(Some(Expr::LocalGet(8))),
+        ];
+        assert!(!flat_const_array_uses_are_read_only(&returned_alias, 7));
+    }
+
+    #[test]
+    fn flat_const_rejects_nested_element_writes() {
+        let write = Expr::IndexSet {
+            object: Box::new(index(Expr::LocalGet(7), 0)),
+            index: Box::new(Expr::Integer(1)),
+            value: Box::new(Expr::Integer(99)),
+        };
+        assert!(!flat_const_array_uses_are_read_only(
+            &[perry_hir::Stmt::Expr(write)],
+            7
+        ));
+    }
 
     #[test]
     fn direct_property_writes_mutate_the_root_binding_value() {
