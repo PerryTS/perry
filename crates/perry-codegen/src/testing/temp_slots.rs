@@ -568,6 +568,27 @@ pub fn assert_no_temp_rooting(fn_ir: &str, what: &str) {
     );
 }
 
+/// Exactly `expected` expression temporaries were rooted in `fn_ir`.
+///
+/// The ratchet form of [`assert_no_temp_rooting`], for a lowering that must
+/// park ONE value and must not grow a second. "None" is the better claim
+/// wherever it is true; this exists so a measured, justified slot can still be
+/// pinned rather than dropped, because an unpinned cost is how a small
+/// permanent overhead stops being small.
+pub fn assert_temp_rooting_count(fn_ir: &str, expected: usize, what: &str) {
+    let rooted = temp_root_slots(fn_ir);
+    assert_eq!(
+        rooted.len(),
+        expected,
+        "{what}: expected exactly {expected} rooted temporary, found {}. Each \
+         one costs a store, a re-read and a clear (#6996/#6997), so a new one \
+         has to be justified and measured, not absorbed. Pooled temp slots \
+         with traffic: {rooted:?}. Full traffic: {:#?}\n{fn_ir}",
+        rooted.len(),
+        slot_traffic(fn_ir)
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
