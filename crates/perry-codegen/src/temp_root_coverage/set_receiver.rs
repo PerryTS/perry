@@ -33,7 +33,8 @@
 
 use super::{allocating, main_ir_for, under_both_lowerings};
 use crate::testing::temp_slots::{
-    assert_no_temp_rooting, assert_rooted_across, first_call_result, temp_root_slots,
+    assert_no_temp_rooting, assert_rooted_across, assert_temp_rooting_count, first_call_result,
+    temp_root_slots,
 };
 use perry_hir::types::Type;
 use perry_hir::{Expr, Stmt};
@@ -146,9 +147,28 @@ fn a_set_has_with_a_non_allocating_value_pays_no_temp_slot() {
                 ir.contains("@js_set_has(") || ir.contains("@js_set_delete("),
                 "{lowering}: {name} must reach the generic Set helper, or this proves nothing:\n{ir}"
             );
-            assert_no_temp_rooting(
+            // #10943 moved this from "none" to "exactly one", deliberately and
+            // with a measurement. The own-override guard tests the receiver
+            // before it branches, and the receiver must stay rooted across
+            // that call — the predicate allocates today (`js_string_from_bytes`
+            // on its authoritative tier), so it is not a GC leaf and the root
+            // is not optional.
+            //
+            // Measured on this exact shape (`s.has(2)` in a hot loop, same
+            // compiler with Set in and out of the guard's gate, min of 3,
+            // fitted 500k -> 5M): 778.27 vs 778.26 instructions per iteration,
+            // +0.01 — LLVM hoists the test, the branch and the slot traffic
+            // out of the loop. The cost is emitted shape, not runtime.
+            //
+            // #10957 removes it for real: pass the INTERNED KEY instead of
+            // (ptr, len), which takes the allocation out of the predicate,
+            // makes the GC-leaf claim provable rather than assumed, and drops
+            // this slot with it. Until then this is a ratchet: one slot is
+            // accounted for, a second reddens.
+            assert_temp_rooting_count(
                 &ir,
-                &format!("{lowering}: {name} — #9523 gate: nothing after the receiver can collect"),
+                1,
+                &format!("{lowering}: {name} — #9523 gate: only the own-override test's receiver"),
             );
         }
     });
