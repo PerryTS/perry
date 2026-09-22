@@ -428,6 +428,17 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::shapes::prune_dead_shape_keys,
         young_prune: Some(crate::object::shapes::prune_dead_shape_keys_young),
     },
+    // #10868 step 2.5 stage 1b: the canonical keys trie holds its arrays
+    // WEAKLY, so a node whose array did not survive has to be reaped here or
+    // the next probe dereferences freed memory. Runs after the shape prune
+    // for the same reason the transition-cache prune does: by then a dead
+    // keys edge has no descriptor left to confuse the question.
+    DeadKeyPrune {
+        table: "CANONICAL_KEYS (canonical keys trie)",
+        owner: DeadKeyOwner::Any,
+        prune: crate::object::canonical_keys::prune_dead_canonical_keys,
+        young_prune: None,
+    },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "state().exotic_expando.entries",

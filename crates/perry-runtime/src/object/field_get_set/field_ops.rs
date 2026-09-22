@@ -335,9 +335,24 @@ pub extern "C" fn js_object_set_field_by_index(
 
 /// Set the keys array for an object (used for Object.keys() support)
 /// The keys_array should be an array of string pointers
+///
+/// #10868 step 2.5 stage 1b: the list is canonicalized on the way in. The
+/// census named this site — 21 of the 24 remaining duplicate-content mints on
+/// the same-content fixture came from here — and that is the whole argument
+/// for a census over a perf gate: a producer outside the funnel costs a
+/// duplicate LAYOUT, which no timing and no parity row can see.
 #[no_mangle]
 pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
     unsafe {
-        set_object_keys_array(obj, keys_array);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let len = if keys_array.is_null() {
+            0
+        } else {
+            (*keys_array).length
+        };
+        let canonical = crate::object::canonical_keys::canonicalize(keys_array, len);
+        let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        set_object_keys_array(obj, canonical.as_ptr());
     }
 }

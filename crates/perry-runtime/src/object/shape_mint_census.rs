@@ -521,6 +521,45 @@ pub(crate) fn dump() {
             mints as f64 / c.key_lists.len() as f64
         ));
     }
+    // #10868 step 2.5 stage 1b. `distinct keys ADDRESSES` above and `live`
+    // here answer the same question from opposite sides, which is the point:
+    // this census hashes CONTENT (`key_list_content_hash`) and knows nothing
+    // about the trie, so `addresses == distinct key-NAME lists` is an
+    // INDEPENDENT confirmation that one array now serves one layout. A
+    // producer that skips the funnel shows up here as addresses climbing
+    // above lists while `live` stays put — which is the census sabotage.
+    {
+        let (live, canon_minted, reaped) = crate::object::canonical_keys::canonical_stats();
+        let words = crate::object::canonical_keys::canonical_element_words();
+        out.push_str(&format!(
+            "  canonical keys trie: live {}  minted {}  reaped {}  elements {} ({} KB)\n",
+            live,
+            canon_minted,
+            reaped,
+            words,
+            words * 8 / 1024
+        ));
+        // The named witness for the funnel sabotage. One canonical array per
+        // ordered key list means a mint can only ever have seen as many
+        // ADDRESSES as it has seen distinct key-name LISTS; a producer that
+        // allocates around the funnel breaks that inequality and nothing else
+        // in the process notices, because a duplicate layout is a slow
+        // answer, not a wrong one.
+        let addrs = c.keys_addrs.len();
+        let lists = c.key_lists.len();
+        if addrs > lists {
+            out.push_str(&format!(
+                "  FUNNEL BROKEN: {} keys ADDRESSES for {} distinct key-NAME lists \
+                 -- {} duplicate layouts; a producer is allocating around \
+                 canonical_keys\n",
+                addrs,
+                lists,
+                addrs - lists
+            ));
+        } else {
+            out.push_str("  FUNNEL OK: one keys address per distinct key-name list\n");
+        }
+    }
     let tc_h = TC_HITS.load(Ordering::Relaxed);
     let tc_e = TC_MISS_EMPTY.load(Ordering::Relaxed);
     let tc_c = TC_MISS_COLLIDE.load(Ordering::Relaxed);
