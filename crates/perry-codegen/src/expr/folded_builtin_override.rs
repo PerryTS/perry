@@ -112,7 +112,9 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
             method: "add",
             args: vec![value],
         },
-        Expr::ArrayPush { array_id, value, .. } => FoldedCall {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => FoldedCall {
             receiver: Receiver::Local(*array_id),
             method: "push",
             args: vec![value],
@@ -137,6 +139,176 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
                 None => vec![start],
             },
         },
+        // Date. HIR folds every Date accessor into its own variant, and they
+        // reach `js_date_apply_setter` / the getter helpers without passing
+        // the property chain at all — which is why `d.setHours = () => 1`
+        // emitted no guard and ran the builtin. A getter carries the receiver
+        // alone; a setter carries its argument list.
+        Expr::DateGetTime(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getTime",
+            args: Vec::new(),
+        },
+        Expr::DateToISOString(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "toISOString",
+            args: Vec::new(),
+        },
+        Expr::DateGetFullYear(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getFullYear",
+            args: Vec::new(),
+        },
+        Expr::DateGetMonth(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getMonth",
+            args: Vec::new(),
+        },
+        Expr::DateGetDate(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getDate",
+            args: Vec::new(),
+        },
+        Expr::DateGetDay(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getDay",
+            args: Vec::new(),
+        },
+        Expr::DateGetHours(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getHours",
+            args: Vec::new(),
+        },
+        Expr::DateGetMinutes(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getMinutes",
+            args: Vec::new(),
+        },
+        Expr::DateGetSeconds(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getSeconds",
+            args: Vec::new(),
+        },
+        Expr::DateGetMilliseconds(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getMilliseconds",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcDay(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCDay",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcFullYear(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCFullYear",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcMonth(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCMonth",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcDate(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCDate",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcHours(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCHours",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcMinutes(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCMinutes",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcSeconds(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCSeconds",
+            args: Vec::new(),
+        },
+        Expr::DateGetUtcMilliseconds(date) => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "getUTCMilliseconds",
+            args: Vec::new(),
+        },
+        Expr::DateSetFullYear { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setFullYear",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetMonth { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setMonth",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetDate { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setDate",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetHours { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setHours",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetMinutes { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setMinutes",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetSeconds { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setSeconds",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetMilliseconds { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setMilliseconds",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetTime { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setTime",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcFullYear { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCFullYear",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcMonth { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCMonth",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcDate { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCDate",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcHours { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCHours",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcMinutes { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCMinutes",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcSeconds { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCSeconds",
+            args: args.iter().collect(),
+        },
+        Expr::DateSetUtcMilliseconds { date, args } => FoldedCall {
+            receiver: Receiver::Expr(date),
+            method: "setUTCMilliseconds",
+            args: args.iter().collect(),
+        },
         _ => return None,
     };
     Some(call)
@@ -156,7 +328,10 @@ fn emit_own_override_branch(
     let (name_bytes, name_len) = {
         let idx = ctx.strings.intern(method);
         let entry = ctx.strings.entry(idx);
-        (format!("@{}", entry.bytes_global), entry.byte_len.to_string())
+        (
+            format!("@{}", entry.bytes_global),
+            entry.byte_len.to_string(),
+        )
     };
     let blk = ctx.block();
     let maybe = blk.call(
