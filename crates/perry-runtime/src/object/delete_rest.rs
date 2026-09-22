@@ -432,9 +432,44 @@ pub extern "C" fn js_object_delete_field(
             }
             (*keys_cloned).length = key_count as u32;
             super::rebuild_array_layout_from_slots(keys_cloned);
-            set_object_keys_array(obj, keys_cloned);
-            keys = keys_cloned;
-            keys_owned = true;
+            // `set_object_keys_array` PUBLISHES, and a publication can
+            // REPLACE the receiver's key list with an array that is not the
+            // one handed in. Its tail latches an eligible receiver into
+            // dictionary mode (#10868 step 2.5), and the latch installs a
+            // SECOND private copy of the key list; its mint can also collect
+            // and move the array. Either way `keys_cloned` stops naming the
+            // receiver's keys the moment this returns, and the tombstone
+            // below then lands in an ORPHAN: the value slot clears on the
+            // receiver while the key survives in its live list, so
+            // `Object.keys` still lists the deleted key and `in` still
+            // answers true, with `JSON.stringify` agreeing with node by
+            // coincidence because it omits an undefined-valued property
+            // (#10942).
+            //
+            // Re-derive from the receiver. `object_keys_array` is the single
+            // authoritative spelling of "this receiver's keys"; an address
+            // this function passed IN is not, and neither is one it read
+            // before a publish.
+            let ((), reloaded_obj) = obj_handle
+                .across_mut::<ObjectHeader, _>(|| set_object_keys_array(obj, keys_cloned));
+            obj = reloaded_obj;
+            keys = crate::object::object_keys_array(obj);
+            if keys.is_null() {
+                // Unreachable for a receiver that reached this branch with a
+                // key list, and a silent wrong answer if it ever happens: the
+                // vacuous-success return at the top of this function is the
+                // only honest thing left to do without a keys array.
+                debug_assert!(false, "the clone publish left the receiver with no keys array");
+                return 1;
+            }
+            // Ownership is a fact of the array the receiver now carries, not
+            // of the one allocated above: the latch's copy is private, but
+            // asserting that instead of reading it is how this branch got
+            // here. A shared answer falls through to the compacting delete,
+            // which needs no ownership.
+            let reloaded_gc =
+                (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            keys_owned = (*reloaded_gc).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0;
         }
         // O(1) tombstone delete (flag-gated, #9020's Map pattern applied to
         // objects). An OWNED keys array can take a hole marker in place of
