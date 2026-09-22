@@ -100,3 +100,27 @@ t("map.get after-delete", () => m8.get("k"));
 t("map.get hasOwn", () => Object.prototype.hasOwnProperty.call(m1, "get"));
 t("array.push hasOwn", () => Object.prototype.hasOwnProperty.call(a1, "push"));
 t("map.get typeof", () => typeof m1.get);
+
+// --- ARGUMENT POSITION -----------------------------------------------------
+// The guarded node's builtin arm re-lowers the WHOLE node, arguments included.
+// A depth-counted suppression covers them too, so a folded call nested in an
+// argument emitted no diamond and ran its native helper, while the same call
+// in statement position took the own method: the two arms of one diamond
+// disagreeing for the same source. Found by review on #10958 and reproduced
+// on that branch AND on main before the fix, which makes it #10943 surviving
+// in a spelling this file did not contain. The suppression is now keyed on
+// node identity, so only the node being re-lowered is skipped.
+const m9 = new Map(); m9.set("k", "native"); m9.get = (k) => "own:" + k;
+const m10 = new Map();
+t("map.get in map.set argument", () => { m10.set("k", m9.get("k")); return m10.get("k"); });
+const a4 = [];
+t("map.get in array.push argument", () => { a4.push(m9.get("k")); return a4[0]; });
+t("map.get in a nested argument", () => { const inner = new Map(); inner.set("x", m9.get("k")); return inner.get("x"); });
+t("map.get twice in one argument list", () => { const mm = new Map(); mm.set(m9.get("a"), m9.get("b")); return mm.get("own:a"); });
+t("map.get in a concat argument", () => { const mm = new Map(); mm.set("k", "<" + m9.get("k") + ">"); return mm.get("k"); });
+const s9 = new Set(); s9.add("v"); s9.has = (v) => "own:" + v;
+t("set.has in map.set argument", () => { const mm = new Map(); mm.set("k", s9.has("v")); return mm.get("k"); });
+// the same shapes with NOTHING shadowed must stay native
+const m11 = new Map(); m11.set("k", "native11");
+const m12 = new Map();
+t("native get in set argument", () => { m12.set("k", m11.get("k")); return m12.get("k"); });

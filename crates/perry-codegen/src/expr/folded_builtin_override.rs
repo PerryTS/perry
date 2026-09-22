@@ -33,24 +33,39 @@ use crate::rooting;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 thread_local! {
-    /// Non-zero while the builtin arm is re-entering `lower_expr` for the very
-    /// node being guarded, which must reach the ordinary fold rather than
-    /// forming a second diamond around itself.
-    static SUPPRESS: Cell<u32> = const { Cell::new(0) };
+    /// The identity of the node whose builtin arm is currently re-entering
+    /// `lower_expr`. That node — and only that node — must reach the ordinary
+    /// fold rather than forming a second diamond around itself.
+    ///
+    /// It was a DEPTH COUNTER until a review caught what that spells: the
+    /// re-entrant `lower_expr(ctx, expr)` lowers the node's ARGUMENTS too, so
+    /// a folded builtin nested in an argument was suppressed as well and ran
+    /// its native helper with no guard. `m1.set("k", m2.get("k"))` with
+    /// `m2.get` an own property printed the native answer while the same call
+    /// in statement position printed the own one — the two arms of one diamond
+    /// disagreeing for the same source. Verified before fixing: reproduced on
+    /// this branch AND on main, so it is #10943 surviving in argument
+    /// position, not a regression this guard introduced.
+    ///
+    /// A positional guarantee ("everything under here is suppressed") cannot
+    /// express "this node"; an identity can.
+    static SUPPRESSED_NODE: Cell<usize> = const { Cell::new(0) };
 }
 
-struct Suppressed;
+/// Holds the node identity that was suppressed before this one, so nested
+/// diamonds restore rather than clear: while an inner node's builtin arm runs,
+/// the outer node is not the one being re-lowered.
+struct Suppressed(usize);
 
 impl Suppressed {
-    fn enter() -> Self {
-        SUPPRESS.with(|s| s.set(s.get() + 1));
-        Suppressed
+    fn enter(node: usize) -> Self {
+        Suppressed(SUPPRESSED_NODE.with(|s| s.replace(node)))
     }
 }
 
 impl Drop for Suppressed {
     fn drop(&mut self) {
-        SUPPRESS.with(|s| s.set(s.get() - 1));
+        SUPPRESSED_NODE.with(|s| s.set(self.0));
     }
 }
 
@@ -362,7 +377,8 @@ fn emit_dispatcher(
 
 /// Guard a folded builtin-method node, or return `None` for everything else.
 pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
-    if SUPPRESS.with(|s| s.get()) > 0 {
+    let node = expr as *const Expr as usize;
+    if SUPPRESSED_NODE.with(|s| s.get()) == node {
         return Ok(None);
     }
     let Some(call) = folded_call(expr) else {
@@ -407,7 +423,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
 
         ctx.current_block = builtin_idx;
         let builtin_value = {
-            let _suppressed = Suppressed::enter();
+            let _suppressed = Suppressed::enter(node);
             lower_expr(ctx, expr)?
         };
         let builtin_end = ctx.block().label.clone();
