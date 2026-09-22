@@ -54,6 +54,24 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    let receiver_bits = obj as u64;
+    let receiver = JSValue::from_bits(receiver_bits);
+    if receiver.is_bool() || receiver.is_bigint() {
+        if !key.is_null() {
+            unsafe {
+                let primitive = f64::from_bits(receiver_bits);
+                let builtin = if receiver.is_bool() {
+                    b"Boolean".as_slice()
+                } else {
+                    b"BigInt".as_slice()
+                };
+                if let Some(value) = primitive_tagged_prototype_property(builtin, key, primitive) {
+                    return value;
+                }
+            }
+        }
+        return JSValue::undefined();
+    }
     // Lane 3 hook C: the same inherited-read entry, for the callers that do
     // not come through a per-site cache (the recursive prototype hop, native
     // callers, `js_object_get_field_by_name_f64`). It goes BEFORE
@@ -65,6 +83,57 @@ pub extern "C" fn js_object_get_field_by_name(
         return value;
     }
     get_field_by_name_past_inherited_cache(obj, key)
+}
+
+#[cfg(test)]
+mod primitive_proto_accessor_tests_10648 {
+    use super::*;
+
+    #[test]
+    fn boolean_and_bigint_inherit_object_proto_getter() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key = crate::string::js_string_from_bytes(b"__proto__".as_ptr(), 9);
+        let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+        let receivers = [
+            (
+                "true",
+                "Boolean",
+                scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_TRUE)),
+            ),
+            (
+                "false",
+                "Boolean",
+                scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_FALSE)),
+            ),
+            (
+                "positive bigint",
+                "BigInt",
+                scope.root_nanbox_f64(crate::value::js_nanbox_bigint(
+                    crate::bigint::js_bigint_from_i64(1) as i64,
+                )),
+            ),
+            (
+                "negative bigint",
+                "BigInt",
+                scope.root_nanbox_f64(crate::value::js_nanbox_bigint(
+                    crate::bigint::js_bigint_from_i64(-1) as i64,
+                )),
+            ),
+        ];
+        for (label, name, receiver) in receivers {
+            let expected = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
+            let key_ptr = crate::value::JSValue::from_bits(key_h.get_nanbox_u64()).as_string_ptr();
+            let actual = js_object_get_field_by_name(
+                receiver.get_nanbox_u64() as *const ObjectHeader,
+                key_ptr,
+            );
+            assert_eq!(
+                actual.bits(),
+                expected.get_nanbox_u64(),
+                "{label} must inherit Object.prototype.__proto__"
+            );
+        }
+    }
 }
 
 /// The same read for a caller that has ALREADY asked the inherited-read cache
