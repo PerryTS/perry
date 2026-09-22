@@ -117,6 +117,39 @@ fn stream_object_mode_flags_default_false_and_follow_options() {
 }
 
 #[test]
+fn passthrough_subclass_uses_override_or_identity_transform() {
+    crate::closure::js_register_closure_arity(super::tests::noop_listener as *const u8, 0);
+    let callback =
+        box_pointer(js_closure_alloc(super::tests::noop_listener as *const u8, 0) as *const u8);
+
+    let overridden_obj = crate::object::js_object_alloc(0, 1);
+    js_object_set_field_by_name(overridden_obj, hidden_key(b"_transform"), callback);
+    let overridden = js_node_stream_passthrough_subclass_init(
+        box_pointer(overridden_obj as *const u8),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    assert_eq!(
+        transform_hidden_callback(overridden).map(f64::to_bits),
+        Some(callback.to_bits())
+    );
+    assert!(!has_truthy_hidden(
+        overridden,
+        hidden_transform_passthrough_key()
+    ));
+
+    let default_obj = crate::object::js_object_alloc(0, 0);
+    let default = js_node_stream_passthrough_subclass_init(
+        box_pointer(default_obj as *const u8),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    assert!(transform_hidden_callback(default).is_none());
+    assert!(has_truthy_hidden(
+        default,
+        hidden_transform_passthrough_key()
+    ));
+}
+
+#[test]
 fn stream_dynamic_instanceof_follows_node_stream_inheritance() {
     let readable = crate::object::bound_native_callable_export_value("stream", "Readable");
     let writable = crate::object::bound_native_callable_export_value("stream", "Writable");

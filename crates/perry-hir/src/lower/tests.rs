@@ -1986,5 +1986,6 @@ mod subclass_ctor_inherited_method;
 mod ui_widget_add_child;
 
 mod issue_10623_require_destructured_native_super;
+mod issue_10745_passthrough_heritage;
 
 mod hoisted_sibling_in_later_closure;
