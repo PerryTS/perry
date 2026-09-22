@@ -722,11 +722,7 @@ pub(crate) fn lower_generic_property_get(
     // polymorphic path and not on the hit this tower is sized by; removing it
     // is a separate, measured change.
     //
-    // #10826 keeps `PERRY_DELETE_SHAPE_TRANSITION=0` as a kill switch that
-    // restores the id-preserving publish. With this compare gone that switch
-    // is no longer a performance knob: under it a shape-gated hit CAN address
-    // a deleted slot and return the raw hole word. It must be retired with
-    // that PR, not kept.
+    // Ordinary deletes always transition the shape before clearing the slot.
     let hit_end_label = match hit_live_idx {
         None => {
             let label = ctx.block().label.clone();

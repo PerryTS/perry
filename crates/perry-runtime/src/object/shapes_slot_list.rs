@@ -619,12 +619,10 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
 /// Publish the successor shape for an O(1) hole-delete on `obj`'s CURRENT
 /// keys array: same address, same surviving slots, one more tombstone.
 ///
-/// This is #9064's ID-PRESERVING publish, now reached only through
-/// `PERRY_DELETE_SHAPE_TRANSITION=0` and the squeeze:
-/// [`publish_object_shape_delete_transition`] is what an ordinary delete takes.
-/// For a stable-tombstone receiver it keeps the ShapeId and relies on the
-/// emitted read's per-slot `TAG_HOLE` compare to retire the deleted key;
-/// otherwise it mints a process-unique generation.
+/// This helper is now reached by the squeeze, after it has compacted slots.
+/// [`publish_object_shape_delete_transition`] handles ordinary deletes.
+/// The stable-tombstone path can preserve the ShapeId when the squeezed
+/// layout admits it; otherwise this mints a process-unique generation.
 ///
 /// Returns the successor id, or 0 when the object is not stamped/shaped —
 /// the caller falls back to the compacting delete.
