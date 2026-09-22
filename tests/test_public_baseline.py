@@ -1,7 +1,12 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+from benchmarks import public_baseline as pb
 
 from benchmarks.benchmark_gate import ArtifactError, build_artifact
 from benchmarks.public_baseline import (
@@ -11,8 +16,7 @@ from benchmarks.public_baseline import (
     README_START,
     ROOT,
     SOURCE_PATHS,
-    _CARGO_VERSION_RE,
-    _cargo_profile_tables,
+    _normalize_cargo_workspace_version,
     _is_resolved_path,
     _normalize_checkout_newlines,
     _replace_block,
@@ -28,6 +32,72 @@ from benchmarks.public_baseline import (
 
 def metric(values):
     return {"wall_ms": distribution(values), "rss_kb": distribution([100] * len(values))}
+
+
+class CargoFingerprintTests(unittest.TestCase):
+    """Exercise Git discovery, byte normalization, hashing and the real validator."""
+
+    MANIFEST = b'''[workspace]
+members = ["crates/perry"]
+[workspace.package]
+version = "0.5.1635"
+edition = "2021"
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+[workspace.dependencies.other]
+version = "2.0"
+[profile.release]
+opt-level = 3
+'''
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        self.manifest = root / "Cargo.toml"
+        self.manifest.write_bytes(self.MANIFEST)
+        for args in (("init", "-q"), ("add", "Cargo.toml")):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+        root_patch = patch.object(pb, "ROOT", root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
+        self.original = pb.tracked_fingerprint(SOURCE_PATHS)
+        # In-memory validator fixture only; never rewrite published evidence.
+        self.artifact = json.loads(pb.DEFAULT_ARTIFACT.read_text())
+        self.artifact["generated_at"] = datetime.now(timezone.utc).isoformat()
+        self.artifact["freshness"] = {
+            "source_fingerprint": self.original,
+            "harness_fingerprint": pb.tracked_fingerprint(HARNESS_PATHS),
+        }
+        pb.validate_public(self.artifact, 45)
+
+    def test_version_only_bump_keeps_fingerprint_and_gate_green(self):
+        changed = self.MANIFEST.replace(b'0.5.1635', b'0.5.1636')
+        self.assertNotEqual(changed, self.MANIFEST)
+        self.manifest.write_bytes(changed)
+        self.assertEqual(pb.tracked_fingerprint(SOURCE_PATHS), self.original)
+        pb.validate_public(self.artifact, 45)
+
+    def test_real_manifest_changes_move_fingerprint_and_turn_gate_red(self):
+        changes = (
+            ("profile", b'opt-level = 3', b'opt-level = 2'),
+            ("inline dependency", b'version = "1.0"', b'version = "1.1"'),
+            ("dependency table", b'version = "2.0"', b'version = "2.1"'),
+            ("feature flags", b'["derive"]', b'["derive", "rc"]'),
+            ("workspace member", b'"crates/perry"', b'"crates/other"'),
+            ("edition", b'edition = "2021"', b'edition = "2024"'),
+        )
+        for label, old, new in changes:
+            with self.subTest(input=label):
+                changed = self.MANIFEST.replace(old, new)
+                self.assertNotEqual(changed, self.MANIFEST)
+                self.manifest.write_bytes(changed)
+                self.assertNotEqual(pb.tracked_fingerprint(SOURCE_PATHS), self.original)
+                with self.assertRaisesRegex(ArtifactError, "benchmark inputs changed"):
+                    pb.validate_public(self.artifact, 45)
+                self.manifest.write_bytes(self.MANIFEST)
+                self.assertEqual(pb.tracked_fingerprint(SOURCE_PATHS), self.original)
+                pb.validate_public(self.artifact, 45)
 
 
 class PublicBaselineTests(unittest.TestCase):
@@ -133,33 +203,20 @@ class PublicBaselineTests(unittest.TestCase):
         self.assertIn("win vs both", block)
         self.assertIn("`abcdef123456`", block)
 
-    def test_cargo_version_bump_does_not_change_fingerprint_input(self):
-        # A workspace version bump must not move the source fingerprint: the
-        # volatile version line is normalized out before hashing. Regression
-        # guard — before this, the freshness gate reddened on every PR that
-        # followed a version bump (Cargo.toml is a fingerprinted source path).
-        def normalize(data):
-            normalized = _CARGO_VERSION_RE.sub(b'version = "0.0.0"', data)
-            return _cargo_profile_tables(normalized)
-
-        base = (
-            b'[workspace.package]\nversion = "0.5.1258"\nedition = "2021"\n'
-            b'[profile.release]\nopt-level = 3\n'
-        )
-        bumped = (
-            b'[workspace.package]\nversion = "0.5.1300"\nedition = "2021"\n'
-            b'[profile.release]\nopt-level = 3\n'
-        )
-        self.assertEqual(normalize(base), normalize(bumped))
-
-        # Workspace/dependency plumbing is outside the extract, while a build
-        # profile change must still move it.
-        dependency_change = base.replace(
-            b"[profile.release]", b'foo = "1"\n[profile.release]'
-        )
-        profile_change = base.replace(b"opt-level = 3", b"opt-level = 2")
-        self.assertEqual(normalize(base), normalize(dependency_change))
-        self.assertNotEqual(normalize(base), normalize(profile_change))
+    def test_only_workspace_package_version_value_is_normalized(self):
+        for quote in (b'"', b"'"):
+            with self.subTest(quote=quote):
+                base = (
+                    b'[workspace.package] # release metadata\n'
+                    b'  version = ' + quote + b'0.5.1635' + quote + b' # release\n'
+                    b'edition = "2021"\n'
+                    b'[workspace.dependencies.serde] # dependency metadata\n'
+                    b'version = "1.0"\n'
+                )
+                self.assertEqual(
+                    _normalize_cargo_workspace_version(base),
+                    base.replace(b'0.5.1635', b'0.0.0'),
+                )
 
     def test_fingerprint_input_is_checkout_line_ending_independent(self):
         self.assertEqual(
