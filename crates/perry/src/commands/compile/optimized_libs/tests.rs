@@ -25,6 +25,31 @@ fn write_file(path: &Path, contents: &[u8]) {
     std::fs::write(path, contents).expect("write test file");
 }
 
+#[test]
+fn missing_ext_archive_names_emitted_symbols_and_their_providers() {
+    let emitted = BTreeSet::from([
+        "js_bun_tcp_nm_install".to_string(),
+        "js_ext_http_nm_install".to_string(),
+    ]);
+    let definitions = HashSet::new();
+    let missing = missing_ext_archive_diagnostics(&emitted, &definitions, &[], None);
+    assert_eq!(missing.len(), 2);
+    assert!(missing.iter().any(|line| {
+        line.contains("js_bun_tcp_nm_install")
+            && line.contains("libperry_ext_net.a")
+            && line.contains("-p perry-stdlib-static -p perry-ext-net")
+    }));
+    assert!(missing.iter().any(|line| {
+        line.contains("js_ext_http_nm_install")
+            && line.contains("libperry_ext_http.a")
+            && line.contains("-p perry-stdlib-static -p perry-ext-http")
+    }));
+
+    let resolved = [PathBuf::from("/archive/libperry_ext_net.a")];
+    let definitions = HashSet::from(["js_ext_http_nm_install".to_string()]);
+    assert!(missing_ext_archive_diagnostics(&emitted, &definitions, &resolved, None).is_empty());
+}
+
 fn minimal_auto_workspace(dir: &Path) {
     write_file(&dir.join("Cargo.toml"), b"[workspace]\n");
     write_file(&dir.join("Cargo.lock"), b"# lock\n");
