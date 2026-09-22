@@ -10,9 +10,13 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx};
+use crate::expr::{
+    can_lower_proven_boolean_to_number, lower_expr, lower_expr_value, nanbox_pointer_inline,
+    nanbox_string_inline, unbox_to_i64, FnCtx,
+};
 use crate::nanbox::double_literal;
-use crate::types::{DOUBLE, I64};
+use crate::native_value::NativeRep;
+use crate::types::{DOUBLE, I1, I64};
 
 use perry_dispatch::{
     ArgKind as UiArgKind, MethodRow as UiSig, ReturnKind as UiReturnKind, PERRY_AUDIO_TABLE,
@@ -553,12 +557,19 @@ pub fn lower_perry_ui_table_call(
                     runtime_param_types.push(DOUBLE);
                 }
                 UiArgKind::I64Raw => {
-                    // Numeric arg the runtime wants as i64 (e.g. enum tag,
-                    // boolean flag). `fptosi` converts the f64 to a signed
-                    // integer.
-                    let v = lower_expr(ctx, arg)?;
-                    let blk = ctx.block();
-                    let i = blk.fptosi(DOUBLE, &v, I64);
+                    // Numeric arg the runtime wants as i64 (e.g. enum tag or
+                    // boolean flag). Perry booleans are NaN-boxed at JSValue
+                    // boundaries, so preserve a proven native i1 and widen it
+                    // before the generic numeric fptosi path.
+                    let i = if can_lower_proven_boolean_to_number(ctx, arg) {
+                        let boolean = lower_expr_value(ctx, arg)?
+                            .expect("a proven native Boolean must lower to a native value");
+                        debug_assert!(matches!(boolean.rep, NativeRep::I1));
+                        ctx.block().zext(I1, &boolean.value, I64)
+                    } else {
+                        let v = lower_expr(ctx, arg)?;
+                        ctx.block().fptosi(DOUBLE, &v, I64)
+                    };
                     llvm_args.push((I64, i));
                     runtime_param_types.push(I64);
                 }
