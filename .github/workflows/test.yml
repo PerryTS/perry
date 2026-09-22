@@ -809,13 +809,29 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/global_sink_isolation.py --self-test
-          # #10980: the lock-downgrade gate runs at MERGE time, not per-PR
-          # (a branch that merely predates a bump is not at fault, and failing
-          # those trains people to bypass it). Only its self-test belongs here
-          # -- it proves the detector still catches a downgrade and still
-          # passes every legitimate move.
-          python3 scripts/lock_no_downgrade.py --self-test
           python3 scripts/global_sink_isolation.py
+
+      # #10980/#11025: Cargo.lock is a shipping input, and a regenerated lock
+      # can lower one consumer's resolved dependency while a newer version of
+      # that dependency remains elsewhere in the graph. Keep the detector's
+      # proof independent from unrelated lint steps so it always reports.
+      - name: Lockfile downgrade detector self-test
+        if: ${{ !cancelled() }}
+        run: python3 scripts/lock_no_downgrade.py --self-test
+
+      # actions/checkout checks out the synthetic merge commit for a
+      # pull_request event. Comparing that tree with the event's base SHA asks
+      # the useful question: would THIS merge move any shared consumer's pin
+      # backwards? A branch that merely predates a bump inherits the base's
+      # lock in the merge result and stays green.
+      - name: Cargo.lock may not downgrade vs. pull request base
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/lock_no_downgrade.py --vs "$BASE_SHA"
 
       # #10944's asserted-global ratchet, merge-base half. The gate above
       # fails on a NEW bare process-global that a test asserts on; this
