@@ -1219,6 +1219,12 @@ export function setCornerRadius(widget: Widget, radius: number): void;
 export function textfieldSetString(widget: Widget, text: string): void;
 export function textfieldGetString(widget: Widget): string;
 export function textfieldFocus(widget: Widget): void;
+/** macOS: set a UTF-16 selection [start, end), or place the cursor when equal. Works before or after focus. */
+export function textfieldSetSelectionRange(widget: Widget, start: number, end: number): void;
+/** macOS: get the current or pending UTF-16 selection start. */
+export function textfieldGetSelectionStart(widget: Widget): number;
+/** macOS: get the current or pending UTF-16 selection end. */
+export function textfieldGetSelectionEnd(widget: Widget): number;
 export function textfieldBlurAll(): void;
 export function textfieldSetNextKeyView(widget: Widget, next: Widget): void;
 export function textfieldSetOnSubmit(widget: Widget, callback: () => void): void;

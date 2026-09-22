@@ -4,7 +4,7 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_app_kit::{NSLineBreakMode, NSTextField, NSView};
 use objc2_foundation::{
-    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSString,
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSRange, NSRunLoop, NSString,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,6 +16,8 @@ thread_local! {
     static TEXTFIELD_SUBMIT_CALLBACKS: RefCell<HashMap<usize, (f64, *const AnyObject)>> = RefCell::new(HashMap::new());
     /// Map from observer address to (focus_closure_f64, textfield_view_ptr)
     static TEXTFIELD_FOCUS_CALLBACKS: RefCell<HashMap<usize, (f64, *const AnyObject)>> = RefCell::new(HashMap::new());
+    /// A selection requested before the field editor exists is applied when editing begins.
+    static TEXTFIELD_SELECTIONS: RefCell<HashMap<i64, NSRange>> = RefCell::new(HashMap::new());
 }
 
 pub(crate) fn scan_macos_textfield_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
@@ -54,6 +56,28 @@ define_class!(
     pub struct PerryTextFieldObserver;
 
     impl PerryTextFieldObserver {
+        #[unsafe(method(textDidBeginEditing:))]
+        fn text_did_begin_editing(&self, notification: &NSNotification) {
+            let key = self.ivars().callback_key.get();
+            crate::catch_callback_panic("textfield selection", std::panic::AssertUnwindSafe(|| {
+                TEXTFIELD_CALLBACKS.with(|callbacks| {
+                    let Some(&(_, field_ptr, handle)) = callbacks.borrow().get(&key) else {
+                        return;
+                    };
+                    let Some(object) = notification.object() else {
+                        return;
+                    };
+                    if &*object as *const AnyObject != field_ptr {
+                        return;
+                    }
+                    if let Some(view) = super::get_widget(handle) {
+                        let field = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+                        apply_requested_selection(handle, field);
+                    }
+                });
+            }));
+        }
+
         #[unsafe(method(textDidChange:))]
         fn text_did_change(&self, notification: &NSNotification) {
             let key = self.ivars().callback_key.get();
@@ -241,6 +265,10 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         let sel = Sel::register(c"textDidChange:");
         let _: () = msg_send![&center, addObserver: &*observer, selector: sel, name: &*notif_name, object: tf_raw];
 
+        let begin_name = NSString::from_str("NSControlTextDidBeginEditingNotification");
+        let begin_sel = Sel::register(c"textDidBeginEditing:");
+        let _: () = msg_send![&center, addObserver: &*observer, selector: begin_sel, name: &*begin_name, object: tf_raw];
+
         // Prevent observer from being deallocated
         std::mem::forget(observer);
 
@@ -255,9 +283,87 @@ pub fn focus(handle: i64) {
             let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
             if let Some(window) = tf.window() {
                 window.makeFirstResponder(Some(tf));
+                apply_requested_selection(handle, tf);
             }
         }
     }
+}
+
+fn apply_requested_selection(handle: i64, field: &NSTextField) {
+    if let Some(editor) = field.currentEditor() {
+        let range = TEXTFIELD_SELECTIONS.with(|selections| selections.borrow_mut().remove(&handle));
+        if let Some(range) = range {
+            editor.setSelectedRange(range);
+        }
+    }
+}
+
+fn queue_selection_application(handle: i64) {
+    let run_loop = NSRunLoop::currentRunLoop();
+    let block = block2::RcBlock::new(move || {
+        if let Some(view) = super::get_widget(handle) {
+            let field = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+            apply_requested_selection(handle, field);
+        }
+    });
+    // AppKit may install and select the initial field editor after the widget
+    // is configured. Recheck on the next main-loop turn, once the window exists.
+    unsafe { run_loop.performBlock(&block) };
+}
+
+fn selection_offset(value: f64, length: usize) -> usize {
+    if value.is_nan() || value <= 0.0 {
+        0
+    } else {
+        (value as usize).min(length)
+    }
+}
+
+/// Set a UTF-16 selection range. A request made before editing starts is
+/// applied when AppKit creates the field editor, after its select-all step.
+pub fn set_selection_range(handle: i64, start: f64, end: f64) {
+    if let Some(view) = super::get_widget(handle) {
+        let field = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+        let length = field.stringValue().length();
+        let start = selection_offset(start, length);
+        let end = selection_offset(end, length);
+        let range = NSRange::new(start.min(end), start.max(end) - start.min(end));
+        TEXTFIELD_SELECTIONS.with(|selections| {
+            selections.borrow_mut().insert(handle, range);
+        });
+        if field.currentEditor().is_some() {
+            apply_requested_selection(handle, field);
+        } else {
+            queue_selection_application(handle);
+        }
+    }
+}
+
+fn selection_range(handle: i64) -> NSRange {
+    let Some(view) = super::get_widget(handle) else {
+        return NSRange::default();
+    };
+    let field = unsafe { &*(Retained::as_ptr(&view) as *const NSTextField) };
+    if let Some(editor) = field.currentEditor() {
+        editor.selectedRange()
+    } else {
+        TEXTFIELD_SELECTIONS.with(|selections| {
+            selections
+                .borrow()
+                .get(&handle)
+                .copied()
+                .unwrap_or_default()
+        })
+    }
+}
+
+pub fn selection_start(handle: i64) -> f64 {
+    selection_range(handle).location as f64
+}
+
+pub fn selection_end(handle: i64) -> f64 {
+    let range = selection_range(handle);
+    (range.location + range.length) as f64
 }
 
 /// Set the text of an editable text field from a StringHeader pointer.
