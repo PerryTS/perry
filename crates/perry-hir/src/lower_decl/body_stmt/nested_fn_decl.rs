@@ -284,6 +284,11 @@ pub(super) fn lower_nested_fn_decl(
     // tag has to be applied here too.
     ctx.function_valued_locals.insert(local_id);
 
+    // Nested declarations become inline closures rather than entries in
+    // `module.functions`. Preserve the declared name for function.name;
+    // codegen cannot infer it from a Let inside another closure's body.
+    ctx.closure_display_names.insert(func_id, func_name.clone());
+
     let closure = Expr::Closure {
         func_id,
         params,
