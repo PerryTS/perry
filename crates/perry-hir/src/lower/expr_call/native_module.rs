@@ -421,8 +421,7 @@ pub(super) fn try_native_module_methods(
             }
 
             // Check for os module methods FIRST (before generic NativeMethodCall)
-            let is_os_module =
-                obj_name == "os" || ctx.lookup_builtin_module_alias(&obj_name) == Some("os");
+            let is_os_module = ctx.is_builtin_module_namespace(&obj_name, "os");
             if is_os_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if let Some(expr) =
@@ -593,8 +592,7 @@ pub(super) fn try_native_module_methods(
             }
 
             // Check for net module methods
-            let is_net_module =
-                obj_name == "net" || ctx.lookup_builtin_module_alias(&obj_name) == Some("net");
+            let is_net_module = ctx.is_builtin_module_namespace(&obj_name, "net");
             if is_net_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
