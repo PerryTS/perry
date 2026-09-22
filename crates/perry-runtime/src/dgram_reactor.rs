@@ -30,8 +30,8 @@
 //! why sends moved to the driver as well, rather than only receives.
 //!
 //! The thread path survives as a fallback for an agent with no loop (a
-//! `worker_threads` agent before P3/P4, the `tokio-wait-driver` A/B arm, or a
-//! host where loop creation failed) — the P1 coexistence rule, unchanged.
+//! `worker_threads` agent before P3/P4, or a host where loop creation
+//! failed) — the P1 coexistence rule, unchanged.
 //! [`uses_turnloop`] reports which path a socket actually took, so a test can
 //! assert its subject ran instead of passing vacuously.
 //!

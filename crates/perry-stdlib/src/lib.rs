@@ -113,9 +113,8 @@ pub mod turnloop_smtp;
 // directly when this thread owns it, and through turnloop P10's `agent_post`
 // when another thread of the same agent does. The reqwest client stays beside
 // it for what the engine declines: an undrivable proxy, a URL the fetch policy
-// layer rejects, and a genuine absence of an agent loop (the
-// `tokio-wait-driver` A/B arm, or a host where `Loop::new` failed). See
-// `turnloop_client`'s module note.
+// layer rejects, and a genuine absence of an agent loop (a host where
+// `Loop::new` failed). See `turnloop_client`'s module note.
 #[cfg(feature = "turnloop-http-client")]
 pub mod turnloop_client;
 

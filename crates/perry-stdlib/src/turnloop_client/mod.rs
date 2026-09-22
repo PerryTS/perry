@@ -38,9 +38,9 @@
 //! coexistence rule rather than an omission. Since turnloop P10 that list no
 //! longer includes a thread without a loop of its own: `submit` posts to the
 //! thread that owns the agent's loop (`posted`). What is left is a genuine
-//! absence of a loop for the whole agent — the `tokio-wait-driver` A/B arm, or
-//! a host where `Loop::new` failed — plus three request-shaped declines the
-//! owner would refuse identically (`Declined`).
+//! absence of a loop for the whole agent — a host where `Loop::new` failed —
+//! plus three request-shaped declines the owner would refuse identically
+//! (`Declined`).
 //!
 //! Every policy decision — redirects, the pool, the per-phase deadlines, the
 //! proxy environment, `Content-Encoding` — comes from `turnloop_http::client`
@@ -144,9 +144,7 @@ pub(crate) enum Declined {
     ///
     /// turnloop P9 gave every agent a loop and P10 (`posted`) lets a thread
     /// that does not own its agent's loop hand the submission to the thread
-    /// that does, so the two cases left are both a genuine absence: the
-    /// `tokio-wait-driver` A/B arm, which compiles no agent loop because it
-    /// exists to measure the transport this replaces, and a host where
+    /// that does, so the case left is a genuine absence: a host where
     /// `Loop::new` failed.
     NoLoop,
     /// A proxy this client cannot drive. An `http://` proxy is served here now
@@ -579,17 +577,14 @@ fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
 /// while the UI thread pumps for the same heap. P10 lets that thread hand the
 /// whole submission to the owner ([`posted`]), which is a thread serving the
 /// *same* JS heap, so the promise is settled where that agent's values live.
-/// Only a genuine absence of a loop — the `tokio-wait-driver` A/B arm, or a
-/// host where `Loop::new` failed — still declines to reqwest.
+/// Only a genuine absence of a loop — a host where `Loop::new` failed —
+/// still declines to reqwest.
 pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
     let direct = tl::available();
     if !direct && !posted::available() {
         // No loop anywhere for this agent, so the caller's own transport is the
-        // only one. Decline BEFORE preparing the request: on the
-        // `tokio-wait-driver` A/B arm this is every request, and `prepare`
-        // reaches `tls_config()`, whose first call loads the platform root
-        // store. The arm exists to measure the transport this replaces, and it
-        // must not be charged for a client it can never use.
+        // only one. Decline BEFORE preparing the request: `prepare` reaches
+        // `tls_config()`, whose first call loads the platform root store.
         return Err(Declined::NoLoop);
     }
     let prepared = prepare(&spec)?;

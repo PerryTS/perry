@@ -16,11 +16,11 @@
 //!
 //! # Which sockets come here
 //!
-//! [`enabled`] is false in the `tokio-wait-driver` A/B arm and on a second
-//! thread acting for an agent another thread already owns — turnloop P9 gave
-//! every JS agent a loop, so a `worker_threads` Worker is no longer one of
-//! these, and the route is claimed once per thread by the first to ask
-//! (`event_pump::agent_loop::claim_route`). Those keep the tokio path.
+//! [`enabled`] is false on a second thread acting for an agent another
+//! thread already owns — turnloop P9 gave every JS agent a loop, so a
+//! `worker_threads` Worker is no longer a reason it is false — and the
+//! route is claimed once per thread by the first to ask
+//! (`event_pump::agent_loop::claim_route`). That keeps the tokio path.
 //!
 //! **TLS no longer does.** This paragraph used to say a socket that might be
 //! upgraded was created on tokio and stayed there for life, because

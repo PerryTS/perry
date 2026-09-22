@@ -227,10 +227,10 @@ pub fn live_handles() -> usize {
 /// Whether this thread can take the turnloop P2 path at all.
 ///
 /// True on every thread that runs a JS agent's event loop, since turnloop P9
-/// gave every agent a loop. False in the `tokio-wait-driver` A/B arm, on a host
-/// where loop creation failed, and on a second thread acting for an agent
-/// another thread already owns. A caller that gets `false` keeps its existing
-/// thread-backed transport — the P1 coexistence rule, unchanged.
+/// gave every agent a loop. False on a host where loop creation failed, and
+/// on a second thread acting for an agent another thread already owns. A
+/// caller that gets `false` keeps its existing thread-backed transport — the
+/// P1 coexistence rule, unchanged.
 pub fn available() -> bool {
     crate::event_pump::net_loop_available()
 }

@@ -1,5 +1,5 @@
 //! `PERRY_LOOP_STATS=1` wait metrics: where the primary agent's event loop
-//! spends its waits, measured the same way in both A/B arms.
+//! spends its waits.
 //!
 //! Instruction counts and RSS can stay flat while the waits between Perry and
 //! tokio decide a server's latency and CPU. This module makes them directly
@@ -342,7 +342,7 @@ pub fn format_line(arm: &str, s: &LoopWaitStats) -> String {
     )
 }
 
-/// Print the wait-metrics line once per process (both arms).
+/// Print the wait-metrics line once per process.
 pub fn print_once(arm: &str) {
     static PRINTED: AtomicU8 = AtomicU8::new(0);
     if enabled() && PRINTED.swap(1, Ordering::Relaxed) == 0 {

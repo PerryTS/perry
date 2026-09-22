@@ -90,10 +90,10 @@ pub(super) fn cp_pipe_from_file(file: std::fs::File) -> CpPipe {
 /// implements are untouched.
 ///
 /// The thread survives as the fallback for an agent with no loop (a
-/// `worker_threads` agent before P3/P4, the `tokio-wait-driver` A/B arm, or a
-/// host where loop creation failed) — the P1 coexistence rule. Adoption moves
-/// the descriptor, so the fallback reconstructs the reader from it rather than
-/// from a copy: there is exactly one owner at every instant.
+/// `worker_threads` agent before P3/P4, or a host where loop creation
+/// failed) — the P1 coexistence rule. Adoption moves the descriptor, so the
+/// fallback reconstructs the reader from it rather than from a copy: there
+/// is exactly one owner at every instant.
 pub(super) fn cp_spawn_reader(handle: u64, pipe: CpPipe, fd: usize) {
     if crate::turnloop_proc::available() {
         let transport = pipe.into_transport();

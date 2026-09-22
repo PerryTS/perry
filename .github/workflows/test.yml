@@ -893,17 +893,6 @@ jobs:
           fi
           echo "✅ API docs match the manifest."
 
-      # The tokio-vs-turnloop A/B has two arms, and only one of them is built
-      # by any other job. `tokio-wait-driver` compiles the legacy park instead
-      # of the per-agent turnloop loop, and it silently stopped compiling in
-      # the P3 timers commit — an `event_pump.rs` import left without the cfg
-      # every sibling item carries. A baseline that does not build is not a
-      # baseline, and nothing was red, so nobody looked. `check`, not
-      # `warnings`: the arm legitimately leaves turnloop-side code dead.
-      - name: Build the tokio-wait-driver A/B baseline arm
-        if: ${{ !cancelled() }}
-        run: cargo check -p perry-stdlib --features tokio-wait-driver
-
   # ---------------------------------------------------------------------------
   # rustc warnings gate
   #

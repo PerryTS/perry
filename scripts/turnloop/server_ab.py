@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""turnloop P0 server A/B harness: turnloop arm vs `tokio-wait-driver` arm.
+"""turnloop server A/B harness: the turnloop arm vs a pre-migration commit.
+
+The tokio arm was originally this same tree built with
+`perry-stdlib/tokio-wait-driver`. That feature has been DELETED, so the only
+tokio baseline left is a pre-migration checkout, passed with `--arm-tree
+tokio=<path>`. See the cross-commit note below for why that is the RIGHT
+baseline and not merely the surviving one.
 
 Builds both arms from ONE commit into separate target dirs (prebuilt archives,
 PERRY_NO_AUTO_OPTIMIZE=1 — the A/B feature does not survive auto-optimize),
@@ -91,12 +97,19 @@ ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "scripts/turnloop/apps/node_http_hello.ts"
 
 ARMS = ("turnloop", "tokio")
-ARM_FEATURES = {"turnloop": [], "tokio": ["perry-stdlib/tokio-wait-driver"]}
+# The tokio arm carries no extra features. It used to be selected in-tree by
+# `perry-stdlib/tokio-wait-driver`; that feature is DELETED, so the tokio arm is
+# now only reachable through cross-commit mode below, where it is built from a
+# pre-migration checkout whose own tree still has whatever it needs.
+ARM_FEATURES = {"turnloop": [], "tokio": []}
 ARM_MARKER = {
     "turnloop": "[perry-loop] driver=turnloop",
-    "tokio": "[perry-loop] driver=tokio-wait-driver",
+    # Unreachable: a pre-migration tree prints no `[perry-loop]` line at all,
+    # and its ABSENCE is what `verify_arm` asserts for the tokio arm instead.
+    # Kept so the two tables stay keyed by ARMS rather than silently partial.
+    "tokio": None,
 }
-ARM_WAITS = {"turnloop": "turnloop", "tokio": "tokio-wait-driver"}
+ARM_WAITS = {"turnloop": "turnloop", "tokio": None}
 # Cross-commit mode: the two arms are two COMMITS, not one commit built twice
 # with a feature flag. That is what P1-P8 force -- once `node:net`, the servers,
 # the clients and the database drivers stop going through tokio at all, the
@@ -171,6 +184,16 @@ def profile_dir(profile):
 
 
 def cargo_command(arm, profile):
+    if arm == "tokio" and not cross_enabled():
+        # Fail loudly rather than silently building a SECOND turnloop arm and
+        # reporting a 0% delta as if it meant something. The in-tree selector
+        # for this arm was `perry-stdlib/tokio-wait-driver`, which no longer
+        # exists; a pre-migration commit is the only tokio baseline there is.
+        raise SystemExit(
+            "the tokio arm can no longer be built from this tree: the "
+            "`tokio-wait-driver` feature was deleted with the migration. Pass "
+            "`--arm-tree tokio=<path-to-pre-migration-checkout>` to measure "
+            "against a pre-migration commit instead.")
     cmd = ["cargo", "build", "--locked", "--profile", profile]
     for package in PACKAGES:
         cmd += ["-p", package]
@@ -278,10 +301,10 @@ def build(args):
 def assert_arms_differ(meta):
     """The arms must not be byte-identical, or the A/B is vacuous.
 
-    `tokio-wait-driver` changes perry-stdlib and perry-runtime, so both archives
-    and the linked server must differ. Two identical arms is the failure mode
-    CLAUDE.md warns about — a stale `.a`, or a feature that never reached the
-    build — and it reads as "no regressions" instead of as "nothing measured".
+    The arms are two different COMMITS, so both archives and the linked server
+    must differ. Two identical arms is the failure mode CLAUDE.md warns about —
+    a stale `.a`, or a tree that was never rebuilt — and it reads as "no
+    regressions" instead of as "nothing measured".
     """
     a, b = (meta["arms"][arm] for arm in ARMS)
     same = [name for name in ("libperry_runtime.a", "libperry_stdlib.a")
@@ -290,7 +313,7 @@ def assert_arms_differ(meta):
         why = ("the two arms are supposed to be different COMMITS, so identical "
                "archives mean one tree was not rebuilt"
                if cross_enabled() else
-               "the tokio-wait-driver feature did not reach the build")
+               "the arms were built from the same tree")
         raise SystemExit(
             f"the two arms share identical {', '.join(same)}: {why}, so any "
             "comparison would be vacuous")
@@ -1528,7 +1551,7 @@ def markdown(summary, doc):
         mt = {k: v.get("mtime_iso") for k, v in meta.get("archives", {}).items()}
         lines.append(f"- {arm}: marker `{meta.get('marker')}`, binary {meta.get('server_binary_bytes')} B, archives {mt}")
     lines += ["", MEASUREMENT_NOTE, "",
-              "Median [min–max] over valid rounds; Δ = turnloop median vs tokio-wait-driver median.", ""]
+              "Median [min–max] over valid rounds; Δ = turnloop median vs pre-migration median.", ""]
     for scenario, block in summary["scenarios"].items():
         rows = block["rows"] if isinstance(block, dict) and "rows" in block else block
         lines += [f"## {scenario}", ""]
@@ -1546,7 +1569,7 @@ def markdown(summary, doc):
             title = GROUP_HEADINGS[group]
             if group == "timing" and isinstance(block, dict) and not block.get("timing_authoritative", True):
                 title += " — ADVISORY"
-            lines += [f"### {title}", "", "| metric | turnloop | tokio-wait-driver | Δ % |", "|---|---|---|---|"]
+            lines += [f"### {title}", "", "| metric | turnloop | tokio (pre-migration) | Δ % |", "|---|---|---|---|"]
             for key, row in group_rows:
                 if key in seen:
                     continue
@@ -1658,7 +1681,7 @@ def callgrind_markdown(doc):
              CALLGRIND_NOTE, "",
              f"- valgrind: `{doc.get('valgrind')}`, host `{doc.get('host', {}).get('hostname')}`, "
              f"commit `{doc.get('commit')}`", "",
-             "| probe | turnloop Ir | tokio-wait-driver Ir | Δ % |", "|---|---|---|---|"]
+             "| probe | turnloop Ir | tokio (pre-migration) Ir | Δ % |", "|---|---|---|---|"]
     by_probe = {}
     for row in doc.get("rows", []):
         by_probe.setdefault(row["probe"], {})[row["arm"]] = row

@@ -266,8 +266,8 @@ pub(crate) const NO_LOOP_MESSAGE: &str =
 ///
 /// Since turnloop P9 gave every JS agent a loop, that leaves a second thread
 /// acting for an agent another thread already owns (a host pump thread;
-/// Android's UI thread for `perry-native`), the `tokio-wait-driver` A/B arm,
-/// and a host where `Loop::new` failed.
+/// Android's UI thread for `perry-native`), and a host where `Loop::new`
+/// failed.
 ///
 /// The `h2` client that used to stand here is gone rather than kept. It built a
 /// private `current_thread` runtime per session and a *second* one per request;

@@ -181,8 +181,8 @@ pub enum Delivery<T> {
 /// its `deliver` never runs and the caller keeps its own fallback.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubmitError {
-    /// This thread has no `turnloop::Loop`: a worker agent, the
-    /// `tokio-wait-driver` A/B arm, or a host where loop creation failed.
+    /// This thread has no `turnloop::Loop`: a worker agent, or a host where
+    /// loop creation failed.
     NoLoop,
     /// The pool queue or the loop's operation table is full. This is
     /// backpressure, not a failure: the caller may retry or run inline.

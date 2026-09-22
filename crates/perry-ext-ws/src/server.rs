@@ -205,11 +205,10 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     });
 
     if !perry_http_server::available(SERVER_SUBSYSTEM) {
-        // This agent owns no `turnloop::Loop` — a `worker_threads` agent, or
-        // the `tokio-wait-driver` A/B arm — and this crate has no second
-        // transport since the tokio accept loop was deleted. Say so on
-        // `'error'` rather than returning a handle that silently never
-        // listens.
+        // This agent owns no `turnloop::Loop` — a `worker_threads` agent —
+        // and this crate has no second transport since the tokio accept
+        // loop was deleted. Say so on `'error'` rather than returning a
+        // handle that silently never listens.
         push_ws_event(PendingWsEvent::ServerError(
             server_handle,
             "WebSocketServer bind error: no event loop on this thread".to_string(),

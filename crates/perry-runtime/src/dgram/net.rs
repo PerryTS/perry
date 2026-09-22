@@ -396,8 +396,9 @@ pub(crate) fn real_send_bytes(
         let callback_bits = callback_from_args(args).map(f64::to_bits).unwrap_or(0);
         match crate::dgram_reactor::send_on_loop(id, bytes, dest, callback_bits) {
             Ok(()) => return undefined_value(),
-            // Not on the loop (a worker agent, or the A/B arm): fall through
-            // to the synchronous send with the bytes handed back.
+            // Not on the loop (a `worker_threads` agent before P3/P4, or a
+            // host where loop creation failed): fall through to the
+            // synchronous send with the bytes handed back.
             Err(crate::dgram_reactor::SendRefusal::NotOnLoop(returned)) => bytes = returned,
             // The driver refused the submission and the bytes went with it.
             Err(crate::dgram_reactor::SendRefusal::Refused) => {

@@ -19,8 +19,8 @@ use std::os::raw::c_void;
 /// Nonzero when a post from this thread would reach a loop.
 ///
 /// Asked once, when a binding decides which transport a connection lives on.
-/// False in the `tokio-wait-driver` A/B arm and on a host where loop creation
-/// failed — the two cases where the binding must keep its legacy transport.
+/// False on a host where loop creation failed — the only case where the
+/// binding must keep its legacy transport.
 #[no_mangle]
 pub extern "C" fn js_perry_agent_post_available() -> i32 {
     i32::from(super::available())

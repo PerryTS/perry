@@ -1,6 +1,6 @@
-//! PERRY_LOOP_STATS wait-metric tests. They compile in both A/B arms and drive
-//! the real park and notify entry points; every assertion is a delta against a
-//! snapshot, and each case proves its wait actually ran.
+//! PERRY_LOOP_STATS wait-metric tests. They drive the real park and notify
+//! entry points; every assertion is a delta against a snapshot, and each case
+//! proves its wait actually ran.
 
 use super::*;
 use std::sync::atomic::Ordering;

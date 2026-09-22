@@ -87,7 +87,7 @@ impl AgentJob for PostedAbort {
 ///
 /// `submit` needs the answer before it prepares a request, because preparing
 /// one is not free — the first `tls_config()` call loads the platform root
-/// store — and on the `tokio-wait-driver` A/B arm the answer is always no.
+/// store.
 pub(super) fn available() -> bool {
     agent_post::available()
 }
@@ -96,8 +96,8 @@ pub(super) fn available() -> bool {
 ///
 /// `Ok(())` keeps [`super::submit`]'s contract: the sink will be called exactly
 /// once, over there. `Err(Declined::NoLoop)` means no loop exists for this
-/// agent at all — the `tokio-wait-driver` A/B arm, or a host where `Loop::new`
-/// failed — and the caller must run its reqwest future.
+/// agent at all — the only case is a host where `Loop::new` failed — and the
+/// caller must run its reqwest future.
 ///
 /// One qualification on "will be called", inherited from `agent_post`: a job
 /// still queued when the owner's loop goes down is dropped without being

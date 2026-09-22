@@ -169,7 +169,6 @@ where
 /// runtime counts — fetch/net/ws/db connections, server accept loops — so the
 /// primary agent drives the legacy tick exactly while any of it exists and
 /// parks in its turnloop loop otherwise. P8 deletes this with tokio.
-#[cfg(not(feature = "tokio-wait-driver"))]
 extern "C" fn native_work_inflight() -> i32 {
     let tasks = Lazy::get(&RUNTIME).is_some_and(|rt| rt.metrics().num_alive_tasks() != 0);
     i32::from(tasks || EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0)
@@ -435,7 +434,7 @@ extern "C" fn stdlib_fast_drive() {
     if !native {
         return;
     }
-    // PERRY_LOOP_STATS (both A/B arms): a fast drive that actually ran tokio.
+    // PERRY_LOOP_STATS: a fast drive that actually ran tokio.
     let stats = perry_runtime::event_pump::loop_stats::begin_fast_drive();
     RUNTIME.block_on(async {
         let notified = EVENT_READY.notified();
@@ -543,7 +542,6 @@ pub fn ensure_pump_registered() {
         Lazy::force(&RUNTIME);
         // turnloop P0: the primary agent parks in its own loop and drives the
         // tick above only while tokio owns native work (P0-transitional).
-        #[cfg(not(feature = "tokio-wait-driver"))]
         perry_runtime::event_pump::js_register_native_inflight(Some(native_work_inflight));
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
@@ -1117,10 +1115,8 @@ mod tests {
 
     /// PERRY_LOOP_STATS, real wiring: a live tokio task makes the primary
     /// agent's park a TOKIO TICK, and the notify that ends it is one
-    /// wake-latency sample. Both arms take this path — the turnloop arm because
-    /// `native_work_inflight()` hands the wait back to the tick, the
-    /// `tokio-wait-driver` arm because it is the only wait it has — which is
-    /// what makes the A/B comparison like-for-like.
+    /// wake-latency sample — `native_work_inflight()` hands the wait back to
+    /// the tick.
     #[test]
     fn a_live_tokio_task_parks_the_main_loop_in_a_counted_tokio_tick() {
         use perry_runtime::event_pump::loop_stats;

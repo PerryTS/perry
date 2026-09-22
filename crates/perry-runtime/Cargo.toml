@@ -288,12 +288,6 @@ full = ["dep:hostname", "dep:dirs"]
 # symbol-suppression gate; it must NOT be confused
 # with the behavioral `external-fetch-symbols` (fetch dispatch routing) below.
 stdlib = []
-# turnloop P0 A/B arm. Enabled ONLY through `perry-stdlib/tokio-wait-driver`
-# (never directly): compiles the legacy whole-millisecond park — condvar, or the
-# stdlib's registered tokio tick — for every agent instead of the primary
-# agent's turnloop loop, so a runtime-only binary measures the same arm as a
-# stdlib-linked one. Deleted with the migration (P8).
-tokio-wait-driver = []
 # Extension-crate test binaries that link the real perry-ext-ws symbols still
 # need runtime-link for perry-ffi helpers, but must not also export runtime-only
 # js_ws_* stubs.

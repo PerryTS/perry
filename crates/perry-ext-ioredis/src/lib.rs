@@ -7,8 +7,8 @@
 //! The legacy transport — `redis::AsyncCommands` bridged through
 //! `spawn_blocking` + `tokio::Handle::current().block_on`, which borrowed a
 //! tokio blocking-pool thread for every round trip — remains for the clients
-//! that decline: a `worker_threads` agent (no loop of its own) and the
-//! `tokio-wait-driver` A/B arm. A TLS (`rediss://`) client no longer declines,
+//! that decline: a `worker_threads` agent (no loop of its own). A TLS
+//! (`rediss://`) client no longer declines,
 //! and that is the case that matters most here: `REDIS_TLS` defaults to
 //! `true`, and the legacy path has no TLS backend compiled into its `redis`
 //! dependency, so until the driver could perform the upgrade itself every
@@ -156,9 +156,9 @@ pub unsafe extern "C" fn js_ioredis_new(_config_ptr: *const std::ffi::c_void) ->
     // Nor is the agent-shaped decline one any more: `transport()` answers with
     // three values, and the middle one — another thread of this same agent owns
     // the loop — hands its commands to that owner instead of to tokio. Only a
-    // genuine absence of a loop (the `tokio-wait-driver` A/B arm, or a host
-    // where `Loop::new` failed) still reaches the `redis` crate. Asked once,
-    // here: a connection belongs to one transport for its whole life.
+    // genuine absence of a loop — a host where `Loop::new` failed — still
+    // reaches the `redis` crate. Asked once, here: a connection belongs to
+    // one transport for its whole life.
     let transport = turnloop_io::transport();
     ENDPOINTS.lock().unwrap().insert(
         handle,

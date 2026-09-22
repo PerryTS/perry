@@ -91,9 +91,8 @@ impl<J> Rejected<J> {
 ///
 /// Asked once, when a binding decides which transport a connection lives on —
 /// [`post_job`] consumes its job on the way in, so "would this land?" cannot be
-/// answered by trying. False in the `tokio-wait-driver` A/B arm and on a host
-/// where loop creation failed: the two cases where the legacy transport must
-/// stay.
+/// answered by trying. False on a host where loop creation failed — the only
+/// case where the legacy transport must stay.
 ///
 /// Says nothing about whether *this* thread owns that loop. A thread that does
 /// should submit directly and already knows so from

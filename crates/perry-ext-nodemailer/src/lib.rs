@@ -11,11 +11,11 @@
 //! `turnloop_smtp::message`, which re-exports it from a `builder`-only pin.
 //!
 //! What a decline costs, stated plainly: an agent that cannot get a
-//! `turnloop::Loop` (a host pump thread, the `tokio-wait-driver` A/B arm, a
-//! host where `Loop::new` failed) now REJECTS instead of silently taking a
-//! second transport. That is the kill-policy trade CLAUDE.md asks for — the
-//! fallback was never exercised by any test, so "it still works there" was
-//! never a claim anyone had evidence for.
+//! `turnloop::Loop` (a host pump thread, a host where `Loop::new` failed) now
+//! REJECTS instead of silently taking a second transport. That is the
+//! kill-policy trade CLAUDE.md asks for — the fallback was never exercised
+//! by any test, so "it still works there" was never a claim anyone had
+//! evidence for.
 //!
 //! Exercises perry-ffi v0.5's nested-object reading surface
 //! (`js_object_get_field` indexed lookups for the user's SMTP

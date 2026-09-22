@@ -9,9 +9,9 @@
 //! # The coexistence rule
 //!
 //! [`available`] answers whether this thread may use turnloop at all. It is
-//! false on a `worker_threads` agent (which has no loop until P3/P4), in the
-//! `tokio-wait-driver` A/B arm, and on a host where loop creation failed. A
-//! binding that gets `false` must keep its existing transport for that socket.
+//! false on a `worker_threads` agent (which has no loop until P3/P4), and on
+//! a host where loop creation failed. A binding that gets `false` must keep
+//! its existing transport for that socket.
 //! **A socket belongs to one transport for its whole life** — there is no
 //! handover, so a binding must decide once, at creation.
 //!
@@ -329,10 +329,9 @@ fn check(rc: i32, raw: RawNetError) -> Result<(), NetError> {
 ///
 /// A binding calls this once per socket, at creation, and keeps its legacy
 /// transport when it is false. Both halves matter: the thread must own a loop
-/// (false on a worker agent, and in the `tokio-wait-driver` A/B arm), and
-/// *this* subsystem's sink must be installed — a binding whose registration
-/// was refused by the layout check would otherwise submit work whose
-/// completions nothing would deliver.
+/// (false on a worker agent), and *this* subsystem's sink must be installed
+/// — a binding whose registration was refused by the layout check would
+/// otherwise submit work whose completions nothing would deliver.
 pub fn available(subsystem: u8) -> bool {
     #[cfg(any(not(test), feature = "runtime-link"))]
     {

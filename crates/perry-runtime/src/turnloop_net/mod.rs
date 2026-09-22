@@ -244,11 +244,11 @@ pub fn live_handles() -> usize {
 /// Whether this thread can take the turnloop net path at all.
 ///
 /// True on every thread that runs a JS agent's event loop, since turnloop P9
-/// gave every agent a loop. False in the `tokio-wait-driver` A/B arm, on a host
-/// where loop creation failed, and on a second thread acting for an agent
-/// another thread already owns (a host pump thread). A caller that gets `false`
-/// must keep its existing transport — that is the P1 coexistence rule, and it
-/// is why the tokio socket task is not deleted outright.
+/// gave every agent a loop. False on a host where loop creation failed, and
+/// on a second thread acting for an agent another thread already owns (a
+/// host pump thread). A caller that gets `false` must keep its existing
+/// transport — that is the P1 coexistence rule, and it is why the tokio
+/// socket task is not deleted outright.
 pub fn available() -> bool {
     crate::event_pump::net_loop_available()
 }

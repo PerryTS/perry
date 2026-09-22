@@ -23,12 +23,11 @@
 //! the per-connection `select!` task are `tcp_connect`, `accept_start` and the
 //! completion sink. This crate declares no async runtime.
 //!
-//! A host with no turnloop loop — a `worker_threads` agent, the
-//! `tokio-wait-driver` A/B arm — therefore has no WebSocket transport at all,
-//! and says so: `new WebSocket(url)` rejects and `new WebSocketServer({port})`
-//! raises `'error'` rather than silently doing nothing. That is a real
-//! narrowing and it is written down in `changelog.d/`, not hidden behind a
-//! fallback nobody exercises.
+//! A host with no turnloop loop — a `worker_threads` agent — therefore has no
+//! WebSocket transport at all, and says so: `new WebSocket(url)` rejects and
+//! `new WebSocketServer({port})` raises `'error'` rather than silently doing
+//! nothing. That is a real narrowing and it is written down in
+//! `changelog.d/`, not hidden behind a fallback nobody exercises.
 //!
 //! Architecture mirrors perry-stdlib's existing copy minus the iOS
 //! `NSURLSessionWebSocketTask` delegation path (out of scope for an
@@ -619,9 +618,9 @@ fn start_connect(
     };
     if !turnloop_io::available() {
         // The honest answer, not a silent no-op. This agent owns no
-        // `turnloop::Loop` — a `worker_threads` agent, or the
-        // `tokio-wait-driver` A/B arm — and this crate has no second
-        // transport to fall back to since the tokio one was deleted.
+        // `turnloop::Loop` — a `worker_threads` agent — and this crate has
+        // no second transport to fall back to since the tokio one was
+        // deleted.
         return refuse(
             "no event loop on this thread: `ws` needs a turnloop agent".to_string(),
             token,

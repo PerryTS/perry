@@ -38,7 +38,6 @@ fn the_posted_job_class_collides_with_no_other_token_space() {
             !crate::turnloop_pool::owns(token),
             "class {class:#x} must not also be P4's"
         );
-        #[cfg(not(feature = "tokio-wait-driver"))]
         assert_ne!(
             token,
             crate::event_pump::TIMER_TOKEN,
@@ -198,21 +197,4 @@ fn the_liveness_counter_is_per_thread_and_starts_at_zero() {
         0,
         "another thread's count must not leak into this one"
     );
-}
-
-/// The one decline reason posting cannot close, asserted rather than assumed:
-/// the `tokio-wait-driver` A/B arm compiles no agent loop at all, so there is
-/// no route to post to and every binding must keep its legacy transport. This
-/// is the baseline of the tokio-vs-turnloop measurement — it exists to run the
-/// code this work replaces, so it MUST decline.
-#[cfg(feature = "tokio-wait-driver")]
-#[test]
-fn the_ab_baseline_arm_has_no_post_path_at_all() {
-    assert!(!available(), "the A/B arm compiles no agent loop");
-    let mut sentinel = 0u8;
-    // SAFETY: the pointer is a live local and the arm never invokes the
-    // callback; the post is a compile-time no-op that reports NoRoute.
-    let outcome = unsafe { post(must_not_run, (&raw mut sentinel).cast()) };
-    assert_eq!(outcome, Posted::NoRoute, "the arm has no loop to post to");
-    assert!(!outcome.consumed(), "and therefore takes nothing");
 }

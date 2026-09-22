@@ -16,12 +16,6 @@ workspace = true
 crate-type = ["rlib"]
 
 [features]
-# turnloop P0 A/B measurement arm, default OFF: restores the pre-P0 wait driver
-# exactly (every agent parks through the tokio current-thread tick with its
-# whole-millisecond budget; runtime-only binaries use the legacy condvar park).
-# Nothing else may depend on it. Build it TOGETHER with perry-runtime-static so
-# the forwarded runtime feature unifies into both archives. Deleted in P8.
-tokio-wait-driver = ["perry-runtime/tokio-wait-driver"]
 # Default: include everything for backwards compatibility
 default = ["full"]
 

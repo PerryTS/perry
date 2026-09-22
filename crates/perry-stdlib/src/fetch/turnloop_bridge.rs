@@ -8,10 +8,9 @@
 //!
 //! # What declines, and why each is real
 //!
-//! * **No loop for this agent at all** — the `tokio-wait-driver` A/B arm, which
-//!   compiles none because it exists to measure the transport this replaces,
-//!   and a host where `Loop::new` failed. A *worker* agent is no longer one of
-//!   these (turnloop P9 gave every agent a loop), and neither is a second
+//! * **No loop for this agent at all** — the only remaining case is a host
+//!   where `Loop::new` failed. A *worker* agent is no longer one of these
+//!   (turnloop P9 gave every agent a loop), and neither is a second
 //!   thread acting for an agent another thread owns: turnloop P10 hands that
 //!   thread's whole submission to the owner (`turnloop_client::posted`).
 //! * **A proxy this client cannot drive** — a proxy URL whose scheme is not

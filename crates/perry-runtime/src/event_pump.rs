@@ -28,49 +28,44 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 // turnloop P0: the primary agent parks in its own `turnloop::Loop` on exact
-// `Instant` deadlines. Native targets only; the `tokio-wait-driver` A/B arm
-// (forwarded from perry-stdlib) compiles the legacy park instead.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+// `Instant` deadlines. Native targets only; wasm compiles the legacy park
+// instead.
+#[cfg(not(target_arch = "wasm32"))]
 mod agent_loop;
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod precise_wait;
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use agent_loop::arm_timer as arm_agent_timer;
-/// The A/B and wasm arms have no agent loop to arm: the legacy park recomputes
-/// its own timeout from the timer store on every pass, so there is no timer
-/// handle to re-arm and nothing to do here.
-///
-/// This mirror is not cosmetic. Without it the `tokio-wait-driver` arm — the
-/// BASELINE of the whole tokio-vs-turnloop measurement — does not compile, and
-/// that is exactly how it stopped building unnoticed when P3 moved JS timers
-/// onto the loop's own timer handle and left this `use` unconditional.
-#[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+/// The wasm arm has no agent loop to arm: the legacy park recomputes its own
+/// timeout from the timer store on every pass, so there is no timer handle
+/// to re-arm and nothing to do here.
+#[cfg(target_arch = "wasm32")]
 pub(crate) fn arm_agent_timer(_at: Option<std::time::Instant>) {}
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use agent_loop::{loop_statistics, LoopStats};
 // turnloop P6: perry-stdlib's outbound-client counters reach the stats line
 // through this, because the dependency edge runs stdlib → runtime.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use agent_loop::{register_stats_reporter, StatsReporter};
 // perry#10395 step 1: hand work to the loop of an agent ANOTHER thread owns.
 // The decline path — a second thread acting for an agent that already has an
 // owner — is the single root cause behind 19 of the remaining tokio edges, and
 // this is what those bindings convert to instead of keeping a tokio fallback.
-#[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use agent_loop::{has_route, post_to_agent, PostToAgentError};
 // P3's timer token, so P10's token-space test can name the real constant it
 // must not collide with rather than restate `u64::MAX` and drift from it.
-#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use agent_loop::TIMER_TOKEN;
 
-/// The A/B and wasm arms have no agent loop, so there is no stats line to add
-/// to. Registration is accepted and dropped rather than `#[cfg]`-ed at every
+/// The wasm arm has no agent loop, so there is no stats line to add to.
+/// Registration is accepted and dropped rather than `#[cfg]`-ed at every
 /// call site.
-#[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+#[cfg(target_arch = "wasm32")]
 pub type StatsReporter = extern "C" fn();
-#[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+#[cfg(target_arch = "wasm32")]
 pub fn register_stats_reporter(_reporter: StatsReporter) {}
-/// `PERRY_LOOP_STATS=1` wait metrics, recorded identically in both A/B arms.
+/// `PERRY_LOOP_STATS=1` wait metrics.
 pub mod loop_stats;
 
 use crate::timer::{
@@ -161,8 +156,7 @@ fn invoke_host_wake_callback() {
 // (`event_pump/precise_wait.rs`) and drives the registered tick only while the
 // `js_register_native_inflight` predicate reports tokio-owned native work in
 // flight (P0-transitional; P8 deletes it). Worker agents, which have no loop
-// until P3/P4, and the perry-stdlib `tokio-wait-driver` A/B arm use the hooks
-// exactly as described above.
+// until P3/P4, use the hooks exactly as described above.
 // ============================================================================
 static WAIT_DRIVER_SLEEP: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 static WAIT_DRIVER_WAKE: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
@@ -201,13 +195,13 @@ pub extern "C" fn js_register_wait_driver(
 /// flight" predicate (nonzero = in flight). While it reports work, the primary
 /// agent drives the registered millisecond tick instead of a turnloop turn,
 /// because tokio tasks only advance inside that tick. Passing `None` clears it.
-/// A no-op in the `tokio-wait-driver` A/B arm and on wasm, which have no agent
-/// loop. P8 deletes this hook with tokio.
+/// A no-op on wasm, which has no agent loop. P8 deletes this hook with
+/// tokio.
 #[no_mangle]
 pub extern "C" fn js_register_native_inflight(f: Option<extern "C" fn() -> i32>) {
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    #[cfg(not(target_arch = "wasm32"))]
     precise_wait::register_native_inflight(f);
-    #[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+    #[cfg(target_arch = "wasm32")]
     let _ = f;
 }
 
@@ -217,16 +211,16 @@ pub extern "C" fn js_register_native_inflight(f: Option<extern "C" fn() -> i32>)
 /// parked in a turnloop turn it goes back around the loop and selects the tokio
 /// tick, which is the only thing that runs that work; otherwise this is one
 /// atomic load. Needed for spawns from threads other than the primary agent's,
-/// which tokio's own driver unpark cannot deliver to a turnloop wait. A no-op in
-/// the `tokio-wait-driver` A/B arm and on wasm. P8 deletes it.
+/// which tokio's own driver unpark cannot deliver to a turnloop wait. A no-op
+/// on wasm. P8 deletes it.
 #[no_mangle]
 pub extern "C" fn js_native_work_submitted() {
     // PERRY_LOOP_STATS: this is a wake producer in its own right — it is the
     // ONLY way a cross-thread native submission reaches a parked turn — so it
     // stamps the wake-latency clock like `js_notify_main_thread` does. Without
-    // this the turnloop arm's histogram silently omits exactly the wakes the
-    // A/B is about. One relaxed load when stats are off.
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    // this the histogram silently omits exactly these wakes. One relaxed load
+    // when stats are off.
+    #[cfg(not(target_arch = "wasm32"))]
     {
         loop_stats::note_notify();
         agent_loop::wake_parked_agents();
@@ -236,23 +230,15 @@ pub extern "C" fn js_native_work_submitted() {
 /// turnloop P1: run `f` against this agent's driver, creating or upgrading the
 /// loop to the net profile first.
 ///
-/// `None` means this thread has no loop — the `tokio-wait-driver` A/B arm, a
-/// host where loop creation failed, or a second thread acting for an agent
-/// another thread already owns — and the caller must keep its legacy transport.
+/// `None` means this thread has no loop — a host where loop creation failed,
+/// or a second thread acting for an agent another thread already owns — and
+/// the caller must keep its legacy transport.
 /// That is the whole coexistence rule: a socket is either turnloop's or
 /// tokio's for its entire life, never both. Since turnloop P9 a worker agent is
 /// NOT in that list: it has a loop of its own.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn with_net_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
-    #[cfg(not(feature = "tokio-wait-driver"))]
-    {
-        agent_loop::with_net_driver(f)
-    }
-    #[cfg(feature = "tokio-wait-driver")]
-    {
-        let _ = f;
-        None
-    }
+    agent_loop::with_net_driver(f)
 }
 
 /// turnloop P4: run `f` against this agent's driver for a blocking-pool
@@ -284,40 +270,33 @@ pub(crate) fn with_pool_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> O
 /// no loop, so the caller's legacy poll still works.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn js_loop_turn_bounded(budget_ms: u64) {
-    #[cfg(not(feature = "tokio-wait-driver"))]
-    {
-        if !agent_loop::eligible() || !agent_loop::ensure_loop() {
-            return;
-        }
-        if budget_ms == 0 || !agent_loop::has_outstanding_work() {
-            // Nothing to wait *for*: collect anything already queued and
-            // return rather than burning the caller's budget in an OS wait.
-            agent_loop::settle_turn();
-            return;
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
-        let _ = agent_loop::park_until(deadline);
+    if !agent_loop::eligible() || !agent_loop::ensure_loop() {
+        return;
     }
-    #[cfg(feature = "tokio-wait-driver")]
-    {
-        let _ = budget_ms;
+    if budget_ms == 0 || !agent_loop::has_outstanding_work() {
+        // Nothing to wait *for*: collect anything already queued and
+        // return rather than burning the caller's budget in an OS wait.
+        agent_loop::settle_turn();
+        return;
     }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
+    let _ = agent_loop::park_until(deadline);
 }
 
 /// Test-only: install an unrouted net-profile loop on this thread.
-#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn install_net_loop_for_test() -> bool {
     agent_loop::install_unrouted_for_test(agent_loop::Profile::Net)
 }
 
 /// Test-only: one bounded turn plus completion dispatch.
-#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn pump_net_for_test(budget: std::time::Duration) {
     agent_loop::turn_for_test(budget);
 }
 
 /// Test-only: drop this thread's loop and all P1 net state.
-#[cfg(all(test, not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn reset_net_loop_for_test() {
     agent_loop::reset_for_test();
 }
@@ -327,24 +306,14 @@ pub(crate) fn reset_net_loop_for_test() {
 /// `turnloop_proc::close_and_settle`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn settle_loop_once() {
-    #[cfg(not(feature = "tokio-wait-driver"))]
-    {
-        agent_loop::settle_turn();
-    }
+    agent_loop::settle_turn();
 }
 
 /// turnloop P1: whether this thread can take the turnloop net path, asked
 /// without creating a loop.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn net_loop_available() -> bool {
-    #[cfg(not(feature = "tokio-wait-driver"))]
-    {
-        agent_loop::net_available()
-    }
-    #[cfg(feature = "tokio-wait-driver")]
-    {
-        false
-    }
+    agent_loop::net_available()
 }
 
 /// turnloop P9: destroy the calling *worker* agent's loop at
@@ -355,7 +324,7 @@ pub(crate) fn net_loop_available() -> bool {
 /// funnel and must not be emitted once per Worker. The per-agent `[perry-loop]`
 /// line still is — it is the only evidence a worker agent's loop ever ran.
 pub fn shutdown_agent_loop() {
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    #[cfg(not(target_arch = "wasm32"))]
     agent_loop::shutdown_current_thread();
 }
 
@@ -363,7 +332,7 @@ pub fn shutdown_agent_loop() {
 /// `PERRY_LOOP_STATS=1`, print its counters once (a diagnostic, not a behaviour
 /// knob). Idempotent; a park after this uses the legacy path.
 pub fn shutdown_wait_driver() {
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         agent_loop::shutdown_current_thread();
         loop_stats::print_once("turnloop");
@@ -372,15 +341,15 @@ pub fn shutdown_wait_driver() {
         // cannot say what one request cost. This one can.
         crate::turnloop_net::census::print_once();
     }
-    #[cfg(any(target_arch = "wasm32", feature = "tokio-wait-driver"))]
+    #[cfg(target_arch = "wasm32")]
     {
-        // Marks the arm so an A/B run can prove which driver it measured.
+        // Names the driver so a loop-stats run can prove which one it
+        // measured. Only one is left on wasm now that the tokio-vs-turnloop
+        // A/B arm is gone, but the line stays: `turnloop_p0_loop_stats.py`
+        // parses it, and a driver named in the output is what makes a run's
+        // subject checkable rather than assumed.
         static PRINTED: AtomicBool = AtomicBool::new(false);
-        let driver = if cfg!(feature = "tokio-wait-driver") {
-            "tokio-wait-driver"
-        } else {
-            "legacy"
-        };
+        let driver = "legacy";
         if loop_stats::enabled() && !PRINTED.swap(true, Ordering::AcqRel) {
             eprintln!("[perry-loop] driver={driver}");
         }
@@ -618,7 +587,7 @@ pub extern "C" fn js_notify_main_thread() {
     invoke_wait_driver_wake();
     // turnloop P0: wake the primary agent's loop if it is inside a turn. One
     // atomic load otherwise; must follow the `NOTIFIED` store above.
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    #[cfg(not(target_arch = "wasm32"))]
     agent_loop::wake_parked_agents();
     // Hot path: no consumer is currently in `cvar.wait_timeout`, so
     // we don't need to take the mutex or signal the cvar — the next
@@ -833,15 +802,15 @@ pub extern "C" fn js_wait_for_event() {
             PROFILE_WAIT_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
         }
         invoke_wait_driver_fast();
-        #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+        #[cfg(not(target_arch = "wasm32"))]
         agent_loop::fast_turn();
         return;
     }
 
     // turnloop P0/P9: every JS agent parks on exact `Instant` deadlines in its
     // own loop. A second thread acting for an agent another thread already owns
-    // (a host pump thread) and the A/B arm fall through to the legacy park.
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    // (a host pump thread) falls through to the legacy park.
+    #[cfg(not(target_arch = "wasm32"))]
     if agent_loop::eligible() && precise_wait::park() {
         return;
     }
@@ -851,7 +820,7 @@ pub extern "C" fn js_wait_for_event() {
     // zero poll timeout while its immediate queue is non-empty. The precise park
     // above says the same thing for an agent with a loop; this covers the
     // threads that take the legacy park (a second thread acting for an agent
-    // another thread owns, the A/B arm). It goes through the shared zero-budget
+    // another thread owns). It goes through the shared zero-budget
     // return, so the #1114 throttle still bounds a caller that never runs the
     // phase that would drain the queue.
     if crate::timer::js_immediate_has_pending() != 0 {
@@ -949,7 +918,7 @@ fn zero_budget_return() {
     // driven turn. No-op (atomic loads) when no driver is registered or
     // nothing native is in flight. #1114: this path does NOT reset the streak.
     invoke_wait_driver_fast();
-    #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-wait-driver")))]
+    #[cfg(not(target_arch = "wasm32"))]
     agent_loop::fast_turn();
 }
 

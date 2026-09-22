@@ -160,18 +160,11 @@ impl Posted {
 /// whether *this* thread owns that loop: a thread that does should submit
 /// directly, and already knows so from `turnloop_net::available()`.
 pub fn available() -> bool {
-    #[cfg(not(feature = "tokio-wait-driver"))]
-    {
-        crate::event_pump::has_route(crate::agent::current_agent())
-    }
-    // The A/B baseline arm compiles no agent loop at all, so there is no route
-    // to post to and every binding keeps its legacy transport. This is the one
-    // decline reason posting cannot close, and it is deliberate: the arm exists
-    // to measure the transport this work replaces.
-    #[cfg(feature = "tokio-wait-driver")]
-    {
-        false
-    }
+    crate::event_pump::has_route(crate::agent::current_agent())
+    // A host where loop creation failed has no loop to post to, so the binding
+    // keeps its legacy transport. Since the A/B baseline arm was deleted that
+    // is the ONE decline reason posting cannot close — and unlike the arm, it
+    // is not deliberate.
 }
 
 /// Hand `run(ctx)` to the loop of the agent this thread is acting for.
@@ -194,27 +187,19 @@ pub fn available() -> bool {
 /// owning thread. On a non-negative outcome the runtime owns it and will invoke
 /// `run` exactly once; on a negative one the caller still owns it.
 pub unsafe fn post(run: extern "C" fn(*mut c_void), ctx: *mut c_void) -> Posted {
-    #[cfg(not(feature = "tokio-wait-driver"))]
-    {
-        use crate::event_pump::{post_to_agent, PostToAgentError};
-        let job = HostJob { run, ctx };
-        let payload = turnloop::Payload::Boxed(Box::new(job));
-        match post_to_agent(crate::agent::current_agent(), job_token(), payload) {
-            Ok(()) => Posted::Accepted,
-            Err(PostToAgentError::NoRoute) => Posted::NoRoute,
-            Err(PostToAgentError::NotPublished) => Posted::Again,
-            // `payload: Some` is turnloop's "not accepted, take it back"; the
-            // box is dropped here and the caller keeps its context. `None` is
-            // the opposite and must NOT read as a failure the caller retries:
-            // the job is queued and will run.
-            Err(PostToAgentError::Refused { payload: Some(_) }) => Posted::Again,
-            Err(PostToAgentError::Refused { payload: None }) => Posted::QueuedUnwoken,
-        }
-    }
-    #[cfg(feature = "tokio-wait-driver")]
-    {
-        let _ = (run, ctx);
-        Posted::NoRoute
+    use crate::event_pump::{post_to_agent, PostToAgentError};
+    let job = HostJob { run, ctx };
+    let payload = turnloop::Payload::Boxed(Box::new(job));
+    match post_to_agent(crate::agent::current_agent(), job_token(), payload) {
+        Ok(()) => Posted::Accepted,
+        Err(PostToAgentError::NoRoute) => Posted::NoRoute,
+        Err(PostToAgentError::NotPublished) => Posted::Again,
+        // `payload: Some` is turnloop's "not accepted, take it back"; the
+        // box is dropped here and the caller keeps its context. `None` is
+        // the opposite and must NOT read as a failure the caller retries:
+        // the job is queued and will run.
+        Err(PostToAgentError::Refused { payload: Some(_) }) => Posted::Again,
+        Err(PostToAgentError::Refused { payload: None }) => Posted::QueuedUnwoken,
     }
 }
 

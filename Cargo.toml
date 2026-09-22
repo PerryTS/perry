@@ -430,8 +430,6 @@ turnloop-smtp = { version = "0.1.0-alpha.6", default-features = false }
 # it is the release that gave MySQL and MongoDB one deflate state per
 # connection, each compressed message framed as its own zlib stream; alpha.3
 # re-created the state per message and is a wire-level regression to adopt.
-turnloop-mysql = { version = "0.1.0-alpha.6", default-features = false }
-turnloop-postgres = { version = "0.1.0-alpha.6", default-features = false }
 turnloop-redis = { version = "0.1.0-alpha.6", default-features = false }
 turnloop-mongodb = { version = "0.1.0-alpha.6", default-features = false }
 hex = "0.4"

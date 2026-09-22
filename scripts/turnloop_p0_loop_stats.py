@@ -13,12 +13,9 @@ reached its deadlines by waiting, not spinning:
   * no transitional tokio ticks (these probes own no native work) and no turn
     errors.
 
-With `--arm tokio-wait-driver` it checks only the oracle output and that the
-binary really is the A/B arm (`driver=tokio-wait-driver`).
-
 Usage:
   scripts/turnloop_p0_loop_stats.py [--perry target/perry-dev/perry]
-      [--runtime-dir DIR] [--arm turnloop|tokio-wait-driver]
+      [--runtime-dir DIR]
 """
 
 import argparse
@@ -59,7 +56,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--perry", default=str(ROOT / "target/perry-dev/perry"))
     parser.add_argument("--runtime-dir")
-    parser.add_argument("--arm", choices=["turnloop", "tokio-wait-driver"], default="turnloop")
     args = parser.parse_args()
 
     perry = Path(args.perry).resolve()
@@ -103,29 +99,24 @@ def main() -> int:
                 problems.append(f"exit {run.returncode}")
             if run.stdout != oracle:
                 problems.append(f"stdout {run.stdout!r} != node {oracle!r}")
-            if args.arm == "tokio-wait-driver":
-                if "[perry-loop] driver=tokio-wait-driver" not in run.stderr:
-                    problems.append("not the tokio-wait-driver arm")
-                line = f"{probe}: arm=tokio-wait-driver wall_ms={wall_ms:.1f}"
+            found = STATS.findall(run.stderr)
+            if not found and run.stderr.count(UNPARKED) == 1:
+                found = [("0", "0", "0", "0", "0")]
+            if len(found) != 1:
+                problems.append(f"expected one turnloop stats line, stderr={run.stderr!r}")
+                line = f"{probe}: no stats"
             else:
-                found = STATS.findall(run.stderr)
-                if not found and run.stderr.count(UNPARKED) == 1:
-                    found = [("0", "0", "0", "0", "0")]
-                if len(found) != 1:
-                    problems.append(f"expected one turnloop stats line, stderr={run.stderr!r}")
-                    line = f"{probe}: no stats"
-                else:
-                    turns, os_waits, zero, native, errors = map(int, found[0])
-                    line = (f"{probe}: turns={turns} os_waits={os_waits} zero_event_waits={zero} "
-                            f"native_ticks={native} turn_errors={errors} wall_ms={wall_ms:.1f}")
-                    if turns > 2 * expiries:
-                        problems.append(f"{turns} turns for {expiries} expiries (spin)")
-                    if zero > expiries:
-                        problems.append(f"{zero} zero-event waits for {expiries} expiries")
-                    if turns < min_turns or os_waits < min_turns:
-                        problems.append("the precise park never waited (subject did not run)")
-                    if native or errors:
-                        problems.append("unexpected tokio ticks or turn errors")
+                turns, os_waits, zero, native, errors = map(int, found[0])
+                line = (f"{probe}: turns={turns} os_waits={os_waits} zero_event_waits={zero} "
+                        f"native_ticks={native} turn_errors={errors} wall_ms={wall_ms:.1f}")
+                if turns > 2 * expiries:
+                    problems.append(f"{turns} turns for {expiries} expiries (spin)")
+                if zero > expiries:
+                    problems.append(f"{zero} zero-event waits for {expiries} expiries")
+                if turns < min_turns or os_waits < min_turns:
+                    problems.append("the precise park never waited (subject did not run)")
+                if native or errors:
+                    problems.append("unexpected tokio ticks or turn errors")
             print(("PASS " if not problems else "FAIL ") + line, flush=True)
             if problems:
                 failures.append(f"{probe}: " + "; ".join(problems))

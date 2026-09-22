@@ -14,8 +14,8 @@
 //!
 //! # Which connections come here
 //!
-//! [`enabled`] is false on a `worker_threads` agent (no loop of its own) and in
-//! the `tokio-wait-driver` A/B arm. **A TLS connection no longer declines**:
+//! [`enabled`] is false on a `worker_threads` agent (no loop of its own).
+//! **A TLS connection no longer declines**:
 //! `turnloop_redis` asks the host to perform the upgrade and the driver now has
 //! one to give it ([`tls_options`]). That is the default `new Redis()`
 //! configuration (`REDIS_TLS` defaults to `true`), and while it declined it
@@ -443,10 +443,8 @@ pub(crate) fn enabled() -> bool {
 /// for the same heap. That case is [`Transport::Posted`]: the owner does the
 /// I/O, on the thread where this agent's JS values live.
 ///
-/// Only the third answer keeps tokio, and it is a genuine absence of a loop:
-/// the `tokio-wait-driver` A/B arm, which compiles no agent loop because it
-/// exists to measure the transport this replaces, and a host where `Loop::new`
-/// failed.
+/// Only the third answer keeps tokio, and it is a genuine absence of a loop —
+/// the only remaining case is a host where `Loop::new` failed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Transport {
     /// This thread owns the agent's loop: submit directly.
@@ -839,8 +837,8 @@ mod tests {
         // layout digest and the runtime's refuses registration, leaves
         // `available` false, and would silently put every client back on the
         // legacy transport. On an agent with no loop — a `worker_threads`
-        // Worker, or the `tokio-wait-driver` arm — this is false and that
-        // fallback is the correct behaviour.
+        // Worker — this is false and that fallback is the correct
+        // behaviour.
         assert!(
             register_only(),
             "a false here is an ABI layout mismatch between perry-ffi and perry-runtime"

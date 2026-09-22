@@ -117,7 +117,7 @@ pub fn has_pending() -> bool {
 /// Why a submission could not be served here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Declined {
-    /// This agent has no loop (a worker agent, or the `tokio-wait-driver` arm).
+    /// This agent has no loop (a worker agent).
     NoLoop,
     /// TLS is required but the client configuration could not be built.
     NoTls,
