@@ -998,23 +998,23 @@ unsafe fn object_field_to_owned_string(
 }
 
 /// Convert a NaN-boxed f64 value to a string pointer.
-/// Handles all value types: strings (extract pointer), numbers (convert), JS handles, etc.
 #[no_mangle]
 pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::StringHeader {
-    // Consume the one-shot "explicit `.toString()`" request (#6373). Read +
-    // clear it immediately, before any branch, so it governs only this single
-    // top-level object and cannot leak into a recursive stringify or the next
-    // conversion. When set, the `[Symbol.toPrimitive]` shortcut below is
-    // skipped — `x.toString()` must never invoke `[Symbol.toPrimitive]`.
+    js_jsvalue_to_string_impl(value, false)
+}
+
+pub(crate) fn js_jsvalue_to_string_impl(
+    value: f64,
+    reject_symbol: bool,
+) -> *mut crate::string::StringHeader {
+    // Explicit `.toString()` skips `[Symbol.toPrimitive]` for this value (#6373).
     let skip_to_primitive = SKIP_TO_PRIMITIVE_ONESHOT.with(|c| c.replace(false));
-    // Check for JS handle first - these come from the JS runtime (e.g., process.env values)
     if is_js_handle(value) {
         let func_ptr = JS_HANDLE_TO_STRING.load(Ordering::SeqCst);
         if !func_ptr.is_null() {
             let func: JsHandleToStringFn = unsafe { std::mem::transmute(func_ptr) };
             return func(value);
         }
-        // Fallback if no handler registered
         return crate::string::js_string_from_bytes(b"[JS Handle]".as_ptr(), 11);
     }
 
@@ -1057,7 +1057,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         if crate::object::is_class_id_registered(cid) {
             if !skip_to_primitive {
                 let primitive = unsafe { class_ref_to_primitive(value, 2) };
-                return js_jsvalue_to_string(primitive);
+                return js_jsvalue_to_string_impl(primitive, reject_symbol);
             }
             let s = crate::object::class_ref_to_string(cid);
             return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -1069,9 +1069,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         let ptr = jsval.as_bigint_ptr();
         crate::bigint::js_bigint_to_string(ptr)
     } else if jsval.is_pointer() {
-        // Pointer: could be an array, object, or other heap type. Arrays
-        // stringify via `Array.prototype.join(",")` per JS semantics; other
-        // objects fall back to "[object Object]".
+        // Arrays stringify via join; other objects use their own conversion.
         let ptr: *const u8 = jsval.as_pointer();
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
         // registry (a by-value lookup, no deref) before the gate.
@@ -1082,7 +1080,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             }
             let target = crate::proxy::js_proxy_target(value);
             if target.to_bits() != value.to_bits() {
-                return js_jsvalue_to_string(target);
+                return js_jsvalue_to_string_impl(target, reject_symbol);
             }
             return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
         }
@@ -1111,12 +1109,16 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 }
                 let target = crate::proxy::js_proxy_target(value);
                 if target.to_bits() != value.to_bits() {
-                    return js_jsvalue_to_string(target);
+                    return js_jsvalue_to_string_impl(target, reject_symbol);
                 }
                 return crate::string::js_string_from_bytes(b"[object Object]".as_ptr(), 15);
             }
-            // Symbols: detect via the side-table before any GC header read.
             if crate::symbol::is_registered_symbol(ptr as usize) {
+                if reject_symbol {
+                    crate::collection_iter::throw_type_error(
+                        "Cannot convert a Symbol value to a string",
+                    );
+                }
                 return unsafe {
                     crate::symbol::js_symbol_to_string(value) as *mut crate::string::StringHeader
                 };
@@ -1144,7 +1146,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             if !skip_to_primitive {
                 let primitive = unsafe { crate::symbol::js_to_primitive(value, 2) };
                 if primitive.to_bits() != value.to_bits() {
-                    return js_jsvalue_to_string(primitive);
+                    return js_jsvalue_to_string_impl(primitive, reject_symbol);
                 }
             }
             // Buffers: BufferHeader has no GC header, so we must detect via
@@ -1188,7 +1190,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     )
                 } {
                     ExoticOwnToString::Primitive(primitive) => {
-                        return js_jsvalue_to_string(primitive)
+                        return js_jsvalue_to_string_impl(primitive, reject_symbol)
                     }
                     ExoticOwnToString::UseBuiltin => {}
                 }
@@ -1221,7 +1223,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     )
                 } {
                     ExoticOwnToString::Primitive(primitive) => {
-                        return js_jsvalue_to_string(primitive)
+                        return js_jsvalue_to_string_impl(primitive, reject_symbol)
                     }
                     ExoticOwnToString::UseBuiltin => {}
                 }
@@ -1234,7 +1236,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     // of the hardcoded join (test262 S15.5.1.1_A1_T8).
                     match array_prototype_to_string_override(value) {
                         ArrayToStringOutcome::Primitive(primitive) => {
-                            return js_jsvalue_to_string(primitive)
+                            return js_jsvalue_to_string_impl(primitive, reject_symbol)
                         }
                         ArrayToStringOutcome::TypeError => throw_cannot_convert_to_primitive(),
                         ArrayToStringOutcome::UseDefaultJoin => {}
@@ -1252,7 +1254,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 let obj = ptr as *const crate::object::ObjectHeader;
                 if (*obj).class_id == crate::jsx::JSX_NODE_CLASS_ID {
                     let html = crate::object::js_object_get_field(obj, 0);
-                    return js_jsvalue_to_string(f64::from_bits(html.bits()));
+                    return js_jsvalue_to_string_impl(f64::from_bits(html.bits()), reject_symbol);
                 }
             }
             // WHATWG `URL` / `URLSearchParams` have native `toString`s
@@ -1284,7 +1286,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     let boxed = f64::from_bits(POINTER_TAG | ((ptr as u64) & POINTER_MASK));
                     let url_href = crate::url::url_class::js_url_href_if_url(boxed);
                     if url_href.to_bits() != crate::value::TAG_UNDEFINED {
-                        return js_jsvalue_to_string(url_href);
+                        return js_jsvalue_to_string_impl(url_href, reject_symbol);
                     }
                     if crate::url::try_read_as_search_params(
                         ptr as *mut crate::object::ObjectHeader,
@@ -1311,7 +1313,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
             // still hit the fallback — a separate, pre-existing gap.)
             if let Some(primitive) = unsafe { ordinary_to_primitive_string(value) } {
                 if primitive.to_bits() != value.to_bits() {
-                    return js_jsvalue_to_string(primitive);
+                    return js_jsvalue_to_string_impl(primitive, reject_symbol);
                 }
             }
             // #2135: a built-in Error with no user-overridden `toString`

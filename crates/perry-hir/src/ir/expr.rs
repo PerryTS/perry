@@ -2440,6 +2440,8 @@ pub enum Expr {
     /// String(value) -> string
     /// Type coercion to string
     StringCoerce(Box<Expr>),
+    /// Template substitution uses abstract ToString, which rejects Symbols.
+    TemplateStringCoerce(Box<Expr>),
     /// `Object(value)` plain-call coercion (#3149). Nullish/primitive → a fresh
     /// `{}`; an existing object/array passes through unchanged.
     ObjectCoerce(Box<Expr>),

@@ -9223,6 +9223,7 @@ fn expr_array_length_effect(
         | Expr::TypeOf(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => walk(operand),
@@ -9680,6 +9681,7 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::TypeOf(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => walk(operand),

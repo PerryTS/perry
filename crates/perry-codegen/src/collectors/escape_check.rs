@@ -457,7 +457,7 @@ pub fn check_escapes_in_expr(
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
         | Expr::Await(operand)
-        | Expr::StringCoerce(operand)
+        | Expr::StringCoerce(operand) | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand)

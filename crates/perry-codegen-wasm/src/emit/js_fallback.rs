@@ -631,6 +631,10 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(String(toJsValue({})))", v)
             }
+            Expr::TemplateStringCoerce(val) => {
+                let v = self.emit_js_expr(val, locals);
+                format!("fromJsValue(`${{toJsValue({})}}`)", v)
+            }
             Expr::ObjectCoerce(val) => {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(Object(toJsValue({})))", v)

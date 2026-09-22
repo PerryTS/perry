@@ -973,6 +973,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::StringCoerce(value) => {
             Expr::StringCoerce(Box::new(substitute_expr(value, substitutions)))
         }
+        Expr::TemplateStringCoerce(value) => {
+            Expr::TemplateStringCoerce(Box::new(substitute_expr(value, substitutions)))
+        }
         Expr::ObjectCoerce(value) => {
             Expr::ObjectCoerce(Box::new(substitute_expr(value, substitutions)))
         }

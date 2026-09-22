@@ -792,7 +792,11 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
     // honest keeps ineligible locals off the canonical rep.
     fn syntactic_str(e: &Expr, declared: &HashSet<u32>) -> bool {
         match e {
-            Expr::String(_) | Expr::WtfString(_) | Expr::StringCoerce(_) | Expr::TypeOf(_) => true,
+            Expr::String(_)
+            | Expr::WtfString(_)
+            | Expr::StringCoerce(_)
+            | Expr::TemplateStringCoerce(_)
+            | Expr::TypeOf(_) => true,
             Expr::LocalGet(id) => declared.contains(id),
             Expr::Binary {
                 op: perry_hir::BinaryOp::Add,

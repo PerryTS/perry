@@ -1181,7 +1181,7 @@ pub fn fix_native_instance_expr_with_locals(
         Expr::Unary { operand, .. } => {
             fix_native_instance_expr_with_locals(operand, native_instances, local_id_instances);
         }
-        Expr::StringCoerce(value) => {
+        Expr::StringCoerce(value) | Expr::TemplateStringCoerce(value) => {
             fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
         }
         Expr::Logical { left, right, .. } => {

@@ -402,6 +402,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         | Expr::TypeOf(operand)
         | Expr::Await(operand)
         | Expr::StringCoerce(operand)
+        | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => expr_uses_this_as_value(operand, fields),

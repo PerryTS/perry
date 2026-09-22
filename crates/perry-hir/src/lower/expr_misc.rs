@@ -333,11 +333,9 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         // #6078: template substitutions use ToString, NOT the `+` operator's
         // ToPrimitive(default) hint. `+` with a string operand coerces the other
         // side valueOf-first, so `` `${obj}` `` (obj with both valueOf+toString)
-        // disagreed with `String(obj)`. Wrap each substitution in `StringCoerce`
-        // (the same `js_string_coerce`/ToString that `String(x)` uses), so it is
-        // toString-first and the concat sees a plain string. No-op for
-        // string/number substitutions; fixes the object case.
-        let coerced = Expr::StringCoerce(Box::new(lowered));
+        // disagreed with `String(obj)`. The template coercion is string-hint
+        // and also rejects Symbols (#10609), unlike explicit `String(symbol)`.
+        let coerced = Expr::TemplateStringCoerce(Box::new(lowered));
         result = Some(match result.take() {
             None => coerced,
             Some(prev) => Expr::Binary {

@@ -165,6 +165,10 @@ function buildImports() {
         stringTable.push(String(toJsValue(val)));
         return nanboxString(stringTable.length - 1);
       },
+      jsvalue_to_template_string: (val) => {
+        stringTable.push(`${toJsValue(val)}`);
+        return nanboxString(stringTable.length - 1);
+      },
       is_truthy: (val) => {
         const bits = f64ToU64(val);
         if (bits === TAG_FALSE || bits === TAG_NULL || bits === TAG_UNDEFINED) return 0;
@@ -1624,6 +1628,7 @@ const __memDispatch = {
     return 0;
   },
   jsvalue_to_string: (val) => String(val),
+  jsvalue_to_template_string: (val) => `${val}`,
   is_truthy: (val) => {
     if (val === false || val === null || val === undefined || val === 0 || val === '') return 0;
     if (Number.isNaN(val)) return 0;

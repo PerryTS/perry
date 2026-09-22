@@ -203,7 +203,10 @@ pub(crate) fn lower_string_self_append_chain(
 /// SSO bits.
 fn proven_heap_string_operand(_ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::String(_) | Expr::WtfString(_) | Expr::StringCoerce(_) => true,
+        Expr::String(_)
+        | Expr::WtfString(_)
+        | Expr::StringCoerce(_)
+        | Expr::TemplateStringCoerce(_) => true,
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -760,7 +763,7 @@ pub(crate) fn flatten_string_add_chain<'a>(
 /// Drop a `StringCoerce` wrapper the chain helper's own formatting makes
 /// redundant.
 ///
-/// The template desugaring wraps every substitution in `StringCoerce` so it is
+/// The template desugaring wraps every substitution in `TemplateStringCoerce` so it is
 /// toString-first rather than `+`'s valueOf-first (#6078). But
 /// `js_string_concat_chain` formats each part itself, and for two kinds of part
 /// its formatting IS `ToString`: a value already proven a string (the coercion
@@ -800,16 +803,19 @@ pub(crate) fn flatten_string_add_chain<'a>(
 /// than the declared check, because `String(obj)` and `+`'s ToPrimitive can
 /// disagree — but `js_string_coerce`'s object arm ITSELF forwards to
 /// `js_jsvalue_to_string`, matching classify loop's fallback exactly, so even
-/// that case stays correct; declared-number trust only ever changes which
-/// code path produces the (identical) answer, never the answer.
+/// that case stays correct for explicit String coercion. Template coercion
+/// cannot use declared-number trust: a lying annotation may contain a Symbol,
+/// which implicit ToString must reject before the concat helper sees it.
 fn chain_part_without_redundant_coerce<'a>(ctx: &FnCtx<'_>, part: &'a Expr) -> &'a Expr {
-    let Expr::StringCoerce(inner) = part else {
-        return part;
+    let (inner, is_template) = match part {
+        Expr::StringCoerce(inner) => (inner, false),
+        Expr::TemplateStringCoerce(inner) => (inner, true),
+        _ => return part,
     };
     let is_string = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, inner);
     let is_plain_number = (crate::type_analysis::is_numeric_expr(ctx, inner)
         && crate::expr::expr_produces_non_pointer_bits_by_construction(ctx, inner))
-        || crate::type_analysis::is_declared_number_expr(ctx, inner);
+        || (!is_template && crate::type_analysis::is_declared_number_expr(ctx, inner));
     if is_string || is_plain_number {
         inner
     } else {

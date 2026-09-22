@@ -199,6 +199,7 @@ fn expr_not_bigint(
         | Expr::PrivateBrandCheck { .. }
         | Expr::NumberCoerce(_)
         | Expr::StringCoerce(_)
+        | Expr::TemplateStringCoerce(_)
         | Expr::BooleanCoerce(_)
         | Expr::IsNaN(_)
         | Expr::IsFinite(_)
