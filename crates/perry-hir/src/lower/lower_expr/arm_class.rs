@@ -226,6 +226,7 @@ pub(crate) fn lower_class_expr(
             || computed_statics.iter().any(|(_, value)| uses_self(value))
             || computed_name_evaluations.iter().any(uses_self)
     });
+    let has_static_methods = !class.static_methods.is_empty();
     ctx.pending_classes.push(class);
     // #1772/#5893: a class EXPRESSION that carries per-evaluation static
     // fields, captures, or private elements lowers to a
@@ -301,7 +302,15 @@ pub(crate) fn lower_class_expr(
             || !captured_args.is_empty()
             || !static_block_names.is_empty()
             || has_private_elements
-            || self_binding_used)
+            || self_binding_used
+            // A factory-created superclass is a fresh class object with its
+            // own mutable prototype. A shared ClassRef for the child links to
+            // the template prototype instead of that evaluated parent (e.g.
+            // Effect's Base.prototype.name = tag). Keep the runtime parent
+            // value on a fresh child class. The shared path remains for class
+            // expressions with static methods until those methods can be
+            // installed on fresh class objects.
+            || (parent_expr.is_some() && !has_static_methods))
     {
         // #6438: a class expression WITH heritage (`class extends <expr>`) used
         // to be excluded here and fell back to the shared-template `ClassRef`
