@@ -53,12 +53,14 @@ import re
 import sys
 from pathlib import Path
 
+from shape_descriptor_census import blank_rust_comments_and_literals
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_SRC = REPO_ROOT / "crates" / "perry-runtime" / "src"
 SUPPORT = RUNTIME_SRC / "gc" / "tests" / "support.rs"
 RESET_FN = "reset_copying_nursery_runtime_test_state"
-# 93 classify today; the floor only has to be high enough that a broken
-# matcher cannot pass as a clean tree.
+# 115 classify after comments and literals are excluded. The floor only has
+# to be high enough that a broken matcher cannot pass as a clean tree.
 CLASSIFIED_FLOOR = 60
 
 # name -> issue that blocks converting it. An entry matching nothing FAILS.
@@ -68,10 +70,6 @@ ALLOWLIST = {
     # preflight, or the skip path is masked entirely. It has no reader outside
     # the guard, so it cannot damage another test's assertion.
     "YOUNG_PIN_EVER": "#7645",
-    # #9613's FSEvents symbol table: a OnceLock caching dlopen'd CoreServices
-    # function addresses. Process-wide by nature (dynamic-loader handles),
-    # write-once, holds no JS-heap pointers and no per-test state.
-    "API": "#9613",
     # Read, never written, by `test_clear_symbol_side_table_roots`: these two are
     # the process-lifetime registries the per-thread `SYMBOL_POINTERS` rebuild is
     # derived FROM. Their symbols are `Box::leak`ed, so a process-wide identity
@@ -107,6 +105,47 @@ def rel(path) -> str:
 
 
 PAIRS = {"{": "}", "(": ")", "[": "]"}
+SOURCE_TOKEN = re.compile(r"::|[{};]|[A-Za-z_][A-Za-z0-9_]*")
+ASSERTED_IDENT = re.compile(r"[A-Z][A-Z0-9_]{2,}")
+
+
+def referenced_idents(code: str) -> set[str]:
+    """Uppercase references not shadowed by a simple block-local binding.
+
+    `code` has comments and literals blanked. Activate `let`/`const` bindings
+    after their initializer's semicolon, so an outer static used on the RHS is
+    still visible. Unrecognized patterns remain visible to the gate.
+    """
+    scopes = [set()]
+    pending = [set()]
+    referenced = set()
+    binding = False
+    previous = ""
+    for match in SOURCE_TOKEN.finditer(code):
+        token = match.group()
+        if token == "{":
+            scopes.append(set())
+            pending.append(set())
+        elif token == "}":
+            if len(scopes) > 1:
+                scopes.pop()
+                pending.pop()
+        elif token == ";":
+            scopes[-1].update(pending[-1])
+            pending[-1].clear()
+        elif binding:
+            if token in ("mut", "ref"):
+                continue
+            if ASSERTED_IDENT.fullmatch(token):
+                pending[-1].add(token)
+            binding = False
+        elif token in ("let", "const"):
+            binding = True
+        elif ASSERTED_IDENT.fullmatch(token):
+            if previous == "::" or not any(token in scope for scope in scopes):
+                referenced.add(token)
+        previous = token
+    return referenced
 
 
 def brace_body(text: str, open_idx: int, opener: str = "{") -> str:
@@ -276,7 +315,12 @@ def declaration_kind(sources: dict, ident: str, prefer=None):
 
 
 def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout, floor=None):
-    body = reset_body(support_text)
+    # Keep offsets and newlines while removing prose, literal text, and braces
+    # inside them. Otherwise a comment can both invent a static reference and
+    # corrupt the brace walk that locates a helper body.
+    code_sources = {path: blank_rust_comments_and_literals(text) for path, text in sources.items()}
+    support_code = blank_rust_comments_and_literals(support_text)
+    body = reset_body(support_code)
     helpers = clear_helpers(body)
     violations = []
     hazards = {}
@@ -290,7 +334,7 @@ def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout, flo
     # set from the clear list alone could not see it, and it cost one red run in
     # a 22-run soak before anyone looked.
     subjects = [(helper, None) for helper in helpers]
-    subjects.append(("gc/tests/support.rs (the guards themselves)", (SUPPORT, support_text)))
+    subjects.append(("gc/tests/support.rs (the guards themselves)", (SUPPORT, support_code)))
 
     out.write(
         "per-test global sinks (#7672): %d clear helper(s) reached from %s, "
@@ -300,7 +344,7 @@ def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout, flo
         if preloaded is not None:
             path, helper_body = preloaded
         else:
-            path, helper_body = find_fn_body(sources, helper)
+            path, helper_body = find_fn_body(code_sources, helper)
         if helper_body is None:
             violations.append(
                 "%s is called by %s but has no definition under crates/perry-runtime/src — "
@@ -311,15 +355,15 @@ def audit(sources: dict, support_text: str, allowlist: dict, out=sys.stdout, flo
         # side_tables` names no static at all — it goes through
         # `get_closure_props()` — so a body-only scan classified it as "no
         # storage" and would not have noticed CLOSURE_PROPS reverting.
-        expanded = helper_body
+        bodies = [helper_body]
         for callee in sorted(set(re.findall(r"\b(get_[a-z0-9_]+)\s*\(", helper_body))):
-            callee_path, callee_body = find_fn_body({path: sources[path]}, callee)
+            callee_path, callee_body = find_fn_body({path: code_sources[path]}, callee)
             if callee_body:
-                expanded += "\n" + callee_body
-        idents = sorted(set(re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", expanded)))
+                bodies.append(callee_body)
+        idents = sorted(set().union(*(referenced_idents(body) for body in bodies)))
         classified = []
         for ident in idents:
-            kind, decl = declaration_kind(sources, ident, prefer=path)
+            kind, decl = declaration_kind(code_sources, ident, prefer=path)
             if kind is None:
                 continue  # a constant, a type, an Ordering variant, ...
             seen_idents.add(ident)
@@ -387,6 +431,9 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::demo::test_clear_paren();
     crate::demo::test_clear_realm_atomic();
     crate::demo::test_clear_qualified_realm_atomic();
+    crate::demo::test_clear_prose();
+    crate::demo::test_clear_local_shadows();
+    crate::demo::test_clear_cross_body();
 }
 """
 
@@ -407,6 +454,21 @@ pub(crate) fn test_clear_bare() { *BARE_TABLE.lock().unwrap() = 0; }
 pub(crate) fn test_clear_tls() { TLS_TABLE.with(|t| *t.borrow_mut() = 0); }
 pub(crate) fn test_clear_paren() { *PAREN_TABLE.lock().unwrap() = 0; let _g = PURE_LOCK.lock(); }
 pub(crate) fn test_clear_realm_atomic() { REALM_CACHE.with_slot(|slot| slot.store(0)); }
+pub(crate) fn test_clear_prose() {
+    // BARE_TABLE is only a word in this comment.
+    let note = "BARE_TABLE";
+    let raw = r#"BARE_TABLE"#;
+    let block = /* BARE_TABLE */ 0;
+}
+pub(crate) fn test_clear_local_shadows() {
+    { const BARE_TABLE: u64 = 1; let _ = BARE_TABLE; }
+    { let BARE_TABLE = 2; let _ = BARE_TABLE; }
+}
+fn get_bare_table() -> u64 { *BARE_TABLE.lock().unwrap() }
+pub(crate) fn test_clear_cross_body() {
+    let BARE_TABLE = 0;
+    get_bare_table();
+}
 """
 
 _FAKE_CHILD_SRC = """
@@ -439,8 +501,27 @@ def self_test() -> int:
     violations = audit(fake, _FAKE_SUPPORT, {}, sink)
     if len(violations) != 1 or "BARE_TABLE" not in violations[0]:
         failures.append("expected exactly one BARE_TABLE violation, got %r" % (violations,))
+    report = sink.getvalue().splitlines()
+    for helper in ("test_clear_prose", "test_clear_local_shadows"):
+        line = next((line for line in report if line.strip().startswith(helper + " ")), "")
+        if not line or "BARE_TABLE=" in line:
+            failures.append("%s falsely resolved BARE_TABLE: %r" % (helper, line))
+    cross_body = next((line for line in report if line.strip().startswith("test_clear_cross_body ")), "")
+    if "BARE_TABLE=static" not in cross_body:
+        failures.append("a helper-local shadow hid an accessor's real static: %r" % cross_body)
     if any("PARTITIONED_TABLE" in v or "TLS_TABLE" in v for v in violations):
         failures.append("a converted or thread-local table was reported: %r" % (violations,))
+
+    # A local binding starts after its initializer and ends with its block.
+    # A qualified static bypasses the local shadow. These remain visible so
+    # scope filtering cannot turn a real bare sink into a green result.
+    for code in (
+        "{ let BARE_TABLE = BARE_TABLE; }",
+        "{ let BARE_TABLE = 1; } BARE_TABLE",
+        "{ let BARE_TABLE = 1; crate::BARE_TABLE }",
+    ):
+        if "BARE_TABLE" not in referenced_idents(code):
+            failures.append("scope scan hid a real BARE_TABLE reference: %r" % code)
 
     # 2. Allowlisting it silences exactly that one.
     if audit(fake, _FAKE_SUPPORT, {"BARE_TABLE": "#1"}, sink):
@@ -528,7 +609,7 @@ def self_test() -> int:
 
     for failure in failures:
         print("SELF-TEST FAIL: %s" % failure, file=sys.stderr)
-    print("self-test: 20 checks, %d failures" % len(failures))
+    print("self-test: %d failures" % len(failures))
     return 1 if failures else 0
 
 
