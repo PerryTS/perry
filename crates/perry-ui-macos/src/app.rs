@@ -38,6 +38,8 @@ thread_local! {
     static PENDING_OPEN_FILES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Pending activation policy: "regular", "accessory", or "background".
     static PENDING_ACTIVATION_POLICY: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// Opt in to AppKit termination after the final application window closes.
+    static QUIT_ON_LAST_WINDOW_CLOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Whether the window needs rounded corners (set by frameless, applied in app_run).
     static PENDING_ROUNDED_CORNERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -126,6 +128,21 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             apps.len() as i64 // 1-based handle
         })
     }
+}
+
+/// Configure AppKit's last-window-close termination policy for this app.
+pub fn app_set_quit_on_last_window_close(app_handle: i64, value: f64) {
+    APPS.with(|apps| {
+        if apps
+            .borrow()
+            .get(app_handle.saturating_sub(1) as usize)
+            .is_some()
+        {
+            QUIT_ON_LAST_WINDOW_CLOSE.with(|quit| {
+                quit.set(value.to_bits() == 0x7FFC_0000_0000_0004);
+            });
+        }
+    });
 }
 
 /// Set the root widget (body) of the app.
@@ -1396,6 +1413,14 @@ define_class!(
     pub struct PerryAppDelegate;
 
     impl PerryAppDelegate {
+        #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
+        fn application_should_terminate_after_last_window_closed(
+            &self,
+            _app: &NSApplication,
+        ) -> bool {
+            QUIT_ON_LAST_WINDOW_CLOSE.with(std::cell::Cell::get)
+        }
+
         #[unsafe(method(application:openFile:))]
         fn application_open_file(&self, _app: &AnyObject, filename: &NSString) -> bool {
             let path = filename.to_string();
