@@ -16,8 +16,9 @@ delete their own exemption.
 
 This is a deliberately small Rust source audit rather than a parser.  It masks
 comments and literals, balances braces, enumerates every ``.is_open = true``
-suffix, and rejects receiver syntax it cannot prove.  ``MIN_ASSIGNMENTS`` and
-the self-test keep a broken matcher from reporting an empty green census.
+transition and ``is_open: true`` initializer, and rejects receiver syntax it
+cannot prove.  ``MIN_OPEN_SITES`` and the self-test keep a broken matcher from
+reporting an empty green census.
 
 Usage:
     python3 scripts/check_ext_net_socket_open_invariant.py
@@ -39,14 +40,19 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = ROOT / "crates" / "perry-ext-net" / "src"
 EXCEPTIONS_PATH = ROOT / "scripts" / "ext_net_socket_open_exceptions.json"
-MIN_ASSIGNMENTS = 4
+MIN_OPEN_SITES = 7
 
 OPEN_ASSIGNMENT = re.compile(r"\.\s*is_open\s*=\s*true\b")
+OPEN_INITIALIZER = re.compile(r"\bis_open\s*:\s*true\b")
+OPENED_INITIALIZER = re.compile(r"\bhas_opened\s*:\s*true\b")
 SIMPLE_RECEIVER = re.compile(
     r"(?<![A-Za-z0-9_.:])"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*$"
 )
 FUNCTION_NAME = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+SOCKET_STATE_HEAD = re.compile(
+    r"(?<![A-Za-z0-9_])(?:[A-Za-z_][A-Za-z0-9_]*::)*SocketState\s*$"
+)
 CHAR_LITERAL = re.compile(
     r"'(?:\\(?:x[0-9A-Fa-f]{2}|u\{[0-9A-Fa-f_]+\}|.)|[^'\\\n])'"
 )
@@ -60,10 +66,11 @@ class Site:
     receiver: str | None
     line: int
     paired: bool
+    kind: str
 
     @property
     def key(self) -> tuple[str, str, str] | None:
-        if self.receiver is None:
+        if self.kind != "assignment" or self.receiver is None:
             return None
         return (self.path, self.function, self.receiver)
 
@@ -141,8 +148,6 @@ def mask_non_code(source: str) -> str:
                 if char == '"' and not escaped:
                     end += 1
                     break
-                if char == "\n" and not escaped:
-                    raise ValueError("unterminated string literal")
                 if char == "\\" and not escaped:
                     escaped = True
                 else:
@@ -166,6 +171,8 @@ def mask_non_code(source: str) -> str:
 
 
 def brace_pairs(code: str) -> dict[int, int]:
+    """Map opening braces to closing braces, rejecting malformed input."""
+
     stack: list[int] = []
     pairs: dict[int, int] = {}
     for index, char in enumerate(code):
@@ -199,11 +206,43 @@ def function_spans(code: str, pairs: dict[int, int]) -> list[tuple[int, int, str
 def containing_span(
     position: int, spans: Iterable[tuple[int, int, str]]
 ) -> tuple[int, int, str] | None:
+    """Return the innermost named function span containing POSITION."""
+
     matches = [span for span in spans if span[0] < position < span[1]]
     return max(matches, key=lambda span: span[0], default=None)
 
 
+def containing_block(
+    position: int, openings: Iterable[int], pairs: dict[int, int]
+) -> tuple[int, int] | None:
+    """Return the innermost brace pair containing POSITION."""
+
+    blocks = [
+        (opening, pairs[opening])
+        for opening in openings
+        if opening < position < pairs[opening]
+    ]
+    return max(blocks, key=lambda block: block[0], default=None)
+
+
+def has_direct_match(
+    pattern: re.Pattern[str],
+    code: str,
+    block: tuple[int, int],
+    openings: list[int],
+    pairs: dict[int, int],
+) -> bool:
+    """Whether PATTERN matches directly in BLOCK, excluding nested blocks."""
+
+    return any(
+        containing_block(match.start(), openings, pairs) == block
+        for match in pattern.finditer(code, block[0] + 1, block[1])
+    )
+
+
 def receiver_pattern(receiver: str, field: str) -> re.Pattern[str]:
+    """Build an assignment pattern for FIELD on a proven simple RECEIVER."""
+
     pieces = [re.escape(piece) for piece in receiver.split(".")]
     receiver_expr = r"\s*\.\s*".join(pieces)
     return re.compile(
@@ -213,6 +252,8 @@ def receiver_pattern(receiver: str, field: str) -> re.Pattern[str]:
 
 
 def scan_source(path: str, source: str) -> list[Site]:
+    """Enumerate open transitions and already-open initializers in SOURCE."""
+
     code = mask_non_code(source)
     pairs = brace_pairs(code)
     spans = function_spans(code, pairs)
@@ -229,18 +270,15 @@ def scan_source(path: str, source: str) -> list[Site]:
         if receiver_match:
             receiver = re.sub(r"\s+", "", receiver_match.group(1))
 
-        blocks = [
-            (opening, pairs[opening])
-            for opening in openings
-            if opening < assignment.start() < pairs[opening]
-        ]
-        block = max(blocks, key=lambda item: item[0], default=None)
+        block = containing_block(assignment.start(), openings, pairs)
         paired = False
         if receiver is not None and block is not None:
-            paired = bool(
-                receiver_pattern(receiver, "has_opened").search(
-                    code, block[0] + 1, block[1]
-                )
+            paired = has_direct_match(
+                receiver_pattern(receiver, "has_opened"),
+                code,
+                block,
+                openings,
+                pairs,
             )
 
         sites.append(
@@ -250,12 +288,41 @@ def scan_source(path: str, source: str) -> list[Site]:
                 receiver=receiver,
                 line=line,
                 paired=paired,
+                kind="assignment",
+            )
+        )
+
+    for initializer in OPEN_INITIALIZER.finditer(code):
+        line = source.count("\n", 0, initializer.start()) + 1
+        function = containing_span(initializer.start(), spans)
+        function_name = function[2] if function else "<outside-function>"
+        block = containing_block(initializer.start(), openings, pairs)
+        receiver = None
+        if block is not None and SOCKET_STATE_HEAD.search(code[: block[0]]):
+            receiver = "SocketState"
+        paired = bool(
+            receiver is not None
+            and block is not None
+            and has_direct_match(
+                OPENED_INITIALIZER, code, block, openings, pairs
+            )
+        )
+        sites.append(
+            Site(
+                path=path,
+                function=function_name,
+                receiver=receiver,
+                line=line,
+                paired=paired,
+                kind="initializer",
             )
         )
     return sites
 
 
 def parse_exceptions(data: Any) -> tuple[list[ExceptionEntry], list[str]]:
+    """Parse and validate the identity-pinned exception registry."""
+
     errors: list[str] = []
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         return [], ["exception registry must be an object with schema_version 1"]
@@ -304,8 +371,10 @@ def evaluate(
     sources: dict[str, str],
     registry: Any,
     *,
-    min_assignments: int = MIN_ASSIGNMENTS,
+    min_open_sites: int = MIN_OPEN_SITES,
 ) -> tuple[list[Site], list[str]]:
+    """Audit SOURCES against REGISTRY and return sites plus violations."""
+
     entries, errors = parse_exceptions(registry)
     sites: list[Site] = []
     for path, source in sorted(sources.items()):
@@ -314,14 +383,26 @@ def evaluate(
         except ValueError as error:
             errors.append(f"{path}: source scan failed: {error}")
 
-    if len(sites) < min_assignments:
+    if len(sites) < min_open_sites:
         errors.append(
-            f"matched only {len(sites)} is_open=true assignment(s), below the "
-            f"coverage floor of {min_assignments}; the scanner or source population changed"
+            f"matched only {len(sites)} is_open=true site(s), below the "
+            f"coverage floor of {min_open_sites}; the scanner or source population changed"
         )
 
     unpaired_by_key: dict[tuple[str, str, str], list[Site]] = {}
     for site in sites:
+        if site.kind == "initializer":
+            if site.receiver is None:
+                errors.append(
+                    f"{site.path}:{site.line}: is_open:true appears in an "
+                    "initializer the checker cannot prove is SocketState"
+                )
+            elif not site.paired:
+                errors.append(
+                    f"{site.path}:{site.line}: SocketState initializer sets "
+                    "is_open:true without has_opened:true directly in the same block"
+                )
+            continue
         if site.receiver is None:
             errors.append(
                 f"{site.path}:{site.line}: is_open=true uses receiver syntax the "
@@ -361,6 +442,8 @@ def evaluate(
 
 
 def load_sources() -> dict[str, str]:
+    """Load every Rust source under perry-ext-net using repository paths."""
+
     return {
         path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(SOURCE_ROOT.rglob("*.rs"))
@@ -368,10 +451,14 @@ def load_sources() -> dict[str, str]:
 
 
 def load_registry() -> Any:
+    """Load the checked-in JSON exception registry."""
+
     return json.loads(EXCEPTIONS_PATH.read_text(encoding="utf-8"))
 
 
 def self_test() -> None:
+    """Exercise positive and negative checker shapes without repository mutation."""
+
     path = "crates/perry-ext-net/src/example.rs"
     exception = {
         "name": "synthetic-open",
@@ -390,27 +477,27 @@ fn open() {
 }
 """
     sites, errors = evaluate(
-        {path: paired}, {"schema_version": 1, "exceptions": []}, min_assignments=1
+        {path: paired}, {"schema_version": 1, "exceptions": []}, min_open_sites=1
     )
     assert not errors and len(sites) == 1 and sites[0].paired
 
     missing = paired.replace("        socket.has_opened = true;\n", "")
     _, errors = evaluate(
-        {path: missing}, {"schema_version": 1, "exceptions": []}, min_assignments=1
+        {path: missing}, {"schema_version": 1, "exceptions": []}, min_open_sites=1
     )
     assert any("no documented exception" in error for error in errors)
 
     _, errors = evaluate(
         {path: missing},
         {"schema_version": 1, "exceptions": [exception]},
-        min_assignments=1,
+        min_open_sites=1,
     )
     assert not errors
 
     _, errors = evaluate(
         {path: paired},
         {"schema_version": 1, "exceptions": [exception]},
-        min_assignments=1,
+        min_open_sites=1,
     )
     assert any("matches 0 unpaired" in error for error in errors)
 
@@ -421,7 +508,18 @@ fn open() {
 }
 """
     _, errors = evaluate(
-        {path: sibling}, {"schema_version": 1, "exceptions": []}, min_assignments=1
+        {path: sibling}, {"schema_version": 1, "exceptions": []}, min_open_sites=1
+    )
+    assert any("same block" in error for error in errors)
+
+    nested = """
+fn open() {
+    socket.is_open = true;
+    if history { socket.has_opened = true; }
+}
+"""
+    _, errors = evaluate(
+        {path: nested}, {"schema_version": 1, "exceptions": []}, min_open_sites=1
     )
     assert any("same block" in error for error in errors)
 
@@ -431,11 +529,13 @@ fn harmless() {
     let a = "socket.is_open = true; {";
     let b = r#"socket.is_open = true; }"#;
     let c = '{';
+    let d = "a valid Rust string may contain
+socket.is_open = true; and is_open: true {";
     /* nested /* socket.is_open = true; */ comment */
 }
 '''
     sites, errors = evaluate(
-        {path: masked}, {"schema_version": 1, "exceptions": []}, min_assignments=0
+        {path: masked}, {"schema_version": 1, "exceptions": []}, min_open_sites=0
     )
     assert not sites and not errors
 
@@ -443,9 +543,43 @@ fn harmless() {
     _, errors = evaluate(
         {path: complex_receiver},
         {"schema_version": 1, "exceptions": []},
-        min_assignments=1,
+        min_open_sites=1,
     )
     assert any("receiver syntax" in error for error in errors)
+
+    paired_initializer = """
+fn build() -> SocketState {
+    SocketState {
+        is_open: true,
+        has_opened: true,
+    }
+}
+"""
+    sites, errors = evaluate(
+        {path: paired_initializer},
+        {"schema_version": 1, "exceptions": []},
+        min_open_sites=1,
+    )
+    assert not errors and len(sites) == 1 and sites[0].paired
+    assert sites[0].kind == "initializer"
+
+    missing_initializer = paired_initializer.replace(
+        "        has_opened: true,\n", ""
+    )
+    _, errors = evaluate(
+        {path: missing_initializer},
+        {"schema_version": 1, "exceptions": []},
+        min_open_sites=1,
+    )
+    assert any("SocketState initializer" in error for error in errors)
+
+    unknown_initializer = paired_initializer.replace("SocketState {", "OtherState {")
+    _, errors = evaluate(
+        {path: unknown_initializer},
+        {"schema_version": 1, "exceptions": []},
+        min_open_sites=1,
+    )
+    assert any("cannot prove is SocketState" in error for error in errors)
 
     complex_field_receiver = """
 fn open() {
@@ -456,7 +590,7 @@ fn open() {
     _, errors = evaluate(
         {path: complex_field_receiver},
         {"schema_version": 1, "exceptions": []},
-        min_assignments=1,
+        min_open_sites=1,
     )
     assert any("receiver syntax" in error for error in errors)
 
@@ -469,7 +603,7 @@ fn open() {
     _, errors = evaluate(
         {path: ambiguous},
         {"schema_version": 1, "exceptions": [exception]},
-        min_assignments=2,
+        min_open_sites=2,
     )
     assert any("ambiguous" in error for error in errors)
 
@@ -477,17 +611,20 @@ fn open() {
     _, errors = evaluate(
         {path: missing},
         {"schema_version": 1, "exceptions": [bad_reason]},
-        min_assignments=1,
+        min_open_sites=1,
     )
     assert any("specific reason" in error for error in errors)
 
     print(
         "check_ext_net_socket_open_invariant self-test: OK "
-        "(pair, missing, exception, stale, scope, masking, syntax, ambiguity)"
+        "(pair, missing, exception, stale, scope, nesting, masking, syntax, "
+        "initializer, ambiguity)"
     )
 
 
 def main() -> int:
+    """Run the requested self-test, listing, or repository audit mode."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--list", action="store_true")
@@ -518,7 +655,7 @@ def main() -> int:
     paired = sum(site.paired for site in sites)
     print(
         "check_ext_net_socket_open_invariant: OK — "
-        f"{len(sites)} is_open=true assignment(s), {paired} paired, "
+        f"{len(sites)} is_open=true site(s), {paired} paired, "
         f"{len(sites) - paired} documented exception(s)"
     )
     return 0
