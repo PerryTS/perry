@@ -525,6 +525,55 @@ unsafe fn inherited_proto_accessor_value(
     ))
 }
 
+/// Read the actual prototype objects of a class whose parent is a fresh class
+/// evaluation. The template-id walk below follows the parent's shared class
+/// registry entry; that entry cannot see writes to this evaluation's
+/// `Base.prototype` (such as an Effect tagged error's `name`).
+unsafe fn evaluated_parent_instance_field(
+    decl_proto: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<JSValue> {
+    if decl_proto.is_null() || key.is_null() {
+        return None;
+    }
+    let mut link = Some(crate::value::js_nanbox_pointer(decl_proto as i64).to_bits());
+    for _ in 0..32 {
+        let bits = link?;
+        if bits == crate::value::TAG_NULL {
+            return None;
+        }
+        let value = f64::from_bits(bits);
+        if crate::proxy::js_proxy_is_proxy(value) != 0 {
+            return super::super::prototype_chain::resolve_inherited_field_from_prototype(
+                decl_proto as usize,
+                bits,
+                key,
+            );
+        }
+        let addr = match bits >> 48 {
+            0x7FFD => (bits & crate::value::POINTER_MASK) as usize,
+            0 if crate::value::addr_class::is_above_handle_band(bits as usize) => bits as usize,
+            _ => return None,
+        };
+        let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return None;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+        let proto = addr as *mut ObjectHeader;
+        if let Some(value) = inherited_proto_accessor_value(proto, key, receiver) {
+            return Some(value);
+        }
+        if let Some(value) = super::super::field_get_set::own_data_field_by_name(proto, key) {
+            return Some(value);
+        }
+        link = super::super::prototype_chain::object_static_prototype(addr);
+    }
+    None
+}
+
 /// `constructor_side`: this walk serves a read on the class CONSTRUCTOR, so a
 /// name that is a declared INSTANCE member must not resolve through it.
 ///
@@ -579,6 +628,43 @@ unsafe fn resolve_proto_chain_field_inner(
     receiver: Option<f64>,
     constructor_side: bool,
 ) -> Option<JSValue> {
+    if let Some(receiver) = receiver {
+        let receiver_value = JSValue::from_bits(receiver.to_bits());
+        if receiver_value.is_pointer() {
+            let receiver_obj = receiver_value.as_pointer::<ObjectHeader>();
+            if !receiver_obj.is_null() {
+                if let Some(pin) = instance_pinned_constructing_class(receiver_obj) {
+                    // A factory-created class can be evaluated again after
+                    // this instance was built. Its template class id then
+                    // points at the later evaluation. Resolve through this
+                    // instance's pinned class object and its own prototype.
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let receiver = scope.root_nanbox_f64(receiver);
+                    let pin = scope.root_nanbox_f64(pin);
+                    let key = scope.root_string_ptr(key as *mut crate::StringHeader);
+                    let pin_obj = JSValue::from_bits(pin.get_nanbox_f64().to_bits())
+                        .as_pointer::<ObjectHeader>();
+                    let proto_value =
+                        super::super::field_get_set::class_object_prototype_value(pin_obj);
+                    let proto = JSValue::from_bits(proto_value.bits()).as_pointer::<ObjectHeader>();
+                    if !proto.is_null() {
+                        let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
+                        if let Some(value) = proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                                evaluated_parent_instance_field(
+                                    proto,
+                                    key,
+                                    receiver.get_nanbox_f64(),
+                                )
+                            })
+                        }) {
+                            return Some(value);
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Resolved once: `class_instance_has_member` already walks the parent
     // chain, so a parent's instance method is excluded from a subclass's
     // constructor read too.

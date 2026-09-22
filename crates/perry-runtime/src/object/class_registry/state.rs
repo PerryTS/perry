@@ -1129,30 +1129,50 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         // Object.prototype default.
         Some(crate::value::TAG_NULL)
     } else {
-        let registered_parent_proto = get_parent_class_id(class_id)
-            .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
-            .and_then(|parent_id| {
-                let parent_proto = class_decl_prototype_value(parent_id);
-                let parent_bits = parent_proto.to_bits();
-                if (parent_bits >> 48) == 0x7FFD {
-                    return Some(parent_bits);
-                }
-                // #10599: `parent_id` may be a RESERVED native-builtin class id
-                // rather than a declared class -- `builtin_parent_reserved_class_id`
-                // in perry-codegen wires this edge for `class Sub extends
-                // EventEmitter {}`, which has no `js_register_class_name`
-                // registration of its own. `class_decl_prototype_value` bails
-                // immediately for such an id (`class_name_for_id` is `None`), so
-                // without this fallback the lookup above always misses and
-                // execution falls through to the runtime-function-valued branch
-                // below, which also misses (there is no dynamic-parent VALUE for
-                // a statically-resolved reserved id) -- landing `Sub.prototype`'s
-                // `[[Prototype]]` on `Object.prototype` instead of
-                // `EventEmitter.prototype`.
-                reserved_native_parent_prototype_bits(parent_id)
-            });
-        if registered_parent_proto.is_some() {
-            registered_parent_proto
+        // A dynamically evaluated class has its own prototype object even
+        // when it shares a template class id with other evaluations. Use the
+        // parent VALUE recorded at this class definition, before consulting
+        // the template's parent-id edge. The latter loses assignments such as
+        // Effect's `Base.prototype.name = tag` on the actual parent object.
+        let evaluated_parent_proto = {
+            let parent_value = dynamic_parent.get_nanbox_f64();
+            if super::is_class_object_value(parent_value) {
+                let parent_obj = crate::value::JSValue::from_bits(parent_value.to_bits())
+                    .as_pointer::<ObjectHeader>();
+                let parent_proto = unsafe {
+                    super::super::field_get_set::class_object_prototype_value(parent_obj)
+                };
+                class_parent_prototype_bits(f64::from_bits(parent_proto.bits()))
+            } else {
+                None
+            }
+        };
+        let parent_proto = evaluated_parent_proto.or_else(|| {
+            get_parent_class_id(class_id)
+                .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+                .and_then(|parent_id| {
+                    let parent_proto = class_decl_prototype_value(parent_id);
+                    let parent_bits = parent_proto.to_bits();
+                    if (parent_bits >> 48) == 0x7FFD {
+                        return Some(parent_bits);
+                    }
+                    // #10599: `parent_id` may be a RESERVED native-builtin class id
+                    // rather than a declared class -- `builtin_parent_reserved_class_id`
+                    // in perry-codegen wires this edge for `class Sub extends
+                    // EventEmitter {}`, which has no `js_register_class_name`
+                    // registration of its own. `class_decl_prototype_value` bails
+                    // immediately for such an id (`class_name_for_id` is `None`), so
+                    // without this fallback the lookup above always misses and
+                    // execution falls through to the runtime-function-valued branch
+                    // below, which also misses (there is no dynamic-parent VALUE for
+                    // a statically-resolved reserved id) -- landing `Sub.prototype`'s
+                    // `[[Prototype]]` on `Object.prototype` instead of
+                    // `EventEmitter.prototype`.
+                    reserved_native_parent_prototype_bits(parent_id)
+                })
+        });
+        if parent_proto.is_some() {
+            parent_proto
         } else {
             // A runtime function-valued superclass (including Intl service
             // constructors) has no class-id edge. Link the declared prototype
@@ -1188,9 +1208,13 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         }
     };
     if let Some(bits) = parent_proto_bits {
+        let bits = scope.root_heap_word_u64(bits);
         let proto = class_decl_prototype_object(class_id);
         if !proto.is_null() {
-            super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
+            super::super::prototype_chain::object_set_static_prototype(
+                proto as usize,
+                bits.get_heap_word_u64(),
+            );
         }
     }
 
