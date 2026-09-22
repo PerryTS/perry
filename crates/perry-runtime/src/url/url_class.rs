@@ -344,6 +344,65 @@ pub extern "C" fn js_url_set_protocol(url: *mut ObjectHeader, value: f64) {
     }
 }
 
+/// `url.host = value` — update hostname and an optional valid port.
+#[no_mangle]
+pub extern "C" fn js_url_set_host(url: *mut ObjectHeader, value: f64) {
+    if url.is_null() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let url_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(url as i64));
+    let raw = coerce_url_setter_value(value);
+    if raw.is_empty() {
+        return;
+    }
+    let (hostname, port) = if raw.starts_with('[') {
+        let Some(end) = raw.find(']') else { return };
+        let suffix = &raw[end + 1..];
+        if !suffix.is_empty() && !suffix.starts_with(':') {
+            return;
+        }
+        (&raw[..=end], suffix.strip_prefix(':'))
+    } else if let Some((host, port)) = raw.rsplit_once(':') {
+        (host, Some(port))
+    } else {
+        (raw.as_str(), None)
+    };
+    let hostname = if let Some(ip) = hostname.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        ip.parse::<std::net::Ipv6Addr>()
+            .ok()
+            .map(|addr| format!("[{addr}]"))
+    } else {
+        normalize_hostname_value(hostname)
+    };
+    let Some(hostname) = hostname else {
+        return;
+    };
+    let port = port
+        .map(|text| {
+            text.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+        })
+        .filter(|text| !text.is_empty())
+        .filter(|text| text.parse::<u32>().is_ok_and(|n| n <= 65_535));
+    unsafe {
+        let hostname_value = create_string_f64(&hostname);
+        let url = crate::value::js_nanbox_get_pointer(url_h.get_nanbox_f64()) as *mut ObjectHeader;
+        js_object_set_field_f64(url, URL_HOSTNAME, hostname_value);
+        if let Some(port) = port {
+            let port_value = create_string_f64(&port);
+            let url =
+                crate::value::js_nanbox_get_pointer(url_h.get_nanbox_f64()) as *mut ObjectHeader;
+            js_object_set_field_f64(url, URL_PORT, port_value);
+        }
+        let url = crate::value::js_nanbox_get_pointer(url_h.get_nanbox_f64()) as *mut ObjectHeader;
+        rebuild_url_host(url);
+        let url = crate::value::js_nanbox_get_pointer(url_h.get_nanbox_f64()) as *mut ObjectHeader;
+        rebuild_url_href(url);
+    }
+}
+
 /// `url.hostname = value` — update hostname and reconstruct host.
 #[no_mangle]
 pub extern "C" fn js_url_set_hostname(url: *mut ObjectHeader, value: f64) {

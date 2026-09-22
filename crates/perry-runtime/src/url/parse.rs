@@ -398,35 +398,30 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     // Allocate object with URL_FIELD_COUNT fields
     // Using class_id 0 for now (generic object)
     let obj = js_object_alloc(0, URL_FIELD_COUNT);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
 
-    // Create the keys array with property names (order must match field indices)
-    let mut keys = js_array_alloc(URL_FIELD_COUNT);
-    keys = js_array_push_f64(keys, create_string_f64("href")); // 0
-    keys = js_array_push_f64(keys, create_string_f64("protocol")); // 1
-    keys = js_array_push_f64(keys, create_string_f64("host")); // 2
-    keys = js_array_push_f64(keys, create_string_f64("hostname")); // 3
-    keys = js_array_push_f64(keys, create_string_f64("port")); // 4
-    keys = js_array_push_f64(keys, create_string_f64("pathname")); // 5
-    keys = js_array_push_f64(keys, create_string_f64("search")); // 6
-    keys = js_array_push_f64(keys, create_string_f64("hash")); // 7
-    keys = js_array_push_f64(keys, create_string_f64("origin")); // 8
-    keys = js_array_push_f64(keys, create_string_f64("searchParams")); // 9
-    keys = js_array_push_f64(keys, create_string_f64("username")); // 10
-    keys = js_array_push_f64(keys, create_string_f64("password")); // 11
-    js_object_set_keys(obj, keys);
+    // The numbered fields are internal URL state. Named properties live on
+    // URL.prototype; an expando write seeds twelve tombstone keys before its
+    // first append so it cannot overwrite these fields.
 
     // Set all the URL properties
-    js_object_set_field_f64(obj, URL_HREF, create_string_f64(&href));
-    js_object_set_field_f64(obj, URL_PROTOCOL, create_string_f64(&protocol));
-    js_object_set_field_f64(obj, URL_HOST, create_string_f64(&host));
-    js_object_set_field_f64(obj, URL_HOSTNAME, create_string_f64(&hostname));
-    js_object_set_field_f64(obj, URL_PORT, create_string_f64(&port));
-    js_object_set_field_f64(obj, URL_PATHNAME, create_string_f64(&pathname));
-    js_object_set_field_f64(obj, URL_SEARCH, create_string_f64(&search));
-    js_object_set_field_f64(obj, URL_HASH, create_string_f64(&hash));
-    js_object_set_field_f64(obj, URL_ORIGIN, create_string_f64(&origin));
-    js_object_set_field_f64(obj, URL_USERNAME, create_string_f64(&username));
-    js_object_set_field_f64(obj, URL_PASSWORD, create_string_f64(&password));
+    let set_string = |field, text: &str| {
+        let value = create_string_f64(text);
+        let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
+        js_object_set_field_f64(obj, field, value);
+    };
+    set_string(URL_HREF, &href);
+    set_string(URL_PROTOCOL, &protocol);
+    set_string(URL_HOST, &host);
+    set_string(URL_HOSTNAME, &hostname);
+    set_string(URL_PORT, &port);
+    set_string(URL_PATHNAME, &pathname);
+    set_string(URL_SEARCH, &search);
+    set_string(URL_HASH, &hash);
+    set_string(URL_ORIGIN, &origin);
+    set_string(URL_USERNAME, &username);
+    set_string(URL_PASSWORD, &password);
     // Build a real URLSearchParams object from the search string (parsed
     // lazily below). Storing a string here would break `url.searchParams.get()`
     // because the URLSearchParams method runtime functions interpret the
@@ -434,16 +429,26 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
     // instead — see issue #111.
     let params_entries = parse_query_string(&search);
     let params_obj = create_url_search_params_object(params_entries);
-    let params_f64 = crate::value::js_nanbox_pointer(params_obj as i64);
-    js_object_set_field_f64(obj, URL_SEARCH_PARAMS, params_f64);
+    let params_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(params_obj as i64));
+    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
+    js_object_set_field_f64(obj, URL_SEARCH_PARAMS, params_h.get_nanbox_f64());
     // Adopt: subsequent mutations on `url.searchParams` should sync back.
+    let params_obj =
+        crate::value::js_nanbox_get_pointer(params_h.get_nanbox_f64()) as *mut ObjectHeader;
     js_object_set_field_f64(
         params_obj,
         super::search_params::URL_SEARCH_PARAMS_OWNER,
-        crate::value::js_nanbox_pointer(obj as i64),
+        obj_h.get_nanbox_f64(),
     );
 
-    obj
+    let proto = crate::object::builtin_prototype_value("URL");
+    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+        crate::object::prototype_chain::object_link_class_default_prototype(
+            crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize,
+            proto.to_bits(),
+        );
+    }
+    crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader
 }
 
 /// Build and throw a `TypeError` matching Node's WHATWG-URL parser's

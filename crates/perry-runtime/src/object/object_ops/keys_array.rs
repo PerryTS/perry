@@ -78,7 +78,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         // accessor installs, which claim a keys slot with no data write)
         // can never take a raw internal field's index. The seeded receiver
         // then falls through to the ordinary existing-keys append below.
-        if crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0 {
+        if crate::object::reserved_slot_floor_for_object(obj) != 0 {
             let seeded = crate::object::ensure_reserved_floor_keys(obj);
             refresh_define_property_roots!();
             keys = crate::object::object_keys_array(obj);
