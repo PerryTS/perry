@@ -597,6 +597,50 @@ unsafe fn web_builtin_to_string_tag_symbol_property(obj_f64: f64, sym_f64: f64) 
     Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)))
 }
 
+/// Native core instances resolve their intrinsic prototype reflectively, not
+/// through the ordinary symbol-property chain. Consult the actual prototype
+/// for @@toStringTag after own and explicit-chain reads have missed.
+unsafe fn reflected_prototype_to_string_tag_symbol_property(
+    obj_f64: f64,
+    sym_f64: f64,
+    receiver_f64: f64,
+) -> Option<f64> {
+    let value = crate::value::JSValue::from_bits(obj_f64.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let tag = well_known_symbol("toStringTag");
+    if tag.is_null() {
+        return None;
+    }
+    let tag_value = f64::from_bits(crate::value::JSValue::pointer(tag as *const u8).bits());
+    if sym_key_from_f64(sym_f64) != sym_key_from_f64(tag_value) {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(obj_f64);
+    let sym = scope.root_nanbox_f64(sym_f64);
+    let receiver = scope.root_nanbox_f64(receiver_f64);
+    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+        obj.get_nanbox_f64(),
+    ));
+    if !crate::value::JSValue::from_bits(proto.get_nanbox_f64().to_bits()).is_pointer() {
+        return None;
+    }
+    own_symbol_property_for_receiver(
+        proto.get_nanbox_f64(),
+        sym.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    )
+    .or_else(|| {
+        resolve_explicit_object_prototype_symbol(
+            proto.get_nanbox_f64(),
+            sym.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+        )
+    })
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f64) -> f64 {
     js_object_get_symbol_property_with_receiver(obj_f64, sym_f64, obj_f64)
@@ -1334,6 +1378,13 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 }
             }
         }
+    }
+    if let Some(value) = reflected_prototype_to_string_tag_symbol_property(
+        obj_h.get_nanbox_f64(),
+        sym_h.get_nanbox_f64(),
+        receiver_h.get_nanbox_f64(),
+    ) {
+        return value;
     }
     f64::from_bits(TAG_UNDEFINED)
 }
