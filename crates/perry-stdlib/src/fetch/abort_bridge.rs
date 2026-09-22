@@ -213,7 +213,7 @@ pub(crate) async fn run_request(
                     .unwrap_or("")
                     .to_string();
                 let headers = super::headers_from_header_map(response.headers());
-                let body = response.bytes().await.unwrap_or_default().to_vec();
+                let body = super::response_body_bytes(response).await;
                 let response_id = super::alloc_fetch_handle_id();
                 super::FETCH_RESPONSES.lock().unwrap().insert(
                     response_id,

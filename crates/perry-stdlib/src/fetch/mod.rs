@@ -18,6 +18,8 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 // `use super::*`.
 mod abort_bridge;
 pub use abort_bridge::*;
+mod content_encoding;
+use content_encoding::response_body_bytes;
 mod headers;
 mod request_handle;
 mod transport_error;
@@ -120,8 +122,14 @@ lazy_static::lazy_static! {
 
 /// Shared builder options for every fetch client (direct or proxied).
 fn fetch_client_builder() -> reqwest::ClientBuilder {
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    default_headers.insert(
+        reqwest::header::ACCEPT_ENCODING,
+        reqwest::header::HeaderValue::from_static("gzip, deflate"),
+    );
     let builder = reqwest::Client::builder()
         .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
+        .default_headers(default_headers)
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60));
@@ -479,7 +487,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
 
                 let headers = headers_from_header_map(response.headers());
 
-                let body = response.bytes().await.unwrap_or_default().to_vec();
+                let body = response_body_bytes(response).await;
 
                 // Store response
                 let response_id = alloc_fetch_handle_id();
@@ -552,7 +560,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
 
                 let headers = headers_from_header_map(response.headers());
 
-                let body = response.bytes().await.unwrap_or_default().to_vec();
+                let body = response_body_bytes(response).await;
 
                 let response_id = alloc_fetch_handle_id();
 
@@ -626,7 +634,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
 
                 let headers = headers_from_header_map(response.headers());
 
-                let body = response.bytes().await.unwrap_or_default().to_vec();
+                let body = response_body_bytes(response).await;
 
                 let response_id = alloc_fetch_handle_id();
 
@@ -714,7 +722,7 @@ pub unsafe extern "C" fn js_fetch_post(
 
                 let headers = headers_from_header_map(response.headers());
 
-                let body = response.bytes().await.unwrap_or_default().to_vec();
+                let body = response_body_bytes(response).await;
 
                 // Store response
                 let response_id = alloc_fetch_handle_id();
