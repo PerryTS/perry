@@ -1914,6 +1914,33 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         return result;
     }
 
+    // #10943: an own property BEATS the builtin. Every kind dispatcher below
+    // resolves a method by NAME against the receiver's kind — a Map's `get`, a
+    // Date's `getTime` — and none of them consults the receiver's own
+    // properties, so `const m = new Map(); m.get = () => 1; m.get()` ran
+    // `Map.prototype.get`. Reflection already disagreed with the call:
+    // `typeof`, `hasOwnProperty` and `Object.keys` all see the own property.
+    //
+    // Resolved and called HERE, in Get-then-Call order, the way the Proxy arm
+    // above does it. A BORROWED builtin (`m.get = Map.prototype.get`) is not a
+    // user method and falls through to the native arms — dispatching it by
+    // name again is how an earlier attempt recursed until the stack ran out.
+    if let Some(own) = crate::object::own_override::own_user_method_value(object(), method_name) {
+        let method_handle = root_scope.root_nanbox_f64(own);
+        let args = refreshed_args();
+        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+        let prev_this_h = prev_this_scope.root_nanbox_u64(
+            IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits())),
+        );
+        let result = crate::closure::js_native_call_value(
+            method_handle.get_nanbox_f64(),
+            args.as_ptr(),
+            args.len(),
+        );
+        IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
+        return result;
+    }
+
     if let Some(r) = primitive_methods::dispatch_primitive(
         &root_scope,
         &object_handle,

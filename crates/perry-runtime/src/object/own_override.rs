@@ -146,3 +146,33 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
     let has_own = crate::object::object_ops::has_own::js_object_has_own(recv, key_value);
     i32::from(has_own.to_bits() == crate::value::TAG_TRUE)
 }
+
+/// The receiver's own USER method of this name, if it has one.
+///
+/// `None` means "run the builtin": either nothing owns the name, or what owns
+/// it is a BORROWED builtin (`m.get = Map.prototype.get`), which must take the
+/// native arm — dispatching it by name again is how an earlier attempt at
+/// #10943 recursed until the stack ran out. `array::generic`'s
+/// `object_owns_user_method` is the existing two-valued classifier and this
+/// asks it rather than repeating the rule.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value; `name` is this call's method name.
+pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64> {
+    // The same relaxed arm the emitted guard consults: nothing anywhere has
+    // ever put a named property on a non-object cell, so nothing can shadow.
+    if !EXOTIC_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) {
+        return None;
+    }
+    let jsval = crate::JSValue::from_bits(recv.to_bits());
+    if !jsval.is_pointer() {
+        return None;
+    }
+    if !crate::array::object_owns_user_method(recv, name) {
+        return None;
+    }
+    let addr = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = crate::object::js_object_get_field_by_name_f64(addr, key);
+    Some(value)
+}
