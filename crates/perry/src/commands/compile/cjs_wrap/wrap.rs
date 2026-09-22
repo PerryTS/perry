@@ -1522,7 +1522,7 @@ fn cyclic_missing_property_names(
     .filter_map(|capture| capture.get(1).map(|name| name.as_str().to_string()))
     .collect::<std::collections::HashSet<_>>();
     let masked_source = super::detect::strip_comments_and_strings(source);
-    let mut missing = std::collections::BTreeSet::new();
+    let mut candidate_sites = Vec::new();
     for alias in aliases {
         let access = perry_perex::tooling::Regex::new(&format!(
             r#"(?:^|[^A-Za-z0-9_$]){}\.([A-Za-z_$][A-Za-z0-9_$]*)"#,
@@ -1532,11 +1532,17 @@ fn cyclic_missing_property_names(
         for capture in access.captures_iter(&masked_source) {
             if let Some(property) = capture.get(1).map(|name| name.as_str()) {
                 if !assigned_before.contains(property) {
-                    missing.insert(property.to_string());
+                    candidate_sites.push((capture.get(0).unwrap().start(), property.to_string()));
                 }
             }
         }
     }
+    let offsets: Vec<usize> = candidate_sites.iter().map(|(offset, _)| *offset).collect();
+    let deferred = super::extract_requires::deferred_function_sites(&masked_source, &offsets);
+    let missing: std::collections::BTreeSet<String> = candidate_sites
+        .into_iter()
+        .filter_map(|(offset, property)| (!deferred.contains(&offset)).then_some(property))
+        .collect();
     missing.into_iter().collect()
 }
 

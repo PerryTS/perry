@@ -483,6 +483,73 @@ pub fn function_local_specs(source: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
+/// Property reads in a function body cannot be inferred to happen at the
+/// preceding `require()` call. Used by the circular-dependency warning scan:
+/// warning there would run even when the function is called after the cycle
+/// finishes. An immediately invoked function still runs during module init.
+pub(super) fn deferred_function_sites(
+    masked: &str,
+    sites: &[usize],
+) -> std::collections::HashSet<usize> {
+    if sites.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let bytes = masked.as_bytes();
+    let is_ident = |c: u8| c == b'_' || c == b'$' || c.is_ascii_alphanumeric();
+    let mut open: Vec<Option<usize>> = Vec::new();
+    let mut functions: Vec<(usize, usize, bool)> = Vec::new();
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                let mut p = i;
+                while p > 0 && bytes[p - 1].is_ascii_whitespace() {
+                    p -= 1;
+                }
+                let function = if p >= 2 && &bytes[p - 2..p] == b"=>" {
+                    true
+                } else if p > 0 && bytes[p - 1] == b')' {
+                    !matches!(
+                        matched_open_head(masked, bytes, p - 1, &is_ident).as_str(),
+                        "if" | "for" | "while" | "switch" | "catch" | "with"
+                    )
+                } else {
+                    false
+                };
+                open.push(function.then_some(i));
+            }
+            b'}' => {
+                if let Some(Some(start)) = open.pop() {
+                    let mut after = i + 1;
+                    while after < bytes.len() && bytes[after].is_ascii_whitespace() {
+                        after += 1;
+                    }
+                    while after < bytes.len() && bytes[after] == b')' {
+                        after += 1;
+                        while after < bytes.len() && bytes[after].is_ascii_whitespace() {
+                            after += 1;
+                        }
+                    }
+                    let tail = &masked[after..];
+                    let immediate = tail.starts_with('(')
+                        || tail.starts_with(".call(")
+                        || tail.starts_with(".apply(");
+                    functions.push((start, i, immediate));
+                }
+            }
+            _ => {}
+        }
+    }
+    sites
+        .iter()
+        .copied()
+        .filter(|site| {
+            functions
+                .iter()
+                .any(|(start, end, immediate)| !immediate && start < site && site < end)
+        })
+        .collect()
+}
+
 /// Is the `require(` call whose match starts at masked-source offset
 /// `call_start` reached only conditionally by a nearby operator or a
 /// braceless control-flow header, even though it has no enclosing `{ }`
