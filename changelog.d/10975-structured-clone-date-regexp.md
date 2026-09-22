@@ -1,0 +1,1 @@
+- Fix `structuredClone` returning the original `Date` or `RegExp` object. Clones now have independent identity and mutable state; RegExp clones reset `lastIndex` to zero as in Node.
