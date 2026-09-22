@@ -80,6 +80,7 @@ pub(crate) use class_registry::class_registry_census;
 pub(crate) use class_registry::construct_two_rooted;
 pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
 mod census;
+pub(crate) mod canonical_keys;
 pub(crate) use census::object_tables_census;
 mod collection_proto_thunks;
 mod data_view_registry;
@@ -717,7 +718,34 @@ fn shape_cache_get_with_id(shape_id: u32) -> (*mut ArrayHeader, u32) {
 /// Insert a keys_array into the cache. Updates the inline slot
 /// (evicting any prior entry there) and also writes to the overflow
 /// map so misses on the inline cache still find the value.
-fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
+#[must_use]
+fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) -> *mut ArrayHeader {
+    // #10868 step 2.5 stage 1b: the cache holds the CANONICAL array for this
+    // static shape's key list, so two compile-time shapes that spell the same
+    // ordered key list are one layout rather than two. The canonical array is
+    // RETURNED rather than swapped in silently — every caller here keeps
+    // using the pointer afterwards (`remember_class_keys_array`, and the
+    // value it hands back to codegen), and a cache holding one array while
+    // the caller holds another is exactly the divergence this stage exists to
+    // remove.
+    let keys_array = {
+        // SAFETY: a live keys array or null; `canonicalize` allocates and
+        // roots its operand across that.
+        let len = if keys_array.is_null() {
+            0
+        } else {
+            unsafe { (*keys_array).length }
+        };
+        if len == 0 {
+            // The empty list has no canonical array — the trie's root owns
+            // none — and a zero-length keys array is NOT interchangeable with
+            // null here: `js_build_class_keys_array` hands this pointer back
+            // to generated code. Leave it exactly as it was.
+            keys_array
+        } else {
+            unsafe { canonical_keys::canonicalize(keys_array, len).as_ptr() }
+        }
+    };
     // Mark the array as shape-shared so `js_object_set_field_by_name`
     // knows it must clone before mutating. The clone path was firing
     // every time *any* fresh object literal added a property beyond
@@ -756,6 +784,7 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
         .insert(shape_id, (keys_array, runtime_shape_id));
     crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
     shape_carriers::note_shape_id(runtime_shape_id);
+    keys_array
 }
 
 /// Thread-local shape-transition cache for the dynamic-key write path
@@ -1405,8 +1434,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
 /// but a call: a seam with logic of its own can drift from the writer it
 /// stands in for, which is exactly what let a deleted arm site stay green.
 #[cfg(test)]
-pub(crate) fn test_shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
-    shape_cache_insert(shape_id, keys_array);
+pub(crate) fn test_shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) -> *mut ArrayHeader {
+    shape_cache_insert(shape_id, keys_array)
 }
 
 #[cfg(test)]

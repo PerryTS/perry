@@ -274,64 +274,17 @@ unsafe fn ensure_key_in_keys_array_inner(
         }
     }
 
-    // Clone a shape-cache / transition-cache keys array before appending.
-    //
-    // The old `key_count == field_count` proxy was not an ownership test.
-    // Objects may legitimately have a different logical field boundary while
-    // still pointing at the shared shape array. In that case defineProperty
-    // appended directly to the cache entry, so sibling `{}` allocations grew
-    // the same phantom own key (Babel's webpack exports objects exposed this
-    // as an enumerable `ALIAS_KEYS: undefined`). The caches already stamp the
-    // authoritative GC_FLAG_SHAPE_SHARED bit; use it just like the ordinary
-    // [[Set]] growth path does.
-    let keys_gc_header =
-        (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let keys_shared = (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
-    let owned_keys = if keys_shared {
-        // Every entry in an ordered object-keys array is a heap string
-        // pointer. Preserve that invariant explicitly while cloning instead
-        // of starting as a raw-f64 array and reconstructing a HashMap-backed
-        // per-object pointer mask from the finished slots. The clone is still
-        // unpublished here and no allocation occurs during the copy, so it is
-        // safe to expose the initialized prefix through `length` only after
-        // the last pointer has been written.
-        let cloned = crate::array::js_array_alloc_pointer_elements(key_count as u32 + 4);
-        refresh_define_property_roots!();
-        let keys = crate::object::object_keys_array(obj);
-        // #10939: a keys array's elements do not necessarily start
-        // at `header + 8`. `keys_array_dense_slots` resolves a
-        // grow-forward pointer and adds `array_front_offset`, which is
-        // nonzero for any array with a front reserve — #9019's
-        // reserved-floor keys arrays are BORN with leading holes, and a
-        // size-class round-up alone can make it nonzero. The clone
-        // declares every published slot a pointer, so copying from the
-        // wrong base does not merely read the wrong bytes: it promises
-        // the collector that `ArrayHeader` and reserve words are heap
-        // pointers. A missing property now, a SIGSEGV inside the next
-        // collection later, with a backtrace naming something else.
-        let (src_data, src_len) = crate::object::keys_array_dense_slots(keys);
-        let dst_data = crate::array::array_elements_ptr(cloned as *const crate::array::ArrayHeader);
-        // A source shorter than the shape's count means the shape is already
-        // lying; copy what exists rather than publishing uninitialised words
-        // as traced pointers.
-        let copied = std::cmp::min(key_count, src_len);
-        debug_assert_eq!(
-            copied, key_count,
-            "the shape's key count outruns its keys array"
-        );
-        for i in 0..copied {
-            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished and its all-pointer layout covers only the prefix published by length.
-            *dst_data.add(i) = (*src_data.add(i)).to_bits();
-        }
-        (*cloned).length = copied as u32;
-        set_object_keys_array(obj, cloned);
-        cloned
-    } else {
-        keys
-    };
-    let owned_keys_handle = scope.root_raw_mut_ptr(owned_keys);
-    let new_keys = crate::array::js_array_push(owned_keys, JSValue::string_ptr(key as *mut _));
-    let _owned_keys = owned_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
+    // #10868 step 2.5 stage 1b: the canonical successor for this ordered list
+    // plus `key`. The clone-before-append this replaces existed because the
+    // array might be shared; every keys array is shared now, so the question
+    // is not asked — and the clone it used to answer with was a fresh address
+    // per receiver, which is a fresh LAYOUT per receiver. This site is the
+    // census's `object_ops/keys_array.rs:318`, 5,334 `key_count` mints, and
+    // it is the mechanism named in the #10287 comment above: a receiver that
+    // defines one key can never again share a keys array with its siblings.
+    let canonical_parent = crate::object::canonical_keys::canonicalize(keys, key_count as u32);
+    refresh_define_property_roots!();
+    let new_keys = crate::object::canonical_keys::extend_key(canonical_parent, key).as_ptr();
     refresh_define_property_roots!();
     set_object_keys_array(obj, new_keys);
     // Keep the sidecar fresh (mirrors the [[Set]] append path): the entry is
