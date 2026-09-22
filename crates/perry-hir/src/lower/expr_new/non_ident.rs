@@ -9,7 +9,7 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
-use crate::lower_decl::lower_class_from_ast;
+use crate::lower_decl::{lower_class_from_ast, prepare_ordered_class_computed_names};
 use crate::lower_types::extract_ts_type_with_ctx;
 
 use super::super::{lower_expr, LoweringContext};
@@ -165,6 +165,12 @@ pub(crate) fn lower_new_non_ident(
         // link instead and needs no registration — which is why the user-parent
         // form of this shape already worked.
         let parent_expr = class.extends_expr.clone();
+        // This arm bypasses `lower_class_expr`, which normally evaluates and
+        // registers computed member keys at class-definition time. Without
+        // that prelude, an inline `new (class { *[Symbol.iterator]() {} })()`
+        // constructs an instance before its iterator method is registered.
+        let (computed_name_evaluations, _) =
+            prepare_ordered_class_computed_names(&class_expr.class.body, &class, &synthetic_name);
         ctx.pending_classes.push(class);
         let mut args: Vec<Expr> = new_expr
             .args
@@ -217,16 +223,19 @@ pub(crate) fn lower_new_non_ident(
         // The `Sequence` yields its LAST element, so the `new` site still sees
         // the constructed instance — the registration is pure side effect,
         // ordered before it.
-        let Some(parent_expr) = parent_expr else {
-            return Ok(construct);
-        };
-        return Ok(Expr::Sequence(vec![
-            Expr::RegisterClassParentDynamic {
+        let mut definition_steps = Vec::new();
+        if let Some(parent_expr) = parent_expr {
+            definition_steps.push(Expr::RegisterClassParentDynamic {
                 class_name: synthetic_name,
                 parent_expr,
-            },
-            construct,
-        ]));
+            });
+        }
+        definition_steps.extend(computed_name_evaluations);
+        if definition_steps.is_empty() {
+            return Ok(construct);
+        }
+        definition_steps.push(construct);
+        return Ok(Expr::Sequence(definition_steps));
     }
 
     let callee = Box::new(lower_expr(ctx, callee_expr)?);
