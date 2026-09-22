@@ -5,6 +5,11 @@
 use super::*;
 use std::sync::atomic::Ordering;
 
+#[inline(always)]
+fn is_length_heap_addr(addr: usize) -> bool {
+    crate::value::addr_class::is_plausible_heap_addr(addr)
+}
+
 /// Issue #73: safe `.length` lookup by runtime type. Called from the
 /// inline PropertyGet length path when the GC-type-byte check at
 /// `handle-8` doesn't prove the receiver is a GC_TYPE_ARRAY or
@@ -56,44 +61,17 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
         // ids, revocable-proxy ids — all `< 0x100000`) is a registry id, not a
         // heap pointer. None of them carry a `.length`, and dereferencing the
         // raw id (`handle - 8` GcHeader read, or `*handle` u32 below) hits
-        // unmapped low memory → SIGSEGV. The macOS 2 TB `heap_min` floor below
-        // masks this, but the Linux/Android/iOS `0x1000` floor does not, so
-        // reject the band explicitly here. Matches the band gating the inline
-        // `.length` codegen fast path now applies before falling in here.
+        // unmapped low memory → SIGSEGV. Reject the band explicitly before
+        // applying the platform heap-range classifier below. Matches the band
+        // gating the inline `.length` codegen fast path now applies before
+        // falling in here.
         if crate::value::addr_class::is_handle_band(handle) {
             return 0.0;
         }
-        // Heap window: macOS mimalloc lands in 3-5 TB, but Android scudo,
-        // Linux glibc, Windows mimalloc, and iOS-family device
-        // libsystem_malloc all allocate much lower (often hundreds of GB
-        // or less, and on iOS device often in the single-digit GB or even
-        // sub-GB range). Using the macOS-tight 2 TB floor on those
-        // platforms null-s every real pointer — on iOS device this is the
-        // bug behind #1136 (`.length` on an array returned from
-        // `String.split()` collapses to 0, so `for…of` loops zero times
-        // and `segments.length === 0` is wrongly true). See clean_arr_ptr
-        // for the same platform split.
-        #[cfg(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "windows",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "visionos",
-        ))]
-        let heap_min: usize = 0x1000;
-        #[cfg(not(any(
-            target_os = "android",
-            target_os = "linux",
-            target_os = "windows",
-            target_os = "ios",
-            target_os = "tvos",
-            target_os = "watchos",
-            target_os = "visionos",
-        )))]
-        let heap_min: usize = 0x200_0000_0000;
-        if handle < heap_min || (handle as u64) >= 0x8000_0000_0000 {
+        // Keep this path on the canonical platform heap range. The duplicated
+        // floor here omitted macOS and rejected legitimate low mappings there
+        // (#10271); it also could not follow the wider AArch64 Linux ceiling.
+        if !is_length_heap_addr(handle) {
             return 0.0;
         }
         if let Some(value) = unsafe {
@@ -183,31 +161,10 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
     // sometimes hands their pointer through as `bitcast i64 → double`
     // without a POINTER_TAG. Without this path, `Int32Array.length`
     // returned 0 because the value's top16 was 0, not 0x7FFD.
-    // #1136: mirror the platform split above for raw-pointer-bitcast
+    // #1136: use the same canonical platform range for raw-pointer-bitcast
     // values too, so a Buffer/TypedArray pointer handed through as
-    // `bitcast i64 → double` on iOS device still resolves to its real
-    // length via the registry lookups below.
-    #[cfg(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "windows",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-    ))]
-    let raw_heap_min: u64 = 0x1000;
-    #[cfg(not(any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "windows",
-        target_os = "ios",
-        target_os = "tvos",
-        target_os = "watchos",
-        target_os = "visionos",
-    )))]
-    let raw_heap_min: u64 = 0x200_0000_0000;
-    if top16 == 0 && bits >= raw_heap_min && bits < 0x8000_0000_0000 {
+    // `bitcast i64 → double` resolves to its real length on every target.
+    if top16 == 0 && is_length_heap_addr(bits as usize) {
         let handle = bits as usize;
         if let Some(value) = unsafe {
             crate::typedarray_props::typed_array_get_property_value_by_name(handle, "length")
@@ -826,6 +783,67 @@ pub unsafe extern "C" fn js_get_property(object: f64, name_ptr: i64, name_len: i
 mod length_handle_band_tests {
     use super::*;
     use crate::value::addr_class;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn low_macos_mapping_reaches_both_length_dispatch_paths() {
+        struct Mapping {
+            ptr: *mut crate::typedarray::TypedArrayHeader,
+            len: usize,
+        }
+
+        impl Drop for Mapping {
+            fn drop(&mut self) {
+                crate::typedarray::unregister_typed_array(self.ptr);
+                unsafe {
+                    assert_eq!(libc::munmap(self.ptr.cast(), self.len), 0);
+                }
+            }
+        }
+
+        unsafe {
+            let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+            let raw = libc::mmap(
+                std::ptr::null_mut(),
+                page,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANON | libc::MAP_PRIVATE,
+                -1,
+                0,
+            );
+            assert_ne!(raw, libc::MAP_FAILED);
+            let addr = raw as usize;
+            assert!(
+                (addr_class::HANDLE_BAND_MAX..0x200_0000_0000).contains(&addr),
+                "fixture must exercise the macOS address range that the old 2 TiB floor rejected; got {addr:#x}"
+            );
+
+            let ptr = raw.cast::<crate::typedarray::TypedArrayHeader>();
+            std::ptr::write(
+                ptr,
+                crate::typedarray::TypedArrayHeader {
+                    length: 37,
+                    capacity: 37,
+                    kind: crate::typedarray::KIND_UINT8,
+                    elem_size: 1,
+                    _pad: [0; 6],
+                },
+            );
+            crate::typedarray::register_typed_array(ptr, crate::typedarray::KIND_UINT8);
+            let _mapping = Mapping { ptr, len: page };
+
+            assert_eq!(
+                js_value_length_f64(crate::value::js_nanbox_pointer(addr as i64)),
+                37.0,
+                "POINTER_TAG length dispatch must accept a live low macOS mapping"
+            );
+            assert_eq!(
+                js_value_length_f64(f64::from_bits(addr as u64)),
+                37.0,
+                "raw-bitcast length dispatch must accept the same mapping"
+            );
+        }
+    }
 
     /// A POINTER_TAG-boxed *handle-band* value (Web Fetch
     /// Headers/Request/Response/Blob ids, net/http handles, zlib/proxy ids —
