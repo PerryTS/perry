@@ -158,7 +158,7 @@ pub(crate) fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
 /// `lower_call.rs` for chained `.toString(arg)` calls where the receiver
 /// type is not statically known.
 ///
-/// - If the receiver is a registered Buffer (POINTER_TAG-boxed or raw),
+/// - If the receiver is a byte-indexed buffer (POINTER_TAG-boxed or raw),
 ///   route to `js_buffer_to_string` with the encoding tag.
 /// - Otherwise fall through to `js_jsvalue_to_string` (encoding ignored,
 ///   matches Node behavior for non-Buffer values like numbers/objects).
@@ -179,7 +179,7 @@ pub extern "C" fn js_value_to_string_with_encoding(value: f64, enc_tag: i32) -> 
     } else {
         0
     };
-    if ptr_addr != 0 && is_registered_buffer(ptr_addr) {
+    if ptr_addr != 0 && is_byte_indexed_buffer(ptr_addr) {
         return js_buffer_to_string(ptr_addr as *const BufferHeader, enc_tag);
     }
     crate::value::js_jsvalue_to_string(value)
@@ -208,7 +208,7 @@ pub extern "C" fn js_value_to_string_with_encoding_or_radix(
     } else {
         0
     };
-    if ptr_addr != 0 && is_registered_buffer(ptr_addr) {
+    if ptr_addr != 0 && is_byte_indexed_buffer(ptr_addr) {
         return js_buffer_to_string(ptr_addr as *const BufferHeader, enc_tag);
     }
     // Non-buffer: a Number or BigInt receiver treats the string arg as a radix.
