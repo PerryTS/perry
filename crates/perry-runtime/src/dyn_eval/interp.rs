@@ -470,6 +470,9 @@ pub(crate) fn make_function_value(
             ctx.wasm_allowed,
         );
         let closure_idx = root_push(closure);
+        let closure_ptr = crate::value::js_nanbox_get_pointer(root_get(closure_idx))
+            as *mut crate::closure::ClosureHeader;
+        crate::object::set_bound_native_closure_name(closure_ptr, &fn_name);
         env::define(root_get(name_env_idx), &fn_name, root_get(closure_idx));
         let closure = root_get(closure_idx);
         roots_truncate(name_env_idx);
@@ -1199,6 +1202,9 @@ pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: u
     let ctor_idx = root_push(ctor_closure);
 
     if let Some(name) = &name {
+        let ctor_ptr = crate::value::js_nanbox_get_pointer(root_get(ctor_idx))
+            as *mut crate::closure::ClosureHeader;
+        crate::object::set_bound_native_closure_name(ctor_ptr, name);
         env::define(root_get(body_env_idx), name, root_get(ctor_idx));
     }
 

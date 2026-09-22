@@ -280,6 +280,21 @@ fn named_function_expression_recursion_and_expando() {
 }
 
 #[test]
+fn interpreted_functions_and_classes_keep_their_declared_names() {
+    for (source, expected) in [
+        ("return function Named() {};", "Named"),
+        ("function Declared() {} return Declared;", "Declared"),
+        ("return class Widget {};", "Widget"),
+    ] {
+        let factory = dyn_fn(&[source]);
+        let value_idx = root_push(call(factory, &[]));
+        let name = bridge::get_member(root_get(value_idx), "name");
+        assert_eq!(as_str(name), expected, "source: {source}");
+        roots_truncate(value_idx);
+    }
+}
+
+#[test]
 fn closures_capture_interpreter_scope() {
     let f = dyn_fn(&[r#"
         let count = 0;
