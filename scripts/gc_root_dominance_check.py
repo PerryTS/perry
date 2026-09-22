@@ -916,6 +916,69 @@ def dead_poll_capable(symbols):
     return sorted(n for n in POLL_CAPABLE_RUNTIME if n not in symbols)
 
 
+# Macros that take a `js_*` name as their first argument WITHOUT defining it:
+# assertions and formatting inside function bodies. Everything else indented is
+# the shape `--audit-macro-item-position` exists to reject.
+_NON_DEFINING_MACROS = frozenset((
+    "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
+    "debug_assert_ne", "matches", "println", "eprintln", "print", "eprint",
+    "write", "writeln", "format", "panic", "vec", "dbg", "todo", "unimplemented",
+))
+_INDENTED_MACRO_RE = re.compile(
+    r'^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
+
+
+def indented_macro_exports(roots=SYMBOL_ROOTS):
+    """`[(path, lineno, macro, symbol)]` for INDENTED macro calls naming a `js_*`.
+
+    `runtime_symbols` recognises a macro-defined export by ITEM POSITION --
+    column 0. That is a heuristic, and it is allowed to be one ONLY because a
+    miss is caught: `--verify-symbols` turns it into a red build against `nm`.
+    But that check needs built archives, so it lives in the label-gated
+    workflow and speaks after the fact. This audit is the build-free half that
+    can run in `lint`, a REQUIRED context, and it enforces the heuristic's
+    precondition directly: if an export macro is ever wrapped in an inline
+    `mod` (or otherwise indented), say so at PR time instead of silently
+    dropping the symbol.
+    """
+    hits = []
+    for path, src in _rs_sources(roots):
+        for lineno, line in enumerate(src.split("\n"), 1):
+            m = _INDENTED_MACRO_RE.match(line)
+            if m and m.group(1) not in _NON_DEFINING_MACROS:
+                hits.append((path, lineno, m.group(1), m.group(2)))
+    return sorted(hits)
+
+
+def audit_macro_item_position(roots=SYMBOL_ROOTS):
+    """Exit status for `--audit-macro-item-position`. 0 clean, 2 on a hit."""
+    symbols = runtime_symbols(roots)
+    if len(symbols) < 500:
+        print(f"error: found only {len(symbols)} js_* symbols under "
+              f"{', '.join(roots)}. Run it from the repository root.",
+              file=sys.stderr)
+        return 2
+    hits = indented_macro_exports(roots)
+    macro = macro_generated_symbols(roots)
+    print(f"=== macro item position: {len(macro)} macro-generated exports, all "
+          "at column 0")
+    if hits:
+        print("error: macro invocation(s) naming a `js_*` symbol at an INDENT. "
+              "`runtime_symbols` only recognises macro-defined exports at "
+              "column 0, so if any of these DEFINES the symbol it is invisible "
+              "to every audit here -- which makes each one greener, never "
+              "redder:", file=sys.stderr)
+        for path, lineno, name, sym in hits:
+            print(f"  {path}:{lineno}: {name}!({sym}, ..)", file=sys.stderr)
+        print("If it defines an export, move it to column 0 or teach "
+              "`_macro_defined_symbols` the shape. If it does not (an assertion "
+              "or a format), add the macro to `_NON_DEFINING_MACROS`.",
+              file=sys.stderr)
+        return 2
+    print("=== no indented macro invocation names a runtime symbol")
+    return 0
+
+
 def verify_symbols_against_archives(archives, roots=SYMBOL_ROOTS):
     """Exit status for `--verify-symbols`. 0 clean, 2 if nm sees more."""
     missing = [a for a in archives if not os.path.isfile(a)]
@@ -5843,6 +5906,14 @@ def main():
                          "so a phantom entry is a hole the gate cannot fail "
                          "through -- ten of twenty-eight were phantoms when "
                          "this was added. Takes no corpus.")
+    ap.add_argument("--audit-macro-item-position", action="store_true",
+                    help="build-free companion to --verify-symbols, for a "
+                         "REQUIRED context: fail on a macro invocation naming a "
+                         "`js_*` symbol at an indent. Macro-defined exports are "
+                         "recognised by column-0 item position, so an indented "
+                         "one (an export macro wrapped in an inline `mod`, say) "
+                         "would be invisible to every audit here. Takes no "
+                         "corpus and needs no build.")
     ap.add_argument("--verify-symbols", nargs="+", metavar="ARCHIVE",
                     help="cross-check `runtime_symbols()` against `nm -gj` on "
                          "one or more built archives (libperry_runtime.a, "
@@ -5907,6 +5978,8 @@ def main():
     # are checked before the corpus arguments are.
     if ns.audit_alloc_re:
         return audit_alloc_re()
+    if ns.audit_macro_item_position:
+        return audit_macro_item_position()
     if ns.verify_symbols:
         return verify_symbols_against_archives(ns.verify_symbols)
     if ns.audit_poll_capable:
