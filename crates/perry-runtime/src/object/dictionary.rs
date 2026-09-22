@@ -279,10 +279,30 @@ pub fn dictionary_counters_line() -> String {
     )
 }
 
+/// The CURRENT arming, resolved — for a scope guard that must restore what
+/// it found instead of assuming the default is off. Once #10868 armed the
+/// latch by default, "disarm on exit" stopped being "restore on exit".
+#[cfg(test)]
+pub(crate) fn test_latch_state() -> Option<u64> {
+    if dictionary_latch_armed() {
+        Some(LATCH_MIN_KEYS.load(Ordering::Relaxed))
+    } else {
+        None
+    }
+}
+
 /// Arm or disarm the latch from a test. Returns the previous minimum, if armed.
 #[cfg(test)]
 pub(crate) fn test_arm_latch(min_keys: Option<u64>) -> Option<u64> {
-    let was = if LATCH_ARMED.load(Ordering::Relaxed) == 1 {
+    // RESOLVE before saving. `LATCH_ARMED` starts at -1 = unresolved, and
+    // reading the raw atomic sees that as "not armed" — so a test that saved
+    // before anything had queried the latch restored `None`, which STORES 0
+    // and disarms it for every later test in the process. Harmless while the
+    // default was off; fatal once #10868 armed it, because the 65,536-key
+    // membership test runs later in the same binary and its key list is
+    // unique to it. It passed standalone and OOM'd in the suite, which is the
+    // signature of exactly this.
+    let was = if dictionary_latch_armed() {
         Some(LATCH_MIN_KEYS.load(Ordering::Relaxed))
     } else {
         None

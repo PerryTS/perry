@@ -13,16 +13,25 @@ use super::dictionary;
 use super::{js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name};
 
 /// Restores the latch arming on scope exit (panic included) so a failing test
-/// cannot leak an armed latch into unrelated tests on the same process.
+/// cannot leak its arming into unrelated tests on the same process.
+///
+/// It RESTORES WHAT IT FOUND. It used to disarm unconditionally, which was
+/// the same thing while the default was off — and became the opposite of
+/// restoring once #10868 armed the latch by default: every dictionary test
+/// then leaked a DISARMED latch forward, and
+/// `own_key_membership_crosses_65536_without_a_cutoff`, which runs later in
+/// the same binary and whose key list is unique to it, hit the k(k+1)/2
+/// cliff and was OOM-killed. It passed standalone and died in the suite,
+/// which is the signature of leaked process-global state (L16.11).
 fn scopeguard_latch() -> impl Drop {
-    struct Restore;
+    struct Restore(Option<u64>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            dictionary::test_arm_latch(None);
+            dictionary::test_arm_latch(self.0);
             dictionary::test_clear_layout_id_budget();
         }
     }
-    Restore
+    Restore(dictionary::test_latch_state())
 }
 
 unsafe fn set_key(obj: *mut super::ObjectHeader, name: &str, value: f64) {
