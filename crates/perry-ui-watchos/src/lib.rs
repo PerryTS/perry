@@ -427,7 +427,7 @@ pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b:
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_image(_handle: i64, _name_ptr: i64) {}
+pub extern "C" fn perry_ui_button_set_image(_handle: i64, _name_ptr: i64, _point_size: f64) {}
 
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_image_position(_handle: i64, _position: i64) {}

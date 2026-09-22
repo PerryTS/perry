@@ -523,8 +523,8 @@ pub extern "C" fn perry_ui_button_set_title(handle: i64, title_ptr: i64) {
 
 /// Set an SF Symbol image on a Button.
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64) {
-    widgets::button::set_image(handle, name_ptr as *const u8);
+pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64, point_size: f64) {
+    widgets::button::set_image(handle, name_ptr as *const u8, point_size);
 }
 
 /// Set the content tint color of a Button (for SF Symbol icon coloring).

@@ -877,7 +877,12 @@ export function buttonSetBordered(widget: Widget, bordered: number): void;
 export function buttonSetFontFamily(widget: Widget, family: string): void;
 export function buttonSetTitle(widget: Widget, title: string): void;
 export function buttonSetTextColor(widget: Widget, r: number, g: number, b: number, a: number): void;
-export function buttonSetImage(widget: Widget, symbolName: string): void;
+/**
+ * Set an SF Symbol image. A positive `pointSize` sizes it in points on Apple
+ * platforms (and pixels in the JavaScript web backend); omitting it keeps
+ * the existing default.
+ */
+export function buttonSetImage(widget: Widget, symbolName: string, pointSize?: number): void;
 export function buttonSetImagePosition(widget: Widget, position: number): void;
 export function buttonSetContentTintColor(widget: Widget, r: number, g: number, b: number, a: number): void;
 
