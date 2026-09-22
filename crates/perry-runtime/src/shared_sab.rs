@@ -193,7 +193,10 @@ mod header_survival_tests {
         // The canonical read predicate, not a bare cast: this is an ordinary
         // header READ and `try_read_gc_header` expresses it exactly, the same
         // way `object::tombstone_tests` reads a keys array's flags.
-        let header = unsafe { crate::value::addr_class::try_read_gc_header(header_addr) }
+        // `try_read_gc_header` takes the OBJECT address and reads the header at
+        // `addr - GC_HEADER_SIZE`; `header_addr` is already that subtraction,
+        // so passing it reads a header's-worth of bytes too far back.
+        let header = unsafe { crate::value::addr_class::try_read_gc_header(buf as usize) }
             .expect("the shared SAB block carries a GcHeader");
         assert_eq!(header.obj_type, GC_TYPE_BUFFER);
         assert_eq!(header.gc_flags, GC_FLAG_PINNED | GC_FLAG_TENURED);
