@@ -1,0 +1,1 @@
+- The parity harness now reports Cargo build errors and stops when Cargo is unavailable for runs that may auto-optimize fixtures, instead of recording resulting link failures as Perry regressions.
