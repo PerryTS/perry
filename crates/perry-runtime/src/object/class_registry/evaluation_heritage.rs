@@ -205,6 +205,12 @@ pub(crate) fn pin_instance_constructing_class(inst: *mut ObjectHeader, classobj_
     if class_ptr.is_null() || class_object_pinned_parent(class_ptr).is_none() {
         return;
     }
+    // A derived constructor may replay several fresh ancestors. Keep the
+    // first (most derived) class object: later super() legs would otherwise
+    // replace it with a deeper ancestor and lose the nearer prototype chain.
+    if instance_pinned_constructing_class(inst).is_some() {
+        return;
+    }
     // `js_class_object_pin_parent` already armed `CLASS_OBJECT_HERITAGE_PIN_LATCH`
     // before writing `class_ptr`'s own pin above (the ordering rule in
     // `registry_latch.rs`) — that write happens-before this one in this

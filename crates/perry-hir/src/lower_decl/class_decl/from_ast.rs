@@ -200,6 +200,18 @@ pub(crate) fn lower_class_from_ast(
                         Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
                         Err(_) => (None, Some(parent_name), None, None),
                     }
+                } else if ctx.scope_depth > 0 && ctx.locals.lookup(ident.sym.as_ref()).is_some() {
+                    // A function-local class declaration is a fresh class
+                    // object each time its enclosing function runs. Preserve
+                    // its static id for method/layout analysis, but also
+                    // record the evaluated local as the actual superclass.
+                    // Otherwise a fresh child class expression links to the
+                    // shared template prototype and loses writes such as
+                    // `Base.prototype.name = tag` (Effect TaggedError).
+                    match lower_class_heritage_expr(ctx, super_class) {
+                        Ok(expr) => (parent_cid, Some(parent_name), None, Some(Box::new(expr))),
+                        Err(_) => (parent_cid, Some(parent_name), None, None),
+                    }
                 } else {
                     (parent_cid, Some(parent_name), None, None)
                 }
