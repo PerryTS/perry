@@ -28,6 +28,7 @@ mod helpers;
 mod imported_object;
 mod map_set;
 mod number_string;
+mod own_override_guard;
 mod promise_chain;
 mod static_dispatch;
 
@@ -126,9 +127,6 @@ pub fn try_lower_property_get_method_call(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    // String/array method dispatch (Phase B.12) and class method
-    // dispatch (Phase C.2). For PropertyGet receivers, dispatch based
-    // on the receiver's static type.
     let Expr::PropertyGet {
         object, property, ..
     } = callee
@@ -141,6 +139,35 @@ pub fn try_lower_property_get_method_call(
     // `js_set_call_location` from this captured value, immediately before the
     // throwing dispatch. `0` (and the default build) → no emission.
     let call_byte_offset = ctx.strings.pending_call_offset();
+    // #10943: an own property BEATS a builtin, and proving the receiver's KIND
+    // proves nothing about that. The chain below is ORDERED, and every proven
+    // receiver is claimed by an arm above the only one that can branch at
+    // runtime, so the test has to happen here — once, above all of them, with
+    // the receiver materialised so no arm re-evaluates it.
+    if own_override_guard::guards(ctx, object, property) {
+        return own_override_guard::lower(ctx, callee, object, property, args, call_byte_offset)
+            .map(Some);
+    }
+    lower_method_call_chain(ctx, callee, object, property, args, call_byte_offset)
+}
+
+/// The ordered chain of specialised lowerings. Each arm proves something about
+/// the receiver and lowers a direct call; the first to claim the call wins.
+///
+/// Reached either directly, or as the builtin arm of the own-override diamond
+/// above — in which case the receiver is already materialised and every
+/// `lower_expr(ctx, object)` below re-reads it instead of evaluating it again.
+fn lower_method_call_chain(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    call_byte_offset: u32,
+) -> Result<Option<String>> {
+    // String/array method dispatch (Phase B.12) and class method
+    // dispatch (Phase C.2). For PropertyGet receivers, dispatch based
+    // on the receiver's static type.
     if let Some(value) =
         super::web_storage::try_lower_web_storage_method_call(ctx, object, property, args)?
     {

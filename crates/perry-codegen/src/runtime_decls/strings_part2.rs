@@ -153,6 +153,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     );
     // Object introspection / mutation (Agent A's accessor-descriptor work).
     module.declare_function("js_object_has_own", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #10943: the own-override guard condition; 0 takes the builtin, 1 the
+    // universal dispatcher.
+    module.declare_function(
+        "js_receiver_may_own_named_method",
+        I32,
+        &[DOUBLE, I64],
+    );
     // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
     module.declare_function(
         "js_object_property_is_enumerable",

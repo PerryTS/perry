@@ -389,7 +389,7 @@ impl Repr {
 /// nothing about when it was loaded. [`call_with_roots`] fuses the re-read to
 /// the use instead, so "load early, use late" is not a sequence this API can
 /// express.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RootedSlot {
     idx: String,
     repr: Repr,
@@ -1828,6 +1828,69 @@ fn escape_hatch_uses(src: &str) -> Vec<(usize, String)> {
         })
         .map(|(i, line)| (i + 1, line.trim().to_string()))
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// One receiver, materialised once for a whole call-site lowering (#10943).
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The receiver the innermost call-site guard materialised, keyed by the
+    /// identity of the receiver's HIR node.
+    static MATERIALIZED_RECEIVER: std::cell::RefCell<Option<(usize, RootedSlot)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Materialise a call's receiver ONCE, run `body` with it available, release.
+///
+/// The own-override guard (#10943) needs the receiver's VALUE before it can
+/// branch, and the lowerings below it are handed the same receiver EXPRESSION
+/// and lower it again. Evaluating an effectful receiver twice is a wrong
+/// program — `make().get(k)` must call `make()` once — so it is evaluated
+/// here, held in a rooted slot for the window (everything below it allocates),
+/// and RE-READ at each use rather than handed out as a register: an
+/// evacuating minor rewrites the root, not the register (#7211).
+///
+/// `key` is the identity of the receiver's HIR node
+/// (`expr as *const Expr as usize`), which is what
+/// [`materialized_receiver_reread`] matches against. HIR nodes are owned by
+/// the module for the whole of codegen and are never shared between call
+/// sites, so the identity is exact.
+///
+/// Nesting is a stack: a guard inside `body` saves and restores this cell, and
+/// releases its own slot first, which is the order [`RootedSlot::release`]'s
+/// truncate requires.
+pub(crate) fn with_materialized_receiver<R>(
+    ctx: &mut FnCtx<'_>,
+    key: usize,
+    value: &str,
+    body: impl FnOnce(&mut FnCtx<'_>) -> R,
+) -> R {
+    let slot = RootedSlot {
+        idx: temp_root::temp_root_push_double(ctx, value),
+        repr: Repr::Boxed,
+    };
+    let previous =
+        MATERIALIZED_RECEIVER.with(|cell| cell.borrow_mut().replace((key, slot.clone())));
+    let out = body(ctx);
+    MATERIALIZED_RECEIVER.with(|cell| *cell.borrow_mut() = previous);
+    slot.release(ctx);
+    out
+}
+
+/// Re-read the materialised receiver for `key` HERE, or `None` when this node
+/// is not the materialised one.
+///
+/// Every operand lowering in the compiler funnels through
+/// `crate::expr::lower_expr` (`RootedGroup::lower`, `with_operands_rooted` and
+/// the arms' direct calls all do), so consulting it there covers every way a
+/// lowering below the guard can ask for the receiver.
+pub(crate) fn materialized_receiver_reread(ctx: &mut FnCtx<'_>, key: usize) -> Option<String> {
+    let slot = MATERIALIZED_RECEIVER.with(|cell| match &*cell.borrow() {
+        Some((installed, slot)) if *installed == key => Some(slot.clone()),
+        _ => None,
+    })?;
+    Some(read_slot(ctx, &slot))
 }
 
 #[cfg(test)]
