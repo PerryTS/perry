@@ -54,7 +54,9 @@ use perry_hir::Expr;
 use super::helpers::is_date_receiver;
 use crate::expr::{lower_expr, FnCtx};
 use crate::rooting;
-use crate::type_analysis::{is_array_expr, is_map_expr, is_set_expr};
+use crate::type_analysis::{
+    is_array_expr, is_declared_map_expr, is_map_expr, is_readonly_set_expr, is_set_expr,
+};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
@@ -92,6 +94,15 @@ fn kind_is_proven_exotic(ctx: &FnCtx<'_>, object: &Expr) -> bool {
         || is_set_expr(ctx, object)
         || is_array_expr(ctx, object)
         || is_date_receiver(ctx, object)
+        // A DECLARED collection is specialised too, and by a condition that is
+        // the negation of the proven one (`!is_native_map && is_declared_map_expr`
+        // in `map_set.rs`), so asking only about proven kinds missed it
+        // entirely: `class Holder { m = new Map() }` read through a captured
+        // `h.m` emitted NO guard and ran `js_declared_map_get`. That helper
+        // brand-checks the receiver and then calls the native method, which an
+        // own property must still beat.
+        || is_declared_map_expr(ctx, object)
+        || is_readonly_set_expr(ctx, object)
 }
 
 /// Does this call need the own-override diamond?
