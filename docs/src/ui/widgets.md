@@ -64,6 +64,21 @@ with `stateBindTextfield(state, field)` for two-way binding so programmatic
 `textfieldSetBorderless`, `textfieldSetOnSubmit`, `textfieldSetOnFocus`,
 `textfieldSetNextKeyView`.
 
+On macOS, `textfieldSetSelectionRange(field, start, end)` sets the selected
+UTF-16 range. Equal offsets place the cursor without selecting text. Call it
+before the field gains focus to replace AppKit's initial select-all behavior,
+or while the field is focused to change the current selection. Offsets are
+clamped to the text length. `textfieldGetSelectionStart` and
+`textfieldGetSelectionEnd` read the current selection (or a range queued for
+the next focus).
+
+For a prefilled field, set the text first, then place the cursor at its end:
+
+```typescript,no-test
+textfieldSetString(field, savedValue);
+textfieldSetSelectionRange(field, savedValue.length, savedValue.length);
+```
+
 ## SecureField
 
 A password input — identical signature to `TextField`, but text is masked.

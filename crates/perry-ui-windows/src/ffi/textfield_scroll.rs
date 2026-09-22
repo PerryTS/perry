@@ -11,6 +11,18 @@ pub extern "C" fn perry_ui_textfield_focus(handle: i64) {
     widgets::textfield::focus(handle);
 }
 
+// Selection control is currently macOS-specific; retain the shared UI ABI.
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_set_selection_range(_handle: i64, _start: f64, _end: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_get_selection_start(_handle: i64) -> f64 {
+    0.0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_get_selection_end(_handle: i64) -> f64 {
+    0.0
+}
+
 /// Set the text value of a TextField.
 #[no_mangle]
 pub extern "C" fn perry_ui_textfield_set_string(handle: i64, text_ptr: i64) {

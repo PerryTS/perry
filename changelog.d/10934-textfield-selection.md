@@ -1,0 +1,1 @@
+Add macOS TextField selection controls. `textfieldSetSelectionRange` now places the cursor or selects a UTF-16 range before or after focus, with matching start/end getters. This lets a focused field preserve its existing value when a form opens instead of selecting all text.

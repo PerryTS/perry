@@ -798,6 +798,17 @@ pub extern "C" fn perry_ui_stack_set_distribution(_handle: i64, _dist: f64) {}
 pub extern "C" fn perry_ui_stack_set_alignment(_handle: i64, _align: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_textfield_focus(_handle: i64) {}
+// Selection control is currently macOS-specific; retain the shared UI ABI.
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_set_selection_range(_handle: i64, _start: f64, _end: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_get_selection_start(_handle: i64) -> f64 {
+    0.0
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_get_selection_end(_handle: i64) -> f64 {
+    0.0
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_textfield_set_string(_handle: i64, _text: i64) {}
 #[no_mangle]

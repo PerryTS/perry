@@ -10,6 +10,22 @@ pub extern "C" fn perry_ui_textfield_focus(handle: i64) {
     widgets::textfield::focus(handle);
 }
 
+/// Set a UTF-16 selection range, including a cursor (start == end).
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_set_selection_range(handle: i64, start: f64, end: f64) {
+    widgets::textfield::set_selection_range(handle, start, end);
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_get_selection_start(handle: i64) -> f64 {
+    widgets::textfield::selection_start(handle)
+}
+
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_get_selection_end(handle: i64) -> f64 {
+    widgets::textfield::selection_end(handle)
+}
+
 /// Scroll a ScrollView to make a child visible.
 #[no_mangle]
 pub extern "C" fn perry_ui_scrollview_scroll_to(scroll_handle: i64, child_handle: i64) {
