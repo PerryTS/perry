@@ -80,6 +80,43 @@ fn accessor() -> AccessorDescriptor {
 const DEFAULT_ATTRS: PropertyAttrs = PropertyAttrs::new(true, true, true);
 const FROZEN_ATTRS: PropertyAttrs = PropertyAttrs::new(false, true, false);
 
+/// Keyless receivers expose the flag transition directly: no descriptor
+/// install can incidentally mint a successor shape for these operations.
+#[test]
+fn rule1_integrity_flags_transition_keyless_shapes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    for (name, operation) in [
+        (
+            "preventExtensions",
+            super::js_object_prevent_extensions as extern "C" fn(f64) -> f64,
+        ),
+        ("seal", super::js_object_seal),
+        ("freeze", super::js_object_freeze),
+    ] {
+        unsafe {
+            let obj = shaped_object(&[]);
+            let sibling = shaped_object(&[]);
+            let before = shapes::object_shape_stamp(obj);
+            assert_eq!(before, shapes::object_shape_stamp(sibling));
+            let value = crate::value::js_nanbox_pointer(obj as i64);
+            operation(value);
+            let after = shapes::object_shape_stamp(obj);
+            assert_ne!(before, after, "{name} must retire the extensible shape");
+            assert_eq!(
+                before,
+                shapes::object_shape_stamp(sibling),
+                "{name} must not change a sibling's shape"
+            );
+            operation(value);
+            assert_eq!(
+                after,
+                shapes::object_shape_stamp(obj),
+                "repeated {name} must not mint another shape for unchanged flags"
+            );
+        }
+    }
+}
+
 #[test]
 fn rule1_set_property_attrs_transitions() {
     assert_shape_moves("set_property_attrs", |addr| {
