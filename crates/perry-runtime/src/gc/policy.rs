@@ -1305,6 +1305,15 @@ crate::perry_thread_local! {
     /// `OldReclaim` escalation — old-gen garbage still forces a full through
     /// `old_reclaim_pressure_due` regardless of this backoff.
     pub(super) static GC_MAJOR_PACING_BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
+    /// #10928: pre-full LIVE reading for the old-reclaim full that is about to
+    /// run, recorded by `old_reclaim_pressure_due` itself so a future call site
+    /// cannot forget to. Zero means "no start reading was taken", exactly as
+    /// `GC_FULL_CYCLE_PRE_IN_USE_BYTES` uses it.
+    pub(super) static GC_OLD_RECLAIM_PRE_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
+    /// #10928: how far left to shift the old-reclaim growth band because the
+    /// preceding old-reclaim fulls were unproductive. Reset to 0 by the first
+    /// productive one. Capped at `OLD_RECLAIM_BACKOFF_SHIFT_MAX`.
+    pub(super) static GC_OLD_RECLAIM_BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
     /// Survival-adaptive arm of major-GC pacing: `true` once a copying minor
     /// has measured a young-survival ratio at or above
     /// `MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE`, cleared by any minor that
@@ -1873,42 +1882,133 @@ pub(super) fn gc_old_reclaim_growth_band_bytes(baseline: usize) -> usize {
     // full that reclaimed 7.6% — the same futile-full shape one trigger over,
     // reached by the same route. While the young generation is not dying, old
     // growth is priced as live here too.
-    if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
-        return band.saturating_mul(MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER);
-    }
-    band
+    let band = if GC_MAJOR_PACING_RETAINING.with(|c| c.get()) {
+        band.saturating_mul(MAJOR_PACING_RETAINING_GROWTH_MULTIPLIER)
+    } else {
+        band
+    };
+    // #10928: the adaptive input. `update_old_reclaim_backoff` shifts this left
+    // once per old-reclaim full that freed less than
+    // `MAJOR_PACING_PRODUCTIVE_YIELD_PCT` of the live set it traced, and resets
+    // it to zero on the first productive one.
+    //
+    // The signal already existed (`GC_MAJOR_PACING_BACKOFF_SHIFT`) and could
+    // never see an old-reclaim full: `note_full_cycle_started` has exactly one
+    // production caller, inside `arena_growth_full_escalation_due`, so
+    // `update_major_pacing_backoff` returned at `pre_in_use == 0` on every one
+    // of the 412 fulls a tsc transpile runs. Recording the pre-full reading
+    // inside the PREDICATE is the same structural fix
+    // `arena_growth_full_escalation_due` already carries, for the same reason
+    // its comment gives: #7726 wired call sites by hand and missed the one the
+    // shipped path actually takes.
+    //
+    // Quiescent on tsc by measurement - its fulls free a median 21.5 MB against
+    // a 65.1 MB arena, comfortably past the 20% yield test - so the shift stays
+    // 0 there and the band is unchanged. It engages on the futile-full shape
+    // the yield test was written for.
+    let shift = GC_OLD_RECLAIM_BACKOFF_SHIFT.with(Cell::get);
+    band.checked_shl(shift).unwrap_or(usize::MAX)
 }
 
+/// #10928: the single live old-reclaim pacing rule.
+///
+/// The #7937 absolute first-crossing arm used to sit here and was DELETED. It
+/// fired on `old_in_use >= 48 MiB && baseline < 48 MiB`, which is not a
+/// property of the heap: every reclaim resets the baseline BELOW the
+/// threshold, so the "first crossing" re-arms and fires again on the next
+/// ~18 MiB of growth. Evaluating both arms per trigger on `tscwork.ts` x3
+/// measured the absolute arm true in 422/438 observations (96.3%) on
+/// v0.5.1633 and 428/444 (96.4%) on PR #10931s head, the proportional arm
+/// alone in 5 and 3, and BOTH TOGETHER IN ZERO. One arm did all the work.
+///
+/// The other could not bind. `gc_old_reclaim_growth_band_bytes` is
+/// `max(32 MiB floor, baseline/2)`, and `baseline/2` passes the floor only
+/// above a 64 MiB baseline; tsc peaks at 57.6 MiB before #10931 and 49.3 MiB
+/// after it, so the band read exactly 32 MiB in 438/438 and 444/444
+/// observations. Shrinking the live set moved the heap FURTHER from the
+/// proportional regime, so the defect deepens as the object-model work
+/// succeeds - which is why this is a rewrite and not a retuned constant.
+///
+/// What is left is one proportional rule with one adaptive input: the
+/// productivity of the preceding old-reclaim full.
 #[inline]
 pub(super) fn old_reclaim_pressure_due(old_in_use: usize, baseline: usize) -> bool {
-    let threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
-    // #7937: the absolute first-crossing arm is exempted while the heap is
-    // measurably RETAINING, for the reason #7592 already exempted the
-    // proportional arm two functions down — and it is the arm that actually
-    // fires.
-    //
-    // `baseline` is credited by every promotion
-    // (`credit_promoted_bytes_to_old_baseline`), so `old_in_use >= T &&
-    // baseline < T` is a race between two quantities that move in the same
-    // direction at different granularities. Whether it fires therefore depends
-    // on the SIZE OF THE PROMOTION STEPS, not on any property of the heap.
-    // Measured on `retain.ts` (#7937, `gc-handoff/CYCLE0-NOTES.md`): same
-    // program, same live set, same total promotion — changing the schedule from
-    // (18.7 MB, 34.6 MB) to (17.7 MB, 17.8 MB) makes it fire twice and buys two
-    // full mark-sweeps costing 588 ms against a 55 ms GC budget, at
-    // `old_in_use=52.3 MB, baseline=35.5 MB, T=48 MB` with the proportional arm
-    // correctly declining (`band=128 MB`) and `retaining=true`.
-    //
-    // That is the futile-full shape #7592 removed one trigger over: a heap
-    // whose young generation is not dying is retaining live data, and a full
-    // mark-sweep cannot lower the number being watched. The proportional arm
-    // still bounds the exposure, so this defers reclamation, it does not remove
-    // it — the same trade the RETAINING multiplier already makes.
-    let crossed_absolute_threshold = old_in_use >= threshold
-        && baseline < threshold
-        && !GC_MAJOR_PACING_RETAINING.with(|c| c.get());
-    crossed_absolute_threshold
-        || old_in_use.saturating_sub(baseline) >= gc_old_reclaim_growth_band_bytes(baseline)
+    let due = old_reclaim_pressure_due_inner(old_in_use, baseline);
+    if due {
+        // Recorded HERE, not at the call sites, so a future arm that decides
+        // to run a reclaim cannot forget to price it - the rule
+        // `arena_growth_full_escalation_due` already follows, and the one
+        // #7726 learned by wiring two sites and missing the third.
+        note_old_reclaim_cycle_started();
+    }
+    due
+}
+
+/// The pure predicate: no pacing side effect, so the debt arithmetic and the
+/// unit tests can ask the question without answering it.
+#[inline]
+pub(super) fn old_reclaim_pressure_due_inner(old_in_use: usize, baseline: usize) -> bool {
+    old_in_use.saturating_sub(baseline) >= gc_old_reclaim_growth_band_bytes(baseline)
+}
+
+/// #10928: snapshot the live set this old-reclaim full is about to trace, for
+/// `update_old_reclaim_backoff` to price the result against. Same metric on
+/// both sides (`pacing_arena_in_use_bytes`) so the two cannot disagree about
+/// whether the full helped.
+fn note_old_reclaim_cycle_started() {
+    GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(|bytes| bytes.set(pacing_arena_in_use_bytes()));
+}
+
+/// Cap on the old-reclaim backoff, deliberately tighter than
+/// `MAJOR_PACING_BACKOFF_SHIFT_MAX`. Each shift doubles how much old-gen may
+/// grow between fulls, and that growth is peak RSS: measured on tsc, the band
+/// governs a ~47 MB live set inside a ~300 MB peak, so one doubling of the
+/// 32 MiB band is already most of the campaigns +10% peak-RSS budget. Raise
+/// this only with an RSS measurement that says the budget holds.
+const OLD_RECLAIM_BACKOFF_SHIFT_MAX: u32 = 1;
+
+/// Price what the just-finished old-reclaim full actually reclaimed.
+///
+/// Mirrors `update_major_pacing_backoff` exactly, against its own cell: the
+/// two triggers pace different things and must not share a homeostat, but
+/// they agree on what "productive" means.
+fn update_old_reclaim_backoff(post_in_use: usize) {
+    let pre_in_use = GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(|bytes| bytes.get());
+    if pre_in_use == 0 {
+        return;
+    }
+    GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(|bytes| bytes.set(0));
+    let reclaimed = pre_in_use.saturating_sub(post_in_use);
+    let productive =
+        reclaimed.saturating_mul(100) / pre_in_use >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
+    GC_OLD_RECLAIM_BACKOFF_SHIFT.with(|shift| {
+        if productive {
+            shift.set(0);
+        } else {
+            shift.set(
+                shift
+                    .get()
+                    .saturating_add(1)
+                    .min(OLD_RECLAIM_BACKOFF_SHIFT_MAX),
+            );
+        }
+    });
+}
+
+#[cfg(test)]
+pub(super) fn test_set_old_reclaim_backoff_shift(shift: u32) -> u32 {
+    GC_OLD_RECLAIM_BACKOFF_SHIFT.with(|c| c.replace(shift))
+}
+
+#[cfg(test)]
+pub(super) fn test_old_reclaim_backoff_shift() -> u32 {
+    GC_OLD_RECLAIM_BACKOFF_SHIFT.with(Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn test_price_old_reclaim_full(pre_in_use: usize, post_in_use: usize) {
+    GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(|b| b.set(pre_in_use));
+    update_old_reclaim_backoff(post_in_use);
 }
 
 /// Whether an imminent promotion justifies a full old reclaim FIRST.
@@ -2187,6 +2287,8 @@ pub(super) fn finish_full_old_reclaim_baseline() {
     let post_in_use = crate::arena::arena_live_allocated_bytes();
     GC_LAST_FULL_ARENA_IN_USE_BYTES.with(|bytes| bytes.set(post_in_use));
     update_major_pacing_backoff(post_in_use);
+    // #10928: and price THIS full against the old-reclaim band that scheduled it.
+    update_old_reclaim_backoff(post_in_use);
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
     // #7742: the dead bytes that whole-block promotion parked in old-gen are
     // exactly what this collection just reclaimed, so the running budget that
@@ -3353,13 +3455,11 @@ fn gc_budgeted_resume_blocked() -> bool {
 }
 
 pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u64 {
-    let trigger = if baseline < gc_old_gen_reclaim_threshold_dyn_bytes() {
-        gc_old_gen_reclaim_threshold_dyn_bytes()
-    } else {
-        // Same proportional band as `old_reclaim_pressure_due` (#7592) —
-        // debt and dueness must share one trigger or they diverge.
-        baseline.saturating_add(gc_old_reclaim_growth_band_bytes(baseline))
-    };
+    // #10928: one trigger, shared with `old_reclaim_pressure_due` -- the
+    // absolute first-crossing arm it used to mirror no longer exists, and a
+    // debt computed against a trigger the predicate does not use is exactly
+    // the #7024 two-predicates-collapse the shared helper exists to prevent.
+    let trigger = baseline.saturating_add(gc_old_reclaim_growth_band_bytes(baseline));
     old_in_use.saturating_sub(trigger) as u64
 }
 

@@ -180,24 +180,94 @@ fn test_gc_bump_never_lowers_existing_arena_trigger() {
     assert!(!GcBumpTriggerTestGuard::trigger_bumped());
 }
 
+/// #10928: the old-reclaim rule is PROPORTIONAL ONLY.
+///
+/// **Replaces `test_old_reclaim_pressure_uses_threshold_and_growth`**, and
+/// deliberately inverts one of its assertions. That test pinned the #7937
+/// absolute first-crossing arm with `old_reclaim_pressure_due(T, T - 1) ==
+/// true`: old-gen has just crossed 48 MiB and the baseline has not.
+///
+/// Why that pin is obsolete. The arm is not a property of the heap. Every
+/// reclaim resets the baseline BELOW the threshold, so the "first crossing"
+/// re-arms and fires again on the next ~18 MiB of growth. Evaluating both arms
+/// per trigger on `tscwork.ts` x3 measured the absolute arm true in 422/438
+/// observations (96.3%) on v0.5.1633 and 428/444 (96.4%) on PR #10931s head,
+/// the proportional arm alone in 5 and 3, and BOTH TOGETHER IN ZERO.
+///
+/// What this pins instead: one proportional rule, the same arithmetic on both
+/// sides of the old threshold. The case the replaced test asserted TRUE this
+/// one asserts FALSE, so it fails against the previous implementation.
 #[test]
-fn test_old_reclaim_pressure_uses_threshold_and_growth() {
-    assert!(!old_reclaim_pressure_due(
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - 1,
-        GC_OLD_GEN_RECLAIM_GROWTH_BYTES,
-    ));
-    assert!(old_reclaim_pressure_due(
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES - 1,
-    ));
-    assert!(!old_reclaim_pressure_due(
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES + 1,
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
-    ));
-    assert!(old_reclaim_pressure_due(
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES + GC_OLD_GEN_RECLAIM_GROWTH_BYTES,
-        GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES,
-    ));
+fn old_reclaim_pressure_is_proportional_only() {
+    let previous = super::super::policy::test_set_old_reclaim_backoff_shift(0);
+    let t = GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES;
+    let band = gc_old_reclaim_growth_band_bytes(t - 1);
+
+    // The signature case of the deleted arm, and the one the replaced test
+    // pinned as TRUE: old-gen has just reached 48 MiB and the baseline is one
+    // byte below it. One byte of growth is not a reason to trace the whole
+    // heap, and because every reclaim resets the baseline below the threshold,
+    // this is the case that re-armed forever.
+    assert!(
+        !old_reclaim_pressure_due_inner(t, t - 1),
+        "the #7937 absolute first-crossing arm must not fire"
+    );
+
+    // Below the band, no -- on either side of the old threshold.
+    assert!(!old_reclaim_pressure_due_inner(t - 1 + band - 1, t - 1));
+    // At the band, yes.
+    assert!(old_reclaim_pressure_due_inner(t - 1 + band, t - 1));
+
+    // The same arithmetic far above the threshold, where the old code switched
+    // arms. There is one arm now, so there is no switch to get wrong.
+    let big = 400 * 1024 * 1024;
+    let big_band = gc_old_reclaim_growth_band_bytes(big);
+    assert!(!old_reclaim_pressure_due_inner(big + big_band - 1, big));
+    assert!(old_reclaim_pressure_due_inner(big + big_band, big));
+
+    super::super::policy::test_set_old_reclaim_backoff_shift(previous);
+}
+
+/// #10928: an unproductive old-reclaim full widens the band and a productive
+/// one resets it.
+///
+/// This pins the WIRING, not the arithmetic. The signal already existed before
+/// #10928 and no old-reclaim full could reach it: `note_full_cycle_started`
+/// has exactly one production caller, inside `arena_growth_full_escalation_due`,
+/// so `update_major_pacing_backoff` returned at `pre_in_use == 0` for every one
+/// of the 412 fulls a `tscwork.ts` transpile runs. A test that checked only the
+/// shift arithmetic would have passed throughout that.
+#[test]
+fn old_reclaim_backoff_widens_band_on_futile_fulls() {
+    use super::super::policy::{
+        test_old_reclaim_backoff_shift, test_price_old_reclaim_full,
+        test_set_old_reclaim_backoff_shift,
+    };
+    let previous = test_set_old_reclaim_backoff_shift(0);
+    let baseline = 8 * 1024 * 1024;
+    let band0 = gc_old_reclaim_growth_band_bytes(baseline);
+
+    // Reclaimed 1% of what it traced: futile, so widen.
+    test_price_old_reclaim_full(100 * 1024 * 1024, 99 * 1024 * 1024);
+    assert_eq!(test_old_reclaim_backoff_shift(), 1);
+    assert_eq!(gc_old_reclaim_growth_band_bytes(baseline), band0 * 2);
+
+    // Capped: a futile run cannot widen without bound, because every doubling
+    // of this band is peak RSS.
+    test_price_old_reclaim_full(100 * 1024 * 1024, 99 * 1024 * 1024);
+    assert_eq!(test_old_reclaim_backoff_shift(), 1);
+
+    // Reclaimed 50%: productive, so reset, and the band comes back.
+    test_price_old_reclaim_full(100 * 1024 * 1024, 50 * 1024 * 1024);
+    assert_eq!(test_old_reclaim_backoff_shift(), 0);
+    assert_eq!(gc_old_reclaim_growth_band_bytes(baseline), band0);
+
+    // A full with no recorded start must not move the shift.
+    test_set_old_reclaim_backoff_shift(1);
+    test_price_old_reclaim_full(0, 0);
+    assert_eq!(test_old_reclaim_backoff_shift(), 1);
+
+    test_set_old_reclaim_backoff_shift(previous);
 }
 
 /// #7592: the handoff full fires on CURRENT old-gen pressure only. It used to
@@ -288,61 +358,57 @@ fn test_old_reclaim_band_is_proportional_and_promotion_credits_baseline() {
     GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|b| b.set(prev));
 }
 
-/// #7937: the ABSOLUTE first-crossing arm is granularity-sensitive, and the
-/// RETAINING latch is what stops that from costing a futile full.
+/// #10928: what survives #7937 now that the absolute arm is deleted.
 ///
-/// `baseline` is credited by every promotion, so `old_in_use >= T && baseline
-/// < T` is a race between two quantities moving in the same direction at
-/// different step sizes — whether it fires depends on the promotion SCHEDULE,
-/// not on the heap. The numbers below are the ones measured on `retain.ts`
-/// when the first copying minor started promoting in place: `old_in_use =
-/// 52.3 MB`, `baseline = 35.5 MB`, `T = 48 MB`, proportional arm correctly
-/// declining, and it bought two full mark-sweeps costing 588 ms.
+/// **Replaces `the_absolute_old_reclaim_arm_stands_down_on_a_retaining_heap`.**
+/// That test pinned the absolute first-crossing arm in BOTH directions: that
+/// it fires when the young generation is dying ("it is the only thing that
+/// makes the first full happen at all"), and that it stands down when the heap
+/// is retaining. The first assertion went with the arm - see
+/// `old_reclaim_pressure_is_proportional_only` for the per-trigger measurement
+/// that removed it. The premise was also wrong by then: the arm was not making
+/// "the first full" happen, it was making 96% of 412 of them happen.
 ///
-/// Both states are asserted: with the young generation dying the arm still
-/// fires (it is the only thing that makes the first full happen at all), and
-/// with the young generation provably retaining it does not.
+/// What remains true and worth pinning is the RETAINING latch itself: while
+/// the young generation is not dying, old growth is priced as live and the
+/// band widens, and the one proportional rule still bounds the exposure past
+/// it so old-gen growth cannot run away.
+///
+/// Open item for #10928, recorded here so it is not lost: with the absolute
+/// arm gone this latch is the last inert pacing input.
+/// `MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE` is 900 and the highest young
+/// survival measured anywhere in a tsc transpile is 893, so it never fires on
+/// that workload. Whether it can be given a reachable threshold, or should
+/// come out, needs a second workload and its own A/B - deliberately not
+/// bundled into this change, so that one measurement answers one question.
 #[test]
-fn the_absolute_old_reclaim_arm_stands_down_on_a_retaining_heap() {
+fn the_retaining_latch_widens_the_band_and_the_rule_still_bounds_it() {
     let _guard = GcTestIsolationGuard::new();
     let threshold = gc_old_gen_reclaim_threshold_dyn_bytes();
-    // The measured `retain` state, re-derived against whatever the threshold
-    // resolves to on this host so the test cannot drift away from it.
-    let old_in_use = threshold + threshold / 12;
     let baseline = threshold - threshold / 4;
-    assert!(
-        old_in_use.saturating_sub(baseline) < gc_old_reclaim_growth_band_bytes(baseline),
-        "the proportional arm must be declining, or this test is not about the \
-         absolute one"
-    );
 
-    // Young generation dying: the arm is the only thing that can schedule the
-    // first full, so it must still fire.
     note_copying_minor_young_survival(0);
     assert!(!major_pacing_retaining());
-    assert!(
-        old_reclaim_pressure_due(old_in_use, baseline),
-        "on a heap whose young generation is dying the absolute crossing must \
-         still schedule a full"
-    );
+    let dying_band = gc_old_reclaim_growth_band_bytes(baseline);
 
-    // Young generation retaining: a full mark-sweep cannot lower the number
-    // being watched, so firing here is the #7592 futile-full shape.
     note_copying_minor_young_survival(1000);
     assert!(major_pacing_retaining());
+    let retaining_band = gc_old_reclaim_growth_band_bytes(baseline);
     assert!(
-        !old_reclaim_pressure_due(old_in_use, baseline),
-        "a retaining heap's old-gen growth is credited live data; the absolute \
-         crossing must defer to the proportional arm"
+        retaining_band > dying_band,
+        "a retaining heap must get a wider band, or the latch is inert"
     );
 
-    // Deferred, not removed: the proportional arm still bounds the exposure.
-    let far_past = baseline + gc_old_reclaim_growth_band_bytes(baseline);
-    assert!(
-        old_reclaim_pressure_due(far_past, baseline),
-        "the proportional arm must still fire while retaining, or old-gen \
-         growth would be unbounded"
-    );
+    // Deferred, not removed: the proportional rule still fires past the band,
+    // so a retaining heap cannot grow old-gen without bound.
+    assert!(!old_reclaim_pressure_due_inner(
+        baseline + retaining_band - 1,
+        baseline
+    ));
+    assert!(old_reclaim_pressure_due_inner(
+        baseline + retaining_band,
+        baseline
+    ));
 }
 
 /// #7592: a handoff full must not repeat without the copying minor it exists to
