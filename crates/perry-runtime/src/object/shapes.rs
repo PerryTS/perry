@@ -213,6 +213,27 @@ impl Eq for ShapeDescriptor {}
 pub(crate) enum ShapeObjectKind {
     Ordinary,
     Class,
+    /// #10868: the receiver's keys live per-object, not in a shared keys
+    /// array. Held as a KIND rather than a side-table predicate so that
+    /// `object_is_regular` declines the fast lanes by construction: a keyless
+    /// shape otherwise reads as "this receiver has no own properties" to a
+    /// long tail of consumers, four of which return wrong values and one of
+    /// which writes out of bounds (#10942). A set whose membership is partly
+    /// accidental cannot be secured by enumerating it.
+    Dictionary,
+}
+
+impl ShapeObjectKind {
+    /// The discriminant `facts_key` folds and `ShapeRecord` stores. Stable:
+    /// it is written into a record field, so the values may not be reordered.
+    #[inline]
+    pub(crate) fn code(self) -> u64 {
+        match self {
+            ShapeObjectKind::Ordinary => 0,
+            ShapeObjectKind::Class => 1,
+            ShapeObjectKind::Dictionary => 2,
+        }
+    }
 }
 
 /// Per-agent direct cache for the immutable `object_kind` half of a ShapeId.
@@ -223,6 +244,7 @@ pub(crate) const SHAPE_KIND_CACHE_SIZE: usize = 16_384;
 const SHAPE_KIND_CACHE_MASK: usize = SHAPE_KIND_CACHE_SIZE - 1;
 const SHAPE_KIND_ORDINARY: u64 = 1;
 const SHAPE_KIND_CLASS: u64 = 2;
+const SHAPE_KIND_DICTIONARY: u64 = 3;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -240,6 +262,7 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
     match packed & 0xFFFF_FFFF {
         SHAPE_KIND_ORDINARY => Some(ShapeObjectKind::Ordinary),
         SHAPE_KIND_CLASS => Some(ShapeObjectKind::Class),
+        SHAPE_KIND_DICTIONARY => Some(ShapeObjectKind::Dictionary),
         _ => None,
     }
 }
@@ -250,6 +273,7 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
     let tag = match kind {
         ShapeObjectKind::Ordinary => SHAPE_KIND_ORDINARY,
         ShapeObjectKind::Class => SHAPE_KIND_CLASS,
+        ShapeObjectKind::Dictionary => SHAPE_KIND_DICTIONARY,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
