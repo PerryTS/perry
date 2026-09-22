@@ -1005,7 +1005,10 @@ mod tests {
         let c = facts_key(w, 3, 4, 7, ShapeObjectKind::Class, 0);
         let d = facts_key(w, 3, 4, 7, ShapeObjectKind::Dictionary, 0);
         assert_ne!(o, c, "Ordinary and Class collide");
-        assert_ne!(o, d, "Ordinary and Dictionary collide -- the bool fold is back");
+        assert_ne!(
+            o, d,
+            "Ordinary and Dictionary collide -- the bool fold is back"
+        );
         assert_ne!(c, d, "Class and Dictionary collide");
     }
 
@@ -1031,7 +1034,10 @@ mod tests {
             r.set(RECORD_FLAG_OLD_CARRIER, false);
             r.set(RECORD_FLAG_CACHE_CARRIER, true);
             assert_eq!(r.object_kind(), kind, "clearing a flag moved the kind");
-            assert!(!r.has(RECORD_FLAG_OLD_CARRIER), "clear leaked into another flag");
+            assert!(
+                !r.has(RECORD_FLAG_OLD_CARRIER),
+                "clear leaked into another flag"
+            );
         }
     }
 
