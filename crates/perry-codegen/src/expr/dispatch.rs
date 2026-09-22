@@ -37,6 +37,14 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     {
         return Ok(value);
     }
+    // #10943: HIR folds a builtin method call on a proven receiver into a
+    // dedicated node that lowers straight to the native helper, below the
+    // chain guard entirely. An own property still beats the builtin, so the
+    // same diamond is applied here, at the one place every folded node
+    // passes through.
+    if let Some(value) = super::folded_builtin_override::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     if let Some(value) = super::suffix_cursor::try_lower(ctx, expr)? {
         return Ok(value);
     }
