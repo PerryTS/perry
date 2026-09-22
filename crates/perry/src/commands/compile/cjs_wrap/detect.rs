@@ -134,12 +134,37 @@ fn has_module_exports_descriptor(source: &str, stripped: &str) -> bool {
         let Some(rest) = source.get(matched.end()..) else {
             return false;
         };
-        let rest = rest.trim_start();
+        let rest = skip_js_trivia(rest);
         ["'exports'", "\"exports\""]
             .into_iter()
             .filter_map(|literal| rest.strip_prefix(literal))
-            .any(|after| after.trim_start().starts_with(','))
+            .any(|after| skip_js_trivia(after).starts_with(','))
     })
+}
+
+/// Skip whitespace and comments where JavaScript permits trivia between
+/// arguments. An unterminated comment consumes the rest of the source.
+fn skip_js_trivia(mut source: &str) -> &str {
+    loop {
+        source = source.trim_start();
+        if let Some(comment) = source.strip_prefix("//") {
+            let Some(end) =
+                comment.find(|ch: char| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+            else {
+                return "";
+            };
+            source = &comment[end..];
+            continue;
+        }
+        if let Some(comment) = source.strip_prefix("/*") {
+            let Some(end) = comment.find("*/") else {
+                return "";
+            };
+            source = &comment[end + 2..];
+            continue;
+        }
+        return source;
+    }
 }
 
 /// Replace comment bodies and string/template-literal contents with spaces
