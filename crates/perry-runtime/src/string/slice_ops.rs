@@ -539,7 +539,7 @@ pub extern "C" fn js_string_index_of_from(
         } else {
             from_index as usize
         };
-        let byte_start = utf16_offset_to_byte_offset(h, u16_start);
+        let byte_start = utf16_offset_to_byte_offset(h.as_bytes(), u16_start);
         if byte_start > h.len() {
             if n.is_empty() {
                 return (*haystack).utf16_len as i32;

@@ -614,19 +614,18 @@ pub(crate) fn wtf8_step(bytes: &[u8], i: usize) -> (usize, usize, u32) {
     )
 }
 
-/// Convert a UTF-16 code unit index to a UTF-8 byte offset.
-/// Returns `s.len()` if `utf16_idx` is past the end.
+/// Convert a UTF-16 code unit index to a WTF-8 byte offset.
+/// Returns `bytes.len()` if `utf16_idx` is past the end.
 ///
 /// Bounds-driven byte walk (#6085): the previous `s.chars()` loop decoded
 /// through the UTF-8-validity assumption, which over-reads an exact-sized
 /// payload ending in a truncated multi-byte lead. `wtf8_step` reads only
 /// bounds-checked bytes; valid input maps identically.
 #[inline]
-pub(crate) fn utf16_offset_to_byte_offset(s: &str, utf16_idx: usize) -> usize {
+pub(crate) fn utf16_offset_to_byte_offset(bytes: &[u8], utf16_idx: usize) -> usize {
     if utf16_idx == 0 {
         return 0;
     }
-    let bytes = s.as_bytes();
     let mut byte_off = 0usize;
     let mut u16_count = 0usize;
     while byte_off < bytes.len() {

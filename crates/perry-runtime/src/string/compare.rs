@@ -566,13 +566,14 @@ pub extern "C" fn js_string_starts_with_at(
 
     let prefix_blen = unsafe { (*prefix).byte_len } as usize;
 
+    let blen = unsafe { (*s).byte_len } as usize;
     let byte_start = if is_ascii_string(s) {
         pos
     } else {
-        utf16_offset_to_byte_offset(string_as_str(s), pos)
+        let bytes = unsafe { std::slice::from_raw_parts(string_data(s), blen) };
+        utf16_offset_to_byte_offset(bytes, pos)
     };
 
-    let blen = unsafe { (*s).byte_len } as usize;
     if byte_start + prefix_blen > blen {
         return 0;
     }
@@ -609,7 +610,9 @@ pub extern "C" fn js_string_ends_with_at(
     let byte_end = if is_ascii_string(s) {
         end_u16
     } else {
-        utf16_offset_to_byte_offset(string_as_str(s), end_u16)
+        let blen = unsafe { (*s).byte_len } as usize;
+        let bytes = unsafe { std::slice::from_raw_parts(string_data(s), blen) };
+        utf16_offset_to_byte_offset(bytes, end_u16)
     };
 
     let suffix_blen = unsafe { (*suffix).byte_len } as usize;
@@ -630,6 +633,28 @@ pub extern "C" fn js_string_ends_with_at(
     }
 
     1
+}
+
+#[cfg(test)]
+mod position_wtf8_tests {
+    use super::*;
+
+    #[test]
+    fn starts_and_ends_positions_cross_lone_surrogates() {
+        let bytes = b"\xed\xa0\x80abc\xed\xb0\x80xyz";
+        let source = js_string_from_wtf8_bytes(bytes.as_ptr(), bytes.len() as u32);
+        let abc = js_string_from_bytes(b"abc".as_ptr(), 3);
+        let xyz = js_string_from_bytes(b"xyz".as_ptr(), 3);
+
+        assert_eq!(js_string_starts_with_at(source, abc, 1), 1);
+        assert_eq!(js_string_starts_with_at(source, abc, 0), 0);
+        assert_eq!(js_string_starts_with_at(source, xyz, 5), 1);
+        assert_eq!(js_string_starts_with_at(source, xyz, 4), 0);
+        assert_eq!(js_string_ends_with_at(source, abc, 4), 1);
+        assert_eq!(js_string_ends_with_at(source, abc, 3), 0);
+        assert_eq!(js_string_ends_with_at(source, xyz, 8), 1);
+        assert_eq!(js_string_ends_with_at(source, xyz, 7), 0);
+    }
 }
 
 /// String.prototype.normalize(form) — Unicode normalization.
