@@ -8,31 +8,34 @@ use std::cell::Cell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+#[derive(Clone, Copy)]
+struct PendingFetchOptions {
+    signal: f64,
+    redirect: i32,
+}
+
 crate::perry_thread_local! {
-    /// The `signal` from the in-progress `fetch(url, { signal })` call, stashed
-    /// so the stdlib `js_fetch_with_options` (whose 4-arg ABI predates
-    /// AbortSignal support) can pick it up at entry without an ABI change.
+    /// Options from the in-progress `fetch(url, init)` call, stashed so the
+    /// stdlib `js_fetch_with_options` (whose 4-arg ABI predates them) can pick
+    /// them up at entry without an ABI change.
     ///
     /// **This is a GC root, and must stay one (#7231).** The `AbortSignal` is
     /// a NaN-boxed heap object, and between the stash and
     /// `js_fetch_with_options`'s consume the argument lowering for the fetch
     /// call itself still runs and allocates. The window is short, but the
     /// cell is the only reference across it.
-    static PENDING_FETCH_SIGNAL: Cell<f64> =
-        const { Cell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
-    /// Encoded RequestInit.redirect for the fetch call about to enter
-    /// `js_fetch_with_options`: 0 = absent, 1 = follow, 2 = error, 3 = manual,
-    /// -1 = invalid. Keeping only the enum avoids retaining an unrooted string
-    /// pointer across the FFI boundary.
-    static PENDING_FETCH_REDIRECT: Cell<i32> = const { Cell::new(0) };
+    static PENDING_FETCH_OPTIONS: Cell<PendingFetchOptions> = const { Cell::new(PendingFetchOptions {
+        signal: f64::from_bits(crate::value::TAG_UNDEFINED),
+        redirect: 0,
+    }) };
 }
 
 /// Root + rewrite the stashed in-flight `fetch` `AbortSignal`.
 pub(crate) fn scan_pending_fetch_signal_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PENDING_FETCH_SIGNAL.with(|cell| {
-        let mut value = cell.get();
-        if visitor.visit_nanbox_f64_slot(&mut value) {
-            cell.set(value);
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        if visitor.visit_nanbox_f64_slot(&mut options.signal) {
+            cell.set(options);
         }
     });
 }
@@ -45,7 +48,11 @@ pub(crate) fn scan_pending_fetch_signal_root_mut(visitor: &mut crate::gc::Runtim
 /// codegen `fetch(url, {static init})` fast path can emit it too.
 #[no_mangle]
 pub extern "C" fn js_fetch_set_pending_signal(signal: f64) {
-    PENDING_FETCH_SIGNAL.with(|c| c.set(signal));
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        options.signal = signal;
+        cell.set(options);
+    });
 }
 
 /// Consume and clear the pending fetch signal, returning `undefined` when none
@@ -53,10 +60,12 @@ pub extern "C" fn js_fetch_set_pending_signal(signal: f64) {
 /// fetch on the same thread).
 #[no_mangle]
 pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
-    PENDING_FETCH_SIGNAL.with(|c| {
-        let v = c.get();
-        c.set(f64::from_bits(crate::value::TAG_UNDEFINED));
-        v
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        let signal = options.signal;
+        options.signal = f64::from_bits(crate::value::TAG_UNDEFINED);
+        cell.set(options);
+        signal
     })
 }
 
@@ -84,16 +93,22 @@ pub extern "C" fn js_fetch_set_pending_redirect(redirect: f64) {
             }
         }
     };
-    PENDING_FETCH_REDIRECT.with(|cell| cell.set(mode));
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        options.redirect = mode;
+        cell.set(options);
+    });
 }
 
 /// Consume and clear the pending redirect mode. An absent option returns 0 so
 /// `fetch(Request)` can inherit the Request object's own redirect setting.
 #[no_mangle]
 pub extern "C" fn js_fetch_take_pending_redirect() -> i32 {
-    PENDING_FETCH_REDIRECT.with(|cell| {
-        let mode = cell.get();
-        cell.set(0);
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        let mode = options.redirect;
+        options.redirect = 0;
+        cell.set(options);
         mode
     })
 }
