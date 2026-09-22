@@ -70,7 +70,7 @@ const ID_MASK: u64 = (1 << ID_BITS) - 1;
 /// trace could not tell apart.
 static NEXT_JOB: AtomicU64 = AtomicU64::new(1);
 
-thread_local! {
+crate::perry_thread_local! {
     /// Posted jobs this thread has run. The liveness counter: a test that
     /// claims "the owner carried this" must watch it move, because a post that
     /// silently went nowhere and a post that ran look identical from the

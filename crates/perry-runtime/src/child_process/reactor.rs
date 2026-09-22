@@ -477,8 +477,12 @@ pub(super) fn cp_register_windows_live_child(
         extra_pipes,
         pid,
         stdin.map(|pipe| CpStdin::new(Box::new(pipe) as CpWriter)),
-        stdout.map(|pipe| Box::new(pipe) as CpReader),
-        stderr.map(|pipe| Box::new(pipe) as CpReader),
+        // `cp_register_live_child_parts` takes `Option<CpPipe>`, not a boxed
+        // reader: the pipe is stored as an owned handle and only turned into a
+        // reader at read time (`streams.rs`'s `CpPipe::into_reader`). macOS and
+        // Linux never compile this arm, so only a Windows build catches it.
+        stdout.map(cp_pipe_from_file),
+        stderr.map(cp_pipe_from_file),
         waiter,
         Some(ipc),
         ipc_advanced,
