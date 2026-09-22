@@ -1,0 +1,1 @@
+Fix local macOS app bundles to use `assets/AppIcon.icns` as the Dock and Finder icon. When display name or version is not set explicitly in `perry.toml`, the bundle now uses `[project].name` and `package.json`'s version before falling back to the output name and default version.

@@ -82,6 +82,25 @@ fn package_bundle_id_from_input(input: &Path) -> Option<String> {
     }
 }
 
+fn package_version_from_input(input: &Path) -> Option<String> {
+    let mut dir = input.canonicalize().ok()?.parent()?.to_path_buf();
+    for _ in 0..5 {
+        let package = dir.join("package.json");
+        if package.exists() {
+            let data = fs::read_to_string(package).ok()?;
+            let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+            return json
+                .get("version")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|version| !version.is_empty())
+                .map(str::to_string);
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+    None
+}
+
 pub(super) fn read_app_metadata(
     perry_toml: Option<&toml::Table>,
     input: &Path,
@@ -112,6 +131,18 @@ pub(super) fn read_app_metadata(
                     .and_then(|v| v.as_str())
                     .map(str::to_string)
             });
+    }
+
+    // A macOS app without a Perry version should use its package version in
+    // both the embedded and external Info.plist, as well as at runtime.
+    if target_bundle_section(target) == Some("macos")
+        && perry_toml
+            .and_then(|doc| toml_string(doc, "project", "version"))
+            .is_none_or(|version| version.trim().is_empty())
+    {
+        if let Some(version) = package_version_from_input(input) {
+            metadata.version = version;
+        }
     }
 
     metadata.bundle_id = cli_bundle_id
@@ -340,6 +371,29 @@ app_group = "group.com.example.fallback"
         assert_eq!(metadata.version, "1.0.0");
         assert_eq!(metadata.build_number, 1);
         assert_eq!(metadata.bundle_id, "com.example.pkg");
+    }
+
+    #[test]
+    fn macos_version_uses_package_json_when_project_version_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"version":"2.3.4"}"#).unwrap();
+        let input = dir.path().join("main.ts");
+        std::fs::write(&input, "console.log('x')").unwrap();
+
+        let project_without_version = "[project]\nname = 'Example'"
+            .parse::<toml::Table>()
+            .unwrap();
+        let macos = read_app_metadata(Some(&project_without_version), &input, Some("macos"), None);
+        assert_eq!(macos.version, "2.3.4");
+
+        let project_with_version = "[project]\nversion = '3.0.0'"
+            .parse::<toml::Table>()
+            .unwrap();
+        let macos = read_app_metadata(Some(&project_with_version), &input, Some("macos"), None);
+        assert_eq!(macos.version, "3.0.0");
+
+        let ios = read_app_metadata(None, &input, Some("ios"), None);
+        assert_eq!(ios.version, "1.0.0");
     }
 
     #[test]
