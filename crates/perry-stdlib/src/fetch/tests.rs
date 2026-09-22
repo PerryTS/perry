@@ -7,12 +7,8 @@ fn fetch_json_preserves_document_key_order() {
     let output =
         unsafe { perry_runtime::json::js_json_stringify(f64::from_bits(parsed.bits()), 0) };
     assert!(!output.is_null());
-    let bytes = unsafe {
-        std::slice::from_raw_parts(
-            (output as *const u8).add(std::mem::size_of::<StringHeader>()),
-            (*output).byte_len as usize,
-        )
-    };
+    let output = unsafe { perry_ffi::JsString::from_raw(output.cast::<perry_ffi::StringHeader>()) };
+    let bytes = perry_ffi::read_bytes(output).expect("JSON.stringify returned a string");
     assert_eq!(
         bytes,
         br#"{"2":"two","10":"ten","title":"t","permission":[],"zeta":1}"#
