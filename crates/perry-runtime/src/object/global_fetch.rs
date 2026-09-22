@@ -60,9 +60,9 @@ pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
     })
 }
 
-/// Stash a parsed `RequestInit.redirect` mode for the immediately-following
-/// `js_fetch_with_options` call. The string is read synchronously and no heap
-/// pointer is retained, so the bridge itself needs no GC root.
+/// Validate and stash `RequestInit.redirect` for the immediately-following
+/// `js_fetch_with_options` call. The string is read synchronously and only its
+/// mode is retained, so the bridge itself needs no GC root.
 #[no_mangle]
 pub extern "C" fn js_fetch_set_pending_redirect(redirect: f64) {
     let mode = if redirect.to_bits() == crate::value::TAG_UNDEFINED {
