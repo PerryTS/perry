@@ -277,6 +277,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
     // #3662: Map/Set/WeakMap/WeakSet prototypes get brand-checking thunks
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
+        set_intrinsic_to_string_tag(proto_obj, builtin_name);
         install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         return;
     }
@@ -509,6 +510,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     }
                 }
             }
+            set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "SharedArrayBuffer" => {
@@ -546,6 +548,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // codegen / `buffer_dispatch`; these only close the reflection +
             // `DataView.prototype.getInt32.call(dv, …)` cascade.
             super::super::dataview_proto_thunks::install_dataview_proto_methods(proto_obj);
+            set_intrinsic_to_string_tag(proto_obj, "DataView");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "Object" => {
@@ -970,6 +973,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 crate::promise::promise_prototype_then_thunk as *const u8,
                 2,
             );
+            set_intrinsic_to_string_tag(proto_obj, "Promise");
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         // #340/#341: these carried `install_noop_proto_methods` placeholders —
