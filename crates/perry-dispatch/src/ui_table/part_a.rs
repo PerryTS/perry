@@ -443,6 +443,12 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
     },
     // ---- Button setters ----
     MethodRow {
+        method: "buttonSetFontFamily",
+        runtime: "perry_ui_button_set_font_family",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "buttonSetBordered",
         runtime: "perry_ui_button_set_bordered",
         args: &[ArgKind::Widget, ArgKind::F64],

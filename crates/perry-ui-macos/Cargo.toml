@@ -60,6 +60,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard",
     "NSColor",
     "NSFont",
+    "NSFontManager",
     "NSSavePanel",
     "NSOpenPanel",
     "NSSecureTextField",
@@ -84,6 +85,11 @@ harness = false
 [[test]]
 name = "native_widget_padding"
 path = "tests/native_widget_padding.rs"
+harness = false
+
+[[test]]
+name = "native_button_font_family"
+path = "tests/native_button_font_family.rs"
 harness = false
 
 [[test]]

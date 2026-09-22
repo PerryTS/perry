@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSButton, NSView};
-use objc2_foundation::{MainThreadMarker, NSObject, NSString};
+use objc2_app_kit::{NSButton, NSFont, NSFontManager, NSView};
+use objc2_foundation::{MainThreadMarker, NSObject, NSRange, NSString};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -169,6 +169,52 @@ pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             ];
 
             let _: () = msg_send![btn, setAttributedTitle: attr_str];
+        }
+    }
+}
+
+/// Change a button's font family while retaining its current size and traits.
+/// Keep the font on the attributed title too: an attributed font overrides the
+/// button cell's font, and setting text color can create an attributed title.
+pub fn set_font_family(handle: i64, family_ptr: *const u8) {
+    if family_ptr.is_null() {
+        return;
+    }
+    let family = unsafe { str_from_header(family_ptr) };
+    if family.is_empty() {
+        return;
+    }
+    let Some(view) = super::get_widget(handle) else {
+        return;
+    };
+    let mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
+    unsafe {
+        let is_button: bool = msg_send![&*view, isKindOfClass: AnyClass::get(c"NSButton").unwrap()];
+        if !is_button {
+            return;
+        }
+        let button: &NSButton = &*(Retained::as_ptr(&view) as *const NSButton);
+        let current = button
+            .font()
+            .unwrap_or_else(|| NSFont::systemFontOfSize(13.0));
+        let font = NSFontManager::sharedFontManager(mtm)
+            .convertFont_toFamily(&current, &NSString::from_str(&family));
+        button.setFont(Some(&font));
+
+        let title: *mut AnyObject = msg_send![button, attributedTitle];
+        if !title.is_null() {
+            let length: usize = msg_send![title, length];
+            if length > 0 {
+                let attributed: Retained<AnyObject> = msg_send![title, mutableCopy];
+                let key = NSString::from_str("NSFont");
+                let _: () = msg_send![
+                    &*attributed,
+                    addAttribute: &*key,
+                    value: &*font,
+                    range: NSRange::new(0, length)
+                ];
+                let _: () = msg_send![button, setAttributedTitle: &*attributed];
+            }
         }
     }
 }

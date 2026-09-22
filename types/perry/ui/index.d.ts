@@ -873,6 +873,8 @@ export function textSetDecoration(widget: Widget, decoration: number): void;
 // ---------------------------------------------------------------------------
 
 export function buttonSetBordered(widget: Widget, bordered: number): void;
+/** Change a macOS button title's font family while retaining its size and weight. */
+export function buttonSetFontFamily(widget: Widget, family: string): void;
 export function buttonSetTitle(widget: Widget, title: string): void;
 export function buttonSetTextColor(widget: Widget, r: number, g: number, b: number, a: number): void;
 export function buttonSetImage(widget: Widget, symbolName: string): void;
