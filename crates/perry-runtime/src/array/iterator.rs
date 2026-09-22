@@ -1241,8 +1241,27 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     throw_not_iterable(value());
 }
 
+// This helper runs the user-observable iterator protocol and can therefore
+// throw through the generated caller. Debug/test archives transport that
+// throw with Rust unwinding, so their outer ABI must permit it. Production
+// uses Perry's raw exception transport and must retain the plain C boundary;
+// see closure/dispatch/value_call.rs (#8479).
+#[cfg(panic = "abort")]
 #[no_mangle]
 pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) -> *mut ArrayHeader {
+    js_array_spread_append_impl(dest, source)
+}
+
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_array_spread_append(
+    dest: *mut ArrayHeader,
+    source: f64,
+) -> *mut ArrayHeader {
+    js_array_spread_append_impl(dest, source)
+}
+
+fn js_array_spread_append_impl(dest: *mut ArrayHeader, source: f64) -> *mut ArrayHeader {
     // Materializing an intercepted iterator can allocate and move the
     // destination. Keep it rooted across that protocol walk and re-read it
     // before appending. Ordinary dense arrays need no temporary: the same
@@ -1557,8 +1576,22 @@ fn settled_promise_value(value: f64) -> Option<f64> {
 
 /// Used by spread on generators, Array.from on generators, etc.
 /// Calls `.next()` in a loop until `.done` is true, collecting `.value` entries.
+// `.next()` is arbitrary user code. Match the conditional ABI on the dynamic
+// call bridges so a debug/test archive can carry a catchable throw across this
+// exported helper without rustc's abort-on-unwind guard.
+#[cfg(panic = "abort")]
 #[no_mangle]
 pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
+    js_iterator_to_array_impl(iter_f64)
+}
+
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
+    js_iterator_to_array_impl(iter_f64)
+}
+
+fn js_iterator_to_array_impl(iter_f64: f64) -> *mut ArrayHeader {
     use crate::closure;
     use crate::object::{js_object_get_field_by_name, ObjectHeader};
     use crate::string::js_string_from_bytes;
