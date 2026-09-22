@@ -81,6 +81,27 @@ fn variable_headers_are_captured_as_dynamic() {
 }
 
 #[test]
+fn shorthand_headers_are_captured_as_dynamic() {
+    let module = lower_src(
+        r#"
+        const headers = new Headers({ Authorization: "Bearer x" });
+        fetch("http://x/", { method: "POST", headers, body: "b" });
+        "#,
+    )
+    .expect("fetch with shorthand headers should lower");
+
+    let (static_pairs, has_dynamic) = find_fetch(&module);
+    assert_eq!(
+        static_pairs, 0,
+        "a shorthand headers value has no static pairs"
+    );
+    assert!(
+        has_dynamic,
+        "shorthand headers must be captured in headers_dynamic (#11024)"
+    );
+}
+
+#[test]
 fn spread_literal_headers_are_captured_as_dynamic() {
     // `{ ...h }` is an object literal, but its spread prop cannot be enumerated
     // statically, so it must fall back to the runtime path.
