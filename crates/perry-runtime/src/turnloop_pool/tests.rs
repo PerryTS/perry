@@ -82,11 +82,11 @@ fn read_js_string(bits: u64) -> String {
         crate::value::addr_class::is_plausible_heap_addr(ptr as usize),
         "live string pointer"
     );
-    unsafe {
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
-    }
+    // The runtime API, not open-coded `ptr + size_of::<StringHeader>()`: the
+    // payload offset is the runtime's to know, and hand-rolling it is what
+    // `scripts/string_payload_access_inventory.py` ratchets against.
+    let owned = unsafe { crate::OwnedStringBytes::copy_from_header(ptr) };
+    String::from_utf8_lossy(owned.as_bytes()).into_owned()
 }
 
 struct Fixture {

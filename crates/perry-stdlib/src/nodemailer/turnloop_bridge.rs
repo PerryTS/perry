@@ -195,12 +195,36 @@ fn settle_verify(ctx: usize, outcome: Outcome) {
 /// Must run on the thread that owns the JS heap; the deferred-resolution
 /// converter guarantees that.
 unsafe fn info_object(message_id: &str, response: &str) -> u64 {
-    let info = perry_runtime::js_object_alloc(0, 2);
-    let id = perry_runtime::js_string_from_bytes(message_id.as_ptr(), message_id.len() as u32);
-    perry_runtime::js_object_set_field(info, 0, perry_runtime::JSValue::string_ptr(id));
-    let resp = perry_runtime::js_string_from_bytes(response.as_ptr(), response.len() as u32);
-    perry_runtime::js_object_set_field(info, 1, perry_runtime::JSValue::string_ptr(resp));
-    perry_runtime::JSValue::object_ptr(info as *mut u8).bits()
+    // Every one of these calls can allocate, and therefore collect and MOVE
+    // the others. `info` was held as a bare `*mut ObjectHeader` across two
+    // `js_string_from_bytes` calls, so each `set_field` could write through a
+    // pointer a collection had already relocated -- the #7210 shape, which
+    // surfaces cycles later as `TypeError: value is not a function` rather
+    // than here. Root all three and re-read through the handles.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let info = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 2));
+    let id = scope.root_raw_mut_ptr(perry_runtime::js_string_from_bytes(
+        message_id.as_ptr(),
+        message_id.len() as u32,
+    ));
+    let resp = scope.root_raw_mut_ptr(perry_runtime::js_string_from_bytes(
+        response.as_ptr(),
+        response.len() as u32,
+    ));
+    perry_runtime::js_object_set_field(
+        info.get_raw_mut_ptr::<perry_runtime::object::ObjectHeader>(),
+        0,
+        perry_runtime::JSValue::string_ptr(id.get_raw_mut_ptr()),
+    );
+    perry_runtime::js_object_set_field(
+        info.get_raw_mut_ptr::<perry_runtime::object::ObjectHeader>(),
+        1,
+        perry_runtime::JSValue::string_ptr(resp.get_raw_mut_ptr()),
+    );
+    perry_runtime::JSValue::object_ptr(
+        info.get_raw_mut_ptr::<perry_runtime::object::ObjectHeader>() as *mut u8,
+    )
+    .bits()
 }
 
 /// Reject `promise_ptr` with `message`, through the same deferred queue the

@@ -694,8 +694,14 @@ fn the_armed_deadline_and_perrys_own_deadline_agree() {
     let _g = serial();
     std::thread::spawn(|| {
         install_unrouted();
-        let id = crate::timer::js_set_timeout_callback(0, 50_000.0);
-        assert!(id > 0, "the subject timer was never scheduled");
+        // #340/#341: this returns the handle OBJECT's raw pointer, not the raw
+        // registry id -- codegen NaN-boxes the i64 return. So the clear below
+        // has to box it and go through the value entry point, which is also
+        // the one codegen emits for `clearTimeout`
+        // (`lower_call/namespace_call.rs` -> the `_value` form).
+        let handle = crate::timer::js_set_timeout_callback(0, 50_000.0);
+        assert!(handle != 0, "the subject timer was never scheduled");
+        let handle_value = crate::value::js_nanbox_pointer(handle);
         let heap = crate::timer::next_timer_deadline();
         assert!(heap.is_some(), "the timer heap has no deadline to compare");
         assert_eq!(
@@ -703,7 +709,7 @@ fn the_armed_deadline_and_perrys_own_deadline_agree() {
             heap,
             "the armed deadline drifted from the heap root"
         );
-        crate::timer::clearTimeout(id);
+        crate::timer::js_clear_timeout_value(handle_value);
         assert_eq!(crate::timer::next_timer_deadline(), None);
         assert_eq!(
             loop_deadline(),

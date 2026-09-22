@@ -57,6 +57,10 @@ impl PerryNetError {
             errno: err.errno,
         };
         // SAFETY: the caller supplies a writable `PerryNetError`.
+        // GC_STORE_AUDIT(POINTER_FREE): the destination is the CALLER's `PerryNetError`
+        // out-param, not a GC slot, and every field is pointer-free with respect to the
+        // heap: `code`/`syscall` are `&'static str` (see errors.rs:27,32), the lengths
+        // are `usize`, `errno` is `i32`.
         unsafe { std::ptr::write(out, value) };
     }
 }
@@ -147,6 +151,9 @@ pub unsafe extern "C" fn js_perry_net_error_from_os(
             errno: mapped.errno,
         };
         // SAFETY: the caller supplies a writable `PerryNetError`.
+        // GC_STORE_AUDIT(POINTER_FREE): same out-param as above. `code` is a `&'static
+        // str`; `syscall` is the caller's OWN pointer echoed back, which is why it
+        // outlives the call.
         unsafe { std::ptr::write(out, value) };
     }
     let _ = name;
@@ -360,6 +367,8 @@ pub unsafe extern "C" fn js_perry_net_write(
         Ok(queued) => {
             if !out_queued.is_null() {
                 // SAFETY: the caller supplies a writable `usize`.
+                // GC_STORE_AUDIT(POINTER_FREE): a `u32` queued-byte count into a caller
+                // out-param.
                 unsafe { std::ptr::write(out_queued, queued) };
             }
             PERRY_NET_OK
@@ -518,14 +527,17 @@ unsafe fn write_addr(
     }
     if !out_len.is_null() {
         // SAFETY: caller-supplied writable `usize`.
+        // GC_STORE_AUDIT(POINTER_FREE): a length into a caller out-param.
         unsafe { std::ptr::write(out_len, n) };
     }
     if !out_port.is_null() {
         // SAFETY: caller-supplied writable `u16`.
+        // GC_STORE_AUDIT(POINTER_FREE): a `u16` port into a caller out-param.
         unsafe { std::ptr::write(out_port, addr.port()) };
     }
     if !out_family.is_null() {
         // SAFETY: caller-supplied writable `i32`.
+        // GC_STORE_AUDIT(POINTER_FREE): a `u8` address family into a caller out-param.
         unsafe { std::ptr::write(out_family, if addr.is_ipv6() { 6 } else { 4 }) };
     }
     PERRY_NET_OK
@@ -597,6 +609,7 @@ pub unsafe extern "C" fn js_perry_net_completion_bytes(
     if completion.is_null() {
         if !out_len.is_null() {
             // SAFETY: caller-supplied writable `usize`.
+            // GC_STORE_AUDIT(POINTER_FREE): a length into a caller out-param.
             unsafe { std::ptr::write(out_len, 0) };
         }
         return std::ptr::null();
@@ -605,6 +618,7 @@ pub unsafe extern "C" fn js_perry_net_completion_bytes(
     let c = unsafe { &*completion };
     if !out_len.is_null() {
         // SAFETY: caller-supplied writable `usize`.
+        // GC_STORE_AUDIT(POINTER_FREE): a length into a caller out-param.
         unsafe { std::ptr::write(out_len, c.len) };
     }
     c.data

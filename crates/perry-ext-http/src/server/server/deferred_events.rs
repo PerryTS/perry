@@ -237,6 +237,13 @@ fn listen_error_description(code: &str) -> &'static str {
     }
 }
 
+/// The fallback when the error object could not be allocated: hand the
+/// listener the message string alone, so something still arrives.
+fn listen_error_message_value(err: &ListenError) -> f64 {
+    let s = alloc_string(&listen_error_message(err));
+    f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits())
+}
+
 /// Node's `err.message` for a failed listen.
 fn listen_error_message(err: &ListenError) -> String {
     if err.address.is_empty() {
@@ -281,17 +288,19 @@ unsafe fn build_listen_error_value(err: &ListenError) -> f64 {
         packed.as_ptr(),
         packed.len() as u32,
     );
-    let message = listen_error_message(err);
     if obj.is_null() {
-        // The object alloc failed; hand the listener the message so something
-        // still arrives.
-        let s = alloc_string(&message);
-        return f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits());
+        return listen_error_message_value(err);
     }
+    // Root `obj` BEFORE anything in this function can allocate. The failure
+    // path above is a separate function for the same reason: its `alloc_string`
+    // is unreachable from here, but it sat lexically between the alloc and the
+    // root, and `unrooted_local_shape.py` is flow-insensitive by design --
+    // an unrooted window it cannot rule out is one a reader cannot either.
     let roots = perry_ffi::TransientRootScope::enter();
     let object = roots.root_nanbox(f64::from_bits(
         JsValue::from_object_ptr(obj as *mut u8).bits(),
     ));
+    let message = listen_error_message(err);
     let set_string = |index: u32, value: &str| {
         let rooted = roots.root_nanbox(f64::from_bits(
             JsValue::from_string_ptr(alloc_string(value).as_raw()).bits(),
