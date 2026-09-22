@@ -268,6 +268,9 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("ws", "on", true, None),
     method("ws", "send", true, None),
     method("ws", "close", true, None),
+    method("ws", "ping", true, None),
+    method("ws", "pong", true, None),
+    method("ws", "terminate", true, None),
     method("ws", "readyState", true, None),
     // `WebSocketServer.clients` is a data getter. It is represented as a
     // receiver method internally because native-handle getters dispatch
@@ -290,6 +293,9 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("ws", "addListener", true, Some("Client")),
     method("ws", "send", true, Some("Client")),
     method("ws", "close", true, Some("Client")),
+    method("ws", "ping", true, Some("Client")),
+    method("ws", "pong", true, Some("Client")),
+    method("ws", "terminate", true, Some("Client")),
     class("ws", "Client"),
     method_sig(
         "ws",

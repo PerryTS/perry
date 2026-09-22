@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2829 entries across 117 modules.
+Total: 2835 entries across 117 modules.
 
 ## Modules
 
@@ -3780,10 +3780,16 @@ Total: 2829 entries across 117 modules.
 - `handleUpgrade` — instance
 - `on` — instance
 - `on` — instance *(class: `Client`)*
+- `ping` — instance
+- `ping` — instance *(class: `Client`)*
+- `pong` — instance
+- `pong` — instance *(class: `Client`)*
 - `readyState` — instance
 - `send` — instance
 - `send` — instance *(class: `Client`)*
 - `sendToClient` — module
+- `terminate` — instance
+- `terminate` — instance *(class: `Client`)*
 
 ### Properties
 
