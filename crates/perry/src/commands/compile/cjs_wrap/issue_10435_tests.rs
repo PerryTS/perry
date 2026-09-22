@@ -15,6 +15,12 @@ Object.defineProperty(module, 'exports', {
     let double = r#"Object . defineProperty ( module , "exports", { value: {} });"#;
     assert!(is_commonjs(single));
     assert!(is_commonjs(double));
+    assert!(is_commonjs(
+        "Object.defineProperty(module, /* key */ 'exports' // separator\n, { value: {} });"
+    ));
+    assert!(is_commonjs(
+        "Object.defineProperty(module, // key\n \"exports\" /* separator */, { value: {} });"
+    ));
 }
 
 #[test]
