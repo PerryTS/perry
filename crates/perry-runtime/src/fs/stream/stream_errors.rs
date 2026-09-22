@@ -56,8 +56,8 @@ fn store_read_failure(id: usize, failure: &FsReadFailure) {
 }
 
 /// Turn the constructor's open failure into `error_value` once the state is
-/// registered, so the `'error'` replay to a listener attached right after
-/// construction and the pump's delivery both hand out the node-shaped value.
+/// registered, so the deferred pump hands the `'error'` listener a
+/// node-shaped value.
 pub(super) fn store_open_failure(id: usize) {
     let failure = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
@@ -104,6 +104,10 @@ pub(super) fn emit_pending_read_error(id: usize) -> bool {
         return false;
     };
     record_stream_error(id, message);
-    maybe_close_stream(id, false);
+    // Node delivers `close` after `error`. Keeping those on separate turns
+    // also lets work queued in the construction turn (for example
+    // `fs.promises.writeFile(out, stream)`) still identify the stream and
+    // consume its stored open failure.
+    schedule_read_stream_turn(id);
     true
 }

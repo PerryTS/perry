@@ -91,7 +91,7 @@ pub(crate) struct StreamState {
     /// #10451: a read stream's constructor-time open failure, held as the OS
     /// error until `store_open_failure` turns it into `error_value`.
     open_failure: Option<FsReadFailure>,
-    /// #9493: a turn is already parked on the callback-timer queue.
+    /// A stream turn is already parked on the callback-timer queue.
     turn_pending: bool,
     bytes_read: u64,
     bytes_written: u64,
@@ -1238,6 +1238,8 @@ fn throw_plain_type_error_value(message: &str) -> ! {
 
 mod options_init;
 use options_init::*;
+mod read_turn;
+use read_turn::*;
 mod stream_errors;
 use stream_errors::*;
 mod utf8_stream;
@@ -1483,7 +1485,7 @@ pub(crate) extern "C" fn read_stream_on_impl(
                 state.paused = false;
             }
         });
-        read_stream_pump(id);
+        schedule_read_stream_turn(id);
     }
     current_receiver_value()
 }
@@ -1501,7 +1503,7 @@ pub(crate) extern "C" fn read_stream_once_impl(
                 state.paused = false;
             }
         });
-        read_stream_pump(id);
+        schedule_read_stream_turn(id);
     }
     current_receiver_value()
 }
@@ -1522,7 +1524,7 @@ pub(crate) extern "C" fn read_stream_pipe_impl(
             state.paused = false;
         }
     });
-    read_stream_pump(id);
+    schedule_read_stream_turn(id);
     dest
 }
 
@@ -1542,7 +1544,7 @@ pub(crate) extern "C" fn read_stream_resume_impl(closure: *const ClosureHeader) 
             state.paused = false;
         }
     });
-    read_stream_pump(id);
+    schedule_read_stream_turn(id);
     current_receiver_value()
 }
 
@@ -1595,7 +1597,7 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
             "ready" if state.kind == StreamKind::Read && state.opened => {
                 Some(("ready", undefined_value()))
             }
-            "error" => stored_error_value(state).map(|err| ("error", err)),
+            "error" if state.errored => stored_error_value(state).map(|err| ("error", err)),
             "end" if state.kind == StreamKind::Read && state.ended => {
                 Some(("end", undefined_value()))
             }
@@ -1787,6 +1789,15 @@ fn create_read_stream_with_state(state: StreamState) -> f64 {
     // stream at all. `emit_event0`/`emit_event1` forward to node:stream's listener
     // registry so the iterator this installs actually receives the chunks.
     crate::node_stream::async_iterator::install_foreign_readable_async_iterator_symbol(value);
+    let has_open_failure = STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .is_some_and(|state| state.error_msg.is_some())
+    });
+    if has_open_failure {
+        schedule_read_stream_turn(id);
+    }
     value
 }
 

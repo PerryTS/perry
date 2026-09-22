@@ -19,6 +19,7 @@ pub(super) fn register_stream_method_arities() {
     crate::closure::js_register_closure_arity(read_stream_is_paused_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(read_stream_close_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(read_stream_resume_from_drain_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(read_stream_turn_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(utf8_stream_write_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(utf8_stream_flush_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(utf8_stream_flush_sync_impl as *const u8, 0);
