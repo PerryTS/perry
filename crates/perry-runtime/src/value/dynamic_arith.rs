@@ -333,6 +333,22 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     }
 }
 
+/// The N-way `+` concat fold needs the same default-hint conversion as the
+/// pairwise dynamic-add path, before it hands each part to the string builder.
+#[no_mangle]
+pub unsafe extern "C" fn js_to_primitive_default_for_add(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64(value);
+    to_primitive_default_for_add(rooted.get_nanbox_f64())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_add_throw_if_symbol(value: f64) {
+    if is_symbol_value(value) {
+        throw_add_type_error(b"Cannot convert a Symbol value to a string");
+    }
+}
+
 type BigIntBinaryOp = extern "C" fn(
     *const crate::bigint::BigIntHeader,
     *const crate::bigint::BigIntHeader,
