@@ -254,9 +254,26 @@ fn proven_receivers_keep_the_direct_builtin_call() {
         1,
         "a proven Date calls the getter once, with no kind check:\n{ir}"
     );
-    assert!(
-        !ir.contains(DISPATCH),
-        "a proven receiver must not pay for method dispatch:\n{ir}"
+    // #10943 CHANGED THIS CLAIM, deliberately. What stood here was
+    // `!ir.contains(DISPATCH)` — "a proven receiver must not pay for method
+    // dispatch" — and that premise is the bug: proving the receiver's KIND
+    // proves nothing about an own property, so `d.getTime = () => "own"` ran
+    // `Date.prototype.getTime` and returned a real timestamp. The dispatcher
+    // now appears as the OTHER SIDE of one own-override diamond.
+    //
+    // What replaces it is the cost claim that is still worth pinning: a proven
+    // receiver pays ONE predicate test and a branch, not the full tower —
+    // exactly one dispatch call, reached only when the predicate says the
+    // receiver may own the name.
+    assert_eq!(
+        ir.matches("js_receiver_may_own_named_method").count(),
+        1,
+        "a proven receiver pays exactly one own-override test:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches(DISPATCH).count(),
+        1,
+        "and reaches the dispatcher only as that test's other arm:\n{ir}"
     );
 }
 
