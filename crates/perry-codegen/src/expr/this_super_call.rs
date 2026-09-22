@@ -623,6 +623,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "Writable"
                             | "Duplex"
                             | "Transform"
+                            | "PassThrough"
                             | "ReadableStream"
                             | "WritableStream"
                             | "TransformStream"
@@ -785,6 +786,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "Writable" => Some("writable"),
                         "Duplex" => Some("duplex"),
                         "Transform" => Some("transform"),
+                        "PassThrough" => Some("passthrough"),
                         _ => None,
                     };
                     if let Some(kind) = node_stream_kind {
@@ -851,6 +853,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "Writable" => Some("writable"),
                         "Duplex" => Some("duplex"),
                         "Transform" => Some("transform"),
+                        "PassThrough" => Some("passthrough"),
                         _ => None,
                     };
                     if let Some(kind) = node_stream_kind {

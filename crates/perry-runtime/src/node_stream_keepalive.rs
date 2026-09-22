@@ -196,6 +196,10 @@ static KEEP_NS_TRANSFORM_NEW: extern "C" fn(f64) -> f64 = super::js_node_stream_
 static KEEP_NS_PASSTHROUGH_NEW: extern "C" fn(f64) -> f64 = super::js_node_stream_passthrough_new;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
+static KEEP_NS_PASSTHROUGH_SUBCLASS_INIT: extern "C" fn(f64, f64) -> f64 =
+    super::js_node_stream_passthrough_subclass_init;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
 static KEEP_NS_READABLE_FROM: extern "C" fn(f64) -> f64 = super::js_node_stream_readable_from;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]

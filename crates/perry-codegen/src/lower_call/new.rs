@@ -1092,6 +1092,7 @@ fn lower_new_impl_inner<'a>(
             Some("Writable") => Some("js_node_stream_writable_subclass_init"),
             Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
             Some("Transform") => Some("js_node_stream_transform_subclass_init"),
+            Some("PassThrough") => Some("js_node_stream_passthrough_subclass_init"),
             _ => None,
         }
     } else {
@@ -1390,6 +1391,7 @@ fn lower_new_impl_inner<'a>(
                     "readable" => "js_node_stream_readable_subclass_init",
                     "duplex" => "js_node_stream_duplex_subclass_init",
                     "transform" => "js_node_stream_transform_subclass_init",
+                    "passthrough" => "js_node_stream_passthrough_subclass_init",
                     _ => unreachable!("node stream parent kind {}", kind),
                 };
                 ctx.block().call(

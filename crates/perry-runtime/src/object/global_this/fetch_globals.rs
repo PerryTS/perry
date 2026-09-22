@@ -790,14 +790,6 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     // `lower_node_stream_super_init`), so every heritage shape installs the
     // override onto `this` identically.
     //
-    // `PassThrough` is deliberately NOT handled here: HIR never recognizes
-    // it as a node:stream native parent at all, even via a bare import
-    // (`canonical_native_parent_name` lists Readable/Writable/Duplex/
-    // Transform but not PassThrough), so the hidden `_transform` field this
-    // shim reads is never pre-seeded for ANY `PassThrough` heritage shape —
-    // that's a separate, deeper HIR-level gap needing its own fix; adding an
-    // arm here alone was confirmed (empirically) to change nothing.
-    //
     // #10798: `Stream` (the legacy `node:stream` base that `Readable` and
     // friends themselves derive from) is a DIFFERENT shape than
     // `PassThrough`: it carries no hidden per-instance state at all — in
@@ -840,6 +832,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 "Transform" => Some(crate::node_stream::js_node_stream_transform_subclass_init(
                     this_box, opts,
                 )),
+                "PassThrough" => Some(
+                    crate::node_stream::js_node_stream_passthrough_subclass_init(this_box, opts),
+                ),
                 "Stream" => Some(crate::node_stream::js_node_stream_legacy_subclass_init(
                     this_box,
                 )),

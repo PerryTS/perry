@@ -927,6 +927,7 @@ pub(super) fn node_stream_parent_kind(
             "Readable" => return Some("readable"),
             "Duplex" => return Some("duplex"),
             "Transform" => return Some("transform"),
+            "PassThrough" => return Some("passthrough"),
             _ => {}
         }
         cur = classes
