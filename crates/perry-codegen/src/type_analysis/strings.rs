@@ -364,6 +364,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             .first()
             .is_some_and(|arg| is_definitely_string_expr(ctx, arg)),
         Expr::StringCoerce(_)
+        | Expr::TemplateStringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
         | Expr::JsonStringify(_)
@@ -549,6 +550,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         Expr::String(_)
         | Expr::WtfString(_)
         | Expr::StringCoerce(_)
+        | Expr::TemplateStringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
         | Expr::JsonStringify(_)
@@ -734,7 +736,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             .is_some_and(|arg| is_definitely_string_expr(ctx, arg)),
         // String coerce, JSON.stringify, ArrayJoin, etc. all return
         // strings.
-        Expr::StringCoerce(_)
+        Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_)
         | Expr::TypeOf(_)
         | Expr::ArrayJoin { .. }
         | Expr::JsonStringifyFull(..)

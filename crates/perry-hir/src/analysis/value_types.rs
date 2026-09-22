@@ -817,7 +817,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
 
         Expr::BigIntCoerce(_) => Type::BigInt,
         Expr::NumberCoerce(_) => Type::Number,
-        Expr::StringCoerce(_) => Type::String,
+        Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_) => Type::String,
         Expr::BooleanCoerce(_) => Type::Boolean,
 
         Expr::New { class_name, .. } if class_name == "Array" => Type::Array(Box::new(Type::Any)),

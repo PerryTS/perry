@@ -450,6 +450,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_min2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
+    module.declare_function("js_template_string_coerce", I64, &[DOUBLE]);
     // RequireObjectCoercible + ToString for inline-lowered String.prototype
     // methods on a non-string receiver: a nullish `this` throws the V8
     // member-access TypeError instead of coercing undefined→"undefined".

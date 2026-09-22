@@ -872,6 +872,7 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::PrivateBrandCheck { .. }
         | Expr::NumberCoerce(_)
         | Expr::StringCoerce(_)
+        | Expr::TemplateStringCoerce(_)
         | Expr::BooleanCoerce(_)
         | Expr::IsNaN(_)
         | Expr::IsFinite(_)

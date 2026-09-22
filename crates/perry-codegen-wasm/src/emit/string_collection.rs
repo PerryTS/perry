@@ -24,6 +24,7 @@ impl WasmModuleEmitter {
             "string_eq",
             "string_len",
             "jsvalue_to_string",
+            "jsvalue_to_template_string",
             "is_truthy",
             "js_strict_eq",
             "math_floor",
@@ -624,7 +625,10 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(a);
                 self.collect_strings_in_expr(b);
             }
-            Expr::StringFromCharCode(e) | Expr::StringFromCodePoint(e) | Expr::StringCoerce(e) => {
+            Expr::StringFromCharCode(e)
+            | Expr::StringFromCodePoint(e)
+            | Expr::StringCoerce(e)
+            | Expr::TemplateStringCoerce(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::StringAt { string, index } | Expr::StringCodePointAt { string, index } => {

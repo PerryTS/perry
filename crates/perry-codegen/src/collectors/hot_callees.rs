@@ -481,6 +481,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         | Expr::Await(operand)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
+        | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => walk_expr(operand, in_loop, scan),
