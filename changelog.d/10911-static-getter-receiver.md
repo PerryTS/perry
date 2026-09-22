@@ -1,0 +1,9 @@
+fix(runtime): a static getter binds `this` to the class it was read from (#10911).
+
+`Sub.accessor` ran the getter with `this` === the class that DECLARED it, not the class the read started from. `js_object_get_field_by_name` walks the static side by re-entering ITSELF with the parent class object as the receiver; that walk was written when effect's `ast` was a static DATA field, where the object does not matter. effect now exposes `ast` as a static GETTER, and spec `OrdinaryGet` threads the original Receiver through the chain unchanged.
+
+The runtime already had the device for exactly this: `accessor_receiver_override`, which `resolve_proto_chain_field_inner` uses so an inherited INSTANCE getter binds the original instance. The static side never produced or consumed it. It now does — the walk stashes the class the read started from, and the class-body static accessor path takes it.
+
+`this` and the capture/private OWNER stay separate, and that distinction is the whole subtlety: `this` is the class the read started from, while the owner is the evaluation the getter was FOUND on — the object whose `__perry_ctor_caps` hold its captured variables and whose brand gates `#x`. `js_class_capture_value_for_receiver` prefers the owner, so binding it to the subclass loses every capture (a first cut of this fix did that, turning a capturing getter's value into `undefined`). The regression test pins both halves, because a test that checked only `this` would pass that broken version.
+
+Downstream this is #10891: effect's `static get ast() { return getClassSchema(this).ast }` memoised its schema against the base class, so `Schema.decodeUnknownSync` built decoded values from the base and they were not `instanceof` their own class — a typed error stopped matching, and OpenCode's TUI died at bootstrap reporting a generic server error.

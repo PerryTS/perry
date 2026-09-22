@@ -1125,6 +1125,35 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|_| args.input.clone());
 
     classify_eager_modules(&mut ctx, &entry_path);
+
+    // #10399: whole-program Worker detection, before ANY module codegen runs.
+    //
+    // A `worker_threads` worker is a real OS thread sharing this address
+    // space, but Node and bun give each worker its own copy of the module
+    // graph. Perry's module-init once-guard and module-global slots are
+    // process-wide by default, so without this a worker skips init entirely
+    // (the main thread already set the flag) and then reads objects owned by
+    // the main thread's thread-local arena. Setting this makes codegen emit
+    // those globals thread-local so each thread instantiates its own graph.
+    //
+    // Conservative on purpose: any `new Worker(...)` site counts, resolved or
+    // not. A program with no Worker at all keeps process-wide globals and
+    // pays no TLS cost.
+    let program_has_worker = ctx.native_modules.values().any(|hir_module| {
+        let mut found = false;
+        perry_hir::for_each_worker_new(hir_module, &mut |_expr| {
+            found = true;
+        });
+        found
+    });
+    perry_codegen::set_program_has_worker(program_has_worker);
+    if program_has_worker && verbose > 0 {
+        eprintln!(
+            "  #10399: program constructs a worker_threads Worker — \
+             module-init guards and module-global slots are thread-local"
+        );
+    }
+
     let non_entry_module_names: Vec<String> =
         topo_sort_non_entry_modules(&ctx, &entry_path, format, verbose);
     // #10428/#10429: every imported module the well-known flip serves from a
@@ -5156,6 +5185,24 @@ pub fn run_with_parse_cache(
                 .chain(parent_name_clone.into_iter().map(|name| (name, true)))
                 .collect();
             for (ref_name, is_parent_ref) in refs {
+                // #10356, second registration path. The implicit
+                // import-walk loop below is not the only way a class the
+                // importer never named gets registered under its bare name:
+                // this transitive closure pulls in whatever an imported
+                // class's FIELD and RETURN types mention. OpenCode's
+                // `OpencodeClient` carries `get request(): Request`, so
+                // `import { OpencodeClient }` registered `Request` here and
+                // `new Request(url, init)` in the importer built the SDK's
+                // `class Request extends HeyApiClient` instead of the global.
+                //
+                // A parent ref is exempt: `class Sub extends Request` really
+                // does need its parent's layout registered (#485 — too few
+                // inline slots otherwise), and parent refs already resolve
+                // path-aware in the child's own module (#26/#321).
+                if !is_parent_ref && perry_hir::analysis::is_global_intrinsic_value_name(&ref_name)
+                {
+                    continue;
+                }
                 // Resolve the type name in the declaring class's own
                 // module before falling back to the legacy global lookup.
                 // This includes erased `import type { Result as Local }`

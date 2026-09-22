@@ -564,6 +564,75 @@ fn string_coerce(value: f64) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
+/// #10854: a worker must get event-loop turns, or an `async` `onmessage` handler
+/// never resumes after its first `await` and the reply is never posted.
+///
+/// Turns are taken ONLY while the worker actually has queued work, and the
+/// receive below stays blocking when it does not. That matters: an earlier
+/// version polled every 1-5ms, which left this thread running JS continuously
+/// alongside the main thread and intermittently corrupted it. Running JS only
+/// while servicing a message is the same exposure a synchronous handler already
+/// has, and that path is stable.
+///
+/// This must NOT be the `AllowTimers` pump (`js_promise_run_microtasks`):
+/// `timer.rs` keeps `TIMER_QUEUE`/`CALLBACK_TIMERS`/`INTERVAL_TIMERS` in global
+/// mutexes rather than thread-locals, so that drain runs the MAIN thread's timer
+/// callbacks on this worker thread against this thread's globals — a later
+/// main-thread timer then dies with "value is not a function". The
+/// microtask/nextTick queues are `perry_thread_local!`, so draining those is
+/// confined to this worker.
+fn pump_worker_microtasks() {
+    // Bounded so a job queue that re-arms itself cannot wedge the worker here.
+    for _ in 0..4096 {
+        let mut ran = perry_runtime::promise::microtasks::js_promise_run_microtasks_await_loop();
+        // Owner-FILTERED timer tick: with this thread holding its own agent id
+        // (see the spawn body), this fires only timers whose closures live in
+        // this worker's arena. That is what lets `await` of a timer — or of
+        // anything a timer ultimately resolves — resume inside a worker.
+        ran += perry_runtime::timer::js_await_loop_tick_timers();
+        if ran == 0 {
+            break;
+        }
+    }
+}
+
+/// How long the worker may block waiting for its next command.
+///
+/// `None` means "nothing pending anywhere, block until a command arrives", so an
+/// idle worker costs exactly what it did before #10854. Otherwise the wait is
+/// bounded so a continuation waiting on a timer still gets a turn: the timer
+/// itself is run by whichever thread owns the event loop, but when it resolves a
+/// promise this worker awaits, the continuation lands in THIS thread's microtask
+/// queue and only a turn here can run it.
+///
+/// The timer queues are process-global (see `pump_worker_microtasks`), so this
+/// also sees other threads' timers. That only costs an extra wake-up, and the
+/// drain has an empty fast path — it must never be used to RUN those timers.
+fn worker_wait_budget() -> Option<std::time::Duration> {
+    let pending = perry_runtime::timer::js_timer_has_pending() != 0
+        || perry_runtime::timer::js_callback_timer_has_pending() != 0
+        || perry_runtime::timer::js_interval_timer_has_pending() != 0;
+    if !pending {
+        return None;
+    }
+    let mut soonest: Option<f64> = None;
+    for ms in [
+        perry_runtime::timer::js_timer_next_deadline(),
+        perry_runtime::timer::js_callback_timer_next_deadline(),
+        perry_runtime::timer::js_interval_timer_next_deadline(),
+    ] {
+        if ms >= 0.0 {
+            soonest = Some(soonest.map_or(ms, |best: f64| best.min(ms)));
+        }
+    }
+    // Floor at 5ms so a 60fps main loop cannot turn this into a spin — the
+    // queues are global, so a TUI's own render timers would otherwise wake this
+    // worker ~1000x/s for the life of the process. Cap at 25ms so a far-off
+    // deadline still leaves the worker responsive.
+    let ms = soonest.unwrap_or(25.0).clamp(5.0, 25.0) as u64;
+    Some(std::time::Duration::from_millis(ms))
+}
+
 fn queue_worker_threads_microtask() {
     perry_runtime::closure::js_register_closure_arity(
         worker_threads_channels_microtask as *const u8,
@@ -1274,92 +1343,133 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     // shares the parent's class tables instead of building a second copy. Its
     // entry's `js_gc_init` then finds an image already installed and keeps it.
     let class_image = perry_runtime::object::class_image::current_image_handle();
-    std::thread::spawn(move || {
-        perry_runtime::object::class_image::adopt_image(class_image);
-        // A `worker_threads` Worker runs JS on its own thread with its own heap,
-        // so it IS an agent and must claim an id before it can allocate or
-        // enqueue anything — exactly as `perry/thread`'s spawn/parallelMap do
-        // (#6185). Without this the thread reports `PRIMARY_AGENT`, which makes
-        // `agent_loop::net_available()` true on a thread that cannot own the
-        // primary agent's turnloop loop: `fetch()` is then accepted by the
-        // submit guard and refused a moment later by `ensure_loop_with`, so the
-        // request fails after acceptance instead of taking the fallback path.
-        let worker_agent = perry_runtime::agent::enter_worker_agent();
-        let previous_env = apply_worker_env(&thread_options.env);
-        CURRENT_WORKER_ID.with(|id| id.set(worker_id));
-        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
-        CURRENT_THREAD_NAME.with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
-        CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
-        CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
-        worker_surface::install_web_worker_globals();
-        push_parent_event(WorkerEvent::Online(worker_id));
+    // #10399: a worker runs the module graph, so it needs the same stack
+    // headroom as the blocking pool — the program's static TLS block is
+    // carved from this same mapping (see `async_bridge::RUNTIME`).
+    let spawned = std::thread::Builder::new()
+        .stack_size(crate::common::async_bridge::blocking_thread_stack_size())
+        .spawn(move || {
+            perry_runtime::object::class_image::adopt_image(class_image);
+            // #10854/#6185: claim this thread's own agent id BEFORE it can allocate
+            // or enqueue anything. A `worker_threads` Worker gets its own arena and
+            // GC, but it never claimed an agent, so `current_agent()` fell back to
+            // `PRIMARY_AGENT` (see `agent.rs`: a thread with no agent of its own is
+            // by definition a pump acting for the primary heap). The owner tag on
+            // `TIMER_QUEUE`/`CALLBACK_TIMERS`/`INTERVAL_TIMERS` entries therefore
+            // could not tell this worker's timers from the main thread's, in either
+            // direction: the main thread fired timer closures living in this
+            // worker's arena, and an owner-filtered tick here fired the main
+            // thread's. The `perry/thread` workers in `thread.rs` have always done
+            // this; the Web Worker path was simply missing it.
+            //
+            // turnloop adds a second consequence of the same omission: a thread
+            // reporting `PRIMARY_AGENT` makes `agent_loop::net_available()`
+            // true on a thread that cannot own the primary agent's loop, so
+            // `fetch()` was accepted by the submit guard and refused a moment
+            // later by `ensure_loop_with` — failing after acceptance instead of
+            // taking the fallback path.
+            let worker_agent = perry_runtime::agent::enter_worker_agent();
+            let previous_env = apply_worker_env(&thread_options.env);
+            CURRENT_WORKER_ID.with(|id| id.set(worker_id));
+            CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
+            CURRENT_THREAD_NAME
+                .with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
+            CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
+            CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
+            worker_surface::install_web_worker_globals();
+            push_parent_event(WorkerEvent::Online(worker_id));
 
-        let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
-        let mut exit_code = 0;
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            'reload: loop {
-                entry();
-                if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                    return;
-                }
-                // Keep the worker thread alive to service main→worker messages
-                // only if it registered a Node-style, EventTarget-style, or
-                // property-style message consumer.
-                let has_message_consumer = MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
-                    || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty())
-                    || worker_surface::web_worker_global_handler("onmessage").is_some();
-                if !has_message_consumer {
-                    return;
-                }
-                loop {
-                    match rx.recv() {
-                        Ok(WorkerCommand::Message(message)) => {
-                            deliver_parent_port_message(&message);
-                            if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
-                                return;
+            let entry: WorkerEntry = unsafe { std::mem::transmute(entry_ptr as usize) };
+            let mut exit_code = 0;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                'reload: loop {
+                    entry();
+                    if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                        return;
+                    }
+                    // Keep the worker thread alive to service main→worker messages
+                    // only if it registered a Node-style, EventTarget-style, or
+                    // property-style message consumer.
+                    let has_message_consumer = MESSAGE_CALLBACK.with(|cb| cb.borrow().is_some())
+                        || MESSAGE_EVENT_CALLBACKS.with(|cbs| !cbs.borrow().is_empty())
+                        || worker_surface::web_worker_global_handler("onmessage").is_some();
+                    if !has_message_consumer {
+                        return;
+                    }
+                    loop {
+                        // #10854: a continuation may be waiting on a timer another
+                        // thread owns, so bound the wait when anything is pending.
+                        let received = match worker_wait_budget() {
+                            Some(budget) => match rx.recv_timeout(budget) {
+                                Ok(command) => Ok(command),
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                    pump_worker_microtasks();
+                                    continue;
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                    Err(std::sync::mpsc::RecvError)
+                                }
+                            },
+                            None => rx.recv(),
+                        };
+                        match received {
+                            Ok(WorkerCommand::Message(message)) => {
+                                deliver_parent_port_message(&message);
+                                // #10854: let the handler's continuations run before
+                                // parking again, so an `async` handler can reply.
+                                pump_worker_microtasks();
+                                if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                                    return;
+                                }
                             }
+                            Ok(WorkerCommand::Reload) => {
+                                MESSAGE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+                                MESSAGE_EVENT_CALLBACKS.with(|cbs| cbs.borrow_mut().clear());
+                                CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
+                                CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
+                                worker_surface::install_web_worker_globals();
+                                continue 'reload;
+                            }
+                            Ok(WorkerCommand::DirectMessage {
+                                message,
+                                source_thread_id,
+                                ack,
+                            }) => {
+                                let result = direct_message::deliver_worker_message(
+                                    &message,
+                                    source_thread_id,
+                                );
+                                pump_worker_microtasks();
+                                let _ = ack.send(result);
+                            }
+                            Ok(WorkerCommand::Terminate) => {
+                                exit_code = 1;
+                                break 'reload;
+                            }
+                            Err(_) => break 'reload,
                         }
-                        Ok(WorkerCommand::Reload) => {
-                            MESSAGE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
-                            MESSAGE_EVENT_CALLBACKS.with(|cbs| cbs.borrow_mut().clear());
-                            CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = None);
-                            CURRENT_WORKER_CLOSE_REQUESTED.with(|closed| closed.set(false));
-                            worker_surface::install_web_worker_globals();
-                            continue 'reload;
-                        }
-                        Ok(WorkerCommand::DirectMessage {
-                            message,
-                            source_thread_id,
-                            ack,
-                        }) => {
-                            let result =
-                                direct_message::deliver_worker_message(&message, source_thread_id);
-                            let _ = ack.send(result);
-                        }
-                        Ok(WorkerCommand::Terminate) => {
-                            exit_code = 1;
-                            break 'reload;
-                        }
-                        Err(_) => break 'reload,
                     }
                 }
-            }
-        }));
-        restore_worker_env(previous_env);
+            }));
+            restore_worker_env(previous_env);
+            // This arena is about to go away; purge any queue entry still tagged
+            // with this agent rather than leave it for a drain that can never
+            // legally run it.
+            perry_runtime::agent::retire_agent(worker_agent);
 
-        let exit_code = match result {
-            Ok(()) => exit_code,
-            Err(_) => {
-                push_parent_event(WorkerEvent::Error(worker_id));
-                1
-            }
-        };
-        push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
-        // The arena backing this agent is about to go away; purge anything
-        // still queued under its id rather than leaving it for a drain that
-        // can never legally run.
-        perry_runtime::agent::retire_agent(worker_agent);
-    });
+            let exit_code = match result {
+                Ok(()) => exit_code,
+                Err(_) => {
+                    push_parent_event(WorkerEvent::Error(worker_id));
+                    1
+                }
+            };
+            push_parent_event(WorkerEvent::Exit(worker_id, exit_code));
+        });
+    if spawned.is_err() {
+        push_parent_event(WorkerEvent::Error(worker_id));
+        push_parent_event(WorkerEvent::Exit(worker_id, 1));
+    }
 
     object_value(worker_obj)
 }

@@ -1295,6 +1295,17 @@ pub fn gc_init() {
     reg_scanner!(crate::arkts_callbacks::arkts_callbacks_root_scanner_mut);
 }
 
+/// #10399: see `js_gc_init`. Default floor for `std::thread` stacks in a
+/// compiled program, chosen to leave usable stack after a multi-megabyte
+/// static TLS block. Overridable by setting RUST_MIN_STACK in the environment.
+fn raise_default_thread_stack_floor() {
+    const FLOOR: usize = 32 * 1024 * 1024;
+    if std::env::var_os("RUST_MIN_STACK").is_some() {
+        return;
+    }
+    std::env::set_var("RUST_MIN_STACK", FLOOR.to_string());
+}
+
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
     // #8546: this is the first runtime call of every `main` / `perry_module_init`,
@@ -1303,6 +1314,21 @@ pub extern "C" fn js_gc_init() {
     // call lands. A host that loads several application images on several
     // threads gets one image per thread; a plain executable gets one.
     crate::object::class_image::enter_current_thread_image();
+    // #10399: raise the floor for every thread this process will spawn, before
+    // it spawns one.
+    //
+    // glibc carves a thread's static TLS block out of the same mapping as its
+    // stack. Per-thread module state makes that block large — OpenCode's binary
+    // carries 5.79 MB of PT_TLS — so against Rust's 2 MB default a spawned
+    // thread has almost no usable stack and faults on its FIRST frame. The TUI
+    // died exactly there: `si_addr` equal to `rsp` on instruction +27 of
+    // `ensure_stdin_reader`'s closure, a guard-page hit at thread start.
+    //
+    // `std::thread` reads RUST_MIN_STACK once and caches it, and every
+    // `std::thread::spawn` in the runtime and stdlib honors it, so setting it
+    // here covers all of them without touching each spawn site. An explicit
+    // RUST_MIN_STACK from the environment still wins.
+    raise_default_thread_stack_floor();
     // #9402: a compiled program has its own `main` and never runs Rust's
     // `std::rt` startup, so SIGPIPE arrives with its DEFAULT disposition and
     // any truncating consumer (`| head`, `| grep -q`, a closed socket) kills

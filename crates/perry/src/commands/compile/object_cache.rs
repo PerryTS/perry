@@ -313,6 +313,18 @@ fn compute_object_cache_key_with_env(
     // doesn't usually move between rebuilds.
     h.field("build_id", &format!("{:016x}", perry_build_id()));
     h.field("ir_only", if opts.emit_ir_only { "1" } else { "0" });
+    // #10399: a program that constructs a `worker_threads` Worker emits its
+    // module-init guards and module-global slots thread-local. That changes
+    // the IR of EVERY module, not just the worker's, so an object cached from
+    // a worker-free build must never be served to a build that has one.
+    h.field(
+        "worker_tls_globals",
+        if perry_codegen::program_has_worker() {
+            "1"
+        } else {
+            "0"
+        },
+    );
     // #5247: `--debug-symbols` flips per-call `js_set_call_location` emission,
     // which changes the emitted IR (and `.o` bytes). Without this in the key,
     // toggling the flag would serve the previously-cached object and the

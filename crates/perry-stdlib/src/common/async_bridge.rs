@@ -187,9 +187,30 @@ extern "C" fn native_work_inflight() -> i32 {
 pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        // #10399: glibc carves a thread's static TLS block out of the same
+        // mapping as its stack, so a compiled program's TLS comes off the top
+        // of whatever we ask for here. OpenCode's binary carries 5.79 MB of
+        // PT_TLS once module state is per-thread; against tokio's 2 MB default
+        // the blocking threads were left with almost no usable stack and
+        // SIGSEGV'd deep inside reqwest's connector on first use, while the
+        // main thread (whose TLS is allocated separately) was fine.
+        //
+        // The stack is reserved address space, committed lazily, so a generous
+        // reservation costs no RSS. `PERRY_THREAD_STACK_SIZE` overrides it.
+        .thread_stack_size(blocking_thread_stack_size())
         .build()
         .expect("Failed to create tokio current-thread runtime")
 });
+
+/// #10399: stack reservation for perry-spawned threads. See `RUNTIME`.
+pub fn blocking_thread_stack_size() -> usize {
+    const DEFAULT: usize = 32 * 1024 * 1024;
+    std::env::var("PERRY_THREAD_STACK_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v >= 1024 * 1024)
+        .unwrap_or(DEFAULT)
+}
 
 /// Fired whenever a producer has queued main-thread-visible work (any
 /// `js_notify_main_thread`, via the wait-driver wake). Ends the current bounded

@@ -92,6 +92,35 @@ pub(crate) fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
 /// `codegen_unit_parts` may skip: a local symbol cannot collide with anything
 /// — not another unit of this module, not another module's copy of a
 /// same-named global — so leaving it alone is inert at link time. Dropping the
+/// Split an optional `thread_local` / `thread_local(<model>)` specifier off a
+/// global's post-linkage text (#10399). Returns `(tls, rest)`, where `tls` is
+/// `""` when there is none.
+///
+/// LLVM's grammar puts the TLS specifier AFTER linkage and BEFORE
+/// `global`/`constant`, so anything that takes a definition apart to rebuild
+/// it has to carry this across — a declaration that loses `thread_local`
+/// names a different (non-TLS) symbol than the definition.
+pub(crate) fn split_thread_local(s: &str) -> (&str, &str) {
+    const KW: &str = "thread_local";
+    let t = s.trim_start();
+    if !t.starts_with(KW) {
+        return ("", t);
+    }
+    let after = &t[KW.len()..];
+    let end = if after.starts_with('(') {
+        match after.find(')') {
+            Some(i) => KW.len() + i + 1,
+            None => return ("", t),
+        }
+    } else if after.starts_with(char::is_whitespace) {
+        KW.len()
+    } else {
+        // A symbol whose text merely starts with the keyword.
+        return ("", t);
+    };
+    (&t[..end], t[end..].trim_start())
+}
+
 /// promotion on a strong external definition would NOT be: `linkonce_odr` is
 /// what lets ld64 coalesce two modules' same-named globals instead of
 /// reporting a duplicate symbol.
@@ -158,6 +187,9 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     }
     let (name, rhs) = line.split_once(" = ")?;
     let rhs = strip_leading_linkage(rhs.trim_start());
+    // #10399: keep the TLS specifier — `@g = external global i8` and
+    // `@g = external thread_local global i8` are different symbols to LLVM.
+    let (tls, rhs) = split_thread_local(rhs);
     let (kind, rest) = if let Some(rest) = rhs.strip_prefix("unnamed_addr constant ") {
         ("constant", rest)
     } else if let Some(rest) = rhs.strip_prefix("constant ") {
@@ -191,7 +223,12 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
         }
         _ => rest.find(char::is_whitespace).unwrap_or(rest.len()),
     };
-    Some(format!("{name} = external {kind} {}", &rest[..ty_end]))
+    let tls = if tls.is_empty() {
+        String::new()
+    } else {
+        format!("{tls} ")
+    };
+    Some(format!("{name} = external {tls}{kind} {}", &rest[..ty_end]))
 }
 
 /// Attribute-group suffix for a runtime-helper `declare` line, keyed by

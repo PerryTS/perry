@@ -1173,12 +1173,36 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 if getter == 0 {
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
+                // #10911: when this getter was reached by walking the STATIC
+                // prototype chain -- a subclass reading an accessor declared
+                // on its parent class OBJECT -- `receiver` is that parent, the
+                // object the getter lives on. `resolve_proto_chain_field_inner`
+                // stashes the class the read actually started from, exactly as
+                // it does for instance getters (see `class_getter_this`), and
+                // spec OrdinaryGet threads that Receiver through. Bind `this`
+                // to it, or `Sub.accessor` runs with `this === Base`.
+                //
+                // Effect's `static get ast() { return getClassSchema(this).ast }`
+                // is this shape: the schema memoised against the base class, so
+                // decoded errors were built from the base and were not
+                // `instanceof` their own class (#10891).
+                //
+                // `this` and the capture/private OWNER are two different
+                // things here and must not be collapsed: `this` is the class
+                // the read started from, while the owner is the evaluation the
+                // getter was FOUND on -- the object whose `__perry_ctor_caps`
+                // hold its captured variables and whose brand gates `#x`.
+                // `js_class_capture_value_for_receiver` prefers the owner, so
+                // binding it to the subclass would lose every capture.
+                let owner = receiver;
+                let receiver = crate::object::field_get_set::accessor_receiver_override_take()
+                    .unwrap_or(receiver);
                 // Static accessor bodies use the same receiver-resolving
                 // prologue as static methods. In particular, a fresh class
                 // expression must expose its per-evaluation class object as
                 // `this`, not the shared compile-time ClassRef.
                 crate::object::static_this_arm_if_unarmed(receiver);
-                crate::object::static_private_owner_push(receiver);
+                crate::object::static_private_owner_push(owner);
                 let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
                 let result = f();
                 crate::object::static_private_owner_pop();

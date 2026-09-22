@@ -1391,7 +1391,8 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     if !cross_module.namespace_entries.is_empty() || cross_module.is_dynamic_import_target {
         let ns_name = format!("__perry_ns_{}", module_prefix);
         // Hex double literal for TAG_UNDEFINED (0x7FFC_0000_0000_0001).
-        llmod.add_global(&ns_name, DOUBLE, "0x7FFC000000000001");
+        // #10399: namespace objects are built by module init.
+        llmod.add_module_state_global(&ns_name, DOUBLE, "0x7FFC000000000001");
         for (entry_index, entry) in cross_module.namespace_entries.iter().enumerate() {
             let (gname, byte_len) = llmod.add_string_constant(&entry.name);
             namespace_key_globals.push((gname, byte_len));
@@ -1504,7 +1505,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 continue;
             }
             let ns_name = format!("__perry_ns_{}", prefix);
-            llmod.add_external_global(&ns_name, DOUBLE);
+            llmod.add_external_module_state_global(&ns_name, DOUBLE);
             // Issue #753: declare each dynamic-import target's `__init`
             // so the dispatch site in `Expr::DynamicImport` can call it
             // before loading the namespace. The wrapper-side init is
