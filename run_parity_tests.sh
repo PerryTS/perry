@@ -655,6 +655,13 @@ else
     PERRY_BIN="$TARGET_DIR/release/perry$PERRY_EXE_SUFFIX"
     echo "Building compiler (release)..."
 fi
+# The mixed suite re-enables auto-optimize for ext-routed fixtures even in
+# prebuilt mode. Without cargo, Perry falls back to a possibly incompatible
+# prebuilt stdlib and the harness misreports its link errors as regressions.
+if [[ "$PERRY_SKIP_BUILD" == "0" || "$TEST_SUITE" == "all" ]] && ! command -v cargo &>/dev/null; then
+    echo -e "${RED}Cargo is required to build or auto-optimize parity tests, but it is not on PATH${NC}" >&2
+    exit 1
+fi
 BUILD_PACKAGES=(-p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static)
 BUILD_FEATURES=()
 # #7629 — every tokio-using `perry-ext-*` wrapper this run will link from the
@@ -753,9 +760,13 @@ if [[ "${#BUILD_FEATURES[@]}" -gt 0 ]]; then
     feature_csv=$(IFS=,; echo "${BUILD_FEATURES[*]}")
     BUILD_FEATURE_ARGS=(--features "$feature_csv")
 fi
-if [[ "$PERRY_SKIP_BUILD" == "0" ]] && ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" 2>/dev/null; then
-    echo -e "${RED}Failed to build compiler/runtime archives${NC}"
-    exit 1
+if [[ "$PERRY_SKIP_BUILD" == "0" ]]; then
+    build_log="$PARITY_TMP/release-build.log"
+    if ! cargo build --release --quiet "${BUILD_PACKAGES[@]}" "${BUILD_FEATURE_ARGS[@]}" >"$build_log" 2>&1; then
+        echo -e "${RED}Failed to build compiler/runtime archives (last 40 lines):${NC}" >&2
+        tail -40 "$build_log" >&2
+        exit 1
+    fi
 fi
 if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_wasm_host" -eq 1 ]]; then
     # WebAssembly metadata fixtures exercise the real host shims. Build the
@@ -763,8 +774,10 @@ if [[ "$PERRY_SKIP_BUILD" == "0" && "$needs_wasm_host" -eq 1 ]]; then
     # feature while building the `perry` binary would make the CLI link against
     # unresolved perry_wasm_host_* symbols.
     echo "Building WebAssembly host runtime (release)..."
-    if ! cargo build --release --quiet -p perry-runtime-static -p perry-wasm-host --features perry-runtime/wasm-host 2>/dev/null; then
-        echo -e "${RED}Failed to build WebAssembly host runtime archives${NC}"
+    build_log="$PARITY_TMP/wasm-host-build.log"
+    if ! cargo build --release --quiet -p perry-runtime-static -p perry-wasm-host --features perry-runtime/wasm-host >"$build_log" 2>&1; then
+        echo -e "${RED}Failed to build WebAssembly host runtime archives (last 40 lines):${NC}" >&2
+        tail -40 "$build_log" >&2
         exit 1
     fi
 fi
