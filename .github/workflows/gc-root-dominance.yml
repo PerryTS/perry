@@ -255,6 +255,23 @@ jobs:
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
           done
 
+      # The three static audits above validate their LISTS against what the
+      # scanner can see. This validates the SCANNER itself, against what the
+      # linker actually produced -- the only ground truth there is. It runs
+      # here because this is the first point in the job where the archives
+      # exist.
+      #
+      # It exists because the scanner has under-counted twice: #8207 (18
+      # symbols invisible, including js_throw) and 2026-09-22 (56, via macro
+      # definitions). Both were silent, and both made every consumer GREENER.
+      # The second one reported two live POLL_CAPABLE_RUNTIME entries as naming
+      # nothing, which invited deleting coverage of a real poll point.
+      - name: Verify the scanner sees every symbol the archives define
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py --verify-symbols \
+            target/release/libperry_runtime.a target/release/libperry_stdlib.a
+
       # The source list and the env knobs live in the script, not here, so that
       # reproducing a CI failure is one command rather than a re-read of this
       # YAML. A retyped invocation that drops PERRY_GC_MOVING_LOOP_POLLS
