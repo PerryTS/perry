@@ -567,6 +567,9 @@ pub(super) fn try_global_builtins(
                                             match key.as_str() {
                                                 "method" => method = value,
                                                 "body" => body = value,
+                                                "headers" => {
+                                                    headers_dynamic = Some(Box::new(value))
+                                                }
                                                 "signal" => signal = Some(Box::new(value)),
                                                 _ => {}
                                             }
