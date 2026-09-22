@@ -82,6 +82,9 @@ pub extern "C" fn perry_ui_button_set_title(handle: i64, title_ptr: i64) {
     widgets::button::set_title(handle, title_ptr as *const u8);
 }
 
+#[no_mangle]
+pub extern "C" fn perry_ui_button_set_font_family(_handle: i64, _family_ptr: i64) {}
+
 /// Set button image (SF Symbol name). On Windows, maps known SF Symbol names to Unicode/text fallbacks.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64) {

@@ -466,7 +466,7 @@ pub(crate) fn collect_mutations_in_expr(
                 cond,
             );
         }
-        "textSetFontFamily" => {
+        "textSetFontFamily" | "buttonSetFontFamily" => {
             // Args: (widget, family). Family must resolve to a string
             // literal — most theme code passes a const-bound string.
             let mut cur = match args.get(1) {

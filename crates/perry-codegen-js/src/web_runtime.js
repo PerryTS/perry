@@ -1149,6 +1149,11 @@ function perry_ui_button_set_title(h, title) {
     if (el) el.textContent = title;
 }
 
+function perry_ui_button_set_font_family(h, family) {
+    const el = getHandle(h);
+    if (el) el.style.fontFamily = family;
+}
+
 function perry_ui_button_set_text_color(h, r, g, b, a) {
     const el = getHandle(h);
     if (el) el.style.color = `rgba(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)},${a})`;
@@ -3714,6 +3719,7 @@ window.__perry = {
     perry_ui_text_set_string,
     perry_ui_text_set_selectable,
     perry_ui_button_set_bordered,
+    perry_ui_button_set_font_family,
     perry_ui_button_set_title,
     perry_ui_button_set_text_color,
     perry_ui_button_set_image,

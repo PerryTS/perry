@@ -140,6 +140,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "textSetString" => "perry_ui_text_set_string",
         "textSetWraps" => "perry_ui_text_set_wraps",
         "buttonSetBordered" => "perry_ui_button_set_bordered",
+        "buttonSetFontFamily" => "perry_ui_button_set_font_family",
         "buttonSetTitle" => "perry_ui_button_set_title",
         "buttonSetTextColor" => "perry_ui_button_set_text_color",
         "buttonSetImage" => "perry_ui_button_set_image",

@@ -2,7 +2,7 @@
 //! Button/TextField/ScrollView state ops, continuous events,
 //! and view-driven animations.
 
-use crate::{full, Category::*, Feature, S, U};
+use crate::{full, Category::*, Feature, Support::Stub, S, U};
 
 pub(crate) const ROWS: &[Feature] = &[
     // ── Button Ops ───────────────────────────────────────────────────────
@@ -25,6 +25,17 @@ pub(crate) const ROWS: &[Feature] = &[
         android: S,
         gtk4: S,
         windows: S,
+        web: S,
+        web_name: None,
+    },
+    Feature {
+        name: "perry_ui_button_set_font_family",
+        category: ButtonOps,
+        macos: S,
+        ios: Stub,
+        android: Stub,
+        gtk4: Stub,
+        windows: Stub,
         web: S,
         web_name: None,
     },

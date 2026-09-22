@@ -88,6 +88,9 @@ pub extern "C" fn perry_ui_button_set_title(handle: i64, title_ptr: i64) {
     widgets::button::set_title(handle, title_ptr as *const u8);
 }
 
+#[no_mangle]
+pub extern "C" fn perry_ui_button_set_font_family(_handle: i64, _family_ptr: i64) {}
+
 /// Set the text color of a button's label.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {

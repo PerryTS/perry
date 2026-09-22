@@ -467,6 +467,12 @@ pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b:
     widgets::button::set_text_color(handle, r, g, b, a);
 }
 
+/// Set a Button's font family, retaining its current point size and weight.
+#[no_mangle]
+pub extern "C" fn perry_ui_button_set_font_family(handle: i64, family_ptr: i64) {
+    widgets::button::set_font_family(handle, family_ptr as *const u8);
+}
+
 /// Set a fixed width constraint on a widget.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_width(handle: i64, width: f64) {

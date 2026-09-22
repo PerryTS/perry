@@ -40,6 +40,7 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 
 | Prop | FFI symbol | macOS | iOS | tvOS | visionOS | watchOS | Android | GTK4 | Windows | Web |
 |---|---|---|---|---|---|---|---|---|---|---|
+| `font_family` | `perry_ui_button_set_font_family` | ✓ | ~ | ~ | ~ | ~ | ~ | ~ | ~ | ✓ |
 | `text_color` | `perry_ui_button_set_text_color` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `content_tint_color` | `perry_ui_button_set_content_tint_color` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `bordered` | `perry_ui_button_set_bordered` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -86,13 +87,13 @@ Legend: `✓` Wired (real native impl), `~` Stub (symbol exists, no-op), `✗` M
 
 | Platform | Wired | Stub | Missing | Not applicable |
 |---|---|---|---|---|
-| macOS | 48 | 0 | 0 | 0 |
-| iOS | 47 | 1 | 0 | 0 |
-| tvOS | 47 | 1 | 0 | 0 |
-| visionOS | 47 | 1 | 0 | 0 |
-| watchOS | 47 | 1 | 0 | 0 |
-| Android | 47 | 1 | 0 | 0 |
-| GTK4 | 47 | 1 | 0 | 0 |
-| Windows | 47 | 1 | 0 | 0 |
-| Web | 48 | 0 | 0 | 0 |
+| macOS | 49 | 0 | 0 | 0 |
+| iOS | 47 | 2 | 0 | 0 |
+| tvOS | 47 | 2 | 0 | 0 |
+| visionOS | 47 | 2 | 0 | 0 |
+| watchOS | 47 | 2 | 0 | 0 |
+| Android | 47 | 2 | 0 | 0 |
+| GTK4 | 47 | 2 | 0 | 0 |
+| Windows | 47 | 2 | 0 | 0 |
+| Web | 49 | 0 | 0 | 0 |
 

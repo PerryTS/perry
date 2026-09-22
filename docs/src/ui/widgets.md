@@ -41,6 +41,8 @@ A clickable button.
 **Helpers:** `buttonSetTitle`, `buttonSetBordered`, `buttonSetImage`
 (SF Symbol name on macOS/iOS), `buttonSetImagePosition`,
 `buttonSetContentTintColor`, `buttonSetTextColor`, `widgetSetEnabled`.
+On macOS, `buttonSetFontFamily(button, "Menlo")` changes the title font while
+retaining its size and weight; it also works after `buttonSetTextColor`.
 
 ## TextField
 

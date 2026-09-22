@@ -294,6 +294,7 @@ impl JsEmitter {
             "textSetFontFamily" => "perry_ui_set_font_family",
             "textSetString" => "perry_ui_text_set_string",
             "buttonSetBordered" => "perry_ui_button_set_bordered",
+            "buttonSetFontFamily" => "perry_ui_button_set_font_family",
             "buttonSetTextColor" => "perry_ui_button_set_text_color",
             "buttonSetTitle" => "perry_ui_button_set_title",
             "buttonSetImage" => "perry_ui_button_set_image",
