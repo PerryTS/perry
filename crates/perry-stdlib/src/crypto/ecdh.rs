@@ -136,6 +136,13 @@ pub unsafe extern "C" fn js_crypto_ecdh_convert_key(
     )
 }
 
+unsafe fn signature_output(bytes: &[u8], encoding: Option<EncodingTag>) -> f64 {
+    match encoding {
+        Some(tag) => encode_bytes_with_tag(bytes, tag),
+        None => nanbox_ptr(alloc_buffer_from_slice(bytes)),
+    }
+}
+
 pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
     let h = match get_handle_mut::<SignHandle>(handle) {
         Some(h) => h,
@@ -161,6 +168,7 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
             // The handle is consumed by `.sign()` regardless of outcome.
             h.finalized
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            let output_encoding = encoding_tag_from_arg(args.get(1).copied());
             let key_bits = args[0].to_bits();
             let pem = match crypto_key_input_to_private_pem(key_bits) {
                 Some(pem) => pem,
@@ -171,16 +179,10 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let signature: P256EcdsaSignature = signing_key.sign(&data);
                 if key_input_uses_ieee_p1363(key_bits) {
                     let raw = signature.to_bytes();
-                    let buf = alloc_buffer_from_slice(raw.as_slice());
-                    return f64::from_bits(
-                        0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF),
-                    );
+                    return signature_output(raw.as_slice(), output_encoding);
                 }
                 let der = signature.to_der();
-                let buf = alloc_buffer_from_slice(der.as_bytes());
-                return f64::from_bits(
-                    0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF),
-                );
+                return signature_output(der.as_bytes(), output_encoding);
             }
             let private_key = match parse_rsa_private_key_pem(&pem) {
                 Some(key) => key,
@@ -193,8 +195,7 @@ pub unsafe fn dispatch_sign(handle: i64, method: &str, args: &[f64]) -> f64 {
             } else {
                 sign_rsa_data(h.alg, private_key, &data)
             };
-            let buf = alloc_buffer_from_slice(&signature);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
+            signature_output(&signature, output_encoding)
         }
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
@@ -486,13 +487,21 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
             h.finalized
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             let key_bits = args[0].to_bits();
-            let sig_ptr = (args[1].to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+            // Node applies `signatureEncoding` only to string signatures.
+            // Buffer inputs keep their bytes and ignore even an invalid third
+            // argument. A string with no encoding defaults to UTF-8.
+            let sig_bytes = if let Some(signature) = string_from_jsvalue(args[1].to_bits()) {
+                let encoding =
+                    encoding_tag_from_arg(args.get(2).copied()).unwrap_or(EncodingTag(0));
+                decode_string_bytes_with_tag(signature.as_bytes(), encoding)
+            } else {
+                bytes_from_ptr(arg_ptr(args[1]))
+            };
             let pem = match crypto_key_input_to_public_pem(key_bits) {
                 Some(pem) => pem,
                 None => return js_bool(false),
             };
             if let Some(verifying_key) = parse_p256_verifying_key_pem(&pem) {
-                let sig_bytes = bytes_from_ptr(sig_ptr);
                 let signature = if key_input_uses_ieee_p1363(key_bits) {
                     P256EcdsaSignature::from_slice(&sig_bytes)
                 } else {
@@ -509,7 +518,6 @@ pub unsafe fn dispatch_verify(handle: i64, method: &str, args: &[f64]) -> f64 {
                 Some(key) => key,
                 None => return js_bool(false),
             };
-            let sig_bytes = bytes_from_ptr(sig_ptr);
             if key_input_uses_rsa_pss(key_bits) {
                 let signature = match RsaPssSignature::try_from(sig_bytes.as_slice()) {
                     Ok(sig) => sig,
