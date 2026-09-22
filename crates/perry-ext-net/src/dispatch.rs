@@ -160,6 +160,7 @@ fn socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "end" => Some(b"end"),
         "emit" => Some(b"emit"),
         "pause" => Some(b"pause"),
+        "read" => Some(b"read"),
         "ref" => Some(b"ref"),
         "resetAndDestroy" => Some(b"resetAndDestroy"),
         "resume" => Some(b"resume"),
@@ -249,6 +250,9 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
     }
 
     let result = match method {
+        "read" => {
+            crate::js_ext_net_socket_read(handle, args.first().copied().unwrap_or_else(undefined))
+        }
         // #11111 — Node's boolean: drain-aware writers (mongodb's
         // `writeCommand`) wait for `'drain'` on anything falsy.
         "write" if !args.is_empty() => crate::js_ext_net_socket_write3(

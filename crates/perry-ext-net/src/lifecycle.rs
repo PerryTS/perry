@@ -20,7 +20,9 @@
 //! `NativeModSig` rows live in
 //! `perry-codegen/src/lower_call/native_table/net_events.rs`.
 
-use perry_ffi::{alloc_string, nanbox_string_bits, ArrayHeader, JsValue, StringHeader};
+use perry_ffi::{
+    alloc_buffer, alloc_string, nanbox_string_bits, ArrayHeader, JsValue, StringHeader,
+};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -54,6 +56,23 @@ fn nanbox_bool(b: bool) -> f64 {
 
 fn nanbox_undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+/// Paused-mode `net.Socket.read()`: return the next buffered chunk, or the
+/// Node sentinel `null` when no data is currently available.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_read(handle: i64, _size: f64) -> f64 {
+    let Some(bytes) = crate::server_state::take_pending_socket_data(handle) else {
+        return f64::from_bits(JsValue::NULL.bits());
+    };
+    let buffer = alloc_buffer(&bytes);
+    f64::from_bits(0x7FFD_0000_0000_0000 | (buffer as u64 & 0x0000_FFFF_FFFF_FFFF))
+}
+
+/// Typed native-table calls use the provider-neutral symbol name.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_read(handle: i64, size: f64) -> f64 {
+    js_ext_net_socket_read(handle, size)
 }
 
 /// Main-thread custody for write/end callbacks awaiting socket-task I/O.

@@ -67,6 +67,7 @@ fn net_socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "end" => Some(b"end"),
         "emit" => Some(b"emit"),
         "pause" => Some(b"pause"),
+        "read" => Some(b"read"),
         "ref" => Some(b"ref"),
         "resetAndDestroy" => Some(b"resetAndDestroy"),
         "resume" => Some(b"resume"),

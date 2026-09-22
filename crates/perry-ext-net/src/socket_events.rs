@@ -136,6 +136,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
                     server_state::buffer_pending_server_data(id, bytes);
+                    emit_socket_no_arg(id, "readable");
                     continue;
                 }
                 // #8259: park BEFORE the payload allocation below — it can

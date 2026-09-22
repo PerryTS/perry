@@ -26,7 +26,7 @@
 
 use perry_runtime::buffer::{js_buffer_alloc, BufferHeader};
 use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader, JSValue, StringHeader};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -121,6 +121,7 @@ lazy_static::lazy_static! {
     static ref NET_SOCKETS: Mutex<HashMap<i64, SocketState>> = Mutex::new(HashMap::new());
     static ref NET_LISTENERS: Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> = Mutex::new(HashMap::new());
     static ref NET_PENDING_EVENTS: Mutex<Vec<PendingNetEvent>> = Mutex::new(Vec::new());
+    static ref NET_PENDING_READS: Mutex<HashMap<i64, VecDeque<Vec<u8>>>> = Mutex::new(HashMap::new());
     static ref NET_PENDING_TLS_ABORTS: Mutex<std::collections::HashSet<i64>> = Mutex::new(std::collections::HashSet::new());
     static ref NEXT_NET_ID: Mutex<i64> = Mutex::new(1);
 }
@@ -1527,6 +1528,35 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     }
 }
 
+/// Paused-mode `net.Socket.read()`: return one queued Buffer or `null` when
+/// no bytes are currently available. The optional size argument is accepted
+/// for ABI parity; socket transport reads already define the queued chunks.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_read(handle: i64, _size: f64) -> f64 {
+    let chunk = {
+        let mut reads = NET_PENDING_READS.lock().unwrap();
+        let Some(queue) = reads.get_mut(&handle) else {
+            return f64::from_bits(0x7FFC_0000_0000_0002);
+        };
+        let chunk = queue.pop_front();
+        if queue.is_empty() {
+            reads.remove(&handle);
+        }
+        chunk
+    };
+    let Some(bytes) = chunk else {
+        return f64::from_bits(0x7FFC_0000_0000_0002);
+    };
+    let buffer = js_buffer_alloc(bytes.len() as i32, 0);
+    if buffer.is_null() {
+        return f64::from_bits(0x7FFC_0000_0000_0002);
+    }
+    let data = (buffer as *mut u8).add(std::mem::size_of::<BufferHeader>());
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
+    (*buffer).length = bytes.len() as u32;
+    f64::from_bits(JSValue::pointer(buffer as *const u8).bits())
+}
+
 // ─── FFI: socket.end([data]) ─────────────────────────────────────────────────
 
 /// `socket.end([data])` — optionally write a final chunk, then graceful
@@ -1836,6 +1866,13 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
+                    NET_PENDING_READS
+                        .lock()
+                        .unwrap()
+                        .entry(id)
+                        .or_default()
+                        .push_back(bytes);
+                    emit_socket_no_arg(id, "readable");
                     continue;
                 }
                 // Construct Buffer on the main thread.
@@ -1889,6 +1926,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 }
                 NET_LISTENERS.lock().unwrap().remove(&id);
                 NET_SOCKETS.lock().unwrap().remove(&id);
+                NET_PENDING_READS.lock().unwrap().remove(&id);
             }
         }
     }
