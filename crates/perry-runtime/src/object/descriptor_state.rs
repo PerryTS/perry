@@ -1383,6 +1383,7 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
     if key_str.is_null() {
         return None;
     }
+    let key_string = scope.root_string_ptr(key_str);
     let name = unsafe {
         let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let name_len = (*key_str).byte_len as usize;
@@ -1419,6 +1420,25 @@ pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
                 // a field read.
                 Some(0)
             };
+        }
+        // ClassBody accessors live in the declared class's vtable, not the
+        // ordinary descriptor table. A RegExp subclass's `get flags()` must
+        // win before the walk reaches RegExp.prototype's builtin getter.
+        if let Some(cid) = class_registry::class_id_for_decl_prototype_object(obj as usize) {
+            // A later own data definition replaces the ClassBody accessor.
+            if unsafe { own_key_present(obj as *mut ObjectHeader, key_string.get_raw_const_ptr()) }
+            {
+                return None;
+            }
+            if let Some((getter, _)) =
+                class_registry::class_declared_accessor_ptrs(cid, false, &name)
+            {
+                return Some(if getter == 0 {
+                    0
+                } else {
+                    class_registry::class_accessor_function_value(getter, false, &name).to_bits()
+                });
+            }
         }
         // An own (data) property at this level shadows any inherited accessor.
         if obj_value_has_own_key(current, key_handle.get_nanbox_f64()) {
