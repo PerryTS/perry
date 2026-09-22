@@ -58,3 +58,72 @@ fn readable_stream_from_static_factory_lowers_to_native_factory() {
         other => panic!("expected ReadableStream.from NativeMethodCall, got: {other:#?}"),
     }
 }
+
+#[test]
+fn namespace_readable_stream_from_lowers_to_native_factory_and_reader() {
+    let module = lower(
+        r#"
+        import * as streamWeb from "node:stream/web";
+        const rs: any = (streamWeb.ReadableStream as any).from(["a"]);
+        const reader = rs.getReader();
+        const result = reader.read();
+    "#,
+    );
+
+    let lets: Vec<(&str, &Expr)> = module
+        .init
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                name,
+                init: Some(expr),
+                ..
+            } => Some((name.as_str(), expr)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(matches!(
+        lets.as_slice(),
+        [
+            (
+                "rs",
+                Expr::NativeMethodCall {
+                    module,
+                    class_name: Some(class_name),
+                    object: None,
+                    method,
+                    ..
+                }
+            ),
+            (
+                "reader",
+                Expr::NativeMethodCall {
+                    module: reader_module,
+                    class_name: Some(reader_class),
+                    object: Some(_),
+                    method: reader_method,
+                    ..
+                }
+            ),
+            (
+                "result",
+                Expr::NativeMethodCall {
+                    module: read_module,
+                    class_name: Some(read_class),
+                    object: Some(_),
+                    method: read_method,
+                    ..
+                }
+            )
+        ] if module == "readable_stream"
+            && class_name == "ReadableStream"
+            && method == "from"
+            && reader_module == "readable_stream"
+            && reader_class == "ReadableStream"
+            && reader_method == "getReader"
+            && read_module == "readable_stream_reader"
+            && read_class == "ReadableStreamDefaultReader"
+            && read_method == "read"
+    ));
+}
