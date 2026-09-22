@@ -790,6 +790,21 @@ jobs:
           python3 scripts/global_sink_isolation.py --self-test
           python3 scripts/global_sink_isolation.py
 
+      # #10944's asserted-global ratchet, merge-base half. The gate above
+      # fails on a NEW bare process-global that a test asserts on; this
+      # rejects the other way round it -- a diff that adds one and records it
+      # in the baseline in the same commit. Same shape as the raw-handle-debt
+      # rule above, and it exists for the same reason: the ratchet measured
+      # only against its own file can be raised by the PR that needs raising.
+      - name: asserted-global baseline may not rise vs. the merge base
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \
+            || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 scripts/global_sink_isolation.py --asserted-no-raise-vs "$BASE_SHA"
+
   # ---------------------------------------------------------------------------
   # check: clippy (both scopes) + API-docs drift, in ONE job. Was three jobs
   # (Clippy x2 matrix, api-docs-drift); merged because each job is a runner
