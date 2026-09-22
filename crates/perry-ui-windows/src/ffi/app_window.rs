@@ -14,6 +14,10 @@ pub extern "C" fn perry_ui_app_set_body(app_handle: i64, root_handle: i64) {
     app::app_set_body(app_handle, root_handle);
 }
 
+/// Win32 already ends the message loop when its application window closes.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_quit_on_last_window_close(_app_handle: i64, _value: f64) {}
+
 /// Run the app event loop (blocks until window closes).
 #[no_mangle]
 pub extern "C" fn perry_ui_app_run(app_handle: i64) {

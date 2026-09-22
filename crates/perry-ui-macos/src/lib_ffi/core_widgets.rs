@@ -18,6 +18,12 @@ pub extern "C" fn perry_ui_app_set_body(app_handle: i64, root_handle: i64) {
     app::app_set_body(app_handle, root_handle);
 }
 
+/// Opt in to quitting when the final application window closes.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_quit_on_last_window_close(app_handle: i64, value: f64) {
+    app::app_set_quit_on_last_window_close(app_handle, value);
+}
+
 /// Run the app event loop (blocks until window closes).
 #[no_mangle]
 pub extern "C" fn perry_ui_app_run(app_handle: i64) {
