@@ -33,6 +33,24 @@ unsafe fn jsvalue_to_json_string(value: f64) -> String {
     string_from_header(str_ptr).unwrap_or_default()
 }
 
+/// `spawn_for_promise` accepts JSValue bits, not a raw integer count.
+#[inline]
+fn count_value_bits(count: u64) -> u64 {
+    JSValue::number(count as f64).bits()
+}
+
+#[cfg(test)]
+mod count_value_tests {
+    use super::count_value_bits;
+
+    #[test]
+    fn native_count_resolves_as_a_javascript_number() {
+        for count in [0, 1, 2, 100_000] {
+            assert_eq!(f64::from_bits(count_value_bits(count)), count as f64);
+        }
+    }
+}
+
 /// Helper to extract string from StringHeader pointer
 /// MongoDB client handle.
 ///
@@ -438,7 +456,7 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_many(
             match coll_wrapper.collection.insert_many(docs).await {
                 Ok(result) => {
                     let count = result.inserted_ids.len();
-                    Ok(count as u64)
+                    Ok(count_value_bits(count as u64))
                 }
                 Err(e) => Err(format!("Insert failed: {}", e)),
             }
@@ -477,7 +495,7 @@ pub unsafe extern "C" fn js_mongodb_collection_update_one(
                 .map_err(|e| format!("Invalid update JSON: {}", e))?;
 
             match coll_wrapper.collection.update_one(filter, update).await {
-                Ok(result) => Ok(result.modified_count),
+                Ok(result) => Ok(count_value_bits(result.modified_count)),
                 Err(e) => Err(format!("Update failed: {}", e)),
             }
         } else {
@@ -515,7 +533,7 @@ pub unsafe extern "C" fn js_mongodb_collection_update_many(
                 .map_err(|e| format!("Invalid update JSON: {}", e))?;
 
             match coll_wrapper.collection.update_many(filter, update).await {
-                Ok(result) => Ok(result.modified_count),
+                Ok(result) => Ok(count_value_bits(result.modified_count)),
                 Err(e) => Err(format!("Update failed: {}", e)),
             }
         } else {
@@ -541,7 +559,7 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_one(
             let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
             match coll_wrapper.collection.delete_one(filter).await {
-                Ok(result) => Ok(result.deleted_count),
+                Ok(result) => Ok(count_value_bits(result.deleted_count)),
                 Err(e) => Err(format!("Delete failed: {}", e)),
             }
         } else {
@@ -567,7 +585,7 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_many(
             let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
             match coll_wrapper.collection.delete_many(filter).await {
-                Ok(result) => Ok(result.deleted_count),
+                Ok(result) => Ok(count_value_bits(result.deleted_count)),
                 Err(e) => Err(format!("Delete failed: {}", e)),
             }
         } else {
@@ -593,7 +611,7 @@ pub unsafe extern "C" fn js_mongodb_collection_count(
             let filter: Document = serde_json::from_str(&filter_json).unwrap_or_else(|_| doc! {});
 
             match coll_wrapper.collection.count_documents(filter).await {
-                Ok(count) => Ok(count),
+                Ok(count) => Ok(count_value_bits(count)),
                 Err(e) => Err(format!("Count failed: {}", e)),
             }
         } else {
