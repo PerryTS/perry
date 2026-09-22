@@ -239,8 +239,6 @@ pub(super) fn add_pipeline_callback_listeners(
 
 pub(super) fn wire_pipeline_pair(src: f64, dest: f64, end_dest: bool) {
     add_pipe_destination(src, dest);
-    mark_live_pipe_consume_on_emit(src);
-    mark_live_pipe_consume_on_emit(dest);
     if !end_dest {
         add_pipe_no_end_destination(src, dest);
     }

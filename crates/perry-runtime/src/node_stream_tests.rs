@@ -738,6 +738,68 @@ fn transform_option_callback_transforms_written_chunks() {
 }
 
 #[test]
+fn flowing_passthrough_stays_open_and_does_not_replay_emitted_chunks() {
+    READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
+    READABLE_END_COUNT.with(|count| *count.borrow_mut() = 0);
+
+    let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let handle = raw_ptr_from_value(stream) as i64;
+    let data_closure = js_closure_alloc(capture_data_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_data_listener as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(data_closure, 0, stream);
+    let end_closure = js_closure_alloc(capture_end_listener as *const u8, 1);
+    crate::closure::js_register_closure_arity(capture_end_listener as *const u8, 0);
+    crate::closure::js_closure_set_capture_f64(end_closure, 0, stream);
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("data"),
+        box_pointer(data_closure as *const u8),
+    );
+    let _ = js_node_stream_method_on(
+        handle,
+        string_value("end"),
+        box_pointer(end_closure as *const u8),
+    );
+
+    let _ = js_node_stream_method_write(
+        handle,
+        string_value("a"),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    READABLE_DATA_CAPTURED
+        .with(|captured| assert_eq!(captured.borrow().as_slice(), &[b"a".to_vec()]));
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
+    assert_eq!(
+        js_node_stream_method_readable_ended(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(
+        js_node_stream_method_writable_ended(handle).to_bits(),
+        TAG_FALSE
+    );
+
+    let _ = js_node_stream_method_write(
+        handle,
+        string_value("b"),
+        f64::from_bits(TAG_UNDEFINED),
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    let _ = js_node_stream_method_end(handle, string_value("c"));
+    let _ = crate::promise::js_promise_run_microtasks();
+
+    READABLE_DATA_CAPTURED.with(|captured| {
+        assert_eq!(
+            captured.borrow().as_slice(),
+            &[b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
+    });
+    READABLE_END_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+}
+
+#[test]
 fn transform_pipe_chain_applies_callback_output() {
     READABLE_DATA_CAPTURED.with(|captured| captured.borrow_mut().clear());
     READABLE_THIS_MATCHES.with(|matches| matches.borrow_mut().clear());

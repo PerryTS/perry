@@ -92,6 +92,7 @@ const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FEE0;
 const WEB_STREAM_SHAPE_ID: u32 = 0x7FFF_FF20;
 const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
 const READABLE_SOURCE_ITERATOR_KEY: &[u8] = b"__perryReadableSourceIterator";
+const READABLE_AUTO_END_ON_DRAIN_KEY: &[u8] = b"__perryReadableAutoEndOnDrain";
 const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
 const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
 const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
@@ -148,7 +149,6 @@ const STREAM_PIPE_END_PENDING_KEY: &[u8] = b"__perryStreamPipeEndPending";
 const STREAM_AUTO_DESTROY_KEY: &[u8] = b"__perryStreamAutoDestroy";
 const STREAM_EMIT_CLOSE_KEY: &[u8] = b"__perryStreamEmitClose";
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
-const STREAM_COMPOSE_LIVE_PIPE_CONSUME_KEY: &[u8] = b"__perryStreamComposeLivePipeConsume";
 
 use destroy_state::{destroy_stream, ns_destroy1, ns_destroy_error_microtask};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
@@ -593,7 +593,7 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
         mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
-            consume_readable_buffered_front_for_live_pipe(stream, chunk);
+            consume_readable_buffered_front_on_emit(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             buffer_pending_readable_chunk(stream, chunk);
@@ -816,7 +816,7 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
         mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) {
-            consume_readable_buffered_front_for_live_pipe(stream, chunk);
+            consume_readable_buffered_front_on_emit(stream, chunk);
             emit_readable_data(stream, chunk);
         } else {
             unshift_pending_readable_chunk(stream, chunk);

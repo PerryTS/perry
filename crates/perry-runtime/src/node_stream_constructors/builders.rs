@@ -591,6 +591,11 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
                     hidden_chunks_key(),
                     normalized.chunks,
                 );
+                set_hidden_value(
+                    readable,
+                    hidden_key(READABLE_AUTO_END_ON_DRAIN_KEY),
+                    f64::from_bits(TAG_TRUE),
+                );
                 initialize_readable_from_buffered_length(readable, normalized.chunks);
                 if let Some(source_iterator) = normalized.source_iterator {
                     js_object_set_field_by_name(

@@ -31,6 +31,11 @@ fn attach_duplex_readable_source(duplex: f64, source: f64) -> Result<(), f64> {
         hidden_key(b"readableLength"),
         crate::array::js_array_length(arr) as f64,
     );
+    set_hidden_value(
+        duplex,
+        hidden_key(READABLE_AUTO_END_ON_DRAIN_KEY),
+        f64::from_bits(TAG_TRUE),
+    );
     Ok(())
 }
 
