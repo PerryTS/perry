@@ -246,6 +246,7 @@
             let mut transparent_val: Option<String> = None;
             let mut vibrancy_ptr: Option<String> = None;
             let mut activation_policy_ptr: Option<String> = None;
+            let mut quit_on_last_window_close_val: Option<String> = None;
             for (key, val) in &props {
                 match key.as_str() {
                     "title" => {
@@ -313,6 +314,9 @@
                         let blk = ctx.block();
                         activation_policy_ptr = Some(crate::expr::unbox_str_handle(blk, &v));
                     }
+                    "quitOnLastWindowClose" => {
+                        quit_on_last_window_close_val = Some(lower_expr(ctx, val)?);
+                    }
                     _ => {
                         let _ = lower_expr(ctx, val)?;
                     }
@@ -362,6 +366,11 @@
                 "perry_ui_app_set_activation_policy".to_string(),
                 crate::types::VOID,
                 vec![I64, I64],
+            ));
+            ctx.pending_declares.push((
+                "perry_ui_app_set_quit_on_last_window_close".to_string(),
+                crate::types::VOID,
+                vec![I64, DOUBLE],
             ));
             ctx.pending_declares.push((
                 "perry_ui_app_set_body".to_string(),
@@ -414,6 +423,12 @@
                 blk.call_void(
                     "perry_ui_app_set_activation_policy",
                     &[(I64, &app_handle), (I64, p)],
+                );
+            }
+            if let Some(value) = &quit_on_last_window_close_val {
+                blk.call_void(
+                    "perry_ui_app_set_quit_on_last_window_close",
+                    &[(I64, &app_handle), (DOUBLE, value)],
                 );
             }
             if let Some(root) = frame_autosave_name_root {

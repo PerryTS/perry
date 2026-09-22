@@ -152,13 +152,14 @@ fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
     String::from_utf8(compile_module(&module(name, body), empty_opts()).unwrap()).unwrap()
 }
 
-const WINDOW_OPTION_SETTERS: [&str; 6] = [
+const WINDOW_OPTION_SETTERS: [&str; 7] = [
     "call void @perry_ui_app_set_frameless",
     "call void @perry_ui_app_set_level",
     "call void @perry_ui_app_set_transparent",
     "call void @perry_ui_app_set_vibrancy",
     "call void @perry_ui_app_set_activation_policy",
     "call void @perry_ui_app_set_frame_autosave_name",
+    "call void @perry_ui_app_set_quit_on_last_window_close",
 ];
 
 #[test]
@@ -176,6 +177,7 @@ fn app_config_window_options_emit_ffi_calls() {
             ("vibrancy", Expr::String("sidebar".to_string())),
             ("activationPolicy", Expr::String("accessory".to_string())),
             ("frameAutosaveName", Expr::String("launcher".to_string())),
+            ("quitOnLastWindowClose", Expr::Bool(true)),
         ])],
     );
     for setter in WINDOW_OPTION_SETTERS {
@@ -189,9 +191,12 @@ fn app_config_window_options_emit_ffi_calls() {
     // vibrancy/frameless reconfigure the window ahead of Auto Layout.
     let vibrancy_at = ir.find("call void @perry_ui_app_set_vibrancy").unwrap();
     let body_at = ir.find("call void @perry_ui_app_set_body").unwrap();
+    let quit_at = ir
+        .find("call void @perry_ui_app_set_quit_on_last_window_close")
+        .unwrap();
     assert!(
-        vibrancy_at < body_at,
-        "perry_ui_app_set_vibrancy must be emitted before perry_ui_app_set_body"
+        vibrancy_at < body_at && quit_at < body_at,
+        "App() window options must be applied before perry_ui_app_set_body"
     );
 }
 

@@ -230,6 +230,12 @@ export function App(config: {
     icon?: string;
     body: Widget;
     /**
+     * Quit when the final application window closes. On macOS this opts out
+     * of the usual windowless state; GTK4 and Windows already quit on close.
+     * Ignored on mobile, TV, watch, and visionOS.
+     */
+    quitOnLastWindowClose?: boolean;
+    /**
      * Initial window state. Default is `"normal"` — the window opens at
      * the requested `width`/`height`. `"maximized"` zooms the window to
      * fill the working area (taskbar/dock visible). `"fullscreen"` enters
