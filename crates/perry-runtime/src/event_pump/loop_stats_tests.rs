@@ -39,7 +39,12 @@ fn one_cross_thread_notify_into_a_condvar_park_is_one_wake_sample() {
     force_enable_for_test();
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
     let before = snapshot();
-    let waiter = std::thread::spawn(|| {
+    // The park CLEARS the wake-latency slot and the notify below SETS it, on
+    // two different threads. Share this thread's instance, adopted before the
+    // waiter's first park — adopting later orphans what it already wrote.
+    let wake_key = super::test_shared_wake_key();
+    let waiter = std::thread::spawn(move || {
+        super::test_adopt_wake(wake_key);
         let start = std::time::Instant::now();
         super::super::condvar_park(Duration::from_secs(30));
         start.elapsed()
@@ -70,9 +75,16 @@ fn a_timed_out_wait_and_an_unparked_notify_add_no_wake_sample() {
     force_enable_for_test();
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
     let before = snapshot();
-    std::thread::spawn(|| super::super::condvar_park(Duration::from_millis(5)))
-        .join()
-        .unwrap();
+    // The park and the notify are on different threads; share this thread's
+    // wake-latency instance so the sample is observable here (see
+    // `PerThread::adopt` -- must precede the spawned thread's first park).
+    let wake_key = super::test_shared_wake_key();
+    std::thread::spawn(move || {
+        super::test_adopt_wake(wake_key);
+        super::super::condvar_park(Duration::from_millis(5))
+    })
+    .join()
+    .unwrap();
     super::super::js_notify_main_thread();
     let after = snapshot();
     assert_eq!(after.condvar.count - before.condvar.count, 1);
@@ -108,7 +120,14 @@ fn one_notify_into_a_registered_tick_is_one_wake_sample() {
     *FAKE_WOKEN.lock().unwrap() = false;
     super::super::js_register_wait_driver(Some(fake_tick), None, Some(fake_wake));
     let before = snapshot();
-    let waiter = std::thread::spawn(|| super::super::wait_driver_sleep(30_000));
+    // The park and the notify are on different threads; share this thread's
+    // wake-latency instance so the sample is observable here (see
+    // `PerThread::adopt` -- must precede the spawned thread's first park).
+    let wake_key = super::test_shared_wake_key();
+    let waiter = std::thread::spawn(move || {
+        super::test_adopt_wake(wake_key);
+        super::super::wait_driver_sleep(30_000)
+    });
     let limit = std::time::Instant::now() + Duration::from_secs(10);
     while PARKED.load(Ordering::SeqCst) != WaitKind::TokioTick as u8 {
         assert!(std::time::Instant::now() < limit, "tick never parked");
@@ -151,9 +170,16 @@ fn js_wait_for_event_zero_budget_path_is_counted() {
     super::super::NOTIFIED.store(false, Ordering::SeqCst);
     let before = snapshot();
     super::super::TEST_FORCE_ZERO_BUDGET.store(true, Ordering::SeqCst);
-    std::thread::spawn(|| super::super::js_wait_for_event())
-        .join()
-        .unwrap();
+    // The park and the notify are on different threads; share this thread's
+    // wake-latency instance so the sample is observable here (see
+    // `PerThread::adopt` -- must precede the spawned thread's first park).
+    let wake_key = super::test_shared_wake_key();
+    std::thread::spawn(move || {
+        super::test_adopt_wake(wake_key);
+        super::super::js_wait_for_event()
+    })
+    .join()
+    .unwrap();
     super::super::TEST_FORCE_ZERO_BUDGET.store(false, Ordering::SeqCst);
     assert_eq!(snapshot().zero_budget - before.zero_budget, 1);
 }

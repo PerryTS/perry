@@ -117,7 +117,11 @@ extern "C" fn must_not_run(_ctx: *mut c_void) {
 /// runs exactly once, after the caller takes the box back, and never before.
 #[test]
 fn a_post_with_no_route_leaves_the_context_with_the_caller() {
-    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        /// Single-threaded: this test has no route / a null callback, so both
+        /// the increment and the assertion happen on this thread. No adoption.
+        static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    }
 
     // A worker agent id nobody has claimed a route for. Taken on a thread of
     // its own so the process's primary route — which other tests own — is
@@ -163,7 +167,11 @@ fn a_post_with_no_route_leaves_the_context_with_the_caller() {
 /// report it on the *negative* side so the caller keeps its context.
 #[test]
 fn a_null_callback_is_refused_without_taking_the_context() {
-    static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    per_test_global! {
+        /// Single-threaded: this test has no route / a null callback, so both
+        /// the increment and the assertion happen on this thread. No adoption.
+        static DROPPED: AtomicUsize = AtomicUsize::new(0);
+    }
     let ctx = Box::into_raw(Box::new(Ctx {
         value: 1,
         dropped: &DROPPED,

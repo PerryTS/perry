@@ -173,7 +173,13 @@ fn another_thread_wakes_a_parked_turn_through_js_notify_main_thread() {
     super::super::loop_stats::force_enable_for_test();
     let waits_before = super::super::loop_stats::snapshot();
     let (parked_tx, parked_rx) = mpsc::channel();
+    // The spawned owner PARKS (clearing the wake-latency slot) while this
+    // thread notifies (setting it), so both must see one instance. Adopted as
+    // the owner's first statement -- after its first park it would be too late
+    // (`PerThread::adopt`).
+    let wake_key = super::super::loop_stats::test_shared_wake_key();
     let owner = std::thread::spawn(move || {
+        super::super::loop_stats::test_adopt_wake(wake_key);
         take_primary_route();
         super::super::NOTIFIED.store(false, Ordering::SeqCst);
         let notifier = AGENT_LOOP.with(|slot| slot.borrow().as_ref().unwrap().driver.notifier());
@@ -224,7 +230,13 @@ fn a_cross_thread_native_submission_wakes_a_turn_and_is_one_wake_sample() {
     super::super::loop_stats::force_enable_for_test();
     let before = super::super::loop_stats::snapshot();
     let (parked_tx, parked_rx) = mpsc::channel();
+    // The spawned owner PARKS (clearing the wake-latency slot) while this
+    // thread notifies (setting it), so both must see one instance. Adopted as
+    // the owner's first statement -- after its first park it would be too late
+    // (`PerThread::adopt`).
+    let wake_key = super::super::loop_stats::test_shared_wake_key();
     let owner = std::thread::spawn(move || {
+        super::super::loop_stats::test_adopt_wake(wake_key);
         take_primary_route();
         super::super::NOTIFIED.store(false, Ordering::SeqCst);
         parked_tx.send(()).unwrap();
@@ -918,10 +930,18 @@ fn a_posted_host_job_runs_on_the_owner_not_on_the_poster() {
             self.dropped.fetch_add(1, Ordering::SeqCst);
         }
     }
-    static DROPPED: AtomicUsize = AtomicUsize::new(0);
-    static DONE: AtomicUsize = AtomicUsize::new(0);
-    static SEEN_VALUE: AtomicU64 = AtomicU64::new(0);
-    static SEEN_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+    per_test_global! {
+        /// DONE / SEEN_VALUE / SEEN_THREAD are written by `run`, which executes
+        /// on the OWNER — this test's own thread — so they need no adoption.
+        /// DROPPED does: the POSTER thread captures `&DROPPED` into the `Job`,
+        /// and the per-thread split would hand it the poster's instance while
+        /// the assertions below read this thread's. The poster adopts this
+        /// thread's key as its first statement (see the spawn below).
+        static DROPPED: AtomicUsize = AtomicUsize::new(0);
+        static DONE: AtomicUsize = AtomicUsize::new(0);
+        static SEEN_VALUE: AtomicU64 = AtomicU64::new(0);
+        static SEEN_THREAD: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+    }
 
     extern "C" fn run(ctx: *mut c_void) {
         // SAFETY: the runtime hands back exactly the context `post` was given,
@@ -943,7 +963,12 @@ fn a_posted_host_job_runs_on_the_owner_not_on_the_poster() {
         "this thread owns the primary agent's published loop, so a post lands"
     );
 
+    // Must be taken on THIS thread, and adopted by the poster before its first
+    // touch of the table — adopting later silently orphans what it already
+    // wrote (`PerThread::adopt`).
+    let dropped_key = DROPPED.shared_key();
     let poster = std::thread::spawn(move || {
+        DROPPED.adopt(dropped_key);
         // A second thread acting FOR the primary agent: it has no agent of its
         // own, so `current_agent()` resolves to PRIMARY_AGENT — the Android
         // UI-thread shape, and the reason the tokio drivers are still alive.

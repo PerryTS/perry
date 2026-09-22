@@ -384,14 +384,23 @@ mod honest_tag_tests {
         test_clear_all_timer_scanner_roots();
 
         let handle = js_set_timeout_callback(0, 50_000.0);
+        // `js_timer_has_pending`, not `js_callback_timer_has_pending`. turnloop
+        // P3 split the three liveness entry points across the per-agent store's
+        // phases: `js_timer_has_pending` and `js_interval_timer_has_pending`
+        // both answer `has_refed_timers()` (the Timeout/Interval classes) while
+        // `js_callback_timer_has_pending` answers `has_refed_check()` -- the
+        // CHECK phase, i.e. `setImmediate`. The generated loop's liveness
+        // disjunction asks all three, so the union is unchanged, but this
+        // subject is a `setTimeout` and belongs to the first accessor's
+        // question, not the third's.
         assert_eq!(
-            js_callback_timer_has_pending(),
+            js_timer_has_pending(),
             1,
             "setup: the timer must be pending"
         );
         js_clear_timeout_value(handle_value(handle));
         assert_eq!(
-            js_callback_timer_has_pending(),
+            js_timer_has_pending(),
             0,
             "clearTimeout(handleObject) did not clear the timer"
         );

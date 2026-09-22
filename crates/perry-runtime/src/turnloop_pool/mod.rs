@@ -211,7 +211,16 @@ static SUBMITTED: AtomicU64 = AtomicU64::new(0);
 static COMPLETED: AtomicU64 = AtomicU64::new(0);
 static CANCELLED: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicU64 = AtomicU64::new(0);
-static REFUSED: AtomicU64 = AtomicU64::new(0);
+per_test_global! {
+    /// `per_test_global!` because TEST code reads it via `refused_total()`
+    /// (#10944); `SUBMITTED` / `COMPLETED` / `CANCELLED` / `FAILED` above are
+    /// not read from tests, which is why they stay bare. No `adopt` needed:
+    /// `submit` increments this on the SUBMITTING thread and the assertion
+    /// reads it on that same thread. Outside a test build the macro is the
+    /// plain `static`, byte for byte, and `PerThread` derefs, so the
+    /// `fetch_add` / `load` sites are unchanged.
+    static REFUSED: AtomicU64 = AtomicU64::new(0);
+}
 
 /// Jobs accepted and not yet delivered, across every thread.
 ///
