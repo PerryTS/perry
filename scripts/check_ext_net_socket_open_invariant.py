@@ -59,6 +59,7 @@ CHAR_LITERAL = re.compile(
 RAW_STRING_START = re.compile(r'(?:b|c)?r(#{0,255})"')
 PATTERN_MACRO = re.compile(r"\b(?:matches|assert_matches)\s*!\s*\(")
 PATTERN_FOLLOW = re.compile(r"(?:=>|=(?!=|>)|:(?!:)|\bin\b|\|)")
+IF_KEYWORD = re.compile(r"\bif\b")
 
 
 @dataclass(frozen=True)
@@ -260,7 +261,42 @@ def is_struct_pattern(
     for macro in PATTERN_MACRO.finditer(code):
         opening = code.find("(", macro.start(), macro.end())
         closing = parentheses.get(opening)
-        if closing is not None and opening < block[0] < block[1] < closing:
+        if closing is None or not (opening < block[0] < block[1] < closing):
+            continue
+
+        outer = (opening, closing)
+        delimiters = (braces, parentheses, brackets)
+
+        def is_direct(position: int) -> bool:
+            """Whether POSITION is directly inside the macro argument list."""
+
+            return not any(
+                inner_open < position < inner_close
+                for pairs in delimiters
+                for inner_open, inner_close in pairs.items()
+                if (inner_open, inner_close) != outer
+                and opening < inner_open < inner_close < closing
+            )
+
+        commas = [
+            position
+            for position in range(opening + 1, closing)
+            if code[position] == "," and is_direct(position)
+        ]
+        if not commas or block[0] < commas[0]:
+            continue
+        if len(commas) > 1 and block[0] > commas[1]:
+            continue
+
+        guard = next(
+            (
+                match.start()
+                for match in IF_KEYWORD.finditer(code, commas[0] + 1, block[0])
+                if is_direct(match.start())
+            ),
+            None,
+        )
+        if guard is None:
             return True
 
     containers = [block]
@@ -641,6 +677,31 @@ fn inspect(socket: SocketState, pair: (SocketState, bool)) {
         min_open_sites=0,
     )
     assert not sites and not errors
+
+    matches_expression = """
+fn inspect() {
+    let _ = matches!(
+        SocketState { is_open: true, has_opened: true },
+        SocketState { is_open: true, .. }
+    );
+}
+"""
+    sites, errors = evaluate(
+        {path: matches_expression},
+        {"schema_version": 1, "exceptions": []},
+        min_open_sites=1,
+    )
+    assert not errors and len(sites) == 1 and sites[0].paired
+
+    missing_matches_expression = matches_expression.replace(
+        ", has_opened: true", ""
+    )
+    _, errors = evaluate(
+        {path: missing_matches_expression},
+        {"schema_version": 1, "exceptions": []},
+        min_open_sites=1,
+    )
+    assert any("SocketState initializer" in error for error in errors)
 
     complex_field_receiver = """
 fn open() {
