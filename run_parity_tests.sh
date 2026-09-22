@@ -540,6 +540,15 @@ for raw in sys.stdin:
         # A crash under the instrument is still caught: abnormal exits are
         # detected from the exit status, before either comparison runs.
         sed -E '/^\[gc-schedule\]/d' | \
+        # #10868 step 2.5 stage 1 appends an `[object-dictionary]` counter row to
+        # that SAME exit summary (`gc/schedule.rs` prints it beside the
+        # `[gc-schedule]` lines, so it appears under exactly the same
+        # `parity-env: PERRY_GC_SCHEDULE_SEED=…` fixtures). It is a different
+        # prefix, so the rule above does not cover it and every such fixture
+        # diffed as an output mismatch — `test_gap_dynamic_import_alias_binding`
+        # was the first to show it. Same reasoning, same treatment: instrument
+        # noise, not program output.
+        sed -E '/^\[object-dictionary\]/d' | \
         # Strip Node v22+ MODULE_TYPELESS_PACKAGE_JSON warnings (4 lines
         # printed to stderr when running .ts files without "type":
         # "module" in package.json — pure environmental noise that
