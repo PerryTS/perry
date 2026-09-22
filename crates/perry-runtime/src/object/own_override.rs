@@ -225,9 +225,9 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     // the same one `hasOwn`, `typeof` and `Object.keys` read, which is why
     // reflection already agreed with node while the call did not.
     let value = match crate::object::exotic_expando::exotic_expando_kind_of_value(recv) {
-        Some((addr, kind)) => {
-            f64::from_bits(crate::object::exotic_expando::value_lookup(kind, addr, name)?)
-        }
+        Some((addr, kind)) => f64::from_bits(crate::object::exotic_expando::value_lookup(
+            kind, addr, name,
+        )?),
         None => crate::object::object_ops::js_object_get_own_field_or_undef(
             recv,
             name.as_ptr(),
