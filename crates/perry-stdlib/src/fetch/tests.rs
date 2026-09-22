@@ -1,5 +1,24 @@
 use super::*;
 
+#[test]
+fn fetch_json_preserves_document_key_order() {
+    let source = br#"{"title":"t","permission":[],"zeta":1,"10":"ten","2":"two"}"#;
+    let parsed = unsafe { parse_json_body(source) }.expect("valid JSON body");
+    let output =
+        unsafe { perry_runtime::json::js_json_stringify(f64::from_bits(parsed.bits()), 0) };
+    assert!(!output.is_null());
+    let bytes = unsafe {
+        std::slice::from_raw_parts(
+            (output as *const u8).add(std::mem::size_of::<StringHeader>()),
+            (*output).byte_len as usize,
+        )
+    };
+    assert_eq!(
+        bytes,
+        br#"{"2":"two","10":"ten","title":"t","permission":[],"zeta":1}"#
+    );
+}
+
 /// #8546: Coop hosts each in-process deployment on its own dedicated Perry
 /// thread. The Fetch scanner registry is thread-local, so a process-global
 /// registration latch makes the first Next application safe and leaves the
