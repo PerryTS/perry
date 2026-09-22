@@ -131,7 +131,7 @@ t("native get in set argument", () => { m12.set("k", m11.get("k")); return m12.g
 // array that takes an own named property records NOTHING in its header that
 // the inline push tier can test -- `GC_ARRAY_NAMED_PROPS` is set only when a
 // reserve is created and `OBJ_FLAG_ARRAY_DESCRIPTORS` gates the fallback
-// table, and for `const a = [1]; a.push = fn` neither is set. See the issue.
+// table, and for `const a = [1]; a.push = fn` neither is set. See #11021.
 // The rows below are the ones that are TRUE without the arm: an unrelated
 // named property and a borrowed builtin must both keep the builtin.
 // `push` is not guarded by a diamond: a diamond around it costs the inline
