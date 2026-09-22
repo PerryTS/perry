@@ -133,9 +133,19 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
             // predicate instead of answering 0. When none does — the
             // overwhelmingly common case — the bit stands and this stays one
             // load and a test.
-            if !crate::state::state().descriptors.accessors_in_use.get() {
-                return 0;
-            }
+            // Nor is the descriptor side table the answer: with
+            // `accessors_in_use` clear the row still ran the builtin, so the
+            // property `a.push = () => 1` installs is in neither the
+            // bit-flagged named props, the exotic expando, nor the accessor
+            // descriptors — yet `hasOwn`/`typeof`/`Object.keys` all see it.
+            //
+            // An array therefore has NO cheap absence proof today, and this
+            // module's rule is "never answer 0 for anything it cannot prove",
+            // so it asks the authoritative predicate. That costs a call on a
+            // guarded array builtin whose receiver has no override; making it
+            // cheap again needs an install funnel that arms a flag, the way
+            // the exotic kinds have one, and that is a follow-up rather than
+            // a reason to keep answering wrong.
             return authoritative_has_own(recv, name_ptr, name_len);
         }
     } else {
