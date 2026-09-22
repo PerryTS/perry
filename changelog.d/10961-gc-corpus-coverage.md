@@ -1,0 +1,3 @@
+Add a light old-generation reclaim corpus fixture and a diagnostic checker that refuses unexercised, retaining-only, and nursery-only evidence. On the audited Linux main build it runs in about 0.17 seconds, with 12 full collections, 17 trigger observations, and nine confirmed non-retaining old reclaims. The parser's 11 regression tests run in lint, including negative coverage cases; live small-fixture and mutated-checker sabotage were verified.
+
+Document mechanism coverage and measurement gaps for every campaign corpus row. Record the inherited GC-root-dominance preflight failures and their distinct causes in issue #10389; this change does not silence the audit or claim its repair.
