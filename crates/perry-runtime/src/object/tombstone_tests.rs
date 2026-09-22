@@ -124,13 +124,16 @@ fn tombstone_hole_count_survives_readd_append() {
         assert_eq!(super::shapes::object_shape_hole_count(obj), 1);
         let tombstoned_shape = super::shapes::object_shape_stamp(obj);
         // Re-add: appends (enumeration order moves the key to the end) and
-        // must NOT reset the hole accounting.
+        // must NOT reset the hole accounting. The append changes the layout,
+        // so it publishes a successor shape: a shape id names exactly one
+        // layout (step 2.5), the same rule a delete follows. Only the hole
+        // accounting is carried across the publish.
         let readd = crate::string::js_string_from_bytes(b"hc_key_03".as_ptr(), 9);
         js_object_set_field_by_name(obj, readd, 99.0);
-        assert_eq!(
+        assert_ne!(
             super::shapes::object_shape_stamp(obj),
             tombstoned_shape,
-            "same-allocation re-add must not retire the stable tombstone ShapeId"
+            "re-add changed the layout but kept the tombstoned ShapeId"
         );
         assert_eq!(
             super::shapes::object_shape_hole_count(obj),
