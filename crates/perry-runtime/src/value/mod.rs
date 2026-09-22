@@ -44,6 +44,8 @@ mod jsvalue;
 mod nanbox;
 mod tags;
 pub(crate) mod to_string;
+#[cfg(test)]
+mod to_string_buffer_tests;
 pub(crate) mod to_string_class_ref;
 mod truthy;
 
