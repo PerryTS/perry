@@ -13,6 +13,10 @@ use std::sync::Mutex;
 
 use crate::common::async_bridge::{queue_promise_resolution, spawn};
 
+unsafe extern "C" {
+    fn js_fetch_take_pending_redirect() -> i32;
+}
+
 // Web Fetch `Headers` FFI — split out to keep this file under the 2,000-line
 // lint gate (#1649). The child module sees mod.rs's private items via its
 // `use super::*`.
@@ -106,16 +110,30 @@ lazy_static::lazy_static! {
     /// the box. Per-request `User-Agent` headers passed via `fetch(url, {
     /// headers: { "User-Agent": "..." } })` override this default; reqwest's
     /// `RequestBuilder::header` replaces the client-level value.
-    static ref HTTP_CLIENT: reqwest::Client = fetch_client_builder()
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    static ref HTTP_CLIENTS: FetchClients = FetchClients {
+        follow: build_fetch_client(false),
+        no_redirect: build_fetch_client(true),
+    };
 
     /// Global proxy override installed by `undici.setGlobalDispatcher(new
     /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici).
-    /// `None` = direct connections through `HTTP_CLIENT`. The client is
+    /// `None` = direct connections through `HTTP_CLIENTS`. Both clients are
     /// prebuilt at install time so per-request cost stays a clone (Arc bump).
-    static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
+    static ref GLOBAL_PROXY_CLIENTS: std::sync::RwLock<Option<FetchClients>> =
         std::sync::RwLock::new(None);
+}
+
+#[derive(Clone)]
+struct FetchClients {
+    follow: reqwest::Client,
+    no_redirect: reqwest::Client,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FetchRedirectMode {
+    Follow,
+    Error,
+    Manual,
 }
 
 /// Shared builder options for every fetch client (direct or proxied).
@@ -126,6 +144,25 @@ fn fetch_client_builder() -> reqwest::ClientBuilder {
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60));
     apply_node_tls_environment(builder)
+}
+
+fn build_fetch_client(no_redirect: bool) -> reqwest::Client {
+    let builder = if no_redirect {
+        fetch_client_builder().redirect(reqwest::redirect::Policy::none())
+    } else {
+        fetch_client_builder()
+    };
+    builder.build().unwrap_or_else(|_| {
+        let fallback = reqwest::Client::builder();
+        let fallback = if no_redirect {
+            fallback.redirect(reqwest::redirect::Policy::none())
+        } else {
+            fallback
+        };
+        fallback
+            .build()
+            .expect("reqwest fallback client must build")
+    })
 }
 
 /// Apply the process-wide Node TLS environment to a fetch client. The
@@ -156,19 +193,33 @@ fn apply_node_tls_environment(mut builder: reqwest::ClientBuilder) -> reqwest::C
 /// The client every fetch path must use: the proxied client when a global
 /// dispatcher proxy is installed, the pooled direct client otherwise.
 pub(crate) fn fetch_client() -> reqwest::Client {
-    if let Ok(guard) = GLOBAL_PROXY_CLIENT.read() {
-        if let Some(client) = guard.as_ref() {
-            return client.clone();
+    fetch_client_for_redirect(FetchRedirectMode::Follow)
+}
+
+fn fetch_client_for_redirect(mode: FetchRedirectMode) -> reqwest::Client {
+    if let Ok(guard) = GLOBAL_PROXY_CLIENTS.read() {
+        if let Some(clients) = guard.as_ref() {
+            return match mode {
+                FetchRedirectMode::Follow => clients.follow.clone(),
+                FetchRedirectMode::Error | FetchRedirectMode::Manual => clients.no_redirect.clone(),
+            };
         }
     }
-    HTTP_CLIENT.clone()
+    match mode {
+        FetchRedirectMode::Follow => HTTP_CLIENTS.follow.clone(),
+        FetchRedirectMode::Error | FetchRedirectMode::Manual => HTTP_CLIENTS.no_redirect.clone(),
+    }
 }
 
 /// Build a reqwest client that routes every request through `uri`.
 /// `token` is undici's `ProxyAgent` token — the literal value for the
 /// `Proxy-Authorization` header (e.g. `Basic <base64>`). reqwest performs
 /// HTTP CONNECT tunneling for https targets automatically.
-fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client, String> {
+fn build_proxy_client(
+    uri: &str,
+    token: Option<&str>,
+    no_redirect: bool,
+) -> Result<reqwest::Client, String> {
     let mut proxy =
         reqwest::Proxy::all(uri).map_err(|e| format!("Invalid proxy URI \"{uri}\": {e}"))?;
     if let Some(token) = token {
@@ -176,10 +227,22 @@ fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client,
             .map_err(|e| format!("Invalid proxy token: {e}"))?;
         proxy = proxy.custom_http_auth(value);
     }
-    fetch_client_builder()
-        .proxy(proxy)
+    let builder = fetch_client_builder().proxy(proxy);
+    let builder = if no_redirect {
+        builder.redirect(reqwest::redirect::Policy::none())
+    } else {
+        builder
+    };
+    builder
         .build()
         .map_err(|e| format!("Failed to build proxy client: {e}"))
+}
+
+fn build_proxy_clients(uri: &str, token: Option<&str>) -> Result<FetchClients, String> {
+    Ok(FetchClients {
+        follow: build_proxy_client(uri, token, false)?,
+        no_redirect: build_proxy_client(uri, token, true)?,
+    })
 }
 
 /// Install (or clear) the process-wide fetch proxy. Called by
@@ -197,7 +260,7 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
     token_ptr: *const StringHeader,
 ) -> f64 {
     if uri_ptr.is_null() {
-        if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
+        if let Ok(mut guard) = GLOBAL_PROXY_CLIENTS.write() {
             *guard = None;
             return 1.0;
         }
@@ -207,10 +270,10 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         return 0.0;
     };
     let token = string_from_header(token_ptr).filter(|t| !t.is_empty());
-    match build_proxy_client(&uri, token.as_deref()) {
-        Ok(client) => {
-            if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
-                *guard = Some(client);
+    match build_proxy_clients(&uri, token.as_deref()) {
+        Ok(clients) => {
+            if let Ok(mut guard) = GLOBAL_PROXY_CLIENTS.write() {
+                *guard = Some(clients);
                 1.0
             } else {
                 0.0
@@ -277,6 +340,27 @@ struct FetchResponse {
     /// must not synchronously drain a producer whose chunks appear only after
     /// downstream pulls (TanStack Start / React SSR relies on that).
     body_stream_id: Option<usize>,
+}
+
+fn response_url_metadata(response: &reqwest::Response, requested_url: &str) -> (String, bool) {
+    let final_url = response.url().clone();
+    let redirected = reqwest::Url::parse(requested_url)
+        .map(|mut requested| {
+            // URL fragments are not sent over HTTP and do not make a request a
+            // redirect. Compare the normalized transport URLs.
+            requested.set_fragment(None);
+            let mut final_transport_url = final_url.clone();
+            final_transport_url.set_fragment(None);
+            requested != final_transport_url
+        })
+        .unwrap_or_else(|_| final_url.as_str() != requested_url);
+    (final_url.to_string(), redirected)
+}
+
+fn redirect_response_is_error(mode: FetchRedirectMode, response: &reqwest::Response) -> bool {
+    mode == FetchRedirectMode::Error
+        && is_redirect_status(response.status().as_u16() as i32)
+        && response.headers().contains_key(reqwest::header::LOCATION)
 }
 
 /// Return the one `Headers` registry handle that backs `response.headers`.
@@ -478,7 +562,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                     .to_string();
 
                 let headers = headers_from_header_map(response.headers());
-
+                let (response_url, redirected) = response_url_metadata(&response, &url);
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 // Store response
@@ -494,8 +578,8 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                         body_present: true,
                         body_used: false,
                         type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
+                        url: response_url,
+                        redirected,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                         body_stream_id: None,
@@ -551,7 +635,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                     .to_string();
 
                 let headers = headers_from_header_map(response.headers());
-
+                let (response_url, redirected) = response_url_metadata(&response, &url);
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 let response_id = alloc_fetch_handle_id();
@@ -566,8 +650,8 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                         body_present: true,
                         body_used: false,
                         type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
+                        url: response_url,
+                        redirected,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                         body_stream_id: None,
@@ -625,7 +709,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                     .to_string();
 
                 let headers = headers_from_header_map(response.headers());
-
+                let (response_url, redirected) = response_url_metadata(&response, &url);
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 let response_id = alloc_fetch_handle_id();
@@ -640,8 +724,8 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                         body_present: true,
                         body_used: false,
                         type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
+                        url: response_url,
+                        redirected,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                         body_stream_id: None,
@@ -713,7 +797,7 @@ pub unsafe extern "C" fn js_fetch_post(
                     .to_string();
 
                 let headers = headers_from_header_map(response.headers());
-
+                let (response_url, redirected) = response_url_metadata(&response, &url);
                 let body = response.bytes().await.unwrap_or_default().to_vec();
 
                 // Store response
@@ -729,8 +813,8 @@ pub unsafe extern "C" fn js_fetch_post(
                         body_present: true,
                         body_used: false,
                         type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
+                        url: response_url,
+                        redirected,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                         body_stream_id: None,
@@ -761,6 +845,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
     // on the main thread BEFORE allocating the promise, so a GC during the
     // allocation can't move the still-TLS-stashed signal before we read it.
     let abort_state = abort_bridge::take_pending_signal_watch();
+    let pending_redirect = js_fetch_take_pending_redirect();
 
     let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
@@ -792,6 +877,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
         body_bytes,
         string_from_header(headers_json_ptr),
         url_ptr as usize,
+        pending_redirect,
     ) {
         Ok(inputs) => inputs,
         Err(err_bits) => {

@@ -3,8 +3,9 @@
 //! `AbortSignal.timeout(ms)` deadline elapsing.
 //!
 //! The signal reaches the native fetch via the runtime's pending-signal stash
-//! (`js_fetch_set_pending_signal` / `js_fetch_take_pending_signal`), which keeps
-//! the 4-arg `js_fetch_with_options` ABI unchanged. On the main thread (at the
+//! (`js_fetch_set_pending_signal` / `js_fetch_take_pending_signal`), alongside
+//! the equivalent RequestInit.redirect bridge, which keeps the 4-arg
+//! `js_fetch_with_options` ABI unchanged. On the main thread (at the
 //! start of `js_fetch_with_options`) we register a per-request
 //! `tokio::sync::Notify` keyed to the signal; the request future `select!`s its
 //! send/receive against that notify and, when the abort wins, rejects the fetch
@@ -187,9 +188,10 @@ pub(crate) async fn run_request(
         method,
         body,
         custom_headers,
+        redirect,
     } = inputs;
     let request_future = async move {
-        let client = super::fetch_client();
+        let client = super::fetch_client_for_redirect(redirect);
         let mut request = match method.to_uppercase().as_str() {
             "POST" => client.post(&url),
             "PUT" => client.put(&url),
@@ -207,12 +209,19 @@ pub(crate) async fn run_request(
         match request.send().await {
             Ok(response) => {
                 let status = response.status().as_u16();
+                if super::redirect_response_is_error(redirect, &response) {
+                    queue_deferred_resolution(promise_ptr, false, || unsafe {
+                        super::fetch_type_error_bits("fetch failed: redirect mode is set to error")
+                    });
+                    return;
+                }
                 let status_text = response
                     .status()
                     .canonical_reason()
                     .unwrap_or("")
                     .to_string();
                 let headers = super::headers_from_header_map(response.headers());
+                let (response_url, redirected) = super::response_url_metadata(&response, &url);
                 let body = response.bytes().await.unwrap_or_default().to_vec();
                 let response_id = super::alloc_fetch_handle_id();
                 super::FETCH_RESPONSES.lock().unwrap().insert(
@@ -225,8 +234,8 @@ pub(crate) async fn run_request(
                         body_present: true,
                         body_used: false,
                         type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
+                        url: response_url,
+                        redirected,
                         cached_headers_id: None,
                         cached_body_stream_id: None,
                         body_stream_id: None,

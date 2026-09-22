@@ -13,6 +13,7 @@ pub(crate) struct FetchInputs {
     /// are never corrupted by a lossy UTF-8 round-trip.
     pub body: Option<Vec<u8>>,
     pub custom_headers: HashMap<String, String>,
+    pub redirect: super::FetchRedirectMode,
 }
 
 /// Fields recovered from a `Request` object for the `fetch(Request)` form.
@@ -21,6 +22,7 @@ struct RequestFetchFields {
     method: String,
     body: Option<Vec<u8>>,
     headers: HashMap<String, String>,
+    redirect: String,
 }
 
 /// Recover url/method/body/headers from a live `Request` handle, or `None` when
@@ -41,6 +43,7 @@ fn request_fields_from_handle(maybe_handle: usize) -> Option<RequestFetchFields>
         // would replace invalid UTF-8 with U+FFFD and corrupt binary bodies).
         body: req.body.clone(),
         headers,
+        redirect: req.redirect.clone(),
     })
 }
 
@@ -54,6 +57,7 @@ pub(crate) fn resolve_fetch_inputs(
     body_bytes: Option<Vec<u8>>,
     headers_json: Option<String>,
     url_handle: usize,
+    pending_redirect: i32,
 ) -> Result<FetchInputs, u64> {
     let request_fields = if url_from_header.is_none() {
         request_fields_from_handle(url_handle)
@@ -103,11 +107,37 @@ pub(crate) fn resolve_fetch_inputs(
         }
     }
 
+    let redirect = match pending_redirect {
+        1 => super::FetchRedirectMode::Follow,
+        2 => super::FetchRedirectMode::Error,
+        3 => super::FetchRedirectMode::Manual,
+        -1 => {
+            return Err(unsafe {
+                super::fetch_type_error_bits(
+                    "Request redirect mode must be follow, error, or manual",
+                )
+            });
+        }
+        _ => match request_fields.as_ref().map(|rf| rf.redirect.as_str()) {
+            Some("error") => super::FetchRedirectMode::Error,
+            Some("manual") => super::FetchRedirectMode::Manual,
+            Some("follow") | None => super::FetchRedirectMode::Follow,
+            Some(_) => {
+                return Err(unsafe {
+                    super::fetch_type_error_bits(
+                        "Request redirect mode must be follow, error, or manual",
+                    )
+                });
+            }
+        },
+    };
+
     Ok(FetchInputs {
         url,
         method,
         body,
         custom_headers,
+        redirect,
     })
 }
 
@@ -126,6 +156,7 @@ mod tests {
             Some("GET".to_string()),
             None,
             Some(r#"{"Authorization":"Bearer tok","Content-Type":"application/json"}"#.to_string()),
+            0,
             0,
         )
         .expect("inputs resolve");

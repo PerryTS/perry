@@ -11,8 +11,8 @@
 use bytes::Bytes;
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, get_handle, register_handle, spawn_blocking, JsClosure, JsPromise, JsString,
-    JsValue, Promise, RawClosureHeader, StringHeader,
+    alloc_string, error_value_with_code, get_handle, register_handle, spawn_blocking, ErrorKind,
+    JsClosure, JsPromise, JsString, JsValue, Promise, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -43,6 +43,10 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+
+extern "C" {
+    fn js_fetch_take_pending_redirect() -> i32;
+}
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
@@ -201,18 +205,32 @@ lazy_static! {
     /// reqwest::Client (~250 KB) and the memory never gets reused.
     /// Sets a default User-Agent so endpoints that reject anonymous
     /// requests (api.github.com etc.) work out of the box.
-    static ref HTTP_CLIENT: reqwest::Client = fetch_client_builder()
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+    static ref HTTP_CLIENTS: FetchClients = FetchClients {
+        follow: build_fetch_client(false),
+        no_redirect: build_fetch_client(true),
+    };
 
     /// Global proxy override installed by `undici.setGlobalDispatcher(new
     /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici).
-    /// `None` = direct connections through `HTTP_CLIENT`. Mirrors
+    /// `None` = direct connections through `HTTP_CLIENTS`. Mirrors
     /// perry-stdlib's copy byte-for-byte (this crate shadows the stdlib
     /// symbols when `node-fetch`/`fetch` is imported — see
     /// `prefer_well_known_before_stdlib`).
-    static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
+    static ref GLOBAL_PROXY_CLIENTS: std::sync::RwLock<Option<FetchClients>> =
         std::sync::RwLock::new(None);
+}
+
+#[derive(Clone)]
+struct FetchClients {
+    follow: reqwest::Client,
+    no_redirect: reqwest::Client,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FetchRedirectMode {
+    Follow,
+    Error,
+    Manual,
 }
 
 /// Shared builder options for every fetch client (direct or proxied).
@@ -223,6 +241,25 @@ fn fetch_client_builder() -> reqwest::ClientBuilder {
         .pool_max_idle_per_host(16)
         .tcp_keepalive(std::time::Duration::from_secs(60));
     apply_node_tls_environment(builder)
+}
+
+fn build_fetch_client(no_redirect: bool) -> reqwest::Client {
+    let builder = if no_redirect {
+        fetch_client_builder().redirect(reqwest::redirect::Policy::none())
+    } else {
+        fetch_client_builder()
+    };
+    builder.build().unwrap_or_else(|_| {
+        let fallback = reqwest::Client::builder();
+        let fallback = if no_redirect {
+            fallback.redirect(reqwest::redirect::Policy::none())
+        } else {
+            fallback
+        };
+        fallback
+            .build()
+            .expect("reqwest fallback client must build")
+    })
 }
 
 /// Apply the process-wide Node TLS environment to a fetch client. The
@@ -253,19 +290,33 @@ fn apply_node_tls_environment(mut builder: reqwest::ClientBuilder) -> reqwest::C
 /// The client every fetch path must use: the proxied client when a global
 /// dispatcher proxy is installed, the pooled direct client otherwise.
 fn fetch_client() -> reqwest::Client {
-    if let Ok(guard) = GLOBAL_PROXY_CLIENT.read() {
-        if let Some(client) = guard.as_ref() {
-            return client.clone();
+    fetch_client_for_redirect(FetchRedirectMode::Follow)
+}
+
+fn fetch_client_for_redirect(mode: FetchRedirectMode) -> reqwest::Client {
+    if let Ok(guard) = GLOBAL_PROXY_CLIENTS.read() {
+        if let Some(clients) = guard.as_ref() {
+            return match mode {
+                FetchRedirectMode::Follow => clients.follow.clone(),
+                FetchRedirectMode::Error | FetchRedirectMode::Manual => clients.no_redirect.clone(),
+            };
         }
     }
-    HTTP_CLIENT.clone()
+    match mode {
+        FetchRedirectMode::Follow => HTTP_CLIENTS.follow.clone(),
+        FetchRedirectMode::Error | FetchRedirectMode::Manual => HTTP_CLIENTS.no_redirect.clone(),
+    }
 }
 
 /// Build a reqwest client that routes every request through `uri`.
 /// `token` is undici's `ProxyAgent` token — the literal value for the
 /// `Proxy-Authorization` header (e.g. `Basic <base64>`). reqwest performs
 /// HTTP CONNECT tunneling for https targets automatically.
-fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client, String> {
+fn build_proxy_client(
+    uri: &str,
+    token: Option<&str>,
+    no_redirect: bool,
+) -> Result<reqwest::Client, String> {
     let mut proxy =
         reqwest::Proxy::all(uri).map_err(|e| format!("Invalid proxy URI \"{uri}\": {e}"))?;
     if let Some(token) = token {
@@ -273,10 +324,22 @@ fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client,
             .map_err(|e| format!("Invalid proxy token: {e}"))?;
         proxy = proxy.custom_http_auth(value);
     }
-    fetch_client_builder()
-        .proxy(proxy)
+    let builder = fetch_client_builder().proxy(proxy);
+    let builder = if no_redirect {
+        builder.redirect(reqwest::redirect::Policy::none())
+    } else {
+        builder
+    };
+    builder
         .build()
         .map_err(|e| format!("Failed to build proxy client: {e}"))
+}
+
+fn build_proxy_clients(uri: &str, token: Option<&str>) -> Result<FetchClients, String> {
+    Ok(FetchClients {
+        follow: build_proxy_client(uri, token, false)?,
+        no_redirect: build_proxy_client(uri, token, true)?,
+    })
 }
 
 /// Install (or clear) the process-wide fetch proxy. Called by
@@ -293,7 +356,7 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
     token_ptr: *const StringHeader,
 ) -> f64 {
     if uri_ptr.is_null() {
-        if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
+        if let Ok(mut guard) = GLOBAL_PROXY_CLIENTS.write() {
             *guard = None;
             return 1.0;
         }
@@ -303,10 +366,10 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         return 0.0;
     };
     let token = read_str(token_ptr).filter(|t| !t.is_empty());
-    match build_proxy_client(&uri, token.as_deref()) {
-        Ok(client) => {
-            if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
-                *guard = Some(client);
+    match build_proxy_clients(&uri, token.as_deref()) {
+        Ok(clients) => {
+            if let Ok(mut guard) = GLOBAL_PROXY_CLIENTS.write() {
+                *guard = Some(clients);
                 1.0
             } else {
                 0.0
@@ -529,16 +592,42 @@ pub extern "C" fn js_fetch_response_count() -> i64 {
 
 // ── do_fetch helper — every variant funnels through here ──────────
 
+fn response_url_metadata(response: &reqwest::Response, requested_url: &str) -> (String, bool) {
+    let mut response_url = response.url().clone();
+    response_url.set_fragment(None);
+    let response_url = response_url.to_string();
+    let requested_url = reqwest::Url::parse(requested_url)
+        .map(|mut url| {
+            url.set_fragment(None);
+            url.to_string()
+        })
+        .unwrap_or_else(|_| requested_url.to_string());
+    let redirected = response_url != requested_url;
+    (response_url, redirected)
+}
+
+fn redirect_response_is_error(mode: FetchRedirectMode, response: &reqwest::Response) -> bool {
+    mode == FetchRedirectMode::Error
+        && response.status().is_redirection()
+        && response.headers().contains_key(reqwest::header::LOCATION)
+}
+
+enum FetchFailure {
+    Transport(String),
+    Redirect,
+}
+
 fn do_fetch(
     method: String,
     url: String,
     custom_headers: HashMap<String, String>,
-    body: Option<String>,
+    body: Option<Vec<u8>>,
+    redirect: FetchRedirectMode,
     promise: JsPromise,
 ) {
     spawn_blocking(move || {
         let outcome = tokio::runtime::Handle::current().block_on(async move {
-            let client = fetch_client();
+            let client = fetch_client_for_redirect(redirect);
             let mut req = match method.to_uppercase().as_str() {
                 "POST" => client.post(&url),
                 "PUT" => client.put(&url),
@@ -555,14 +644,16 @@ fn do_fetch(
             }
             match req.send().await {
                 Ok(response) => {
+                    if redirect_response_is_error(redirect, &response) {
+                        return Err(FetchFailure::Redirect);
+                    }
                     let status = response.status().as_u16();
                     let status_text = response
                         .status()
                         .canonical_reason()
                         .unwrap_or("")
                         .to_string();
-                    let response_url = response.url().to_string();
-                    let redirected = response_url != url;
+                    let (response_url, redirected) = response_url_metadata(&response, &url);
                     let headers = headers_from_header_map(response.headers());
                     let body = response.bytes().await.unwrap_or_default();
                     Ok(FetchResponse {
@@ -575,7 +666,7 @@ fn do_fetch(
                         redirected,
                     })
                 }
-                Err(e) => Err(format!("Fetch error: {}", e)),
+                Err(e) => Err(FetchFailure::Transport(format!("Fetch error: {}", e))),
             }
         });
         match outcome {
@@ -583,7 +674,10 @@ fn do_fetch(
                 let id = store_response(resp);
                 promise.resolve(JsValue::from_number(id as f64));
             }
-            Err(e) => promise.reject_string(&e),
+            Err(FetchFailure::Transport(e)) => promise.reject_string(&e),
+            Err(FetchFailure::Redirect) => promise.reject_with(|| {
+                error_value_with_code("Redirect mode is set to error", "", ErrorKind::TypeError)
+            }),
         }
     });
 }
@@ -600,7 +694,14 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut Prom
         promise.reject_string("Invalid URL");
         return raw;
     };
-    do_fetch("GET".to_string(), url, HashMap::new(), None, promise);
+    do_fetch(
+        "GET".to_string(),
+        url,
+        HashMap::new(),
+        None,
+        FetchRedirectMode::Follow,
+        promise,
+    );
     raw
 }
 
@@ -623,7 +724,14 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
             headers.insert("Authorization".to_string(), auth);
         }
     }
-    do_fetch("GET".to_string(), url, headers, None, promise);
+    do_fetch(
+        "GET".to_string(),
+        url,
+        headers,
+        None,
+        FetchRedirectMode::Follow,
+        promise,
+    );
     raw
 }
 
@@ -640,10 +748,17 @@ pub unsafe extern "C" fn js_fetch_post(
         promise.reject_string("Invalid URL");
         return raw;
     };
-    let body = read_str(body_ptr);
+    let body = read_bytes_owned(body_ptr);
     let mut headers = HashMap::new();
     headers.insert("Content-Type".to_string(), "application/json".to_string());
-    do_fetch("POST".to_string(), url, headers, body, promise);
+    do_fetch(
+        "POST".to_string(),
+        url,
+        headers,
+        body,
+        FetchRedirectMode::Follow,
+        promise,
+    );
     raw
 }
 
@@ -661,7 +776,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
         promise.reject_string("Invalid URL");
         return raw;
     };
-    let body = read_str(body_ptr);
+    let body = read_bytes_owned(body_ptr);
     let mut headers = HashMap::new();
     headers.insert("Content-Type".to_string(), "application/json".to_string());
     if let Some(auth) = read_str(auth_header_ptr) {
@@ -669,7 +784,14 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
             headers.insert("Authorization".to_string(), auth);
         }
     }
-    do_fetch("POST".to_string(), url, headers, body, promise);
+    do_fetch(
+        "POST".to_string(),
+        url,
+        headers,
+        body,
+        FetchRedirectMode::Follow,
+        promise,
+    );
     raw
 }
 
@@ -682,18 +804,77 @@ pub unsafe extern "C" fn js_fetch_with_options(
     body_ptr: *const StringHeader,
     headers_json_ptr: *const StringHeader,
 ) -> *mut Promise {
+    let pending_redirect = js_fetch_take_pending_redirect();
     let promise = JsPromise::new();
     let raw = promise.as_raw();
-    let Some(url) = read_str(url_ptr) else {
+
+    // `fetch(Request)` passes the Request handle through the URL pointer ABI.
+    // Recover its stored fields before attempting to dereference that value as
+    // a StringHeader; init members below override the Request's fields.
+    let request = REQUEST_HANDLES
+        .lock()
+        .unwrap()
+        .get(&(url_ptr as usize))
+        .cloned();
+    let url = request
+        .as_ref()
+        .map(|request| request.url.clone())
+        .or_else(|| read_str(url_ptr));
+    let Some(url) = url else {
         promise.reject_string("Invalid URL");
         return raw;
     };
-    let method = read_str(method_ptr).unwrap_or_else(|| "GET".to_string());
-    let body = read_str(body_ptr);
+
+    let method = read_str(method_ptr)
+        .or_else(|| request.as_ref().map(|request| request.method.clone()))
+        .unwrap_or_else(|| "GET".to_string());
+    let body = read_bytes_owned(body_ptr)
+        .or_else(|| request.as_ref().and_then(|request| request.body.clone()));
     let headers_json = read_str(headers_json_ptr).unwrap_or_else(|| "{}".to_string());
-    let custom_headers: HashMap<String, String> =
-        serde_json::from_str(&headers_json).unwrap_or_default();
-    do_fetch(method, url, custom_headers, body, promise);
+    let mut custom_headers: HashMap<String, String> = request
+        .as_ref()
+        .map(|request| request.headers.entries.iter().cloned().collect())
+        .unwrap_or_default();
+    if let Ok(init_headers) = serde_json::from_str::<HashMap<String, String>>(&headers_json) {
+        custom_headers.extend(
+            init_headers
+                .into_iter()
+                .map(|(key, value)| (key.to_ascii_lowercase(), value)),
+        );
+    }
+
+    let redirect = match pending_redirect {
+        1 => FetchRedirectMode::Follow,
+        2 => FetchRedirectMode::Error,
+        3 => FetchRedirectMode::Manual,
+        -1 => {
+            promise.reject_with(|| {
+                error_value_with_code(
+                    "Request redirect mode must be follow, error, or manual",
+                    "",
+                    ErrorKind::TypeError,
+                )
+            });
+            return raw;
+        }
+        _ => match request.as_ref().map(|request| request.redirect.as_str()) {
+            Some("error") => FetchRedirectMode::Error,
+            Some("manual") => FetchRedirectMode::Manual,
+            Some("follow") | None => FetchRedirectMode::Follow,
+            Some(_) => {
+                promise.reject_with(|| {
+                    error_value_with_code(
+                        "Request redirect mode must be follow, error, or manual",
+                        "",
+                        ErrorKind::TypeError,
+                    )
+                });
+                return raw;
+            }
+        },
+    };
+
+    do_fetch(method, url, custom_headers, body, redirect, promise);
     raw
 }
 

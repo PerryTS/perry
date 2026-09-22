@@ -32,6 +32,7 @@ impl<'a> FuncEmitCtx<'a> {
                 // The WASM fetch backend has no AbortSignal cancellation (it is a
                 // separate target from the native binary), so the signal is unused.
                 signal: _,
+                redirect,
             } => {
                 self.emit_expr(func, url);
                 self.emit_expr(func, method);
@@ -68,7 +69,20 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_memcall(func, "object_set", 3);
                     }
                 }
-                self.emit_frame_begin(func, 4);
+                if let Some(mode) = redirect {
+                    self.emit_expr(func, mode);
+                } else {
+                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                }
+                self.emit_frame_begin(func, 5);
+                func.instruction(&Instruction::LocalSet(self.temp_local));
+                self.emit_slot_addr(func, 4);
+                func.instruction(&Instruction::LocalGet(self.temp_local));
+                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
                 func.instruction(&Instruction::LocalSet(self.temp_local));
                 self.emit_slot_addr(func, 3);
                 func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -101,7 +115,7 @@ impl<'a> FuncEmitCtx<'a> {
                     align: 3,
                     memory_index: 0,
                 }));
-                self.emit_memcall(func, "fetch_with_options", 4);
+                self.emit_memcall(func, "fetch_with_options", 5);
             }
             Expr::FetchGetWithAuth { url, auth_header } => {
                 self.emit_expr(func, url);

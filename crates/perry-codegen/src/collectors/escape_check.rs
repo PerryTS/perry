@@ -792,6 +792,7 @@ pub fn check_escapes_in_expr(
             headers,
             headers_dynamic,
             signal,
+            redirect,
         } => {
             check_escapes_in_expr(url, candidates, classes, escaped);
             check_escapes_in_expr(method, candidates, classes, escaped);
@@ -804,6 +805,9 @@ pub fn check_escapes_in_expr(
             }
             if let Some(s) = signal {
                 check_escapes_in_expr(s, candidates, classes, escaped);
+            }
+            if let Some(r) = redirect {
+                check_escapes_in_expr(r, candidates, classes, escaped);
             }
         }
         Expr::SuperCall(args)

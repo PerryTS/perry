@@ -33,6 +33,91 @@ fn response_status_invalid_handle() {
 }
 
 #[test]
+fn redirect_clients_expose_follow_and_manual_responses() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect test server");
+    let address = listener.local_addr().expect("redirect test address");
+    let server = std::thread::spawn(move || {
+        // Follow makes two requests (/start then /final); manual and error make
+        // one /start request each because their client policy never follows.
+        for _ in 0..4 {
+            let (mut stream, _) = listener.accept().expect("accept redirect request");
+            let mut request = [0u8; 2048];
+            let read = stream.read(&mut request).expect("read redirect request");
+            let first_line = String::from_utf8_lossy(&request[..read])
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            if first_line.contains(" /start ") {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .expect("write redirect response");
+            } else {
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nfinal",
+                    )
+                    .expect("write final response");
+            }
+        }
+    });
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build redirect test runtime");
+    runtime.block_on(async {
+        let start = format!("http://{address}/start");
+
+        let followed = build_fetch_client(false)
+            .get(&start)
+            .send()
+            .await
+            .expect("follow request");
+        assert_eq!(followed.status(), reqwest::StatusCode::OK);
+        let (url, redirected) = response_url_metadata(&followed, &start);
+        assert!(redirected);
+        assert_eq!(url, format!("http://{address}/final"));
+        assert_eq!(followed.text().await.expect("follow body"), "final");
+
+        let manual = build_fetch_client(true)
+            .get(&start)
+            .send()
+            .await
+            .expect("manual request");
+        assert_eq!(manual.status(), reqwest::StatusCode::FOUND);
+        assert_eq!(
+            manual
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("/final")
+        );
+        let (url, redirected) = response_url_metadata(&manual, &start);
+        assert!(!redirected);
+        assert_eq!(url, start);
+        assert!(!redirect_response_is_error(
+            FetchRedirectMode::Manual,
+            &manual
+        ));
+
+        let error = build_fetch_client(true)
+            .get(&start)
+            .send()
+            .await
+            .expect("error-mode request transport");
+        assert!(redirect_response_is_error(FetchRedirectMode::Error, &error));
+    });
+
+    server.join().expect("redirect test server panicked");
+}
+
+#[test]
 fn headers_round_trip() {
     let h = js_headers_new();
     let key = alloc_string("Content-Type");

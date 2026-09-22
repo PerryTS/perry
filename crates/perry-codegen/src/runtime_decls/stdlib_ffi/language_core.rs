@@ -151,6 +151,9 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // Stashes the `fetch(url, { signal })` AbortSignal for the next
     // `js_fetch_with_options` so the request can be aborted.
     module.declare_function("js_fetch_set_pending_signal", VOID, &[DOUBLE]);
+    // Stashes the parsed `fetch(url, { redirect })` mode for the next
+    // `js_fetch_with_options` call without widening its established ABI.
+    module.declare_function("js_fetch_set_pending_redirect", VOID, &[DOUBLE]);
     // Headers-aware JSON stringify for the `fetch(url, { headers })` request
     // path: takes the headers value (f64) and returns a `*const StringHeader`
     // (i64) holding `{name:value}` JSON, treating a `Headers` handle safely.

@@ -20,6 +20,11 @@ crate::perry_thread_local! {
     /// cell is the only reference across it.
     static PENDING_FETCH_SIGNAL: Cell<f64> =
         const { Cell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+    /// Encoded RequestInit.redirect for the fetch call about to enter
+    /// `js_fetch_with_options`: 0 = absent, 1 = follow, 2 = error, 3 = manual,
+    /// -1 = invalid. Keeping only the enum avoids retaining an unrooted string
+    /// pointer across the FFI boundary.
+    static PENDING_FETCH_REDIRECT: Cell<i32> = const { Cell::new(0) };
 }
 
 /// Root + rewrite the stashed in-flight `fetch` `AbortSignal`.
@@ -52,6 +57,44 @@ pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
         let v = c.get();
         c.set(f64::from_bits(crate::value::TAG_UNDEFINED));
         v
+    })
+}
+
+/// Stash a parsed `RequestInit.redirect` mode for the immediately-following
+/// `js_fetch_with_options` call. The string is read synchronously and no heap
+/// pointer is retained, so the bridge itself needs no GC root.
+#[no_mangle]
+pub extern "C" fn js_fetch_set_pending_redirect(redirect: f64) {
+    let mode = if redirect.to_bits() == crate::value::TAG_UNDEFINED {
+        0
+    } else {
+        let value = crate::value::JSValue::from_bits(redirect.to_bits());
+        if !value.is_string() {
+            -1
+        } else {
+            let redirect =
+                crate::value::js_nanbox_get_pointer(redirect) as *const crate::StringHeader;
+            let len = unsafe { (*redirect).byte_len as usize };
+            let bytes = unsafe { std::slice::from_raw_parts(redirect.add(1) as *const u8, len) };
+            match bytes {
+                b"follow" => 1,
+                b"error" => 2,
+                b"manual" => 3,
+                _ => -1,
+            }
+        }
+    };
+    PENDING_FETCH_REDIRECT.with(|cell| cell.set(mode));
+}
+
+/// Consume and clear the pending redirect mode. An absent option returns 0 so
+/// `fetch(Request)` can inherit the Request object's own redirect setting.
+#[no_mangle]
+pub extern "C" fn js_fetch_take_pending_redirect() -> i32 {
+    PENDING_FETCH_REDIRECT.with(|cell| {
+        let mode = cell.get();
+        cell.set(0);
+        mode
     })
 }
 
@@ -688,10 +731,12 @@ pub(super) extern "C" fn global_this_fetch_thunk(
     let method_ptr = fetch_option_string_ptr(init, b"method");
     let body_ptr = fetch_option_string_ptr(init, b"body");
     let headers_json_ptr = fetch_headers_json_ptr(init);
+    let redirect = fetch_option(init, b"redirect");
 
     // Hand the `init.signal` (if any) to `js_fetch_with_options` so an
     // `AbortController` / `AbortSignal.timeout` can cancel this request.
     js_fetch_set_pending_signal(fetch_option(init, b"signal"));
+    js_fetch_set_pending_redirect(redirect);
 
     let promise =
         unsafe { call_fetch_with_options(url_ptr, method_ptr, body_ptr, headers_json_ptr) };
@@ -699,5 +744,29 @@ pub(super) extern "C" fn global_this_fetch_thunk(
         f64::from_bits(crate::value::TAG_NULL)
     } else {
         crate::value::js_nanbox_pointer(promise as i64)
+    }
+}
+
+#[cfg(test)]
+mod redirect_mode_tests {
+    use super::*;
+
+    #[test]
+    fn pending_redirect_mode_is_parsed_and_consumed_once() {
+        for (text, expected) in [("follow", 1), ("error", 2), ("manual", 3), ("invalid", -1)] {
+            let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            js_fetch_set_pending_redirect(crate::value::js_nanbox_string(ptr as i64));
+            assert_eq!(js_fetch_take_pending_redirect(), expected, "mode {text}");
+            assert_eq!(
+                js_fetch_take_pending_redirect(),
+                0,
+                "mode must be cleared after consumption"
+            );
+        }
+
+        js_fetch_set_pending_redirect(f64::from_bits(crate::value::TAG_UNDEFINED));
+        assert_eq!(js_fetch_take_pending_redirect(), 0);
+        js_fetch_set_pending_redirect(f64::from_bits(crate::value::TAG_NULL));
+        assert_eq!(js_fetch_take_pending_redirect(), -1);
     }
 }
