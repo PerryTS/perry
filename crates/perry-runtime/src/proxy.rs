@@ -3113,11 +3113,19 @@ mod tests {
             "a hole cannot be treated as an object receiver"
         );
 
+        // Class ids alone do not distinguish layouts: equal ordered keys
+        // canonicalize to the same array. Keep both targets present, but swap
+        // their slots so publishing the first receiver's slots would be wrong.
+        let other_packed = b"a\0b\0d\0c\0";
         let other_keys = crate::object::js_build_class_keys_array(
             0x6809_02,
             4,
-            packed.as_ptr(),
-            packed.len() as u32,
+            other_packed.as_ptr(),
+            other_packed.len() as u32,
+        );
+        assert_ne!(
+            keys, other_keys,
+            "fixture requires different ordered key layouts"
         );
         let other = crate::object::js_object_alloc_class_inline_keys(0x6809_02, 0, 4, other_keys);
         let mixed_values = [boxed_object(first), boxed_object(other)];
@@ -3126,7 +3134,7 @@ mod tests {
         assert_eq!(
             object_array_numeric_write_guard(boxed_object(mixed.cast()), &[c, d], 2),
             0,
-            "content-equal but distinct shape keys arrays must not share raw slots"
+            "different ordered key layouts must not share raw slots"
         );
 
         let ranged_values = [
