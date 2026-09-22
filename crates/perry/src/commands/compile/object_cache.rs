@@ -1416,6 +1416,14 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_L14_NBC_ORDER").as_deref().unwrap_or(""),
     );
 
+    // #10884 step 4b — the region kill switch. Same reasoning as the build
+    // cache above, and the same trap #10929 fell into: keying ONE of the two
+    // caches leaves the other serving objects compiled the other way.
+    h.field(
+        "env_region_reads",
+        env_var("PERRY_REGION_READS").as_deref().unwrap_or(""),
+    );
+
     h.finish()
 }
 

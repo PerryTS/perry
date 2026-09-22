@@ -61,6 +61,11 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // machine pipeline for bounded ISel/regalloc. That changes object bytes,
     // so both the build and object caches must distinguish its settings.
     "PERRY_LL_FAST_EMIT_MAX_INSTRS",
+    // #10884 step 4b kill switch: `PERRY_REGION_READS=0` makes both region
+    // slices decline, so every guarded run lowers as individual reads instead
+    // of one shape compare plus a slot load. Different emitted code, so an
+    // object built with regions must not be served to a build without them.
+    "PERRY_REGION_READS",
     // #10777: gates computing numeric-by-construction provenance AFTER the
     // `Ptr<Shape>` receiver proofs it depends on. On, an accumulator written
     // `h = h + o.a` is admitted and the `+` routes to INLINE_FADD; off, the
@@ -222,6 +227,12 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     "PERRY_LLVM_DIFF_DIR",
     "PERRY_REPSEL_DEBUG",
     "PERRY_STATEPOINT_REPORT",
+    // #10884 step 4b census: `PERRY_REGION_DIAG=1` runs `statement_run_census`
+    // over the HIR and prints the counts from `ModuleDiag::drop`. The census
+    // result is read in exactly one place -- that `eprintln!` -- and nothing in
+    // lowering consults it, so the emitted object is byte-identical with the
+    // report on and off.
+    "PERRY_REGION_DIAG",
     // Writes malformed dialect IR for diagnostics without changing emitted code.
     // `opt_report`'s own module doc states the contract this exclusion rests
     // on: "Observational only. Nothing in this module is read by codegen …
