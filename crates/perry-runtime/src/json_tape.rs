@@ -18,7 +18,9 @@ use std::cell::Cell;
 mod cached_read;
 pub use cached_read::{js_lazy_array_index_probe, lazy_get};
 mod iterative;
+mod scan;
 pub(crate) use iterative::materialize_iterative;
+use scan::{skip_number, skip_string, skip_ws};
 mod mutation;
 pub(crate) use mutation::{resolve_materialized_array, set_lazy_index};
 
@@ -147,11 +149,23 @@ fn json_tape_safepoint(_point: JsonTapeSafepoint, _ptr: usize) {}
 pub fn build_tape(bytes: &[u8]) -> Option<Tape> {
     let mut entries: Vec<TapeEntry> = Vec::new();
     let mut stack: Vec<u32> = Vec::new();
-    if build_tape_into::<false>(bytes, &mut entries, &mut stack, &mut 0) {
+    if build_tape_into::<false>(bytes, &mut entries, &mut stack, &mut 0, &mut 0) {
         Some(Tape { entries })
     } else {
         None
     }
+}
+
+/// Re-run the tape's iterative syntax scanner only after a deep parse fails.
+/// Its byte offset is the same location the normal direct parser reports for
+/// shallow input, without recursing on a document beyond the native bound.
+pub(crate) fn malformed_offset(bytes: &[u8]) -> usize {
+    let mut entries = Vec::new();
+    let mut stack = Vec::new();
+    let mut max_depth = 0;
+    let mut offset = bytes.len();
+    let _ = build_tape_into::<true>(bytes, &mut entries, &mut stack, &mut max_depth, &mut offset);
+    offset
 }
 
 /// Build a tape into caller-provided storage. This is the hot-path
@@ -164,6 +178,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
     entries: &mut Vec<TapeEntry>,
     stack: &mut Vec<u32>,
     max_depth: &mut usize,
+    error_pos: &mut usize,
 ) -> bool {
     entries.clear();
     stack.clear();
@@ -177,95 +192,11 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
     // `link` field with the end's tape index.
     let mut pos = 0usize;
 
-    // Helper: skip whitespace.
-    #[inline(always)]
-    fn skip_ws(bytes: &[u8], pos: &mut usize) {
-        while *pos < bytes.len() {
-            match bytes[*pos] {
-                b' ' | b'\t' | b'\n' | b'\r' => *pos += 1,
-                _ => break,
-            }
-        }
-    }
-
-    // Helper: validate and skip a JSON string in place (past the closing
-    // quote). Decoding remains deferred to materialization.
-    #[inline(always)]
-    fn skip_string(bytes: &[u8], pos: &mut usize) -> bool {
-        debug_assert_eq!(bytes[*pos], b'"');
-        *pos += 1;
-        while *pos < bytes.len() {
-            let Some(offset) = crate::json::simd::find_string_terminator(&bytes[*pos..]) else {
-                *pos = bytes.len();
-                return false;
-            };
-            *pos += offset;
-            let c = bytes[*pos];
-            if c == b'"' {
-                *pos += 1;
-                return true;
-            }
-            if c == b'\\' {
-                *pos += 1;
-                if *pos >= bytes.len() {
-                    return false;
-                }
-                match bytes[*pos] {
-                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => *pos += 1,
-                    b'u' => {
-                        *pos += 1;
-                        if *pos + 4 > bytes.len()
-                            || !bytes[*pos..*pos + 4].iter().all(u8::is_ascii_hexdigit)
-                        {
-                            return false;
-                        }
-                        *pos += 4;
-                    }
-                    _ => return false,
-                }
-            } else if c < 0x20 {
-                return false;
-            } else {
-                *pos += 1;
-            }
-        }
-        false
-    }
-
-    // Helper: validate and skip a JSON number (past its last digit/exponent).
-    #[inline(always)]
-    fn skip_number(bytes: &[u8], pos: &mut usize) -> bool {
-        if *pos < bytes.len() && bytes[*pos] == b'-' {
-            *pos += 1;
-        }
-        match bytes.get(*pos) {
-            Some(b'0') => *pos += 1,
-            Some(b'1'..=b'9') => {
-                *pos += 1;
-                *pos += crate::json::simd::count_ascii_digits(&bytes[*pos..]);
-            }
-            _ => return false,
-        }
-        if *pos < bytes.len() && bytes[*pos] == b'.' {
-            *pos += 1;
-            let fraction_start = *pos;
-            *pos += crate::json::simd::count_ascii_digits(&bytes[*pos..]);
-            if *pos == fraction_start {
-                return false;
-            }
-        }
-        if *pos < bytes.len() && (bytes[*pos] == b'e' || bytes[*pos] == b'E') {
-            *pos += 1;
-            if *pos < bytes.len() && (bytes[*pos] == b'+' || bytes[*pos] == b'-') {
-                *pos += 1;
-            }
-            let exponent_start = *pos;
-            *pos += crate::json::simd::count_ascii_digits(&bytes[*pos..]);
-            if *pos == exponent_start {
-                return false;
-            }
-        }
-        true
+    macro_rules! invalid {
+        () => {{
+            *error_pos = pos;
+            return false;
+        }};
     }
 
     // Driver: expecting-value state. After emitting a value, the
@@ -296,7 +227,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                         if CAPTURE_DEPTH {
                             *max_depth = (*max_depth).max(stack.len());
                             if *max_depth > crate::json::MAX_ITERATIVE_NESTING_DEPTH {
-                                return false;
+                                invalid!();
                             }
                         }
                         pos += 1;
@@ -318,11 +249,11 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                             state = State::Value;
                             // Immediately parse the key.
                             if pos >= bytes.len() || bytes[pos] != b'"' {
-                                return false;
+                                invalid!();
                             }
                             let key_off = pos as u32;
                             if !skip_string(bytes, &mut pos) {
-                                return false;
+                                invalid!();
                             }
                             entries.push(TapeEntry {
                                 offset: key_off,
@@ -331,7 +262,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                             });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
-                                return false;
+                                invalid!();
                             }
                             pos += 1;
                         }
@@ -347,7 +278,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                         if CAPTURE_DEPTH {
                             *max_depth = (*max_depth).max(stack.len());
                             if *max_depth > crate::json::MAX_ITERATIVE_NESTING_DEPTH {
-                                return false;
+                                invalid!();
                             }
                         }
                         pos += 1;
@@ -369,7 +300,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                     }
                     b'"' => {
                         if !skip_string(bytes, &mut pos) {
-                            return false;
+                            invalid!();
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -380,7 +311,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                     }
                     b't' => {
                         if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"true" {
-                            return false;
+                            invalid!();
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -392,7 +323,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                     }
                     b'f' => {
                         if pos + 5 > bytes.len() || &bytes[pos..pos + 5] != b"false" {
-                            return false;
+                            invalid!();
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -404,7 +335,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                     }
                     b'n' => {
                         if pos + 4 > bytes.len() || &bytes[pos..pos + 4] != b"null" {
-                            return false;
+                            invalid!();
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -416,7 +347,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                     }
                     c if c == b'-' || c.is_ascii_digit() => {
                         if !skip_number(bytes, &mut pos) {
-                            return false;
+                            invalid!();
                         }
                         entries.push(TapeEntry {
                             offset: tok_off,
@@ -425,7 +356,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                         });
                         state = State::AfterValue;
                     }
-                    _ => return false,
+                    _ => invalid!(),
                 }
             }
             State::AfterValue => {
@@ -443,11 +374,11 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                             // Expect next key.
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b'"' {
-                                return false;
+                                invalid!();
                             }
                             let key_off = pos as u32;
                             if !skip_string(bytes, &mut pos) {
-                                return false;
+                                invalid!();
                             }
                             entries.push(TapeEntry {
                                 offset: key_off,
@@ -456,7 +387,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                             });
                             skip_ws(bytes, &mut pos);
                             if pos >= bytes.len() || bytes[pos] != b':' {
-                                return false;
+                                invalid!();
                             }
                             pos += 1;
                         }
@@ -486,7 +417,7 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
                         pos += 1;
                         state = State::AfterValue;
                     }
-                    _ => return false,
+                    _ => invalid!(),
                 }
             }
         }
@@ -494,10 +425,10 @@ fn build_tape_into<const CAPTURE_DEPTH: bool>(
 
     skip_ws(bytes, &mut pos);
     if pos != bytes.len() || !stack.is_empty() {
-        return false;
+        invalid!();
     }
     if entries.is_empty() {
-        return false;
+        invalid!();
     }
     true
 }
@@ -564,11 +495,13 @@ unsafe fn with_built_tape_depth_impl<const CAPTURE_DEPTH: bool, R>(
     TAPE_SCRATCH.with(|cell| {
         let mut scratch = cell.take().unwrap_or_else(TapeScratch::new);
         let mut max_depth = 0;
+        let mut error_pos = 0;
         let built = build_tape_into::<CAPTURE_DEPTH>(
             std::slice::from_raw_parts(data, len),
             &mut scratch.entries,
             &mut scratch.stack,
             &mut max_depth,
+            &mut error_pos,
         );
         let result = if built {
             Some(f(&mut scratch.entries, max_depth))
