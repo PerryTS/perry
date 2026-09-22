@@ -222,12 +222,30 @@ per_test_global! {
     static REFUSED: AtomicU64 = AtomicU64::new(0);
 }
 
-/// Jobs accepted and not yet delivered, across every thread.
-///
-/// Process-wide on purpose: it answers the event loop's keep-alive question
-/// ("may this process exit?"), which is asked by the primary agent about the
-/// whole process, while the entry tables are per-thread.
-static OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
+per_test_global! {
+    /// Jobs accepted and not yet delivered, across every thread.
+    ///
+    /// Process-wide on purpose: it answers the event loop's keep-alive question
+    /// ("may this process exit?"), which is asked by the primary agent about the
+    /// whole process, while the entry tables are per-thread. OUTSIDE a test build
+    /// `per_test_global!` IS that plain `static`, byte for byte, so the keep-alive
+    /// gate is unchanged in every shipped configuration.
+    ///
+    /// `per_test_global!` because tests assert on it through `has_pending_jobs()`
+    /// (`tests.rs:180` "an accepted job keeps the loop alive", `:533` "the
+    /// keep-alive gate is released") and `reset_for_test` writes it, so a bare
+    /// static would let one test's residue decide another's verdict.
+    ///
+    /// No `adopt` needed, for the same reason as `REFUSED` above: every access
+    /// is on the SUBMITTING thread. `submit` increments; the decrement rides
+    /// `OutstandingGuard`, dropped inside `deliver`, which can only retire a job
+    /// it found in the thread-local `POOL` table — the suite asserts exactly that
+    /// ("the delivery must run on the submitting thread, where JS lives",
+    /// `tests.rs:172`). `reset_for_test` likewise subtracts only this thread's
+    /// leftover. Contrast `NOTIFY_AT_NS`, which a different thread writes and so
+    /// needs `shared_key`/`adopt`.
+    static OUTSTANDING: AtomicUsize = AtomicUsize::new(0);
+}
 
 /// Jobs submitted to the pool over this process's life.
 pub fn submitted_total() -> u64 {
