@@ -516,11 +516,27 @@ pub(crate) unsafe fn extend(parent: CanonicalKeys, appended: Appended) -> Canoni
     // in the header, where `rebuild_array_layout_from_slots` would install a
     // per-object side mask — and one live mask entry arms the address filter
     // for the whole program (`Node::all_ptr`).
-    let born = if all_ptr {
-        crate::array::js_array_alloc_pointer_elements(parent_len + 1)
-    } else {
-        crate::array::js_array_alloc(parent_len + 1)
-    };
+    // LONGLIVED, and this is load-bearing rather than a placement preference.
+    // `CLASS_KEYS_BY_ID` (`alloc.rs:remember_class_keys_array`) stores the
+    // shape cache's keys array as a raw `usize` with NO root scanner and NO
+    // prune — safe for the array it used to hold, because that one came from
+    // `js_array_alloc_with_length_longlived` and never moves (#179). A
+    // nursery-allocated canonical array substituted into that cache DOES
+    // move, and nothing rewrites the table, so a later class allocation reads
+    // a stale address. That is the defect
+    // `descriptor_trap_collection_preserves_for_in_target_and_keys` caught,
+    // and the reason it caught it is that its trap collects once per key:
+    // fourteen collections through one enumeration, where the `ownKeys`
+    // sibling collects once and saw nothing.
+    let born = crate::array::js_array_alloc_with_length_longlived(parent_len + 1);
+    // The allocator above sets `length = capacity`; the slots are written and
+    // the length re-published below, so expose nothing until then.
+    unsafe { (*born).length = 0 };
+    if all_ptr {
+        // Same claim the pointer-elements allocator makes, on an array that
+        // has to come from the longlived arena instead.
+        unsafe { crate::gc::layout_init_all_pointer_slots(born as *mut u8) };
+    }
     let fresh_handle = scope.root_raw_mut_ptr(born);
 
     let parent = CanonicalKeys(parent_handle.get_raw_mut_ptr::<ArrayHeader>());
