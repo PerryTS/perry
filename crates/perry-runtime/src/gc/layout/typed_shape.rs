@@ -659,8 +659,7 @@ pub extern "C" fn js_gc_declare_typed_shape_layout(
 mod imported_shape_slot_tests {
     use super::*;
 
-    fn keys_for(class_id: u32) -> u64 {
-        let packed = b"next\0value\0";
+    fn keys_for(class_id: u32, packed: &[u8]) -> u64 {
         crate::object::js_build_class_keys_array(class_id, 2, packed.as_ptr(), packed.len() as u32)
             as usize as u64
     }
@@ -675,8 +674,8 @@ mod imported_shape_slot_tests {
         guard: Box<u32>,
     }
 
-    fn slots(class_id: u32) -> Slots {
-        let keys = keys_for(class_id);
+    fn slots(class_id: u32, packed: &[u8]) -> Slots {
+        let keys = keys_for(class_id, packed);
         let ordinary = crate::object::shapes::js_object_shape_id_for_keys(keys, 2);
         Slots {
             keys: Box::new(keys),
@@ -733,7 +732,7 @@ mod imported_shape_slot_tests {
     #[test]
     fn slots_registered_before_the_typed_id_are_rewritten_at_mint() {
         let class_id = 0x0B1_1001;
-        let mut s = slots(class_id);
+        let mut s = slots(class_id, b"next\0value\0");
         let ordinary = *s.shape;
         register(class_id, &mut s);
         assert_eq!(*s.shape, ordinary, "nothing typed exists yet");
@@ -746,7 +745,7 @@ mod imported_shape_slot_tests {
     #[test]
     fn slots_registered_after_the_typed_id_are_rewritten_immediately() {
         let class_id = 0x0B1_1002;
-        let mut s = slots(class_id);
+        let mut s = slots(class_id, b"next\0value\0");
         let typed = mint(class_id, *s.keys);
         register(class_id, &mut s);
         assert_published(class_id, &s, typed);
@@ -757,7 +756,7 @@ mod imported_shape_slot_tests {
     #[test]
     fn a_disabled_inline_path_keeps_imported_expectations_poisoned() {
         let class_id = 0x0B1_1005;
-        let mut s = slots(class_id);
+        let mut s = slots(class_id, b"next\0value\0");
         register(class_id, &mut s);
         crate::object::disable_class_field_inline_guard();
         assert_eq!(
@@ -781,7 +780,10 @@ mod imported_shape_slot_tests {
     fn mismatched_slots_keep_their_ordinary_id() {
         let class_id = 0x0B1_1003;
         let other_class = 0x0B1_1004;
-        let mut foreign = slots(other_class);
+        // A different class id with equal keys now shares the same canonical
+        // array. Use different names, with the same slot count, to isolate
+        // the keys mismatch from the independent count mismatch below.
+        let mut foreign = slots(other_class, b"other_next\0other_value\0");
         let foreign_ordinary = *foreign.shape;
         js_register_imported_class_shape_slot(
             class_id,
@@ -791,7 +793,11 @@ mod imported_shape_slot_tests {
             foreign.image.as_mut_ptr(),
             &mut *foreign.guard as *mut u32,
         );
-        let mut narrow = slots(class_id);
+        let mut narrow = slots(class_id, b"next\0value\0");
+        assert_ne!(
+            *foreign.keys, *narrow.keys,
+            "fixture requires different canonical keys arrays"
+        );
         let narrow_ordinary = *narrow.shape;
         js_register_imported_class_shape_slot(
             class_id,
