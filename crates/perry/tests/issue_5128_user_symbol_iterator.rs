@@ -88,9 +88,9 @@ console.log(it.next().value, it.next().value, it.next().done);
     );
 }
 
-/// The same fix must apply to class *expressions* — `lower_class_from_ast`
-/// mirrors `lower_class_decl`, so `new (class { *[Symbol.iterator]() {…} })()`
-/// and a named class-expression binding are iterable for every runtime consumer.
+/// The same fix must apply to class *expressions*. A direct `new (class
+/// { *[Symbol.iterator]() {…} })()` uses a separate lowering arm that must
+/// register its computed method before constructing the instance (#10839).
 #[test]
 fn class_expression_generator_symbol_iterator_is_iterable() {
     let dir = tempfile::tempdir().expect("tempdir");
