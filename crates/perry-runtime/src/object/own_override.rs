@@ -115,7 +115,28 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
             header.obj_type,
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
         ) {
-            return i32::from(header._reserved & crate::gc::GC_ARRAY_NAMED_PROPS != 0);
+            if header._reserved & crate::gc::GC_ARRAY_NAMED_PROPS != 0 {
+                return 1;
+            }
+            // The bit is NOT a proof of absence, which this module's own rule
+            // ("never answer 0 for anything it cannot prove") forbids relying
+            // on. An array has a THIRD place for an own named property: the
+            // descriptor side table that `get_accessor_descriptor` reads and
+            // `array_own_key_present` consults BEFORE the bit-flagged named
+            // props. `a.push = () => 1` lands there — measured: neither
+            // `array_named_property_set` nor `expando_store` runs, yet
+            // `hasOwn` is true, `typeof` is "function" and `Object.keys`
+            // shows it. Reflection was right and this tier was reading the
+            // wrong table.
+            //
+            // So when any descriptor exists anywhere, ask the authoritative
+            // predicate instead of answering 0. When none does — the
+            // overwhelmingly common case — the bit stands and this stays one
+            // load and a test.
+            if !crate::state::state().descriptors.accessors_in_use.get() {
+                return 0;
+            }
+            return authoritative_has_own(recv, name_ptr, name_len);
         }
     } else {
         // No readable GC header. Cannot prove absence — decline.
@@ -129,6 +150,16 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
         return 0;
     }
 
+    authoritative_has_own(recv, name_ptr, name_len)
+}
+
+/// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
+/// correctly for every cell kind and needs no readable ShapeId.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value; `name_ptr`/`name_len` name this call's
+/// method.
+unsafe fn authoritative_has_own(recv: f64, name_ptr: *const u8, name_len: usize) -> i32 {
     if name_ptr.is_null() || name_len == 0 {
         return 1;
     }
