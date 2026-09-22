@@ -1,0 +1,1 @@
+Fix `String(arrayBuffer)`, `String(sharedArrayBuffer)`, and DataView string conversion to return their `[object …]` tags instead of decoding backing bytes. The same correction applies to template interpolation and `.toString()` with or without an argument; Node Buffer still decodes its bytes.

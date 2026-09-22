@@ -491,7 +491,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
     MethodRow {
         method: "buttonSetImage",
         runtime: "perry_ui_button_set_image",
-        args: &[ArgKind::Widget, ArgKind::Str],
+        args: &[ArgKind::Widget, ArgKind::Str, ArgKind::F64],
         ret: ReturnKind::Void,
     },
     MethodRow {

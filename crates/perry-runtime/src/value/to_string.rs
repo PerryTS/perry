@@ -1147,11 +1147,14 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                     return js_jsvalue_to_string(primitive);
                 }
             }
-            // Buffers: BufferHeader has no GC header, so we must detect via
-            // BUFFER_REGISTRY before any GC-header probe (which would read
-            // garbage one word before the buffer). `Buffer.toString()` with
-            // no arg defaults to UTF-8 — Node prints the raw bytes.
+            // BufferHeader-backed values need handling before GC-header probes.
+            // ArrayBuffer, SharedArrayBuffer, and DataView inherit object tags.
             if crate::buffer::is_registered_buffer(ptr as usize) {
+                if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
+                    let branded = unsafe { crate::object::js_object_to_string(value) };
+                    return (branded.to_bits() & 0x0000_FFFF_FFFF_FFFF)
+                        as *mut crate::string::StringHeader;
+                }
                 return crate::buffer::js_buffer_to_string(
                     ptr as *const crate::buffer::BufferHeader,
                     0,

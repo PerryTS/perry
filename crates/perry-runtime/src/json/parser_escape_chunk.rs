@@ -16,9 +16,9 @@ impl DirectParser<'_> {
         let mut pos = self.pos;
         let limit = pos + 52;
         macro_rules! invalid {
-            () => {{
+            ($at:expr) => {{
                 self.pos = pos;
-                self.valid = false;
+                self.mark_invalid_at($at);
                 return None;
             }};
         }
@@ -58,7 +58,11 @@ impl DirectParser<'_> {
                             let Some(code) =
                                 decode_hex_u16(unsafe { self.input.get_unchecked(pos..pos + 4) })
                             else {
-                                invalid!();
+                                let bad = self.input[pos..pos + 4]
+                                    .iter()
+                                    .position(|byte| !byte.is_ascii_hexdigit())
+                                    .unwrap_or(0);
+                                invalid!(pos + bad);
                             };
                             pos += 4;
                             let low = if (0xd800..=0xdbff).contains(&code)
@@ -102,10 +106,10 @@ impl DirectParser<'_> {
                             }
                             written += length;
                         }
-                        _ => invalid!(),
+                        _ => invalid!(pos - 1),
                     }
                 }
-                c if c < 0x20 => invalid!(),
+                c if c < 0x20 => invalid!(pos - 1),
                 _ => put!(ch),
             }
         }

@@ -13,7 +13,7 @@ use crate::widgets;
 /// Set an icon on a button (e.g. `Button({label, image})`). GTK4: maps the icon
 /// name to GtkButton::set_icon_name (icon-naming-spec / SF-Symbols-style names).
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64) {
+pub extern "C" fn perry_ui_button_set_image(handle: i64, name_ptr: i64, _point_size: f64) {
     widgets::button::set_image(handle, name_ptr as *const u8);
 }
 

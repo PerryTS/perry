@@ -491,6 +491,27 @@ jobs:
           python3 scripts/gc_root_dominance_check.py --self-test
           python3 scripts/gc_root_dominance_check.py --audit-poll-reach
 
+      # Same argument as the audit above, one layer down. `runtime_symbols`
+      # recognises a MACRO-DEFINED export by item position -- column 0 -- which
+      # is a heuristic. It is allowed to be one because a miss is caught:
+      # `--verify-symbols` compares the scanner against `nm` on the built
+      # archives. But that needs a build, so it lives in
+      # `gc-root-dominance.yml`, which is label-gated and speaks only on
+      # scheduled `main` runs, AFTER the fact -- the exact omission #8821 moved
+      # the poll-reach audit here to prevent.
+      #
+      # This is the build-free half, and it enforces the heuristic's
+      # precondition rather than its result: an export macro wrapped in an
+      # inline `mod` sits at an indent and would be invisible. Sub-second, no
+      # corpus, no build, and `lint` IS a required context -- so the shape gets
+      # rejected at PR time instead of costing coverage until someone reads a
+      # sweep. Scanner under-counts have shipped twice (#8207: 18 symbols
+      # including js_throw; 2026-09-22: 56 via macros), both silent, both
+      # toward green.
+      - name: Macro-defined export item position (GC root dominance)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/gc_root_dominance_check.py --audit-macro-item-position
+
       # #8530. Mutable-root scanner registries are thread-local, so guarding a
       # registration call with a process-global Once/OnceLock/AtomicBool (or a
       # mutex boolean) leaves every heap after the first without those roots.
@@ -815,6 +836,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/global_sink_isolation.py --self-test
+          # #10980: the lock-downgrade gate runs at MERGE time, not per-PR
+          # (a branch that merely predates a bump is not at fault, and failing
+          # those trains people to bypass it). Only its self-test belongs here
+          # -- it proves the detector still catches a downgrade and still
+          # passes every legitimate move.
+          python3 scripts/lock_no_downgrade.py --self-test
           python3 scripts/global_sink_isolation.py
 
       # #10944's asserted-global ratchet, merge-base half. The gate above

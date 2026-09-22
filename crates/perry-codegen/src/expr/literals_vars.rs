@@ -621,113 +621,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
 
             let v = lower_expr(ctx, value)?;
-            // `target = source` creates the same string-buffer alias as a
-            // `let target = source` initializer. The declaration path has
-            // demoted this shape since #5552, but assignment aliases were
-            // previously missed. Async lowering expresses mid-body snapshot
-            // variables as LocalSet, making that gap observable as the saved
-            // string growing in place with its boxed accumulator (#8432).
-            if matches!(value.as_ref(), Expr::LocalGet(source_id) if source_id != id) {
-                super::helpers::emit_string_addref_if_heap_string(ctx, &v);
-            }
-            // Closure captures first (write through the runtime), then
-            // locals, then module globals.
-            if let Some(&capture_idx) = ctx.closure_captures.get(id) {
-                let idx_str = capture_idx.to_string();
-                // Boxed captured var: read the box pointer from the
-                // capture slot, then js_box_set_bits to update the shared
-                // cell. Do NOT overwrite the capture slot — it holds
-                // the box pointer, not the value.
-                if ctx.boxed_vars.contains(id) {
-                    if let Some(capture) = ctx.trusted_box_capture_ptrs.get(id).cloned() {
-                        let v_bits = ctx.block().bitcast_double_to_i64(&v);
-                        ctx.block().store(I64, &v_bits, &capture.ptr);
-                        // Gen-GC Phase C2: barrier — box is the parent.
-                        emit_write_barrier(ctx, &capture.bits, &v_bits);
-                    } else {
-                        let closure_ptr =
-                            super::current_closure_ptr_value(ctx, "captured boxed local set")?;
-                        let setter = if ctx.trusted_box_captures {
-                            "js_box_set_bits_trusted_no_barrier"
-                        } else {
-                            "js_box_set_bits"
-                        };
-                        let blk = ctx.block();
-                        let box_ptr = blk.call(
-                            I64,
-                            "js_closure_get_capture_bits",
-                            &[(I64, &closure_ptr), (I32, &idx_str)],
-                        );
-                        let v_bits = blk.bitcast_double_to_i64(&v);
-                        blk.call_void(setter, &[(I64, &box_ptr), (I64, &v_bits)]);
-                        // Gen-GC Phase C2: barrier — box is the parent.
-                        emit_write_barrier(ctx, &box_ptr, &v_bits);
-                    }
-                } else {
-                    let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
-                    let v_bits = ctx.block().bitcast_double_to_i64(&v);
-                    ctx.block().call_void(
-                        "js_closure_set_capture_bits",
-                        &[(I64, &closure_ptr), (I32, &idx_str), (I64, &v_bits)],
-                    );
-                    // Gen-GC Phase C2: barrier — closure is the parent.
-                    emit_write_barrier(ctx, &closure_ptr, &v_bits);
-                }
-            } else if ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id) {
-                // Box path — only for non-global locals. Module globals
-                // have their own shared storage and don't need boxing.
-                // Without the !module_globals guard, closures that
-                // modify a module-level variable would silently skip
-                // the store (ctx.locals doesn't have the global's slot).
-                if let Some(slot) = ctx.locals.get(id).cloned() {
-                    let blk = ctx.block();
-                    let box_ptr = blk.load(I64, &slot);
-                    let v_bits = blk.bitcast_double_to_i64(&v);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &v_bits)]);
-                    // Gen-GC Phase C2: barrier — box is the parent (mirror the
-                    // captured-box path above; an old box can else miss a young
-                    // object/string/array value).
-                    emit_write_barrier(ctx, &box_ptr, &v_bits);
-                }
-            } else if crate::expr::store_canonical_local_from_double(ctx, *id, &v, Some(value)) {
-                // Repsel Phase 1: canonical-i32 local — the NaN-safe helper
-                // stored the value into the (only) i32 slot. No double store,
-                // no shadow-frame traffic (the slot is never bound: the value
-                // is a number, never a pointer).
-            } else if let Some(slot) = ctx.locals.get(id).cloned() {
-                ctx.block().store(DOUBLE, &v, &slot);
-                // Gen-GC Phase A sub-phase 3b: mirror pointer-typed
-                // writes into the shadow frame. See stmt.rs::Let
-                // for the allocation-site mirror; LocalSet is the
-                // reassignment-site mirror.
-                emit_shadow_slot_update_for_expr(ctx, *id, &v, value);
-                // Mirror to the parallel i32 slot allocated for int32-stable
-                // locals (issue #48). Without this, the i32 slot would go
-                // stale on every `sum = (sum + i) | 0` write.
-                // Use fptosi→i64 + trunc→i32 to safely handle unsigned values
-                // (e.g. xorshift state `s = ... >>> 0` where double > INT32_MAX).
-                if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
-                    let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
-                    let v_i32 = ctx.block().trunc(crate::types::I64, &v_i64, I32);
-                    ctx.block().store(I32, &v_i32, &i32_slot);
-                }
-            } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
-                emit_root_nanbox_store_for_expr(ctx, &v, &g_ref, value);
-            }
-            super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
-            if ctx.receiver_descriptors.contains_buffer_view(id)
-                || matches!(
-                    value.as_ref(),
-                    Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) | Expr::Uint8ArrayNew(_)
-                )
-            {
-                super::update_buffer_view_for_assignment(ctx, *id, value, &v);
-            }
-            super::record_int_facts_for_local_set(ctx, *id, value);
-            // Soft fallback: drop the store on the floor for missing
-            // locals. See LocalGet for the rationale.
+            bind_lowered_value_to_local(ctx, *id, &v, value)?;
             Ok(v)
         }
 
@@ -1272,4 +1166,138 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
         }
         _ => None,
     }
+}
+
+/// Bind an already-lowered value to a local — every obligation a
+/// `LocalSet` discharges after its initialiser has been lowered: the alias
+/// addref, closure captures and boxed cells, the canonical-i32 slot, the
+/// plain-slot store with its shadow-frame mirror and i32 mirror, module
+/// globals, the arena owner, buffer views and int facts.
+///
+/// Extracted from `Expr::LocalSet`'s arm VERBATIM (#10946 follow-up) so that
+/// a caller holding a value it did not lower through `lower_expr` — a
+/// region's fast arm, which loads the slot directly — binds it through the
+/// SAME code as the generic arm beside it, instead of a bare store that has
+/// to remember each obligation separately. A skipped addref here is a
+/// use-after-free that no fixture reliably catches, so the guarantee wanted
+/// is structural: there is ONE place where a value becomes a local.
+///
+/// `value` is the initialiser expression, used only for the hints the
+/// obligations are keyed on (is this an alias, a buffer allocation, an
+/// integer fact); it is NOT lowered here — the caller has already done that
+/// and passes the result as `v`.
+pub(crate) fn bind_lowered_value_to_local(
+    ctx: &mut FnCtx<'_>,
+    id: u32,
+    v: &str,
+    value: &Expr,
+) -> Result<()> {
+    // `target = source` creates the same string-buffer alias as a
+    // `let target = source` initializer. The declaration path has
+    // demoted this shape since #5552, but assignment aliases were
+    // previously missed. Async lowering expresses mid-body snapshot
+    // variables as LocalSet, making that gap observable as the saved
+    // string growing in place with its boxed accumulator (#8432).
+    if matches!(value, Expr::LocalGet(source_id) if *source_id != id) {
+        super::helpers::emit_string_addref_if_heap_string(ctx, v);
+    }
+    // Closure captures first (write through the runtime), then
+    // locals, then module globals.
+    if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
+        let idx_str = capture_idx.to_string();
+        // Boxed captured var: read the box pointer from the
+        // capture slot, then js_box_set_bits to update the shared
+        // cell. Do NOT overwrite the capture slot — it holds
+        // the box pointer, not the value.
+        if ctx.boxed_vars.contains(&id) {
+            if let Some(capture) = ctx.trusted_box_capture_ptrs.get(&id).cloned() {
+                let v_bits = ctx.block().bitcast_double_to_i64(v);
+                ctx.block().store(I64, &v_bits, &capture.ptr);
+                // Gen-GC Phase C2: barrier — box is the parent.
+                emit_write_barrier(ctx, &capture.bits, &v_bits);
+            } else {
+                let closure_ptr =
+                    super::current_closure_ptr_value(ctx, "captured boxed local set")?;
+                let setter = if ctx.trusted_box_captures {
+                    "js_box_set_bits_trusted_no_barrier"
+                } else {
+                    "js_box_set_bits"
+                };
+                let blk = ctx.block();
+                let box_ptr = blk.call(
+                    I64,
+                    "js_closure_get_capture_bits",
+                    &[(I64, &closure_ptr), (I32, &idx_str)],
+                );
+                let v_bits = blk.bitcast_double_to_i64(v);
+                blk.call_void(setter, &[(I64, &box_ptr), (I64, &v_bits)]);
+                // Gen-GC Phase C2: barrier — box is the parent.
+                emit_write_barrier(ctx, &box_ptr, &v_bits);
+            }
+        } else {
+            let closure_ptr = super::current_closure_ptr_value(ctx, "captured local set")?;
+            let v_bits = ctx.block().bitcast_double_to_i64(v);
+            ctx.block().call_void(
+                "js_closure_set_capture_bits",
+                &[(I64, &closure_ptr), (I32, &idx_str), (I64, &v_bits)],
+            );
+            // Gen-GC Phase C2: barrier — closure is the parent.
+            emit_write_barrier(ctx, &closure_ptr, &v_bits);
+        }
+    } else if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) {
+        // Box path — only for non-global locals. Module globals
+        // have their own shared storage and don't need boxing.
+        // Without the !module_globals guard, closures that
+        // modify a module-level variable would silently skip
+        // the store (ctx.locals doesn't have the global's slot).
+        if let Some(slot) = ctx.locals.get(&id).cloned() {
+            let blk = ctx.block();
+            let box_ptr = blk.load(I64, &slot);
+            let v_bits = blk.bitcast_double_to_i64(v);
+            blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &v_bits)]);
+            // Gen-GC Phase C2: barrier — box is the parent (mirror the
+            // captured-box path above; an old box can else miss a young
+            // object/string/array value).
+            emit_write_barrier(ctx, &box_ptr, &v_bits);
+        }
+    } else if crate::expr::store_canonical_local_from_double(ctx, id, v, Some(value)) {
+        // Repsel Phase 1: canonical-i32 local — the NaN-safe helper
+        // stored the value into the (only) i32 slot. No double store,
+        // no shadow-frame traffic (the slot is never bound: the value
+        // is a number, never a pointer).
+    } else if let Some(slot) = ctx.locals.get(&id).cloned() {
+        ctx.block().store(DOUBLE, v, &slot);
+        // Gen-GC Phase A sub-phase 3b: mirror pointer-typed
+        // writes into the shadow frame. See stmt.rs::Let
+        // for the allocation-site mirror; LocalSet is the
+        // reassignment-site mirror.
+        emit_shadow_slot_update_for_expr(ctx, id, v, value);
+        // Mirror to the parallel i32 slot allocated for int32-stable
+        // locals (issue #48). Without this, the i32 slot would go
+        // stale on every `sum = (sum + i) | 0` write.
+        // Use fptosi→i64 + trunc→i32 to safely handle unsigned values
+        // (e.g. xorshift state `s = ... >>> 0` where double > INT32_MAX).
+        if let Some(i32_slot) = ctx.i32_counter_slots.get(&id).cloned() {
+            let v_i64 = ctx.block().fptosi(DOUBLE, v, crate::types::I64);
+            let v_i32 = ctx.block().trunc(crate::types::I64, &v_i64, I32);
+            ctx.block().store(I32, &v_i32, &i32_slot);
+        }
+    } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
+        let g_ref = format!("@{}", global_name);
+        // GC_STORE_AUDIT(ROOT): module global slot is registered as a mutable GC root.
+        emit_root_nanbox_store_for_expr(ctx, v, &g_ref, value);
+    }
+    super::record_native_arena_owner_assignment(ctx, id, value);
+    if ctx.receiver_descriptors.contains_buffer_view(id)
+        || matches!(
+            value,
+            Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) | Expr::Uint8ArrayNew(_)
+        )
+    {
+        super::update_buffer_view_for_assignment(ctx, id, value, v);
+    }
+    super::record_int_facts_for_local_set(ctx, id, value);
+    // Soft fallback: drop the store on the floor for missing
+    // locals. See LocalGet for the rationale.
+    Ok(())
 }

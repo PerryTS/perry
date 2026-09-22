@@ -39,8 +39,13 @@ A clickable button.
 ```
 
 **Helpers:** `buttonSetTitle`, `buttonSetBordered`, `buttonSetImage`
-(SF Symbol name on macOS/iOS), `buttonSetImagePosition`,
+(SF Symbol name and optional point size on Apple platforms), `buttonSetImagePosition`,
 `buttonSetContentTintColor`, `buttonSetTextColor`, `widgetSetEnabled`.
+On macOS, `buttonSetFontFamily(button, "Menlo")` changes the title font while
+retaining its size and weight; it also works after `buttonSetTextColor`.
+
+Pass a point size for compact icon buttons, for example
+`buttonSetImage(copyButton, "doc.on.doc", 14)` inside a 32pt control.
 
 ## TextField
 

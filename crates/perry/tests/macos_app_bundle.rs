@@ -95,16 +95,22 @@ fn compile(root: &Path, runtime: &Path, source: &str, output: &str) -> PathBuf {
     root.join(result["output"].as_str().unwrap())
 }
 
-fn verify_bundle(app: &Path) {
+fn verify_bundle(app: &Path, expected_name: &str, expected_version: &str) {
     let mut plutil = Command::new("/usr/bin/plutil");
     plutil
         .args(["-convert", "json", "-o", "-"])
         .arg(app.join("Contents/Info.plist"));
     let plist: serde_json::Value = serde_json::from_slice(&checked(plutil).stdout).unwrap();
     assert_eq!(plist["CFBundleIdentifier"], "dev.perry.bundle10078");
-    assert_eq!(plist["CFBundleDisplayName"], "Perry & Bundle");
-    assert_eq!(plist["CFBundleShortVersionString"], "2.3.4");
+    assert_eq!(plist["CFBundleName"], expected_name);
+    assert_eq!(plist["CFBundleDisplayName"], expected_name);
+    assert_eq!(plist["CFBundleShortVersionString"], expected_version);
     assert_eq!(plist["CFBundleVersion"], "7");
+    assert_eq!(plist["CFBundleIconFile"], "AppIcon.icns");
+    assert_eq!(
+        std::fs::read(app.join("Contents/Resources/AppIcon.icns")).unwrap(),
+        b"icns\0\0\0\x08"
+    );
     assert_eq!(plist["CFBundlePackageType"], "APPL");
     assert!(plist["NSCameraUsageDescription"].is_string());
     assert!(plist["NSMicrophoneUsageDescription"].is_string());
@@ -144,6 +150,7 @@ fn ui_outputs_are_signed_bundles_with_resources_and_final_binary_attestations() 
     let root = dir.path();
     std::fs::create_dir(root.join("assets")).unwrap();
     std::fs::write(root.join("assets/message.txt"), "bundle asset\n").unwrap();
+    std::fs::write(root.join("assets/AppIcon.icns"), b"icns\0\0\0\x08").unwrap();
     std::fs::write(root.join("package.json"), r#"{"type":"module"}"#).unwrap();
     std::fs::write(
         root.join("perry.toml"),
@@ -172,7 +179,7 @@ App({ title: "Bundle test", body: Text("Bundle test") });
         root.join("My App.v2").is_file(),
         "keep the standalone output"
     );
-    verify_bundle(&app);
+    verify_bundle(&app, "Perry & Bundle", "2.3.4");
 
     // Explicit .app outputs link inside the bundle. Rebuilding must not strip
     // after signing or truncate the executable while packaging it in place.
@@ -180,8 +187,21 @@ App({ title: "Bundle test", body: Text("Bundle test") });
         let app = compile(root, &runtime, "main.ts", "nested/Explicit App.app");
         assert_eq!(app, root.join("nested/Explicit App.app"));
         assert!(!root.join("nested/Explicit App").exists());
-        verify_bundle(&app);
+        verify_bundle(&app, "Perry & Bundle", "2.3.4");
     }
+    std::fs::write(
+        root.join("perry.toml"),
+        "[project]\nname = 'Project Name'\nbuild_number = 7\n[macos]\nbundle_id = 'dev.perry.bundle10078'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("package.json"),
+        r#"{"type":"module","version":"5.6.7"}"#,
+    )
+    .unwrap();
+    let app = compile(root, &runtime, "main.ts", "Metadata Fallback");
+    verify_bundle(&app, "Project Name", "5.6.7");
+
     std::fs::write(root.join("cli.ts"), "console.log('plain cli');").unwrap();
     let cli = compile(root, &runtime, "cli.ts", "plain-cli");
     assert!(cli.is_file());

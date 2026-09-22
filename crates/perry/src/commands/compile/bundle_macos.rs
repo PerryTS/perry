@@ -9,6 +9,32 @@ use super::bundle_apple::{read_app_display_name, xml_escape};
 use super::CompilationContext;
 use crate::OutputFormat;
 
+fn app_icon_source(input: &Path) -> Option<PathBuf> {
+    let source_dir = input.canonicalize().ok()?.parent()?.to_path_buf();
+    let project_root = super::resources::find_project_root_for_resources(&source_dir, true);
+    let icon = project_root.join("assets/AppIcon.icns");
+    icon.is_file().then_some(icon)
+}
+
+fn project_name(input: &Path) -> Option<String> {
+    let mut dir = input.canonicalize().ok()?.parent()?.to_path_buf();
+    for _ in 0..5 {
+        let toml_path = dir.join("perry.toml");
+        if toml_path.exists() {
+            let doc: toml::Table = fs::read_to_string(toml_path).ok()?.parse().ok()?;
+            return doc
+                .get("project")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string);
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+    None
+}
+
 pub(super) struct MacosBundleLayout {
     pub app_dir: PathBuf,
     pub executable: PathBuf,
@@ -49,8 +75,14 @@ pub(super) fn layout_for_compile(
 /// The embedded and bundle plists must agree on executable and app identity.
 pub(super) fn info_plist(ctx: &CompilationContext, input: &Path, executable: &Path) -> String {
     let filename = executable.file_name().unwrap_or_default().to_string_lossy();
-    let display_name =
-        read_app_display_name(input, "macos").unwrap_or_else(|| filename.to_string());
+    let display_name = read_app_display_name(input, "macos")
+        .or_else(|| project_name(input))
+        .unwrap_or_else(|| filename.to_string());
+    let icon_entry = if app_icon_source(input).is_some() {
+        "    <key>CFBundleIconFile</key><string>AppIcon.icns</string>\n"
+    } else {
+        ""
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,7 +94,7 @@ pub(super) fn info_plist(ctx: &CompilationContext, input: &Path, executable: &Pa
     <key>CFBundleDisplayName</key><string>{display_name}</string>
     <key>CFBundleExecutable</key><string>{filename}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>{version}</string>
+{icon_entry}    <key>CFBundleShortVersionString</key><string>{version}</string>
     <key>CFBundleVersion</key><string>{build_number}</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSCameraUsageDescription</key>
@@ -75,6 +107,7 @@ pub(super) fn info_plist(ctx: &CompilationContext, input: &Path, executable: &Pa
         bundle_id = xml_escape(&ctx.app_metadata.bundle_id),
         display_name = xml_escape(&display_name),
         filename = xml_escape(&filename),
+        icon_entry = icon_entry,
         version = xml_escape(&ctx.app_metadata.version),
         build_number = ctx.app_metadata.build_number,
     )
@@ -114,6 +147,10 @@ pub(super) fn bundle_for_macos(
     }
     let resources = layout.app_dir.join("Contents/Resources");
     super::resources::copy_standalone_resource_dirs(input, &resources);
+    if let Some(icon) = app_icon_source(input) {
+        fs::copy(&icon, resources.join("AppIcon.icns"))
+            .with_context(|| format!("copy app icon from {}", icon.display()))?;
+    }
     super::resources::stage_native_library_artifacts(ctx, &resources, format)?;
     super::i18n_emit::write_lproj_localized_strings(&resources, i18n_table, i18n_config);
     super::native_addon_sidecar::stage_native_addon_sidecar(ctx, &layout.executable, target)?;

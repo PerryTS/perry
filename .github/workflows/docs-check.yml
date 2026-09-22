@@ -29,7 +29,7 @@ env:
   MDBOOK_VERSION: v0.5.4
 
 jobs:
-  build-and-freshness:
+  build-and-validation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,11 +53,10 @@ jobs:
           python3 scripts/check_docs.py
       - name: Check TypeScript fences
         run: cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
-      - name: Check gettext catalogs are current
+      - name: Validate gettext catalogs
         run: |
-          ./docs/i18n.sh extract
-          ./docs/i18n.sh sync
-          git diff --exit-code -- docs/po
+          # Translation updates require review. Regenerating here rewrites
+          # obsolete entries and can drop existing translations (#10955).
           for catalog in docs/po/*.po; do
             msgfmt --check --check-format --statistics --output-file=/dev/null "$catalog"
           done

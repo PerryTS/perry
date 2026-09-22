@@ -574,13 +574,23 @@ fn string_coerce(value: f64) -> f64 {
 /// while servicing a message is the same exposure a synchronous handler already
 /// has, and that path is stable.
 ///
-/// This must NOT be the `AllowTimers` pump (`js_promise_run_microtasks`):
-/// `timer.rs` keeps `TIMER_QUEUE`/`CALLBACK_TIMERS`/`INTERVAL_TIMERS` in global
-/// mutexes rather than thread-locals, so that drain runs the MAIN thread's timer
-/// callbacks on this worker thread against this thread's globals — a later
-/// main-thread timer then dies with "value is not a function". The
-/// microtask/nextTick queues are `perry_thread_local!`, so draining those is
-/// confined to this worker.
+/// This must NOT be the `AllowTimers` pump (`js_promise_run_microtasks`).
+/// The original reason was that `timer.rs` kept `TIMER_QUEUE`/`CALLBACK_TIMERS`/
+/// `INTERVAL_TIMERS` in three global mutexes, so that drain ran the MAIN
+/// thread's timer callbacks on this worker thread against this thread's globals
+/// — a later main-thread timer then died with "value is not a function".
+/// Those three globals no longer exist: turnloop P3 replaced them with one
+/// store partitioned by agent (`timer/store.rs`), and every read selects the
+/// partition via `current_agent()`, so a worker holding its own agent id cannot
+/// reach the main thread's entries at all.
+///
+/// The narrowing stays anyway. It is a same-shape constraint, not a dead one:
+/// the store is still one process-global lock, `AllowTimers` still drains more
+/// than the owner-filtered tick below does, and nobody has tested the wider
+/// pump under the per-agent store. Whether it would now be safe is OPEN —
+/// establish that with a test before widening it, not by reading this comment.
+/// The microtask/nextTick queues are `perry_thread_local!` either way, so
+/// draining those is confined to this worker.
 fn pump_worker_microtasks() {
     // Bounded so a job queue that re-arms itself cannot wedge the worker here.
     for _ in 0..4096 {

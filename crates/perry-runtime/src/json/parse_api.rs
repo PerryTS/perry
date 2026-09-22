@@ -84,6 +84,75 @@ fn throw_range_error(message: &str) -> ! {
     crate::exception::js_throw(range_error_value(message))
 }
 
+/// JSON.parse positions use JavaScript UTF-16 code units, while the direct
+/// parser indexes the WTF-8 payload in bytes. This runs only after a syntax
+/// failure, so successful parses do not scan their input again.
+fn malformed_json_message(bytes: &[u8], byte_offset: usize) -> String {
+    let offset = byte_offset.min(bytes.len());
+    let position = crate::string::compute_utf16_len_wtf8(&bytes[..offset]);
+    let mut line = 1usize;
+    let mut line_start = 0usize;
+    let mut previous_cr = false;
+    for (index, &byte) in bytes[..offset].iter().enumerate() {
+        match byte {
+            b'\r' => {
+                line += 1;
+                line_start = index + 1;
+                previous_cr = true;
+            }
+            b'\n' => {
+                if !previous_cr {
+                    line += 1;
+                }
+                line_start = index + 1;
+                previous_cr = false;
+            }
+            _ => previous_cr = false,
+        }
+    }
+    let column = crate::string::compute_utf16_len_wtf8(&bytes[line_start..offset]) + 1;
+    format!(
+        "JSON parse error: malformed input at position {position} (line {line} column {column})"
+    )
+}
+
+#[test]
+fn malformed_json_reports_the_first_utf16_error_location() {
+    let cases: &[(&[u8], usize, &str)] = &[
+        (
+            b"{\n  \"a\": 1,\n  \"b\": 2,,\n}\n",
+            21,
+            "position 21 (line 3 column 10)",
+        ),
+        ("{\"🙂\":1}x".as_bytes(), 10, "position 8 (line 1 column 9)"),
+        (b"[01]", 2, "position 2 (line 1 column 3)"),
+        (b"\"a\\q\"", 3, "position 3 (line 1 column 4)"),
+        (b"\"\\u12x4\"", 5, "position 5 (line 1 column 6)"),
+        (b"trux", 3, "position 3 (line 1 column 4)"),
+        (b"{\r\n\"x\":1,,}", 9, "position 9 (line 2 column 7)"),
+    ];
+    for &(bytes, expected_offset, location) in cases {
+        let _suppress = crate::gc::GcSuppressScope::new();
+        let mut parser = DirectParser::new(bytes);
+        unsafe { parser.parse_value() };
+        assert!(!parser.finish(), "input should be invalid: {bytes:?}");
+        assert_eq!(parser.error_offset(), expected_offset, "{bytes:?}");
+        assert!(malformed_json_message(bytes, parser.error_offset()).ends_with(location));
+    }
+}
+
+#[test]
+fn malformed_deep_json_reports_the_iterative_scanners_location() {
+    let depth = crate::json::parser::MAX_RECURSIVE_NESTING_DEPTH + 1;
+    let mut bytes = vec![b'['; depth];
+    bytes.extend_from_slice(b"0,\n]");
+    bytes.extend(std::iter::repeat_n(b']', depth - 1));
+    let offset = crate::json_tape::malformed_offset(&bytes);
+    assert_eq!(offset, depth + 3);
+    assert!(malformed_json_message(&bytes, offset)
+        .ends_with(&format!("position {} (line 2 column 1)", depth + 3)));
+}
+
 /// Whole-document nesting classifier for the cold paths only: a direct parse
 /// that failed (malformed, or deeper than the native bound?) and a forced tape
 /// above the lazy size ceiling. Valid documents never pay it: `DirectParser`
@@ -354,6 +423,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     let mut parser = DirectParser::new_batched_from_string(bytes, source);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
+    let error_offset = if parse_ok { 0 } else { parser.error_offset() };
     let depth_exceeded = parser.depth_exceeded();
     if parse_ok {
         remember_parse_object_template(source, len, result);
@@ -375,7 +445,11 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
         if failed_direct_parse_is_deep(depth_exceeded, text, len) {
             return parse_deep_or_error(text, len);
         }
-        return Err(syntax_error_value("JSON parse error: malformed input"));
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+        return Err(syntax_error_value(&malformed_json_message(
+            bytes,
+            error_offset,
+        )));
     }
 
     Ok(result)
@@ -600,6 +674,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     let mut parser = DirectParser::new_batched_from_string(bytes, source);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
+    let error_offset = if parse_ok { 0 } else { parser.error_offset() };
     let depth_exceeded = parser.depth_exceeded();
     if parse_ok {
         remember_parse_object_template(source, len, result);
@@ -629,7 +704,8 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
         if failed_direct_parse_is_deep(depth_exceeded, text, len) {
             return parse_deep_or_throw(text, len);
         }
-        throw_syntax_error("JSON parse error: malformed input");
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+        throw_syntax_error(&malformed_json_message(bytes, error_offset));
     }
 
     result
@@ -642,9 +718,22 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     if exceeds_iterative_budget(bytes) {
         throw_range_error(&iterative_budget_message());
     }
-    match try_parse_deep_iterative(text, len) {
+    let text_root = parse_root_push(JSValue::string_ptr(text as *mut StringHeader));
+    let result = try_parse_deep_iterative(text, len);
+    let message = if result.is_none() {
+        let moved = parse_root_get(text_root).as_string_ptr();
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
+        Some(malformed_json_message(
+            bytes,
+            crate::json_tape::malformed_offset(bytes),
+        ))
+    } else {
+        None
+    };
+    parse_root_restore(text_root);
+    match result {
         Some(value) => value,
-        None => throw_syntax_error("JSON parse error: malformed deep document"),
+        None => throw_syntax_error(&message.unwrap()),
     }
 }
 
@@ -654,8 +743,20 @@ unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<J
     if exceeds_iterative_budget(bytes) {
         return Err(range_error_value(&iterative_budget_message()));
     }
-    try_parse_deep_iterative(text, len)
-        .ok_or_else(|| syntax_error_value("JSON parse error: malformed deep document"))
+    let text_root = parse_root_push(JSValue::string_ptr(text as *mut StringHeader));
+    let result = try_parse_deep_iterative(text, len);
+    let message = if result.is_none() {
+        let moved = parse_root_get(text_root).as_string_ptr();
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
+        Some(malformed_json_message(
+            bytes,
+            crate::json_tape::malformed_offset(bytes),
+        ))
+    } else {
+        None
+    };
+    parse_root_restore(text_root);
+    result.ok_or_else(|| syntax_error_value(&message.unwrap()))
 }
 
 /// A failed direct parse goes to the heap-stack parser when the descent
@@ -866,6 +967,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     let mut parser = DirectParser::with_shape(bytes, shape);
     let result = parser.parse_array_typed();
     let parse_ok = parser.finish();
+    let error_offset = if parse_ok { 0 } else { parser.error_offset() };
     let depth_exceeded = parser.depth_exceeded();
     parse_root_push(result);
 
@@ -884,7 +986,8 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
         if failed_direct_parse_is_deep(depth_exceeded, text, len) {
             return parse_deep_or_throw(text, len);
         }
-        throw_syntax_error("JSON parse error: malformed input");
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
+        throw_syntax_error(&malformed_json_message(bytes, error_offset));
     }
 
     result

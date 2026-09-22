@@ -180,7 +180,7 @@ pub fn set_title(handle: i64, title_ptr: *const u8) {
 }
 
 /// Set an SF Symbol image on a UIButton.
-pub fn set_image(handle: i64, name_ptr: *const u8) {
+pub fn set_image(handle: i64, name_ptr: *const u8, point_size: f64) {
     let name = unsafe { str_from_header(name_ptr) };
     if let Some(view) = super::get_widget(handle) {
         unsafe {
@@ -189,13 +189,14 @@ pub fn set_image(handle: i64, name_ptr: *const u8) {
             let img_cls = objc2::runtime::AnyClass::get(c"UIImage").unwrap();
             let img: *mut AnyObject = msg_send![img_cls, systemImageNamed: &*ns_name];
             if !img.is_null() {
-                // Apply large symbol configuration
                 let config_cls = objc2::runtime::AnyClass::get(c"UIImageSymbolConfiguration");
                 if let Some(config_cls) = config_cls {
-                    // UIImageSymbolScale: 1=small, 2=medium, 3=large
-                    let config: *mut AnyObject = msg_send![
-                        config_cls, configurationWithScale: 3_i64
-                    ];
+                    let config: *mut AnyObject = if point_size.is_finite() && point_size > 0.0 {
+                        msg_send![config_cls, configurationWithPointSize: point_size as objc2_core_foundation::CGFloat]
+                    } else {
+                        // UIImageSymbolScaleLarge = 3, preserving two-argument calls.
+                        msg_send![config_cls, configurationWithScale: 3_i64]
+                    };
                     if !config.is_null() {
                         let scaled_img: *mut AnyObject =
                             msg_send![img, imageWithConfiguration: config];

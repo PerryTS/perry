@@ -90,6 +90,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from collections import defaultdict, deque
@@ -718,23 +719,131 @@ ALLOC_RE = re.compile(
 # calls most likely to allocate. The name was never wrong; the scanner was.
 _EXTERN_C_FN_RE = re.compile(r'extern\s+"C(?:-unwind)?"\s+fn\s+(js_\w+)')
 
+# 2026-09-22: the SAME under-count again, one layer further in. The regex above
+# needs the LITERAL name after `fn`, so every symbol defined THROUGH A MACRO is
+# invisible to it -- the macro body reads `pub extern "C" fn $name`. 56 exported
+# `js_*` symbols were missing, and two of them were in POLL_CAPABLE_RUNTIME, so
+# `--audit-poll-capable` reported them as naming nothing. They are
+# `String.prototype.replace(re, fn)`, which runs a USER JS CALLBACK -- deleting
+# the entries, which is what the report invited, would have dropped coverage of
+# a real poll point and turned the audit green.
+#
+# The discriminator that works is ITEM POSITION: a macro that defines an export
+# is invoked at column 0, while `assert_eq!(js_thread, ..)` inside a function
+# body is indented and defines nothing. Validated against `nm` on a built
+# archive: with this, every `_js_*` nm reports is covered, and the only names it
+# adds beyond nm are the 17 `js_wasm_export_call_*` shims, which are real and
+# simply absent from a non-wasm build. `--verify-symbols <archive>` re-runs that
+# comparison on demand, because a widened regex is still a regex and the next
+# macro family should fail loudly rather than silently.
+_MACRO_ITEM_OPEN_RE = re.compile(r'^(?:\w+::)*\w+!\s*[({]')
+_MACRO_ITEM_INLINE_RE = re.compile(
+    r'^(?:\w+::)*\w+!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
+_MACRO_ITEM_ARG_RE = re.compile(r'^[ \t]+(js_\w+)\s*(?:=>|[,)])')
+
 # The runtime crates that export the C-ABI surface perry-codegen calls.
 SYMBOL_ROOTS = ("crates/perry-runtime/src", "crates/perry-stdlib/src")
 
 
-def runtime_symbols(roots=SYMBOL_ROOTS):
-    """Every `extern "C" fn js_*` the runtime actually exports."""
-    syms = set()
+def _macro_defined_symbols(text):
+    """`js_*` names passed to an ITEM-POSITION macro invocation in `text`.
+
+    Three shapes occur in the tree, and all three define real exports:
+      regex_value!(js_string_replace_regex_fn, false);
+      wasm_export_call_shim!(js_wasm_export_call_0);
+      two_operand_value_entry!(
+          /// doc
+          js_path_basename_ext_value => super::js_path_basename_ext, ..);
+    """
+    out, lines, i = set(), text.split("\n"), 0
+    while i < len(lines):
+        if not _MACRO_ITEM_OPEN_RE.match(lines[i]):
+            i += 1
+            continue
+        inline = _MACRO_ITEM_INLINE_RE.match(lines[i])
+        if inline:
+            out.add(inline.group(1))
+        depth = 0
+        for j in range(i, len(lines)):
+            stripped = re.sub(r'//.*', '', lines[j])
+            depth += (stripped.count('(') + stripped.count('{')
+                      - stripped.count(')') - stripped.count('}'))
+            if j > i:
+                arg = _MACRO_ITEM_ARG_RE.match(lines[j])
+                if arg:
+                    out.add(arg.group(1))
+            if depth <= 0:
+                i = j + 1
+                break
+        else:
+            i += 1
+    return out
+
+
+def _rs_sources(roots):
     for root in roots:
         if not os.path.isdir(root):
             continue
         for dirpath, _dirs, files in os.walk(root):
             for name in files:
-                if not name.endswith(".rs"):
-                    continue
-                with open(os.path.join(dirpath, name),
-                          encoding="utf-8", errors="replace") as fh:
-                    syms.update(_EXTERN_C_FN_RE.findall(fh.read()))
+                if name.endswith(".rs"):
+                    path = os.path.join(dirpath, name)
+                    with open(path, encoding="utf-8", errors="replace") as fh:
+                        yield path, fh.read()
+
+
+def _macro_rule_bodies(text):
+    """Every `macro_rules!` body in `text`, stripped to code.
+
+    Attributed wholesale rather than per-arm: the point is only to let the
+    call-graph walk SEE the `js_*` calls a generated function makes. Over-
+    attribution can add an edge the specific arm would not have, which makes
+    `--audit-poll-reach` stricter, never blinder -- the safe direction.
+    """
+    out = []
+    for m in re.finditer(r'macro_rules!\s+\w+\s*', text):
+        body = _balanced_body(text, m.end())
+        if body is not None:
+            out.append(_strip_noncode(body))
+    return out
+
+
+def runtime_symbols(roots=SYMBOL_ROOTS):
+    """Every `js_*` the runtime exports, written out OR macro-generated."""
+    syms = set()
+    for _path, src in _rs_sources(roots):
+        syms.update(_EXTERN_C_FN_RE.findall(src))
+        syms.update(_macro_defined_symbols(src))
+    return syms
+
+
+def macro_generated_symbols(roots=SYMBOL_ROOTS):
+    """Just the macro-generated half, for reports that must name the blindness.
+
+    These have no per-symbol body in the source -- the body lives once, in the
+    macro definition -- so the call-graph walk cannot see what they call.
+    """
+    syms = set()
+    for _path, src in _rs_sources(roots):
+        syms.update(_macro_defined_symbols(src))
+    written = set()
+    for _path, src in _rs_sources(roots):
+        written.update(_EXTERN_C_FN_RE.findall(src))
+    return syms - written
+
+
+def nm_exported_symbols(archives):
+    """`js_*` symbols `nm -gj` reports as defined in `archives`.
+
+    Ground truth, and a LOWER bound only: an archive built for one target omits
+    every symbol the other targets' cfgs define, so the invariant to assert is
+    `nm <= scanner`, never equality.
+    """
+    syms = set()
+    for archive in archives:
+        out = subprocess.run(["nm", "-gj", archive],
+                             capture_output=True, text=True).stdout
+        syms.update(tok[1:] for tok in out.split() if tok.startswith("_js_"))
     return syms
 
 
@@ -805,6 +914,110 @@ def dead_poll_capable(symbols):
     very audit that exists because unearned holes are the recurring bug here.
     """
     return sorted(n for n in POLL_CAPABLE_RUNTIME if n not in symbols)
+
+
+# Macros that take a `js_*` name as their first argument WITHOUT defining it:
+# assertions and formatting inside function bodies. Everything else indented is
+# the shape `--audit-macro-item-position` exists to reject.
+#
+# This is an ALLOWLIST, and that is deliberate: an unknown macro reads as
+# DEFINING, so it is a hit and the audit fails. A new assert-like macro is then
+# a loud false positive that somebody fixes by adding one name here, which is
+# the direction this gate should fail in. Inverting it into a list of known
+# DEFINING macros is the obvious tidy-up later and would be wrong -- the next
+# export macro nobody listed would be skipped in silence, which is the exact
+# bug this file already shipped twice.
+_NON_DEFINING_MACROS = frozenset((
+    "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
+    "debug_assert_ne", "matches", "println", "eprintln", "print", "eprint",
+    "write", "writeln", "format", "panic", "vec", "dbg", "todo", "unimplemented",
+))
+_INDENTED_MACRO_RE = re.compile(
+    r'^[ \t]+(?:\w+::)*(\w+)!\s*[({]\s*(js_\w+)\s*(?:=>|[,)])')
+
+
+def indented_macro_exports(roots=SYMBOL_ROOTS):
+    """`[(path, lineno, macro, symbol)]` for INDENTED macro calls naming a `js_*`.
+
+    `runtime_symbols` recognises a macro-defined export by ITEM POSITION --
+    column 0. That is a heuristic, and it is allowed to be one ONLY because a
+    miss is caught: `--verify-symbols` turns it into a red build against `nm`.
+    But that check needs built archives, so it lives in the label-gated
+    workflow and speaks after the fact. This audit is the build-free half that
+    can run in `lint`, a REQUIRED context, and it enforces the heuristic's
+    precondition directly: if an export macro is ever wrapped in an inline
+    `mod` (or otherwise indented), say so at PR time instead of silently
+    dropping the symbol.
+    """
+    hits = []
+    for path, src in _rs_sources(roots):
+        for lineno, line in enumerate(src.split("\n"), 1):
+            m = _INDENTED_MACRO_RE.match(line)
+            if m and m.group(1) not in _NON_DEFINING_MACROS:
+                hits.append((path, lineno, m.group(1), m.group(2)))
+    return sorted(hits)
+
+
+def audit_macro_item_position(roots=SYMBOL_ROOTS):
+    """Exit status for `--audit-macro-item-position`. 0 clean, 2 on a hit."""
+    symbols = runtime_symbols(roots)
+    if len(symbols) < 500:
+        print(f"error: found only {len(symbols)} js_* symbols under "
+              f"{', '.join(roots)}. Run it from the repository root.",
+              file=sys.stderr)
+        return 2
+    hits = indented_macro_exports(roots)
+    macro = macro_generated_symbols(roots)
+    print(f"=== macro item position: {len(macro)} macro-generated exports, all "
+          "at column 0")
+    if hits:
+        print("error: macro invocation(s) naming a `js_*` symbol at an INDENT. "
+              "`runtime_symbols` only recognises macro-defined exports at "
+              "column 0, so if any of these DEFINES the symbol it is invisible "
+              "to every audit here -- which makes each one greener, never "
+              "redder:", file=sys.stderr)
+        for path, lineno, name, sym in hits:
+            print(f"  {path}:{lineno}: {name}!({sym}, ..)", file=sys.stderr)
+        print("If it defines an export, move it to column 0 or teach "
+              "`_macro_defined_symbols` the shape. If it does not (an assertion "
+              "or a format), add the macro to `_NON_DEFINING_MACROS`.",
+              file=sys.stderr)
+        return 2
+    print("=== no indented macro invocation names a runtime symbol")
+    return 0
+
+
+def verify_symbols_against_archives(archives, roots=SYMBOL_ROOTS):
+    """Exit status for `--verify-symbols`. 0 clean, 2 if nm sees more."""
+    missing = [a for a in archives if not os.path.isfile(a)]
+    if missing:
+        print("error: no such archive: " + ", ".join(missing), file=sys.stderr)
+        return 2
+    nm = nm_exported_symbols(archives)
+    if len(nm) < 500:
+        # Same non-vacuity floor the other audits carry: an empty or
+        # unreadable archive would otherwise report a serene clean.
+        print(f"error: nm reported only {len(nm)} `js_*` symbols across "
+              f"{len(archives)} archive(s). That is not a runtime build, so "
+              "this check would pass having compared nothing.", file=sys.stderr)
+        return 2
+    scanner = runtime_symbols(roots)
+    unseen = sorted(nm - scanner)
+    macro = macro_generated_symbols(roots)
+    print(f"=== verify-symbols: nm defines {len(nm)}, scanner sees "
+          f"{len(scanner)} ({len(macro)} of them macro-generated)")
+    if unseen:
+        print(f"error: {len(unseen)} symbol(s) the archives DEFINE that the "
+              "scanner cannot see. Every consumer of `runtime_symbols` is "
+              "blind to them, which makes each audit greener, never redder:",
+              file=sys.stderr)
+        for sym in unseen:
+            print(f"  {sym}", file=sys.stderr)
+        print("Widen the scanner to cover the shape that defines them -- do "
+              "NOT delete the entries that name them.", file=sys.stderr)
+        return 2
+    print("=== every symbol the archives define is visible to the scanner")
+    return 0
 
 
 def audit_poll_capable(roots=SYMBOL_ROOTS):
@@ -968,6 +1181,15 @@ def runtime_symbol_bodies(roots=SYMBOL_ROOTS):
                     body = _balanced_body(src, m.end())
                     if body is not None:
                         bodies[m.group(1)].append(_strip_noncode(body))
+                # A macro-generated export has no per-symbol body here: the body
+                # lives ONCE, inside the macro definition. Attribute that
+                # definition's text to every symbol the macro generates, so the
+                # call-graph walk sees the calls it makes instead of treating it
+                # as a leaf that reaches nothing -- which is the same silent
+                # under-count in a different coat.
+                for sym in _macro_defined_symbols(src):
+                    for macro_body in _macro_rule_bodies(src):
+                        bodies[sym].append(macro_body)
     return bodies
 
 
@@ -1346,7 +1568,6 @@ POLL_CAPABLE_RUNTIME = {
     "js_object_get_own_property_descriptors",
     "js_promise_new_with_executor",
     "js_proxy_construct", "js_proxy_revocable",
-    "js_ratelimit_new_from_options",
     "js_regexp_construct",
     "js_request_new_from_init",
     "js_string_concat_chain", "js_string_concat_value",
@@ -5623,6 +5844,34 @@ def poll_reach_self_test():
               "bodies must be an error -- zero call edges means the body "
               "extractor is broken, not that the lists agree", file=sys.stderr)
         ok = False
+    # `_NON_DEFINING_MACROS` is an allowlist, so it can go vacuous: if the one
+    # occurrence it suppresses is renamed away, the arm keeps "passing" while
+    # suppressing nothing -- the same shape as the scanner bug this audit was
+    # added for. Assert it is load-bearing by re-running the scan with the
+    # allowlist emptied and requiring that it then reports something.
+    global _NON_DEFINING_MACROS
+    real_allowlist = _NON_DEFINING_MACROS
+    try:
+        _NON_DEFINING_MACROS = frozenset()
+        suppressed = indented_macro_exports()
+    finally:
+        _NON_DEFINING_MACROS = real_allowlist
+    if not suppressed:
+        print("self-test FAIL: emptying _NON_DEFINING_MACROS changed nothing, "
+              "so the allowlist suppresses no real occurrence and its arm is "
+              "vacuous. Either the fixture it covers "
+              "(`assert_eq!(js_thread, ..)`) was renamed away, or the scan is "
+              "not reaching the crates.", file=sys.stderr)
+        ok = False
+    # The other direction, which is the one that matters for safety: a macro
+    # nobody listed must read as DEFINING and therefore fail, never be skipped.
+    unknown = _INDENTED_MACRO_RE.match(
+        "    some_unlisted_macro!(js_planted_export, false);")
+    if not unknown or unknown.group(1) in _NON_DEFINING_MACROS:
+        print("self-test FAIL: an indented invocation of an UNLISTED macro "
+              "naming a js_* symbol must be recognised as a hit. If it is not, "
+              "a new export macro is skipped in silence.", file=sys.stderr)
+        ok = False
     return ok
 
 
@@ -5693,6 +5942,25 @@ def main():
                          "so a phantom entry is a hole the gate cannot fail "
                          "through -- ten of twenty-eight were phantoms when "
                          "this was added. Takes no corpus.")
+    ap.add_argument("--audit-macro-item-position", action="store_true",
+                    help="build-free companion to --verify-symbols, for a "
+                         "REQUIRED context: fail on a macro invocation naming a "
+                         "`js_*` symbol at an indent. Macro-defined exports are "
+                         "recognised by column-0 item position, so an indented "
+                         "one (an export macro wrapped in an inline `mod`, say) "
+                         "would be invisible to every audit here. Takes no "
+                         "corpus and needs no build.")
+    ap.add_argument("--verify-symbols", nargs="+", metavar="ARCHIVE",
+                    help="cross-check `runtime_symbols()` against `nm -gj` on "
+                         "one or more built archives (libperry_runtime.a, "
+                         "libperry_stdlib.a). The scanner is a REGEX and the "
+                         "tree keeps growing macro families that define "
+                         "exports; this is how the next one fails loudly "
+                         "instead of silently dropping symbols the way the "
+                         "macro shapes did. nm is a LOWER bound -- an archive "
+                         "built for one target omits the other targets' cfgs "
+                         "-- so the assertion is nm <= scanner, and a symbol "
+                         "nm defines that the scanner cannot see is the error.")
     ap.add_argument("--audit-poll-reach", action="store_true",
                     help="the third audit, and the one the other two cannot "
                          "do: fail on a symbol ALLOC_RE matches whose runtime "
@@ -5746,6 +6014,10 @@ def main():
     # are checked before the corpus arguments are.
     if ns.audit_alloc_re:
         return audit_alloc_re()
+    if ns.audit_macro_item_position:
+        return audit_macro_item_position()
+    if ns.verify_symbols:
+        return verify_symbols_against_archives(ns.verify_symbols)
     if ns.audit_poll_capable:
         return audit_poll_capable()
     if ns.audit_poll_reach:

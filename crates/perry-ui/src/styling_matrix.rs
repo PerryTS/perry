@@ -440,6 +440,12 @@ pub const MATRIX: &[MatrixRow] = &[
     // ---- button widget styling ----------------------------------------
     MatrixRow {
         widget: "button",
+        prop: "font_family",
+        ffi: "perry_ui_button_set_font_family",
+        statuses: [Wired, Stub, Stub, Stub, Stub, Stub, Stub, Stub, Wired],
+    },
+    MatrixRow {
+        widget: "button",
         prop: "text_color",
         ffi: "perry_ui_button_set_text_color",
         statuses: W_ALL_NATIVE_WEB_TODO,

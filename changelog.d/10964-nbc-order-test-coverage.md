@@ -1,0 +1,1 @@
+- Cover the enabled `PERRY_L14_NBC_ORDER` path with a two-receiver numeric-field intersection test, while keeping the disabled path independently verified.

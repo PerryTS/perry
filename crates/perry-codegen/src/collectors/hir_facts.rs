@@ -740,7 +740,10 @@ pub(crate) fn collect_type_facts(
     // `shape_proven_ptr_locals` yields empty inputs below and the fixpoint then
     // computes exactly what it computed before.
     let (nbc_shape_members, nbc_shape_numeric_fields) =
-        super::number_by_construction::shape_numeric_inputs(&shape_proven_ptr_locals);
+        super::number_by_construction::shape_numeric_inputs(
+            &shape_proven_ptr_locals,
+            super::number_by_construction::nbc_order_enabled(),
+        );
     let number_by_construction_locals = super::collect_number_by_construction_locals(
         stmts,
         params,

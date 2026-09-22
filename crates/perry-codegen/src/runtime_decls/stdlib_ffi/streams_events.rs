@@ -1,5 +1,5 @@
-//! node:stream, EventEmitter, domain, StringDecoder, querystring, fastify,
-//! nodemailer, rate-limit, validator stdlib FFI declarations
+//! node:stream, EventEmitter, domain, StringDecoder, querystring, and
+//! nodemailer stdlib FFI declarations
 //! (extracted from stdlib_ffi.rs).
 
 use crate::module::LlModule;

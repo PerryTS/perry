@@ -848,6 +848,31 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     Some(h) => h.obj_type,
                     None => return value,
                 };
+                if gc_type == crate::gc::GC_TYPE_DATE_CELL {
+                    let memo_index = structured_clone_memo_reserve(value);
+                    let timestamp = crate::date::date_cell_timestamp(value);
+                    let cloned = crate::date::alloc_date_cell(timestamp);
+                    structured_clone_memo_record(memo_index, cloned);
+                    return cloned;
+                }
+                #[cfg(feature = "regex-engine")]
+                if gc_type == crate::gc::GC_TYPE_REGEXP {
+                    let memo_index = structured_clone_memo_reserve(value);
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let source = scope.root_raw_const_ptr(ptr as *const crate::regex::RegExpHeader);
+                    let pattern = scope.root_string_ptr(
+                        source.with_const_ptr(|re| crate::regex::js_regexp_get_source(re)),
+                    );
+                    let flags = scope.root_string_ptr(
+                        source.with_const_ptr(|re| crate::regex::js_regexp_get_flags(re)),
+                    );
+                    let cloned = pattern.with_const_ptr(|pattern| {
+                        flags.with_const_ptr(|flags| crate::regex::js_regexp_new(pattern, flags))
+                    });
+                    let cloned_value = crate::value::js_nanbox_pointer(cloned as i64);
+                    structured_clone_memo_record(memo_index, cloned_value);
+                    return cloned_value;
+                }
                 if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Clone array using existing clone, then recursively clone elements
                     let memo_index = structured_clone_memo_reserve(value);
@@ -877,23 +902,6 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                     }
                     structured_clone_memo_value(memo_index)
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
-                    // Check if this is a RegExp (the RegExpHeader lives in an
-                    // arena slot with GC_TYPE_OBJECT but tracked in
-                    // REGEX_POINTERS). Clone by reading source/flags and
-                    // building a fresh one via js_regexp_new.
-                    #[cfg(feature = "regex-engine")]
-                    if crate::regex::is_regex_pointer(ptr as *const u8) {
-                        let memo_index = structured_clone_memo_reserve(value);
-                        let re_ptr = ptr as *const crate::regex::RegExpHeader;
-                        let src = crate::regex::js_regexp_get_source(re_ptr);
-                        let flg = crate::regex::js_regexp_get_flags(re_ptr);
-                        let new_re = crate::regex::js_regexp_new(src, flg);
-                        let new_bits =
-                            0x7FFD_0000_0000_0000u64 | (new_re as u64 & 0x0000_FFFF_FFFF_FFFF);
-                        let cloned = f64::from_bits(new_bits);
-                        structured_clone_memo_record(memo_index, cloned);
-                        return cloned;
-                    }
                     // #4879: properties that live outside the inline field
                     // region (OVERFLOW_FIELDS of a dict-grown object, or every
                     // prop of a `{}`-born object with no inline capacity) are
@@ -1308,6 +1316,52 @@ pub(crate) fn test_queued_microtask_snapshot() -> (usize, u64, u64) {
 #[cfg(test)]
 mod structured_clone_tests {
     use super::*;
+
+    #[test]
+    fn structured_clone_date_is_independent_and_preserves_nested_identity() {
+        let source = crate::date::alloc_date_cell(0.0);
+        let direct = js_structured_clone(source);
+        assert_ne!(direct.to_bits(), source.to_bits());
+        assert_eq!(crate::date::date_cell_timestamp(direct), 0.0);
+        let next_time = [5000.0];
+        crate::date::js_date_apply_setter(direct, 0, 7, next_time.as_ptr(), 1);
+        assert_eq!(crate::date::date_cell_timestamp(direct), 5000.0);
+        assert_eq!(crate::date::date_cell_timestamp(source), 0.0);
+
+        let object = crate::object::js_object_alloc(0, 2);
+        let first_key = crate::string::js_string_from_bytes(b"first".as_ptr(), 5);
+        let second_key = crate::string::js_string_from_bytes(b"second".as_ptr(), 6);
+        crate::object::js_object_set_field_by_name(object, first_key, source);
+        crate::object::js_object_set_field_by_name(object, second_key, source);
+        let cloned_object = js_structured_clone(crate::value::js_nanbox_pointer(object as i64));
+        let cloned_ptr = crate::value::js_nanbox_get_pointer(cloned_object)
+            as *const crate::object::ObjectHeader;
+        let first = crate::object::js_object_get_field_by_name(cloned_ptr, first_key);
+        let second = crate::object::js_object_get_field_by_name(cloned_ptr, second_key);
+        assert_eq!(first.bits(), second.bits());
+        assert_ne!(first.bits(), source.to_bits());
+        assert_eq!(
+            crate::date::date_cell_timestamp(f64::from_bits(first.bits())),
+            0.0
+        );
+    }
+
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn structured_clone_regexp_is_independent_and_resets_last_index() {
+        let pattern = crate::string::js_string_from_bytes(b"a+".as_ptr(), 2);
+        let flags = crate::string::js_string_from_bytes(b"gi".as_ptr(), 2);
+        let source = crate::regex::js_regexp_new(pattern, flags);
+        crate::regex::js_regexp_set_last_index(source, 3.0);
+        let cloned_value = js_structured_clone(crate::value::js_nanbox_pointer(source as i64));
+        let cloned =
+            crate::value::js_nanbox_get_pointer(cloned_value) as *mut crate::regex::RegExpHeader;
+        assert_ne!(cloned, source);
+        assert_eq!(crate::regex::js_regexp_get_last_index(cloned), 0.0);
+        assert_eq!(crate::regex::js_regexp_get_last_index(source), 3.0);
+        crate::regex::js_regexp_set_last_index(cloned, 7.0);
+        assert_eq!(crate::regex::js_regexp_get_last_index(source), 3.0);
+    }
 
     /// #8232: a clone memo must resolve a back-edge to the destination object,
     /// not return the original source object as the old recursion guard did.

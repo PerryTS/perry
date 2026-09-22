@@ -40,7 +40,9 @@ pub(super) const RECORD_FLAG_FACTS_INDEXED: u8 = 1 << 1;
 pub(super) const RECORD_FLAG_OLD_CARRIER: u8 = 1 << 2;
 pub(super) const RECORD_FLAG_OLD_CARRIER_SEEN: u8 = 1 << 3;
 pub(super) const RECORD_FLAG_CACHE_CARRIER: u8 = 1 << 4;
-pub(super) const RECORD_FLAG_KIND_CLASS: u8 = 1 << 5;
+// Bit 5 is FREE: it was `RECORD_FLAG_KIND_CLASS` until the object kind
+// became a 2-bit field in `flags_and_kind` (#10868), a flag byte having no
+// room for a third value.
 pub(super) const RECORD_FLAG_CARRIED_SEEN: u8 = 1 << 6;
 pub(super) const RECORD_FLAG_EXTERNAL_CARRIER: u8 = 1 << 7;
 
@@ -56,9 +58,18 @@ pub(crate) struct ShapeRecord {
     pub(super) logical_key_count: u32,
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
-    pub(super) flags: u8,
-    _pad: [u8; 3],
+    /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-9: the `ShapeObjectKind`
+    /// discriminant. Bits 10-31: reserved.
+    ///
+    /// This word replaces the old `flags: u8` plus `_pad: [u8; 3]`. It is the
+    /// same four bytes in the same place, so the record stays 32 bytes and
+    /// 8-aligned (asserted below) and the slab geometry is unchanged — the
+    /// kind field is free, it lives in padding that was already paid for.
+    flags_and_kind: u32,
 }
+
+const RECORD_KIND_SHIFT: u32 = 8;
+const RECORD_KIND_MASK: u32 = 0b11 << RECORD_KIND_SHIFT;
 
 const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 32);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
@@ -70,26 +81,31 @@ impl ShapeRecord {
         logical_key_count: 0,
         live_inline_slot_count: 0,
         hole_count: 0,
-        flags: 0,
-        _pad: [0; 3],
+        flags_and_kind: 0,
     };
 
     #[inline]
     pub(super) fn present(&self) -> bool {
-        self.flags & RECORD_FLAG_PRESENT != 0
+        self.flags() & RECORD_FLAG_PRESENT != 0
+    }
+
+    /// The `RECORD_FLAG_*` byte. Storage state only, never identity.
+    #[inline]
+    pub(super) fn flags(&self) -> u8 {
+        (self.flags_and_kind & 0xFF) as u8
     }
 
     #[inline]
     pub(super) fn has(&self, flag: u8) -> bool {
-        self.flags & flag != 0
+        self.flags() & flag != 0
     }
 
     #[inline]
     pub(super) fn set(&mut self, flag: u8, on: bool) {
         if on {
-            self.flags |= flag;
+            self.flags_and_kind |= u32::from(flag);
         } else {
-            self.flags &= !flag;
+            self.flags_and_kind &= !u32::from(flag);
         }
     }
 
@@ -102,10 +118,10 @@ impl ShapeRecord {
 
     #[inline]
     pub(super) fn object_kind(&self) -> ShapeObjectKind {
-        if self.has(RECORD_FLAG_KIND_CLASS) {
-            ShapeObjectKind::Class
-        } else {
-            ShapeObjectKind::Ordinary
+        match (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT {
+            1 => ShapeObjectKind::Class,
+            2 => ShapeObjectKind::Dictionary,
+            _ => ShapeObjectKind::Ordinary,
         }
     }
 
@@ -118,18 +134,19 @@ impl ShapeRecord {
         object_kind: ShapeObjectKind,
         hole_count: u32,
     ) -> ShapeRecord {
-        let mut flags = RECORD_FLAG_PRESENT | RECORD_FLAG_FACTS_INDEXED;
-        if object_kind == ShapeObjectKind::Class {
-            flags |= RECORD_FLAG_KIND_CLASS;
-        }
+        let flags = RECORD_FLAG_PRESENT | RECORD_FLAG_FACTS_INDEXED;
+        // The kind is a FIELD, not a flag: it has three values, and a record
+        // that reported the wrong one would be a wrong identity match,
+        // because `facts_match` compares the full enum.
+        let kind_bits = (object_kind.code() as u32) << RECORD_KIND_SHIFT;
+        debug_assert!(kind_bits & !RECORD_KIND_MASK == 0, "kind does not fit");
         ShapeRecord {
             keys,
             semantic_generation,
             logical_key_count,
             live_inline_slot_count,
             hole_count,
-            flags,
-            _pad: [0; 3],
+            flags_and_kind: u32::from(flags) | kind_bits,
         }
     }
 
@@ -213,7 +230,11 @@ pub(super) fn facts_key(
     h = fold(h, u64::from(live_inline_slot_count));
     h = fold(h, semantic_generation);
     h = fold(h, u64::from(hole_count));
-    h = fold(h, u64::from(object_kind == ShapeObjectKind::Class));
+    // The DISCRIMINANT, not `== Class`: folding a bool would give Ordinary
+    // and Dictionary the same hash contribution. `facts_match` re-checks the
+    // full enum on every hit, so that was never a wrong answer — but it is a
+    // silent hash-quality loss, and the two kinds differ in every consumer.
+    h = fold(h, object_kind.code());
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
     h ^ (h >> 32)
@@ -343,7 +364,7 @@ impl ShapeSlab {
     /// touch. Returns the record it replaced, if the id was already present.
     pub(super) fn insert(&mut self, id: u32, mut record: ShapeRecord) -> Option<ShapeRecord> {
         let index = Self::index_of(id).expect("ShapeSlab::insert: id outside the ShapeId range");
-        record.flags |= RECORD_FLAG_PRESENT;
+        record.set(RECORD_FLAG_PRESENT, true);
         let (page, chunk, slot) = Self::split(index);
         if page >= self.pages.len() {
             self.pages.resize_with(page + 1, || None);
@@ -950,6 +971,74 @@ mod tests {
         // Writing through the slot is what an evacuating visitor does.
         unsafe { *lifted.keys_slot().unwrap() = 0x4000 };
         assert_eq!(slab.get(id).unwrap().keys, 0x4000);
+    }
+
+    /// The geometry that makes the object kind FREE, and the O(1) property of
+    /// the probe path, asserted together on purpose: the kind fits only
+    /// because it lives in bytes that were already padding, so a future field
+    /// that grows the record silently takes that away. Fail here rather than
+    /// discovering it as RSS.
+    #[test]
+    fn the_record_geometry_is_free_and_facts_key_is_o1() {
+        assert_eq!(std::mem::size_of::<ShapeRecord>(), 32, "record grew");
+        assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
+
+        // `facts_key` folds the keys ADDRESS; it must never dereference it.
+        // A wild, unmapped address must be folded, not read. If the probe
+        // path is ever changed to walk key strings (an O(N) content fold),
+        // this reads garbage and the test dies -- which is the assertion.
+        let wild: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+        let a = facts_key(wild, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
+        let b = facts_key(wild, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
+        assert_eq!(a, b, "facts_key must be a pure fold of its arguments");
+    }
+
+    /// Every kind must reach the fold distinctly. The predecessor of this
+    /// test folded `object_kind == Class` as a BOOL, which gave Ordinary and
+    /// Dictionary the same contribution; `facts_match` re-checked the full
+    /// enum so it was never a wrong answer, but the two kinds differ in every
+    /// consumer and must not share a hash slot by construction.
+    #[test]
+    fn every_object_kind_reaches_the_facts_fold() {
+        let w: u64 = 0x1234_5678;
+        let o = facts_key(w, 3, 4, 7, ShapeObjectKind::Ordinary, 0);
+        let c = facts_key(w, 3, 4, 7, ShapeObjectKind::Class, 0);
+        let d = facts_key(w, 3, 4, 7, ShapeObjectKind::Dictionary, 0);
+        assert_ne!(o, c, "Ordinary and Class collide");
+        assert_ne!(
+            o, d,
+            "Ordinary and Dictionary collide -- the bool fold is back"
+        );
+        assert_ne!(c, d, "Class and Dictionary collide");
+    }
+
+    /// A record must report the kind it was built with. Storing the kind in a
+    /// single flag bit could represent only two, so a Dictionary record read
+    /// back as Ordinary -- and because `facts_match` compares the full enum,
+    /// that is a WRONG IDENTITY MATCH, not a hash collision.
+    #[test]
+    fn a_record_round_trips_all_three_kinds_beside_its_flags() {
+        for kind in [
+            ShapeObjectKind::Ordinary,
+            ShapeObjectKind::Class,
+            ShapeObjectKind::Dictionary,
+        ] {
+            let mut r = ShapeRecord::new(0x4000, 2, 2, 11, kind, 1);
+            assert_eq!(r.object_kind(), kind, "kind did not round-trip");
+            assert!(r.has(RECORD_FLAG_PRESENT));
+            assert!(r.has(RECORD_FLAG_FACTS_INDEXED));
+            // flags and kind share one word: moving a flag must not move the
+            // kind, and vice versa.
+            r.set(RECORD_FLAG_OLD_CARRIER, true);
+            assert_eq!(r.object_kind(), kind, "setting a flag moved the kind");
+            r.set(RECORD_FLAG_OLD_CARRIER, false);
+            r.set(RECORD_FLAG_CACHE_CARRIER, true);
+            assert_eq!(r.object_kind(), kind, "clearing a flag moved the kind");
+            assert!(
+                !r.has(RECORD_FLAG_OLD_CARRIER),
+                "clear leaked into another flag"
+            );
+        }
     }
 
     /// Varying any ONE fact must change the key: a fold that dropped a field
