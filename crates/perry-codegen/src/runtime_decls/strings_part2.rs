@@ -158,7 +158,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_receiver_may_own_named_method",
         I32,
-        &[DOUBLE, I64],
+        &[DOUBLE, PTR, I64],
     );
     // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
     module.declare_function(
