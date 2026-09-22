@@ -482,14 +482,23 @@ for raw in sys.stdin:
     echo "$decoded" | \
         # Normalize line endings
         tr -d '\r' | \
-        # Strip the seeded GC schedule's diagnostics. A test carrying
+        # Strip the exit-summary instruments. A test carrying
         # `parity-env: … PERRY_GC_SCHEDULE_SEED=…` gets a startup banner and an
         # exit summary on stderr, which this harness merges into the compared
         # stream; Node prints no such thing, so every one of those tests would
         # diff as an output mismatch. Instrument noise, not program output.
         # A crash under the instrument is still caught: abnormal exits are
         # detected from the exit status, before either comparison runs.
-        sed -E '/^\[gc-schedule\]/d' | \
+        #
+        # ADDING A LINE TO `gc::schedule::report_exit_summary` MEANS ADDING ITS
+        # PREFIX HERE. That function is only reached when a GC diagnostic is
+        # on, which is exactly the fixtures carrying the `parity-env` above, so
+        # an unlisted prefix reddens every one of them at once and the failure
+        # looks like a cluster in whatever those fixtures happen to test —
+        # #10938's `[object-dictionary]` counters landed as eight `gc_*_rooting`
+        # parity failures, which is a shape that invites a hunt for a rooting
+        # bug that does not exist.
+        sed -E '/^\[(gc-schedule|object-dictionary)\]/d' | \
         # Strip Node v22+ MODULE_TYPELESS_PACKAGE_JSON warnings (4 lines
         # printed to stderr when running .ts files without "type":
         # "module" in package.json — pure environmental noise that
