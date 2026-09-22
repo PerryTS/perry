@@ -95,3 +95,33 @@ fn missing_property_in_a_cycle_still_warns() {
         "Accessing non-existent property 'after' of module exports inside circular dependency"
     ));
 }
+
+#[test]
+fn deferred_property_read_in_a_cycle_does_not_warn() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "a.cjs",
+        "const b = require('./b.cjs');\n\
+         exports.after = 42;\n\
+         exports.read = b.read;\n",
+    );
+    write(
+        dir.path(),
+        "b.cjs",
+        "const a = require('./a.cjs');\n\
+         exports.read = function () { return a.after; };\n",
+    );
+    write(
+        dir.path(),
+        "main.mjs",
+        "import a from './a.cjs';\nconsole.log(a.read());\n",
+    );
+    let run = compile_and_run_output(dir.path(), "main.mjs");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+    assert!(
+        run.stderr.is_empty(),
+        "deferred property read emitted a warning: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
