@@ -43,6 +43,7 @@ mod masked_window_region;
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;
+mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
 mod stable_packed_typed_array;
@@ -227,6 +228,24 @@ fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bo
                 emit_shadow_clears,
                 &region,
             )?;
+            i = end;
+            if ctx.block().is_terminated() {
+                break;
+            }
+            continue;
+        }
+        // Step 4b slice 2 (#10884): a run of reads on ONE receiver bound
+        // across statements is guarded ONCE, not once per read. Slice 1 takes
+        // the runs that sit inside one `+` tree; this takes the runs spelled
+        // across statements, which a tsc census puts at 3.7x as many reads.
+        if let Some(run) = region_read_stmts::try_match(ctx, &stmts[i..]) {
+            let end = i + run.len;
+            region_read_stmts::lower(ctx, &stmts[i..end], &run)?;
+            if emit_shadow_clears {
+                for j in i..end {
+                    emit_shadow_clears_after_stmt(ctx, j);
+                }
+            }
             i = end;
             if ctx.block().is_terminated() {
                 break;

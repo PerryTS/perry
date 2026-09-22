@@ -53,54 +53,14 @@
 //! there). Priming is bounded to `PRIME_ATTEMPTS` per region for the life of
 //! the process, so a polymorphic or inherited-read site stops paying for it.
 
-use std::cell::Cell;
-
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
+use super::region_guard::{
+    self, emit_miss, emit_prime, emit_r1, emit_slot_loads, state_globals, MAX_KEYS,
+};
 use super::{lower_expr, FnCtx};
-use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
-
-/// Must equal `perry_runtime::object::shapes::REGION_GUARD_MAX_KEYS`.
-const MAX_KEYS: usize = 5;
-/// Must equal the runtime's slot width.
-const SLOT_BITS: u32 = 6;
-/// `REGION_GUARD_WORD_EMPTY`: low half `u32::MAX`, never a live ShapeId.
-const EMPTY_WORD: &str = "4294967295";
-/// Primes attempted per region before it stops trying (process lifetime).
-const PRIME_ATTEMPTS: &str = "8";
-/// A small-handle band sits under the pointer tag; its ids are not addresses.
-const SMALL_HANDLE_MAX: &str = "1048575";
-
-thread_local! {
-    /// Non-zero while the generic copy of a region is being lowered. The
-    /// generic copy lowers the SAME tree through the ordinary dispatch, which
-    /// would otherwise form the same region again inside itself.
-    static SUPPRESS: Cell<u32> = const { Cell::new(0) };
-    static REGIONS_FORMED: Cell<u64> = const { Cell::new(0) };
-    static READS_COVERED: Cell<u64> = const { Cell::new(0) };
-}
-
-struct Suppressed;
-impl Suppressed {
-    fn enter() -> Self {
-        SUPPRESS.with(|s| s.set(s.get() + 1));
-        Suppressed
-    }
-}
-impl Drop for Suppressed {
-    fn drop(&mut self) {
-        SUPPRESS.with(|s| s.set(s.get() - 1));
-    }
-}
-
-fn disabled() -> bool {
-    matches!(
-        std::env::var("PERRY_REGION_READS").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
-}
+use crate::types::{DOUBLE, I1};
 
 enum Leaf<'a> {
     /// A read of the region's receiver; the index names its key.
@@ -197,40 +157,21 @@ pub(crate) fn try_lower_region_add_tree(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    if SUPPRESS.with(|s| s.get()) > 0 || disabled() {
-        return Ok(None);
-    }
-    // Profiling builds record guard pass/fail on the per-access towers; a read
-    // served before them would change a signal that must stay byte-identical.
-    if crate::expr::typed_feedback_emission_enabled() {
+    if !region_guard::emission_allowed() {
         return Ok(None);
     }
     let Some(plan) = plan(expr) else {
         return Ok(None);
     };
-    REGIONS_FORMED.with(|c| c.set(c.get() + 1));
-    READS_COVERED.with(|c| {
-        c.set(
-            c.get()
-                + plan
-                    .leaves
-                    .iter()
-                    .filter(|l| matches!(l, Leaf::Region(_)))
-                    .count() as u64,
-        )
-    });
+    region_guard::note_expr_region(
+        plan.leaves
+            .iter()
+            .filter(|l| matches!(l, Leaf::Region(_)))
+            .count() as u64,
+    );
 
     // Region state: one atomic word (id + slots) and a prime-attempt counter.
-    let site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let base = crate::expr::inline_cache_global_name(ctx, site);
-    let word_g = format!("@{base}_region");
-    let tries_g = format!("@{base}_region_tries");
-    ctx.typed_parse_rodata.push(format!(
-        "{word_g} = private global i64 {EMPTY_WORD}, align 8"
-    ));
-    ctx.typed_parse_rodata
-        .push(format!("{tries_g} = private global i32 0, align 4"));
+    let sites = state_globals(ctx);
 
     // The non-receiver leaves first. They are effect-free, and lowering them
     // before the receiver means nothing that could allocate runs between the
@@ -252,16 +193,12 @@ pub(crate) fn try_lower_region_add_tree(
         }
     }
 
-    let handle_idx = ctx.new_block("region.handle");
-    let r1_idx = ctx.new_block("region.r1");
     let r2_idx = ctx.new_block("region.r2");
     let fold_idx = ctx.new_block("region.fold");
     let miss_idx = ctx.new_block("region.miss");
     let prime_idx = ctx.new_block("region.prime");
     let generic_idx = ctx.new_block("region.generic");
     let merge_idx = ctx.new_block("region.merge");
-    let handle_l = ctx.block_label(handle_idx);
-    let r1_l = ctx.block_label(r1_idx);
     let r2_l = ctx.block_label(r2_idx);
     let fold_l = ctx.block_label(fold_idx);
     let miss_l = ctx.block_label(miss_idx);
@@ -269,45 +206,14 @@ pub(crate) fn try_lower_region_add_tree(
     let generic_l = ctx.block_label(generic_idx);
     let merge_l = ctx.block_label(merge_idx);
 
-    // R1, part 1: the receiver is a heap object pointer.
+    // R1: one guard for the whole run (shared emitter).
     let recv = lower_expr(ctx, &Expr::LocalGet(plan.receiver))?;
-    let bits = ctx.block().bitcast_double_to_i64(&recv);
-    let top = ctx.block().lshr(I64, &bits, "48");
-    let is_ptr = ctx.block().icmp_eq(I64, &top, "32765"); // 0x7FFD, the pointer tag
-    ctx.block().cond_br(&is_ptr, &handle_l, &generic_l);
-
-    ctx.current_block = handle_idx;
-    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    let real = ctx.block().icmp_ugt(I64, &handle, SMALL_HANDLE_MAX);
-    ctx.block().cond_br(&real, &r1_l, &generic_l);
-
-    // R1, part 2: ONE shape compare against the learned region word. By
-    // #10828's rule 3 only a GC_TYPE_OBJECT carrying that shape can match, so
-    // this compare is the whole receiver classification.
-    ctx.current_block = r1_idx;
-    let word_ptr = word_g.clone();
-    let word = ctx.block().load_atomic_monotonic(I64, &word_ptr, 8);
-    let expected = ctx.block().trunc(I64, &word, I32);
-    let sid_addr = ctx.block().add(I64, &handle, "4");
-    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
-    let sid = ctx.block().load(I32, &sid_ptr);
-    let hit = ctx.block().icmp_eq(I32, &sid, &expected);
-    ctx.block().cond_br(&hit, &r2_l, &miss_l);
+    let entry = emit_r1(ctx, &recv, &sites, &r2_l, &miss_l, &generic_l);
 
     // R2 + R3: every key's slot from the same word, then prove every leaf is a
     // Number before any addition runs.
     ctx.current_block = r2_idx;
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let fields = ctx.block().add(I64, &handle, &header);
-    let fields_ptr = ctx.block().inttoptr(I64, &fields);
-    let mut key_values: Vec<String> = Vec::with_capacity(plan.keys.len());
-    for i in 0..plan.keys.len() {
-        let shift = (32 + SLOT_BITS * i as u32).to_string();
-        let shifted = ctx.block().lshr(I64, &word, &shift);
-        let slot = ctx.block().and(I64, &shifted, "63");
-        let field_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
-        key_values.push(ctx.block().load(DOUBLE, &field_ptr));
-    }
+    let key_values = emit_slot_loads(ctx, &entry, plan.keys.len());
     let mut leaf_values: Vec<String> = Vec::with_capacity(plan.leaves.len());
     for (i, leaf) in plan.leaves.iter().enumerate() {
         leaf_values.push(match leaf {
@@ -337,55 +243,18 @@ pub(crate) fn try_lower_region_add_tree(
     let fast_end = ctx.block().label.clone();
     ctx.block().br(&merge_l);
 
-    // Miss: prime at most PRIME_ATTEMPTS times for the life of the process.
+    // Miss: prime a bounded number of times, then retire (shared emitter).
     ctx.current_block = miss_idx;
-    let tries = ctx.block().load(I32, &tries_g);
-    let may_prime = ctx.block().icmp_ult(I32, &tries, PRIME_ATTEMPTS);
-    ctx.block().cond_br(&may_prime, &prime_l, &generic_l);
-
+    let tries = emit_miss(ctx, &sites, &prime_l, &generic_l);
     ctx.current_block = prime_idx;
-    let next_tries = ctx.block().add(I32, &tries, "1");
-    ctx.block().store(I32, &next_tries, &tries_g);
-    let mut key_bits: Vec<String> = Vec::with_capacity(MAX_KEYS);
-    for i in 0..MAX_KEYS {
-        if let Some(key) = plan.keys.get(i) {
-            let idx = ctx.strings.intern(key);
-            let handle_global = format!("@{}", ctx.strings.entry(idx).handle_global);
-            let boxed = ctx.block().load(DOUBLE, &handle_global);
-            key_bits.push(ctx.block().bitcast_double_to_i64(&boxed));
-        } else {
-            key_bits.push("0".to_string());
-        }
-    }
-    let n = plan.keys.len().to_string();
-    // The runtime packs AND publishes: a cache word's store belongs to the
-    // code that owns its memory ordering (`js_region_guard_prime`), the same
-    // split the property IC uses. Emitting the store here instead cost a real
-    // program: `store atomic` parses in the textual backend but not in
-    // perry's native IR construction, which every large module takes, so tsc
-    // failed codegen in 20 of 50 units while every fixture built.
-    ctx.block().call(
-        I64,
-        "js_region_guard_prime",
-        &[
-            (PTR, &word_ptr),
-            (I32, &sid),
-            (I32, &n),
-            (I64, &key_bits[0]),
-            (I64, &key_bits[1]),
-            (I64, &key_bits[2]),
-            (I64, &key_bits[3]),
-            (I64, &key_bits[4]),
-        ],
-    );
-    ctx.block().br(&generic_l);
+    emit_prime(ctx, &sites, &entry, &tries, &plan.keys, &generic_l);
 
     // Generic copy: the same tree through the ordinary dispatch, in source
     // order — the code this region replaces.
     ctx.current_block = generic_idx;
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let slow = {
-        let _suppressed = Suppressed::enter();
+        let _suppressed = region_guard::Suppressed::enter();
         lower_expr(ctx, expr)?
     };
     let slow_end = ctx.block().label.clone();
@@ -396,138 +265,6 @@ pub(crate) fn try_lower_region_add_tree(
         ctx.block()
             .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]),
     ))
-}
-
-/// `PERRY_REGION_DIAG=1`: per module, how many regions slice 1 formed, how many
-/// reads they cover, and — the number that sizes slice 2 on real code — how
-/// many runs of two or more consecutive same-receiver reads sit across
-/// STATEMENTS where this slice does not reach them.
-pub(crate) struct ModuleDiag {
-    census: Option<(u64, u64)>,
-    name: String,
-}
-
-impl ModuleDiag {
-    pub(crate) fn start(hir: &perry_hir::Module) -> Self {
-        REGIONS_FORMED.with(|c| c.set(0));
-        READS_COVERED.with(|c| c.set(0));
-        let on = std::env::var("PERRY_REGION_DIAG").ok().as_deref() == Some("1");
-        ModuleDiag {
-            census: on.then(|| statement_run_census(hir)),
-            name: hir.name.clone(),
-        }
-    }
-}
-
-impl Drop for ModuleDiag {
-    fn drop(&mut self) {
-        if let Some((runs, reads)) = self.census {
-            eprintln!(
-                "[perry region] module={} regions={} reads_covered={} statement_runs_uncovered={} statement_reads_uncovered={}",
-                self.name,
-                REGIONS_FORMED.with(|c| c.get()),
-                READS_COVERED.with(|c| c.get()),
-                runs,
-                reads
-            );
-        }
-    }
-}
-
-fn statement_run_census(hir: &perry_hir::Module) -> (u64, u64) {
-    let mut acc = (0u64, 0u64);
-    census_stmts(&hir.init, &mut acc);
-    for f in &hir.functions {
-        census_stmts(&f.body, &mut acc);
-    }
-    for c in &hir.classes {
-        for m in c
-            .methods
-            .iter()
-            .chain(c.static_methods.iter())
-            .chain(c.constructor.iter())
-        {
-            census_stmts(&m.body, &mut acc);
-        }
-    }
-    acc
-}
-
-/// A statement-level read: `let x = <local>.<key>`.
-fn let_read_receiver(stmt: &perry_hir::Stmt) -> Option<u32> {
-    let perry_hir::Stmt::Let {
-        init: Some(Expr::PropertyGet { object, .. }),
-        ..
-    } = stmt
-    else {
-        return None;
-    };
-    match object.as_ref() {
-        Expr::LocalGet(id) => Some(*id),
-        _ => None,
-    }
-}
-
-fn census_stmts(stmts: &[perry_hir::Stmt], acc: &mut (u64, u64)) {
-    use perry_hir::Stmt;
-    let mut run_receiver: Option<u32> = None;
-    let mut run_len = 0u64;
-    let flush = |len: u64, acc: &mut (u64, u64)| {
-        if len >= 2 {
-            acc.0 += 1;
-            acc.1 += len;
-        }
-    };
-    for stmt in stmts {
-        match let_read_receiver(stmt) {
-            Some(r) if run_receiver == Some(r) => run_len += 1,
-            Some(r) => {
-                flush(run_len, acc);
-                run_receiver = Some(r);
-                run_len = 1;
-            }
-            None => {
-                flush(run_len, acc);
-                run_receiver = None;
-                run_len = 0;
-            }
-        }
-        match stmt {
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                census_stmts(then_branch, acc);
-                if let Some(eb) = else_branch {
-                    census_stmts(eb, acc);
-                }
-            }
-            Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                census_stmts(body, acc)
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                census_stmts(body, acc);
-                if let Some(c) = catch {
-                    census_stmts(&c.body, acc);
-                }
-                if let Some(f) = finally {
-                    census_stmts(f, acc);
-                }
-            }
-            Stmt::Switch { cases, .. } => {
-                for case in cases {
-                    census_stmts(&case.body, acc);
-                }
-            }
-            _ => {}
-        }
-    }
-    flush(run_len, acc);
 }
 
 #[cfg(test)]
