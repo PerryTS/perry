@@ -119,6 +119,67 @@ impl CanonicalKeys {
     }
 }
 
+/// A live object pointer that a call which may collect has to hand back.
+///
+/// **Not `Copy` and not `Clone`**, which is the whole mechanism: a function
+/// that can allocate takes this BY VALUE and returns the post-collection one,
+/// so a caller that keeps using its old binding is a *move-after-use* error
+/// at compile time rather than a receiver written at a stale address at run
+/// time.
+///
+/// It exists because I wrote `CanonicalKeys` to make "a producer forgot to
+/// canonicalize" impossible and then, four hours later, introduced the twin
+/// defect myself: `canonicalize` made `shape_cache_insert` allocate, and
+/// `js_object_alloc_class_with_keys` held the object under construction as a
+/// raw pointer across it, so a collection there moved the receiver and the
+/// keys edge landed in the freed address. Lane 16b predicted exactly this
+/// class at `delete_rest.rs:412` and noted that step 2.5 is what makes the
+/// path allocate — the prediction and its confirmation are four hours apart.
+///
+/// Nobody can enumerate the members of this class by inspection; that is the
+/// argument for a type rather than three hand-rooted call sites.
+///
+/// `none()` is for a caller that has no unrooted object to carry — either
+/// none exists yet, or it is already held in a `RuntimeHandleScope`, which is
+/// the older discipline and is what `js_object_alloc_with_shape` does.
+pub(crate) struct LiveObject(*mut crate::object::ObjectHeader);
+
+impl LiveObject {
+    #[inline]
+    pub(crate) fn new(obj: *mut crate::object::ObjectHeader) -> Self {
+        LiveObject(obj)
+    }
+
+    /// No unrooted object crosses this call.
+    #[inline]
+    pub(crate) fn none() -> Self {
+        LiveObject(std::ptr::null_mut())
+    }
+
+    /// The raw pointer, at a leaf that does not allocate.
+    #[inline]
+    pub(crate) fn as_ptr(&self) -> *mut crate::object::ObjectHeader {
+        self.0
+    }
+
+    /// Run `f` with this object rooted, and return the token carrying its
+    /// post-collection address. Every allocating callee that accepts a
+    /// `LiveObject` funnels through here.
+    pub(crate) fn across<R>(self, f: impl FnOnce() -> R) -> (Self, R) {
+        if self.0.is_null() {
+            let out = f();
+            return (self, out);
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let handle = scope.root_raw_mut_ptr(self.0);
+        let out = f();
+        (
+            LiveObject(handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()),
+            out,
+        )
+    }
+}
+
 const NO_NODE: u32 = u32::MAX;
 /// The empty list. Never freed, owns no array.
 const ROOT_NODE: u32 = 0;
@@ -525,9 +586,7 @@ pub(crate) unsafe fn extend(parent: CanonicalKeys, appended: Appended) -> Canoni
     // move, and nothing rewrites the table, so a later class allocation reads
     // a stale address. That is the defect
     // `descriptor_trap_collection_preserves_for_in_target_and_keys` caught,
-    // and the reason it caught it is that its trap collects once per key:
-    // fourteen collections through one enumeration, where the `ownKeys`
-    // sibling collects once and saw nothing.
+    // and the reason it caught it is that its trap collects once per key.
     let born = crate::array::js_array_alloc_with_length_longlived(parent_len + 1);
     // The allocator above sets `length = capacity`; the slots are written and
     // the length re-published below, so expose nothing until then.
