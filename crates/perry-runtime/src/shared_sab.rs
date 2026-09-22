@@ -213,7 +213,7 @@ mod header_survival_tests {
                 std::thread::spawn(move || {
                     // Touch the shared bytes the way an Atomics user would,
                     // so the SAB is live across this thread's collections.
-                    let data = unsafe { crate::buffer::buffer_data(addr as *const BufferHeader) };
+                    let data = crate::buffer::buffer_data(addr as *const BufferHeader);
                     for i in 0..64u8 {
                         unsafe { std::ptr::write_volatile((data as *mut u8).add(i as usize), i) };
                     }

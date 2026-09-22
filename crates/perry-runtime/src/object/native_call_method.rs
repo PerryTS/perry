@@ -2188,8 +2188,13 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         };
         // #10868 step 2.5 stage 1: see the shadowing scan above.
         if crate::object::dictionary::is_dictionary(obj) {
-            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
-            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+            // #10924 replaced the header-less `NullObjectBytes` static with a
+            // real GC object; #10938 was written before that landed and still
+            // spelled the old static here. Reinstating it would give
+            // dictionary-mode receivers exactly the #10917 bug the replacement
+            // removed -- brand probes reading the `.rodata` bytes in front of
+            // a header-less value.
+            return crate::object::null_stub_value();
         }
         let keys = descriptor.keys as usize as *mut ArrayHeader;
 
