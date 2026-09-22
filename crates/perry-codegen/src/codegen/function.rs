@@ -1258,7 +1258,7 @@ pub(super) fn compile_function(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         canonical_read_loop: None,
-        canonical_read_generic: false,
+        canonical_read_short_bounds: cross_module.canonical_read_short_bounds.get(&f.id).cloned().unwrap_or_default(),
         element_shape_loop_facts: Vec::new(),
         // Specialized entries seed the canonical-i32 registry with their raw
         // i32 params (empty otherwise — identical to the pre-phase behavior).

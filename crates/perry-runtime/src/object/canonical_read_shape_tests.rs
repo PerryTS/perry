@@ -47,3 +47,42 @@ fn predicted_canonical_shape_is_shared_by_literal_and_growth_paths() {
         );
     }
 }
+
+#[test]
+fn remembered_prediction_roots_its_keys_without_a_receiver() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let packed = b"remembered_read_key\0";
+        let id = js_canonical_read_shape(packed.as_ptr(), packed.len() as u32);
+        let descriptor = super::super::shapes::shape_descriptor_by_id(id).unwrap();
+        assert!(
+            descriptor.cache_carrier,
+            "a remembered id needs an external carrier"
+        );
+        let mut roots = Vec::new();
+        super::super::shapes::scan_shape_table_rekey_mut(
+            &mut crate::gc::RuntimeRootVisitor::for_copy(&mut |v| roots.push(v.to_bits())),
+        );
+        assert!(
+            roots
+                .iter()
+                .any(|bits| bits & crate::value::POINTER_MASK == descriptor.keys),
+            "the shape scanner must strongly visit the keys with no receiver"
+        );
+        super::super::shapes::prune_uncarried_shape_descriptors_after_full_trace();
+        assert!(
+            super::super::shapes::shape_descriptor_by_id(id).is_some(),
+            "external expectations must survive descriptor retirement"
+        );
+        prune_dead_canonical_keys(&|addr| {
+            !roots
+                .iter()
+                .any(|bits| bits & crate::value::POINTER_MASK == addr as u64)
+        });
+        assert_eq!(
+            js_canonical_read_shape(packed.as_ptr(), packed.len() as u32),
+            id,
+            "weak trie pruning must retain the rooted prediction"
+        );
+    }
+}

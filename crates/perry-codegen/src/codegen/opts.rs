@@ -815,6 +815,7 @@ impl ImportedCtor {
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx {
+    pub canonical_read_short_bounds: std::collections::HashMap<u32, std::collections::HashSet<u32>>,
     pub namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.

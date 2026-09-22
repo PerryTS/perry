@@ -31,9 +31,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(value) = crate::stmt::canonical_read_loop::lower_reduction(ctx, expr)? {
         return Ok(value);
     }
-    if let Some(value) = crate::stmt::canonical_read_loop::lower_generic_read(ctx, expr)? {
-        return Ok(value);
-    }
     if let Some(value) = super::suffix_cursor::try_lower(ctx, expr)? {
         return Ok(value);
     }

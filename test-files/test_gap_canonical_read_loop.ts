@@ -25,3 +25,6 @@ let coercions=0;
 const value:any={valueOf(){coercions++;return 10;}};
 console.log(run(4,{a:value,b:2}),coercions);
 console.log(run(4,new Proxy({a:1,b:2},{get(t,k){return k==='a'?10:Reflect.get(t,k);}})));
+
+// Keep versioning live while the short counterexamples exercise its miss arm.
+console.log(run(32,{a:1,b:2}));

@@ -1,7 +1,10 @@
-Counted numeric property-read loops now resolve their predicted ordered key list
-through the canonical shape tree and compare the receiver's header once before
-the loop. The body uses constant slot offsets. No receiver-derived IC word or
-slot cache is created; a miss calls the generic property reader directly.
+Counted numeric property-read loops resolve each predicted ordered key list once
+at module initialization. A registered guard-shape global holds the expectation;
+its external-carrier descriptor roots the keys even with no live receiver. The
+preheader compares the receiver's header shape once, and the body uses constant
+slot offsets. A miss runs the original loop lowering, including its existing
+read optimizations. Calls observed only with short constant bounds keep that
+lowering without a preheader, so frequent short misses pay no versioning cost.
 
 Admission is a closed grammar: one numeric addition reduction, an unchanged
 receiver, a primitive bound and counter, and no calls or existing-object stores.

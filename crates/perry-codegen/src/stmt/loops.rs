@@ -7083,6 +7083,17 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    lower_for_baseline_after_init(ctx, init, condition, update, body)
+}
+
+/// The original loop lowering, shared by ordinary loops and shape misses.
+pub(super) fn lower_for_baseline_after_init(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
     // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
     // window, element-tag, and accumulator check admits a clone whose array
     // access is a raw boxed-slot load and whose length dispatch is SSO/heap

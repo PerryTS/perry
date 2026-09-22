@@ -1041,8 +1041,8 @@ pub(crate) struct FnCtx<'a> {
     /// A canonical ordinary-shape proof scoped to a non-dispatching loop.
     /// Carries local/key identities only, never a raw heap address.
     pub canonical_read_loop: Option<crate::stmt::canonical_read_loop::Fact>,
-    /// The one generic clone of that loop bypasses all per-site read caches.
-    pub canonical_read_generic: bool,
+    /// Bound parameters observed only in short calls; a profitability hint.
+    pub canonical_read_short_bounds: std::collections::HashSet<u32>,
 
     /// repsel #7480 / #5093: scoped loop-versioning facts for element-shape
     /// loops (`for (…) sum += arr[i].field`). Pushed only around the FAST

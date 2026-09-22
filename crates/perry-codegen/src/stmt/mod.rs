@@ -39,6 +39,7 @@ mod let_stmt_facts;
 mod let_stmt_var_redeclare_tests;
 mod loops;
 pub(crate) mod canonical_read_loop;
+pub(crate) mod canonical_read_profit;
 #[cfg(test)]
 mod canonical_read_loop_tests;
 mod masked_window_region;

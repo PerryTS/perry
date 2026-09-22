@@ -414,6 +414,17 @@ pub(super) fn emit_string_pool(
         }
     }
 
+    // One rooted shape expectation per ordered prediction, resolved at module init.
+    for (keys, name) in &strings.canonical_read_shapes {
+        let bytes: Vec<u8> = keys.iter().flat_map(|k| k.bytes().chain(Some(0))).collect();
+        let encoded: String = bytes.iter().map(|b| format!("\\{b:02X}")).collect();
+        llmod.add_raw_global(format!("@{name} = internal global i32 -1, align 4"));
+        llmod.add_raw_global(format!(
+            "@{name}_keys = private constant [{} x i8] c\"{encoded}\", align 1",
+            bytes.len()
+        ));
+    }
+
     // #5391 function splitting: a large bundle interns ~190K strings AND
     // registers tens of thousands of closures/classes/functions; emitting all of
     // that into ONE `__perry_init_strings` function produced a single ~32MB /
@@ -435,6 +446,24 @@ pub(super) fn emit_string_pool(
         format!("__perry_init_strings_{}", module_prefix),
         ops_per_chunk,
     );
+
+    for (keys, name) in &strings.canonical_read_shapes {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        let length: usize = keys.iter().map(|k| k.len() + 1).sum();
+        // js_object_shape_id_for_keys marks these keys as an external carrier:
+        // the weak canonical trie cannot collect the remembered descriptor.
+        let shape = blk.call(
+            I32,
+            "js_canonical_read_shape",
+            &[(PTR, &format!("@{name}_keys")), (I32, &length.to_string())],
+        );
+        blk.store(I32, &shape, &format!("@{name}"));
+        blk.call_void(
+            "js_register_class_guard_shape",
+            &[(PTR, &format!("@{name}"))],
+        );
+    }
 
     for entry in strings.iter() {
         chunker.roll_if_full();

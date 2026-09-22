@@ -1159,7 +1159,7 @@ pub(super) fn compile_closure(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         canonical_read_loop: None,
-        canonical_read_generic: false,
+        canonical_read_short_bounds: std::collections::HashSet::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),

@@ -8,13 +8,15 @@
 
 use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::POINTER_MASK_I64;
-use crate::types::{DOUBLE, I1, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64};
 use anyhow::Result;
 use perry_hir::{BinaryOp, CompareOp, Expr, Stmt, UpdateOp};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Fact {
     receiver: u32,
+    counter: u32,
+    invariant_values: Vec<(u32, String)>,
     keys: Vec<String>,
     accumulator: u32,
     numeric_locals: Vec<u32>,
@@ -120,6 +122,8 @@ fn plan(
     }
     let mut fact = Fact {
         receiver: 0,
+        counter,
+        invariant_values: vec![],
         keys: vec![],
         accumulator: *accumulator,
         numeric_locals: vec![],
@@ -188,7 +192,12 @@ fn load_slots(ctx: &mut FnCtx<'_>, fact: &Fact) -> Result<Vec<String>> {
     Ok(values)
 }
 
-fn fold(ctx: &mut FnCtx<'_>, expr: &Expr, fact: &Fact, values: &[String]) -> Result<String> {
+fn fold(
+    ctx: &mut FnCtx<'_>,
+    expr: &Expr,
+    fact: &Fact,
+    values: &mut Option<Vec<String>>,
+) -> Result<String> {
     match expr {
         Expr::Binary {
             op: BinaryOp::Add,
@@ -199,57 +208,52 @@ fn fold(ctx: &mut FnCtx<'_>, expr: &Expr, fact: &Fact, values: &[String]) -> Res
             let r = fold(ctx, right, fact, values)?;
             Ok(ctx.block().fadd(&l, &r))
         }
-        Expr::PropertyGet { property, .. } => Ok(values[fact
-            .keys
-            .iter()
-            .position(|k| k == property)
-            .expect("proved key")]
-        .clone()),
+        Expr::PropertyGet { property, .. } => {
+            // Preserve operand evaluation order. Nothing in this closed
+            // expression can collect between the accumulator and slot loads.
+            if values.is_none() {
+                *values = Some(load_slots(ctx, fact)?);
+            }
+            Ok(values.as_ref().unwrap()[fact
+                .keys
+                .iter()
+                .position(|k| k == property)
+                .expect("proved key")]
+            .clone())
+        }
         _ => lower_expr(ctx, expr),
     }
 }
 
-/// Intercept only the reduction proved by `plan`, ahead of representation
-/// selection and all property/region specializations.
+/// Lower the proved reduction and invariant numeric reads ahead of
+/// representation selection and property/region specializations.
 pub(crate) fn lower_reduction(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
     let Some(fact) = ctx.canonical_read_loop.clone() else {
         return Ok(None);
     };
+    if let Expr::LocalGet(id) = expr {
+        if let Some((_, value)) = fact.invariant_values.iter().find(|(local, _)| local == id) {
+            return Ok(Some(value.clone()));
+        }
+    }
     let Expr::LocalSet(id, value) = expr else {
         return Ok(None);
     };
     if *id != fact.accumulator {
         return Ok(None);
     }
-    let values = load_slots(ctx, &fact)?;
-    let result = fold(ctx, value, &fact, &values)?;
+    let result = fold(ctx, value, &fact, &mut None)?;
     crate::expr::bind_lowered_value_to_local(ctx, *id, &result, value)?;
     Ok(Some(result))
 }
 
-/// The one slow property path. No cache global, priming, or second inline arm.
-pub(crate) fn lower_generic_read(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
-    if !ctx.canonical_read_generic {
-        return Ok(None);
-    }
-    let Expr::PropertyGet {
-        object, property, ..
-    } = expr
-    else {
-        return Ok(None);
-    };
-    let receiver = lower_expr(ctx, object)?;
-    let key = ctx.strings.intern(property);
-    let global = format!("@{}", ctx.strings.entry(key).handle_global);
-    let key_box = ctx.block().load(DOUBLE, &global);
-    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-    let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
-    let bits = ctx.block().bitcast_double_to_i64(&receiver);
-    Ok(Some(ctx.block().call(
-        DOUBLE,
-        "js_object_get_field_generic",
-        &[(I64, &bits), (I64, &key_raw)],
-    )))
+// Independent 50/50 tag checks compound into an artificially cold fast
+// clone, even when the shape comparison itself is balanced. Keep ordinary
+// numeric/object admission likely; leave the actual shape hit unweighted so
+// LLVM allocates registers for both loop versions. This emits no instruction.
+fn likely_plain_input(ctx: &mut FnCtx<'_>, test: &str) -> String {
+    ctx.block()
+        .call(I1, "llvm.expect.i1", &[(I1, test), (I1, "true")])
 }
 
 pub(crate) fn lower(
@@ -260,13 +264,28 @@ pub(crate) fn lower(
     body: &[Stmt],
 ) -> Result<bool> {
     if ctx.canonical_read_loop.is_some()
-        || ctx.canonical_read_generic
         || !ctx.pending_labels.is_empty()
         || crate::expr::typed_feedback_emission_enabled()
     {
         return Ok(false);
     }
-    let Some(fact) = plan(init, condition, update, body) else {
+    // A short loop can pay this preheader on every call without amortizing
+    // it. Leave known short trips entirely on the existing lowering, with no
+    // runtime profitability branch or extra per-entry instruction.
+    if let Some(Expr::Compare { right, .. }) = condition {
+        let short = match right.as_ref() {
+            Expr::LocalGet(id) => ctx.canonical_read_short_bounds.contains(id),
+            Expr::Integer(n) => {
+                *n >= 0 && (*n as f64) < super::canonical_read_profit::SHORT_TRIP_LIMIT
+            }
+            Expr::Number(n) => *n >= 0.0 && *n < super::canonical_read_profit::SHORT_TRIP_LIMIT,
+            _ => false,
+        };
+        if short {
+            return Ok(false);
+        }
+    }
+    let Some(mut fact) = plan(init, condition, update, body) else {
         return Ok(false);
     };
     if fact
@@ -294,29 +313,11 @@ pub(crate) fn lower(
     let slow_l = ctx.block_label(slow);
     let done_l = ctx.block_label(done);
 
-    // Constant key bytes describe a prediction, never a per-site copy of the
-    // receiver's shape/slots. The runtime resolves the canonical shape itself.
-    let bytes: Vec<u8> = fact
-        .keys
-        .iter()
-        .flat_map(|k| k.bytes().chain(std::iter::once(0)))
-        .collect();
-    let site = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let name = format!(
-        "@{}_shape_keys",
-        crate::expr::inline_cache_global_name(ctx, site)
-    );
-    let encoded: String = bytes.iter().map(|b| format!("\\{b:02X}")).collect();
-    ctx.typed_parse_rodata.push(format!(
-        "{name} = private constant [{} x i8] c\"{encoded}\", align 1",
-        bytes.len()
-    ));
-    let expected = ctx.block().call(
-        I32,
-        "js_canonical_read_shape",
-        &[(PTR, &name), (I32, &bytes.len().to_string())],
-    );
+    // The module initializer resolves and roots the prediction once. Every
+    // entry only loads its expectation; it never allocates strings or walks
+    // the weak canonical trie. Volatile observes class-guard poisoning.
+    let name = ctx.strings.canonical_read_shape(&fact.keys);
+    let expected = ctx.block().load_volatile(I32, &format!("@{name}"));
 
     // Numeric locals make condition/update/reduction coercion-free. This also
     // protects the proof against valueOf deleting a property mid-iteration.
@@ -325,17 +326,26 @@ pub(crate) fn lower(
         let v = lower_expr(ctx, &Expr::LocalGet(*id))?;
         let ok = super::loops::emit_js_value_is_number(ctx, &v);
         numeric = ctx.block().and(I1, &numeric, &ok);
+        // This scalar is proven numeric on the fast edge. The admitted body
+        // cannot assign it or run JS, so it remains valid across moving polls.
+        // Keep counter/accumulator loads live: those bindings do change.
+        if *id != fact.counter && *id != fact.accumulator {
+            fact.invariant_values.push((*id, v));
+        }
     }
+    let numeric = likely_plain_input(ctx, &numeric);
     ctx.block().cond_br(&numeric, &tag_l, &slow_l);
     ctx.current_block = tag;
     let receiver = lower_expr(ctx, &Expr::LocalGet(fact.receiver))?;
     let bits = ctx.block().bitcast_double_to_i64(&receiver);
     let top = ctx.block().lshr(I64, &bits, "48");
     let is_ptr = ctx.block().icmp_eq(I64, &top, "32765");
+    let is_ptr = likely_plain_input(ctx, &is_ptr);
     ctx.block().cond_br(&is_ptr, &handle_l, &slow_l);
     ctx.current_block = handle;
     let raw = ctx.block().and(I64, &bits, POINTER_MASK_I64);
     let real = ctx.block().icmp_ugt(I64, &raw, "1048575");
+    let real = likely_plain_input(ctx, &real);
     ctx.block().cond_br(&real, &shape_l, &slow_l);
     ctx.current_block = shape;
     let addr = ctx.block().add(I64, &raw, "4");
@@ -349,6 +359,7 @@ pub(crate) fn lower(
         let ok = super::loops::emit_js_value_is_number(ctx, &v);
         numeric = ctx.block().and(I1, &numeric, &ok);
     }
+    let numeric = likely_plain_input(ctx, &numeric);
     ctx.block().cond_br(&numeric, &fast_l, &slow_l);
 
     ctx.current_block = fast;
@@ -357,9 +368,9 @@ pub(crate) fn lower(
     ctx.canonical_read_loop = None;
     ctx.block().br(&done_l);
     ctx.current_block = slow;
-    ctx.canonical_read_generic = true;
-    super::loops::lower_for_after_init(ctx, init, condition, update, body, "for.shape_generic")?;
-    ctx.canonical_read_generic = false;
+    // Re-enter exactly the pre-existing lowering after initialization. No
+    // read hooks or IC suppression: this clone retains all baseline choices.
+    super::loops::lower_for_baseline_after_init(ctx, init, condition, update, body)?;
     ctx.block().br(&done_l);
     ctx.current_block = done;
     Ok(true)

@@ -197,7 +197,7 @@ pub(crate) fn try_lower_region_add_tree(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    if ctx.canonical_read_generic || SUPPRESS.with(|s| s.get()) > 0 || disabled() {
+    if SUPPRESS.with(|s| s.get()) > 0 || disabled() {
         return Ok(None);
     }
     // Profiling builds record guard pass/fail on the per-access towers; a read

@@ -79,14 +79,13 @@ pub unsafe extern "C" fn js_canonical_read_shape(packed: *const u8, len: u32) ->
     let keys_root = scope.root_raw_mut_ptr(std::ptr::null_mut::<crate::ArrayHeader>());
     let mut keys = CanonicalKeys::EMPTY;
     for name in bytes[..bytes.len() - 1].split(|b| *b == 0) {
-        // Extend roots the appended key before allocating. A redundant key
-        // from a canonical hit is collectible, not a leaked immortal string.
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        keys = extend_key(
-            &proof,
-            CanonicalKeys(keys_root.get_raw_mut_ptr::<crate::ArrayHeader>()),
-            key,
-        );
+        // Match js_build_class_keys_array: canonical prefixes are longlived,
+        // so their initialization must not create unremembered old-to-young
+        // edges. Redundant strings on trie hits remain collectible at full GC.
+        let (key, parent) = keys_root.across_mut(|| {
+            crate::string::js_string_from_bytes_longlived(name.as_ptr(), name.len() as u32)
+        });
+        keys = extend_key(&proof, CanonicalKeys(parent), key);
         keys_root.set_raw_mut_ptr(keys.as_ptr());
     }
     // The external-carrier bit roots the authoritative shape keys just as it
@@ -94,26 +93,10 @@ pub unsafe extern "C" fn js_canonical_read_shape(packed: *const u8, len: u32) ->
     super::shapes::js_object_shape_id_for_keys(keys.addr() as u64, keys.len())
 }
 
-/// Universal generic read, with no per-site cache and no second fast arm.
-#[no_mangle]
-pub extern "C" fn js_object_get_field_generic(bits: i64, key: *const crate::StringHeader) -> f64 {
-    if (bits as u64 >> 48) == crate::value::POINTER_TAG >> 48 {
-        super::js_object_get_field_by_name_f64(
-            (bits as u64 & crate::value::POINTER_MASK) as usize as *const super::ObjectHeader,
-            key,
-        )
-    } else {
-        super::js_object_get_field_ic_nonptr(bits, key, 0)
-    }
-}
-
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_READ_SHAPE: unsafe extern "C" fn(*const u8, u32) -> u32 = js_canonical_read_shape;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_GENERIC_READ: extern "C" fn(i64, *const crate::StringHeader) -> f64 =
-    js_object_get_field_generic;
+
 
 /// A keys array this table owns.
 ///

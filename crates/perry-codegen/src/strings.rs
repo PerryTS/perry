@@ -81,6 +81,8 @@ pub struct StringPool {
     /// Ordered list of unique entries; the index in this Vec is the
     /// interned index referenced by `interned`.
     entries: Vec<StringEntry>,
+    /// Ordered key predictions, shared by all read loops in this module.
+    pub(crate) canonical_read_shapes: Vec<(Vec<String>, String)>,
     /// Module-wide names for TDZ-capable bindings, including outer bindings
     /// read from closure bodies. Kept separately from per-function aliases.
     pub(crate) tdz_binding_names: HashMap<u32, String>,
@@ -131,6 +133,21 @@ pub struct StringEntry {
 }
 
 impl StringPool {
+    /// Register a program-owned expectation for initialization with the string pool.
+    pub(crate) fn canonical_read_shape(&mut self, keys: &[String]) -> String {
+        if let Some((_, name)) = self.canonical_read_shapes.iter().find(|(k, _)| k == keys) {
+            return name.clone();
+        }
+        let name = format!(
+            "perry_class_guard_shape_{}__read${}",
+            self.module_prefix,
+            self.canonical_read_shapes.len()
+        );
+        self.canonical_read_shapes
+            .push((keys.to_vec(), name.clone()));
+        name
+    }
+
     pub fn new() -> Self {
         Self::with_prefix(String::new())
     }
@@ -143,6 +160,7 @@ impl StringPool {
         Self {
             module_prefix,
             interned: HashMap::new(),
+            canonical_read_shapes: Vec::new(),
             entries: Vec::new(),
             tdz_binding_names: HashMap::new(),
             debug_location_ctx: None,
