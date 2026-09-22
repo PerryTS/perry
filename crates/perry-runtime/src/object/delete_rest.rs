@@ -360,6 +360,10 @@ pub extern "C" fn js_object_delete_field(
                     if !attrs.configurable() {
                         return 0;
                     }
+                    // The key is about to be removed on either the tombstone
+                    // or compacting lane. Its old writable/enumerable flags
+                    // must not govern a later assignment that recreates it.
+                    super::clear_property_attrs(obj as usize, name);
                 }
                 // A configurable data method on a class/Object prototype is about
                 // to disappear. Retire only this name's direct-method guards.
@@ -1523,6 +1527,79 @@ mod sso_tests_1781 {
                 "SSO key should be removed after delete"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod descriptor_delete_tests_10840 {
+    use super::*;
+
+    #[test]
+    fn deleting_configurable_read_only_data_allows_readding_the_key() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        for tombstones in [true, false] {
+            let _mode = test_scope_tombstone_deletes(tombstones);
+            for enumerable in [true, false] {
+                let obj = crate::object::js_object_alloc(0, 8);
+                let a = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+                let b = crate::string::js_string_from_bytes(b"b".as_ptr(), 1);
+                crate::object::js_object_set_field_by_name(obj, a, 1.0);
+                crate::object::js_object_set_field_by_name(obj, b, 2.0);
+                super::super::descriptor_state::set_property_attrs(
+                    obj as usize,
+                    "a".to_string(),
+                    super::super::descriptor_state::PropertyAttrs::new(false, enumerable, true),
+                );
+
+                assert_eq!(js_object_delete_field(obj, a), 1);
+                assert!(
+                    super::super::descriptor_state::get_property_attrs(obj as usize, "a").is_none(),
+                    "a successful delete must discard the deleted key's attributes"
+                );
+                crate::object::js_object_set_field_by_name(obj, a, 9.0);
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(obj, a).bits(),
+                    9.0f64.to_bits(),
+                    "assignment must recreate the deleted property"
+                );
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(obj, b).bits(),
+                    2.0f64.to_bits(),
+                    "deleting a must preserve b"
+                );
+                let keys = crate::object::js_object_keys(obj);
+                assert_eq!(crate::array::js_array_length(keys), 2);
+                assert!(unsafe {
+                    crate::string::js_string_key_matches(crate::array::js_array_get(keys, 0), b)
+                });
+                assert!(unsafe {
+                    crate::string::js_string_key_matches(crate::array::js_array_get(keys, 1), a)
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn deleting_nonconfigurable_read_only_data_keeps_the_descriptor() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let obj = crate::object::js_object_alloc(0, 8);
+        let key = crate::string::js_string_from_bytes(b"locked".as_ptr(), 6);
+        crate::object::js_object_set_field_by_name(obj, key, 7.0);
+        super::super::descriptor_state::set_property_attrs(
+            obj as usize,
+            "locked".to_string(),
+            super::super::descriptor_state::PropertyAttrs::new(false, true, false),
+        );
+
+        assert_eq!(js_object_delete_field(obj, key), 0);
+        assert_eq!(
+            crate::object::js_object_get_field_by_name(obj, key).bits(),
+            7.0f64.to_bits()
+        );
+        let attrs = super::super::descriptor_state::get_property_attrs(obj as usize, "locked")
+            .expect("refused delete must preserve the descriptor");
+        assert!(!attrs.writable());
+        assert!(!attrs.configurable());
     }
 }
 
