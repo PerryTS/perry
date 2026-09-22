@@ -1930,19 +1930,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // above does it. A BORROWED builtin (`m.get = Map.prototype.get`) is not a
     // user method and falls through to the native arms — dispatching it by
     // name again is how an earlier attempt recursed until the stack ran out.
-    if let Some(own) = crate::object::own_override::own_user_method_value(object(), method_name) {
-        let method_handle = root_scope.root_nanbox_f64(own);
-        let args = refreshed_args();
-        let prev_this_scope = crate::gc::RuntimeHandleScope::new();
-        let prev_this_h = prev_this_scope.root_nanbox_u64(
-            IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits())),
-        );
-        let result = crate::closure::js_native_call_value(
-            method_handle.get_nanbox_f64(),
-            args.as_ptr(),
-            args.len(),
-        );
-        IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
+    if let Some(result) = crate::object::own_override::call_own_user_method(
+        object(),
+        method_name,
+        &refreshed_args(),
+    ) {
         return result;
     }
 

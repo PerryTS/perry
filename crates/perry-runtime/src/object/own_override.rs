@@ -287,3 +287,39 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     }
     Some(value)
 }
+
+/// Call an own USER method in Get-then-Call order, or `None` when the receiver
+/// has no own user method of that name (nothing owns it, or what owns it is a
+/// borrowed builtin, which must take the native arm).
+///
+/// THE one implementation. The universal dispatcher and the array-push arm are
+/// both callers: two copies of this sequence is how the next divergence gets
+/// introduced, and the difference between them would be a wrong `this` or an
+/// unrooted method value, neither of which a fixture reliably catches.
+///
+/// `IMPLICIT_THIS` is bound across the call and restored after it, because the
+/// callee reads its receiver from there when it has no lexical `this`.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value; `args` are NaN-boxed values live at the call.
+pub(crate) unsafe fn call_own_user_method(recv: f64, name: &str, args: &[f64]) -> Option<f64> {
+    let own = own_user_method_value(recv, name)?;
+    let root_scope = crate::gc::RuntimeHandleScope::new();
+    let method_handle = root_scope.root_nanbox_f64(own);
+    let recv_handle = root_scope.root_nanbox_f64(recv);
+    let arg_handles = root_scope.root_nanbox_f64_slice(args);
+    // Re-read AFTER rooting: resolving the method can move the heap.
+    let refreshed = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    let prev_this_scope = crate::gc::RuntimeHandleScope::new();
+    let prev_this_h = prev_this_scope.root_nanbox_u64(
+        crate::object::this_binding::IMPLICIT_THIS
+            .with(|c| c.replace(recv_handle.get_nanbox_f64().to_bits())),
+    );
+    let result = crate::closure::js_native_call_value(
+        method_handle.get_nanbox_f64(),
+        refreshed.as_ptr(),
+        refreshed.len(),
+    );
+    crate::object::this_binding::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
+    Some(result)
+}

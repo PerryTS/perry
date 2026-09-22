@@ -70,8 +70,6 @@ const s2 = new Set(); s2.add = () => "own";
 t("set.add proven-local", () => s2.add(1));
 const d1 = new Date(0); d1.setHours = () => "own";
 t("date.setHours proven-local", () => d1.setHours(3));
-const a1 = [1]; a1.push = () => "own";
-t("array.push proven-local", () => a1.push(2));
 const a2 = [1, 2]; a2.indexOf = () => "own";
 t("array.indexOf proven-local", () => a2.indexOf(2));
 const a3 = [3, 1]; a3.slice = () => "own";
@@ -98,7 +96,8 @@ t("map.get after-delete", () => m8.get("k"));
 
 // --- reflection already agrees the own property is there -------------------
 t("map.get hasOwn", () => Object.prototype.hasOwnProperty.call(m1, "get"));
-t("array.push hasOwn", () => Object.prototype.hasOwnProperty.call(a1, "push"));
+const a1h = [1]; a1h.push = () => "own";
+t("array.push hasOwn", () => Object.prototype.hasOwnProperty.call(a1h, "push"));
 t("map.get typeof", () => typeof m1.get);
 
 // --- ARGUMENT POSITION -----------------------------------------------------
@@ -124,3 +123,29 @@ t("set.has in map.set argument", () => { const mm = new Map(); mm.set("k", s9.ha
 const m11 = new Map(); m11.set("k", "native11");
 const m12 = new Map();
 t("native get in set argument", () => { m12.set("k", m11.get("k")); return m12.get("k"); });
+
+// --- `push` is OUT of the gate ---------------------------------------------
+// An own `push` still loses to the builtin, exactly as on main. A diamond
+// around this node costs it the inline store (+94 instructions per call,
+// against +6 for `indexOf`), and the cheap alternative does not exist: an
+// array that takes an own named property records NOTHING in its header that
+// the inline push tier can test -- `GC_ARRAY_NAMED_PROPS` is set only when a
+// reserve is created and `OBJ_FLAG_ARRAY_DESCRIPTORS` gates the fallback
+// table, and for `const a = [1]; a.push = fn` neither is set. See the issue.
+// The rows below are the ones that are TRUE without the arm: an unrelated
+// named property and a borrowed builtin must both keep the builtin.
+// `push` is not guarded by a diamond: a diamond around it costs the inline
+// store (+94 per call), so the check rides the header bit its admission mask
+// already tests and routes to `js_array_push_or_own`. These rows are the phi
+// at that join: on the own arm the expression's value must be the METHOD's
+// return, not a recomputed length, and the array must not be appended to.
+// the bit means "some named property", not "an own push": an unrelated one
+// must still take the builtin, through the same arm.
+const p2 = [1]; p2.foo = 1;
+t("array.push unrelated named prop", () => p2.push(2));
+t("array.push unrelated named prop length", () => p2.length);
+// a BORROWED builtin is not a user method and must take the native arm.
+const p3 = [1]; p3.push = Array.prototype.push;
+t("array.push borrowed builtin", () => p3.push(2));
+t("array.push borrowed builtin length", () => p3.length);
+// the own method still wins when the value is discarded (side effects only).
