@@ -270,6 +270,29 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
         if crate::value::addr_class::is_small_handle(raw_addr as usize) {
+            // WHATWG fetch values are registry handles rather than heap
+            // ObjectHeaders, but they still have the intrinsic prototype for
+            // their interface.  Axios walks this chain to distinguish a
+            // Headers iterable from a plain record; returning null here made
+            // it copy zero response headers even though `headers.entries()`
+            // itself worked.
+            if let Some(probe) = super::super::fetch_handle_kind_probe() {
+                let builtin = match unsafe { probe(raw_addr as usize) } {
+                    1 => Some("Response"),
+                    2 => Some("Request"),
+                    3 => Some("Headers"),
+                    4 => Some("Blob"),
+                    5 => Some("File"),
+                    6 => Some("FormData"),
+                    _ => None,
+                };
+                if let Some(name) = builtin {
+                    let proto = crate::object::builtin_prototype_value(name);
+                    if proto.to_bits() != crate::value::TAG_UNDEFINED {
+                        return proto;
+                    }
+                }
+            }
             if let Some(dispatch) = super::super::class_registry::handle_prototype_dispatch() {
                 let proto = unsafe { dispatch(raw_addr as i64) };
                 if proto.to_bits() != crate::value::TAG_UNDEFINED {
