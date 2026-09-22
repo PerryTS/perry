@@ -3076,8 +3076,12 @@ jobs:
     # the known-failures gate) — the merged report is exactly what a triage
     # needs, and the threshold/trend verdicts are meaningful regardless. A
     # missing shard ARTIFACT still fails the merge (--expect). Skipped only
-    # when the plan turned parity off.
-    if: ${{ !cancelled() && fromJSON(needs.plan.outputs.plan).jobs.parity }}
+    # when the plan turned parity off or an upstream failure prevented the
+    # parity job from running at all.
+    if: >-
+      ${{ !cancelled()
+          && fromJSON(needs.plan.outputs.plan).jobs.parity
+          && contains(fromJSON('["success", "failure"]'), needs.parity.result) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
