@@ -4,6 +4,43 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
+fn web_method_receiver(name: &str) -> *mut ObjectHeader {
+    let receiver = crate::object::js_implicit_this_get();
+    if crate::object::web_builtin_to_string_tag(receiver) == Some(name) {
+        return crate::value::js_nanbox_get_pointer(receiver) as *mut ObjectHeader;
+    }
+    let message = format!("Value of this must be of type {name}");
+    let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let error = crate::error::js_typeerror_new(text);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+}
+
+extern "C" fn url_prototype_href_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::url::js_url_get_href(web_method_receiver("URL"))
+}
+
+extern "C" fn abort_controller_prototype_abort_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    crate::url::js_abort_controller_abort_reason(web_method_receiver("AbortController"), reason);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn abort_signal_prototype_throw_if_aborted_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    crate::url::js_abort_signal_throw_if_aborted(web_method_receiver("AbortSignal"))
+}
+
+fn web_method_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
+    super::super::set_builtin_property_attrs(
+        proto_obj as usize,
+        name.to_string(),
+        super::super::PropertyAttrs::new(true, true, true),
+    );
+}
+
 /// Install a FIXED-string `Symbol.toStringTag` data property (`{ value: tag,
 /// writable: false, enumerable: false, configurable: true }`, ES2019
 /// WebIDL/`get %TypedArray%.prototype [ @@toStringTag ]` sibling shape but a
@@ -929,10 +966,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
         // Symbol.toStringTag)` keeps reflecting a real descriptor -- see
         // that function's doc comment. The other six members of the
-        // `#10555` group below (`URL`, `AbortController`, `AbortSignal`,
-        // `EventTarget`, `Event`, `CustomEvent`) have the same
-        // "toStringTag-only arm" shape and have NOT been audited for this
-        // same value-read gap; see #10759's PR body for what was checked.
+        // `#10555` group have their value-read methods below (#10808).
         "URLSearchParams" => {
             install_noop_proto_methods(
                 proto_obj,
@@ -1291,24 +1325,108 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // is wired alongside the `OBJ_FLAG_TYPED_ARRAY_PROTO` flag so the
             // generic property-get chain walk resolves the inherited methods.
         }
-        // #10555: these Web API types expose their prototype toStringTag for
-        // reflection. URL additionally installs WebIDL component accessors;
-        // its methods still use type-directed dispatch. The remaining five
-        // types have not been audited for methods read as values.
+        // #10555 + #10808: these Web API types need BOTH kinds of own
+        // prototype property, and the two installs are complementary, not
+        // alternatives. WebIDL reifies an interface's *attributes* as
+        // accessor properties and its *operations* as data properties whose
+        // value is a function, and Node carries both on the same prototype
+        // object at once (`Object.keys(URL.prototype)` interleaves
+        // `toString`, the twelve component accessors, and `toJSON`). The
+        // `Symbol.toStringTag` data property from #10555 is a third,
+        // independent own property -- see
+        // `install_web_builtin_to_string_tag`'s doc comment.
+        //
+        // The operations have to be REAL values, not type-directed static
+        // dispatch: static dispatch only ever covers `url.toString()` in call
+        // position, while `Object.keys(URL.prototype)`, `'toString' in url`,
+        // `const { abort } = controller`, `URL.prototype.toString.call(x)` and
+        // `for...in` all read the property. That is the #10310 defect class,
+        // and #10759 already had to convert `URLSearchParams` for it.
+        //
+        // Every call below allocates (a closure, its name string, the key
+        // string), so `proto_obj` can move underneath us: re-read the
+        // prototype from the rooted handle before each one rather than
+        // reusing the incoming raw pointer.
         "URL" => {
             let scope = crate::gc::RuntimeHandleScope::new();
             let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto_obj as i64));
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") };
+            let proto = || {
+                crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader
+            };
+            unsafe { install_web_builtin_to_string_tag(proto(), "URL") };
+            // Install order is Node's own key order: `toString`, then the
+            // WebIDL component accessors, then `toJSON`.
+            install_proto_method(proto(), "toString", url_prototype_href_thunk as *const u8, 0);
+            web_method_enumerable(proto(), "toString");
+            crate::url::prototype::install_url_prototype_accessors(proto());
+            install_proto_method(proto(), "toJSON", url_prototype_href_thunk as *const u8, 0);
+            web_method_enumerable(proto(), "toJSON");
+        }
+        "AbortController" => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto_obj as i64));
+            let proto = || {
+                crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader
+            };
+            // The thunk takes the `reason` argument, but WebIDL's
+            // `abort(optional any reason)` is an optional argument, so the
+            // spec `.length` is 0 -- overwrite the arity-derived value.
+            let method = install_proto_method(
+                proto(),
+                "abort",
+                abort_controller_prototype_abort_thunk as *const u8,
+                1,
+            );
+            if JSValue::from_bits(method.to_bits()).is_pointer() {
+                let closure = crate::value::js_nanbox_get_pointer(method) as usize;
+                super::super::native_module::set_builtin_closure_length(closure, 0);
+            }
+            web_method_enumerable(proto(), "abort");
+            unsafe { install_web_builtin_to_string_tag(proto(), "AbortController") };
+        }
+        "AbortSignal" => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto_obj as i64));
+            let proto = || {
+                crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader
+            };
+            // DELIBERATELY NOT `web_method_enumerable`. Node deviates from
+            // plain WebIDL for this one member: `throwIfAborted` and the
+            // `reason` accessor are both NON-enumerable on
+            // `AbortSignal.prototype`, while every other operation in this
+            // group is enumerable. Measured on the pinned oracle
+            // (`.node-version`, v26.5.1):
+            //
+            //   AbortSignal.throwIfAborted  method    enumerable=false
+            //                                         configurable=true
+            //                                         writable=true length=0
+            //   AbortSignal.reason          accessor  enumerable=false
+            //   AbortSignal.aborted         accessor  enumerable=true
+            //   Object.keys(AbortSignal.prototype) === ["aborted", "onabort"]
+            //
+            // contrast `AbortController.abort` / `EventTarget.*` / `Event.*`,
+            // all enumerable=true. `install_proto_method`'s own default is
+            // `{ writable: true, enumerable: false, configurable: true }`, so
+            // the correct thing here is to add NO enumerability override.
+            // Do not "fix" this into the shared helper -- a uniform install
+            // across the five arms silently diverges from Node.
+            // `test_gap_10808_web_proto_methods.ts` pins it.
+            install_proto_method(
+                proto(),
+                "throwIfAborted",
+                abort_signal_prototype_throw_if_aborted_thunk as *const u8,
+                0,
+            );
+            unsafe { install_web_builtin_to_string_tag(proto(), "AbortSignal") };
+        }
+        "EventTarget" | "Event" => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto_obj as i64));
+            crate::event_target::install_web_event_proto_methods(builtin_name, proto_obj);
             let proto =
                 crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
-            crate::url::prototype::install_url_prototype_accessors(proto);
+            unsafe { install_web_builtin_to_string_tag(proto, builtin_name) };
         }
-        "AbortController" => unsafe {
-            install_web_builtin_to_string_tag(proto_obj, "AbortController")
-        },
-        "AbortSignal" => unsafe { install_web_builtin_to_string_tag(proto_obj, "AbortSignal") },
-        "EventTarget" => unsafe { install_web_builtin_to_string_tag(proto_obj, "EventTarget") },
-        "Event" => unsafe { install_web_builtin_to_string_tag(proto_obj, "Event") },
         "CustomEvent" => unsafe { install_web_builtin_to_string_tag(proto_obj, "CustomEvent") },
         _ => {}
     }
