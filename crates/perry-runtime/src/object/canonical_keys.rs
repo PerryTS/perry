@@ -195,7 +195,13 @@ impl LiveObject {
 ///
 /// Nobody holds the membership of this class in their head, including the
 /// author of the rule. So the rule is a constructor.
-pub(crate) struct SharedLayout(());
+pub(crate) struct SharedLayout {
+    /// True only for the shape cache's own entry. DISCRIMINATOR (#9754):
+    /// `scan_shape_cache_roots_mut` states that the shape cache's keys arrays
+    /// live in the LONGLIVED arena. If that assumption is confined to the
+    /// cache, longlived HERE and ordinary on the grow path is enough.
+    shape_cache: bool,
+}
 
 impl SharedLayout {
     /// The kind check, and the only way a receiver yields the proof.
@@ -210,7 +216,7 @@ impl SharedLayout {
         if obj.is_null() || crate::object::dictionary::is_dictionary(obj) {
             return None;
         }
-        Some(SharedLayout(()))
+        Some(SharedLayout { shape_cache: false })
     }
 
     /// The shape cache's entries are shared layouts by construction: they are
@@ -220,7 +226,7 @@ impl SharedLayout {
     /// than implicit.
     #[inline]
     pub(crate) fn shape_cache_entry() -> Self {
-        SharedLayout(())
+        SharedLayout { shape_cache: true }
     }
 }
 
@@ -646,11 +652,18 @@ pub(crate) unsafe fn extend(
     // holder is found. The cost is the retention regression L8.3.15c was
     // withdrawn for, which seven tests name precisely and which is bounded
     // (135 KB on tsc; majors still reclaim).
-    let born = crate::array::js_array_alloc_with_length_longlived(parent_len + 1);
-    unsafe { (*born).length = 0 };
-    if all_ptr {
-        unsafe { crate::gc::layout_init_all_pointer_slots(born as *mut u8) };
-    }
+    let born = if _proof.shape_cache {
+        let a = crate::array::js_array_alloc_with_length_longlived(parent_len + 1);
+        (*a).length = 0;
+        if all_ptr {
+            crate::gc::layout_init_all_pointer_slots(a as *mut u8);
+        }
+        a
+    } else if all_ptr {
+        crate::array::js_array_alloc_pointer_elements(parent_len + 1)
+    } else {
+        crate::array::js_array_alloc(parent_len + 1)
+    };
     let fresh_handle = scope.root_raw_mut_ptr(born);
 
     let parent = CanonicalKeys(parent_handle.get_raw_mut_ptr::<ArrayHeader>());
