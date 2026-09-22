@@ -160,9 +160,9 @@ jobs:
 
 
   # ---------------------------------------------------------------------------
-  # Lint: cargo fmt --check + every no-compile audit script. Runs in EVERY
-  # tier, including docs-only PRs (it is the one job the plan never turns
-  # off). ~4 min. Add the ci_plan self-test here too so a policy edit that
+  # Lint: cargo fmt --check, no-compile audits, and a Windows type-check.
+  # Runs in EVERY tier, including docs-only PRs (it is the one job the plan
+  # never turns off). Add the ci_plan self-test here too so a policy edit that
   # breaks its own invariants is red before it can plan anything.
   # ---------------------------------------------------------------------------
   lint:
@@ -232,6 +232,41 @@ jobs:
           # PRs read from cache; only main writes new entries.
           # Avoids cache thrash from short-lived branches.
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # #10986: native Windows builds run in sweep/full tiers, so PRs had no
+      # required signal for cfg(windows) type errors. Bare cargo check on a
+      # Linux host stops in the mimalloc/zstd C build scripts before checking
+      # Perry source; cargo-xwin supplies the MSVC CRT and headers.
+      - name: Install cargo-xwin for Windows type-check
+        if: ${{ !cancelled() }}
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-xwin@0.23.0
+          fallback: none
+
+      - name: Restore cargo-xwin MSVC sysroot
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/cargo-xwin
+          key: cargo-xwin-${{ runner.os }}-0.23.0
+
+      - name: Type-check Windows runtime and stdlib
+        if: ${{ !cancelled() }}
+        env:
+          # Keep cross-target objects out of lint's shared Linux Rust cache.
+          CARGO_TARGET_DIR: ${{ runner.temp }}/perry-windows-typecheck
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          export PATH="$LLVM_SYS_221_PREFIX/bin:$PATH"
+          cargo xwin check -p perry-runtime -p perry-stdlib --target x86_64-pc-windows-msvc
+
+      - name: Save cargo-xwin MSVC sysroot (main-line runs only)
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/cargo-xwin
+          key: cargo-xwin-${{ runner.os }}-0.23.0
 
       - name: Check formatting
         if: ${{ !cancelled() }}
