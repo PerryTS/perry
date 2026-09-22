@@ -1219,3 +1219,218 @@ mod issue_10595_tests {
         }
     }
 }
+
+/// #10868 lever (iv): the prototype-divergence generation.
+#[cfg(test)]
+mod prototype_generation_tests {
+    use super::*;
+
+    const PREV: u32 = 0x8000_1234;
+    const USER: u8 = 3; // PrototypeLinkKind::UserOverride
+
+    /// THE UNSOUND CASE. Two receivers with the same predecessor that diverge
+    /// to two DIFFERENT prototypes must get different generations, or they get
+    /// the same ShapeId and a shape-keyed inherited-read cache serves one
+    /// receiver's holder for the other — a silent wrong value. This is the
+    /// case the prototype's ShapeId would have got wrong (distinct prototypes
+    /// can share a shape), and the one a broken serial would get wrong.
+    #[test]
+    fn different_prototypes_get_different_generations() {
+        let p = test_deterministic_prototype_generation(PREV, 1, USER).unwrap();
+        let q = test_deterministic_prototype_generation(PREV, 2, USER).unwrap();
+        assert_ne!(p, q, "two distinct prototypes collapsed to one generation");
+        // Across a spread of serials, not just the first two.
+        let mut seen = std::collections::HashSet::new();
+        for serial in 1..=4096u64 {
+            let g = test_deterministic_prototype_generation(PREV, serial, USER).unwrap();
+            assert!(
+                seen.insert(g),
+                "serial {serial} collided with an earlier serial"
+            );
+        }
+    }
+
+    /// The other half, per §17: a check that cannot FIRE is not a check. Two
+    /// receivers diverging the SAME way from the SAME predecessor must land on
+    /// the SAME generation, or lever (iv) merges nothing and the 48,197 mints
+    /// it exists to remove are still minted.
+    #[test]
+    fn the_same_divergence_from_the_same_predecessor_merges() {
+        let a = test_deterministic_prototype_generation(PREV, 7, USER);
+        let b = test_deterministic_prototype_generation(PREV, 7, USER);
+        assert!(a.is_some());
+        assert_eq!(a, b);
+    }
+
+    /// Different predecessors, and different link kinds (which set different
+    /// meta flags on the receiver), stay distinct.
+    #[test]
+    fn predecessor_and_link_kind_both_separate() {
+        let base = test_deterministic_prototype_generation(PREV, 7, USER).unwrap();
+        let other_prev = test_deterministic_prototype_generation(PREV + 1, 7, USER).unwrap();
+        let other_kind = test_deterministic_prototype_generation(PREV, 7, 2).unwrap();
+        assert_ne!(base, other_prev);
+        assert_ne!(base, other_kind);
+    }
+
+    /// Every deterministic generation sets bit 63, so it can never alias a
+    /// counter-allocated one; and a missing predecessor or serial declines to
+    /// the always-correct unique-generation path.
+    #[test]
+    fn bit_63_and_the_declines() {
+        let g = test_deterministic_prototype_generation(PREV, 7, USER).unwrap();
+        assert_ne!(g & (1 << 63), 0);
+        assert_eq!(test_deterministic_prototype_generation(0, 7, USER), None);
+        assert_eq!(test_deterministic_prototype_generation(PREV, 0, USER), None);
+    }
+
+    /// The null prototype has its own serial, distinct from every assigned
+    /// one, so `setPrototypeOf(o, null)` and `setPrototypeOf(o, P)` never merge.
+    #[test]
+    fn a_null_prototype_is_its_own_identity() {
+        let null = test_deterministic_prototype_generation(
+            PREV,
+            crate::object::proto_validity::NULL_PROTOTYPE_SERIAL,
+            USER,
+        )
+        .unwrap();
+        for serial in 1..=64u64 {
+            let g = test_deterministic_prototype_generation(PREV, serial, USER).unwrap();
+            assert_ne!(g, null);
+        }
+    }
+}
+
+/// Step 4b stage 1: the region guard word. Every refusal path must yield the
+/// EMPTY word, because a wrongly packed slot is a wrong value and an empty word
+/// is only a missed fast path.
+#[cfg(test)]
+mod region_guard_pack_tests {
+    use super::*;
+
+    fn key_bits(name: &str) -> u64 {
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK)).to_bits()
+    }
+
+    fn shape_for(class_id: u32, packed: &[u8], count: u32) -> u32 {
+        let keys = crate::object::js_build_class_keys_array(
+            class_id,
+            count,
+            packed.as_ptr(),
+            packed.len() as u32,
+        );
+        js_object_shape_id_for_keys(keys as usize as u64, count)
+    }
+
+    #[test]
+    fn prime_publishes_the_packed_word_and_nothing_else() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let shape = shape_for(0x0C3C_8202, b"pa\0pb", 2);
+        let word = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+        let published = unsafe {
+            js_region_guard_prime(&word, shape, 2, key_bits("pa"), key_bits("pb"), 0, 0, 0)
+        };
+        assert_ne!(published, REGION_GUARD_WORD_EMPTY, "the shape packs");
+        assert_eq!(
+            word.load(core::sync::atomic::Ordering::Relaxed),
+            published,
+            "prime publishes the word it packed"
+        );
+
+        // A shape the region cannot encode leaves the site untouched, so the
+        // emitted code keeps missing and its bounded counter retires it.
+        let site = core::sync::atomic::AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+        let refused = unsafe {
+            js_region_guard_prime(&site, shape, 2, key_bits("pa"), key_bits("nope"), 0, 0, 0)
+        };
+        assert_eq!(refused, REGION_GUARD_WORD_EMPTY, "an absent key refuses");
+        assert_eq!(
+            site.load(core::sync::atomic::Ordering::Relaxed),
+            REGION_GUARD_WORD_EMPTY,
+            "a refused prime publishes nothing"
+        );
+
+        // A null site is a no-op, not a fault.
+        assert_eq!(
+            unsafe {
+                js_region_guard_prime(
+                    core::ptr::null(),
+                    shape,
+                    2,
+                    key_bits("pa"),
+                    key_bits("pb"),
+                    0,
+                    0,
+                    0,
+                )
+            },
+            REGION_GUARD_WORD_EMPTY
+        );
+    }
+
+    #[test]
+    fn packs_the_shape_id_and_each_keys_slot() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let shape = shape_for(0x0C3C_8201, b"ra\0rb\0rc\0rd", 4);
+        let word = js_region_guard_pack(
+            shape,
+            3,
+            key_bits("rc"),
+            key_bits("ra"),
+            key_bits("rd"),
+            0,
+            0,
+        );
+        assert_ne!(
+            word, REGION_GUARD_WORD_EMPTY,
+            "an ordinary inline shape must pack"
+        );
+        assert_eq!(word as u32, shape, "the low 32 bits are the ShapeId");
+        let slot = |i: u32| ((word >> (32 + 6 * i)) & 63) as u32;
+        assert_eq!(
+            (slot(0), slot(1), slot(2)),
+            (2, 0, 3),
+            "slots follow the region's key order"
+        );
+    }
+
+    /// Fails if a key the shape does not own were packed: the region would then
+    /// load some other field's slot for it.
+    #[test]
+    fn an_absent_key_empties_the_whole_word() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let shape = shape_for(0x0C3C_8202, b"sa\0sb", 2);
+        let word = js_region_guard_pack(shape, 2, key_bits("sa"), key_bits("zz"), 0, 0, 0);
+        assert_eq!(word, REGION_GUARD_WORD_EMPTY);
+    }
+
+    #[test]
+    fn a_non_shape_id_and_an_out_of_range_count_are_refused() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let shape = shape_for(0x0C3C_8203, b"ta\0tb", 2);
+        assert_eq!(
+            js_region_guard_pack(u32::MAX, 1, key_bits("ta"), 0, 0, 0, 0),
+            REGION_GUARD_WORD_EMPTY
+        );
+        assert_eq!(
+            js_region_guard_pack(0, 1, key_bits("ta"), 0, 0, 0, 0),
+            REGION_GUARD_WORD_EMPTY
+        );
+        assert_eq!(
+            js_region_guard_pack(shape, 0, 0, 0, 0, 0, 0),
+            REGION_GUARD_WORD_EMPTY
+        );
+        assert_eq!(
+            js_region_guard_pack(shape, REGION_GUARD_MAX_KEYS + 1, key_bits("ta"), 0, 0, 0, 0),
+            REGION_GUARD_WORD_EMPTY
+        );
+    }
+
+    /// The empty word can never match a live receiver: its low half is not a
+    /// ShapeId. Pinned because the region's miss path depends on it.
+    #[test]
+    fn the_empty_word_is_not_a_shape_id() {
+        assert!(!is_shape_id(REGION_GUARD_WORD_EMPTY as u32));
+    }
+}

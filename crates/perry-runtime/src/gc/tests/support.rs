@@ -852,7 +852,18 @@ pub(super) unsafe fn alloc_old_test_object(
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
             .expect("shape id range exhausted in a test fixture")
     };
-    let payload = std::mem::size_of::<crate::object::ObjectHeader>() + field_count as usize * 8;
+    // #10941: a named-property write does not respect "the derived bound is
+    // 0". The inline/overflow boundary is
+    // `max(object_live_slot_count(obj), INLINE_SLOT_FLOOR)` with a floor of 2,
+    // so the first two keys written to a zero-slot fixture store into inline
+    // slots 0 and 1 of an object that has none — those two words belong to the
+    // NEXT OBJECT. It presents as a wrong read now and a SIGSEGV somewhere
+    // unrelated during the next collection. Allocate to the floor; the
+    // PUBLISHED bound stays `field_count`, so the collector still traces
+    // exactly `field_count` slots and the descriptor-count accounting sibling
+    // tests assert on is unchanged.
+    let allocated_slots = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+    let payload = std::mem::size_of::<crate::object::ObjectHeader>() + allocated_slots * 8;
     let obj = crate::arena::arena_alloc_gc_old(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
@@ -860,7 +871,7 @@ pub(super) unsafe fn alloc_old_test_object(
     (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
-    for i in 0..field_count as usize {
+    for i in 0..allocated_slots {
         *fields.add(i) = 0;
     }
     (obj, fields)
@@ -880,7 +891,18 @@ pub(super) unsafe fn alloc_nursery_test_object(
         crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, field_count)
             .expect("shape id range exhausted in a test fixture")
     };
-    let payload = std::mem::size_of::<crate::object::ObjectHeader>() + field_count as usize * 8;
+    // #10941: a named-property write does not respect "the derived bound is
+    // 0". The inline/overflow boundary is
+    // `max(object_live_slot_count(obj), INLINE_SLOT_FLOOR)` with a floor of 2,
+    // so the first two keys written to a zero-slot fixture store into inline
+    // slots 0 and 1 of an object that has none — those two words belong to the
+    // NEXT OBJECT. It presents as a wrong read now and a SIGSEGV somewhere
+    // unrelated during the next collection. Allocate to the floor; the
+    // PUBLISHED bound stays `field_count`, so the collector still traces
+    // exactly `field_count` slots and the descriptor-count accounting sibling
+    // tests assert on is unchanged.
+    let allocated_slots = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
+    let payload = std::mem::size_of::<crate::object::ObjectHeader>() + allocated_slots * 8;
     let obj = crate::arena::arena_alloc_gc(payload, 8, GC_TYPE_OBJECT)
         as *mut crate::object::ObjectHeader;
     (*obj).class_id = 0;
@@ -888,7 +910,7 @@ pub(super) unsafe fn alloc_nursery_test_object(
     (*obj).meta = std::ptr::null_mut();
     let fields =
         (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
-    for i in 0..field_count as usize {
+    for i in 0..allocated_slots {
         *fields.add(i) = 0;
     }
     (obj, fields)

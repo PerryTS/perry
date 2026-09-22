@@ -395,14 +395,23 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // kind missing from this funnel costs a cache hit and can never leave a
     // stale entry (`object::proto_validity`). Marking allocates a meta record,
     // so it happens BEFORE this function takes any raw pointer of its own.
-    unsafe {
+    //
+    // #10868 lever (iv): the mark returns the prototype's stable serial, read
+    // from the meta pointer AFTER the mark's allocation, and it is carried as a
+    // plain u64 to the divergence below rather than re-read through a pointer
+    // that allocation may have moved.
+    let prototype_serial: Option<u64> = unsafe {
         let prototype = crate::value::JSValue::from_bits(proto_bits);
         if prototype.is_pointer() {
             crate::object::proto_validity::mark_object_as_prototype(
                 prototype.as_pointer::<crate::ObjectHeader>() as usize,
-            );
+            )
+        } else if proto_bits == crate::value::TAG_NULL {
+            Some(crate::object::proto_validity::NULL_PROTOTYPE_SERIAL)
+        } else {
+            None
         }
-    }
+    };
     if !ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
         && obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
         && crate::value::addr_class::is_above_handle_band(obj_ptr)
@@ -470,7 +479,25 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 proto_bits,
             );
             if prototype_diverged {
-                crate::object::shapes::transition_object_shape_semantics(obj);
+                #[cfg(feature = "shape-mint-diag")]
+                crate::object::shape_mint_census::note_proto_divergence(
+                    crate::object::shapes::object_shape_stamp(obj),
+                    proto_bits,
+                );
+                // A prototype without a serial (not a meta-capable object) keeps
+                // the unique-generation transition: correct, just unmerged.
+                match prototype_serial {
+                    Some(serial) => {
+                        crate::object::shapes::transition_object_shape_semantics_for_prototype(
+                            obj,
+                            serial,
+                            link_kind as u8,
+                        );
+                    }
+                    None => {
+                        crate::object::shapes::transition_object_shape_semantics(obj);
+                    }
+                }
             }
             return;
         }

@@ -1573,12 +1573,25 @@ pub(crate) fn get_field_by_name_object_tail(
                     // #8113: the live inline-slot bound is a parameter now.
                     // This is a READ path — it must not change the bound, so it
                     // republishes exactly what the receiver already carries.
-                    let id = super::super::shapes::stamp_object_shape(
-                        obj as *mut ObjectHeader,
-                        keys,
-                        key_count as u32,
-                        live_slots,
-                    );
+                    // #10868 step 2.5 stage 1: a dictionary receiver
+                    // publishes NO keys, and `keys` here is the private list
+                    // out of its `ObjectMeta`. Re-stamping would hand it back
+                    // a shape claiming that list — silently UN-LATCHING it on
+                    // the first read, which is how a mode that works under
+                    // writes still reverts under reads. Take the `id == 0`
+                    // fallback below instead: the entry is then keyed on the
+                    // keys-array address, which for a dictionary receiver is
+                    // per-object by construction.
+                    let id = if crate::object::dictionary::is_dictionary(obj as *const _) {
+                        0
+                    } else {
+                        super::super::shapes::stamp_object_shape(
+                            obj as *mut ObjectHeader,
+                            keys,
+                            key_count as u32,
+                            live_slots,
+                        )
+                    };
                     let store_key = if id != 0 { id as usize } else { keys_id };
                     let store_idx =
                         (store_key.wrapping_add(key_hash as usize)) % super::FIELD_CACHE_SIZE;

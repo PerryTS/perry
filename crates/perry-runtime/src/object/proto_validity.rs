@@ -89,15 +89,29 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Monotonic counter standing for "nothing structural has changed on any
-/// object somebody inherits from, and no semantic property event has
-/// happened". Starts at 1 so a zeroed cache entry never matches.
-static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
+per_test_global! {
+    // #10944: a test asserts this counter's value, and libtest runs tests
+    // in one process — any sibling touching the same path made the
+    // assertion fail by one. `per_test_global!` gives each test thread its
+    // own instance in a TEST build and expands to the plain `static`,
+    // byte for byte, outside one.
+    /// Monotonic counter standing for "nothing structural has changed on any
+    /// object somebody inherits from, and no semantic property event has
+    /// happened". Starts at 1 so a zeroed cache entry never matches.
+    static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
+}
 
-/// Has any object ever been marked as a prototype? Until it has,
-/// [`note_object_shape_stamped`] cannot possibly need to bump, so it does not
-/// read the object's `GcHeader` at all.
-static ANY_PROTOTYPE_MARKED: AtomicBool = AtomicBool::new(false);
+per_test_global! {
+    // #10944: a test asserts this counter's value, and libtest runs tests
+    // in one process — any sibling touching the same path made the
+    // assertion fail by one. `per_test_global!` gives each test thread its
+    // own instance in a TEST build and expands to the plain `static`,
+    // byte for byte, outside one.
+    /// Has any object ever been marked as a prototype? Until it has,
+    /// [`note_object_shape_stamped`] cannot possibly need to bump, so it does not
+    /// read the object's `GcHeader` at all.
+    static ANY_PROTOTYPE_MARKED: AtomicBool = AtomicBool::new(false);
+}
 
 /// The current validity word. One relaxed load.
 #[inline]
@@ -137,15 +151,37 @@ pub(crate) fn any_prototype_marked() -> bool {
 /// # Safety
 /// `obj` must be a live heap address whose `GcHeader` precedes it; callers
 /// have already read that header to classify the object.
+///
+/// Returns the prototype's stable serial (#10868 lever iv), assigning one on
+/// first mark. It is read from the meta pointer `ensure_meta_for_mark` returns
+/// AFTER its allocation, so a caller can carry it as a plain `u64` without
+/// re-reading through a pointer the allocation may have moved.
 #[inline]
-pub(crate) unsafe fn mark_object_as_prototype(obj: usize) {
+pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
     if let Some(meta) = ensure_meta_for_mark(obj) {
         ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit in the meta
         // record's flags word, never a heap reference.
         (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
+        // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
+        if (*meta).proto_serial == 0 {
+            (*meta).proto_serial = PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed);
+        }
+        let serial = (*meta).proto_serial;
+        #[cfg(feature = "shape-mint-diag")]
+        crate::object::shape_mint_census::note_event("object marked prototype");
+        return Some(serial);
     }
+    None
 }
+
+/// Next prototype serial. Starts at 1 so 0 can mean "none assigned"; a `u64`
+/// counter cannot be exhausted by any real program.
+static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The serial a `[[Prototype]]` of NULL stands for. Distinct from every
+/// assigned serial, and from 0 ("none").
+pub(crate) const NULL_PROTOTYPE_SERIAL: u64 = u64::MAX;
 
 /// Mark a receiver a shape-keyed read cache must refuse whatever its ShapeId
 /// says: `process.env` or an `arguments` object, whose reads are answered by

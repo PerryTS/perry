@@ -532,13 +532,235 @@ def self_test() -> int:
     return 1 if failures else 0
 
 
+# ---------------------------------------------------------------------------
+# #10944: the SECOND class — a process-global counter a TEST ASSERTS ON.
+# ---------------------------------------------------------------------------
+#
+# The rule above covers tables the GC guards CLEAR. It does not cover the much
+# larger population of process-global counters that tests read directly, and
+# that population is why `cargo test -p perry-runtime` cannot attribute a
+# regression today:
+#
+#     --test-threads=1   4215 passed;  0 failed
+#     parallel (x6)      4198-4205 passed; 10-17 failed, a DIFFERENT set each run
+#
+# ZERO genuine failures. Every failure the suite produces is one test's
+# assertion disturbed by another test's increment, and it always presents the
+# same way -- off by exactly one:
+#
+#     assertion `left == right` failed: ... reuse the prior negative verdict
+#       left: 2, right: 1
+#
+# The premise was written down in `json_tape/cached_read.rs`:
+#
+#     // The runtime suite is serial. This witness holds no managed values.
+#     static ROOTED_READS: AtomicU32 = AtomicU32::new(0);
+#
+# It is not serial. libtest runs tests in one process across many threads.
+#
+# WHY A RATCHET AND NOT A SWEEP
+# -----------------------------
+# The population is not enumerable by inspection -- six parallel runs after
+# three modules were converted still produced 17 distinct failures, including
+# names no earlier run had shown. Converting every one at a time means editing
+# modules owned by several lanes at once. So this records today's set and
+# fails only on ADDITIONS, exactly like `raw_handle_debt.py` and
+# `unrooted_local_shape.py`: existing entries get converted by whoever owns
+# each file, opportunistically, and no new instance can arrive quietly.
+#
+# `per_test_global!` is the fix for an entry, and its own module docs are the
+# justification: "a new sink cannot be added quietly, and a new *reader* never
+# has to remember anything." #7665, #7671, #7672 and #7975 are the first four
+# instances of this class; #10944 is the fifth, which is the argument for a
+# gate rather than a fifth patch.
+#
+# OUT OF SCOPE: the timing-shaped family (`child_process::reactor`, `pty`,
+# `stdlib_pump`) fails under load on a shared box and has nothing to do with
+# shared counters. It needs its own triage and must not be swept in here.
+
+ASSERTED_BASELINE = REPO_ROOT / "scripts" / "global_sink_asserted_baseline.txt"
+
+# Types whose whole purpose is cross-thread mutation. A `static` of one of
+# these is shared state; a `const`, a plain integer or a `&str` table is not.
+_SHARED_TY = re.compile(
+    r"\b(Atomic(?:Bool|I8|I16|I32|I64|Isize|U8|U16|U32|U64|Usize|Ptr)"
+    r"|Mutex|RwLock|OnceLock|OnceCell|ImageTable|RegistryLatch)\b"
+)
+# A declaration the macros already make safe.
+_SAFE_BLOCK = re.compile(r"\b(thread_local|per_test_global|perry_thread_local)\s*!")
+# An `assert*!(...)` invocation, body included (non-greedy to the first `);`
+# at the end of a line, which is how this codebase formats them).
+_ASSERT_CALL = re.compile(r"\bassert(?:_eq|_ne)?!\s*\(.*?\)\s*;", re.S)
+_STATIC = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?static\s+([A-Z][A-Z0-9_]*)\s*:\s*(.+?)\s*=")
+
+
+def _test_region(text: str) -> str:
+    """The part of a file that is test code.
+
+    Everything from the first `#[cfg(test)]` to EOF, which is where this
+    codebase puts its test modules, plus the whole file when it is a
+    `*_tests.rs`. Over-inclusive on purpose: a ratchet may record a few
+    entries no test actually asserts on, and the cost of that is one baseline
+    line, whereas a miss is a flake nobody can attribute.
+    """
+    marker = text.find("#[cfg(test)]")
+    return text[marker:] if marker >= 0 else ""
+
+
+def asserted_globals(sources) -> set[str]:
+    """`path::NAME` for every bare shared `static` a test reads.
+
+    `sources` is `rust_sources()`'s `{path: text}` mapping, or a list of
+    `(name, text)` pairs in the self-test.
+    """
+    items = sources.items() if isinstance(sources, dict) else list(sources)
+    items = [(str(p), t) for p, t in items]
+    bare: dict[str, list[tuple[str, str]]] = {}
+    for path, text in items:
+        depth = 0
+        in_safe = False
+        found: list[tuple[str, str]] = []
+        for line in text.splitlines():
+            if not in_safe and _SAFE_BLOCK.search(line):
+                in_safe, depth = True, 0
+            if in_safe:
+                depth += line.count("{") - line.count("}")
+                if depth <= 0 and "{" in line or (in_safe and depth <= 0):
+                    if depth <= 0:
+                        in_safe = False
+                continue
+            m = _STATIC.match(line)
+            if m and _SHARED_TY.search(m.group(2)):
+                found.append((m.group(1), m.group(2)))
+        if found:
+            bare[path] = found
+
+    hits: set[str] = set()
+    tests_by_path = {p: (t if p.endswith("_tests.rs") else _test_region(t)) for p, t in items}
+    # Only an ASSERTION on the static is the hazard. A test that merely
+    # mentions one -- arming a feature flag, reading a census counter it does
+    # not check -- cannot be broken by a sibling's increment, and flagging
+    # those made the first draft of this list 481 entries of mostly noise.
+    # The failure this gate exists for always looks the same: a test asserts a
+    # global count and a sibling makes it off by one.
+    asserted_text = "\n".join(
+        m.group(0)
+        for text in tests_by_path.values()
+        for m in _ASSERT_CALL.finditer(text)
+    )
+    for path, decls in bare.items():
+        for name, _ty in decls:
+            if re.search(r"\b%s\b" % re.escape(name), asserted_text):
+                # repo-relative, so the baseline is stable across checkouts
+                rel = path.split("/crates/", 1)
+                key = ("crates/" + rel[1]) if len(rel) == 2 else path
+                hits.add("%s::%s" % (key, name))
+    return hits
+
+
+def _load_asserted_baseline() -> set[str] | None:
+    if not ASSERTED_BASELINE.exists():
+        return None
+    return {
+        ln.strip()
+        for ln in ASSERTED_BASELINE.read_text(encoding="utf-8").splitlines()
+        if ln.strip() and not ln.startswith("#")
+    }
+
+
+def check_asserted(update: bool = False) -> int:
+    sources = rust_sources()
+    head = asserted_globals(sources)
+    base = _load_asserted_baseline()
+
+    if update:
+        if base is not None:
+            added = head - base
+            if added:
+                print(
+                    "refusing to raise the baseline; convert these to "
+                    "per_test_global! instead:\n  " + "\n  ".join(sorted(added)),
+                    file=sys.stderr,
+                )
+                return 1
+        header = (
+            "# #10944: bare process-global `static`s that TEST code reads.\n"
+            "# Each is a flake waiting for a scheduling change. Fix one by moving it\n"
+            "# into `per_test_global!` and deleting its line here. This list may only\n"
+            "# shrink -- `--update` refuses to add.\n"
+        )
+        ASSERTED_BASELINE.write_text(header + "\n".join(sorted(head)) + "\n", encoding="utf-8")
+        removed = len(base - head) if base else 0
+        print("asserted-global baseline: %d entries (%d removed)" % (len(head), removed))
+        return 0
+
+    if base is None:
+        print("no asserted-global baseline; run --update-asserted. current=%d" % len(head))
+        return 1
+    added = sorted(head - base)
+    print("asserted process-global statics: %d (baseline %d)" % (len(head), len(base)))
+    if added:
+        for entry in added:
+            print("NEW ASSERTED GLOBAL: %s" % entry, file=sys.stderr)
+        print(
+            "\n%d bare process-global `static`(s) newly readable from test code. "
+            "libtest runs tests in one process on many threads, so a sibling's "
+            "increment breaks another test's assertion by exactly one and the "
+            "failing SET moves between runs -- see #10944, where the suite was "
+            "4215/0 single-threaded and 10-17 failures in parallel. Declare it "
+            "with `per_test_global!` (per-thread in a test build, the plain "
+            "`static` byte for byte outside one)." % len(added),
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def asserted_no_raise_vs(ref: str) -> int:
+    """Reject a diff that ADDS an entry and baselines it in the same commit."""
+    import subprocess
+
+    try:
+        base_text = subprocess.run(
+            ["git", "show", "%s:scripts/global_sink_asserted_baseline.txt" % ref],
+            capture_output=True, text=True, cwd=REPO_ROOT, check=False,
+        ).stdout
+    except OSError as exc:
+        print("cannot resolve %s: %s" % (ref, exc), file=sys.stderr)
+        return 1
+    if not base_text.strip():
+        print("merge base recorded no asserted-global baseline; nothing to compare")
+        return 0
+    base = {ln.strip() for ln in base_text.splitlines() if ln.strip() and not ln.startswith("#")}
+    head = _load_asserted_baseline() or set()
+    added = sorted(head - base)
+    if added:
+        for entry in added:
+            print("BASELINE RAISED: %s" % entry, file=sys.stderr)
+        print(
+            "\nthe baseline gained %d entr(y/ies) relative to %s. The ratchet only "
+            "goes down: convert them with `per_test_global!` rather than recording "
+            "them." % (len(added), ref),
+            file=sys.stderr,
+        )
+        return 1
+    print("asserted-global baseline vs %s: %d -> %d, no additions" % (ref, len(base), len(head)))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--update-asserted", action="store_true")
+    parser.add_argument("--asserted-no-raise-vs", metavar="REF")
     args = parser.parse_args()
 
     if args.self_test:
-        return self_test()
+        return self_test() or asserted_self_test()
+    if args.update_asserted:
+        return check_asserted(update=True)
+    if args.asserted_no_raise_vs:
+        return asserted_no_raise_vs(args.asserted_no_raise_vs)
 
     try:
         violations = audit(
@@ -561,6 +783,56 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    # #10944's ratchet runs unconditionally alongside the clear-list rule.
+    return check_asserted()
+
+
+def asserted_self_test() -> int:
+    """A gate that cannot fail is documentation.
+
+    Four fixtures: the hazard must be reported, and each of the three ways a
+    static is NOT the hazard must not be.
+    """
+    hazard = [(
+        "b.rs",
+        "static HITS: AtomicU64 = AtomicU64::new(0);\n"
+        "#[cfg(test)]\nmod tests {\n"
+        "    #[test]\n    fn t() { assert_eq!(HITS.load(Relaxed), 1); }\n}\n",
+    )]
+    if asserted_globals(hazard) != {"b.rs::HITS"}:
+        print("self-test FAILED: a bare asserted static was NOT reported", file=sys.stderr)
+        return 1
+
+    safe_macro = [(
+        "a.rs",
+        "per_test_global! {\n    static HITS: AtomicU64 = AtomicU64::new(0);\n}\n"
+        "#[cfg(test)]\nmod tests {\n"
+        "    #[test]\n    fn t() { assert_eq!(HITS.load(Relaxed), 1); }\n}\n",
+    )]
+    if asserted_globals(safe_macro):
+        print("self-test FAILED: a per_test_global! static was reported", file=sys.stderr)
+        return 1
+
+    mentioned_not_asserted = [(
+        "c.rs",
+        "static HITS: AtomicU64 = AtomicU64::new(0);\n"
+        "#[cfg(test)]\nmod tests {\n"
+        "    #[test]\n    fn t() { HITS.store(1, Relaxed); }\n}\n",
+    )]
+    if asserted_globals(mentioned_not_asserted):
+        print("self-test FAILED: a static no test ASSERTS on was reported", file=sys.stderr)
+        return 1
+
+    production_only = [(
+        "d.rs",
+        "static HITS: AtomicU64 = AtomicU64::new(0);\n"
+        "fn p() { assert_eq!(HITS.load(Relaxed), 1); }\n",
+    )]
+    if asserted_globals(production_only):
+        print("self-test FAILED: a non-test assertion was reported", file=sys.stderr)
+        return 1
+
+    print("asserted-global self-test: reports the hazard and none of the three near-misses")
     return 0
 
 

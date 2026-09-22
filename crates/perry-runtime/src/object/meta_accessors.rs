@@ -30,14 +30,18 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
+    (*meta).proto_serial = 0;
     (*meta).native_state = 0;
     (*meta).array_subclass_named_prefix_token = 0;
+    #[cfg(feature = "shape-mint-diag")]
+    crate::object::shape_mint_census::note_event("ObjectMeta record born");
     (*meta).array_tail_object_hot = 0;
     (*meta).array_subclass_dense_key = 0;
     (*meta).array_subclass_dense_slots = 0;
     (*meta).array_subclass_dense_bounds = 0;
     (*meta).expando = 0;
     (*meta).elements = 0;
+    (*meta).dictionary_keys = 0;
     // GC_STORE_AUDIT(BARRIERED): header-slot store followed by an object-slot
     // barrier, exactly as `object_meta_ensure` does for an `ObjectHeader`.
     *slot = meta;
@@ -75,14 +79,18 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
+    (*meta).proto_serial = 0;
     (*meta).native_state = 0;
     (*meta).array_subclass_named_prefix_token = 0;
+    #[cfg(feature = "shape-mint-diag")]
+    crate::object::shape_mint_census::note_event("ObjectMeta record born");
     (*meta).array_tail_object_hot = 0;
     (*meta).array_subclass_dense_key = 0;
     (*meta).array_subclass_dense_slots = 0;
     (*meta).array_subclass_dense_bounds = 0;
     (*meta).expando = 0;
     (*meta).elements = 0;
+    (*meta).dictionary_keys = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;

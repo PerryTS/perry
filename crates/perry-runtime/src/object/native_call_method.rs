@@ -162,6 +162,12 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     // tower's field lookup. ShapeId supplies both the moving root and its exact
     // logical length; the ObjectHeader mirrors are compatibility scratch only.
     let descriptor = crate::object::shapes::object_shape_descriptor(obj)?;
+    // #10868 step 2.5 stage 1: a dictionary-mode receiver's own fields are in
+    // its `ObjectMeta`, so a null `keys` word would make this shadowing scan
+    // vacuously true and let a vtable method win over an own field.
+    if crate::object::dictionary::is_dictionary(obj) {
+        return None;
+    }
     let keys = descriptor.keys as usize as *mut ArrayHeader;
     if !keys.is_null() {
         let keys_ptr = keys as usize;
@@ -2180,6 +2186,16 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return crate::object::null_stub_value();
         };
+        // #10868 step 2.5 stage 1: see the shadowing scan above.
+        if crate::object::dictionary::is_dictionary(obj) {
+            // #10924 replaced the header-less `NullObjectBytes` static with a
+            // real GC object; #10938 was written before that landed and still
+            // spelled the old static here. Reinstating it would give
+            // dictionary-mode receivers exactly the #10917 bug the replacement
+            // removed -- brand probes reading the `.rodata` bytes in front of
+            // a header-less value.
+            return crate::object::null_stub_value();
+        }
         let keys = descriptor.keys as usize as *mut ArrayHeader;
 
         if !keys.is_null() {

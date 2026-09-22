@@ -23,8 +23,6 @@
 # Regenerate: python3 scripts/addr_class_inventory.py --write-baseline
 
 handle-floor | crates/perry-ext-events/src/lib.rs | 3
-handle-floor | crates/perry-ext-exponential-backoff/src/lib.rs | 1
-handle-floor | crates/perry-ext-fastify/src/server.rs | 1
 handle-floor | crates/perry-ext-http/src/agent.rs | 3
 handle-floor | crates/perry-ext-http/src/lib.rs | 2
 handle-floor | crates/perry-runtime/src/array/alloc.rs | 2
@@ -117,7 +115,7 @@ handle-floor | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_get_set/has_property.rs | 2
-handle-floor | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 4
+handle-floor | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_set_by_name.rs | 1
 handle-floor | crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs | 2
 handle-floor | crates/perry-runtime/src/object/field_set_by_name/tail.rs | 6
@@ -143,7 +141,7 @@ handle-floor | crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs 
 handle-floor | crates/perry-runtime/src/object/object_ops/has_own.rs | 4
 handle-floor | crates/perry-runtime/src/object/object_ops/keys_array.rs | 6
 handle-floor | crates/perry-runtime/src/object/object_ops/prototype.rs | 1
-handle-floor | crates/perry-runtime/src/object/object_ops_frozen.rs | 7
+handle-floor | crates/perry-runtime/src/object/object_ops_frozen.rs | 4
 handle-floor | crates/perry-runtime/src/object/polymorphic_index.rs | 2
 handle-floor | crates/perry-runtime/src/object/property_key.rs | 1
 handle-floor | crates/perry-runtime/src/object/prototype_chain.rs | 2
@@ -204,9 +202,7 @@ handle-floor | crates/perry-stdlib/src/crypto/util.rs | 4
 handle-floor | crates/perry-stdlib/src/crypto/x509.rs | 3
 handle-floor | crates/perry-stdlib/src/domain.rs | 1
 handle-floor | crates/perry-stdlib/src/events.rs | 1
-handle-floor | crates/perry-stdlib/src/exponential_backoff.rs | 1
 handle-floor | crates/perry-stdlib/src/fetch/dispatch.rs | 4
-handle-floor | crates/perry-stdlib/src/jsonwebtoken.rs | 1
 handle-floor | crates/perry-stdlib/src/querystring.rs | 5
 handle-floor | crates/perry-stdlib/src/readline/mod.rs | 1
 handle-floor | crates/perry-stdlib/src/sqlite/options.rs | 3
@@ -236,12 +232,11 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/entries_shape
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_set_by_name/attr_variants.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/array_error.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/global_this/fetch_globals.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/iterator_prototypes.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/object/native_call_method.rs | 3
+lone-valid-obj-ptr | crates/perry-runtime/src/object/native_call_method.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/native_call_method/common_methods.rs | 2
 lone-valid-obj-ptr | crates/perry-runtime/src/object/native_call_method/proto_dispatch.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/native_this_alias.rs | 1

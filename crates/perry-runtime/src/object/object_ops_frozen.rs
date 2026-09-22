@@ -126,6 +126,29 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
     true
 }
 
+/// #10933: may an integrity op write `OBJ_FLAG_*` into this value's header?
+///
+/// The band check these call sites used to rely on keeps small registry ids
+/// out, and says nothing about whether `value - 8` is a header at all. Several
+/// values perry hands to JS have none: a registered symbol is a
+/// `Box::into_raw`'d `SymbolHeader`, the unresolved-namespace stub is a
+/// `.rodata` static (where the write FAULTS), and the async-hook handles are
+/// bare `Box`es. Writing through those corrupted whatever the allocator had
+/// put in front of them — measured: `Object.freeze(Symbol.for(x))` set
+/// `0x7` six bytes before the symbol on 30 of 32 probes.
+///
+/// The right question is ownership, not magnitude, and
+/// `try_read_tracked_gc_header` is the funnel that answers it: it proves the
+/// allocator owns this address on THIS thread (arena membership or the
+/// gc_malloc registry) instead of trusting `addr - 8` to be a header. A value
+/// it refuses takes the no-op path these functions already have for a handle
+/// (`Object.freeze(handle)` returns the handle —
+/// `test_gap_handle_band_object_ops`).
+#[inline]
+unsafe fn integrity_flags_are_writable(obj: *const ObjectHeader) -> bool {
+    !obj.is_null() && crate::value::addr_class::try_read_tracked_gc_header(obj as usize).is_some()
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     crate::array::subclass_elements::deopt_value(obj_value);
@@ -136,12 +159,14 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        // Reject the WHOLE handle band, not a bare `> 0x10000` floor: a
-        // common-band registry id (crypto `Hash`, `Blob`, …) can sit above
-        // 0x10000, and the `gc_header_for(obj)` write just below would store into
-        // unmapped memory (SIGSEGV) — `Object.freeze(handle)` is a no-op that
-        // returns the handle (test_gap_handle_band_object_ops `Object.freeze(blob)`).
-        if !obj.is_null() && crate::value::addr_class::is_above_handle_band(obj as usize) {
+        // #10933 replaced the handle-band check here with an OWNERSHIP check.
+        // The band rejected a common-band registry id (crypto `Hash`, `Blob`,
+        // …), which is why it was written; it could not reject a real address
+        // whose `- 8` is not a header, and the `gc_header_for(obj)` write just
+        // below then stored into memory belonging to something else. The
+        // no-op-and-return-the-value behaviour for a rejected receiver is
+        // unchanged (`test_gap_handle_band_object_ops` `Object.freeze(blob)`).
+        if integrity_flags_are_writable(obj) {
             let gc = gc_header_for(obj);
             (*gc)._reserved |= crate::gc::OBJ_FLAG_FROZEN
                 | crate::gc::OBJ_FLAG_SEALED
@@ -251,7 +276,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
     if crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some() {
         unsafe {
             let obj = extract_obj_ptr(obj_value);
-            if !obj.is_null() && (obj as usize) > 0x10000 {
+            if integrity_flags_are_writable(obj) {
                 let gc = gc_header_for(obj);
                 (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
             }
@@ -260,7 +285,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
+        if integrity_flags_are_writable(obj) {
             let gc = gc_header_for(obj);
             (*gc)._reserved |= crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
             // TypedArray receivers: GC flags only — see `js_object_freeze`.
@@ -355,7 +380,7 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
-        if !obj.is_null() && (obj as usize) > 0x10000 {
+        if integrity_flags_are_writable(obj) {
             // Typed arrays use a side table for extensibility. Include Perry's
             // BufferHeader-backed Uint8Array: lookup_typed_array_kind can
             // never recognise it, and setting only the Buffer's GC flag is
@@ -631,5 +656,81 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
         } else {
             f64::from_bits(TAG_TRUE)
         }
+    }
+}
+
+#[cfg(test)]
+mod header_gate_tests {
+    //! #10933: `Object.freeze` / `seal` / `preventExtensions` used to write
+    //! `OBJ_FLAG_*` into `(value - 8) + 2` for ANY pointer-tagged value above
+    //! the handle band, with nothing establishing that the value HAS a header.
+    //! Several values perry hands to JS do not: a registered symbol is a
+    //! `Box::into_raw`'d `SymbolHeader`, the unresolved-namespace stub is a
+    //! `.rodata` static (where the write faults), and the async handles are
+    //! bare `Box`es. The write then lands in memory that belongs to something
+    //! else.
+    //!
+    //! MUST-FAIL before the gate: measured on v0.5.1633, 30 of 32 registered
+    //! symbols had the word at `sym - 8` change, `0x...0000 -> 0x...00070000`,
+    //! which is `FROZEN|SEALED|NO_EXTEND` landing in `_reserved`.
+
+    /// The bytes in front of a header-less value must be untouched by all
+    /// three integrity operations.
+    #[test]
+    fn integrity_ops_do_not_write_in_front_of_a_header_less_value() {
+        // Registered / well-known symbols are the header-less population:
+        // a fresh `Symbol()` goes through `gc_malloc` and DOES carry a header.
+        let mut syms: Vec<usize> = Vec::new();
+        for i in 0..32 {
+            let name = format!("freezeGate{i}");
+            let ptr = crate::symbol::well_known_symbol(&name);
+            assert!(
+                !ptr.is_null(),
+                "the probe needs real symbols to be meaningful"
+            );
+            syms.push(ptr as usize);
+        }
+        let before: Vec<u64> = syms
+            .iter()
+            .map(|a| unsafe { std::ptr::read_volatile((*a - 8) as *const u64) })
+            .collect();
+
+        for a in &syms {
+            let boxed = f64::from_bits(crate::value::JSValue::pointer(*a as *const u8).bits());
+            super::js_object_freeze(boxed);
+            super::js_object_seal(boxed);
+            super::js_object_prevent_extensions(boxed);
+        }
+
+        let mut changed = Vec::new();
+        for (i, a) in syms.iter().enumerate() {
+            let now = unsafe { std::ptr::read_volatile((*a - 8) as *const u64) };
+            if now != before[i] {
+                changed.push(format!("sym[{i}] {:#018x} -> {:#018x}", before[i], now));
+            }
+        }
+        assert!(
+            changed.is_empty(),
+            "an integrity op wrote in front of a header-less value ({} of {}):\n  {}",
+            changed.len(),
+            syms.len(),
+            changed.join("\n  ")
+        );
+    }
+
+    /// And the ops still WORK on a real object, so the gate is not a blanket
+    /// no-op: a test that passed by disabling the feature would be worthless.
+    #[test]
+    fn integrity_ops_still_apply_to_a_real_object() {
+        let obj = crate::object::js_object_alloc(0, 0);
+        assert!(!obj.is_null());
+        let boxed = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
+        super::js_object_freeze(boxed);
+        let gc = unsafe { crate::object::object_ops::gc_header_for(obj) };
+        assert_ne!(
+            unsafe { (*gc)._reserved } & crate::gc::OBJ_FLAG_FROZEN,
+            0,
+            "freeze must still mark a real object"
+        );
     }
 }

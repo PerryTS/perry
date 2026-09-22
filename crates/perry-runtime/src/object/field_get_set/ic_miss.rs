@@ -1086,6 +1086,15 @@ pub(super) fn get_field_ic_miss_impl(
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             };
+            // #10868 step 2.5 stage 1: "no keys array" implies "no own
+            // properties" for every receiver EXCEPT a dictionary-mode one,
+            // whose key list lives in its `ObjectMeta`. Priming the
+            // inherited-read cache on that claim would answer an OWN property
+            // from the prototype chain — a wrong value, not a slow one.
+            if crate::object::dictionary::is_dictionary(obj) {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            }
             let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
             if keys.is_null() || (keys as usize) <= 0x10000 {
                 if diag {
@@ -1119,8 +1128,15 @@ pub(super) fn get_field_ic_miss_impl(
                     super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
                 return f64::from_bits(value.bits());
             }
-            let key_count = shape.logical_key_count as usize;
-            let keys_data = (keys as *const u8).add(8) as *const f64;
+            // #10939: `header + 8` is not where a keys array's elements
+            // start — `array_front_offset` is nonzero for any array with a
+            // front reserve. Scanning from the wrong base compares header and
+            // reserve words against the key, so an own property misses here
+            // and is answered from the prototype chain instead. `keys` came
+            // out of a LIVE descriptor on this straight-line path, which is
+            // exactly what the `_resolved` accessor is for.
+            let (keys_data, keys_slots) = crate::object::keys_array_dense_slots_resolved(keys);
+            let key_count = std::cmp::min(shape.logical_key_count as usize, keys_slots);
             let alloc_limit = shape.live_inline_slot_count as usize;
             for i in (0..key_count).rev() {
                 // #10595: back-to-front so a shadowed field's most-derived slot wins; see keys_lookup.rs.
