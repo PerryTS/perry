@@ -91,28 +91,89 @@ fn a_repeated_inherited_read_is_served_by_the_cache() {
     }
 }
 
+/// An entry is keyed on a SHAPE, not on a receiver, so two receivers that
+/// genuinely have one shape must be served by one entry.
+///
+/// The construction order below is the test, not incidental setup. Two
+/// receivers built "the same way" do NOT automatically have one ShapeId, and
+/// the two things that decide it are both ordering-sensitive:
+///
+/// 1. **The key-add must reuse the first receiver's edge.** A ShapeId's
+///    identity includes the keys ARRAY ADDRESS, and two objects share one only
+///    when the second's key-add hits `object::transition_cache_lookup` — a
+///    16384-entry DIRECT-MAPPED table hashed on `(predecessor ShapeId, the
+///    interned key's address)`. A collision from an unrelated entry evicts the
+///    edge, the second receiver mints its own keys array and its own ShapeId,
+///    and nothing is wrong: a transition-cache miss costs a duplicate shape,
+///    never a wrong answer. But it is address-keyed, so whether it collides
+///    varies with heap placement RUN TO RUN. With an unrelated call between
+///    the two `set`s this test failed 2 runs in 6 of the same binary. Both
+///    key-adds therefore happen back to back, with only an allocation between
+///    them, so the edge the first one inserts is certain to still be there.
+/// 2. **Both prototype links must precede the prime.** `Object.setPrototypeOf`
+///    is a semantic property event: it bumps `prop_plan_epoch`, which bumps the
+///    one validity word every entry is re-proved against
+///    (`object::proto_validity`, check 1). Linking `second` AFTER priming
+///    `first` retires the entry that was just made. Measured, every other field
+///    of the entry matched the second receiver exactly — same class id `0x0`,
+///    same ShapeId, same recorded prototype bits, same slot index — and only
+///    `validity` differed, by one. The miss that followed said nothing
+///    whatever about entry sharing.
+///
+/// The ShapeId merge is then asserted rather than assumed. #10931 mints a
+/// prototype divergence's generation as a pure function of `(predecessor
+/// ShapeId, the prototype's stable serial, link kind)`, so with (1) holding,
+/// these two land on ONE ShapeId. Before it, each drew a fresh value from the
+/// monotonic counter and they never could, which is why this test was written
+/// with an `if (*first).parent_class_id == (*second).parent_class_id` guard
+/// around its assertion. That word IS the ShapeId
+/// ([`shapes::object_shape_stamp`] reads it), the two were never equal, and the
+/// body never ran: the test was dormant from the day it was written. It is an
+/// assertion now, so it can never go quiet again.
 #[test]
 fn a_second_receiver_of_the_same_shape_shares_the_entry() {
     let _scope = PrimeScope::new();
     unsafe {
         let proto = crate::object::js_object_alloc(0, 4);
         set(proto, "irc_a", 7.0);
-        let first = crate::object::js_object_alloc(0, 4);
-        set(first, "irc_own", 1.0);
-        crate::object::js_object_set_prototype_of(boxed(first), boxed(proto));
-        let k = key("irc_a");
-        inherited_read_cache_prime(first, k).expect("prime");
 
         // A second receiver reaching the SAME prototype through the same
         // operation: same class id, same recorded prototype bits, same shape.
+        let first = crate::object::js_object_alloc(0, 4);
         let second = crate::object::js_object_alloc(0, 4);
+        set(first, "irc_own", 1.0);
         set(second, "irc_own", 1.0);
+        crate::object::js_object_set_prototype_of(boxed(first), boxed(proto));
         crate::object::js_object_set_prototype_of(boxed(second), boxed(proto));
-        if (*first).parent_class_id == (*second).parent_class_id {
-            let value = inherited_read_cache_hit(second, k)
-                .expect("two receivers with one shape must share one entry");
-            assert_eq!(f64::from_bits(value.bits()), 7.0);
-        }
+
+        assert_eq!(
+            (*first).class_id,
+            (*second).class_id,
+            "the two receivers must share a class id, or the entry index \
+             separates them for a reason that has nothing to do with shape"
+        );
+        assert_eq!(
+            shapes::object_shape_stamp(first),
+            shapes::object_shape_stamp(second),
+            "#10931: the same divergence from the same predecessor to the same \
+             prototype must mint ONE ShapeId. Two here and this test has no \
+             subject — the assertions below would be asking whether two \
+             DIFFERENT shapes share an entry, which they must not"
+        );
+
+        let k = key("irc_a");
+        inherited_read_cache_prime(first, k).expect("prime");
+        let hits_before = inherited_read_cache_hits();
+        let value = inherited_read_cache_hit(second, k)
+            .expect("two receivers with one shape must share one entry");
+        assert_eq!(f64::from_bits(value.bits()), 7.0);
+        assert_eq!(
+            inherited_read_cache_hits(),
+            hits_before + 1,
+            "the second receiver was answered without the cache hitting — a \
+             fall-through to the chain walk returns the same 7.0 and is \
+             invisible in a program's output"
+        );
     }
 }
 
