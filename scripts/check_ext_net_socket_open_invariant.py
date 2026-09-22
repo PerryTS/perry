@@ -43,6 +43,7 @@ MIN_ASSIGNMENTS = 4
 
 OPEN_ASSIGNMENT = re.compile(r"\.\s*is_open\s*=\s*true\b")
 SIMPLE_RECEIVER = re.compile(
+    r"(?<![A-Za-z0-9_.:])"
     r"([A-Za-z_][A-Za-z0-9_]*(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*$"
 )
 FUNCTION_NAME = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\b")
@@ -206,7 +207,7 @@ def receiver_pattern(receiver: str, field: str) -> re.Pattern[str]:
     pieces = [re.escape(piece) for piece in receiver.split(".")]
     receiver_expr = r"\s*\.\s*".join(pieces)
     return re.compile(
-        rf"(?<![A-Za-z0-9_]){receiver_expr}\s*\.\s*{field}"
+        rf"(?<![A-Za-z0-9_.:]){receiver_expr}\s*\.\s*{field}"
         rf"\s*=\s*true\b"
     )
 
@@ -441,6 +442,19 @@ fn harmless() {
     complex_receiver = "fn open() { (*socket).is_open = true; }"
     _, errors = evaluate(
         {path: complex_receiver},
+        {"schema_version": 1, "exceptions": []},
+        min_assignments=1,
+    )
+    assert any("receiver syntax" in error for error in errors)
+
+    complex_field_receiver = """
+fn open() {
+    factory().socket.is_open = true;
+    factory().socket.has_opened = true;
+}
+"""
+    _, errors = evaluate(
+        {path: complex_field_receiver},
         {"schema_version": 1, "exceptions": []},
         min_assignments=1,
     )
