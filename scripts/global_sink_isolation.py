@@ -672,7 +672,18 @@ _SAFE_BLOCK = re.compile(r"\b(thread_local|per_test_global|perry_thread_local)\s
 # An `assert*!(...)` invocation, body included (non-greedy to the first `);`
 # at the end of a line, which is how this codebase formats them).
 _ASSERT_CALL = re.compile(r"\bassert(?:_eq|_ne)?!\s*\(.*?\)\s*;", re.S)
-_STATIC = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?static\s+([A-Z][A-Z0-9_]*)\s*:\s*(.+?)\s*=")
+# `mut` is optional and CAPTURED. A `static mut` is shared mutable state by
+# definition -- racing on one is UB, not merely a wrong count -- so it is the
+# most dangerous shape this rule claims to cover, and it escaped twice over:
+# the identifier is not immediately after `static`, so it never matched, and
+# its type is usually a plain integer, so `_SHARED_TY` would have excluded it
+# even if it had. A gate with a hole exactly where the hazard is worst.
+#
+# Latent today: the tree's only two (`ohos_napi.rs`) are asserted by no test,
+# so the baseline is unchanged. This closes the gap before one arrives.
+_STATIC = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?static\s+(mut\s+)?([A-Z][A-Z0-9_]*)\s*:\s*(.+?)\s*="
+)
 
 
 def _test_region(text: str) -> str:
@@ -711,8 +722,8 @@ def asserted_globals(sources) -> set[str]:
                         in_safe = False
                 continue
             m = _STATIC.match(line)
-            if m and _SHARED_TY.search(m.group(2)):
-                found.append((m.group(1), m.group(2)))
+            if m and (m.group(1) or _SHARED_TY.search(m.group(3))):
+                found.append((m.group(2), m.group(3)))
         if found:
             bare[path] = found
 
@@ -904,6 +915,18 @@ def asserted_self_test() -> int:
         print("self-test FAILED: a static no test ASSERTS on was reported", file=sys.stderr)
         return 1
 
+    static_mut = [(
+        "e.rs",
+        "static mut HITS: u64 = 0;\n"
+        "#[cfg(test)]\nmod tests {\n"
+        "    #[test]\n    fn t() { unsafe { assert_eq!(HITS, 1); } }\n}\n",
+    )]
+    if asserted_globals(static_mut) != {"e.rs::HITS"}:
+        print("self-test FAILED: an asserted `static mut` was NOT reported "
+              "(it matches neither the identifier position nor the shared-type "
+              "filter, which is the gap this case exists for)", file=sys.stderr)
+        return 1
+
     production_only = [(
         "d.rs",
         "static HITS: AtomicU64 = AtomicU64::new(0);\n"
@@ -913,7 +936,8 @@ def asserted_self_test() -> int:
         print("self-test FAILED: a non-test assertion was reported", file=sys.stderr)
         return 1
 
-    print("asserted-global self-test: reports the hazard and none of the three near-misses")
+    print("asserted-global self-test: reports the hazard (including `static "
+          "mut`) and none of the three near-misses")
     return 0
 
 
