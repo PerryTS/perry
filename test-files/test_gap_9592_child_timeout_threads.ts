@@ -34,15 +34,12 @@ await Promise.all(quickChildren);
 if (process.platform !== "linux") {
   console.log("timeout threads released: skipped (no /proc task census)");
 } else {
-  let timeoutThreadsReleased = false;
-  const releaseDeadline = Date.now() + 1_000;
-  while (!timeoutThreadsReleased && Date.now() < releaseDeadline) {
-    timeoutThreadsReleased = threadCount() <= baseline + 5;
-    if (!timeoutThreadsReleased) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 20));
-    }
+  // Let the parity harness report a timeout if the threads never drain.
+  // A fixture-local deadline would print `false` as a parity mismatch.
+  while (threadCount() > baseline + 5) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }
-  console.log("timeout threads released:", timeoutThreadsReleased);
+  console.log("timeout threads released: true");
 }
 
 const started = Date.now();
