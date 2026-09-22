@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "exceptions": [
+    {
+      "name": "synthetic-already-aborted-tls-connect",
+      "path": "crates/perry-ext-net/src/tls.rs",
+      "function": "schedule_tls_abort",
+      "receiver": "socket",
+      "reason": "An already-aborted TLS connect never opens. is_open keeps its synthetic SocketState live only until deferred error and close events are delivered; has_opened must remain false so socket.pending stays true."
+    }
+  ]
+}

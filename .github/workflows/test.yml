@@ -675,6 +675,17 @@ jobs:
           python3 scripts/check_node_version_consistency.py --self-test
           python3 scripts/check_node_version_consistency.py
 
+      # #11056. `SocketState.has_opened` is monotonic history used by
+      # `socket.pending`: every real `is_open = true` transition must set it on
+      # the same receiver in the same block. The already-aborted TLS path is a
+      # named exception because its synthetic socket never opens. Stale
+      # exceptions fail, so fixing or deleting that path removes its permit.
+      - name: perry-ext-net socket-open invariant
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_ext_net_socket_open_invariant.py --self-test
+          python3 scripts/check_ext_net_socket_open_invariant.py
+
       # perry-codegen does NOT depend on perry-runtime, yet it bakes the
       # collector's header layout into emitted code: the inline `new` path
       # stores a packed GcHeader word as a compile-time constant (#8122) and
