@@ -194,8 +194,8 @@ unsafe fn authoritative_has_own(recv: f64, name_ptr: *const u8, name_len: usize)
 /// it is a BORROWED builtin (`m.get = Map.prototype.get`), which must take the
 /// native arm — dispatching it by name again is how an earlier attempt at
 /// #10943 recursed until the stack ran out. `array::generic`'s
-/// `object_owns_user_method` is the existing two-valued classifier and this
-/// asks it rather than repeating the rule.
+/// `object_owns_user_method` identifies that borrowed case. An own
+/// non-callable value must instead throw before the kind dispatcher runs.
 ///
 /// # Safety
 /// `recv` is any NaN-boxed value; `name` is this call's method name.
@@ -205,43 +205,51 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     if !EXOTIC_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) {
         return None;
     }
-    let jsval = crate::JSValue::from_bits(recv.to_bits());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
+    let jsval = crate::JSValue::from_bits(recv.get_nanbox_u64());
     if !jsval.is_pointer() {
         return None;
     }
 
-    // Read the OWN property from the table that actually holds it. Neither
-    // general getter is right here, and each is wrong in its own direction —
-    // both measured on this issue's differential:
-    //
-    //  * `js_object_get_field_by_name_f64` walks the PROTOTYPE CHAIN, so on a
-    //    Set it returned `Set.prototype.has` and the dispatcher called the
-    //    builtin thunk (traced: js_native_call_value -> set_proto_has_thunk);
-    //  * `js_object_get_own_field_or_undef` is own-only but does not consult
-    //    the exotic side table, so on a Map it answered `undefined` and every
-    //    Map row regressed.
-    //
-    // An exotic cell keeps its own named properties in the expando table —
-    // the same one `hasOwn`, `typeof` and `Object.keys` read, which is why
-    // reflection already agreed with node while the call did not.
-    let value = match crate::object::exotic_expando::exotic_expando_kind_of_value(recv) {
-        Some((addr, kind)) => f64::from_bits(crate::object::exotic_expando::value_lookup(
-            kind, addr, name,
-        )?),
-        None => crate::object::object_ops::js_object_get_own_field_or_undef(
-            recv,
+    // Exotic cells keep their own named properties in the expando table.
+    // Other cells need an own-presence check before the general getter: that
+    // getter sees Array's own methods but would otherwise walk the prototype
+    // and mistake an inherited builtin for an own value.
+    let value =
+        match crate::object::exotic_expando::exotic_expando_kind_of_value(recv.get_nanbox_f64()) {
+            Some((addr, kind)) => f64::from_bits(crate::object::exotic_expando::value_lookup(
+                kind, addr, name,
+            )?),
+            None => {
+                if authoritative_has_own(recv.get_nanbox_f64(), name.as_ptr(), name.len()) == 0 {
+                    return None;
+                }
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let raw = (recv.get_nanbox_u64() & crate::value::POINTER_MASK)
+                    as *const crate::object::ObjectHeader;
+                crate::object::js_object_get_field_by_name_f64(raw, key)
+            }
+        };
+    // The borrowed-builtin classifier below allocates its key. Keep a callable
+    // own value rooted until it returns, then hand the refreshed value to the
+    // caller (which roots it before invoking it).
+    let value = scope.root_nanbox_f64(value);
+    if !crate::object::value_is_callable(value.get_nanbox_f64())
+        && !crate::proxy::proxy_wraps_callable(value.get_nanbox_f64())
+    {
+        crate::error::js_throw_type_error_not_a_function(
+            std::ptr::null(),
+            0,
             name.as_ptr(),
             name.len(),
-        ),
-    };
-    if !crate::JSValue::from_bits(value.to_bits()).is_pointer() {
-        return None;
+        );
     }
     // A borrowed builtin (`m.get = Map.prototype.get`) must keep the native
     // arm: dispatching it by name again is the recursion an earlier attempt
     // hit. `object_owns_user_method` is the existing two-valued classifier.
-    if !crate::array::object_owns_user_method(recv, name) {
+    if !crate::array::object_owns_user_method(recv.get_nanbox_f64(), name) {
         return None;
     }
-    Some(value)
+    Some(value.get_nanbox_f64())
 }
