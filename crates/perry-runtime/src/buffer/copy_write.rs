@@ -65,11 +65,7 @@ pub extern "C" fn js_buffer_write(
         let str_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let str_bytes = std::slice::from_raw_parts(str_data, str_len);
 
-        let bytes_to_write = match encoding {
-            1 => decode_hex(str_bytes),
-            2 => decode_base64(str_bytes),
-            _ => str_bytes.to_vec(),
-        };
+        let bytes_to_write = super::from::buffer_string_bytes_for_encoding(str_bytes, encoding);
 
         let available = (buf_len - offset) as usize;
         let write_len = bytes_to_write.len().min(available);
@@ -102,17 +98,9 @@ pub extern "C" fn js_buffer_write_len(
         let str_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let str_bytes = std::slice::from_raw_parts(str_data, str_len);
 
-        let bytes_to_write = match encoding {
-            1 => decode_hex(str_bytes),
-            2 | 3 => decode_base64(str_bytes),
-            // #10426: encoding tag 6 (utf16le/ucs2) fell through to the
-            // default (raw UTF-8 bytes) arm — dormant in the pre-existing
-            // `buf.write(str, offset, 'utf16le')` path and would have made
-            // the new `ucs2Write` method equally wrong. `from::utf16le_string_bytes`
-            // is the same UTF-16LE encoder `Buffer.from(str, 'utf16le')` uses.
-            6 => super::from::utf16le_string_bytes(str_bytes),
-            _ => str_bytes.to_vec(),
-        };
+        // Share the encoding table with the no-length entry point, including
+        // utf16le/ucs2, base64url, and latin1/ascii.
+        let bytes_to_write = super::from::buffer_string_bytes_for_encoding(str_bytes, encoding);
 
         let available = (buf_len - offset) as usize;
         let cap = max_len.max(0) as usize;
@@ -122,5 +110,53 @@ pub extern "C" fn js_buffer_write_len(
         ptr::copy_nonoverlapping(bytes_to_write.as_ptr(), dst_data, write_len);
 
         write_len as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_write_entry_points_decode_every_encoding_tag() {
+        let cases: &[(&str, &str, i32, &[u8])] = &[
+            ("utf8", "Aé", 0, b"A\xc3\xa9"),
+            ("hex", "41e9", 1, &[0x41, 0xe9]),
+            ("base64", "SGk=", 2, b"Hi"),
+            ("base64url", "_w==", 3, &[0xff]),
+            ("latin1", "Aé", 4, &[0x41, 0xe9]),
+            ("ascii", "Aé", 5, &[0x41, 0xe9]),
+            ("utf16le/ucs2", "Aé", 6, &[0x41, 0x00, 0xe9, 0x00]),
+        ];
+
+        for &(name, input, encoding, expected) in cases {
+            for with_length in [false, true] {
+                let buffer = js_buffer_alloc(16, 0x7f);
+                let string =
+                    crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+                let written = if with_length {
+                    js_buffer_write_len(buffer, string, 1, 15, encoding)
+                } else {
+                    js_buffer_write(buffer, string, 1, encoding)
+                };
+                assert_eq!(
+                    written as usize,
+                    expected.len(),
+                    "{name}, with_length={with_length}"
+                );
+                let bytes = unsafe { std::slice::from_raw_parts(buffer_data(buffer), 16) };
+                assert_eq!(bytes[0], 0x7f, "{name}, with_length={with_length}");
+                assert_eq!(
+                    &bytes[1..1 + expected.len()],
+                    expected,
+                    "{name}, with_length={with_length}"
+                );
+                assert_eq!(
+                    bytes[1 + expected.len()],
+                    0x7f,
+                    "{name}, with_length={with_length}"
+                );
+            }
+        }
     }
 }
