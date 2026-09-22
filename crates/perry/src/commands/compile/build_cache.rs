@@ -61,8 +61,8 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // machine pipeline for bounded ISel/regalloc. That changes object bytes,
     // so both the build and object caches must distinguish its settings.
     "PERRY_LL_FAST_EMIT_MAX_INSTRS",
-    // #10884 step 4b kill switch: `PERRY_REGION_READS=0` makes both region
-    // slices decline, so every guarded run lowers as individual reads instead
+    // #10884 step 4b kill switch: `PERRY_REGION_READS=0` makes the region
+    // slice(s) decline, so every guarded run lowers as individual reads instead
     // of one shape compare plus a slot load. Different emitted code, so an
     // object built with regions must not be served to a build without them.
     "PERRY_REGION_READS",
