@@ -301,20 +301,65 @@ pub fn assert_rooted_across(fn_ir: &str, producer_result: &str, consumer: &str, 
         .position(|line| line.contains(&format!("@{consumer}(")))
         .expect("call_operands just found it");
 
-    let reread = events.iter().any(|e| match e {
-        SlotEvent::Load { into, line } => {
-            *line > store_line
-                && *line < consumer_line
-                && operands
-                    .iter()
-                    .any(|operand| derives_from(&defs, operand, into, 4))
-        }
-        _ => false,
-    });
+    // Follow ONE memory round-trip. A value can be parked in a rooted slot,
+    // re-read, and parked again in a SECOND rooted slot that a later consumer
+    // re-reads — every hop is a collector-rewritten location, so the invariant
+    // ("read the location again after the allocation") holds at each step. The
+    // walk below is over SSA defs and cannot cross a store/load by
+    // construction, so before this it reported a correct double-hop as "never
+    // re-read": #10943's own-override diamond parks the receiver once for the
+    // branch and each arm re-reads that slot after its allocating argument.
+    //
+    // Relaxing the assertion for that shape would have been the wrong repair —
+    // this family (#9539, #9445, #9523, #9495, #9542) is exactly "a value held
+    // across an allocation without a reload", and the assertion must keep
+    // failing for it. So the checker learns the hop instead: a re-read counts
+    // when it comes from this slot, or from a slot whose own store was fed by
+    // a re-read of this one.
+    let relay_slots: Vec<String> = traffic
+        .iter()
+        .filter(|(other, _)| **other != slot)
+        .filter(|(_, other_events)| {
+            other_events.iter().any(|e| match e {
+                SlotEvent::Store { value, line } => {
+                    *line > store_line
+                        && events.iter().any(|src| match src {
+                            SlotEvent::Load {
+                                into,
+                                line: load_line,
+                            } => {
+                                *load_line > store_line
+                                    && load_line < line
+                                    && derives_from(&defs, value, into, 4)
+                            }
+                            _ => false,
+                        })
+                }
+                _ => false,
+            })
+        })
+        .map(|(other, _)| other.clone())
+        .collect();
+
+    let reread_from = |slot_events: &[SlotEvent]| {
+        slot_events.iter().any(|e| match e {
+            SlotEvent::Load { into, line } => {
+                *line > store_line
+                    && *line < consumer_line
+                    && operands
+                        .iter()
+                        .any(|operand| derives_from(&defs, operand, into, 4))
+            }
+            _ => false,
+        })
+    };
+    let reread =
+        reread_from(events) || relay_slots.iter().any(|relay| reread_from(&traffic[relay]));
     assert!(
         reread,
         "{what}: @{consumer} takes {operands:?}, none of which was re-read from \
-         {slot} between the store at line {store_line} and the call at line \
+         {slot} (or from a rooted slot re-parked from it: {relay_slots:?}) \
+         between the store at line {store_line} and the call at line \
          {consumer_line}. A root buys a rewritten LOCATION; the consuming call \
          only observes the rewrite if it reads that location again (#7114). \
          Slot traffic: {events:#?}\n{fn_ir}"

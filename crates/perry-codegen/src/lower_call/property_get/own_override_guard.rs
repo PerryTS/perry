@@ -54,9 +54,7 @@ use perry_hir::Expr;
 use super::helpers::is_date_receiver;
 use crate::expr::{lower_expr, FnCtx};
 use crate::rooting;
-use crate::type_analysis::{
-    is_array_expr, is_declared_map_expr, is_map_expr, is_readonly_set_expr, is_set_expr,
-};
+use crate::type_analysis::{is_array_expr, is_declared_map_expr, is_map_expr, is_set_expr};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Method names a specialised lowering can claim on one of the exotic kinds
@@ -101,8 +99,13 @@ fn kind_is_proven_exotic(ctx: &FnCtx<'_>, object: &Expr) -> bool {
         // `h.m` emitted NO guard and ran `js_declared_map_get`. That helper
         // brand-checks the receiver and then calls the native method, which an
         // own property must still beat.
+        //
+        // `ReadonlySet` is deliberately NOT here. `js_readonly_set_has`
+        // brand-checks and otherwise preserves JavaScript dispatch, which
+        // already reaches an own method — so a diamond would only add the
+        // generic tower to the common native case, which
+        // `readonly_collection_tests` exists to forbid.
         || is_declared_map_expr(ctx, object)
-        || is_readonly_set_expr(ctx, object)
 }
 
 /// Does this receiver need materialising, or is re-lowering it already both
@@ -207,8 +210,14 @@ pub(super) fn lower(
         let builtin_label = ctx.block_label(builtin_idx);
         let merge_label = ctx.block_label(merge_idx);
 
-        let recv = rooting::materialized_receiver_reread(ctx, key)
-            .expect("the receiver was materialised above");
+        // Materialised or not, the receiver is READ HERE: from its slot when it
+        // was materialised, and by re-lowering when it lives in one already
+        // (a local). Expecting a materialisation that the gate deliberately
+        // skipped is what made `array_pop` and `entry_block_alloca` panic.
+        let recv = match rooting::materialized_receiver_reread(ctx, key) {
+            Some(value) => value,
+            None => lower_expr(ctx, object)?,
+        };
         emit_own_override_branch(ctx, property, &recv, &own_label, &builtin_label);
 
         // The own arm: the universal dispatcher. Its operands are lowered
