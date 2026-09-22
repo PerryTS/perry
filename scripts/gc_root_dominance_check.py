@@ -919,6 +919,14 @@ def dead_poll_capable(symbols):
 # Macros that take a `js_*` name as their first argument WITHOUT defining it:
 # assertions and formatting inside function bodies. Everything else indented is
 # the shape `--audit-macro-item-position` exists to reject.
+#
+# This is an ALLOWLIST, and that is deliberate: an unknown macro reads as
+# DEFINING, so it is a hit and the audit fails. A new assert-like macro is then
+# a loud false positive that somebody fixes by adding one name here, which is
+# the direction this gate should fail in. Inverting it into a list of known
+# DEFINING macros is the obvious tidy-up later and would be wrong -- the next
+# export macro nobody listed would be skipped in silence, which is the exact
+# bug this file already shipped twice.
 _NON_DEFINING_MACROS = frozenset((
     "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
     "debug_assert_ne", "matches", "println", "eprintln", "print", "eprint",
@@ -5835,6 +5843,34 @@ def poll_reach_self_test():
         print("self-test FAIL: --audit-poll-reach over 600 symbols with EMPTY "
               "bodies must be an error -- zero call edges means the body "
               "extractor is broken, not that the lists agree", file=sys.stderr)
+        ok = False
+    # `_NON_DEFINING_MACROS` is an allowlist, so it can go vacuous: if the one
+    # occurrence it suppresses is renamed away, the arm keeps "passing" while
+    # suppressing nothing -- the same shape as the scanner bug this audit was
+    # added for. Assert it is load-bearing by re-running the scan with the
+    # allowlist emptied and requiring that it then reports something.
+    global _NON_DEFINING_MACROS
+    real_allowlist = _NON_DEFINING_MACROS
+    try:
+        _NON_DEFINING_MACROS = frozenset()
+        suppressed = indented_macro_exports()
+    finally:
+        _NON_DEFINING_MACROS = real_allowlist
+    if not suppressed:
+        print("self-test FAIL: emptying _NON_DEFINING_MACROS changed nothing, "
+              "so the allowlist suppresses no real occurrence and its arm is "
+              "vacuous. Either the fixture it covers "
+              "(`assert_eq!(js_thread, ..)`) was renamed away, or the scan is "
+              "not reaching the crates.", file=sys.stderr)
+        ok = False
+    # The other direction, which is the one that matters for safety: a macro
+    # nobody listed must read as DEFINING and therefore fail, never be skipped.
+    unknown = _INDENTED_MACRO_RE.match(
+        "    some_unlisted_macro!(js_planted_export, false);")
+    if not unknown or unknown.group(1) in _NON_DEFINING_MACROS:
+        print("self-test FAIL: an indented invocation of an UNLISTED macro "
+              "naming a js_* symbol must be recognised as a hit. If it is not, "
+              "a new export macro is skipped in silence.", file=sys.stderr)
         ok = False
     return ok
 
