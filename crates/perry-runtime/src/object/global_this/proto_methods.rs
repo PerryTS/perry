@@ -84,7 +84,7 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// #7760: install `value` as `proto_obj`'s OWN `[Symbol.iterator]`, with the
 /// spec descriptor. Mirrors `collection_proto_thunks::install_collection_iterator_symbol`;
 /// kept here because `Array.prototype` is populated in this module.
-fn install_array_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
+fn install_builtin_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
     if proto_obj.is_null() || value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
@@ -362,7 +362,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 array_prototype_values_thunk as *const u8,
                 0,
             );
-            install_array_iterator_symbol(proto_obj, values_value);
+            install_builtin_iterator_symbol(proto_obj, values_value);
             install_proto_method(proto_obj, "pop", array_prototype_pop_thunk as *const u8, 0);
             install_proto_method(
                 proto_obj,
@@ -1031,12 +1031,22 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         }
         #[cfg(feature = "global-webfetch")]
         "Headers" => {
+            // WHATWG aliases Headers.prototype[Symbol.iterator] to the exact
+            // same function as `.entries`.  Besides reflection parity, axios
+            // deliberately requires this to be an own prototype member before
+            // treating an untrusted header source as iterable.
+            let entries_value = install_proto_method(
+                proto_obj,
+                "entries",
+                global_this_builtin_noop_thunk as *const u8,
+                0,
+            );
+            install_builtin_iterator_symbol(proto_obj, entries_value);
             install_noop_proto_methods(
                 proto_obj,
                 &[
                     ("append", 2),
                     ("delete", 1),
-                    ("entries", 0),
                     ("forEach", 1),
                     ("get", 1),
                     ("getSetCookie", 0),
