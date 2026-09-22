@@ -170,9 +170,10 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.lint
     # Was macos-14 — moved to ubuntu-latest in v0.5.428 since `cargo fmt
     # --check` is portable. The 6 multiplier-min cut is small in absolute
-    # terms (lint runs in ~30s) but it's free.
+    # terms on a warm cache. #10986's first cargo-xwin run spends ~15 minutes
+    # downloading the MSVC sysroot and checking cold; main caches the sysroot.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
