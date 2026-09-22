@@ -339,9 +339,11 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
 /// pages the sticky restore just inserted. They are skipped; the walk is then
 /// proportional to the objects the dirty scan could NOT fully cover
 /// (multi-page arrays, owners of out-of-body buffers) instead of to every slot
-/// on every dirty page. Under `debug_assertions` the skipped objects are
-/// walked anyway and any page the walk would have ADDED is a panic — the
-/// machine check of the equivalence argument above.
+/// on every dirty page. Under `debug_assertions`, and in unit-test builds, the
+/// skipped objects are walked anyway and any page the walk would have ADDED is
+/// a panic — the machine check of the equivalence argument above. Including
+/// `cfg(test)` keeps the check active in `cargo test --release` without adding
+/// work to production release builds.
 pub(super) fn restore_surviving_dirty_coverage(
     snapshot: &RememberedDirtySnapshot,
     covered: &crate::fast_hash::PtrHashSet<usize>,
@@ -367,7 +369,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
     let mut parents_visited = 0usize;
     let mut slots_visited = 0usize;
     let mut slots_tracking = 0usize;
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     let mut skipped_sticky = StickyRememberedSet::default();
     // Mirror scan_remembered_dirty_slots_copying's scan_header guards: the
     // external dirty entries can carry headers the harness seeded
@@ -417,8 +419,8 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |hp| {
             if covered.contains(&(hp as usize)) {
                 skipped += 1;
-                #[cfg(debug_assertions)]
-                debug_visit_covered_parent(hp as *mut GcHeader, &mut skipped_sticky);
+                #[cfg(any(test, debug_assertions))]
+                cross_check_covered_parent(hp as *mut GcHeader, &mut skipped_sticky);
                 return;
             }
             walked += 1;
@@ -432,8 +434,8 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         }
         if covered.contains(&header_addr) {
             skipped += 1;
-            #[cfg(debug_assertions)]
-            debug_visit_covered_parent(header_addr as *mut GcHeader, &mut skipped_sticky);
+            #[cfg(any(test, debug_assertions))]
+            cross_check_covered_parent(header_addr as *mut GcHeader, &mut skipped_sticky);
             continue;
         }
         walked += 1;
@@ -456,7 +458,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         }
     }
     let added = sticky.restore_counted();
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     {
         let would_add = skipped_sticky.count_not_yet_dirty();
         assert_eq!(
@@ -484,11 +486,11 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
     }
 }
 
-/// Debug twin of the restore's `visit_parent` for a skipped object: re-derive
-/// what the full walk would have remembered so the caller can assert it adds
-/// nothing beyond what the dirty scan already restored.
-#[cfg(debug_assertions)]
-fn debug_visit_covered_parent(header: *mut GcHeader, sticky: &mut StickyRememberedSet) {
+/// Test/debug twin of the restore's `visit_parent` for a skipped object:
+/// re-derive what the full walk would have remembered so the caller can assert
+/// it adds nothing beyond what the dirty scan already restored.
+#[cfg(any(test, debug_assertions))]
+fn cross_check_covered_parent(header: *mut GcHeader, sticky: &mut StickyRememberedSet) {
     unsafe {
         if header.is_null() {
             return;
