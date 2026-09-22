@@ -1086,6 +1086,15 @@ pub(super) fn get_field_ic_miss_impl(
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             };
+            // #10868 step 2.5 stage 1: "no keys array" implies "no own
+            // properties" for every receiver EXCEPT a dictionary-mode one,
+            // whose key list lives in its `ObjectMeta`. Priming the
+            // inherited-read cache on that claim would answer an OWN property
+            // from the prototype chain — a wrong value, not a slow one.
+            if crate::object::dictionary::is_dictionary(obj) {
+                let value = js_object_get_field_by_name(obj, key);
+                return f64::from_bits(value.bits());
+            }
             let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
             if keys.is_null() || (keys as usize) <= 0x10000 {
                 if diag {

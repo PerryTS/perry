@@ -646,6 +646,120 @@ fn test_dom_exception_set_cleared_with_error_side_tables() {
 /// record, AND the prototype object; the header's meta edge and the
 /// record's prototype slot must both be rewritten so the moved owner still
 /// resolves the moved prototype.
+/// #10868 step 2.5 stage 1: a dictionary-mode receiver's private ordered key
+/// list is a traced, REWRITTEN child edge of its meta record, like `spill`.
+///
+/// The pin for the one `visit` in `layout_slot_visit`'s `ObjectMeta` arm —
+/// the single enumerator the minor mark, the full mark, the copying-nursery
+/// evacuation, the whole-heap rewrite and the dirty-slot rescan all drive.
+/// Removing it is SILENT everywhere else: nothing enumerates `ObjectMeta`'s
+/// fields (no derive, no registry; `validate_gc_type_info` pairs the type
+/// KINDS, never the slot lists), which is how `expando` came to be missing
+/// from the second enumerator in `gc/layout.rs`. Sabotage-verified: with the
+/// `visit` removed the key list is never evacuated and the "must itself
+/// move" assertion below reddens.
+#[test]
+fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _restore = {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::object::dictionary::test_arm_latch(None);
+            }
+        }
+        Restore
+    };
+
+    // EIGHT slots, not zero. `alloc_nursery_test_object(0)` allocates a
+    // payload of exactly `size_of::<ObjectHeader>()` with no inline slots and
+    // leaves the header unstamped; every sibling fixture only ever sets a
+    // PROTOTYPE on it, so nothing has written a named property to one before.
+    // A named store lands in inline slot 0 or 1 — `alloc_limit` is
+    // `max(live, INLINE_SLOT_FLOOR)` and the floor is 2 — which on a
+    // zero-slot allocation is the NEXT CELL. That corrupted the heap and
+    // SIGSEGV'd a later read, with a backtrace deep inside an unrelated
+    // URLSearchParams shape probe.
+    let (owner, _) = unsafe { alloc_nursery_test_object(8) };
+    let old_owner = owner as usize;
+    unsafe {
+        for i in 0..6 {
+            let name = format!("gcdict_{i:02}");
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_set_field_by_name(owner, key, i as f64);
+        }
+        assert!(
+            crate::object::dictionary::latch_object_to_dictionary(owner),
+            "test premise: the receiver must latch"
+        );
+    }
+    let old_keys = unsafe { crate::object::object_keys_array(owner) } as usize;
+    assert_ne!(old_keys, 0, "test premise: the private key list exists");
+    assert_eq!(
+        crate::array::js_array_length(old_keys as *mut crate::array::ArrayHeader),
+        6,
+        "test premise: it holds the receiver's six keys"
+    );
+
+    // Read every value back BEFORE the collection. Without this the test
+    // cannot tell "the move lost it" from "the latch never stored it", and
+    // those need different fixes.
+    for i in 0..6 {
+        let name = format!("gcdict_{i:02}");
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value =
+            f64::from_bits(crate::object::js_object_get_field_by_name(owner, key).bits());
+        assert_eq!(value, i as f64, "test premise: key {i} reads back after the latch");
+    }
+    assert!(
+        unsafe { crate::object::dictionary::is_dictionary(owner) },
+        "test premise: READING a dictionary receiver must not un-latch it. \
+         The by-name read path stamps the receiver's shape to key its field \
+         cache, and for a dictionary receiver that republishes the private \
+         key list as a shape — a mode that survives writes and reverts on \
+         the first read."
+    );
+
+    js_shadow_slot_set(0, ptr_bits(old_owner));
+
+    let _ = gc_collect_minor();
+
+    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
+    let new_owner = new_owner as *mut crate::object::ObjectHeader;
+
+    assert!(
+        unsafe { crate::object::dictionary::is_dictionary(new_owner) },
+        "the moved receiver must still be in dictionary mode"
+    );
+    let new_keys = unsafe { crate::object::object_keys_array(new_owner) } as usize;
+    assert_ne!(
+        new_keys, 0,
+        "the meta record's dictionary_keys slot was not marked: the key list \
+         was collected out from under a live object"
+    );
+    assert_ne!(
+        new_keys, old_keys,
+        "test premise: the key list must itself move, or this test cannot \
+         distinguish a marked edge from a REWRITTEN one"
+    );
+    assert_eq!(
+        crate::array::js_array_length(new_keys as *mut crate::array::ArrayHeader),
+        6,
+        "the rewritten key list must still hold the receiver's six keys"
+    );
+    // The names survived; so must the values they address.
+    for i in 0..6 {
+        let name = format!("gcdict_{i:02}");
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value =
+            f64::from_bits(crate::object::js_object_get_field_by_name(new_owner, key).bits());
+        assert_eq!(value, i as f64, "key {i} lost its value across the move");
+    }
+
+    js_shadow_slot_set(0, 0);
+}
+
 #[test]
 fn test_object_meta_prototype_survives_copied_minor_move() {
     let _guard = CopyingNurseryTestGuard::new(2);

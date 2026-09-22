@@ -646,24 +646,36 @@ pub(crate) fn set_field_by_name_object_tail(
             // that starts with `{}` and sets the same first key hits the
             // fast path above instead of allocating a fresh 4-elem
             // keys_array here.
-            transition_cache_insert(
-                if record_array_tail {
-                    obj as *const ObjectHeader
-                } else {
-                    std::ptr::null()
-                },
-                prev_shape_id,
-                interned_key,
-                new_keys as usize,
-                0,
-                super::shapes::object_shape_stamp(obj),
-            );
+            // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
+            // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
+            // it caches — which makes the very next append clone the array instead of
+            // extending it, i.e. O(k) copying per append, the cost this mode exists to
+            // remove. A dictionary receiver publishes no shape transitions, so the
+            // entry could never be hit by anyone else either.
+            if !crate::object::dictionary::is_dictionary(obj) {
+                transition_cache_insert(
+                    if record_array_tail {
+                        obj as *const ObjectHeader
+                    } else {
+                        std::ptr::null()
+                    },
+                    prev_shape_id,
+                    interned_key,
+                    new_keys as usize,
+                    0,
+                    super::shapes::object_shape_stamp(obj),
+                );
+            }
             // #6804: birth-stamp the new dynamic shape (once per shape
             // birth — the transition edge above serves the siblings).
             // #6759 C3 rung 1: no `class_id == 0` gate — a keyless class
             // instance gaining its first by-name property is stamped like
             // any other receiver.
-            super::shapes::stamp_object_shape(obj, new_keys, 1, 1);
+            // #10868 step 2.5 stage 1: same un-latch hazard as the read
+            // path's field-cache stamp — this publishes an explicit keys edge.
+            if !crate::object::dictionary::is_dictionary(obj) {
+                super::shapes::stamp_object_shape(obj, new_keys, 1, 1);
+            }
             return;
         }
 
@@ -837,18 +849,26 @@ pub(crate) fn set_field_by_name_object_tail(
                 overflow_set(obj as usize, new_index, vbits);
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
-                transition_cache_insert(
-                    if record_array_tail {
-                        obj as *const ObjectHeader
-                    } else {
-                        std::ptr::null()
-                    },
-                    prev_shape_id,
-                    interned_key,
-                    new_keys as usize,
-                    new_index as u32,
-                    super::shapes::object_shape_stamp(obj),
-                );
+                // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
+                // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
+                // it caches — which makes the very next append clone the array instead of
+                // extending it, i.e. O(k) copying per append, the cost this mode exists to
+                // remove. A dictionary receiver publishes no shape transitions, so the
+                // entry could never be hit by anyone else either.
+                if !crate::object::dictionary::is_dictionary(obj) {
+                    transition_cache_insert(
+                        if record_array_tail {
+                            obj as *const ObjectHeader
+                        } else {
+                            std::ptr::null()
+                        },
+                        prev_shape_id,
+                        interned_key,
+                        new_keys as usize,
+                        new_index as u32,
+                        super::shapes::object_shape_stamp(obj),
+                    );
+                }
                 keys_index_insert(
                     crate::object::object_keys_array(obj),
                     (new_index + 1) as u32,
@@ -885,18 +905,26 @@ pub(crate) fn set_field_by_name_object_tail(
             js_object_set_field(obj, new_index as u32, JSValue::from_bits(value.to_bits()));
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
-            transition_cache_insert(
-                if record_array_tail {
-                    obj as *const ObjectHeader
-                } else {
-                    std::ptr::null()
-                },
-                prev_shape_id,
-                interned_key,
-                new_keys as usize,
-                new_index as u32,
-                super::shapes::object_shape_stamp(obj),
-            );
+            // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
+            // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
+            // it caches — which makes the very next append clone the array instead of
+            // extending it, i.e. O(k) copying per append, the cost this mode exists to
+            // remove. A dictionary receiver publishes no shape transitions, so the
+            // entry could never be hit by anyone else either.
+            if !crate::object::dictionary::is_dictionary(obj) {
+                transition_cache_insert(
+                    if record_array_tail {
+                        obj as *const ObjectHeader
+                    } else {
+                        std::ptr::null()
+                    },
+                    prev_shape_id,
+                    interned_key,
+                    new_keys as usize,
+                    new_index as u32,
+                    super::shapes::object_shape_stamp(obj),
+                );
+            }
             // #6759 C1 note: `keys_index_insert` delegates to the keys-keyed
             // shape records and takes the POST-append keys_array — with the
             // C3a migration above, an owned grow lands the append on the
@@ -1075,18 +1103,26 @@ pub(crate) fn set_field_by_name_object_tail(
             // The cached target is stamped `GC_FLAG_SHAPE_SHARED` by
             // `transition_cache_insert`, which triggers clone-on-extend
             // on either object if someone later appends past this key.
-            transition_cache_insert(
-                if record_array_tail {
-                    obj as *const ObjectHeader
-                } else {
-                    std::ptr::null()
-                },
-                prev_shape_id,
-                interned_key,
-                new_keys as usize,
-                new_index as u32,
-                super::shapes::object_shape_stamp(obj),
-            );
+            // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
+            // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
+            // it caches — which makes the very next append clone the array instead of
+            // extending it, i.e. O(k) copying per append, the cost this mode exists to
+            // remove. A dictionary receiver publishes no shape transitions, so the
+            // entry could never be hit by anyone else either.
+            if !crate::object::dictionary::is_dictionary(obj) {
+                transition_cache_insert(
+                    if record_array_tail {
+                        obj as *const ObjectHeader
+                    } else {
+                        std::ptr::null()
+                    },
+                    prev_shape_id,
+                    interned_key,
+                    new_keys as usize,
+                    new_index as u32,
+                    super::shapes::object_shape_stamp(obj),
+                );
+            }
             return;
         }
         // First, add the key to the keys array (may reallocate)
@@ -1121,17 +1157,25 @@ pub(crate) fn set_field_by_name_object_tail(
         refresh_roots_after_alloc!();
         mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
-        transition_cache_insert(
-            if record_array_tail {
-                obj as *const ObjectHeader
-            } else {
-                std::ptr::null()
-            },
-            prev_shape_id,
-            interned_key,
-            new_keys as usize,
-            new_index as u32,
-            super::shapes::object_shape_stamp(obj),
-        );
+        // #10868 step 2.5 stage 1: a dictionary receiver's keys array is PRIVATE,
+        // and `transition_cache_insert` stamps `GC_FLAG_SHAPE_SHARED` on whatever
+        // it caches — which makes the very next append clone the array instead of
+        // extending it, i.e. O(k) copying per append, the cost this mode exists to
+        // remove. A dictionary receiver publishes no shape transitions, so the
+        // entry could never be hit by anyone else either.
+        if !crate::object::dictionary::is_dictionary(obj) {
+            transition_cache_insert(
+                if record_array_tail {
+                    obj as *const ObjectHeader
+                } else {
+                    std::ptr::null()
+                },
+                prev_shape_id,
+                interned_key,
+                new_keys as usize,
+                new_index as u32,
+                super::shapes::object_shape_stamp(obj),
+            );
+        }
     }
 }

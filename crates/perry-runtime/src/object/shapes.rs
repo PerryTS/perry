@@ -2054,6 +2054,15 @@ pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
     if !cfg!(debug_assertions) {
         return;
     }
+    // #10868 step 2.5 stage 1: a dictionary-mode receiver deliberately
+    // publishes NO keys while `object_keys_array` answers with the private
+    // list in its `ObjectMeta`, so the comparison below is false by
+    // construction for it. Its invariant is stricter, and lives with the mode
+    // that owns it.
+    if crate::object::dictionary::is_dictionary(obj) {
+        crate::object::dictionary::debug_assert_dictionary_parity(obj);
+        return;
+    }
     let id = object_shape_stamp(obj);
     if id != 0 {
         let key_count = if keys.is_null() {

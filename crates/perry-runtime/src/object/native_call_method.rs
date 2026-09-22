@@ -162,6 +162,12 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     // tower's field lookup. ShapeId supplies both the moving root and its exact
     // logical length; the ObjectHeader mirrors are compatibility scratch only.
     let descriptor = crate::object::shapes::object_shape_descriptor(obj)?;
+    // #10868 step 2.5 stage 1: a dictionary-mode receiver's own fields are in
+    // its `ObjectMeta`, so a null `keys` word would make this shadowing scan
+    // vacuously true and let a vtable method win over an own field.
+    if crate::object::dictionary::is_dictionary(obj) {
+        return None;
+    }
     let keys = descriptor.keys as usize as *mut ArrayHeader;
     if !keys.is_null() {
         let keys_ptr = keys as usize;
@@ -2180,6 +2186,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return crate::object::null_stub_value();
         };
+        // #10868 step 2.5 stage 1: see the shadowing scan above.
+        if crate::object::dictionary::is_dictionary(obj) {
+            let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
+            return f64::from_bits(JSValue::pointer(null_obj_ptr).bits());
+        }
         let keys = descriptor.keys as usize as *mut ArrayHeader;
 
         if !keys.is_null() {

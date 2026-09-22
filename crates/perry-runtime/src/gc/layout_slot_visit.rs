@@ -456,6 +456,15 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // The Array-subclass elements store (0 = none): a raw-pointer child
             // edge traced and rewritten exactly like `spill`.
             visit(fixed_slot(&mut (*meta).elements as *mut u64));
+            // #10868 step 2.5 stage 1: a dictionary-mode receiver's private
+            // ordered key list. Reachable ONLY through this record, so an
+            // unvisited edge here collects a live object's own property NAMES
+            // — the same shape as the spill hazard above (#6812). This single
+            // `visit` is mark, evacuation-rewrite and dirty-slot-rescan
+            // coverage at once, because this function is the one enumerator
+            // all three drive; `dictionary_keys_survive_a_moving_collection`
+            // reddens if it is removed.
+            visit(fixed_slot(&mut (*meta).dictionary_keys as *mut u64));
             // A fresh class object stored as an instance's private evaluation
             // brand is a NaN-boxed child edge and moves with the meta record.
             visit(fixed_slot(

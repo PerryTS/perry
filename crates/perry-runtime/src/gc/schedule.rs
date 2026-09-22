@@ -673,6 +673,17 @@ pub(crate) fn report_exit_summary() {
         super::instruments::moved_objects_total(),
         super::instruments::loop_polls_reached(),
     );
+    // #10868 step 2.5 stage 1. Printed here rather than from
+    // `emit_incremental_liveness_diag` because this summary has an
+    // `libc::atexit` backstop as well as the teardown funnel, and because
+    // appending to `gc/mod.rs` changes a source whose hash pins
+    // `census.rs:PASS1_MARKED`'s non-moving-snapshot window.
+    //
+    // Always printed, zeros included. `armed=false` is "the mode is off";
+    // `armed=true candidates=0` is "armed and NEVER REACHED", the bug shape;
+    // `armed=true candidates>0 latches=0` is "reached and declined". One
+    // number could not tell those apart.
+    eprintln!("{}", crate::object::dictionary::dictionary_counters_line());
 }
 
 /// Async-signal-safety is irrelevant on the panic path, so this half can format
