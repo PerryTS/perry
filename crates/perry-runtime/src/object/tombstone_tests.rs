@@ -453,7 +453,7 @@ fn tombstone_publish_on_untraced_receiver_arms_old_carrier() {
 // key)` cache entry primed for a key could be retired by the slot's contents
 // rather than by the shape word. A delete is now a transition: the successor
 // is a pure function of `(predecessor ShapeId, deleted key, vacated slot)` and
-// is never the predecessor. `PERRY_DELETE_SHAPE_TRANSITION=0` restores #9064.
+// is never the predecessor.
 
 /// Restores the per-thread delete-transition override on scope exit.
 fn tombstone_receiver_20(prefix: &str) -> *mut crate::object::ObjectHeader {
@@ -498,7 +498,6 @@ fn tombstone_receiver_20(prefix: &str) -> *mut crate::object::ObjectHeader {
 fn delete_transition_retires_the_shape_a_cache_was_primed_on() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let obj = tombstone_receiver_20("prime_key_");
@@ -568,7 +567,6 @@ fn delete_transition_retires_the_shape_a_cache_was_primed_on() {
 fn delete_transition_leaves_tag_hole_in_the_vacated_slot() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let obj = tombstone_receiver_20("holeslot_");
@@ -601,7 +599,6 @@ fn delete_transition_leaves_tag_hole_in_the_vacated_slot() {
 fn delete_readd_delete_never_returns_to_an_earlier_shape() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let obj = tombstone_receiver_20("churn_key_");
@@ -641,7 +638,6 @@ fn delete_readd_delete_never_returns_to_an_earlier_shape() {
 fn opposite_delete_orders_converge_in_layout_but_not_in_identity() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let forward = tombstone_receiver_20("order_key_");
@@ -687,23 +683,10 @@ fn delete_transitions_the_shape_for_class_instances_and_prototypes() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
     let _global = crate::gc::global_side_table_test_lock();
-    // Both arms, so that a wrong VALUE attributes itself: the surviving-key
-    // reads below must hold under #9064's publish too, and only the ShapeId
-    // assertions are the transition's.
-    for transition in [false, true] {
-        delete_transitions_for_class_receivers(transition);
-    }
-}
-
-fn delete_transitions_for_class_receivers(transition: bool) {
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(transition);
     unsafe {
-        let instance_class_id: u32 = if transition { 0x0004_2101 } else { 0x0004_2102 };
-        let prefix = if transition { "instT_" } else { "instF_" };
-        let proto_prefix = if transition { "protoT_" } else { "protoF_" };
-        const INSTANCE_CLASS_ID: u32 = 0;
-        let _ = INSTANCE_CLASS_ID;
-        let instance = js_object_alloc(instance_class_id, 0);
+        let prefix = "instT_";
+        let proto_prefix = "protoT_";
+        let instance = js_object_alloc(0x0004_2101, 0);
         for i in 0..20 {
             let name = format!("{prefix}{i:02}");
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -717,9 +700,7 @@ fn delete_transitions_for_class_receivers(transition: bool) {
             assert_ne!(
                 super::shapes::object_shape_stamp(instance),
                 before,
-                "transition={transition}: a class instance must transition its \
-                 ShapeId on delete — #9064 never preserved it for a real \
-                 class id either, so this must hold on both arms"
+                "a class instance must transition its ShapeId on delete"
             );
         }
         let survivor_name = format!("{prefix}07");
@@ -728,12 +709,11 @@ fn delete_transitions_for_class_receivers(transition: bool) {
         assert_eq!(
             js_object_get_field_by_name(instance, survivor).bits(),
             7.0f64.to_bits(),
-            "transition={transition}: the delete moved a SURVIVING key's value"
+            "the delete moved a SURVIVING key's value"
         );
 
-        // A prototype object is excluded from the stable-tombstone lane by
-        // construction (its method caches have different guards), so this is
-        // the compacting delete — which must transition too.
+        // A plain object used as a prototype can enter the stable-tombstone
+        // lane, so its second delete must also move the shape word.
         let proto = js_object_alloc(0, 0);
         for i in 0..20 {
             let name = format!("{proto_prefix}{i:02}");
@@ -748,36 +728,16 @@ fn delete_transitions_for_class_receivers(transition: bool) {
         // The FIRST delete meets a 20-key transition-cache-SHARED array and
         // takes the compacting path, which has always minted a fresh id; only
         // the SECOND runs the O(1) tombstone lane this change is about.
-        for (round, victim) in [19u32, 6].into_iter().enumerate() {
-            let tombstone_lane = round == 1;
+        for victim in [19u32, 6] {
             let name = format!("{proto_prefix}{victim:02}");
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             let before = super::shapes::object_shape_stamp(proto);
             assert_eq!(super::delete_rest::js_object_delete_field(proto, key), 1);
             let after = super::shapes::object_shape_stamp(proto);
-            if transition || !tombstone_lane {
-                assert_ne!(
-                    after, before,
-                    "an object that is someone's prototype must transition its \
-                     ShapeId on delete (transition={transition}, \
-                     tombstone_lane={tombstone_lane})"
-                );
-            } else {
-                // Worth stating, because it is easy to assume otherwise and
-                // lane 3 will care: the stable-tombstone lane excludes
-                // `Object.prototype` and REGISTERED class prototypes, not
-                // every object that happens to sit on a chain. A plain
-                // `class_id == 0` object reached through `setPrototypeOf`
-                // enters the lane and #9064 keeps its id across the delete —
-                // so an inherited-property cache keyed on the holder's shape
-                // could not see the delete either.
-                assert_eq!(
-                    after, before,
-                    "#9064 kept the id for a plain object used as a prototype; \
-                     if that changed, the transition's contrast is no longer \
-                     what this test claims"
-                );
-            }
+            assert_ne!(
+                after, before,
+                "an object used as a prototype must transition its ShapeId on delete"
+            );
         }
         let inherited_name = format!("{proto_prefix}06");
         let inherited = crate::string::js_string_from_bytes(
@@ -786,8 +746,7 @@ fn delete_transitions_for_class_receivers(transition: bool) {
         );
         assert!(
             js_object_get_field_by_name(child, inherited).is_undefined(),
-            "transition={transition}: the delete must be visible through the \
-             prototype chain"
+            "the delete must be visible through the prototype chain"
         );
     }
 }
@@ -799,7 +758,6 @@ fn delete_transitions_for_class_receivers(transition: bool) {
 fn delete_with_descriptors_transitions_and_still_refuses_non_configurable() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let obj = js_object_alloc(0, 0);
@@ -839,43 +797,12 @@ fn delete_with_descriptors_transitions_and_still_refuses_non_configurable() {
     }
 }
 
-/// `PERRY_DELETE_SHAPE_TRANSITION=0` must genuinely restore #9064. Without
-/// this the kill switch is decoration, and the A/B arms this lane's
-/// measurements are built on would be the same arm twice.
-#[test]
-fn the_kill_switch_restores_the_9064_stable_shape_id() {
-    super::delete_rest::test_set_tombstone_deletes(Some(true));
-    let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(false);
-    let _global = crate::gc::global_side_table_test_lock();
-    unsafe {
-        let obj = tombstone_receiver_20("killsw_");
-        let before = super::shapes::object_shape_stamp(obj);
-        let victim = crate::string::js_string_from_bytes(b"killsw_04".as_ptr(), 9);
-        assert_eq!(super::delete_rest::js_object_delete_field(obj, victim), 1);
-        assert_eq!(
-            super::shapes::object_shape_hole_count(obj),
-            1,
-            "fixture premise: still the tombstone lane"
-        );
-        assert_eq!(
-            super::shapes::object_shape_stamp(obj),
-            before,
-            "the kill switch must restore #9064's id-preserving publish"
-        );
-    }
-}
-
 /// ShapeId CONSUMPTION, which no output ever reveals: ids come from a 2^30
 /// counter that is never reused and fail-stops at the end, so a path minting
 /// one per delete has a process LIFETIME, not just a memory cost.
 ///
-/// This is the measurement that decides whether the transition can be
-/// default-on for a long-running process. It asserts the numbers rather than
-/// describing them: #9064's lane spends ~0 ids across churn (it keeps the id),
-/// and the transition spends one per delete — because exact-facts interning is
-/// keyed by the keys array's ADDRESS, and each delete-then-re-add reaches a
-/// layout that address has never held before.
+/// Delete/re-add churn spends ShapeIds over the life of a process, because
+/// each re-add reaches a layout that address has never held before.
 #[test]
 fn delete_shape_id_consumption_per_delete_is_measured() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
@@ -905,46 +832,13 @@ fn delete_shape_id_consumption_per_delete_is_measured() {
         super::shapes::test_shape_id_counter() - before
     }
 
-    let preserved = {
-        let _off = super::delete_rest::test_scope_delete_shape_transition(false);
-        churn("idcount_off_", CYCLES)
-    };
-    let transitioned = {
-        let _on = super::delete_rest::test_scope_delete_shape_transition(true);
-        churn("idcount_on_", CYCLES)
-    };
-
-    // Printed as well as asserted: the ratio is what the lane report quotes,
-    // and `cargo test -- --nocapture` is where it comes from.
-    eprintln!(
-        "[delete-shape-id] cycles={CYCLES} ids_preserving={preserved} \
-         ids_transition={transitioned} per_delete_preserving={:.3} \
-         per_delete_transition={:.3}",
-        f64::from(preserved) / f64::from(CYCLES),
-        f64::from(transitioned) / f64::from(CYCLES)
-    );
+    let transitioned = churn("idcount_", CYCLES);
     // The transition mints one id per delete, by construction.
     assert!(
         transitioned >= CYCLES,
         "the transition must mint at least one ShapeId per delete \
          ({transitioned} over {CYCLES} cycles) — fewer would mean some delete \
          kept the predecessor id"
-    );
-    // THE RESULT THAT MATTERS, and the one that was guessed wrong before it
-    // was measured: #9064's id-preserving lane spends essentially the SAME
-    // number of ids on this churn (199 against 200 over 200 cycles). It keeps
-    // the id across the delete, but the re-add's append publish and the
-    // amortized squeeze spend one per cycle anyway. So the transition does not
-    // move ShapeId consumption — the 2^30 counter's exhaustion horizon is a
-    // property of delete/re-add churn itself, not of this change.
-    //
-    // Asserted as a ratio so it fails if the transition ever starts forking
-    // identities the preserving lane did not.
-    assert!(
-        transitioned <= preserved + CYCLES / 10,
-        "the transition spent {transitioned} ShapeIds where #9064's lane spent \
-         {preserved} over {CYCLES} cycles: it is now the dominant consumer, \
-         which it was not when measured"
     );
 }
 
@@ -959,7 +853,6 @@ fn delete_shape_id_consumption_per_delete_is_measured() {
 fn two_receivers_do_not_share_a_delete_successor_because_facts_carry_the_address() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let a = js_object_alloc(0, 0);
@@ -1018,7 +911,6 @@ fn two_receivers_do_not_share_a_delete_successor_because_facts_carry_the_address
 fn the_delete_successor_generation_is_deterministic_not_a_counter_draw() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
-    let _transition = super::delete_rest::test_scope_delete_shape_transition(true);
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
         let obj = tombstone_receiver_20("purefn_");
