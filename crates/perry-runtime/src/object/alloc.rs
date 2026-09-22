@@ -444,7 +444,7 @@ pub extern "C" fn js_build_class_keys_array(
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
         let arr = crate::array::js_array_alloc_with_length_longlived(0);
-        shape_cache_insert(shape_id, arr);
+        let arr = shape_cache_insert(shape_id, arr);
         remember_class_keys_array(class_id, field_count, arr);
         return arr;
     }
@@ -506,7 +506,7 @@ pub extern "C" fn js_build_class_keys_array(
     unsafe {
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     }
-    shape_cache_insert(shape_id, arr);
+    let arr = shape_cache_insert(shape_id, arr);
     remember_class_keys_array(class_id, field_count, arr);
     arr
 }
@@ -587,7 +587,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
                 crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
             }
         }
-        shape_cache_insert(shape_id, arr);
+        let arr = shape_cache_insert(shape_id, arr);
         (arr, shape_cache_get_with_id(shape_id).1)
     };
 
@@ -706,7 +706,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
                 crate::array::note_array_slot_layout_only(arr, idx, nanboxed.to_bits());
             }
         }
-        shape_cache_insert(shape_id, arr);
+        let arr = shape_cache_insert(shape_id, arr);
         (arr, merged_len as u32, shape_cache_get_with_id(shape_id).1)
     };
 
@@ -824,7 +824,7 @@ pub extern "C" fn js_object_alloc_with_shape(
             }
         }
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        shape_cache_insert(shape_id, arr);
+        let arr = shape_cache_insert(shape_id, arr);
         (arr, shape_cache_get_with_id(shape_id).1)
     };
 
