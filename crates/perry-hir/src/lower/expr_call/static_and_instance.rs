@@ -71,6 +71,30 @@ pub(super) fn try_static_method_and_instance(
     // handle it. Refs test262 language/arguments-object
     // cls-*-static-*-spread-operator.
     let static_call_has_spread = call.args.iter().any(|a| a.spread.is_some());
+
+    // `import * as web from "node:stream/web"; (web.ReadableStream as
+    // any).from(xs)` has a nested namespace receiver. Route it through the
+    // same native factory as the named-import form before the generic
+    // module.Class.staticMethod arm sees it as `stream/web.ReadableStream`.
+    if !static_call_has_spread {
+        if let ast::Expr::Member(member) = expr {
+            if matches!(&member.prop, ast::MemberProp::Ident(prop) if prop.sym.as_ref() == "from")
+                && crate::lower_types::is_web_readable_stream_constructor_ref(
+                    ctx,
+                    member.obj.as_ref(),
+                )
+            {
+                return Ok(Ok(Expr::NativeMethodCall {
+                    module: "readable_stream".to_string(),
+                    class_name: Some("ReadableStream".to_string()),
+                    object: None,
+                    method: "from".to_string(),
+                    args,
+                }));
+            }
+        }
+    }
+
     // Check for static method calls (e.g., Counter.increment())
     if let ast::Expr::Member(member) = expr {
         if let ast::Expr::Ident(obj_ident) = unwrap_ts_wrappers(member.obj.as_ref()) {
