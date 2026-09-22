@@ -25,6 +25,13 @@ arguments and terminal input/output. Command-line programs that do not use
 and `--emit-sandbox` sidecars are written beside the `.app`; the attestation
 covers its signed executable in `Contents/MacOS`.
 
+To set the macOS Dock and Finder icon, put `AppIcon.icns` in the project's
+`assets/` directory. Perry copies it to the bundle's `Contents/Resources/`
+directory and references it in `Info.plist`. The bundle name uses
+`[macos].display_name`, then `[project].display_name`, then `[project].name` in
+`perry.toml`; without these it uses the output filename. Its version uses
+`[project].version`, then `package.json`'s `version`.
+
 ## Mental Model
 
 Perry's UI follows the same model as SwiftUI and Flutter: you compose native widgets using stack-based layout containers (`VStack`, `HStack`, `ZStack`), control alignment and distribution, and style widgets via free functions that take the widget handle as their first argument (`textSetColor(label, r, g, b, a)`, `setPadding(stack, ...)`, etc.). If you're coming from web development, the key shift is:
