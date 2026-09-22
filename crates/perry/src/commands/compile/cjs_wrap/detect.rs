@@ -56,6 +56,11 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
         // whitespace where the stripper would have written spaces. A genuinely
         // dynamic `module[k]` (non-string-literal key) does NOT match.
         || has_bracket_cjs_export(source)
+        // Issue #10435: abstract-logging defines the whole export through a
+        // descriptor on the `module` object. The wrapper already implements
+        // this correctly once selected; recognize the precise descriptor
+        // shape so the bare `module` does not reach the ESM pipeline.
+        || has_module_exports_descriptor(source, &stripped)
         // Issue #4872: tsc-compiled type-only modules (nestjs dist
         // `*.interface.js`) contain ONLY the interop marker
         // `Object.defineProperty(exports, "__esModule", { value: true });`
@@ -113,6 +118,28 @@ fn has_bracket_cjs_export(source: &str) -> bool {
     )
     .unwrap();
     module_default.is_match(source) || named.is_match(source)
+}
+
+/// Detect `Object.defineProperty(module, "exports", descriptor)` in real code.
+///
+/// The code prefix is found in the comment/string-masked source so examples in
+/// documentation do not count. The literal key is then read at the same byte
+/// offset in the original source because the masker deliberately blanks string
+/// contents while preserving positions.
+fn has_module_exports_descriptor(source: &str, stripped: &str) -> bool {
+    let prefix =
+        perry_perex::tooling::Regex::new(r"\bObject\s*\.\s*defineProperty\s*\(\s*module\s*,")
+            .unwrap();
+    prefix.find_iter(stripped).any(|matched| {
+        let Some(rest) = source.get(matched.end()..) else {
+            return false;
+        };
+        let rest = rest.trim_start();
+        ["'exports'", "\"exports\""]
+            .into_iter()
+            .filter_map(|literal| rest.strip_prefix(literal))
+            .any(|after| after.trim_start().starts_with(','))
+    })
 }
 
 /// Replace comment bodies and string/template-literal contents with spaces
