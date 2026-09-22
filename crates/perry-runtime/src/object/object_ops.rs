@@ -16,7 +16,7 @@ mod define_properties;
 mod define_property;
 mod descriptor_helpers;
 mod from_entries;
-mod has_own;
+pub(crate) mod has_own;
 mod keys_array;
 mod prototype;
 
