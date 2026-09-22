@@ -108,6 +108,12 @@ unsafe fn stamp_reserved_floor_shape(
     if !shapes::shape_word_is_writable(obj) {
         return 0;
     }
+    // #10868 step 2.5 stage 1: a floor restamp republishes an explicit keys
+    // edge, which a dictionary-mode receiver does not have; publishing one
+    // would hand it back a shape that claims a key list it does not match.
+    if crate::object::dictionary::is_dictionary(obj) {
+        return 0;
+    }
     let lineage = shapes::object_shape_descriptor(obj);
     let live = lineage
         .as_ref()

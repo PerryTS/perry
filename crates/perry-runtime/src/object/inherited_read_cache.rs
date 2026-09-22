@@ -816,6 +816,12 @@ unsafe fn inherited_read_cache_walk(
         note.hops = hops;
         note.hop_count = hop_count as u8;
 
+        // #10868 step 2.5 stage 1: a dictionary-mode hop keeps its own keys
+        // in its `ObjectMeta`, so reading them off its shape would walk PAST
+        // an own property and cache a farther-up value.
+        if crate::object::dictionary::is_dictionary(next) {
+            return None;
+        }
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
         if !keys.is_null() {
             if let Some(slot) =
