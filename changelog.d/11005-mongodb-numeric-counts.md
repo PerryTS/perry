@@ -1,0 +1,1 @@
+Fixed numeric results from the bundled MongoDB collection methods `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, and `countDocuments`. Counts now resolve as JavaScript numbers instead of tiny subnormal values.
