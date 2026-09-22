@@ -31,6 +31,7 @@ fn bundled_socket_method_name(property_name: &str) -> Option<&'static [u8]> {
         "end" => Some(b"end"),
         "destroy" => Some(b"destroy"),
         "on" => Some(b"on"),
+        "read" => Some(b"read"),
         "upgradeToTLS" => Some(b"upgradeToTLS"),
         _ => None,
     }
@@ -65,6 +66,7 @@ fn external_socket_method_name(property_name: &str) -> Option<&'static [u8]> {
         "setTimeout" => Some(b"setTimeout"),
         "setEncoding" => Some(b"setEncoding"),
         "pause" => Some(b"pause"),
+        "read" => Some(b"read"),
         "resume" => Some(b"resume"),
         "ref" => Some(b"ref"),
         "unref" => Some(b"unref"),

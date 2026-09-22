@@ -404,6 +404,15 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "net",
         has_receiver: true,
+        method: "read",
+        class_filter: None,
+        runtime: "js_net_socket_read",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
         method: "pending",
         class_filter: None,
         runtime: "js_net_socket_get_pending",

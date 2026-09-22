@@ -119,6 +119,23 @@ pub(crate) fn buffer_pending_server_data(socket_id: i64, bytes: Bytes) {
         .push_back(bytes);
 }
 
+fn pop_pending_socket_data(state: &mut ConnectionOrderState, socket_id: i64) -> Option<Bytes> {
+    let (chunk, empty) = {
+        let queue = state.pending_socket_data.get_mut(&socket_id)?;
+        let chunk = queue.pop_front();
+        (chunk, queue.is_empty())
+    };
+    if empty {
+        state.pending_socket_data.remove(&socket_id);
+    }
+    chunk
+}
+
+/// Consume one buffered socket chunk for Node's paused-mode `Socket.read()`.
+pub(crate) fn take_pending_socket_data(socket_id: i64) -> Option<Bytes> {
+    pop_pending_socket_data(&mut connection_order_state().lock().unwrap(), socket_id)
+}
+
 pub(crate) fn release_pending_server_data(socket_id: i64) {
     let chunks = connection_order_state()
         .lock()
@@ -474,5 +491,26 @@ mod tests {
         assert!(take_completed_local_connect(&mut state, 7));
         assert!(!state.completed_local_connects.contains_key(&7));
         assert!(!take_completed_local_connect(&mut state, 7));
+    }
+
+    #[test]
+    fn pending_socket_data_is_fifo_and_removes_empty_queue() {
+        let mut state = ConnectionOrderState::default();
+        state.pending_socket_data.insert(
+            7,
+            VecDeque::from([Bytes::from_static(b"first"), Bytes::from_static(b"second")]),
+        );
+
+        assert_eq!(
+            pop_pending_socket_data(&mut state, 7).as_deref(),
+            Some(&b"first"[..])
+        );
+        assert!(state.pending_socket_data.contains_key(&7));
+        assert_eq!(
+            pop_pending_socket_data(&mut state, 7).as_deref(),
+            Some(&b"second"[..])
+        );
+        assert!(!state.pending_socket_data.contains_key(&7));
+        assert!(pop_pending_socket_data(&mut state, 7).is_none());
     }
 }
