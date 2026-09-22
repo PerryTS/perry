@@ -1,5 +1,7 @@
 //! `Stmt::For`, `Stmt::While`, `Stmt::DoWhile` lowering and supporting helpers.
 
+mod i32_counter;
+
 use super::*;
 
 use crate::expr::{
@@ -7157,6 +7159,9 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    if i32_counter::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
     lower_for_after_init(ctx, init, condition, update, body, "for")
 }
 
@@ -7187,6 +7192,29 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     body: &[Stmt],
     label_prefix: &str,
     precomputed_i32_bound: Option<(u32, String)>,
+) -> Result<()> {
+    lower_for_after_init_impl(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        label_prefix,
+        precomputed_i32_bound,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_for_after_init_impl(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    label_prefix: &str,
+    precomputed_i32_bound: Option<(u32, String)>,
+    try_dynamic_bound: bool,
 ) -> Result<()> {
     let loop_proof_scope_id = ctx.next_loop_proof_scope_id();
 
@@ -7450,7 +7478,8 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // finite-integral-i32 guard and `fptosi(n)` once here, in the pre-loop
     // block, so the cond block can pick an `icmp slt/sle i32` fast loop when
     // safe and fall back to the generic comparison otherwise.
-    let dynamic_i32_bound: Option<DynamicI32Bound> = if hoist_classification.is_none()
+    let dynamic_i32_bound: Option<DynamicI32Bound> = if try_dynamic_bound
+        && hoist_classification.is_none()
         && local_bound_classification.is_none()
         && precomputed_i32_bound.is_none()
     {
