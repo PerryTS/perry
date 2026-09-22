@@ -168,11 +168,25 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     if !jsval.is_pointer() {
         return None;
     }
+    // OWN only. `js_object_get_field_by_name_f64` walks the PROTOTYPE CHAIN,
+    // so on a Set it returned `Set.prototype.has` and this called the builtin
+    // thunk through the dispatcher — the exact bug, one layer further in
+    // (traced: js_native_call_method -> js_native_call_value ->
+    // set_proto_has_thunk -> js_set_has). An inherited method is not an
+    // override; only an own one beats the builtin.
+    let value = crate::object::object_ops::js_object_get_own_field_or_undef(
+        recv,
+        name.as_ptr(),
+        name.len(),
+    );
+    // A borrowed builtin (`m.get = Map.prototype.get`) must keep the native
+    // arm: dispatching it by name again is the recursion an earlier attempt
+    // hit. `object_owns_user_method` is the existing two-valued classifier.
     if !crate::array::object_owns_user_method(recv, name) {
         return None;
     }
-    let addr = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let value = crate::object::js_object_get_field_by_name_f64(addr, key);
+    if !crate::JSValue::from_bits(value.to_bits()).is_pointer() {
+        return None;
+    }
     Some(value)
 }
