@@ -55,7 +55,7 @@ mod test_root_helpers;
 #[cfg(test)]
 pub(crate) use test_root_helpers::*;
 
-mod alloc;
+pub(crate) mod alloc;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,

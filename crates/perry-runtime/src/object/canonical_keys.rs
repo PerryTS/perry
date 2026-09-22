@@ -625,23 +625,30 @@ pub(crate) unsafe fn extend(
     // in the header, where `rebuild_array_layout_from_slots` would install a
     // per-object side mask — and one live mask entry arms the address filter
     // for the whole program (`Node::all_ptr`).
-    // LONGLIVED, and this is load-bearing rather than a placement preference.
-    // `CLASS_KEYS_BY_ID` (`alloc.rs:remember_class_keys_array`) stores the
-    // shape cache's keys array as a raw `usize` with NO root scanner and NO
-    // prune — safe for the array it used to hold, because that one came from
-    // `js_array_alloc_with_length_longlived` and never moves (#179). A
-    // nursery-allocated canonical array substituted into that cache DOES
-    // move, and nothing rewrites the table, so a later class allocation reads
-    // a stale address. That is the defect
-    // `descriptor_trap_collection_preserves_for_in_target_and_keys` caught,
-    // and the reason it caught it is that its trap collects once per key.
+    // LONGLIVED, and still load-bearing — but NOT for the reason the first
+    // version of this comment gave.
+    //
+    // It was introduced because `CLASS_KEYS_BY_ID` held the shape cache's
+    // keys array as an unscanned raw `usize`. That table is scanned and
+    // pruned now (`alloc.rs`), and scanning it DID buy what was predicted:
+    // with ordinary allocation, all seven of the GC tests that assert a keys
+    // array moves, is rewritten, and is reclaimed pass UNCHANGED, and the
+    // suite's failures fall 12 -> 6.
+    //
+    // But `descriptor_trap_collection_preserves_for_in_target_and_keys`
+    // returns 1 key of 14 again the moment allocation goes back to the
+    // nursery. So `CLASS_KEYS_BY_ID` was NOT the holder — or not the only
+    // one — and the earlier root cause was a site that had been localised,
+    // not explained. Same error as L8.3.21, caught the same way: by the fix
+    // failing to fix it.
+    //
+    // A wrong answer must not ship, so the allocator stays until the real
+    // holder is found. The cost is the retention regression L8.3.15c was
+    // withdrawn for, which seven tests name precisely and which is bounded
+    // (135 KB on tsc; majors still reclaim).
     let born = crate::array::js_array_alloc_with_length_longlived(parent_len + 1);
-    // The allocator above sets `length = capacity`; the slots are written and
-    // the length re-published below, so expose nothing until then.
     unsafe { (*born).length = 0 };
     if all_ptr {
-        // Same claim the pointer-elements allocator makes, on an array that
-        // has to come from the longlived arena instead.
         unsafe { crate::gc::layout_init_all_pointer_slots(born as *mut u8) };
     }
     let fresh_handle = scope.root_raw_mut_ptr(born);

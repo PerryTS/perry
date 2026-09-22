@@ -18,8 +18,25 @@ use super::*;
 /// per-registration; a `claude-code --help` profile put SipHash under
 /// `remember_class_keys_array` at 0.175% of samples.
 ///
-/// Iteration-order safe: the map is only ever `insert`ed and `get`ed (the two
-/// sites below). Nothing iterates it, so the hasher cannot reorder anything.
+/// WEAK, per #6759 phase 3 and the discipline `canonical_keys` already uses:
+/// the address is rewritten on move by [`scan_class_keys_roots_mut`] and the
+/// entry is dropped on death by [`prune_dead_class_keys_entries`].
+///
+/// It used to hold the address as a bare `usize` the collector knew nothing
+/// about, which was sound only by coincidence — the array it happened to be
+/// handed came from `js_array_alloc_with_length_longlived` and never moved
+/// (#179). #10868 step 2.5 substituted a canonical array into the shape
+/// cache, the coincidence ended, and a moved array left this table pointing
+/// at freed memory. The first fix was to allocate canonical arrays longlived
+/// too, which restored the coincidence and cost minor reclamation of every
+/// canonical array — a retention regression seven GC tests named. Scanning
+/// the table is the fix; the allocator was the dressing. Ralph's standing
+/// constraint, arriving as a bug: a side table the collector does not know
+/// about is the thing we keep paying for.
+///
+/// Iteration-order safe, still: the two mutating passes rewrite independent
+/// values and drop entries by a per-entry predicate, so neither depends on
+/// the order the hasher yields.
 static CLASS_KEYS_BY_ID: std::sync::RwLock<
     Option<crate::fast_hash::PtrHashMap<u32, (usize, u32)>>,
 > = std::sync::RwLock::new(None);
@@ -53,6 +70,62 @@ fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut A
             }
         }
     }
+}
+
+/// GC root scanner: rewrite each remembered keys-array address across a move.
+/// WEAK — the address is visited as metadata, never marked, so remembering a
+/// class's keys array does not keep it alive.
+pub fn scan_class_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let Ok(mut guard) = CLASS_KEYS_BY_ID.write() else {
+        return;
+    };
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    for entry in map.values_mut() {
+        if entry.0 == 0 {
+            continue;
+        }
+        let mut addr = entry.0;
+        if visitor.visit_metadata_usize_slot(&mut addr) {
+            entry.0 = addr;
+        }
+    }
+}
+
+/// Post-trace death prune. A dropped entry costs one rebuild of the class's
+/// keys array — `registered_class_keys_array` already answers `None` for a
+/// zeroed address and every caller re-derives — which is what makes
+/// weakening this table safe rather than merely possible.
+#[cold]
+pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let Ok(mut guard) = CLASS_KEYS_BY_ID.write() else {
+        return;
+    };
+    let Some(map) = guard.as_mut() else {
+        return;
+    };
+    map.retain(|_, entry| {
+        let addr = entry.0;
+        if addr == 0 {
+            return false;
+        }
+        if is_dead_owner(addr) {
+            return false;
+        }
+        // An address the arena recycled for a non-array tenant is dead to us
+        // whatever `is_dead_owner` says about the new occupant.
+        // SAFETY: a read-only tracked-header probe.
+        unsafe {
+            match crate::value::addr_class::try_read_tracked_gc_header(addr) {
+                Some(gc) => {
+                    let ty = (*gc.as_ptr()).obj_type;
+                    ty == crate::gc::GC_TYPE_ARRAY || ty == crate::gc::GC_TYPE_LAZY_ARRAY
+                }
+                None => false,
+            }
+        }
+    });
 }
 
 pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHeader, u32)> {
