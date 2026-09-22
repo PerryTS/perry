@@ -982,13 +982,9 @@ extern "C" fn pipe_drain_callback(closure: *const ClosureHeader) -> f64 {
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn pipe_finish_destination_callback(closure: *const ClosureHeader) -> f64 {
-    if closure.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let dest = js_closure_get_capture_f64(closure, 0);
+fn finish_pipe_destination(dest: f64) {
     if stream_destroyed(dest) || has_truthy_hidden(dest, hidden_finish_emitted_key()) {
-        return f64::from_bits(TAG_UNDEFINED);
+        return;
     }
     if writable_length(dest) > 0.0 {
         set_hidden_value(
@@ -1002,8 +998,17 @@ extern "C" fn pipe_finish_destination_callback(closure: *const ClosureHeader) ->
             hidden_stream_pipe_end_pending_key(),
             f64::from_bits(TAG_FALSE),
         );
-        finish_stream(dest, None);
+        if !finish_transform_stream(dest, None) {
+            finish_stream(dest, None);
+        }
     }
+}
+
+extern "C" fn pipe_finish_destination_callback(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    finish_pipe_destination(js_closure_get_capture_f64(closure, 0));
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -1088,7 +1093,7 @@ fn request_pipe_destination_finish(dest: f64) {
         );
         schedule_pipe_destination_finish_check(dest);
     } else {
-        schedule_pipe_destination_finish(dest);
+        finish_pipe_destination(dest);
     }
 }
 
