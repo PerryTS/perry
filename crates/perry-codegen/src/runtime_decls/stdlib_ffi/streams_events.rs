@@ -47,6 +47,11 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
         &[DOUBLE, DOUBLE],
     );
     module.declare_function("js_node_stream_passthrough_new", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_node_stream_passthrough_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     module.declare_function("js_node_stream_readable_from", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_node_stream_readable_from_options",

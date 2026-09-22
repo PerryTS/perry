@@ -620,6 +620,7 @@ pub(super) fn node_stream_parent_kind(
             "Readable" => return Some("readable"),
             "Duplex" => return Some("duplex"),
             "Transform" => return Some("transform"),
+            "PassThrough" => return Some("passthrough"),
             _ => {}
         }
         if ctx.imported_class_ctors.contains_key(name) {

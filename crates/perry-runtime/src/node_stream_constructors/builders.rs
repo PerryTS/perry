@@ -566,6 +566,24 @@ pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
     passthrough
 }
 
+/// Initialize `class X extends PassThrough` without replacing the derived
+/// instance. A subclass-provided `_transform` wins; otherwise retain
+/// PassThrough's identity transform instead of falling into Transform's
+/// missing-method error.
+#[no_mangle]
+pub extern "C" fn js_node_stream_passthrough_subclass_init(this: f64, opts: f64) -> f64 {
+    let passthrough = js_node_stream_transform_subclass_init(this, opts);
+    if transform_hidden_callback(passthrough).is_none() {
+        set_hidden_value(
+            passthrough,
+            hidden_transform_passthrough_key(),
+            f64::from_bits(TAG_TRUE),
+        );
+    }
+    init_constructor(passthrough, "PassThrough");
+    passthrough
+}
+
 /// `Readable.from(iterable)` — Node's static factory. Returns a
 /// Readable object and retains simple iterable chunks so
 /// `node:stream/consumers` can drain the current stub stream surface.

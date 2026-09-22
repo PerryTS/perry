@@ -12,7 +12,10 @@ use crate::lower_types::*;
 /// imports are registered under the local binding while preserving this export.
 fn canonical_native_parent_name<'a>(ctx: &'a LoweringContext, name: &str) -> Option<&'a str> {
     match ctx.lookup_native_module(name) {
-        Some(("stream", Some(class @ ("Readable" | "Writable" | "Duplex" | "Transform"))))
+        Some((
+            "stream",
+            Some(class @ ("Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough")),
+        ))
         | Some(("events", Some(class @ ("EventEmitter" | "EventEmitterAsyncResource"))))
         | Some(("async_hooks", Some(class @ ("AsyncLocalStorage" | "AsyncResource"))))
         | Some(("ws", Some(class @ "WebSocketServer")))
@@ -30,10 +33,16 @@ fn canonical_native_parent_name<'a>(ctx: &'a LoweringContext, name: &str) -> Opt
 /// minified local binding such as `Readable as ut`.
 fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
     match ctx.lookup_native_module(name) {
-        Some(("stream", Some("Readable" | "Writable" | "Duplex" | "Transform"))) => true,
+        Some((
+            "stream",
+            Some("Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"),
+        )) => true,
         // Preserve the historical name-based treatment of a namespace/default
         // binding whose local name itself is a classic stream constructor.
-        Some(("stream", None)) => matches!(name, "Readable" | "Writable" | "Duplex" | "Transform"),
+        Some(("stream", None)) => matches!(
+            name,
+            "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
+        ),
         _ => false,
     }
 }
@@ -236,7 +245,7 @@ pub fn lower_class_decl(
                 // so a userland stream-shim binding (readable-stream's
                 // `Transform`, winston) falls through to the dynamic
                 // `extends_expr` parent path and runs its real constructor.
-                "Readable" | "Writable" | "Duplex" | "Transform"
+                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                     if is_genuine_node_stream_parent(ctx, &parent_name) =>
                 {
                     Some(("node_stream".to_string(), canonical_parent_name.clone()))

@@ -117,7 +117,7 @@ pub(crate) fn lower_class_from_ast(
                 // `is_genuine_node_stream_parent` so a userland stream-shim
                 // binding (readable-stream's `Transform`) falls through to the
                 // dynamic `extends_expr` parent path.
-                "Readable" | "Writable" | "Duplex" | "Transform"
+                "Readable" | "Writable" | "Duplex" | "Transform" | "PassThrough"
                     if is_genuine_node_stream_parent(ctx, &parent_name) =>
                 {
                     Some(("node_stream".to_string(), canonical_parent_name.clone()))
