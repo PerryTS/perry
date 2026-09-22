@@ -139,13 +139,43 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(
             // bit-flagged named props, the exotic expando, nor the accessor
             // descriptors — yet `hasOwn`/`typeof`/`Object.keys` all see it.
             //
-            // An array therefore has NO cheap absence proof today, and this
-            // module's rule is "never answer 0 for anything it cannot prove",
-            // so it asks the authoritative predicate. That costs a call on a
-            // guarded array builtin whose receiver has no override; making it
-            // cheap again needs an install funnel that arms a flag, the way
-            // the exotic kinds have one, and that is a follow-up rather than
-            // a reason to keep answering wrong.
+            // MEASURED COST OF ASKING ANYWAY: +4,745 instructions per
+            // guarded array builtin call (`a.push(i)` hot, 90.5 -> 4886.7 per
+            // iteration; `a.indexOf` 701.0 -> 5442.6; an element-read control
+            // flat at 16.05). The two deltas agree within 55 instructions on
+            // calls whose own work differs by 610, so it is a fixed per-call
+            // cost: the key-string allocation plus a full `hasOwn`. The exotic
+            // kinds pay +38.000 for the same guard, because their flag lets
+            // them answer 0.
+            //
+            // The cheap absence proof arrays were said to lack EXISTS, and
+            // this tier simply was not wired to it.
+            // `array_has_named_properties_resolved` covers all three storages
+            // an array named property can live in — the inline reserve, the
+            // pairs array, and the fallback table behind
+            // `FULL_ARRAY_NAMED_PROPS_EVER` — and both spellings of an
+            // own-method install go through `array_named_property_set`, which
+            // writes one of them. That is profiled, not assumed: `a.push = fn`
+            // on an `any` receiver and on a proven array local both show
+            // `array::named_props::array_named_property_set` in the install
+            // profile. (The earlier note here, that neither that function nor
+            // the expando store runs, was measured on a path that no longer
+            // carries this spelling and is wrong.)
+            //
+            // The descriptor table is still not covered by it, so a receiver
+            // with ANY descriptor keeps asking the authoritative predicate —
+            // the module's rule is unchanged, only the set of receivers that
+            // can be proven absent has grown. With no descriptors,
+            // `fallback_possible` is false, so the predicate is flag tests and
+            // a reserve read: no hash lookup, no allocation, no call.
+            if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                && header.obj_type == crate::gc::GC_TYPE_ARRAY
+                && !crate::array::array_has_named_properties_resolved(
+                    addr as *const crate::array::ArrayHeader,
+                )
+            {
+                return 0;
+            }
             return authoritative_has_own(recv, name_ptr, name_len);
         }
     } else {
