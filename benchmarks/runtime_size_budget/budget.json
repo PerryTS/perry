@@ -1,0 +1,19 @@
+{
+  "platforms": {
+    "darwin-arm64": {
+      "async": {
+        "max_bytes": 5804512
+      },
+      "cli": {
+        "max_bytes": 5804416
+      },
+      "json": {
+        "max_bytes": 5721728
+      },
+      "loop": {
+        "max_bytes": 5589376
+      }
+    }
+  },
+  "tolerance_pct": 2.0
+}

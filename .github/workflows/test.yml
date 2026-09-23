@@ -4214,6 +4214,15 @@ jobs:
       - name: Build release binaries
         run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
 
+      # What users ship is the dead-stripped LINKED program, not the archive:
+      # compile a few small fixtures through the real pipeline, prove each
+      # binary still produces its expected output, and fail if its stripped
+      # size exceeds benchmarks/runtime_size_budget/budget.json. Between the
+      # July and September size campaigns a small program's size regrew by
+      # ~50% (4.7 -> 7.1 MB) with no signal anywhere.
+      - name: Runtime size budget (small programs)
+        run: python3 scripts/runtime_size_budget.py --check --perry target/release/perry
+
       - name: Report binary sizes
         run: |
           echo "## Binary Sizes" > /tmp/sizes.md

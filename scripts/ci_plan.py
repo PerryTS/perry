@@ -86,7 +86,7 @@ JOBS: dict[str, tuple[str, ...]] = {
     "compiler_output_regression": ("sweep", "full"),
     "repsel_census": ("sweep", "full"),
     "harmonyos_smoke": ("sweep", "full"),
-    "binary_size": ("full",),  # report-only, macOS: not worth a scarce mac slot per merge
+    "binary_size": ("full",),  # macOS linked-size budget + archive report; not worth a scarce mac slot per merge
     "parity": ("full",),
     "compile_smoke": ("full",),
     "native_abi_evidence_packet": ("full",),
