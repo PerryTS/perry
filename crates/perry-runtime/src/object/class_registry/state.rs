@@ -823,7 +823,18 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
     if ptr == 0 {
         return None;
     }
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| table.read().ok()?.as_ref()?.class_id_for(ptr))
+    CLASS_DECL_PROTOTYPE_OBJECTS
+        .with(|table| table.read().ok()?.as_ref()?.class_id_for(ptr))
+        // #11043: a capture-carrying class (`ClassExprFresh`) gets a distinct
+        // prototype object per evaluation instead of the table entry above,
+        // but it is built exactly like one — physical constructor + methods,
+        // ClassBody accessors living only in the template's vtable. Every
+        // reflection site keyed on this lookup (descriptors, own keys,
+        // `defineProperty`, `hasOwn`, `delete`) must therefore see it too, or
+        // its accessors are invisible and `Object.defineProperties(C.prototype,
+        // { x: { enumerable: true } })` replaces `get x`/`set x` with a
+        // read-only `undefined` data property (whatwg-url's `URL`).
+        .or_else(|| super::super::field_get_set::class_evaluation_prototype_class_id(ptr))
 }
 
 /// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's

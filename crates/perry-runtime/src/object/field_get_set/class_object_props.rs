@@ -7,6 +7,67 @@ use super::*;
 
 const CLASS_EVALUATION_PROTOTYPE_KEY: &[u8] = b"#<perry:class-evaluation-prototype>";
 
+/// Set once the first per-evaluation prototype is materialized, so
+/// [`class_evaluation_prototype_class_id`] costs one relaxed load for the
+/// (overwhelmingly common) program that never builds one. Its caller is the
+/// miss path of `class_id_for_decl_prototype_object`, which every
+/// `Object.defineProperty` reaches (#9180).
+static CLASS_EVALUATION_PROTOTYPES_MATERIALIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// #11043: the template class id of `ptr` when it is the prototype object
+/// materialized by [`class_evaluation_prototype_value`] for one evaluation of
+/// a heap class object, else `None`.
+///
+/// Recognized structurally rather than through a side table: the prototype's
+/// own `constructor` is the class object, and that class object's hidden
+/// evaluation-prototype slot points back at `ptr`. A side table would have to
+/// be either a GC root (leaking one prototype per evaluation of a class that
+/// lives in a factory) or a weak, evacuation-rekeyed map; the back-edge is
+/// already maintained by the heap itself. Never allocates — callers hold raw
+/// pointers across this call.
+pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
+    if !CLASS_EVALUATION_PROTOTYPES_MATERIALIZED.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    unsafe {
+        let header = crate::value::addr_class::try_read_gc_header(ptr)?;
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
+        // A class object shares its template id with its prototype; it is
+        // the constructor, never the prototype.
+        if super::super::class_registry::is_class_object_ptr(ptr as *const u8) {
+            return None;
+        }
+        let class_id = (*(ptr as *const ObjectHeader)).class_id;
+        if class_id == 0 {
+            return None;
+        }
+        let proto_value = crate::value::js_nanbox_pointer(ptr as i64);
+        let ctor = super::super::js_object_get_own_field_or_undef(
+            proto_value,
+            b"constructor".as_ptr(),
+            b"constructor".len(),
+        );
+        if !super::super::class_registry::is_class_object_value(ctor) {
+            return None;
+        }
+        let class_obj = JSValue::from_bits(ctor.to_bits()).as_pointer::<ObjectHeader>();
+        if (*class_obj).class_id != class_id {
+            return None;
+        }
+        let back_edge = super::super::js_object_get_own_field_or_undef(
+            ctor,
+            CLASS_EVALUATION_PROTOTYPE_KEY.as_ptr(),
+            CLASS_EVALUATION_PROTOTYPE_KEY.len(),
+        );
+        (back_edge.to_bits() == proto_value.to_bits()).then_some(class_id)
+    }
+}
+
 /// Materialize the distinct prototype object created by one evaluation of a
 /// heap class expression/declaration. Template class ids still own dispatch,
 /// but observable method identity and private-name closures belong to the
@@ -29,6 +90,7 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
 
     let class_id = class.with_mut_ptr::<ObjectHeader, _>(|class| (*class).class_id);
     let proto = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
+    CLASS_EVALUATION_PROTOTYPES_MATERIALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
 
     let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
     let constructor_key = scope.root_string_ptr(constructor_key);
