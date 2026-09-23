@@ -225,7 +225,7 @@
       "target": "cfg(target_os = \"android\")",
       "surface": "`perry/ui` WebSocket on Android (`crates/perry-ui-android/src/ws.rs`)",
       "reached_when": "an Android target build only",
-      "blocker": "SYNC tungstenite 0.24 on its own thread \u2014 not a tokio edge at all. It is now the LAST holder of a second tungstenite major: the turnloop WS lane took 0.29 out of the tree, so this edge and turnloop-websocket's 0.30 are all that remain. `turnloop_websocket::Connection` works over a blocking `std::net::TcpStream` as happily as over anything else, so the migration is mechanical \u2014 but it cannot be built or run from the shared Linux box, and an unexecutable migration is not one to land blind.",
+      "blocker": "SYNC tungstenite on its own thread \u2014 not a tokio edge at all. #11065 bumped this crate's pin from 0.24 to 0.30, so the tree-wide tungstenite major-version split is gone: this edge now resolves to the same 0.30.0 as turnloop-websocket. `turnloop_websocket::Connection` works over a blocking `std::net::TcpStream` as happily as over anything else, so the migration off tungstenite entirely is still mechanical \u2014 but it cannot be built or run from the shared Linux box, and an unexecutable migration is not one to land blind.",
       "issue": "unfiled \u2014 P8",
       "plan": "N"
     }
@@ -271,7 +271,6 @@
       "0.6.11"
     ],
     "tungstenite": [
-      "0.24.0",
       "0.30.0"
     ]
   },
