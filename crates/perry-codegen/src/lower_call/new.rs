@@ -160,7 +160,7 @@ pub(crate) fn lower_new(
     // `new_site_args_carry_appended_caps` heuristic, which could misfire on a
     // forward-referenced capture class whose user args happened to equal its
     // captured locals).
-    lower_new_impl(ctx, class_name, args, cap_args_appended == 0)
+    lower_new_impl(ctx, class_name, args, cap_args_appended as usize)
 }
 
 /// Member-callee `new ns.C(...)` construct (#5437): the captures were NOT
@@ -172,7 +172,7 @@ pub(crate) fn lower_new_member_captured(
     class_name: &str,
     args: &[Expr],
 ) -> Result<String> {
-    lower_new_impl(ctx, class_name, args, true)
+    lower_new_impl(ctx, class_name, args, 0)
 }
 
 /// Refresh `lowered_args` after something that may have collected (#6969).
@@ -215,7 +215,7 @@ fn lower_new_impl(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     args: &[Expr],
-    caps_absent_from_args: bool,
+    cap_args_appended: usize,
 ) -> Result<String> {
     // #6969: one expression-scope temp-root barrier. The body below roots its
     // constructor arguments across the instance allocation, and it has ~20
@@ -235,7 +235,7 @@ fn lower_new_impl(
     // marker has no work left to do. One fewer slot and one fewer push per
     // `new` site that roots anything.
     let mut group = open_rooted_group(args.len() + 1);
-    let result = lower_new_impl_inner(ctx, class_name, args, caps_absent_from_args, &mut group);
+    let result = lower_new_impl_inner(ctx, class_name, args, cap_args_appended, &mut group);
     group.release(ctx);
     result
 }
@@ -269,9 +269,10 @@ fn lower_new_impl_inner<'a>(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     args: &'a [Expr],
-    caps_absent_from_args: bool,
+    cap_args_appended: usize,
     group: &mut RootedGroup<'a>,
 ) -> Result<String> {
+    let caps_absent_from_args = cap_args_appended == 0;
     // Built-in Web classes that the runtime provides constructors for.
     // These are checked BEFORE the ctx.classes lookup because the user
     // code may shadow the name — if they do, the class lookup below
@@ -525,9 +526,27 @@ fn lower_new_impl_inner<'a>(
     // carry the arguments across the instance allocation below, which always
     // collects; the re-read is immediately after it (see `obj_box`), and the
     // scope cut in `lower_new_impl` is the release.
+    //
+    // #11086: the trailing `cap_args_appended` args are Perry-internal capture
+    // forwards, not user reads. A `new C()` that runs while the class is still
+    // being defined — `static BASE = new Point(..)` in a class nested in a
+    // function, with a method capturing a `const` declared AFTER the class
+    // (@noble/curves' `weierstrassPoints` + `const wnaf`) — reaches them while
+    // that binding is still in its dead zone. That is legal JS: the method is
+    // not called until later. Bracket those loads in the same TDZ-suppression
+    // window the decl-site snapshots use (#6052/#6523), so a dead-zone box
+    // forwards `undefined` instead of throwing the ReferenceError.
+    let first_cap_arg = args.len().saturating_sub(cap_args_appended);
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    for a in args {
+    for (i, a) in args.iter().enumerate() {
+        let is_cap_forward = i >= first_cap_arg;
+        if is_cap_forward {
+            ctx.block().call_void("js_tdz_suppress_begin", &[]);
+        }
         let value = lower_constructor_arg(ctx, a)?;
+        if is_cap_forward {
+            ctx.block().call_void("js_tdz_suppress_end", &[]);
+        }
         // An argument can complete abruptly while still returning a sentinel
         // value to the lowering API.  The unresolved dynamic-Worker fallback
         // is one such expression: it emits the runtime throw followed by
