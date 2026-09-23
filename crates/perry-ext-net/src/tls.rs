@@ -1,19 +1,15 @@
-//! rustls client config + handshake for `tls.connect` and the
-//! `socket.upgradeToTLS` mid-stream upgrade. Split out of `lib.rs` (#1852)
-//! to keep that file under the 2000-line gate; the logic is unchanged.
+//! rustls client config for `tls.connect` and the `socket.upgradeToTLS`
+//! mid-stream upgrade. Split out of `lib.rs` (#1852) to keep that file under
+//! the 2000-line gate. The handshake itself runs over the socket's turnloop
+//! handle (`turnloop_tls_io`).
 
 use std::sync::{Arc, Mutex, OnceLock};
 
 use perry_ffi::{js_array_get, js_array_length, ArrayHeader, JsValue};
-// `rustls` is named through this crate's own direct dependency rather than
-// through `tokio_rustls`'s re-export. Both resolve to the same rustls 0.23 —
-// `turnloop-tls` re-exports it too, which is why the config types unify — but
-// spelling it through `tokio_rustls` made `build_client_config`, the one piece
-// of this file BOTH transports share, read as if it belonged to the tokio one.
-// It does not: `turnloop_tls_io` takes the same `Arc<rustls::ClientConfig>`.
+// `rustls` is this crate's own direct dependency — the same rustls 0.23
+// `turnloop-tls` re-exports, which is why the config types unify with
+// `turnloop_tls_io`'s `Arc<rustls::ClientConfig>`.
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use tokio::net::TcpStream;
-use tokio_rustls::{client::TlsStream, TlsConnector};
 
 #[derive(Clone, Default)]
 pub(crate) struct TlsClientConfigData {
@@ -62,18 +58,21 @@ pub(crate) fn fire_pending_tls_abort(handle: i64) {
 /// Node reports an already-aborted connect asynchronously, after callers have
 /// had a chance to attach `error` and `close` listeners to the returned socket.
 unsafe fn schedule_tls_abort(handle: i64) {
-    // An alloc-only SocketState normally has `pending_rx: Some` and is not
-    // considered live by ext-net until connect() consumes that receiver. This
-    // TLS fast path never starts connect(), so mark the synthetic socket live
-    // until its deferred Close event removes it from the registry.
+    // An alloc-only SocketState is `awaiting_connect` and is not considered
+    // live by ext-net until connect() runs. This TLS fast path never starts
+    // connect(), so mark the synthetic socket live until its deferred Close
+    // event removes it from the registry.
     if let Some(socket) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
         socket.is_open = true;
     }
     pending_tls_aborts().lock().unwrap().insert(handle);
-    perry_ffi::spawn_async(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        fire_pending_tls_abort(handle);
-    });
+    // A deadline on the loop, not a timer task: registering a `'close'`
+    // listener fires the abort early (`js_net_socket_on`), and whichever comes
+    // first wins because `fire_pending_tls_abort` removes the entry.
+    crate::turnloop_io::arm_deadline(
+        25,
+        crate::turnloop_io::Deadline::TlsAbort { socket_id: handle },
+    );
 }
 
 pub(crate) fn begin_tls_upgrade(
@@ -82,31 +81,47 @@ pub(crate) fn begin_tls_upgrade(
     verify: bool,
     config: TlsClientConfigData,
 ) -> Result<(), String> {
-    let (cmd_tx, turnloop) = {
+    let (turnloop, awaiting_connect) = {
         let sockets = crate::statics::sockets().lock().unwrap();
         let socket = sockets
             .get(&handle)
             .ok_or_else(|| "socket is closed".to_string())?;
-        (socket.cmd_tx.clone(), socket.turnloop)
+        (socket.turnloop, socket.awaiting_connect)
     };
-    if turnloop {
-        // P5: the session is installed above the same turnloop handle. No
-        // reply channel: JS learns the outcome from `'secureConnect'` /
-        // `'error'`, which is what this caller (`tls.connect` after a plain
-        // connect) already listened for.
+    if !turnloop {
+        // A `new net.Socket()` that has not been asked to connect accepts the
+        // request and drops it, as every command it is given before connecting
+        // is dropped (`SocketState::awaiting_connect`); one whose connect was
+        // refused has nothing to put a session on.
+        return if awaiting_connect {
+            Ok(())
+        } else {
+            Err("socket task is gone".to_string())
+        };
+    }
+    // The session is installed above the same turnloop handle. No reply
+    // channel: JS learns the outcome from `'secureConnect'` / `'error'`, which
+    // is what this caller (`tls.connect` after a plain connect) already
+    // listened for. It runs on the loop's owner; a failure there is reported
+    // the way the caller reports one it gets back from here.
+    if crate::turnloop_io::enabled() {
         return crate::turnloop_tls_io::begin_client_upgrade(
             handle, servername, verify, config, None,
         );
     }
-    let (reply, _reply_rx) = tokio::sync::oneshot::channel();
-    cmd_tx
-        .send(crate::SocketCommand::UpgradeTls {
-            servername,
-            verify,
-            config,
-            reply,
-        })
-        .map_err(|_| "socket task is gone".to_string())
+    let posted = crate::turnloop_io::post_to_owner(Box::new(move || {
+        if let Err(error) =
+            crate::turnloop_tls_io::begin_client_upgrade(handle, servername, verify, config, None)
+        {
+            crate::push_event(crate::PendingNetEvent::Error(handle, error));
+            crate::push_event(crate::PendingNetEvent::Close(handle));
+        }
+    }));
+    if posted {
+        Ok(())
+    } else {
+        Err(crate::turnloop_io::NO_LOOP_CODE.to_string())
+    }
 }
 
 unsafe fn is_array(value: f64) -> bool {
@@ -401,11 +416,9 @@ impl ServerCertVerifier for NodeConfiguredCaVerifier {
     }
 }
 
-/// The rustls client configuration Node's options describe, shared by both
-/// transports: `tokio_rustls` wraps it in a `TlsConnector`, and the turnloop
-/// path (`turnloop_tls_io`) drives the unbuffered session with it directly.
-/// Splitting this out is the whole reason a turnloop socket can be upgraded —
-/// P1 had no way to reach the configuration without a `TlsConnector`.
+/// The rustls client configuration Node's options describe. `turnloop_tls_io`
+/// drives its unbuffered session with it directly; splitting it out of the old
+/// `TlsConnector` path is what let a turnloop socket be upgraded at all.
 pub(crate) fn build_client_config(
     verify: bool,
     data: Option<&TlsClientConfigData>,
@@ -558,28 +571,9 @@ fn build_client_config_insecure(
     Ok(Arc::new(config))
 }
 
-pub(crate) async fn do_tls_handshake(
-    tcp: TcpStream,
-    servername: &str,
-    verify: bool,
-    data: Option<&TlsClientConfigData>,
-) -> Result<TlsStream<TcpStream>, String> {
-    let connector = TlsConnector::from(build_client_config(verify, data)?);
-    let server_name = rustls::pki_types::ServerName::try_from(servername.to_string())
-        .map_err(|e| format!("invalid servername '{}': {}", servername, e))?;
-    connector
-        .connect(server_name, tcp)
-        .await
-        .map_err(|e| format!("tls handshake: {}", e))
-}
-
-/// The handshake outcome a socket publishes to JS, independent of which
-/// transport ran it.
-///
-/// `record_tls_handshake` reads these out of a `tokio_rustls` stream; the
-/// turnloop path reads the identical values out of its unbuffered session, so
-/// `socket.authorized` / `getProtocol()` / `getPeerCertificate()` report the
-/// same thing on both.
+/// The handshake outcome a socket publishes to JS, read out of the turnloop
+/// path's unbuffered session: what `socket.authorized` / `getProtocol()` /
+/// `getPeerCertificate()` report.
 pub(crate) struct HandshakeFacts {
     protocol: &'static str,
     alpn: Vec<u8>,
@@ -610,8 +604,8 @@ impl HandshakeFacts {
         }
     }
 
-    /// Write the facts onto the socket and tell JS, exactly as the tokio path
-    /// does through the same `js_tls_client_record_connected` extern.
+    /// Write the facts onto the socket and tell JS through the runtime's
+    /// `js_tls_client_record_connected` extern.
     pub(crate) fn publish(&self, handle: i64) {
         let authorization_error = if self.authorized {
             ""
@@ -686,92 +680,6 @@ fn own_certificate(data: Option<&TlsClientConfigData>) -> Vec<u8> {
         certificate
     })
     .unwrap_or_default()
-}
-
-pub(crate) fn record_tls_handshake(
-    handle: i64,
-    stream: &TlsStream<TcpStream>,
-    servername: &str,
-    verify: bool,
-    data: Option<&TlsClientConfigData>,
-) {
-    let connection = stream.get_ref().1;
-    let protocol = match connection.protocol_version() {
-        Some(rustls::ProtocolVersion::TLSv1_2) => "TLSv1.2",
-        Some(rustls::ProtocolVersion::TLSv1_3) => "TLSv1.3",
-        _ => "",
-    };
-    let alpn = connection.alpn_protocol().unwrap_or_default();
-    let peer = connection
-        .peer_certificates()
-        .and_then(|certs| certs.first())
-        .map(|cert| cert.as_ref())
-        .unwrap_or_default();
-    let trusted_by_configured_ca =
-        data.and_then(|data| data.ca.as_ref())
-            .is_some_and(|materials| {
-                materials.iter().any(|material| {
-                    let mut cursor = std::io::Cursor::new(material);
-                    let trusted = rustls_pemfile::certs(&mut cursor)
-                        .flatten()
-                        .any(|cert| cert.as_ref() == peer);
-                    trusted
-                })
-            });
-    let authorized = verify || trusted_by_configured_ca;
-    let authorization_error = if authorized {
-        ""
-    } else {
-        "DEPTH_ZERO_SELF_SIGNED_CERT"
-    };
-    if let Some(socket) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
-        socket.tls.encrypted = true;
-        socket.tls.authorized = authorized;
-        socket.tls.servername = Some(servername.to_string());
-    }
-    let own_certificate = data
-        .map(|data| {
-            let mut cursor = std::io::Cursor::new(&data.cert);
-            let certificate = rustls_pemfile::certs(&mut cursor)
-                .flatten()
-                .next()
-                .map(|cert| cert.as_ref().to_vec())
-                .unwrap_or_default();
-            certificate
-        })
-        .unwrap_or_default();
-    extern "C" {
-        fn js_tls_client_record_connected(
-            handle: i64,
-            authorized: i32,
-            authorization_error_ptr: *const u8,
-            authorization_error_len: usize,
-            protocol_ptr: *const u8,
-            protocol_len: usize,
-            alpn_ptr: *const u8,
-            alpn_len: usize,
-            peer_cert_ptr: *const u8,
-            peer_cert_len: usize,
-            own_cert_ptr: *const u8,
-            own_cert_len: usize,
-        );
-    }
-    unsafe {
-        js_tls_client_record_connected(
-            handle,
-            authorized as i32,
-            authorization_error.as_ptr(),
-            authorization_error.len(),
-            protocol.as_ptr(),
-            protocol.len(),
-            alpn.as_ptr(),
-            alpn.len(),
-            peer.as_ptr(),
-            peer.len(),
-            own_certificate.as_ptr(),
-            own_certificate.len(),
-        );
-    }
 }
 
 // ─── FFI: tls.connect ────────────────────────────────────────────────────────

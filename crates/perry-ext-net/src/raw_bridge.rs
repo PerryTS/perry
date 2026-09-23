@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{statics, SocketCommand};
 
-/// Backing buffer for a socket in raw-consumer mode. `run_socket_task` pushes
+/// Backing buffer for a socket in raw-consumer mode. The read sink pushes
 /// inbound bytes into `buf`; [`perry_net_raw_poll_read`] drains them. `closed`
 /// flips on peer-FIN / destroy / error so a drained reader sees EOF; `error`
 /// carries the transport error message if one occurred.
@@ -28,7 +28,7 @@ pub(crate) struct RawReadState {
 
 /// Return the raw-consumer buffer for `id` if the socket is in raw mode (an
 /// `http.request` over an `agent.createConnection` socket), else `None`.
-/// Cloning the `Arc` is cheap and lets `run_socket_task` route bytes without
+/// Cloning the `Arc` is cheap and lets the read sink route bytes without
 /// holding the sockets-map lock across the buffer mutation.
 pub(crate) fn raw_state_for(id: i64) -> Option<Arc<Mutex<RawReadState>>> {
     statics::sockets()
@@ -48,7 +48,7 @@ fn raw_mark_closed(raw: &Arc<Mutex<RawReadState>>, error: Option<String>) {
     }
 }
 
-/// `run_socket_task` hook: route an inbound chunk for socket `id`. Returns
+/// Read-sink hook: route an inbound chunk for socket `id`. Returns
 /// `true` if the socket is in raw mode (bytes buffered for `poll_read`),
 /// `false` if the caller should emit a JS `'data'` event instead.
 pub(crate) fn route_data(id: i64, bytes: &[u8]) -> bool {
@@ -63,7 +63,7 @@ pub(crate) fn route_data(id: i64, bytes: &[u8]) -> bool {
     }
 }
 
-/// `run_socket_task` hook: mark socket `id` terminal (EOF / destroy / error).
+/// Read-sink hook: mark socket `id` terminal (EOF / destroy / error).
 /// Returns `true` if the socket is in raw mode (buffer flagged closed, no JS
 /// events), `false` if the caller should emit the JS End/Close or Error/Close
 /// events. `error` is recorded on the buffer in raw mode.

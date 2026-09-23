@@ -3,7 +3,7 @@ name = "perry-ext-net"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for Node `net.Socket` — TCP + optional TLS upgrade. Uses only `perry-ffi`. Async via spawn_blocking-per-socket. Phase 5 #466 — first net-IO wrapper port."
+description = "Native bindings for Node `net.Socket` — TCP + optional TLS upgrade. Uses only `perry-ffi`; all I/O runs on the agent's turnloop loop. Phase 5 #466 — first net-IO wrapper port."
 
 [lints]
 workspace = true
@@ -13,14 +13,15 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-tokio = { workspace = true }
-# Zero-copy socket reads: `read_buf` fills a reused `BytesMut` in place and
+# Zero-copy socket reads: each read is copied into a reused `BytesMut` and
 # `split_to(n).freeze()` carves each read off as a refcounted `Bytes` view,
 # which the 'data' event carries to the drain handler (it only borrows it as
-# `&[u8]`). Drops the per-read `Vec<u8>` alloc + memcpy. Already in the
-# lockfile via tokio/rustls, so declaring it pulls nothing new.
+# `&[u8]`). Drops the per-read `Vec<u8>` alloc + memcpy.
 bytes.workspace = true
-tokio-rustls.workspace = true
+# No tokio and no tokio-rustls: every socket, listener and TLS session lives
+# on the agent's turnloop loop (`turnloop_io`, `turnloop_tls_io`). A thread
+# that does not own that loop posts its submissions to the thread that does
+# (`perry_ffi::agent_post`) instead of keeping a tokio socket task alive.
 # P5: the sans-I/O rustls core (and Node error-code mapping) that drives TLS
 # over a turnloop socket — `turnloop_tls.rs`. Re-exports the same rustls 0.23
 # this crate already links, so the config types unify.

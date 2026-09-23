@@ -251,6 +251,8 @@ extern "C" {
         err: *mut RawNetError,
     ) -> i32;
     fn js_perry_net_read_start(id: i64, err: *mut RawNetError) -> i32;
+    fn js_perry_net_adopt_stream(id: i64, subsystem: i32, socket: i64, err: *mut RawNetError)
+        -> i32;
     fn js_perry_net_timer_arm(id: i64, subsystem: i32, delay_ms: u64, err: *mut RawNetError)
         -> i32;
     fn js_perry_net_timer_cancel(id: i64, err: *mut RawNetError) -> i32;
@@ -542,6 +544,58 @@ pub fn pipe_connect(id: i64, subsystem: u8, path: &str) -> Result<(), NetError> 
         },
         {
             let _ = (id, subsystem, path);
+            Err(unavailable())
+        }
+    )
+}
+
+/// An already-connected stream socket a binding hands to [`adopt_stream`]:
+/// a file descriptor on Unix, a `SOCKET` on Windows.
+#[cfg(unix)]
+pub type AdoptedSocket = std::os::fd::OwnedFd;
+/// See the Unix definition.
+#[cfg(windows)]
+pub type AdoptedSocket = std::os::windows::io::OwnedSocket;
+
+/// Adopt an already-connected stream socket — one some other transport
+/// opened — as a connected socket on this thread's loop, under `id`.
+///
+/// Completions for it go to `subsystem`'s sink exactly as for a socket this
+/// loop connected itself; the caller starts reading with [`read_start`].
+/// `socket` is **consumed on every outcome**: a refusal (no loop on this
+/// thread, a descriptor turnloop cannot adopt) closes it.
+#[cfg(any(unix, windows))]
+pub fn adopt_stream(id: i64, subsystem: u8, socket: AdoptedSocket) -> Result<(), NetError> {
+    #[cfg(unix)]
+    let raw = {
+        use std::os::fd::IntoRawFd;
+        socket.into_raw_fd() as i64
+    };
+    #[cfg(windows)]
+    let raw = {
+        use std::os::windows::io::IntoRawSocket;
+        socket.into_raw_socket() as i64
+    };
+    runtime_call!(
+        {
+            let mut raw_err = RawNetError::blank();
+            // SAFETY: `raw` is an owned socket whose ownership the runtime
+            // takes on every outcome; `raw_err` is writable.
+            let rc = unsafe { js_perry_net_adopt_stream(id, subsystem as i32, raw, &mut raw_err) };
+            check(rc, raw_err)
+        },
+        {
+            // No runtime to hand it to: honour the "consumed on every outcome"
+            // contract by closing it here.
+            #[cfg(unix)]
+            drop(unsafe {
+                <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw as i32)
+            });
+            #[cfg(windows)]
+            drop(unsafe {
+                <std::os::windows::io::OwnedSocket as std::os::windows::io::FromRawSocket>::from_raw_socket(raw as u64)
+            });
+            let _ = (id, subsystem);
             Err(unavailable())
         }
     )

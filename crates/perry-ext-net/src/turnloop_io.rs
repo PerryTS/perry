@@ -16,22 +16,29 @@
 //!
 //! # Which sockets come here
 //!
-//! [`enabled`] is false on a second thread acting for an agent another
-//! thread already owns — turnloop P9 gave every JS agent a loop, so a
-//! `worker_threads` Worker is no longer a reason it is false — and the
-//! route is claimed once per thread by the first to ask
-//! (`event_pump::agent_loop::claim_route`). That keeps the tokio path.
+//! All of them. This crate has no other transport: tokio and `tokio_rustls`
+//! are gone from its manifest, and with them the per-socket task this table
+//! replaced.
 //!
-//! **TLS no longer does.** This paragraph used to say a socket that might be
-//! upgraded was created on tokio and stayed there for life, because
-//! `socket.upgradeToTLS` moved a live `TcpStream` into `tokio_rustls` and
-//! turnloop owns its descriptor without exposing it. P5 removed the premise
-//! rather than the restriction: the rustls session runs *above* the turnloop
-//! handle (`turnloop_tls_io`), so the upgrade needs no descriptor, and both
-//! `tls.connect` and `socket.upgradeToTLS` come here. `lib.rs`'s connect sites
-//! have said so since P5; this header did not.
+//! What used to keep that task alive was the P1 coexistence rule — a thread
+//! that could not get a loop of its own kept the tokio socket. Since turnloop
+//! P9 every JS agent has a loop, so such a thread is a **second thread acting
+//! for an agent another thread already owns** (an embedder's pump thread,
+//! Android's UI thread for `perry-native`). It serves the same JS heap as the
+//! owner, so [`on_loop`] hands its submission to the owner through
+//! `perry_ffi::agent_post` and the completion is delivered where the socket's
+//! JS values live. That is the whole replacement for the fallback.
 //!
-//! There is no handover in either direction — a socket belongs to one transport
+//! The one case posting cannot serve is an agent with no loop anywhere — a
+//! host where `Loop::new` failed. There the operation fails with `ENOTSUP`
+//! ([`NO_LOOP_CODE`]) through the socket's normal `'error'` path, instead of
+//! silently running on a second event loop.
+//!
+//! TLS rides the same handles: the rustls session runs *above* the turnloop
+//! socket (`turnloop_tls_io`), so neither `tls.connect` nor
+//! `socket.upgradeToTLS` needs a descriptor to move.
+//!
+//! There is no handover in either direction — a socket belongs to one loop
 //! from creation to close.
 //!
 //! # Threading and the GC
@@ -47,6 +54,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use perry_ffi::agent_post::{self, AgentJob};
 use perry_ffi::turnloop_net as tl;
 
 use crate::{
@@ -131,16 +139,16 @@ fn forget_aux(id: i64) -> Aux {
 
 /// Whether a socket created *now, on this thread* should live on turnloop.
 ///
-/// Deliberately not cached: availability is a property of the calling agent,
-/// not of the process. A `worker_threads` Worker has no loop before P3/P4, and
-/// caching its "no" would strand the primary agent on tokio for the rest of
-/// the run. Registration behind it is idempotent and costs one atomic once it
-/// has happened.
+/// Deliberately not cached: availability is a property of the calling
+/// *thread* (only the thread that owns its agent's loop may submit), not of
+/// the process. Registration behind it is idempotent and costs one atomic once
+/// it has happened. A `false` here sends the work to [`on_loop`]'s posting
+/// route, never to a second transport.
 pub(crate) fn enabled() -> bool {
     if !REGISTERED.load(Ordering::Acquire) {
         // `register_sink` refuses if the runtime's completion layout does not
-        // match this crate's, which leaves `available` false and keeps every
-        // socket on tokio rather than submitting work nothing can deliver.
+        // match this crate's, which leaves `available` false rather than
+        // submitting work nothing can deliver.
         tl::register_sink(SUBSYSTEM, sink, alloc_id);
         REGISTERED.store(true, Ordering::Release);
     }
@@ -154,6 +162,174 @@ extern "C" fn alloc_id() -> i64 {
         0
     } else {
         id
+    }
+}
+
+// ── Which thread submits ────────────────────────────────────────────────────
+
+/// Node's `err.code` for an operation this agent has no loop to run on.
+///
+/// Only reachable on a host where turnloop's `Loop::new` failed: every other
+/// thread either owns its agent's loop or can post to the thread that does.
+pub(crate) const NO_LOOP_CODE: &str = "ENOTSUP";
+
+/// How many times a transiently refused post is retried before the operation
+/// is reported as failed. A refusal is `Again` only while the owner is between
+/// claiming its route and publishing its loop, or while its postbox is full —
+/// both drain within a turn, so a short spin is the whole remedy.
+const POST_ATTEMPTS: usize = 64;
+
+/// One submission carried to the thread that owns this agent's loop.
+struct LoopJob(Box<dyn FnOnce() + Send>);
+
+impl AgentJob for LoopJob {
+    fn run(self: Box<Self>) {
+        (self.0)();
+    }
+}
+
+/// Run `op` on the thread that owns this agent's turnloop loop.
+///
+/// Inline when that is this thread — the common case, and exactly what the
+/// call sites did before — otherwise posted to the owner, which serves the
+/// same JS heap (module note). Returns `false`, with `op` dropped unrun, only
+/// when no loop exists for this agent at all; the caller then reports
+/// [`NO_LOOP_CODE`] through its usual error path.
+///
+/// `op` must not assume it runs synchronously: on the posting path it runs on
+/// a later turn of the owner, so anything the caller needs to observe
+/// immediately (a handle id, a `connecting` flag) is published before this is
+/// called, and failures are reported from inside `op` as events.
+pub(crate) fn on_loop(op: impl FnOnce() + Send + 'static) -> bool {
+    if enabled() {
+        op();
+        return true;
+    }
+    post_to_owner(Box::new(op))
+}
+
+/// Post `op` to the owner without first asking whether this thread owns the
+/// loop.
+///
+/// For callers that are not JS threads at all — a tokio worker in another
+/// binding handing over an upgraded connection. [`enabled`] must not be asked
+/// there: the first thread to ask *claims* its agent's route for life, and a
+/// foreign thread that won that race would own a loop nobody turns.
+pub(crate) fn post_to_owner(op: Box<dyn FnOnce() + Send>) -> bool {
+    let mut job = Box::new(LoopJob(op));
+    for _ in 0..POST_ATTEMPTS {
+        match agent_post::post_job(job) {
+            Ok(()) => return true,
+            Err(rejected) if rejected.is_permanent() => return false,
+            Err(rejected) => {
+                job = rejected.into_job();
+                std::thread::yield_now();
+            }
+        }
+    }
+    false
+}
+
+/// A one-shot deadline this crate armed, and what to do when it fires.
+///
+/// Two transport-agnostic paths used to sleep on a tokio timer: the loopback
+/// `'connection'` deferral (`server_state::schedule_server_connection`) and
+/// the already-aborted `tls.connect` signal path (`tls::schedule_tls_abort`).
+/// Both are deadlines on the loop now, delivered to this crate's sink as a
+/// `NET_TIMER` completion naming the id armed here.
+pub(crate) enum Deadline {
+    /// Publish a deferred loopback `ServerConnection(server, socket, true)`.
+    ServerConnection { server_id: i64, socket_id: i64 },
+    /// Fire an already-aborted `tls.connect`'s `AbortError` + `'close'`.
+    TlsAbort { socket_id: i64 },
+}
+
+fn deadlines() -> &'static Mutex<std::collections::HashMap<i64, Deadline>> {
+    static DEADLINES: OnceLock<Mutex<std::collections::HashMap<i64, Deadline>>> = OnceLock::new();
+    DEADLINES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Run `deadline` `delay_ms` from now, on the loop.
+///
+/// The deadline is unreferenced (turnloop's `timer_arm`): it never keeps the
+/// process alive by itself. Both users are covered by a handle that does —
+/// the listening server, or the aborted socket that `schedule_tls_abort`
+/// marks open until its `'close'`.
+pub(crate) fn arm_deadline(delay_ms: u64, deadline: Deadline) {
+    on_loop_or_now(move || {
+        // A fresh id from the shared allocator, never a socket's: the runtime
+        // keys deadlines by id per thread across every subsystem, so reusing
+        // an id another binding armed would *move* that binding's deadline.
+        let id = crate::next_id();
+        if id == perry_ffi::INVALID_HANDLE {
+            fire_deadline(deadline);
+            return;
+        }
+        deadlines()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, deadline);
+        if tl::timer_arm(id, SUBSYSTEM, delay_ms).is_err() {
+            // No deadline could be armed: fire now rather than never. The
+            // delay only ever ordered an event behind a pump boundary.
+            on_timer(id);
+        }
+    });
+}
+
+/// [`on_loop`], falling back to running `op` right here when this agent has
+/// no loop at all. Only for work that is correct on any thread and merely
+/// *prefers* the loop (a deadline that can fire immediately instead).
+fn on_loop_or_now(op: impl FnOnce() + Send + 'static) {
+    let op: Box<dyn FnOnce() + Send> = Box::new(op);
+    if enabled() {
+        op();
+        return;
+    }
+    // `post_to_owner` consumes the job even on refusal, so decide first.
+    if agent_post::available() {
+        if post_to_owner(op) {
+            return;
+        }
+        // Refused after `available()` said yes: the owner went away in
+        // between. The deadline is lost with the job, which is the same
+        // outcome as an agent torn down with a deadline pending.
+        return;
+    }
+    op();
+}
+
+fn fire_deadline(deadline: Deadline) {
+    match deadline {
+        Deadline::ServerConnection {
+            server_id,
+            socket_id,
+        } => {
+            statics::pending_events()
+                .lock()
+                .unwrap()
+                .push(PendingNetEvent::ServerConnection(
+                    server_id, socket_id, true,
+                ));
+            perry_ffi::notify_main_thread();
+        }
+        Deadline::TlsAbort { socket_id } => crate::tls::fire_pending_tls_abort(socket_id),
+    }
+}
+
+fn on_timer(id: i64) {
+    let deadline = deadlines()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+    // A fired one-shot is terminal on the runtime side too: it dropped its own
+    // record, so there is nothing to cancel.
+    if let Some(deadline) = deadline {
+        // The id named only this deadline and was never handed to JS, so it
+        // goes back to the shared allocator rather than leaking a slot of the
+        // handle band per deferred connection.
+        perry_ffi::free_handle_id(id);
+        fire_deadline(deadline);
     }
 }
 
@@ -202,24 +378,47 @@ pub(crate) fn command(
             tl::shutdown(id, completion).map_err(|e| e.message())
         }
         SocketCommand::Destroy => tl::close(id).map_err(|e| e.message()),
-        // TCP_NODELAY is settable on a turnloop socket only at creation
-        // (`TcpOpts`), which covers the paths P1 moves. An accepted connection
-        // and a later `socket.setNoDelay()` have no turnloop API to reach, so
-        // the call keeps Node's chainable semantics — the flag is not
-        // observable from JS. Needs a turnloop socket-option API to finish.
-        SocketCommand::SetNoDelay(_) => Ok(()),
         // The accepted socket's `'connection'` callback has returned, so its
         // listeners exist: release an EOF that arrived before them.
         SocketCommand::ServerConnectionReady => {
             release_deferred_eof(id);
             Ok(())
         }
-        // P5: `UpgradeTls` never reaches here — `js_net_socket_upgrade_tls`
-        // and `tls::begin_tls_upgrade` branch on the transport and install a
-        // `turnloop_tls_io` layer directly, because the upgrade's result is a
-        // promise settled on the loop thread rather than a channel reply.
-        // Anything else is a command with no turnloop meaning.
-        _ => Err("unsupported socket command on a turnloop socket".to_string()),
+    }
+}
+
+/// [`command`] for a socket whose loop another thread owns.
+///
+/// The command is carried to that thread and applied there, with the same
+/// accounting and the same failure path the inline call has: the queued byte
+/// count is written back once the driver has answered, and a refused
+/// submission is reported through [`submission_failed`] on the owner.
+///
+/// Returns `Err` with a Node-shaped message only when this agent has no loop
+/// at all, in which case nothing was queued.
+pub(crate) fn command_on_owner(id: i64, cmd: SocketCommand) -> Result<(), String> {
+    let completion = match &cmd {
+        SocketCommand::Write(_, completion) | SocketCommand::End(completion) => *completion,
+        _ => 0,
+    };
+    let posted = post_to_owner(Box::new(move || {
+        let mut queued = None;
+        let result = command(id, cmd, &mut queued);
+        if let Some(queued) = queued {
+            if let Ok(mut sockets) = statics::sockets().lock() {
+                if let Some(socket) = sockets.get_mut(&id) {
+                    socket.bytes_queued = queued;
+                }
+            }
+        }
+        if let Err(message) = result {
+            submission_failed(id, completion, message);
+        }
+    }));
+    if posted {
+        Ok(())
+    } else {
+        Err(NO_LOOP_CODE.to_string())
     }
 }
 
@@ -286,6 +485,14 @@ pub(crate) fn start_reading(id: i64) {
 /// `'end'` handler the same chance it had inside the tokio task's post-EOF
 /// command drain.
 pub(crate) fn finish_read_end(id: i64) {
+    // The pump that delivered `'end'` may be a second thread acting for this
+    // agent; the shutdown and close below are submissions, so they run on the
+    // loop's owner. A socket exists only if a loop does, so a refused post has
+    // nothing left to finish.
+    if !enabled() {
+        let _ = post_to_owner(Box::new(move || finish_read_end(id)));
+        return;
+    }
     if !with_aux(id, |a| std::mem::replace(&mut a.read_ended, false)) {
         return;
     }
@@ -371,6 +578,8 @@ pub(crate) fn listen_pipe(id: i64, path: &str, backlog: u32) -> Result<(), tl::N
 }
 
 /// `server.close()` on a turnloop-backed server.
+///
+/// Must run on the loop's owner; `js_net_server_close` routes it there.
 pub(crate) fn close_server(id: i64) {
     if tl::close(id).is_err() {
         // Never listened, or already closing: the caller still needs its
@@ -408,6 +617,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
         tl::NET_WROTE => on_wrote(c.id, c.user, c.len, c.queued),
         tl::NET_SHUTDOWN => on_shutdown(c.id, c.user),
         tl::NET_CLOSED => on_closed(c.id),
+        tl::NET_TIMER => on_timer(c.id),
         tl::NET_ERROR => {
             // SAFETY: same call; both point at `'static` string data.
             let (code, syscall) = unsafe { (c.code(), c.syscall()) };
@@ -457,8 +667,8 @@ fn on_connect(id: i64) {
     // what Node does: a TLS socket's underlying connection completes at the
     // TCP level, which is when `'connect'` fires and `connecting` goes false,
     // and the handshake is signalled separately by `'secureConnect'`. The
-    // tokio path at lib.rs:1494 holds `connecting` true until the transport
-    // INCLUDING TLS is established; that is the deviation, not this. Nothing
+    // deleted tokio path held `connecting` true until the transport INCLUDING
+    // TLS was established; that was the deviation, not this. Nothing
     // pins it yet — the parity fixture is plain-socket only, so both timings
     // pass today (see #11056).
     if let Ok(mut sockets) = statics::sockets().lock() {
@@ -692,11 +902,9 @@ mod tests {
     #[test]
     fn the_commands_with_no_driver_equivalent_succeed_rather_than_fall_through() {
         // A command that returned `Err` here would be reported to JS as a
-        // socket error. `setNoDelay` and the server-ready marker have no
-        // turnloop submission and must stay silent no-ops; only the TLS
-        // upgrade is a real refusal.
+        // socket error. The server-ready marker has no turnloop submission and
+        // must stay a silent no-op.
         let mut queued = None;
-        assert!(super::command(-1, SocketCommand::SetNoDelay(true), &mut queued).is_ok());
         assert!(super::command(-1, SocketCommand::ServerConnectionReady, &mut queued).is_ok());
         assert_eq!(queued, None, "a non-write never reports a queue length");
     }
