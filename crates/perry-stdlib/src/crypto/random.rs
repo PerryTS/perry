@@ -392,6 +392,17 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             js_crypto_check_prime_async(arg(0), undefined, arg(1))
         }
         "checkPrime" | "checkPrimeSync" => js_crypto_check_prime_sync(arg(0), arg(1)),
+        // #11046: the inventory helpers are reached through this dispatcher
+        // whenever the receiver is not a statically-known `node:crypto`
+        // reference — `let crypto; crypto = require('node:crypto');
+        // crypto.getHashes()` (undici's subresource-integrity feature probe),
+        // a detached `const f = crypto.getHashes; f()`, or `crypto` held in an
+        // object. Without these arms they fell to `_ => undefined`, and
+        // undici's `cryptoHashes.length` threw at module init.
+        "getHashes" => pointer_value(js_crypto_get_hashes() as *mut u8),
+        "getCiphers" => pointer_value(js_crypto_get_ciphers() as *mut u8),
+        "getCurves" => pointer_value(js_crypto_get_curves() as *mut u8),
+        "getCipherInfo" => js_crypto_get_cipher_info(arg(0), arg(1)),
         "getFips" => 0.0,
         "setFips" => undefined,
         "secureHeapUsed" => pointer_value(js_crypto_secure_heap_used() as *mut u8),
