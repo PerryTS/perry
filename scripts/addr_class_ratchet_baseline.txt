@@ -193,7 +193,7 @@ handle-floor | crates/perry-runtime/src/value/dynamic_arith.rs | 2
 handle-floor | crates/perry-runtime/src/value/dynamic_object.rs | 2
 handle-floor | crates/perry-runtime/src/value/equality.rs | 2
 handle-floor | crates/perry-runtime/src/value/nanbox.rs | 1
-handle-floor | crates/perry-runtime/src/value/to_string.rs | 3
+handle-floor | crates/perry-runtime/src/value/to_string_primitive.rs | 3
 handle-floor | crates/perry-runtime/src/weakref.rs | 2
 handle-floor | crates/perry-stdlib/src/crypto/kdf.rs | 3
 handle-floor | crates/perry-stdlib/src/crypto/keys.rs | 1
@@ -262,4 +262,4 @@ lone-valid-obj-ptr | crates/perry-runtime/src/util_inherits.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_mime.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/util_style_text.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/value/dyn_index.rs | 1
-lone-valid-obj-ptr | crates/perry-runtime/src/value/to_string.rs | 1
+lone-valid-obj-ptr | crates/perry-runtime/src/value/to_string_primitive.rs | 1
