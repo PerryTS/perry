@@ -89,11 +89,6 @@ fn sorted_pair_positions(mut pairs: Vec<(u64, u32)>) -> Vec<u32> {
     pairs.into_iter().map(|(_, position)| position).collect()
 }
 
-/// Ascending sort of an `Ord` slice — drop-in for `sort` / `sort_unstable`.
-pub(crate) fn sort<T: Ord>(v: &mut [T]) {
-    sort_by(v, |a, b| a.cmp(b));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

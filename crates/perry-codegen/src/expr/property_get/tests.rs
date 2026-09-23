@@ -48,6 +48,7 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
         needs_stdlib: false,
+        program_is_synchronous: false,
         needs_ui: false,
         needs_geisterhand: false,
         geisterhand_port: 7676,

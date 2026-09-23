@@ -2476,6 +2476,8 @@ pub fn run_with_parse_cache(
     }
 
     // Pre-compute feature flags (moved out of parallel loop to avoid ctx mutation)
+    // Whole-program: may `main` end without the event loop (binary size)?
+    let program_is_synchronous = super::sync_program::program_is_synchronous(&ctx);
     let compiled_features: Vec<String> = if let Some(ref features_str) = args.features {
         let mut features: Vec<String> = features_str
             .split(',')
@@ -5457,6 +5459,7 @@ pub fn run_with_parse_cache(
             // Feature plumbing
             output_type: args.output_type.clone(),
             needs_stdlib: ctx.needs_stdlib,
+            program_is_synchronous,
             needs_ui: ctx.needs_ui,
             needs_geisterhand: ctx.needs_geisterhand,
             geisterhand_port: ctx.geisterhand_port,

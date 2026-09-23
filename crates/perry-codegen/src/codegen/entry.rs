@@ -1008,6 +1008,21 @@ pub(super) fn compile_module_entry(
                 // return after running top-level statements (which set up
                 // module-level state like Maps, class registrations, etc.).
                 ctx.block().ret_void();
+            } else if cross_module.program_is_synchronous {
+                // Proven synchronous program (see perry's `sync_program`):
+                // nothing can be queued, so there is no loop to drain and no
+                // `beforeExit` to emit — only Node's exit sequence. Skipping
+                // the loop drops the microtask runner and the event-loop
+                // phases from the link.
+                ctx.block().call_void("js_process_run_exit_sequence", &[]);
+                ctx.block()
+                    .call_void("js_process_run_finalization_exit", &[]);
+                ctx.block().call_void(
+                    "js_gc_release_current_thread_collection_side_allocations",
+                    &[],
+                );
+                let final_exit_code = ctx.block().call(I32, "js_process_pending_exit_code", &[]);
+                ctx.block().ret(I32, &final_exit_code);
             } else {
                 // Event loop: keep running while there are active event
                 // sources (timers, intervals, WS servers, pending stdlib

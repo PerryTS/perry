@@ -2539,6 +2539,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         imported_vars: opts.imported_vars,
         imported_object_literals,
         needs_stdlib: opts.needs_stdlib,
+        program_is_synchronous: opts.program_is_synchronous,
         needs_geisterhand: opts.needs_geisterhand,
         geisterhand_port: opts.geisterhand_port,
         compile_time_constants,

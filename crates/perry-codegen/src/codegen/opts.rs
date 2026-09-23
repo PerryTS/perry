@@ -339,6 +339,10 @@ pub struct CompileOptions {
     pub output_type: String,
     /// Whether the project needs `libperry_stdlib.a` linked in.
     pub needs_stdlib: bool,
+    /// The whole program is proven unable to schedule asynchronous work
+    /// (`perry::commands::compile::sync_program`), so the entry `main` ends
+    /// with the exit sequence instead of the event loop (binary size).
+    pub program_is_synchronous: bool,
     /// Whether the project needs `libperry_ui_*.a` linked in.
     pub needs_ui: bool,
     /// Whether the project needs the Geisterhand inspector linked in.
@@ -991,6 +995,8 @@ pub(crate) struct CrossModuleCtx {
     /// `stdlib` feature on when perry-stdlib depends on it, which
     /// excludes the cfg-gated stub in `perry-runtime/src/stdlib_stubs.rs`).
     pub needs_stdlib: bool,
+    /// See `CompileOptions::program_is_synchronous`.
+    pub program_is_synchronous: bool,
     /// Whether the project needs the Geisterhand inspector linked in.
     /// Threaded through from `CompileOptions::needs_geisterhand` so the
     /// entry-module init prelude can emit the `perry_geisterhand_start`
