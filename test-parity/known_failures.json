@@ -76,16 +76,6 @@
     "category": "bug-stale",
     "reason": "RE-TRIAGE: tracking issue #2514 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. process SIGINT trace hook gap; standing per the #5917 diff."
   },
-  "test_gap_fetch_expect_continue_header": {
-    "issue": "11024",
-    "added": "2026-09-22",
-    "category": "module-inventory",
-    "reason": "Case 2 of 5. A SHORTHAND object property (`{ ..., headers }`) loses the `Headers` handle before `js_fetch_headers_to_json`, so the instance is stringified generically to `{}` and every header is dropped. The forbidden-header check added by #10354 (`fetch::forbidden_header_failure`) therefore never sees `expect` on that path, the PUT goes out, and node rejects with NotSupportedError / UND_ERR_NOT_SUPPORTED where perry returns 200. Explicit `headers: headers` is correct and the other four cases pass; the two differ ONLY by the shorthand — #11024 carries the 12-line repro. SCOPE: not Expect-specific — ANY `fetch(url, { headers })` written with shorthand and a `Headers` instance sends NO headers at all, including ordinary ones; object literals and explicit `headers: h` are unaffected. ATTRIBUTION as measured: `forbidden_header_failure` has 0 references on origin/main and 3 on #10354, so the CHECK is new here; codegen/src/expr/logical_collections.rs and stdlib/src/fetch/headers.rs are UNTOUCHED by #10354 — strong evidence the lowering defect predates it, but not proof; a two-arm probe (main vs this head, same fixture, only compiler+runtime varying) is measuring it and #11024 carries the verdict.",
-    "platforms": [
-      "linux",
-      "macos"
-    ]
-  },
   "test_gap_http2_alpn_secure": {
     "issue": "10327",
     "added": "2026-09-16",
