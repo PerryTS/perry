@@ -238,18 +238,6 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
     if !is_plausible_heap_addr(addr) {
         return None;
     }
-    // A GC allocation's user address is always `align_of::<GcHeader>()`-aligned
-    // (GC_HEADER_SIZE is a multiple of it), so a misaligned address can never
-    // name one. Without this the magnitude checks above admit IN-RANGE garbage
-    // such as 0xABCDEF and the deref below is UB — in a debug build, a
-    // non-unwinding "misaligned pointer dereference" abort that takes the whole
-    // test binary down. `try_read_tracked_gc_header` has always checked this;
-    // this function's own contract already promises to return `None` "without
-    // touching memory for ... out-of-range garbage", and in-range garbage
-    // deserves the same. Costs one AND on a path that then dereferences.
-    if !addr.is_multiple_of(std::mem::align_of::<GcHeader>()) {
-        return None;
-    }
     try_read_gc_header_known_plausible(addr)
 }
 
@@ -270,7 +258,9 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
 ///
 /// # Safety
 /// As [`try_read_gc_header`], plus: `is_plausible_heap_addr(addr)` must be
-/// `true` for this `addr` already (unchecked here).
+/// `true` for this `addr` already (unchecked here). Alignment is NOT part of
+/// that precondition and is checked here — see the guard below for why it
+/// cannot be hoisted into the caller's `is_plausible_heap_addr` proof.
 #[inline(always)]
 pub(crate) unsafe fn try_read_gc_header_known_plausible(addr: usize) -> Option<&'static GcHeader> {
     // Small-buffer slab allocations are heap-plausible but carry NO GcHeader —
@@ -279,6 +269,25 @@ pub(crate) unsafe fn try_read_gc_header_known_plausible(addr: usize) -> Option<&
     // content-dependent fake header and misroute (observed: `String(buffer)`
     // on a zlib result took the Temporal path and deref'd buffer bytes).
     if crate::buffer::is_small_buf_slab_addr(addr) {
+        return None;
+    }
+    // A GC allocation's user address is always `align_of::<GcHeader>()`-aligned
+    // (GC_HEADER_SIZE is a multiple of it), so a misaligned address can never
+    // name one. Without this the magnitude checks admit IN-RANGE garbage such
+    // as 0xABCDEF and the deref below is UB — in a debug build, a non-unwinding
+    // "misaligned pointer dereference" abort that takes the whole test binary
+    // down. `try_read_tracked_gc_header` has always checked this.
+    //
+    // This guard lives HERE rather than in `try_read_gc_header` because that
+    // function delegates to this one, while three sites in
+    // `object/inherited_read_cache.rs` call this one DIRECTLY. Those callers
+    // satisfy this function's documented precondition — they proved
+    // `is_plausible_heap_addr` — but that predicate is
+    // `is_above_handle_band && is_valid_obj_ptr` and says nothing about
+    // alignment, so proving it does not transfer the guarantee. Guarding the
+    // delegate covers every path with one check instead of one check and one
+    // gap. Costs one AND on a path that then dereferences.
+    if !addr.is_multiple_of(std::mem::align_of::<GcHeader>()) {
         return None;
     }
     Some(&*((addr - GC_HEADER_SIZE) as *const GcHeader))
@@ -620,5 +629,59 @@ mod tests {
         assert!(is_valid_obj_ptr(0x0000_e000_0000_1000usize as *const u8));
         assert!(is_plausible_heap_addr(0x0000_e000_0000_1000));
         assert!(!is_valid_obj_ptr(0x0001_0000_0000_0000usize as *const u8));
+    }
+}
+
+#[cfg(test)]
+mod known_plausible_alignment_tests {
+    use super::*;
+
+    /// The alignment guard must be reachable from the DIRECT call path, not
+    /// only through [`try_read_gc_header`].
+    ///
+    /// `try_read_gc_header` checks plausibility then delegates, so a guard
+    /// placed in *its* body covers its own callers and misses the three sites
+    /// in `object/inherited_read_cache.rs` that call the delegate directly.
+    /// Those sites satisfy the delegate's documented precondition — they proved
+    /// `is_plausible_heap_addr` — but that predicate is
+    /// `is_above_handle_band && is_valid_obj_ptr`, which says nothing about
+    /// alignment, so satisfying it does not transfer the guarantee.
+    ///
+    /// This asserts the property at the delegate. Remove the guard and a debug
+    /// build aborts here with "misaligned pointer dereference" rather than
+    /// failing — which is itself the point: the failure mode is a
+    /// non-unwinding abort that takes the whole test binary down, so it must
+    /// be caught by a guard rather than observed as a test failure.
+    #[test]
+    fn the_delegate_rejects_a_misaligned_in_range_address() {
+        let align = std::mem::align_of::<GcHeader>();
+        assert!(align > 1, "test is vacuous if GcHeader is byte-aligned");
+
+        // Deliberately in-range-looking but misaligned: exactly the shape the
+        // magnitude checks admit and the deref cannot survive.
+        for skew in 1..align {
+            let addr = 0x0000_0001_0000_0000usize + skew;
+            assert!(
+                !addr.is_multiple_of(align),
+                "fixture must be misaligned, or the assertion below is vacuous"
+            );
+            // SAFETY: the guard under test must return `None` before any deref.
+            let got = unsafe { try_read_gc_header_known_plausible(addr) };
+            assert!(
+                got.is_none(),
+                "misaligned addr {addr:#x} must be refused by the delegate, \
+                 not dereferenced"
+            );
+        }
+    }
+
+    /// The same property through the wrapper, so both entry points are pinned.
+    #[test]
+    fn the_wrapper_also_rejects_a_misaligned_in_range_address() {
+        let align = std::mem::align_of::<GcHeader>();
+        let addr = 0x0000_0001_0000_0000usize + 1;
+        assert!(!addr.is_multiple_of(align));
+        // SAFETY: as above.
+        assert!(unsafe { try_read_gc_header(addr) }.is_none());
     }
 }
