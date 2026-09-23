@@ -269,21 +269,17 @@ fn point_class() -> Class {
     }
 }
 
-/// `probe(p: Point) { return p.x }` — the inline class-field guard tests the
-/// GcHeader with one masked 32-bit compare and the class/shape identity with
-/// one 64-bit compare, instead of five separate header loads.
+/// `probe(p: Point) { return p.x }` (a raw-f64 field) — the class-field READ
+/// guard loads the poisonable expectation, the (class id, ShapeId) word and
+/// the `_reserved` half-word for the intact bit, and NOTHING else: the GcHeader word the write guard still tests (kind,
+/// forwarded, descriptor and tombstone flags) is carried by the ShapeId on a
+/// read (`emit_class_field_read_precheck`).
 ///
-/// Three loads now, not two: the third is the poisonable
-/// `@perry_class_guard_shape_*` expectation, which carries the authority the
-/// `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch used to. That is a
-/// REDUCTION, not an addition — the latch it displaced was an `external
-/// global`, so reading it cost a GOT load plus a dependent `ldrb` through it
-/// plus a compare, in the gate block, on every access. Net per access: one
-/// fewer machine instruction pair and one fewer dependent load. The assertions
-/// below pin both halves, because "three loads" alone would also be satisfied
-/// by a lowering that kept the latch and added the expectation.
+/// The expectation carries the authority the retired
+/// `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch had, so it must be read
+/// VOLATILE and the latch must stay gone.
 #[test]
-fn class_field_inline_guard_uses_two_fused_loads() {
+fn class_field_read_guard_loads_identity_expectation_and_intact_bit_only() {
     let mut m = module(
         "class_field_fused",
         vec![param(1, named("Point"))],
@@ -301,8 +297,8 @@ fn class_field_inline_guard_uses_two_fused_loads() {
     assert_eq!(
         loads.len(),
         3,
-        "the guard must load the header word, the identity word and the live \
-         expectation, and nothing else:\n{deref}"
+        "the read guard must load the identity word, the live expectation and \
+         the _reserved half-word, and nothing else (no GcHeader word):\n{deref}"
     );
     assert!(
         !ir.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED"),
@@ -316,8 +312,8 @@ fn class_field_inline_guard_uses_two_fused_loads() {
          path:\n{deref}"
     );
     assert!(
-        loads.iter().any(|l| l.contains("load i32"))
-            && loads.iter().any(|l| l.contains("load i64")),
-        "one 32-bit header word and one 64-bit identity word:\n{deref}"
+        loads.iter().any(|l| l.contains("load i64"))
+            && loads.iter().any(|l| l.contains("load i16")),
+        "one 64-bit (class id, ShapeId) identity word and the intact half-word:\n{deref}"
     );
 }

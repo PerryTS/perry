@@ -559,6 +559,183 @@ pub(crate) fn emit_class_field_inline_precheck(
     guardcall_label
 }
 
+/// The receiver test of the class-field READ guard, as ONE unsigned range
+/// check: `bits - (POINTER_TAG | 0x10_0000) < 2^48 - 0x10_0000`.
+///
+/// Subtracting the constant maps exactly the POINTER-tagged values whose
+/// 48-bit payload is above the handle band (`> HANDLE_BAND_TOP`) onto
+/// `[0, 2^48 - 0x10_0000)` and every other bit pattern (other tags, a POINTER
+/// tag with a small native-registry handle, plain doubles) above it, so the
+/// one compare is the conjunction the flat predicate used to spell as two
+/// compares, two `setcc`s and a `test`. The same subtraction yields the
+/// handle (`t + 0x10_0000`), which isel folds into the displacements of the
+/// loads that follow instead of re-masking the NaN-box.
+const READ_RECEIVER_BIAS: u64 = crate::nanbox::POINTER_TAG | (HANDLE_BAND_TOP_U64 + 1);
+const READ_RECEIVER_SPAN: u64 = (1u64 << 48) - (HANDLE_BAND_TOP_U64 + 1);
+const HANDLE_BAND_TOP_U64: u64 = 0x0F_FFFF;
+const _: () = assert!(READ_RECEIVER_BIAS == 0x7FFD_0000_0010_0000);
+const _: () = assert!(READ_RECEIVER_SPAN == 0x0000_FFFF_FFF0_0000);
+
+/// Emit the class-field READ guard: receiver range check, ONE ShapeId compare
+/// against the poisonable per-class expectation, and — for a raw-f64 site
+/// only — the class id and the per-object typed-layout intact bit.
+///
+/// Hit path on x86-64 (`class P { a; getA() { return this.a } }`): a boxed
+/// field is `lea`/`shr`/`cmp`/`jae` (range), `mov` expectation, `cmp` against
+/// `+4`, `jne`, load; a raw-f64 field adds the class id to the compare
+/// (`shl`/`or` building the 64-bit word) and a one-byte `testb`/`je` of the
+/// intact bit. The pre-split guard spent 11 instructions on a flat
+/// tag+handle predicate and 4 on a GcHeader word mask before its compare.
+///
+/// This is the read-side form of [`emit_class_field_inline_precheck`], and it
+/// is deliberately a separate function: the WRITE guard keeps the full header
+/// word test, because `OBJ_FLAG_FROZEN` and `OBJ_FLAG_PACKED_NUMERIC_PROOF` are
+/// per-object facts no ShapeId carries.
+///
+/// ## What a matching ShapeId already proves (the checks this guard dropped)
+///
+/// The generic read IC (`property_get/generic_dispatch.rs`, "No GC-header
+/// load, no descriptor-flag test") dropped the same header predicates on the
+/// same arguments; each is held by runtime tests in
+/// `perry-runtime/src/object/shape_rules_tests.rs` / `shape_rule3.rs`:
+///
+/// * **`obj_type == GC_TYPE_OBJECT`** — rule 3 (#10828): no POINTER-tagged
+///   non-object cell holds a value in the ShapeId range at payload `+4`. The
+///   expectation is a ShapeId or the poison `u32::MAX`, and no `+4` word of
+///   any kind equals either, so a match proves an ordinary object.
+/// * **not `GC_FLAG_FORWARDED`** — `set_forwarding_address` (`gc/types.rs`)
+///   overwrites payload `+0..8` with the new address, so a forwarded cell's
+///   `+4` word is the high half of a heap address, `<= 0xFFFF` under
+///   `MAX_HEAP_ADDR_EXCLUSIVE` (the `StructurallySmall` argument of rule 3),
+///   far below the ShapeId floor.
+/// * **no `OBJ_FLAG_HAS_DESCRIPTORS`** — rule 1 (#10824): every descriptor
+///   install / removal / clear on a shaped ordinary object goes through
+///   `note_descriptor_target_keyed`, which transitions the shape onto a
+///   semantic successor lineage. The class ShapeId is the one module init
+///   minted for the class's canonical key list and stamped on every instance
+///   at birth, so a receiver still carrying it has had no descriptor change.
+/// * **no `OBJ_FLAG_STABLE_TOMBSTONES`** — #10826: every successful `delete`
+///   is a shape transition, so a receiver at the class ShapeId holds no hole
+///   in any slot of that shape.
+/// * **unstamped receivers** — rule 2: nothing but the shape allocator mints
+///   into the ShapeId range, so a `parent_class_id` at `+4` cannot match.
+/// * **the slot** — the expectation is the ShapeId of the class's canonical
+///   keys array, whose key order IS `class_field_global_index`'s layout, so a
+///   match proves `property` is an own data property at `field_index` —
+///   whatever the receiver's class id. A boxed read therefore needs nothing
+///   else: it returns the slot as a JS value, exactly what the generic IC
+///   returns for the same ShapeId and slot.
+///
+/// ## What it does NOT prove (the checks this guard keeps)
+///
+/// * **The receiver range check** — nothing may be dereferenced before it.
+/// * **The poison** — `disable_class_field_inline_guard` writes `u32::MAX`
+///   into the expectation; the compare against it is the latch.
+/// * **raw-f64 sites: the class id.** A class whose layout has no pointer
+///   slot mints its ShapeId from the key list alone
+///   (`js_object_shape_id_for_keys`, `codegen/string_pool.rs`), so an object
+///   literal or another class with the same keys in the same order shares
+///   it — and may hold a string where this class declares `number`. Only the
+///   class id tells the raw-f64 read that the declared type is the one that
+///   applies. Measured on the 2.5 base: `class SamePt { x: number; y:
+///   number }`, `class BoolPt { x: boolean; y: number }` and `class SubPt
+///   extends Pt {}` instances all carry `Pt`'s ShapeId, each with its own
+///   class id (scenario 1 of
+///   `test-files/test_gap_class_field_read_guard_shape_authority.ts`).
+/// * **raw-f64 sites: `GC_OBJ_TYPED_LAYOUT_INTACT`.** A store that
+///   contradicts the typed descriptor (`gc/layout.rs` `SlotVerdict::
+///   Downgrade`) clears this per-object bit WITHOUT a shape transition, so
+///   the ShapeId says nothing about whether the slot still holds a raw
+///   double. Measured: a downgraded `Pt` keeps its ShapeId with the bit
+///   clear (scenario 2 of the same fixture).
+///
+/// On success the IR branches to `fast_label`; on any miss to a fresh
+/// `class_field_inline.guardcall` block, which is left current (the caller
+/// emits the unchanged miss call there). Returns `(guardcall_label,
+/// obj_handle)`: the handle is derived from the range check's subtraction and
+/// is the one the fast block must address the slot through.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_class_field_read_precheck(
+    ctx: &mut FnCtx,
+    obj_bits: &str,
+    expected_class_id: &str,
+    require_raw_f64: bool,
+    fast_label: &str,
+    subclass_arms: &[ClassFieldSubclassArm],
+    keys_global_name: &str,
+) -> (String, String) {
+    let guard_shape_global =
+        crate::typed_shape::guard_shape_global_name_from_keys_global(keys_global_name);
+    let deref_idx = ctx.new_block("class_field_inline.deref");
+    let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
+    let deref_label = ctx.block_label(deref_idx);
+    let guardcall_label = ctx.block_label(guardcall_idx);
+
+    let obj_handle = {
+        let blk = ctx.block();
+        let biased = blk.sub(I64, obj_bits, &(READ_RECEIVER_BIAS as i64).to_string());
+        let in_range = blk.icmp_ult(I64, &biased, &(READ_RECEIVER_SPAN as i64).to_string());
+        let handle = blk.add(I64, &biased, &(HANDLE_BAND_TOP_U64 + 1).to_string());
+        blk.cond_br(&in_range, &deref_label, &guardcall_label);
+        handle
+    };
+
+    ctx.current_block = deref_idx;
+    {
+        let blk = ctx.block();
+        let obj_ptr = blk.inttoptr(I64, &obj_handle);
+        // The expectation is read VOLATILE: the runtime poisons it
+        // mid-execution, and a cached copy would keep a closed fast path open.
+        let live_shape = blk.load_volatile(I32, &format!("@{guard_shape_global}"));
+        let mut ok = if require_raw_f64 {
+            // ObjectHeader word 0 is class_id @0 and the ShapeId @4 (#8113):
+            // one 64-bit compare against `(shape << 32) | class_id`.
+            let identity = blk.load(I64, &obj_ptr);
+            let declared = expected_class_identity(blk, expected_class_id, &live_shape);
+            blk.icmp_eq(I64, &identity, &declared)
+        } else {
+            let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+            let shape_id = blk.load(I32, &sid_ptr);
+            let mut ok = blk.icmp_eq(I32, &shape_id, &live_shape);
+            for arm in subclass_arms {
+                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
+                ok = blk.or(I1, &ok, &arm_ok);
+            }
+            ok
+        };
+        if require_raw_f64 && !subclass_arms.is_empty() {
+            // Each arm is a full (class id, ShapeId) pair: the class id is
+            // what licenses the raw-f64 representation (see above).
+            let identity = blk.load(I64, &obj_ptr);
+            for arm in subclass_arms {
+                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_expected =
+                    expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
+                let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
+                ok = blk.or(I1, &ok, &arm_ok);
+            }
+        }
+        if require_raw_f64 {
+            // GcHeader `_reserved` (u16 @-6): the per-object typed-layout
+            // intact bit. A native-endian half-word, like every other
+            // `_reserved` reader. Same block as the identity compare, so the
+            // conjunction lowers to compare-and-branches that fall through
+            // into the slot load (x86-64: `movzwl`/`and`/`je` after the
+            // identity `cmp`/`jne`).
+            let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+            let reserved = blk.load(I16, &res_ptr);
+            let intact = blk.and(I16, &reserved, TYPED_LAYOUT_INTACT_BIT);
+            let intact_ok = blk.icmp_ne(I16, &intact, "0");
+            ok = blk.and(I1, &ok, &intact_ok);
+        }
+        blk.cond_br(&ok, fast_label, &guardcall_label);
+    }
+
+    ctx.current_block = guardcall_idx;
+    (guardcall_label, obj_handle)
+}
+
 /// `(shape_id << 32) | class_id` — the little-endian value of an
 /// `ObjectHeader`'s first word for an instance of that exact class and layout.
 fn expected_class_identity(
@@ -570,4 +747,57 @@ fn expected_class_identity(
     let shape_bits = blk.zext(I32, shape_id, I64);
     let shape_high = blk.shl(I64, &shape_bits, "32");
     blk.or(I64, &shape_high, &class_bits)
+}
+
+#[cfg(test)]
+mod read_receiver_range_tests {
+    use super::{HANDLE_BAND_TOP_U64, READ_RECEIVER_BIAS, READ_RECEIVER_SPAN};
+
+    /// The predicate the flat form spelled out: POINTER tag AND a payload
+    /// above the native-registry handle band.
+    fn flat(bits: u64) -> bool {
+        (bits >> 48) == 0x7FFD && (bits & 0x0000_FFFF_FFFF_FFFF) > HANDLE_BAND_TOP_U64
+    }
+
+    /// The emitted form: one biased unsigned compare.
+    fn biased(bits: u64) -> bool {
+        bits.wrapping_sub(READ_RECEIVER_BIAS) < READ_RECEIVER_SPAN
+    }
+
+    /// The range check is EXACTLY the flat predicate, including at every
+    /// boundary: each neighbouring tag, the handle band's top and the first
+    /// address above it, the top of the 48-bit payload, and plain doubles.
+    /// A one-off in either constant flips at least one of these.
+    #[test]
+    fn biased_range_check_equals_tag_and_handle_predicate() {
+        let payloads = [
+            0u64,
+            1,
+            HANDLE_BAND_TOP_U64 - 1,
+            HANDLE_BAND_TOP_U64,
+            HANDLE_BAND_TOP_U64 + 1,
+            HANDLE_BAND_TOP_U64 + 2,
+            0x7F12_3456_7890,
+            0x0000_FFFF_FFFF_FFFE,
+            0x0000_FFFF_FFFF_FFFF,
+        ];
+        for tag in [
+            0u64, 0x3FF0, 0x7FF8, 0x7FF9, 0x7FFA, 0x7FFC, 0x7FFD, 0x7FFE, 0x7FFF, 0xFFFF,
+        ] {
+            for payload in payloads {
+                let bits = (tag << 48) | payload;
+                assert_eq!(
+                    biased(bits),
+                    flat(bits),
+                    "tag {tag:#x} payload {payload:#x}: biased check disagrees"
+                );
+            }
+        }
+        // The handle the fast path addresses through is the payload.
+        let bits = (0x7FFDu64 << 48) | 0x7F12_3456_7890;
+        assert_eq!(
+            bits.wrapping_sub(READ_RECEIVER_BIAS) + HANDLE_BAND_TOP_U64 + 1,
+            0x7F12_3456_7890
+        );
+    }
 }

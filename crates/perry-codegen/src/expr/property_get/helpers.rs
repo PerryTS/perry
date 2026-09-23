@@ -736,14 +736,13 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
     let expected_class_id_str = expected_class_id.to_string();
     let expected_shape_id =
         crate::typed_shape::load_class_shape_id(ctx, &class_name, &keys_global_name);
-    let (obj_bits, obj_handle, key_raw) = {
+    let (obj_bits, key_raw) = {
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
         let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        (obj_bits, obj_handle, key_raw)
+        (obj_bits, key_raw)
     };
 
     let fast_idx = ctx.new_block("class_field_get_number.fast");
@@ -760,17 +759,16 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         field_index,
         true,
     );
-    let _guardcall_label = crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
-        ctx,
-        &obj_bits,
-        &obj_handle,
-        &expected_class_id_str,
-        true,
-        None,
-        &fast_label,
-        &subclass_arms,
-        &keys_global_name,
-    );
+    let (_guardcall_label, obj_handle) =
+        crate::expr::class_field_inline_guard::emit_class_field_read_precheck(
+            ctx,
+            &obj_bits,
+            &expected_class_id_str,
+            true,
+            &fast_label,
+            &subclass_arms,
+            &keys_global_name,
+        );
     let guard_ok = ctx.block().call(
         I32,
         "js_typed_feedback_class_field_get_guard",

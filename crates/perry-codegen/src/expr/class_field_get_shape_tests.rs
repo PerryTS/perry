@@ -308,3 +308,91 @@ fn the_ic_call_carries_the_guard_operands() {
         "IC call signature drifted from the guard's operand list:\n{line}"
     );
 }
+
+/// Loads in a block body, one per line.
+fn loads(body: &str) -> Vec<&str> {
+    body.lines().filter(|l| l.contains(" = load ")).collect()
+}
+
+/// The hit path of a BOXED class-field read is the receiver range check, ONE
+/// ShapeId compare against the poisonable expectation, and the slot load.
+///
+/// Every header predicate the guard used to test with a masked word compare
+/// (GC kind, forwarded, descriptor flag, tombstone flag) is carried by the
+/// ShapeId (`emit_class_field_read_precheck`, rules 1-3 and #10826), and a
+/// boxed slot needs no class id: the key list fixes the slot. This fails on
+/// the pre-change guard, which loaded the header word and the 64-bit
+/// (class id, ShapeId) identity.
+#[test]
+fn boxed_class_field_read_guard_is_one_shape_compare() {
+    let ir = ir(Type::Any);
+    let deref = block_body(&ir, "class_field_inline.deref").expect("deref block");
+    let deref_loads = loads(deref);
+    assert_eq!(
+        deref_loads.len(),
+        2,
+        "boxed read guard must load the ShapeId word and the expectation, nothing else:\n{deref}"
+    );
+    assert!(
+        deref.contains("load volatile i32, ptr @perry_class_guard_shape_"),
+        "the expectation must be read VOLATILE (the runtime poisons it):\n{deref}"
+    );
+    assert!(
+        deref_loads
+            .iter()
+            .filter(|l| l.contains("load i32, ptr "))
+            .count()
+            == 1
+            && !deref_loads.iter().any(|l| l.contains("load i64")),
+        "one 32-bit ShapeId load, no 64-bit identity (class id) load:\n{deref}"
+    );
+    assert!(
+        !deref.contains("load i16"),
+        "a boxed read does not test the typed-layout intact bit:\n{deref}"
+    );
+    // The receiver test is the one-compare range check, not the flat
+    // tag+handle predicate.
+    assert!(
+        ir.contains("sub i64 ")
+            && ir.contains(", 9222527611925692416")
+            && ir.contains("icmp ult i64 ")
+            && ir.contains(", 281474975662080"),
+        "receiver test is not the biased range check:\n{ir}"
+    );
+    // The header word mask of the old guard (0xFF | 0x80 << 8 | 3072 << 16)
+    // must be gone from the read.
+    assert!(
+        !ir.contains("201359615"),
+        "the GcHeader word mask is back on the read guard:\n{ir}"
+    );
+}
+
+/// A RAW-F64 class-field read keeps exactly the two facts the ShapeId does
+/// not carry: the class id (a key-list ShapeId is shared with same-keyed
+/// literals and classes, which may hold a non-number in the slot) and the
+/// per-object typed-layout intact bit (a downgrade clears it without a shape
+/// transition). Nothing else — no GcHeader word.
+#[test]
+fn raw_f64_class_field_read_guard_keeps_class_id_and_intact_bit() {
+    let ir = ir(Type::Number);
+    let deref = block_body(&ir, "class_field_inline.deref").expect("deref block");
+    let deref_loads = loads(deref);
+    assert_eq!(
+        deref_loads.len(),
+        3,
+        "raw-f64 read guard: the (class id, ShapeId) word, the expectation and \
+         the _reserved half-word, nothing else:\n{deref}"
+    );
+    assert!(
+        deref_loads.iter().any(|l| l.contains("load i64")),
+        "the class id must stay in the raw-f64 compare:\n{deref}"
+    );
+    assert!(
+        deref.contains("load i16, ") && deref.contains("and i16 ") && deref.contains(", 4096"),
+        "the raw-f64 guard must test GC_OBJ_TYPED_LAYOUT_INTACT:\n{deref}"
+    );
+    assert!(
+        !ir.contains("469795071"),
+        "the GcHeader word mask is back on the read guard:\n{ir}"
+    );
+}

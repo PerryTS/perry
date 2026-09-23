@@ -1177,9 +1177,11 @@ pub(super) fn emit_guarded_direct_method_call(
             // field and per call, facts the exact `(class_id, ShapeId)` pair
             // already pins (slot count, key-at-slot) plus a descriptor lookup
             // (`shape_descriptor_by_id`, a thread-local map) — it was ~80% of
-            // the probe-first `c.inc()` loop. The inline precheck the
-            // field-GET sites already use proves class/shape + not-forwarded +
-            // the per-OBJECT raw-f64 intact bit in a handful of loads, and
+            // the probe-first `c.inc()` loop. The inline read precheck the
+            // field-GET sites already use proves the exact (class id, ShapeId)
+            // pair — which also carries kind, not-forwarded and descriptor
+            // state (`emit_class_field_read_precheck`) — plus the per-OBJECT
+            // raw-f64 intact bit in two loads, and
             // because the intact bit is object-wide, ONE precheck vouches for
             // every receiver field at once. Its miss edge runs the unchanged
             // per-field runtime guard chain, so nothing is lost.
@@ -1189,22 +1191,17 @@ pub(super) fn emit_guarded_direct_method_call(
             let (fields_proven_idx, fields_merge_idx) = if inline_fields_proof {
                 let proven_idx = ctx.new_block("typed_f64_recv_method.fields_proven");
                 let proven_label = ctx.block_label(proven_idx);
-                let (obj_bits, obj_handle) = {
-                    let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(recv_box);
-                    let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-                    (obj_bits, obj_handle)
-                };
+                let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
                 // Leaves `current_block` at the freshly created guardcall
                 // block, where the per-field runtime chain below is emitted.
+                // The READ guard: this proof licenses the clone's raw-f64
+                // field reads (class id + ShapeId + intact bit).
                 let _guardcall =
-                    crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+                    crate::expr::class_field_inline_guard::emit_class_field_read_precheck(
                         ctx,
                         &obj_bits,
-                        &obj_handle,
                         &expected_class_id_str,
                         true,
-                        None,
                         &proven_label,
                         &[],
                         &keys_global_name,

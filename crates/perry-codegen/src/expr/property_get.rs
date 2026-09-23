@@ -1683,12 +1683,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // #5093: build the guard operands once, up front, so
                         // both the inline shape pre-check and the fast slot
                         // load can reference them.
-                        let (obj_bits, obj_handle) = {
-                            let blk = ctx.block();
-                            let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-                            let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                            (obj_bits, obj_handle)
-                        };
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
                         let fast_idx = ctx.new_block("class_field_get.fast");
                         let merge_idx = ctx.new_block("class_field_get.merge");
                         let fast_label = ctx.block_label(fast_idx);
@@ -1706,14 +1701,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 field_index,
                                 requires_raw_f64,
                             );
-                        let _guardcall_label =
-                            crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+                        let (_guardcall_label, obj_handle) =
+                            crate::expr::class_field_inline_guard::emit_class_field_read_precheck(
                                 ctx,
                                 &obj_bits,
-                                &obj_handle,
                                 &expected_class_id_str,
                                 requires_raw_f64,
-                                None,
                                 &fast_label,
                                 &subclass_arms,
                                 &keys_global_name,
