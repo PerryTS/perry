@@ -554,6 +554,10 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     ),
     method("net", "connect", true, Some("Socket")),
     method("net", "write", true, Some("Socket")),
+    // #10908 — paused-mode `socket.read([size])`. Dispatches to
+    // `js_net_socket_read`; see the NATIVE_MODULE_TABLE row in
+    // `perry-codegen/src/lower_call/native_table/net_events.rs`.
+    method("net", "read", true, Some("Socket")),
     method("net", "end", true, Some("Socket")),
     method("net", "destroy", true, Some("Socket")),
     method("net", "on", true, Some("Socket")),
