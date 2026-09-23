@@ -698,3 +698,66 @@ fn parking_a_deadline_keeps_its_handle_and_cancelling_destroys_it() {
     super::timer_cancel(id).expect("cancel is idempotent");
     assert_eq!(super::live_handles(), before);
 }
+
+/// A stream some *other* transport connected becomes an ordinary socket on the
+/// loop: its endpoints are reported, its bytes arrive as `NET_DATA` under the
+/// caller's id, its writes reach the peer, and it closes like any other handle.
+/// This is the path an HTTP `'upgrade'` takes into `node:net`.
+#[cfg(any(unix, windows))]
+#[test]
+fn an_adopted_stream_is_an_ordinary_socket_on_the_loop() {
+    use std::io::{Read, Write};
+
+    let _fixture = Fixture::start();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let listen_addr = listener.local_addr().unwrap();
+    let mut peer = std::net::TcpStream::connect(listen_addr).expect("connect");
+    let (adopted, _) = listener.accept().expect("accept");
+    let before = super::live_handles();
+
+    let id = 77;
+    super::adopt_stream(id, SUBSYSTEM, adopted.into()).expect("adopt the stream");
+    assert_eq!(
+        super::live_handles(),
+        before + 1,
+        "the adopted stream must be a handle this loop holds"
+    );
+    assert_eq!(
+        super::local_addr(id).map(|a| a.port()),
+        Some(listen_addr.port()),
+        "the endpoints are read off the descriptor before it is handed over"
+    );
+    assert_eq!(
+        super::peer_addr(id),
+        Some(peer.local_addr().unwrap()),
+        "the peer endpoint too"
+    );
+
+    super::read_start(id).expect("read the adopted stream");
+    peer.write_all(b"hello").unwrap();
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_DATA && e.id == id)),
+        "bytes the peer sends must arrive under the caller's id: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, id), b"hello");
+
+    super::write(id, b"world".to_vec(), 0).expect("write to the peer");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_WROTE && e.id == id)),
+        "the write must complete: {:?}",
+        events()
+    );
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut reply = [0u8; 5];
+    peer.read_exact(&mut reply).expect("the peer reads the reply");
+    assert_eq!(&reply, b"world");
+
+    super::close(id).expect("close the adopted stream");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_CLOSED && e.id == id)),
+        "the adopted stream reports its terminal Closed: {:?}",
+        events()
+    );
+    assert_eq!(super::live_handles(), before);
+}

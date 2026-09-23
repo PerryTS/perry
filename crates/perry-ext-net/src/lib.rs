@@ -1135,17 +1135,18 @@ fn submit_tcp_connect(
     // run must already be routed to the loop rather than parked.
     set_turnloop(id, true);
     let target = host.clone();
-    let submitted = turnloop_io::on_loop(move || {
-        match turnloop_io::connect_tcp(id, &host, port, true) {
-            Ok(()) => {
-                turnloop_io::note_local_connect(id, local_server);
-                if let Some((servername, verify, config)) = direct_tls {
-                    turnloop_io::note_direct_tls(id, servername, verify, config);
+    let submitted =
+        turnloop_io::on_loop(
+            move || match turnloop_io::connect_tcp(id, &host, port, true) {
+                Ok(()) => {
+                    turnloop_io::note_local_connect(id, local_server);
+                    if let Some((servername, verify, config)) = direct_tls {
+                        turnloop_io::note_direct_tls(id, servername, verify, config);
+                    }
                 }
-            }
-            Err(err) => refuse_connect(id, &err.code, &host, port, local_server),
-        }
-    });
+                Err(err) => refuse_connect(id, &err.code, &host, port, local_server),
+            },
+        );
     if !submitted {
         refuse_connect(id, turnloop_io::NO_LOOP_CODE, &target, port, local_server);
     }

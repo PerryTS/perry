@@ -4,8 +4,8 @@
 //! under the 2000-line CI gate.
 
 use crate::{
-    dispatch, ensure_gc_scanner_registered, mark_closed, next_id, push_event, statics,
-    turnloop_io, PendingNetEvent, SocketState,
+    dispatch, ensure_gc_scanner_registered, mark_closed, next_id, push_event, statics, turnloop_io,
+    PendingNetEvent, SocketState,
 };
 use perry_ffi::turnloop_net as tl;
 use std::collections::HashMap;

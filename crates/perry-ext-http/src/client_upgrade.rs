@@ -148,9 +148,10 @@ pub(crate) async fn dispatch_upgrade_http_request(
     if status == 101 {
         // perry-ext-net takes the connection as a plain `std` stream and hands
         // it to the agent's turnloop loop; tokio only has to let go of it.
-        let socket_id = stream
-            .into_std()
-            .map_or(perry_ffi::INVALID_HANDLE, perry_ext_net::adopt_upgraded_tcp_stream);
+        let socket_id = stream.into_std().map_or(
+            perry_ffi::INVALID_HANDLE,
+            perry_ext_net::adopt_upgraded_tcp_stream,
+        );
         push_event(PendingHttpEvent::Upgrade {
             request_handle,
             status,
