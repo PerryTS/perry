@@ -11,6 +11,11 @@ use super::opts::CrossModuleCtx;
 
 /// Read-only view of the `CompileOptions` fields that artifact emission still
 /// references after the pipeline has moved other fields into `CrossModuleCtx`.
+///
+/// `Copy` so a phase module (`class_artifacts`) can take the same view by
+/// value without the artifact tail losing its own; every field is already a
+/// shared borrow or a scalar.
+#[derive(Clone, Copy)]
 pub(super) struct OptsView<'a> {
     pub(super) import_function_prefixes: &'a HashMap<String, String>,
     pub(super) constructor_param_counts: &'a std::collections::BTreeMap<String, usize>,
