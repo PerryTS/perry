@@ -56,20 +56,20 @@ We publish *everything*, including the workloads where V8's JIT still beats us â
 <summary><b>The full published suite, generated from the artifact â€” including the rows we lose</b></summary>
 
 <!-- public-node-bun:start -->
-Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `827a92bad5a5`.
+Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `b77aba63433b`.
 Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks.
 
 | Benchmark | Perry | Node.js | Bun | Result | What it tests |
 |---|---:|---:|---:|---|---|
-| factorial | 59 ms | 95 ms | 61 ms | win vs both | Modular accumulation |
-| method_calls | 6 ms | 9 ms | 4 ms | mixed | Class method dispatch |
-| closure | 29 ms | 30 ms | 29 ms | mixed | Closure creation and invocation |
-| binary_trees | 6 ms | 5 ms | 9 ms | mixed | Tree allocation and traversal |
-| string_concat | 5 ms | 37 ms | 12 ms | win vs both | String append loop |
-| prime_sieve | 4 ms | 4 ms | 5 ms | mixed | Sieve of Eratosthenes |
-| mandelbrot | 15 ms | 17 ms | 16 ms | win vs both | Complex-number iteration |
-| matrix_multiply | 22 ms | 24 ms | 22 ms | mixed | Matrix multiplication |
-| json_roundtrip | 186 ms | 407 ms | 189 ms | win vs both | Parse and stringify ~1 MB JSON |
+| factorial | 93 ms | 95 ms | 95 ms | win vs both | Modular accumulation |
+| method_calls | 35 ms | 11 ms | 8 ms | loss vs both | Class method dispatch |
+| closure | 47 ms | 49 ms | 49 ms | win vs both | Closure creation and invocation |
+| binary_trees | 13 ms | 6 ms | 6 ms | loss vs both | Tree allocation and traversal |
+| string_concat | 6 ms | 31 ms | 5 ms | mixed | String append loop |
+| prime_sieve | 6 ms | 5 ms | 5 ms | loss vs both | Sieve of Eratosthenes |
+| mandelbrot | 25 ms | 24 ms | 29 ms | mixed | Complex-number iteration |
+| matrix_multiply | 19 ms | 33 ms | 33 ms | win vs both | Matrix multiplication |
+| json_roundtrip | 144 ms | 379 ms | 219 ms | win vs both | Parse and stringify ~1 MB JSON |
 
 <!-- public-node-bun:end -->
 
