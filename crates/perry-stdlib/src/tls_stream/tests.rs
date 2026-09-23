@@ -10,7 +10,7 @@ const TEST_CA: &str = include_str!("../../../perry-tls-session/tests/test-ca.pem
 const TEST_KEY: &str = include_str!("../../../perry-tls-session/tests/test-key.pem");
 
 fn provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    Arc::new(rustls::crypto::ring::default_provider())
 }
 
 fn server_config() -> Arc<rustls::ServerConfig> {
