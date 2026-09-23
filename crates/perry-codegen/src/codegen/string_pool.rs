@@ -96,6 +96,13 @@ impl<'a> InitChunker<'a> {
     }
 }
 
+/// Pool literals at most this long are minted as ATOMS. **Must equal
+/// `INTERN_MAX_BYTE_LEN` in `perry-runtime/src/string/intern.rs`**, the
+/// longest key the runtime interns; `js_string_pool_atom` falls back to a
+/// plain allocation past it, so a mismatch costs only the atom, never
+/// correctness.
+pub(crate) const POOL_ATOM_MAX_BYTE_LEN: usize = 64;
+
 /// Emit the string pool into the module: byte-array constants, handle
 /// globals, and the `__perry_init_strings_<prefix>` function that
 /// allocates + NaN-boxes + GC-roots each handle exactly once at startup.
@@ -446,12 +453,30 @@ pub(super) fn emit_string_pool(
         let bytes_ref = format!("@{}", entry.bytes_global);
         let handle_ref = format!("@{}", entry.handle_global);
         let len_str = entry.byte_len.to_string();
-        let from_bytes_fn = if entry.is_wtf8 {
-            "js_string_from_wtf8_bytes"
+        // A literal short enough to be a property key becomes its text's ATOM
+        // (`js_string_pool_atom`): one string object per key text for the
+        // whole agent, shared by every module's pool, every canonical shape
+        // key list and every intern hit — so a read site's key and the
+        // receiver's shape key compare by pointer (S3b). Longer literals, and
+        // WTF-8 ones (lone surrogates: never an identifier key), keep the
+        // plain allocation.
+        let atomize =
+            !entry.is_wtf8 && entry.byte_len > 0 && entry.byte_len <= POOL_ATOM_MAX_BYTE_LEN;
+        let handle = if atomize {
+            let hash = crate::nanbox::i64_literal(entry.dispatch_hash);
+            blk.call(
+                I64,
+                "js_string_pool_atom",
+                &[(PTR, &bytes_ref), (I32, &len_str), (I64, &hash), (I32, "0")],
+            )
         } else {
-            "js_string_from_bytes"
+            let from_bytes_fn = if entry.is_wtf8 {
+                "js_string_from_wtf8_bytes"
+            } else {
+                "js_string_from_bytes"
+            };
+            blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)])
         };
-        let handle = blk.call(I64, from_bytes_fn, &[(PTR, &bytes_ref), (I32, &len_str)]);
         let nanboxed = blk.call(DOUBLE, "js_nanbox_string", &[(I64, &handle)]);
         // Plain store, no remembered-set write barrier: the handle slot is
         // registered as a permanent global root on the very next line (always

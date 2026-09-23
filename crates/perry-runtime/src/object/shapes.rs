@@ -257,11 +257,12 @@ impl ShapeRecordRef {
     /// SHAPE's key count, never the backing's length (#10969: one backing per
     /// growth chain).
     ///
-    /// A stored key matches the site's key by identity, or else by (byte
-    /// length, bytes): a canonical list holds the string its first grower
-    /// passed, which is usually NOT the read site's pooled literal. The
-    /// site's slot guess is tried first. Allocation-free, never calls user
-    /// code.
+    /// Key compares go identity first: canonical lists hold their text's ATOM
+    /// (`string::intern::AtomTable`), which is also what a read site's pooled
+    /// key is, so the site's guess, and then any position, matches by one
+    /// pointer compare. A byte pass remains for a list written before its
+    /// atom existed (and for SSO slots) — a pointer MISmatch proves nothing.
+    /// Allocation-free, never calls user code.
     #[inline]
     pub(crate) unsafe fn inline_slot_of_key(
         self,
@@ -284,11 +285,16 @@ impl ShapeRecordRef {
         let bound = len
             .min(r.logical_key_count as usize)
             .min(r.live_inline_slot_count as usize);
+        let heap_bits = crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits();
         // The site's slot guess first: the receiver's shape confirms it.
-        if hint < bound && stored_key_matches(key, (*slots.add(hint)).to_bits()) {
+        if hint < bound && (*slots.add(hint)).to_bits() == heap_bits {
             return Some(hint);
         }
-        (0..bound).find(|&i| i != hint && stored_key_matches(key, (*slots.add(i)).to_bits()))
+        // Identity over the whole list before any byte is compared.
+        if let Some(i) = (0..bound).find(|&i| (*slots.add(i)).to_bits() == heap_bits) {
+            return Some(i);
+        }
+        (0..bound).find(|&i| stored_key_matches(key, (*slots.add(i)).to_bits()))
     }
 
     /// The SPILL position at which this shape stores `key` as an own DATA
@@ -333,11 +339,11 @@ impl ShapeRecordRef {
     }
 }
 
-/// Does the key-list entry `bits` name `key`? A canonical list holds heap
-/// strings of its own (NOT the site's pooled key — measured: every stored key
-/// of a literal-born shape is a distinct heap string) or SSO immediates, so a
-/// stored key matches by identity, by SSO identity, or by (byte length,
-/// bytes).
+/// Does the key-list entry `bits` name `key`? A canonical list holds its
+/// text's ATOM where one exists (the site's pooled key), but must not be
+/// assumed to: a list written before its atom existed holds another heap
+/// string, and a slot may be an SSO immediate. So a stored key matches by
+/// identity, by SSO identity, or by (byte length, bytes).
 #[inline]
 unsafe fn stored_key_matches(key: *const crate::StringHeader, bits: u64) -> bool {
     if bits == crate::JSValue::string_ptr(key as *mut crate::StringHeader).bits() {

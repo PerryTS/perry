@@ -525,6 +525,172 @@ mod tests {
         }
     }
 
+    /// `megamorphic_receivers` with a chosen text for the read key (slot 2),
+    /// each receiver growing that key through its OWN freshly allocated string
+    /// — never an atom — so which string a shape's list ends up holding is
+    /// decided by the list writer, not by the test.
+    fn megamorphic_receivers_keyed<'s>(
+        scope: &'s crate::gc::RuntimeHandleScope,
+        n: usize,
+        read_key: &[u8],
+        extra_prefix: &str,
+    ) -> Vec<crate::gc::RuntimeHandle<'s>> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 8));
+            for (k, v) in [
+                (&b"pos"[..], 1.0),
+                (&b"end"[..], 2.0),
+                (read_key, 100.0 + i as f64),
+            ] {
+                let key = scope.root_string_ptr(key_of(k));
+                obj.with_mut_ptr(|o| {
+                    key.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, v))
+                });
+            }
+            let extra = format!("{extra_prefix}{i}");
+            let key = scope.root_string_ptr(key_of(extra.as_bytes()));
+            obj.with_mut_ptr(|o| {
+                key.with_const_ptr(|kp| crate::object::js_object_set_field_by_name(o, kp, 7.0))
+            });
+            out.push(obj);
+        }
+        out
+    }
+
+    fn atom_of(text: &[u8]) -> *mut crate::StringHeader {
+        let hash = crate::object::key_bytes_hash(text.as_ptr(), text.len());
+        crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
+    }
+
+    fn answered() -> u64 {
+        crate::object::shapes::SHAPE_ANSWERED_READS.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Read `key` at one latched site over `objs` until it latches, then once
+    /// more; every read must return `expect(i)`. Returns the reads the
+    /// receivers' SHAPES answered on the latched pass.
+    fn latched_pass(
+        objs: &[crate::gc::RuntimeHandle<'_>],
+        key: &crate::gc::RuntimeHandle<'_>,
+        expect: impl Fn(usize) -> u64,
+    ) -> u64 {
+        let mut cache: PicCache = [0; PIC_CACHE_WORDS];
+        let mut slot: PicCacheSlot = &mut cache;
+        let packed = AtomicU64::new(0);
+        let read = |o: &crate::gc::RuntimeHandle<'_>, slot: &mut PicCacheSlot| {
+            o.with_mut_ptr(|p: *mut ObjectHeader| {
+                key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(p), k, slot, &packed))
+            })
+        };
+        for round in 0..4 {
+            for (i, o) in objs.iter().enumerate() {
+                assert_eq!(
+                    read(o, &mut slot).to_bits(),
+                    expect(i),
+                    "round {round} receiver {i}"
+                );
+            }
+        }
+        assert!(
+            cache[crate::object::field_get_set::ic_miss::PIC_WAY_STATE] < 0,
+            "premise: the site latched megamorphic"
+        );
+        let before = answered();
+        for (i, o) in objs.iter().enumerate() {
+            assert_eq!(
+                read(o, &mut slot).to_bits(),
+                expect(i),
+                "latched read, receiver {i}"
+            );
+        }
+        answered() - before
+    }
+
+    /// S3b: one key text reaching the runtime as TWO string objects — each
+    /// receiver grows it through its own fresh copy — is still ONE string in
+    /// every shape's key list: the text's atom, the same object a read site's
+    /// pooled key is. So the site matches by pointer; and a site holding yet
+    /// another copy (not the atom) still gets the right answer by bytes.
+    #[test]
+    fn a_key_text_in_two_string_objects_is_one_atom_in_every_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3b_two_objects_kind";
+        let atom = scope.root_string_ptr(atom_of(text));
+        let copy = scope.root_string_ptr(key_of(text));
+        let addr = |h: &crate::gc::RuntimeHandle<'_>| {
+            h.with_const_ptr(|p: *const crate::StringHeader| p as usize)
+        };
+        assert_ne!(
+            addr(&atom),
+            addr(&copy),
+            "premise: two string objects, one text"
+        );
+        assert!(
+            unsafe { crate::string::is_atom_for_test(atom.with_const_ptr(|p| p)) },
+            "premise: the pool mint made an atom"
+        );
+        let objs = megamorphic_receivers_keyed(&scope, 48, text, "s3b_two_x");
+        let atom_bits = crate::value::js_nanbox_string(addr(&atom) as i64).to_bits();
+        for (i, o) in objs.iter().enumerate() {
+            let stored = o.with_const_ptr(|p: *const ObjectHeader| unsafe {
+                crate::object::object_keys(p).get(2).bits()
+            });
+            assert_eq!(
+                stored, atom_bits,
+                "INVARIANT: receiver {i}'s shape holds the atom, not the copy it grew with"
+            );
+        }
+        // A computed key with the text interns TO the atom.
+        let interned = copy.with_const_ptr(|p: *const crate::StringHeader| {
+            crate::string::js_string_intern(
+                p,
+                crate::object::key_bytes_hash(text.as_ptr(), text.len()),
+            ) as usize
+        });
+        assert_eq!(interned, addr(&atom), "a copy interns to the atom");
+        // The site holds the atom: every latched read is the receiver's own
+        // value, answered by its shape.
+        let by_atom = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        assert!(
+            by_atom >= 47,
+            "the shape answers a pointer-equal key: {by_atom}"
+        );
+        // A site holding a different string object with the same text (not
+        // the atom): the answer is the same, found by bytes.
+        let fresh = scope.root_string_ptr(key_of(text));
+        let by_bytes = latched_pass(&objs, &fresh, |i| (100.0 + i as f64).to_bits());
+        assert!(
+            by_bytes >= 47,
+            "a non-atom key text still matches by bytes: {by_bytes}"
+        );
+    }
+
+    /// A list written BEFORE its key's atom existed holds another string. A
+    /// pointer mismatch is not an answer: the shape still answers by bytes.
+    #[test]
+    fn a_list_written_before_the_atom_existed_still_answers() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let text = b"s3b_pre_atom_kind";
+        let objs = megamorphic_receivers_keyed(&scope, 48, text, "s3b_pre_x");
+        // The lists hold the string the grow path interned; a collision
+        // evicts it from the cache before the atom is minted, so the atom is
+        // a different object.
+        crate::string::test_evict_interned(text);
+        let atom = scope.root_string_ptr(atom_of(text));
+        let atom_bits = atom.with_const_ptr(|p: *const crate::StringHeader| {
+            crate::value::js_nanbox_string(p as i64).to_bits()
+        });
+        let stored = objs[0].with_const_ptr(|p: *const ObjectHeader| unsafe {
+            crate::object::object_keys(p).get(2).bits()
+        });
+        assert_ne!(stored, atom_bits, "premise: the list predates the atom");
+        let n = latched_pass(&objs, &atom, |i| (100.0 + i as f64).to_bits());
+        assert!(n >= 47, "the shape answers by bytes: {n}");
+    }
+
     /// A plain own data read that has never primed: the entry must fall all the
     /// way through to the miss handler, answer the field, and leave the site
     /// primed exactly as the old `js_object_get_field_ic_miss_packed` edge did.

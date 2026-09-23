@@ -36,6 +36,229 @@ crate::perry_thread_local! {
         std::cell::UnsafeCell::new(crate::zeroed_cache::new_zeroed_cache(INTERN_TABLE_SIZE));
 }
 
+/// Property-key ATOMS: exactly one string object per key text among the
+/// program's pooled literals.
+///
+/// The direct-mapped table above is a CACHE — a collision evicts — so two
+/// strings with one text can both be "interned" at different moments, and a
+/// key compare can never conclude anything from pointer equality alone. That
+/// is why every runtime key match, and the megamorphic read's confirm against
+/// the receiver's key list, paid a byte compare: a canonical key list held the
+/// string its first grower happened to pass, and a read site holds its
+/// module's pooled literal, and the two were different objects with the same
+/// bytes.
+///
+/// An atom is the one string for its text in this agent, for the agent's
+/// lifetime. Atoms are minted only from the compiled program's string pools
+/// (`js_string_pool_atom`, at module init), so the table is bounded by the
+/// program TEXT, never by runtime data, and it can hold its strings strongly
+/// without a death prune: every atom is also the value of a registered pool
+/// handle, so the table keeps nothing alive that was not already live. The
+/// collector rewrites the entries on move through the intern-table root
+/// scanner (`scan_intern_table_roots_mut`), exactly like the cache's.
+///
+/// Two funnels consult it: the intern cache's miss paths (so a computed key
+/// with an atom's text interns TO the atom), and canonical key lists when they
+/// write a key (`canonical_keys::Appended::atomized`), so a read site's pooled
+/// key and the receiver's shape key are one pointer.
+///
+/// The table never decides an answer. A pointer match proves equal text; a
+/// pointer MISmatch proves nothing (a list written before its atom existed
+/// holds another string), so every consumer still falls back to bytes on a
+/// mismatch.
+pub(crate) struct AtomTable {
+    /// Open addressing, linear probe, power-of-two capacity; `string_ptr == 0`
+    /// is an empty slot. Entries are never removed.
+    slots: Vec<InternEntry>,
+    len: usize,
+}
+
+impl AtomTable {
+    const fn new() -> Self {
+        AtomTable {
+            slots: Vec::new(),
+            len: 0,
+        }
+    }
+
+    /// The atom for `bytes` (whose FNV-1a hash is `hash`), if any.
+    ///
+    /// # Safety
+    /// Every tabled pointer is a live string (the collector keeps them so).
+    unsafe fn lookup(&self, bytes: &[u8], hash: u64) -> Option<*const StringHeader> {
+        self.lookup_from(0, bytes, hash)
+    }
+
+    /// [`Self::lookup`] for a string that may itself BE the atom (`from`, or
+    /// 0): a tabled pointer equal to it answers without comparing bytes, which
+    /// is the common case for a key a list already holds.
+    ///
+    /// # Safety
+    /// As [`Self::lookup`].
+    unsafe fn lookup_from(
+        &self,
+        from: usize,
+        bytes: &[u8],
+        hash: u64,
+    ) -> Option<*const StringHeader> {
+        if self.slots.is_empty() {
+            return None;
+        }
+        let mask = self.slots.len() - 1;
+        let mut i = (hash as usize) & mask;
+        loop {
+            let entry = &self.slots[i];
+            if entry.string_ptr == 0 {
+                return None;
+            }
+            if entry.hash == hash {
+                let existing = entry.string_ptr as *const StringHeader;
+                if entry.string_ptr == from {
+                    return Some(existing);
+                }
+                if (*existing).byte_len as usize == bytes.len()
+                    && std::slice::from_raw_parts(string_data(existing), bytes.len()) == bytes
+                {
+                    return Some(existing);
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// Table `atom` under `hash`. The caller has proved no atom exists for
+    /// its text. Rust-heap only: never allocates on the GC heap.
+    fn insert(&mut self, hash: u64, atom: *const StringHeader) {
+        if (self.len + 1) * 4 > self.slots.len() * 3 {
+            let cap = (self.slots.len() * 2).max(256);
+            let old = std::mem::replace(
+                &mut self.slots,
+                vec![
+                    InternEntry {
+                        hash: 0,
+                        string_ptr: 0,
+                    };
+                    cap
+                ],
+            );
+            for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
+                self.place(entry);
+            }
+        }
+        self.place(InternEntry {
+            hash,
+            string_ptr: atom as usize,
+        });
+        self.len += 1;
+    }
+
+    fn place(&mut self, entry: InternEntry) {
+        let mask = self.slots.len() - 1;
+        let mut i = (entry.hash as usize) & mask;
+        while self.slots[i].string_ptr != 0 {
+            i = (i + 1) & mask;
+        }
+        self.slots[i] = entry;
+    }
+}
+
+crate::perry_thread_local! {
+    /// Per agent, like the cache: an atom is a string in THIS agent's heap.
+    pub(crate) static ATOMS: std::cell::UnsafeCell<AtomTable> =
+        std::cell::UnsafeCell::new(AtomTable::new());
+}
+
+/// The atom for `bytes`, without allocating. `None` when no atom exists — or
+/// when the agent's table is already torn down.
+#[inline]
+pub(crate) fn atom_lookup(bytes: &[u8], hash: u64) -> Option<*const StringHeader> {
+    ATOMS
+        .try_with(|t| unsafe { (*t.get()).lookup(bytes, hash) })
+        .ok()
+        .flatten()
+}
+
+/// The atom with `key`'s text, if one exists. `hash` is the FNV-1a hash of
+/// `key`'s bytes (`key_bytes_hash`). Allocation-free, GC-free.
+///
+/// # Safety
+/// `key` is a live heap `StringHeader`.
+#[inline]
+pub(crate) unsafe fn atom_for_key(
+    key: *const StringHeader,
+    hash: u64,
+) -> Option<*const StringHeader> {
+    if key.is_null() || (*key).byte_len > INTERN_MAX_BYTE_LEN {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(string_data(key), (*key).byte_len as usize);
+    ATOMS
+        .try_with(|t| (*t.get()).lookup_from(key as usize, bytes, hash))
+        .ok()
+        .flatten()
+}
+
+/// Mint (or find) the atom for a pooled literal: the one string object this
+/// agent uses for that text from now on. Called from `__perry_init_strings_*`
+/// in place of `js_string_from_bytes` for pool entries that can be property
+/// keys (at most `INTERN_MAX_BYTE_LEN` bytes). `hash` is the pool's
+/// precomputed FNV-1a hash of the bytes — the same function as every other
+/// key hash here.
+///
+/// Adopts the intern cache's string when it already holds this text, so the
+/// keys runtime code interned before this module initialised keep matching.
+/// Longer literals are not keys worth an atom and take the plain allocation.
+#[no_mangle]
+pub extern "C" fn js_string_pool_atom(
+    bytes: *const u8,
+    len: u32,
+    hash: u64,
+    is_wtf8: i32,
+) -> *mut StringHeader {
+    if len == 0 || len > INTERN_MAX_BYTE_LEN || bytes.is_null() {
+        return if is_wtf8 != 0 {
+            js_string_from_wtf8_bytes(bytes, len)
+        } else {
+            js_string_from_bytes(bytes, len)
+        };
+    }
+    let input = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+    if let Some(atom) = atom_lookup(input, hash) {
+        return atom as *mut StringHeader;
+    }
+    // Finds the cache's string for this text or allocates one, marking it
+    // interned and immutable (`refcount = 0`). Nothing is held across the
+    // allocation: `bytes` is read-only data in the compiled image.
+    let atom = intern_dispatch_bytes(0, bytes, len as usize, 0, is_wtf8 != 0);
+    if atom.is_null() {
+        return js_string_from_bytes(bytes, len);
+    }
+    let _ = ATOMS.try_with(|t| unsafe { (*t.get()).insert(hash, atom) });
+    atom as *mut StringHeader
+}
+
+/// Test hook: evict `bytes` from the intern CACHE (a collision would), so the
+/// next atom mint for that text allocates a new string instead of adopting
+/// the cached one.
+#[cfg(test)]
+pub(crate) fn test_evict_interned(bytes: &[u8]) {
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    with_intern_table(|table| unsafe {
+        (*table)[(hash as usize) & INTERN_TABLE_MASK] = InternEntry {
+            hash: 0,
+            string_ptr: 0,
+        };
+    });
+}
+
+/// Test view: is `p` the atom of its text?
+#[cfg(test)]
+pub(crate) unsafe fn is_atom_for_test(p: *const StringHeader) -> bool {
+    let bytes = std::slice::from_raw_parts(string_data(p), (*p).byte_len as usize);
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    atom_lookup(bytes, hash) == Some(p)
+}
+
 #[inline]
 pub(crate) fn with_intern_table<R>(
     f: impl FnOnce(*mut [InternEntry; INTERN_TABLE_SIZE]) -> R,
@@ -75,6 +298,20 @@ pub extern "C" fn js_string_intern(key: *const StringHeader, hash: u64) -> *cons
         });
         if let Some(existing) = hit {
             return existing;
+        }
+
+        // An atom owns this text: the cache slot takes the ATOM, so a computed
+        // key interns to the same string a read site and a shape key list hold
+        // (see `AtomTable`), never to a second copy.
+        let bytes = std::slice::from_raw_parts(string_data(key), byte_len as usize);
+        if let Some(atom) = atom_lookup(bytes, hash) {
+            with_intern_table(|table| {
+                (*table)[slot] = InternEntry {
+                    hash,
+                    string_ptr: atom as usize,
+                };
+            });
+            return atom;
         }
 
         // Miss or collision — insert (evict on collision)
@@ -148,6 +385,16 @@ pub(crate) fn intern_dispatch_bytes(
     });
     if let Some(existing) = hit {
         return existing;
+    }
+    // An atom owns this text (see `AtomTable`): hand it out rather than a copy.
+    if let Some(atom) = atom_lookup(input, hash) {
+        with_intern_table(|table| unsafe {
+            (*table)[slot] = InternEntry {
+                hash,
+                string_ptr: atom as usize,
+            };
+        });
+        return atom;
     }
 
     let key = if is_wtf8 {
@@ -265,6 +512,16 @@ pub fn scan_intern_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         for i in 0..INTERN_TABLE_SIZE {
             let entry = &mut (*table)[i];
             visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
+        }
+    });
+    // The atoms: strong like the cache (every atom is also a registered pool
+    // handle's value, so this keeps nothing alive that was not), rewritten on
+    // move. A key's hash is its content's, so a move never rehashes.
+    let _ = ATOMS.try_with(|t| unsafe {
+        for entry in (*t.get()).slots.iter_mut() {
+            if entry.string_ptr != 0 {
+                visitor.visit_tagged_usize_slot(&mut entry.string_ptr, crate::value::STRING_TAG);
+            }
         }
     });
 }
