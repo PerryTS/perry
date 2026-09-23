@@ -761,11 +761,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
 
     progress.checkpoint("class methods, constructors, and statics");
 
-    // Node builtin named imports are runtime callable/property values rather
+    // Native named imports are runtime callable/property values rather
     // than functions compiled into this module. When one is exported (either
     // `import { x } from "node:m"; export { x }` or the synthetic Import +
-    // Named pair used for `export { x } from "node:m"`), publish a zero-arg
-    // getter that reads the live builtin ESM export cell. Importers classify
+    // Named pair used for a direct native re-export), publish a zero-arg
+    // getter that reads the native ESM export cell. Importers classify
     // this as a variable export and invoke the returned callable value, rather
     // than linking a nonexistent `perry_fn_<module>__x` body.
     for export in &hir.exports {
@@ -773,7 +773,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             continue;
         };
         let native_origin = hir.imports.iter().find_map(|import| {
-            if !import.is_native || !perry_api_manifest::is_node_core_module(&import.source) {
+            if !import.is_native {
                 return None;
             }
             import

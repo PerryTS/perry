@@ -3626,7 +3626,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 perry_hir::Export::Named { local, exported }
                     if !hir.imports.iter().any(|import| {
                         import.is_native
-                            && perry_api_manifest::is_node_core_module(&import.source)
                             && import.specifiers.iter().any(|specifier| {
                                 matches!(
                                     specifier,
