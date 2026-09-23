@@ -2407,67 +2407,6 @@ pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
     }
 }
 
-/// A canonical keys list was just published as `parent` plus one appended
-/// slot (`canonical_keys::extend_slot`'s miss path). Hand the parent's
-/// COMPLETE slot index to the child, extended by that one slot, instead of
-/// leaving the child to rebuild it from nothing on its first lookup.
-///
-/// #10969: every length of a growing key list is its own canonical array, so
-/// without this each length of a wide object built key by key indexed its
-/// whole list again — 2,199,657 indexed slots on `ts.transpileModule` against
-/// 75,775 before canonical identity, where `shape_keys_grown` carried one
-/// index across an owned array's in-place growth. This is that carry for the
-/// canonical successor.
-///
-/// A MOVE, not a copy, so a chain of N publications costs O(N) in total. The
-/// parent keeps working without an index: a later lookup on it rebuilds one
-/// at the usual threshold, which happens at most once per publication. A
-/// partial parent index is left alone. `appended_hash` is the appended key's
-/// `key_bytes_hash`, or `None` for a slot that is not a key string (a
-/// tombstone or a symbol), which an index never holds — exactly what
-/// `index_range` would have produced for the child.
-pub(crate) fn shape_keys_extended(
-    parent: *const ArrayHeader,
-    parent_len: u32,
-    child: *const ArrayHeader,
-    appended_hash: Option<u64>,
-) {
-    let (parent_id, child_id) = (parent as usize, child as usize);
-    if parent_id == 0 || child_id == 0 || parent_id == child_id {
-        return;
-    }
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if inner.indices.contains_key(&child_id)
-        || inner
-            .indices
-            .get(&parent_id)
-            .is_none_or(|index| index.indexed_len != parent_len)
-    {
-        return;
-    }
-    let Some(mut index) = inner.indices.remove(&parent_id) else {
-        return;
-    };
-    if let Some(hash) = appended_hash {
-        index.slots.push(hash, parent_len);
-    }
-    index.indexed_len = parent_len + 1;
-    inner.note_young_keys(child_id as u64);
-    inner.indices.insert(child_id, index);
-}
-
-/// How many keys the slot index for `keys` covers, or `None` without one.
-#[cfg(test)]
-pub(crate) fn test_keys_index_len(keys: *const ArrayHeader) -> Option<u32> {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .indices
-        .get(&(keys as usize))
-        .map(|index| index.indexed_len)
-}
-
 /// Drop only the validated slot-index accelerator for a keys array that was
 /// compacted/retired (delete path). Descriptors are weak and exact-fact gated,
 /// but are not eagerly removed: another live sibling may still name one. The
