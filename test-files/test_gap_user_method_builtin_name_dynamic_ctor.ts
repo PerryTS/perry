@@ -171,6 +171,11 @@ const lib: any = { SinglyLinkedList, EmptyAwareSinglyLinkedList };
 
 // 6. the instance reaches the call through other bindings
 interface Pushy { n: number; push(v: number): Pushy; get(k: string): string; }
+function useInstance(x: InstanceType<typeof R>) {
+  x.push(3);
+  x.unshift(1);
+  return x.n + ":" + x.log.join(",");
+}
 {
   const C: any = R;
   class Holder {
@@ -192,6 +197,7 @@ interface Pushy { n: number; push(v: number): Pushy; get(k: string): string; }
     return x.n + ":" + x.get("i");
   }
   console.log("instancetype-param", useIt(new C()));
+  console.log("instancetype-module-fn", useInstance(new C()));
   const iq: Pushy = new C();
   iq.push(4);
   console.log("interface-typed", iq.n, iq.get("b"));
