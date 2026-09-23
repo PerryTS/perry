@@ -1156,6 +1156,14 @@ unsafe fn format_object_as_json(
             continue;
         }
 
+        // Runtime-internal own keys (a per-evaluation class object's pinned
+        // `__perry_parent_class`, an instance's `__perry_ctor_class_object`,
+        // collection backings, …) are already invisible to every reflective
+        // surface; inspect must not print them either, even with showHidden.
+        if crate::object::field_get_set::is_internal_runtime_key_bytes(key_str.as_bytes()) {
+            continue;
+        }
+
         // Error inspection consumes an own `name` into the headline. Node
         // does not print it again as an enumerable body property unless
         // showHidden asks for the complete reflective surface.

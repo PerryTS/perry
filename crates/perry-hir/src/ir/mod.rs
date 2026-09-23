@@ -9,6 +9,7 @@
 //! re-exported here with explicit names — `use perry_hir::ir::*;` and
 //! `use perry_hir::ir::Foo;` continue to work unchanged.
 
+mod class_value;
 mod constants;
 mod decl;
 mod expr;
@@ -16,6 +17,9 @@ mod module;
 mod ops;
 mod stmt;
 mod widget;
+
+// ---- class_value.rs ----
+pub use class_value::class_value_template_name;
 
 // ---- constants.rs ----
 pub use constants::{

@@ -235,11 +235,7 @@ fn trailing_return_classref(body: &[Stmt]) -> Option<String> {
 }
 
 fn classref_name(expr: &Expr) -> Option<String> {
-    match expr {
-        Expr::ClassRef(name) => Some(name.clone()),
-        Expr::Sequence(parts) => parts.last().and_then(classref_name),
-        _ => None,
-    }
+    crate::ir::class_value_template_name(expr).map(str::to_string)
 }
 
 /// Extract a property name from a PropName

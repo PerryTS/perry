@@ -110,12 +110,11 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         }
     }
 
+    // #11042: a dynamic-heritage class expression lowers to a bare
+    // `ClassExprFresh` rather than a `ClassRef`; its template is still the class
+    // a per-call-site clone must copy.
     fn classref_name(expr: &Expr) -> Option<String> {
-        match expr {
-            Expr::ClassRef(c) => Some(c.clone()),
-            Expr::Sequence(parts) => parts.last().and_then(classref_name),
-            _ => None,
-        }
+        perry_hir::class_value_template_name(expr).map(str::to_string)
     }
 
     fn resolve_curried_factory_return_class<'a>(
