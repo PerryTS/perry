@@ -210,7 +210,9 @@ pub(crate) use spill::{
 #[cfg(test)]
 use spill::{spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
 #[cfg(test)]
-pub(crate) use spill::{test_set_spill_safepoint_hook, SpillSafepointHook};
+pub(crate) use spill::{
+    test_set_spill_safepoint_hook, SpillSafepointHook, TEST_LAYOUT_NOTE_SLOT_CALLS,
+};
 mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
