@@ -538,6 +538,102 @@ fn root_fields_run_at_own_super(ctx: &FnCtx<'_>, root: &str) -> bool {
             .is_some_and(|parent| !ctx.classes.contains_key(parent))
 }
 
+/// Does `class_name`'s own constructor reach its parent ONLY through
+/// `super(...spread)` lowered to `js_super_construct_apply`?
+///
+/// That runtime helper runs the parent's registered standalone constructor on
+/// the same `this` (every local class registers one), and that constructor
+/// installs the field initializers of every class from the chain root down to
+/// the parent. The construction-time staging below must then stage nothing
+/// above `class_name`: staging the root as well ran its initializers twice —
+/// silently for public fields, and "Cannot initialize a private field twice"
+/// for a `#field` (#11120, redis's `linked-list.js`: a CommonJS-wrapped class
+/// gets a synthesized capture constructor whose `super(...args)` is spread).
+///
+/// Mirrors the arm selection of `Expr::SuperCallSpread` in
+/// `expr/this_super_call.rs`: only a LOCAL user parent reaches the generic
+/// `js_super_construct_apply` arm (the `Map`/`Set`/`URLSearchParams`/
+/// `DOMException` arms key on the parent's name alone), and without a class id
+/// no call is emitted at all. A body that ALSO has a plain `super(...)` keeps
+/// the staging, which that form relies on.
+///
+/// A body with only a plain `super(...)` to a local static parent inlines the
+/// nearest ancestor constructor body (the static-parent arm's walk past
+/// constructor-free classes), so the question is asked again of that
+/// ancestor: `class F extends E { constructor() { super(); } }` over a spread
+/// `E` still reaches `js_super_construct_apply` from the inlined `E` body.
+pub(crate) fn ctor_super_reruns_parent_ctor(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    let mut current = class_name.to_string();
+    // Bounded like the runtime's own ancestor walk; a well-formed chain is
+    // far shorter.
+    for _ in 0..64 {
+        let Some(class) = ctx.classes.get(&current).copied() else {
+            return false;
+        };
+        let Some(ctor) = class.constructor.as_ref() else {
+            return false;
+        };
+        let Some(parent) = class.extends_name.as_deref() else {
+            return false;
+        };
+        if !ctx.classes.contains_key(parent) {
+            return false;
+        }
+        let (has_spread, has_plain) = super::new_helpers::ctor_body_super_call_forms(&ctor.body);
+        match (has_spread, has_plain) {
+            (true, false) => {
+                return !matches!(parent, "Map" | "Set" | "URLSearchParams" | "DOMException")
+                    && ctx.class_ids.contains_key(&current);
+            }
+            (false, true) if class.extends_expr.is_none() => {
+                // Mirror the static-parent arm of `Expr::SuperCall`: walk to
+                // the nearest local ancestor with a constructor body; an
+                // effectful imported constructor, or running out of local
+                // classes, ends the question with "no".
+                let mut ancestor = parent.to_string();
+                loop {
+                    let Some(ac) = ctx.classes.get(&ancestor).copied() else {
+                        return false;
+                    };
+                    if ac.constructor.is_some() {
+                        break;
+                    }
+                    if ctx
+                        .imported_class_ctors
+                        .get(&ancestor)
+                        .is_some_and(|ctor| ctor.stops_constructor_walk())
+                    {
+                        return false;
+                    }
+                    let Some(next) = ac.extends_name.as_deref() else {
+                        return false;
+                    };
+                    ancestor = next.to_string();
+                }
+                current = ancestor;
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The classes a constructor-owning `leaf` must stage BEFORE its body runs:
+/// the chain root only (every later class is installed by the body's
+/// `super()` — see `AncestorsOnly`), and not even the root when the root
+/// installs its own fields at its own `super()` (#10443) or when the leaf's
+/// `super(...spread)` re-runs the whole parent constructor (#11120).
+fn staged_before_ctor_body(ctx: &FnCtx<'_>, chain: &[String], leaf: &str) -> Vec<String> {
+    if chain.len() <= 1
+        || root_fields_run_at_own_super(ctx, &chain[0])
+        || ctor_super_reruns_parent_ctor(ctx, leaf)
+    {
+        Vec::new()
+    } else {
+        vec![chain[0].clone()]
+    }
+}
+
 /// Whether a named public field initializer can populate the allocation's
 /// predeclared own slot through the ordinary by-name store.
 ///
@@ -624,12 +720,10 @@ pub(crate) fn apply_field_initializers_recursive(
             // its body may reference its own fields directly — unless the
             // root's own constructor calls `super()` into a non-user parent,
             // which installs them itself (#10443, see
-            // `root_fields_run_at_own_super`).
-            if chain.len() <= 1 || root_fields_run_at_own_super(ctx, &chain[0]) {
-                Vec::new()
-            } else {
-                vec![chain[0].clone()]
-            }
+            // `root_fields_run_at_own_super`), or unless the leaf's
+            // `super(...spread)` re-runs the parent's whole constructor
+            // (#11120, `ctor_super_reruns_parent_ctor`).
+            staged_before_ctor_body(ctx, &chain, class_name)
         }
         FieldInitMode::SelfOnly => {
             if let Some(last) = chain.last().cloned() {
@@ -640,9 +734,33 @@ pub(crate) fn apply_field_initializers_recursive(
         }
         FieldInitMode::UpToInclusive(stop_at) => {
             if let Some(idx) = chain.iter().position(|n| n == stop_at) {
-                // Same root exception as `AncestorsOnly` (#10443).
-                let start = usize::from(root_fields_run_at_own_super(ctx, &chain[0]));
-                chain[start..=idx].to_vec()
+                let stop_is_derived = ctx.classes.get(stop_at).is_some_and(|c| {
+                    c.extends.is_some()
+                        || c.extends_name.is_some()
+                        || c.native_extends.is_some()
+                        || c.extends_expr.is_some()
+                });
+                if stop_is_derived {
+                    // The inherited body is `stop_at`'s own constructor, so it
+                    // is staged exactly as that constructor is when `stop_at`
+                    // itself is constructed (`AncestorsOnly`): its `super()`
+                    // installs every class after the root through `stop_at`
+                    // — the static-parent arm walks the intermediates and
+                    // then applies `SelfOnly(stop_at)`, `stop_at` being on top
+                    // of `class_stack` while its body is inlined. Staging the
+                    // whole prefix here as well ran each of those initializers
+                    // twice: `class F extends E {}` over `class E extends S {
+                    // #b = 1; constructor() { super(); } }` threw "Cannot
+                    // initialize a private field twice" from a plain `new F()`
+                    // (#11120).
+                    staged_before_ctor_body(ctx, &chain[..=idx], stop_at)
+                } else {
+                    // A heritage-free `stop_at` is the root and has no
+                    // `super()` to install it. Same root exception as
+                    // `AncestorsOnly` (#10443).
+                    let start = usize::from(root_fields_run_at_own_super(ctx, &chain[0]));
+                    chain[start..=idx].to_vec()
+                }
             } else {
                 Vec::new()
             }

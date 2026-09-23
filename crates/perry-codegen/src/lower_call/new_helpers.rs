@@ -465,6 +465,43 @@ fn expr_calls_super(expr: &Expr) -> bool {
     found
 }
 
+/// Which `super(...)` forms this constructor body contains, arrows included:
+/// `(has_spread, has_plain)`. A `super(...spread)` cannot inline its parent
+/// (the argument count is dynamic), so it lowers to `js_super_construct_apply`,
+/// which runs the parent's whole standalone constructor — field initializers
+/// of every class from the root down to the parent included (#11120).
+pub(crate) fn ctor_body_super_call_forms(body: &[perry_hir::Stmt]) -> (bool, bool) {
+    let spread = ctor_body_any(body, &|e: &Expr| expr_has_super_form(e, true), NO_STMT_PRED);
+    let plain = ctor_body_any(
+        body,
+        &|e: &Expr| expr_has_super_form(e, false),
+        NO_STMT_PRED,
+    );
+    (spread, plain)
+}
+
+fn expr_has_super_form(expr: &Expr, spread: bool) -> bool {
+    match expr {
+        Expr::SuperCallSpread(_) if spread => return true,
+        Expr::SuperCall(_) if !spread => return true,
+        Expr::Closure { body, .. } => {
+            return ctor_body_any(
+                body,
+                &|e: &Expr| expr_has_super_form(e, spread),
+                NO_STMT_PRED,
+            );
+        }
+        _ => {}
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_has_super_form(child, spread) {
+            found = true;
+        }
+    });
+    found
+}
+
 /// True when a closure (arrow) created in the ctor body contains a
 /// `super(...)` call. Such an arrow can run DURING construction (e.g.
 /// stored on an iterator and invoked from its `return()` while the ctor's
