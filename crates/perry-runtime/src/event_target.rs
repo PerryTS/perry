@@ -1098,9 +1098,18 @@ unsafe fn bound_event_target(closure: *const crate::closure::ClosureHeader) -> *
                 .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT);
             if valid {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let target = scope.root_raw_mut_ptr(target);
-                if is_event_target(target.get_raw_mut_ptr::<ObjectHeader>()) {
-                    return target.get_raw_mut_ptr::<ObjectHeader>();
+                let target_handle = scope.root_raw_mut_ptr(target);
+                // `is_event_target` interns `_eventTarget` through `key()`,
+                // which allocates, so the receiver can move while the
+                // predicate runs. `across_mut` orders the re-read after that
+                // call and hands back the refreshed address, and the nested
+                // `with_const_ptr` scopes the pointer the predicate reads --
+                // neither ever binds the pre-call address.
+                let (is_target, target) = target_handle.across_mut::<ObjectHeader, _>(|| {
+                    target_handle.with_const_ptr::<ObjectHeader, _>(|p| is_event_target(p))
+                });
+                if is_target {
+                    return target;
                 }
             }
         }
@@ -1213,14 +1222,32 @@ extern "C" fn event_proto_composed_path_thunk(
 /// CustomEvent inherits Event's methods through its prototype link.
 pub(crate) fn install_web_event_proto_methods(name: &str, proto_obj: *mut ObjectHeader) {
     use crate::object::install_proto_method;
+    // Each install allocates a closure, its name string and the key string, so
+    // the prototype can move between them: root it once and re-read the
+    // current address from the rooted slot on every use rather than closing
+    // over the incoming raw `proto_obj`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_nanbox_f64(boxed_ptr(proto_obj));
+    let proto =
+        || crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
     let install = |method: &str, func: *const u8, call_arity: u32, spec_length: u32| {
-        let value = install_proto_method(proto_obj, method, func, call_arity);
+        let value = install_proto_method(proto(), method, func, call_arity);
         let closure = crate::value::js_nanbox_get_pointer(value) as usize;
         if closure != 0 {
             crate::object::native_module::set_builtin_closure_length(closure, spec_length);
         }
+        // WebIDL operations are ENUMERABLE, unlike ECMAScript builtin methods
+        // (`Array.prototype.map` is enumerable=false). Measured on the pinned
+        // oracle (`.node-version`, v26.5.1): every one of the eight members
+        // installed here reports `enumerable=true`, and
+        // `Object.keys(EventTarget.prototype)` is
+        // `["addEventListener", "removeEventListener", "dispatchEvent"]`.
+        // `install_proto_method` defaults to the ECMAScript shape, so each
+        // needs this override. (`AbortSignal.prototype.throwIfAborted` is the
+        // one member of the #10808 group Node makes non-enumerable; it is
+        // installed in `proto_methods.rs` without this call, on purpose.)
         crate::object::set_builtin_property_attrs(
-            proto_obj as usize,
+            proto() as usize,
             method.to_string(),
             crate::object::PropertyAttrs::new(true, true, true),
         );

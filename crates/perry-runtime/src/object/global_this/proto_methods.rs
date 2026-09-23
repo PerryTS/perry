@@ -1356,7 +1356,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             unsafe { install_web_builtin_to_string_tag(proto(), "URL") };
             // Install order is Node's own key order: `toString`, then the
             // WebIDL component accessors, then `toJSON`.
-            install_proto_method(proto(), "toString", url_prototype_href_thunk as *const u8, 0);
+            install_proto_method(
+                proto(),
+                "toString",
+                url_prototype_href_thunk as *const u8,
+                0,
+            );
             web_method_enumerable(proto(), "toString");
             crate::url::prototype::install_url_prototype_accessors(proto());
             install_proto_method(proto(), "toJSON", url_prototype_href_thunk as *const u8, 0);
@@ -1410,7 +1415,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // the correct thing here is to add NO enumerability override.
             // Do not "fix" this into the shared helper -- a uniform install
             // across the five arms silently diverges from Node.
-            // `test_gap_10808_web_proto_methods.ts` pins it.
+            // `test_gap_11003_web_proto_descriptors.ts` pins the descriptor
+            // and the matching `Object.keys` read; the behavioural half is in
+            // `test_gap_10808_web_proto_methods.ts`.
             install_proto_method(
                 proto(),
                 "throwIfAborted",
