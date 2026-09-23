@@ -71,8 +71,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # specifiers, so rows fall by twice the provider count). 349 -> 314 rows and
 # 300 -> 279 providers; each figure is what the script reports on the
 # resolved tree, not arithmetic (#10739).
-EXPECTED_ROWS = 314
-EXPECTED_PROVIDERS = 279
+#
+# +7 rows / +7 providers (#11068): the previously unreachable ioredis
+# `setex`, `ping`, and hash-command methods now have native-table rows. Each
+# provider returns its newly allocated Promise pointer, matching the existing
+# ioredis command rows. 314 -> 321 rows and 279 -> 286 providers.
+EXPECTED_ROWS = 321
+EXPECTED_PROVIDERS = 286
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
