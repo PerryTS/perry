@@ -11,54 +11,19 @@ pub use super::alloc_basic::{
 };
 use super::*;
 
-/// class_id -> (keys array address, field count).
-///
-/// `PtrHasher`, not SipHash: the key is a codegen-minted class id (a small
-/// sequential counter, see `perry-hir::lower::context`), never external input,
-/// so hash-flooding resistance buys nothing — the same rationale as the
-/// pointer-keyed registries in `fast_hash`. `js_build_class_keys_array` calls
-/// `remember_class_keys_array` on EVERY invocation, including the shape-cache
-/// hit path, so this probe is per-object-construction rather than
-/// per-registration; a `claude-code --help` profile put SipHash under
-/// `remember_class_keys_array` at 0.175% of samples.
-///
-/// WEAK, per #6759 phase 3 and the discipline `canonical_keys` already uses:
-/// the address is rewritten on move by [`scan_class_keys_roots_mut`] and the
-/// entry is dropped on death by [`prune_dead_class_keys_entries`].
-///
-/// It used to hold the address as a bare `usize` the collector knew nothing
-/// about, which was sound only by coincidence — the array it happened to be
-/// handed came from `js_array_alloc_with_length_longlived` and never moved
-/// (#179). #10868 step 2.5 substituted a canonical array into the shape
-/// cache, the coincidence ended, and a moved array left this table pointing
-/// at freed memory. The first fix was to allocate canonical arrays longlived
-/// too, which restored the coincidence and cost minor reclamation of every
-/// canonical array — a retention regression seven GC tests named. Scanning
-/// the table is the fix; the allocator was the dressing. Ralph's standing
-/// constraint, arriving as a bug: a side table the collector does not know
-/// about is the thing we keep paying for.
-///
-/// Iteration-order safe, still: the two mutating passes rewrite independent
-/// values and drop entries by a per-entry predicate, so neither depends on
-/// the order the hasher yields.
-static CLASS_KEYS_BY_ID: std::sync::RwLock<
-    Option<crate::fast_hash::PtrHashMap<u32, (usize, u32)>>,
-> = std::sync::RwLock::new(None);
+// Storage: `ObjectHotTables::class_keys_by_id` (this agent's class_id ->
+// (keys array address, field count) memo). See its field docs for why it is
+// per agent and weak.
 
 fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut ArrayHeader) {
     if class_id == 0 || keys_array.is_null() {
         return;
     }
-    {
-        let mut guard = CLASS_KEYS_BY_ID.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(crate::fast_hash::new_ptr_hash_map());
-        }
-        guard
-            .as_mut()
-            .unwrap()
-            .insert(class_id, (keys_array as usize, field_count));
-    }
+    crate::state::state()
+        .object_hot
+        .class_keys_by_id
+        .borrow_mut()
+        .insert(class_id, (keys_array as usize, field_count));
     // #6759 C5a: harvest this class's declared instance-field names into
     // the process-wide name-hash set the per-key inline-guard vetting
     // consults — and retro-check them against prototype-level descriptor
@@ -80,12 +45,8 @@ fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut A
 /// WEAK — the address is visited as metadata, never marked, so remembering a
 /// class's keys array does not keep it alive.
 pub fn scan_class_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let Ok(mut guard) = CLASS_KEYS_BY_ID.write() else {
-        return;
-    };
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
+    let st = crate::state::state();
+    let mut map = st.object_hot.class_keys_by_id.borrow_mut();
     for entry in map.values_mut() {
         if entry.0 == 0 {
             continue;
@@ -101,14 +62,15 @@ pub fn scan_class_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>
 /// keys array — `registered_class_keys_array` already answers `None` for a
 /// zeroed address and every caller re-derives — which is what makes
 /// weakening this table safe rather than merely possible.
+///
+/// The table is this agent's, so every address in it belongs to this agent's
+/// heap: an address the header probe cannot attribute has been recycled, not
+/// borrowed from another thread, and is dropped — the same `None` arm the
+/// canonical trie uses (`canonical_keys::canonical_address_is_recycled`).
 #[cold]
 pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    let Ok(mut guard) = CLASS_KEYS_BY_ID.write() else {
-        return;
-    };
-    let Some(map) = guard.as_mut() else {
-        return;
-    };
+    let st = crate::state::state();
+    let mut map = st.object_hot.class_keys_by_id.borrow_mut();
     map.retain(|_, entry| {
         let addr = entry.0;
         if addr == 0 {
@@ -132,9 +94,16 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
     });
 }
 
+/// This agent's memoized keys array for `class_id`. The address is current
+/// only until the next allocation: a caller that allocates before its last
+/// use must root it or read this again after the allocation.
 pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHeader, u32)> {
-    let guard = CLASS_KEYS_BY_ID.read().ok()?;
-    let (addr, field_count) = guard.as_ref()?.get(&class_id).copied()?;
+    let (addr, field_count) = crate::state::state()
+        .object_hot
+        .class_keys_by_id
+        .borrow()
+        .get(&class_id)
+        .copied()?;
     if addr == 0 {
         return None;
     }
@@ -183,6 +152,100 @@ pub(crate) unsafe fn mark_object_plain_ordinary(obj: *mut ObjectHeader) {
     (*gc)._reserved |= crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
 }
 
+/// Allocate a class instance's storage while the caller holds `keys` — a keys
+/// array it received as a raw copy of a root it does not own (a codegen
+/// per-class global, the class memo, the shape cache) — and hand back both the
+/// storage and the keys array's address AFTER the allocation.
+///
+/// #10969 review, finding 2: a canonical keys array is an ordinary movable
+/// allocation, so a pointer read before a collecting allocation names
+/// from-space after it. The open-block bump cannot collect
+/// (`arena_alloc_gc_no_collect`), so the common case uses `keys` as received
+/// and pays nothing; only the block-exhausted path, which is also the only
+/// path that can collect, roots `keys` across the allocation and reloads it.
+#[inline(always)]
+fn alloc_instance_keeping_keys(
+    total_size: usize,
+    keys: *mut ArrayHeader,
+) -> (*mut ObjectHeader, *mut ArrayHeader) {
+    let raw = crate::arena::arena_alloc_gc_no_collect(total_size, 8, crate::gc::GC_TYPE_OBJECT);
+    if !raw.is_null() {
+        return (raw as *mut ObjectHeader, keys);
+    }
+    alloc_instance_keeping_keys_collecting(total_size, keys)
+}
+
+#[cold]
+#[inline(never)]
+fn alloc_instance_keeping_keys_collecting(
+    total_size: usize,
+    keys: *mut ArrayHeader,
+) -> (*mut ObjectHeader, *mut ArrayHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let keys_handle = scope.root_raw_mut_ptr(keys);
+    keys_handle.across_mut::<ArrayHeader, _>(|| {
+        arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader
+    })
+}
+
+/// Build a fresh longlived keys array: `prefix[0..prefix_len]` (the dynamic
+/// parent's keys, or nothing) followed by one longlived string per `keys`.
+///
+/// Every allocation here can collect — the longlived arena reaches
+/// `gc_check_trigger` when its block is full — so the array under
+/// construction and `prefix` are both held in handles and reloaded after each
+/// allocation, and the prefix is copied last, after the final allocation. The
+/// slots are cleared right after the array is born so a collection that
+/// traces the unfinished array never reads uninitialized words. Callers own
+/// the layout policy (`js_build_class_keys_array` adds its immortal scope).
+///
+/// # Safety
+/// `prefix` is a live keys array with at least `prefix_len` slots, or null
+/// with `prefix_len == 0`, and was read with no allocation since.
+unsafe fn build_longlived_keys_array(
+    prefix: *mut ArrayHeader,
+    prefix_len: u32,
+    keys: &[&[u8]],
+) -> *mut ArrayHeader {
+    let total = prefix_len as usize + keys.len();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prefix_handle = scope.root_raw_mut_ptr(prefix);
+    let (arr, _) = prefix_handle.across_mut::<ArrayHeader, _>(|| {
+        crate::array::js_array_alloc_with_length_longlived(total as u32)
+    });
+    let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
+    for i in 0..total {
+        // GC_STORE_AUDIT(POINTER_FREE): clearing the unfinished array's slots.
+        slots.add(i).write(crate::value::TAG_UNDEFINED);
+    }
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for (j, key_bytes) in keys.iter().enumerate() {
+        let str_ptr =
+            crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let bits = crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK);
+        let idx = prefix_len as usize + j;
+        // GC_STORE_AUDIT(BARRIERED): keys-array slot is reflected into layout metadata.
+        *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64).add(idx) = bits;
+        crate::array::note_array_slot_layout_only(arr, idx, bits);
+    }
+    // No allocation from here on.
+    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    if prefix_len > 0 {
+        let src = crate::array::array_elements_ptr(
+            prefix_handle.get_raw_mut_ptr::<ArrayHeader>() as *const ArrayHeader,
+        ) as *const u64;
+        let dst = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
+        for i in 0..prefix_len as usize {
+            let bits = *src.add(i);
+            // GC_STORE_AUDIT(INIT): parent key copied into the unpublished array.
+            *dst.add(i) = bits;
+            crate::array::note_array_slot_layout_only(arr, i, bits);
+        }
+    }
+    arr
+}
+
 /// Fast class instance allocator that takes a pre-built keys_array
 /// pointer directly, skipping the per-call SHAPE_CACHE lookup. The
 /// codegen pre-builds the keys_array ONCE at module init time
@@ -201,13 +264,15 @@ pub(crate) unsafe fn mark_object_plain_ordinary(obj: *mut ObjectHeader) {
 /// Returns the header plus the BIRTH live inline-slot bound the allocation was
 /// sized for. #8113: the header no longer carries a `field_count` word, so the
 /// widened bound this computes has to travel back to the caller that stamps it.
+/// The last element is `keys_array`'s address after the allocation, which is
+/// the only one a caller may use.
 fn object_alloc_class_inline_keys_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
     keys_array: *mut ArrayHeader,
     preinstalled_shape_id: u32,
-) -> (*mut ObjectHeader, u32, bool) {
+) -> (*mut ObjectHeader, u32, bool, *mut ArrayHeader) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
     }
@@ -226,7 +291,9 @@ fn object_alloc_class_inline_keys_impl(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    // `keys_array` is a raw copy of the caller's root and is not nameable
+    // past this call; the helper hands back its post-allocation address.
+    let (ptr, keys_array) = alloc_instance_keeping_keys(total_size, keys_array);
 
     let used_preinstalled_shape = unsafe {
         (*ptr).class_id = class_id;
@@ -269,7 +336,7 @@ fn object_alloc_class_inline_keys_impl(
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         used_preinstalled_shape
     };
-    (ptr, logical_field_count as u32, used_preinstalled_shape)
+    (ptr, logical_field_count as u32, used_preinstalled_shape, keys_array)
 }
 
 /// Compatibility entry point for runtime callers that do not have a
@@ -289,7 +356,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     field_count: u32,
     keys_array: *mut ArrayHeader,
 ) -> *mut ObjectHeader {
-    let (ptr, birth_slots, _) =
+    let (ptr, birth_slots, _, keys_array) =
         object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array, 0);
     unsafe {
         let key_count = if keys_array.is_null() {
@@ -322,7 +389,7 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> *mut ObjectHeader {
-    let (ptr, birth_slots, used_preinstalled_shape) = object_alloc_class_inline_keys_impl(
+    let (ptr, birth_slots, used_preinstalled_shape, _) = object_alloc_class_inline_keys_impl(
         class_id,
         parent_class_id,
         field_count,
@@ -375,40 +442,20 @@ pub extern "C" fn js_build_class_keys_array(
         .split(|&b| b == 0)
         .filter(|s| !s.is_empty())
         .collect();
-    let num_keys = keys.len();
     // This array is long-lived and never dies. Without the scope, the per-slot
-    // notes below mint a per-object pointer mask for any class with enough
-    // keys, which arms `PERRY_PER_OBJECT_LAYOUTS_ANY` and puts the address
-    // filter probe on EVERY later allocation in the program (measured as 3%
-    // of an allocation-heavy ECS row: `layout_forget_object` from each object
-    // literal). Under the scope the notes settle on the tag-checked scan, and
-    // `layout_init_all_pointer_slots` below records the final all-pointer
-    // layout anyway.
+    // notes in the builder mint a per-object pointer mask for any class with
+    // enough keys, which arms `PERRY_PER_OBJECT_LAYOUTS_ANY` and puts the
+    // address filter probe on EVERY later allocation in the program (measured
+    // as 3% of an allocation-heavy ECS row: `layout_forget_object` from each
+    // object literal). Under the scope the notes settle on the tag-checked
+    // scan, and `layout_init_all_pointer_slots` below records the final
+    // all-pointer layout anyway.
     let _immortal = crate::gc::ImmortalLayoutScope::new();
-    // Issue #179: the keys_array and its string elements are shape-cache
-    // resident for the program's lifetime (anchored by
-    // `scan_shape_cache_roots`). Route them through the longlived arena
-    // so general-arena block 0 doesn't get pinned by the first `new C()`
-    // in a loop, which cascaded via block-persistence into every
+    // Issue #179: route the array and its key strings through the longlived
+    // arena so general-arena block 0 doesn't get pinned by the first
+    // `new C()` in a loop, which cascaded via block-persistence into every
     // subsequent iteration's allocations.
-    let arr = crate::array::js_array_alloc_with_length_longlived(num_keys as u32);
-    let elements_ptr = unsafe {
-        crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
-    };
-    for (i, key_bytes) in keys.iter().enumerate() {
-        let str_ptr = crate::string::js_string_from_bytes_longlived(
-            key_bytes.as_ptr(),
-            key_bytes.len() as u32,
-        );
-        let nanboxed = f64::from_bits(
-            crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-        );
-        unsafe {
-            // GC_STORE_AUDIT(BARRIERED): cached method-name array records layout immediately after.
-            *elements_ptr.add(i) = nanboxed;
-            crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
-        }
-    }
+    let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
     // #7510: every slot in `0..length` now holds an interned key string, and a
     // canonical keys array is immutable for the rest of the program (growing a
     // shape builds a NEW array — `shape_keys_grown`). Say that in the header
@@ -422,9 +469,10 @@ pub extern "C" fn js_build_class_keys_array(
     // Since ~every program builds at least one shape, that made the fast path
     // essentially dead: on `churn_alloc` it fired once in 40 million calls.
     //
-    // The per-element notes above stay. They are what keeps the already-stored
-    // prefix traceable if allocating the *next* key string triggers a GC; the
-    // declaration can only be made once the last slot is filled, which is here.
+    // The per-element notes in the builder stay. They are what keeps the
+    // already-stored prefix traceable if allocating the *next* key string
+    // triggers a GC; the declaration can only be made once the last slot is
+    // filled, which is here.
     unsafe {
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     }
@@ -465,29 +513,15 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    // #10868 stage 1c: the receiver is carried as a `LiveObject`, never as a
-    // raw binding, because `shape_cache_insert` below CAN COLLECT — stage 1b
-    // made it allocate. The token is moved into that call and reassigned from
-    // its result, so the stale pointer this function used to write its keys
-    // edge with is no longer nameable.
-    let mut live = crate::object::canonical_keys::LiveObject::new(arena_alloc_gc(
-        total_size,
-        8,
-        crate::gc::GC_TYPE_OBJECT,
-    ) as *mut ObjectHeader);
-
-    unsafe {
-        let ptr = live.as_ptr();
-        (*ptr).class_id = class_id;
-        (*ptr).parent_class_id = parent_class_id;
-        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
-        (*ptr).meta = ptr::null_mut();
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
-    }
-
     // Use class_id as shape_id for caching the keys array.
     // Hot path: direct-mapped inline cache lookup (no RefCell, no
     // HashMap). Miss path: lazy-build from packed_keys.
+    //
+    // The keys are resolved BEFORE the instance exists. A miss allocates —
+    // the array, its key strings, and the canonical copy `shape_cache_insert`
+    // makes — and an instance allocated first would have to be carried across
+    // all of them (it used to be carried raw across the first two, which can
+    // collect).
     let shape_id = class_id
         .wrapping_mul(10007)
         .wrapping_add(field_count.wrapping_mul(100003))
@@ -502,36 +536,24 @@ pub extern "C" fn js_object_alloc_class_with_keys(
             .split(|&b| b == 0)
             .filter(|s| !s.is_empty())
             .collect();
-        let num_keys = keys.len();
         // Issue #179: shape-cache keys_array lives in the longlived arena
         // (see `js_build_class_keys_array` for the rationale).
-        let arr = crate::array::js_array_alloc_with_length_longlived(num_keys as u32);
-        let elements_ptr = unsafe {
-            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
-        };
-        for (i, key_bytes) in keys.iter().enumerate() {
-            let str_ptr = crate::string::js_string_from_bytes_longlived(
-                key_bytes.as_ptr(),
-                key_bytes.len() as u32,
-            );
-            let nanboxed = f64::from_bits(
-                crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-            );
-            unsafe {
-                // GC_STORE_AUDIT(BARRIERED): cached keys array slot is reflected into layout metadata.
-                *elements_ptr.add(i) = nanboxed;
-                crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
-            }
-        }
-        // `live` is moved into the call and reassigned from its result; the
-        // pre-call value is not nameable afterwards.
-        let (live_after, arr) = shape_cache_insert(shape_id, live, arr);
-        live = live_after;
+        let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
+        let (_, arr) = shape_cache_insert(
+            shape_id,
+            crate::object::canonical_keys::LiveObject::none(),
+            arr,
+        );
         (arr, shape_cache_get_with_id(shape_id).1)
     };
 
+    let (ptr, keys_arr) = alloc_instance_keeping_keys(total_size, keys_arr);
     unsafe {
-        let ptr = live.as_ptr();
+        (*ptr).class_id = class_id;
+        (*ptr).parent_class_id = parent_class_id;
+        // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
+        (*ptr).meta = ptr::null_mut();
+        crate::gc::layout_init_pointer_free(ptr as *mut u8);
         set_object_keys_array_with_live(ptr, keys_arr, field_count);
         // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
         // COMPILED entry point (`js_object_alloc_class_inline_keys_stamped`)
@@ -542,7 +564,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
     }
     remember_class_keys_array(class_id, field_count, keys_arr);
-    live.as_ptr()
+    ptr
 }
 
 /// Allocate a subclass instance whose parent was resolved DYNAMICALLY at
@@ -615,40 +637,10 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect()
         };
         let merged_len = parent_len as usize + own_keys.len();
-        let arr = crate::array::js_array_alloc_with_length_longlived(merged_len as u32);
-        let dst = unsafe {
-            crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader) as *mut f64
-        };
-        let src = unsafe {
-            crate::array::array_elements_ptr(parent_arr as *const crate::array::ArrayHeader)
-                as *const f64
-        };
-        unsafe {
-            for i in 0..parent_len as usize {
-                let bits = (*src.add(i)).to_bits();
-                // GC_STORE_AUDIT(INIT): initializing fresh longlived keys-array slot
-                // with a longlived parent key; layout recorded below.
-                *dst.add(i) = f64::from_bits(bits);
-                crate::array::note_array_slot_layout_only(arr, i, bits);
-            }
-            for (j, key_bytes) in own_keys.iter().enumerate() {
-                let str_ptr = crate::string::js_string_from_bytes_longlived(
-                    key_bytes.as_ptr(),
-                    key_bytes.len() as u32,
-                );
-                let nanboxed = f64::from_bits(
-                    crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-                );
-                let idx = parent_len as usize + j;
-                // GC_STORE_AUDIT(INIT): initializing fresh longlived keys-array slot
-                // with a freshly interned longlived key string; layout recorded below.
-                *dst.add(idx) = nanboxed;
-                crate::array::note_array_slot_layout_only(arr, idx, nanboxed.to_bits());
-            }
-        }
-        // No unrooted receiver crosses this call: the object is allocated
-        // after it here, and in `js_object_alloc_with_shape` it is already
-        // held in a `RuntimeHandleScope` and reloaded below.
+        // `parent_arr` was read from the memo with no allocation since; the
+        // builder roots it across its own allocations and copies it last.
+        let arr = unsafe { build_longlived_keys_array(parent_arr, parent_len, &own_keys) };
+        // No object exists yet, so nothing unrooted crosses this call.
         let (_, arr) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
@@ -661,7 +653,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
-    let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
+    let (ptr, merged_arr) = alloc_instance_keeping_keys(total_size, merged_arr);
     unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_cid;
@@ -742,38 +734,12 @@ pub extern "C" fn js_object_alloc_with_shape(
             .split(|&b| b == 0)
             .filter(|s| !s.is_empty())
             .collect();
-        let num_keys = keys.len();
         // Issue #179: shape-cache keys_array lives in the longlived arena.
-        let arr = crate::array::js_array_alloc_with_length_longlived(num_keys as u32);
-        // The array is not installed in the shape cache (and therefore not a
-        // scanner root) until every key has been allocated. A longlived-string
-        // allocation can collect in between, so root the in-progress array and
-        // reload it before each slot write.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let arr_handle = scope.root_raw_mut_ptr(arr);
-        for (i, key_bytes) in keys.iter().enumerate() {
-            let str_ptr = crate::string::js_string_from_bytes_longlived(
-                key_bytes.as_ptr(),
-                key_bytes.len() as u32,
-            );
-            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            let elements_ptr = unsafe {
-                crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
-                    as *mut f64
-            };
-            let nanboxed = f64::from_bits(
-                crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK),
-            );
-            unsafe {
-                // GC_STORE_AUDIT(BARRIERED): cached keys array slot is reflected into layout metadata.
-                *elements_ptr.add(i) = nanboxed;
-                crate::array::note_array_slot_layout_only(arr, i, nanboxed.to_bits());
-            }
-        }
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        // No unrooted receiver crosses this call: the object is allocated
-        // after it here, and in `js_object_alloc_with_shape` it is already
-        // held in a `RuntimeHandleScope` and reloaded below.
+        // The builder roots the unfinished array across its key allocations;
+        // the object is already held in `obj_scope`.
+        let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
+        // No unrooted receiver crosses this call: the object is held in
+        // `obj_scope` and reloaded below.
         let (_, arr) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),

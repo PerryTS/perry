@@ -145,21 +145,10 @@ impl CanonicalKeys {
 pub(crate) struct LiveObject(*mut crate::object::ObjectHeader);
 
 impl LiveObject {
-    #[inline]
-    pub(crate) fn new(obj: *mut crate::object::ObjectHeader) -> Self {
-        LiveObject(obj)
-    }
-
     /// No unrooted object crosses this call.
     #[inline]
     pub(crate) fn none() -> Self {
         LiveObject(std::ptr::null_mut())
-    }
-
-    /// The raw pointer, at a leaf that does not allocate.
-    #[inline]
-    pub(crate) fn as_ptr(&self) -> *mut crate::object::ObjectHeader {
-        self.0
     }
 
     /// Run `f` with this object rooted, and return the token carrying its
