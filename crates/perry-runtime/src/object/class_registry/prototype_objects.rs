@@ -118,7 +118,7 @@ pub(crate) fn ensure_function_prototype_object(
     // native-callable closures only exist once `callable_exports` minted one
     // (which arms), so binaries without module imports link neither the
     // probe nor the EventEmitter prototype machinery.
-    if let Some(ops) = super::super::nm_namespace_ops() {
+    if let Some(ops) = super::super::nm_ee_ops() {
         proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
             (ops.ee_prototype_install)(func_handle.get_nanbox_f64(), proto)
         });
@@ -916,7 +916,7 @@ pub(crate) fn function_value_for_class_id(class_id: u32) -> Option<f64> {
 /// `EventEmitterAsyncResource` export, its synthetic prototype must carry the
 /// EventEmitter methods (the `Object.setPrototypeOf(x, EventEmitter.prototype)`
 /// mixin pattern — pino). Extracted verbatim; reached ONLY through
-/// `NmNamespaceOps::ee_prototype_install`.
+/// `NmEeOps::ee_prototype_install`.
 pub(crate) unsafe fn nm_ee_prototype_install(
     func_value: f64,
     proto: *mut crate::object::ObjectHeader,

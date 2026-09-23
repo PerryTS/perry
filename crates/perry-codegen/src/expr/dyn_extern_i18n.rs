@@ -1039,6 +1039,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `populate_global_this_builtins` closure `globalThis.<name>`
             // reads, which is callable through the dynamic dispatch path.
             if is_global_this_builtin_name(name) {
+                crate::expr::property_get::globalget::emit_global_value_installs(ctx, name);
                 let name_idx = ctx.strings.intern(name);
                 let name_bytes_global = format!("@{}", ctx.strings.entry(name_idx).bytes_global);
                 let name_len = name.len().to_string();

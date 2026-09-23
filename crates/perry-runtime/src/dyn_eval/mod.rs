@@ -356,6 +356,8 @@ pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
 ///   * TypeError naming the construct when the source parses but uses
 ///     something outside the interpreter subset.
 pub fn dyn_function_from_strings(args: &[String]) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     let fn_id = prepare_function_args(args);
     let function_length = lookup_fn(fn_id)
         .map(|function| {
@@ -410,6 +412,8 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
 /// Build a persistent script lexical environment over a live global/object
 /// environment chain. The last `object_envs` entry has highest precedence.
 pub(crate) fn script_environment(global: f64, object_envs: &[f64]) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     let chain = object_environment_chain(global, object_envs);
     let chain_idx = root_push(chain);
     let lexical = env::env_new(root_get(chain_idx));
@@ -431,6 +435,8 @@ pub(crate) fn function_from_strings_in(
     intrinsics: f64,
     object_envs: &[f64],
 ) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     function_from_strings_in_with_codegen(args, global_this, intrinsics, object_envs, true, true)
 }
 
@@ -442,6 +448,8 @@ pub(crate) fn function_from_strings_in_with_codegen(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
@@ -479,6 +487,8 @@ pub(crate) fn eval_script_in(
     intrinsics: f64,
     lexical_env: f64,
 ) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     eval_script_in_with_codegen(source, global_this, intrinsics, lexical_env, true, true)
 }
 
@@ -490,6 +500,8 @@ pub(crate) fn eval_script_in_with_codegen(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
@@ -522,6 +534,8 @@ pub(crate) fn eval_direct_in(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    // Interpreted code reaches `process`/`console` by name.
+    crate::object::js_install_global_value_surfaces();
     let base = roots_len();
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);

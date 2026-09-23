@@ -743,6 +743,37 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
 // `process.*` metadata-property dispatcher and the process-title cell.
 // ─────────────────────────────────────────────────────────────────────────────
 
+static PROCESS_STDIO_HOOK: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+fn process_stdio_value(property: &str) -> f64 {
+    match property {
+        "stdin" => crate::os::js_process_stdin(),
+        "stdout" => crate::os::js_process_stdout(),
+        _ => crate::os::js_process_stderr(),
+    }
+}
+
+/// Arm the dynamic `process.stdin/stdout/stderr` reads (see
+/// `process_metadata_property`). `black_box`: a single-store slot is otherwise
+/// devirtualized back into a direct reference by whole-program optimization.
+pub(crate) fn arm_process_stdio_properties() {
+    PROCESS_STDIO_HOOK.store(
+        std::hint::black_box(process_stdio_value as fn(&str) -> f64 as *mut ()),
+        std::sync::atomic::Ordering::Release,
+    );
+}
+
+fn process_stdio_property(property: &str) -> Option<f64> {
+    let p = PROCESS_STDIO_HOOK.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: only ever stores `process_stdio_value`.
+    let f: fn(&str) -> f64 = unsafe { std::mem::transmute(p) };
+    Some(f(property))
+}
+
 pub fn process_metadata_property(property: &str) -> Option<f64> {
     Some(match property {
         // #4987: core value-properties. The bare `process` identifier lowers
@@ -759,9 +790,12 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "ppid" => crate::os::js_process_ppid(),
         "version" => f64::from_bits(JSValue::string_ptr(crate::os::js_process_version()).bits()),
         "versions" => crate::os::js_process_versions(),
-        "stdin" => crate::os::js_process_stdin(),
-        "stdout" => crate::os::js_process_stdout(),
-        "stderr" => crate::os::js_process_stderr(),
+        // Dynamic reads only (`p.stdin`, `process["stdout"]`): the member
+        // forms lower to the `ProcessStdin`/`ProcessStdout` intrinsics. Armed by
+        // `js_nm_install_process`, which every value site of `process` runs
+        // first, so the stream objects stay out of binaries that never read
+        // `process` dynamically.
+        "stdin" | "stdout" | "stderr" => process_stdio_property(property)?,
         "allowedNodeEnvironmentFlags" => report::process_allowed_flags_value(),
         "argv0" | "execPath" => module_string_value(&process_argv0_string()),
         "config" => report::process_config_value(),

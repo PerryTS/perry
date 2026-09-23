@@ -423,7 +423,6 @@ pub(crate) unsafe fn get_native_module_constant(
     // JavaScript-visible table rather than blindly mirroring every zlib.h
     // macro: modern Node exposes ZLIB_VERNUM but omits Z_TREES.
     // Required by axios for its stream wiring.
-    let zlib_const = zlib_const_lookup;
 
     let sqlite_const = sqlite_const_lookup;
 
@@ -480,48 +479,15 @@ pub(crate) unsafe fn get_native_module_constant(
             | "_preloadModules" => Some(bound_native_callable_export_value("module", property)),
             _ => None,
         },
-        "inspector" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
-            "console" => Some(cached_inspector_object("console", || {
-                crate::node_inspector::js_node_inspector_console_object()
-            })),
-            "Network" => Some(cached_inspector_object("Network", || {
-                create_sub_namespace("inspector.Network")
-            })),
-            "NetworkResources" => Some(cached_inspector_object("NetworkResources", || {
-                create_sub_namespace("inspector.NetworkResources")
-            })),
-            "DOMStorage" => Some(cached_inspector_object("DOMStorage", || {
-                create_sub_namespace("inspector.DOMStorage")
-            })),
-            "Session" => {
-                let value = bound_native_callable_export_value("inspector", "Session");
-                crate::node_inspector::install_session_prototype(value, false);
-                Some(value)
-            }
-            _ => None,
-        },
-        "inspector/promises" => match property {
-            "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
-            "Session" => {
-                let value = bound_native_callable_export_value("inspector/promises", "Session");
-                crate::node_inspector::install_session_prototype(value, true);
-                Some(value)
-            }
-            // Node's promise entry point spreads the callback namespace and
-            // replaces only Session, so read the callback export itself.
-            _ => {
-                let name =
-                    crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
-                let callback = cjs_default_export_value("inspector")?;
-                let scope = crate::gc::RuntimeHandleScope::new();
-                let callback = scope.root_nanbox_f64(callback);
-                let raw = (callback.get_nanbox_u64() & crate::value::POINTER_MASK)
-                    as *const crate::ObjectHeader;
-                let value = crate::object::js_object_get_field_by_name_f64(raw, name);
-                (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value)
-            }
-        },
+        // Per-module arms registered by the module's `js_nm_install_*()`
+        // (see `nm_const_*` below): this hub is live in every binary, so a
+        // direct arm here would link that module's surface into programs
+        // that never import it.
+        "inspector" | "inspector/promises" | "tls" | "zlib" | "zlib.constants" | "http"
+        | "https" | "cluster" => {
+            let f = super::super::native_module_registry::nm_const_lookup(module_name)?;
+            f(module_name, property, namespace_obj, is_cjs_default_object)
+        }
         "process" => crate::process::process_metadata_property(property),
         "dns" => match property {
             "promises" => {
@@ -860,16 +826,6 @@ pub(crate) unsafe fn get_native_module_constant(
             _ => None,
         },
         "crypto.constants" => crypto_const(property),
-        "tls" => match property {
-            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
-            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
-            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
-            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
-            "CLIENT_RENEG_LIMIT" => Some(3.0),
-            "CLIENT_RENEG_WINDOW" => Some(600.0),
-            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
-            _ => None,
-        },
         "events" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("events"),
             "defaultMaxListeners" => Some(10.0),
@@ -941,55 +897,6 @@ pub(crate) unsafe fn get_native_module_constant(
             ))),
             _ => None,
         },
-        // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
-        // Node also exposes directly on `require('node:zlib')`.
-        "zlib" => match property {
-            "constants" => Some(create_sub_namespace("zlib.constants")),
-            "codes" => Some(zlib_codes_object()),
-            _ => zlib_const(property),
-        },
-        "zlib.constants" => zlib_const(property),
-        // Issue #912 (#909 follow-up): express reads
-        // `const { METHODS } = require('node:http')` at module init and
-        // immediately calls `METHODS.map(...)` — pre-fix METHODS resolved
-        // to undefined and threw `TypeError: Cannot read properties of
-        // undefined (reading 'map')`. Node's `http.METHODS` is a sorted
-        // array of HTTP verb strings sourced from llhttp (only exposed
-        // on `node:http`, not on `https`/`http2`). We materialize the
-        // array once (`http_methods_array` caches the long-lived
-        // pointer) and hand it back for every read.
-        "http" => match property {
-            "METHODS" => Some(unsafe { http_methods_array() }),
-            "OutgoingMessage" => Some(bound_native_callable_export_value(
-                "http",
-                "OutgoingMessage",
-            )),
-            // #3712: Node's `http.maxHeaderSize` default is 16 KiB (16384).
-            "maxHeaderSize" => Some(16384.0),
-            // #3712: `http.globalAgent` is an http.Agent with protocol "http:"
-            // and defaultPort 80 (distinct from https.globalAgent above).
-            "globalAgent" => Some(unsafe { http_global_agent_object() }),
-            // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
-            "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
-            "WebSocket" => Some(js_get_global_this_builtin_value(
-                b"WebSocket".as_ptr(),
-                "WebSocket".len(),
-            )),
-            // #4974: `require('_http_server').kConnectionsCheckingInterval`
-            // (the module aliases to "http" in cjs_wrap). Node exports a
-            // Symbol used as `server[k]` to reach the connections-checking
-            // interval timer; Perry represents it as a sentinel string key
-            // the ext-http server handle dispatch recognizes, mirroring the
-            // `@@__perry_wk_*` well-known-symbol encoding.
-            "kConnectionsCheckingInterval" => {
-                Some(native_string_value("@@kConnectionsCheckingInterval"))
-            }
-            _ => None,
-        },
-        "https" => match property {
-            "globalAgent" => Some(unsafe { https_global_agent_object() }),
-            _ => None,
-        },
         // node:http2 — `constants` is a sub-namespace object (Node exposes it
         // as a single object, not loose top-level constants), so
         // `import { constants } from 'node:http2'` binds to a real object and
@@ -1028,9 +935,6 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         #[cfg(feature = "mod-http2-constants")]
         "http2.constants" => crate::node_http2_constants::constant(property),
-        // node:cluster — primary-side settings and Worker handles are backed
-        // by `crate::cluster`; scheduling/identity constants remain static.
-        "cluster" => crate::cluster::cluster_property(property),
         // Histograms returned by perf_hooks.monitorEventLoopDelay /
         // .createHistogram. Every stat accessor (`count`/`min`/`max`/`mean`/
         // `stddev`/`exceeds`, their BigInt twins, and the `percentiles` Map)
@@ -1234,6 +1138,200 @@ fn fs_const_tail_reference(prop: &str) -> Option<f64> {
     v.map(|n| n as f64)
 }
 
+/// `node:inspector` constants/value exports — registered by `js_nm_install_inspector()` and
+/// reached only through [`get_native_module_constant`]'s registry arm.
+pub(crate) unsafe fn nm_const_inspector(
+    module_name: &str,
+    property: &str,
+    #[allow(unused_variables)] namespace_obj: f64,
+    #[allow(unused_variables)] is_cjs_default_object: bool,
+) -> Option<f64> {
+    #[allow(unused_variables)]
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    match module_name {
+        "inspector" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("inspector"),
+            "console" => Some(cached_inspector_object("console", || {
+                crate::node_inspector::js_node_inspector_console_object()
+            })),
+            "Network" => Some(cached_inspector_object("Network", || {
+                create_sub_namespace("inspector.Network")
+            })),
+            "NetworkResources" => Some(cached_inspector_object("NetworkResources", || {
+                create_sub_namespace("inspector.NetworkResources")
+            })),
+            "DOMStorage" => Some(cached_inspector_object("DOMStorage", || {
+                create_sub_namespace("inspector.DOMStorage")
+            })),
+            "Session" => {
+                let value = bound_native_callable_export_value("inspector", "Session");
+                crate::node_inspector::install_session_prototype(value, false);
+                Some(value)
+            }
+            _ => None,
+        },
+        "inspector/promises" => match property {
+            "default" if !is_cjs_default_object => cjs_default_export_value("inspector/promises"),
+            "Session" => {
+                let value = bound_native_callable_export_value("inspector/promises", "Session");
+                crate::node_inspector::install_session_prototype(value, true);
+                Some(value)
+            }
+            // Node's promise entry point spreads the callback namespace and
+            // replaces only Session, so read the callback export itself.
+            _ => {
+                let name =
+                    crate::string::js_string_from_bytes(property.as_ptr(), property.len() as u32);
+                let callback = cjs_default_export_value("inspector")?;
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let callback = scope.root_nanbox_f64(callback);
+                let raw = (callback.get_nanbox_u64() & crate::value::POINTER_MASK)
+                    as *const crate::ObjectHeader;
+                let value = crate::object::js_object_get_field_by_name_f64(raw, name);
+                (value.to_bits() != crate::value::TAG_UNDEFINED).then_some(value)
+            }
+        },
+        _ => None,
+    }
+}
+
+/// `node:tls` constants/value exports — registered by `js_nm_install_tls()` and
+/// reached only through [`get_native_module_constant`]'s registry arm.
+pub(crate) unsafe fn nm_const_tls(
+    module_name: &str,
+    property: &str,
+    #[allow(unused_variables)] namespace_obj: f64,
+    #[allow(unused_variables)] is_cjs_default_object: bool,
+) -> Option<f64> {
+    #[allow(unused_variables)]
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    match module_name {
+        "tls" => match property {
+            "DEFAULT_ECDH_CURVE" => Some(str_val("auto")),
+            "DEFAULT_MIN_VERSION" => Some(str_val("TLSv1.2")),
+            "DEFAULT_MAX_VERSION" => Some(str_val("TLSv1.3")),
+            "DEFAULT_CIPHERS" => Some(str_val(crate::tls::DEFAULT_CIPHERS)),
+            "CLIENT_RENEG_LIMIT" => Some(3.0),
+            "CLIENT_RENEG_WINDOW" => Some(600.0),
+            "rootCertificates" => Some(crate::tls::js_tls_root_certificates()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `node:zlib` constants/value exports — registered by `js_nm_install_zlib()` and
+/// reached only through [`get_native_module_constant`]'s registry arm.
+pub(crate) unsafe fn nm_const_zlib(
+    module_name: &str,
+    property: &str,
+    #[allow(unused_variables)] namespace_obj: f64,
+    #[allow(unused_variables)] is_cjs_default_object: bool,
+) -> Option<f64> {
+    #[allow(unused_variables)]
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    match module_name {
+        // `zlib.constants` and the top-level Z_*/DEFLATE/INFLATE shortcuts
+        // Node also exposes directly on `require('node:zlib')`.
+        "zlib" => match property {
+            "constants" => Some(create_sub_namespace("zlib.constants")),
+            "codes" => Some(zlib_codes_object()),
+            _ => zlib_const_lookup(property),
+        },
+        "zlib.constants" => zlib_const_lookup(property),
+        _ => None,
+    }
+}
+
+/// `node:http / node:https` constants/value exports — registered by `js_nm_install_http()` and
+/// reached only through [`get_native_module_constant`]'s registry arm.
+pub(crate) unsafe fn nm_const_http(
+    module_name: &str,
+    property: &str,
+    #[allow(unused_variables)] namespace_obj: f64,
+    #[allow(unused_variables)] is_cjs_default_object: bool,
+) -> Option<f64> {
+    #[allow(unused_variables)]
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    match module_name {
+        // Issue #912 (#909 follow-up): express reads
+        // `const { METHODS } = require('node:http')` at module init and
+        // immediately calls `METHODS.map(...)` — pre-fix METHODS resolved
+        // to undefined and threw `TypeError: Cannot read properties of
+        // undefined (reading 'map')`. Node's `http.METHODS` is a sorted
+        // array of HTTP verb strings sourced from llhttp (only exposed
+        // on `node:http`, not on `https`/`http2`). We materialize the
+        // array once (`http_methods_array` caches the long-lived
+        // pointer) and hand it back for every read.
+        "http" => match property {
+            "METHODS" => Some(unsafe { http_methods_array() }),
+            "OutgoingMessage" => Some(bound_native_callable_export_value(
+                "http",
+                "OutgoingMessage",
+            )),
+            // #3712: Node's `http.maxHeaderSize` default is 16 KiB (16384).
+            "maxHeaderSize" => Some(16384.0),
+            // #3712: `http.globalAgent` is an http.Agent with protocol "http:"
+            // and defaultPort 80 (distinct from https.globalAgent above).
+            "globalAgent" => Some(unsafe { http_global_agent_object() }),
+            // #2519: `http.STATUS_CODES` maps status codes to reason phrases.
+            "STATUS_CODES" => Some(unsafe { http_status_codes_object() }),
+            "WebSocket" => Some(js_get_global_this_builtin_value(
+                b"WebSocket".as_ptr(),
+                "WebSocket".len(),
+            )),
+            // #4974: `require('_http_server').kConnectionsCheckingInterval`
+            // (the module aliases to "http" in cjs_wrap). Node exports a
+            // Symbol used as `server[k]` to reach the connections-checking
+            // interval timer; Perry represents it as a sentinel string key
+            // the ext-http server handle dispatch recognizes, mirroring the
+            // `@@__perry_wk_*` well-known-symbol encoding.
+            "kConnectionsCheckingInterval" => {
+                Some(native_string_value("@@kConnectionsCheckingInterval"))
+            }
+            _ => None,
+        },
+        "https" => match property {
+            "globalAgent" => Some(unsafe { https_global_agent_object() }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `node:cluster` constants/value exports — registered by `js_nm_install_cluster()` and
+/// reached only through [`get_native_module_constant`]'s registry arm.
+pub(crate) unsafe fn nm_const_cluster(
+    module_name: &str,
+    property: &str,
+    #[allow(unused_variables)] namespace_obj: f64,
+    #[allow(unused_variables)] is_cjs_default_object: bool,
+) -> Option<f64> {
+    #[allow(unused_variables)]
+    let str_val = |s: &str| -> f64 {
+        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        f64::from_bits(JSValue::string_ptr(ptr).bits())
+    };
+    match module_name {
+        // node:cluster — primary-side settings and Worker handles are backed
+        // by `crate::cluster`; scheduling/identity constants remain static.
+        "cluster" => crate::cluster::cluster_property(property),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod fs_const_tail_table_tests {
     use super::*;
@@ -1411,3 +1509,4 @@ mod sqlite_const_table_tests {
         }
     }
 }
+

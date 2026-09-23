@@ -97,6 +97,12 @@ fn module_null() -> f64 {
 /// constructor fields and leaves loading to the resolver helpers below.
 #[no_mangle]
 pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
+    // The instance's `.constructor` resolves through an armed hook so the
+    // generic field-read path does not retain the `node:module` exports; arm
+    // it (and the module bucket its attach handler lives in) before the first
+    // instance exists.
+    crate::object::js_nm_install_module();
+    crate::object::arm_module_cjs_constructor_hook();
     let id_string = module_value_to_string(id).unwrap_or_default();
     let scope = crate::gc::RuntimeHandleScope::new();
     let parent = scope.root_nanbox_f64(parent);

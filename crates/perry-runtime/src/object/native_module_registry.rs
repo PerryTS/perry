@@ -276,6 +276,7 @@ pub extern "C" fn js_nm_install_child_process() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
+    nm_register_const(NmBucket::Cluster, super::native_module::constants::nm_const_cluster);
     nm_register_attach(
         NmBucket::Cluster,
         super::native_module::callable_exports::nm_attach_cluster,
@@ -327,6 +328,7 @@ pub extern "C" fn js_nm_install_domain() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
+    super::native_module::install_nm_ee_ops();
     nm_register_attach(
         NmBucket::Events,
         super::native_module::callable_exports::nm_attach_events,
@@ -344,6 +346,7 @@ pub extern "C" fn js_nm_install_fs() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_http() {
+    nm_register_const(NmBucket::Http, super::native_module::constants::nm_const_http);
     NM_DISPATCH_REGISTRY[NmBucket::Http as usize].store(
         nm_dispatch_http as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -351,6 +354,7 @@ pub extern "C" fn js_nm_install_http() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_inspector() {
+    nm_register_const(NmBucket::Inspector, super::native_module::constants::nm_const_inspector);
     NM_DISPATCH_REGISTRY[NmBucket::Inspector as usize].store(
         nm_dispatch_inspector as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -411,6 +415,21 @@ pub extern "C" fn js_nm_install_process() {
         nm_dispatch_process as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
+    crate::process::arm_process_stdio_properties();
+}
+
+/// Install the dispatch surface behind the `process` / `console` VALUES
+/// (binary size). Both namespaces exist from realm bootstrap, but their
+/// runtime dispatch buckets are only needed once a program holds one as a
+/// value — `const p = process; p.exit()`, `console[m](…)`, `globalThis.process`
+/// — because direct `process.x` / `console.log(…)` member forms lower to
+/// intrinsics. Codegen emits this (or the per-module installer) at every such
+/// value site; the dyn-eval and `node:vm` entry points call it because
+/// interpreted code can reach either global by name.
+#[no_mangle]
+pub extern "C" fn js_install_global_value_surfaces() {
+    js_nm_install_process();
+    js_nm_install_console();
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_punycode() {
@@ -462,6 +481,7 @@ pub extern "C" fn js_nm_install_sqlite() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_stream() {
+    super::native_module::install_nm_ee_ops();
     nm_register_attach(
         NmBucket::Stream,
         super::native_module::callable_exports::nm_attach_stream,
@@ -481,6 +501,7 @@ pub extern "C" fn js_nm_install_timers() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_tls() {
+    nm_register_const(NmBucket::Tls, super::native_module::constants::nm_const_tls);
     nm_register_attach(
         NmBucket::Tls,
         super::native_module::callable_exports::nm_attach_tls,
@@ -546,6 +567,7 @@ pub extern "C" fn js_nm_install_wasi() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_zlib() {
+    nm_register_const(NmBucket::Zlib, super::native_module::constants::nm_const_zlib);
     NM_DISPATCH_REGISTRY[NmBucket::Zlib as usize].store(
         nm_dispatch_zlib as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -719,6 +741,44 @@ pub(crate) fn nm_attach_lookup(module: &str) -> Option<NmAttachFn> {
 /// speculatively devirtualizable, same as the ctor registry).
 fn nm_register_attach(b: NmBucket, f: NmAttachFn) {
     NM_ATTACH_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
+}
+
+/// Per-module constant/value-export resolvers for `get_native_module_constant`
+/// (binary size): that hub is live in every binary through the `console` /
+/// `process` namespaces, so a module's arms live here instead and are linked
+/// only when its `js_nm_install_<module>()` is.
+pub(crate) type NmConstFn = unsafe fn(&str, &str, f64, bool) -> Option<f64>;
+
+static NM_CONST_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
+    [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
+
+/// Sub-namespace tags whose bucket is their parent module's.
+fn nm_const_bucket(module: &str) -> Option<NmBucket> {
+    match module {
+        "zlib.constants" => Some(NmBucket::Zlib),
+        _ => nm_module_index(module),
+    }
+}
+
+pub(crate) fn nm_const_lookup(module: &str) -> Option<NmConstFn> {
+    let b = nm_const_bucket(module)?;
+    let p = NM_CONST_REGISTRY[b as usize].load(Ordering::Relaxed);
+    if !p.is_null() {
+        return Some(unsafe { std::mem::transmute::<*mut (), NmConstFn>(p) });
+    }
+    #[cfg(test)]
+    if nm_lazy_install_enabled() {
+        js_nm_install_all();
+        let p = NM_CONST_REGISTRY[b as usize].load(Ordering::Relaxed);
+        if !p.is_null() {
+            return Some(unsafe { std::mem::transmute::<*mut (), NmConstFn>(p) });
+        }
+    }
+    None
+}
+
+fn nm_register_const(b: NmBucket, f: NmConstFn) {
+    NM_CONST_REGISTRY[b as usize].store(f as *mut (), Ordering::Relaxed);
 }
 
 #[cfg(test)]

@@ -44,14 +44,6 @@ pub(crate) struct NmNamespaceOps {
     /// namespace object (`const fn = fs.lstatSync`): NaN-boxed namespace
     /// value + property-name bytes → bound callable (or undefined).
     pub bind_method: unsafe fn(f64, *const u8, usize) -> f64,
-    /// #5477: install the EventEmitter prototype methods on the synthetic
-    /// prototype of the bound `events.EventEmitter` export. No-op for every
-    /// other function value.
-    pub ee_prototype_install: unsafe fn(f64, *mut ObjectHeader),
-    /// Dynamic `super()` for `class X extends <runtime EventEmitter export>`:
-    /// installs the EE methods on the fresh instance. `None` when the callee
-    /// is not the bound events export (fall through to normal call dispatch).
-    pub ee_dynamic_super: unsafe fn(f64, *const f64, usize) -> Option<f64>,
 }
 
 static NM_NAMESPACE_OPS: AtomicPtr<NmNamespaceOps> = AtomicPtr::new(std::ptr::null_mut());
@@ -65,6 +57,45 @@ pub(crate) fn arm_nm_namespace_ops(ops: &'static NmNamespaceOps) {
         std::hint::black_box(ops as *const NmNamespaceOps as *mut NmNamespaceOps),
         Ordering::Release,
     );
+}
+
+/// EventEmitter behaviors of the bound `events` / `stream` exports, split out
+/// of [`NmNamespaceOps`] (binary size): that table is armed by every namespace
+/// (including the always-present `console` / `process`), and these two ops pin
+/// the whole EventEmitter/stream method tower. They only ever act on a bound
+/// `events.EventEmitter` / `EventEmitterAsyncResource` / `stream.Stream`
+/// callable, which exists only after its module's `js_nm_install_events()` /
+/// `js_nm_install_stream()` ran (every import form emits it; dynamic `require`
+/// / `getBuiltinModule` go through install-all) — those installers arm this.
+pub(crate) struct NmEeOps {
+    /// #5477: install the EventEmitter prototype methods on the synthetic
+    /// prototype of the bound `events.EventEmitter` export. No-op for every
+    /// other function value.
+    pub ee_prototype_install: unsafe fn(f64, *mut ObjectHeader),
+    /// Dynamic `super()` for `class X extends <runtime EventEmitter export>`:
+    /// installs the EE methods on the fresh instance. `None` when the callee
+    /// is not the bound events export (fall through to normal call dispatch).
+    pub ee_dynamic_super: unsafe fn(f64, *const f64, usize) -> Option<f64>,
+}
+
+static NM_EE_OPS: AtomicPtr<NmEeOps> = AtomicPtr::new(std::ptr::null_mut());
+
+pub(crate) fn arm_nm_ee_ops(ops: &'static NmEeOps) {
+    NM_EE_OPS.store(
+        std::hint::black_box(ops as *const NmEeOps as *mut NmEeOps),
+        Ordering::Release,
+    );
+}
+
+#[inline]
+pub(crate) fn nm_ee_ops() -> Option<&'static NmEeOps> {
+    let p = NM_EE_OPS.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        // SAFETY: only ever stores `&'static NmEeOps`.
+        Some(unsafe { &*p })
+    }
 }
 
 #[inline]

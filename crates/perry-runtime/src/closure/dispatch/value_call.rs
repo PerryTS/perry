@@ -96,7 +96,7 @@ unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_
     // Routed through the armed ops table (see `nm_namespace_hooks`): the
     // probe can only match a bound native callable, which exists only once
     // `callable_exports` minted one (arming the table).
-    if let Some(ops) = crate::object::nm_namespace_ops() {
+    if let Some(ops) = crate::object::nm_ee_ops() {
         if let Some(result) = unsafe { (ops.ee_dynamic_super)(func_value, args_ptr, args_len) } {
             return result;
         }

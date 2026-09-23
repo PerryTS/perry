@@ -1246,6 +1246,7 @@ fn main_context_state() -> ContextState {
     if let Some(state) = MAIN_CONTEXT.with(|main| main.borrow().clone()) {
         return state;
     }
+    crate::object::js_install_global_value_surfaces();
     let global = crate::object::js_get_global_this();
     let state = ContextState {
         returned_bits: global.to_bits(),

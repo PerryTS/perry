@@ -24,7 +24,7 @@ mod callable_export_table;
 pub(crate) mod callable_exports;
 mod perf_instance_bind;
 pub(crate) use perf_instance_bind::{instance_bound_perf_method, performance_namespace_method};
-mod constants;
+pub(crate) mod constants;
 mod constants_tables;
 mod constructor_exports;
 mod module_keys;
@@ -475,12 +475,21 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     reflect_has_enumerable: super::reflect_support::nm_reflect_has_enumerable,
     own_keys_array: nm_own_keys_array_opt,
     bind_method: nm_bind_method_ops,
+};
+
+static NM_EE_OPS_IMPL: super::NmEeOps = super::NmEeOps {
     ee_prototype_install: super::class_registry::prototype_objects::nm_ee_prototype_install,
     ee_dynamic_super: nm_ee_dynamic_super,
 };
 
+/// Arm the EventEmitter ops (see `NmEeOps`). Called by
+/// `js_nm_install_events()` / `js_nm_install_stream()`.
+pub(crate) fn install_nm_ee_ops() {
+    super::arm_nm_ee_ops(&NM_EE_OPS_IMPL);
+}
+
 /// Dynamic-`super()` EventEmitter-subclass init (extracted from
-/// `closure::dispatch::value_call`; see `NmNamespaceOps::ee_dynamic_super`).
+/// `closure::dispatch::value_call`; see `NmEeOps::ee_dynamic_super`).
 unsafe fn nm_ee_dynamic_super(
     func_value: f64,
     args_ptr: *const f64,
@@ -1060,6 +1069,35 @@ pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) 
 #[no_mangle]
 pub extern "C" fn js_native_module_named_esm_export_value(module: f64, property: f64) -> f64 {
     native_module_export_value(module, property, false)
+}
+
+/// Armed `.constructor` resolver for `MODULE_CJS` instances (binary size).
+///
+/// The generic field-read tail used to call
+/// [`module_constructor_identity_value`] directly, which made every binary
+/// retain the `node:module` export machinery. A `MODULE_CJS_CLASS_ID` object
+/// is only ever minted by `js_module_module_new`, which arms this slot first,
+/// so an unarmed slot and a matching class id cannot coexist.
+static MODULE_CJS_CONSTRUCTOR_HOOK: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+pub(crate) fn arm_module_cjs_constructor_hook() {
+    // `black_box`: a single-store slot is otherwise devirtualized back into a
+    // direct reference by whole-program optimization (see NM_INSTALL_ALL_HOOK).
+    MODULE_CJS_CONSTRUCTOR_HOOK.store(
+        std::hint::black_box(module_constructor_identity_value as fn() -> f64 as *mut ()),
+        Ordering::Release,
+    );
+}
+
+pub(crate) fn module_cjs_constructor_via_hook() -> Option<f64> {
+    let p = MODULE_CJS_CONSTRUCTOR_HOOK.load(Ordering::Acquire);
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: only ever stores `module_constructor_identity_value`.
+    let f: fn() -> f64 = unsafe { std::mem::transmute(p) };
+    Some(f())
 }
 
 pub(crate) fn module_constructor_identity_value() -> f64 {

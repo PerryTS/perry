@@ -163,7 +163,10 @@ pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module
 // (`fs/promises` → `fs.constants`, `sys` → `util`).
-pub(crate) use native_module_registry::{js_nm_install_fs, js_nm_install_perf, js_nm_install_util};
+pub(crate) use native_module_registry::{
+    js_install_global_value_surfaces, js_nm_install_fs, js_nm_install_module, js_nm_install_perf,
+    js_nm_install_util,
+};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -266,7 +269,9 @@ pub use native_call_method::*;
 pub use native_module::*;
 pub(crate) use native_module_dispatch::*;
 pub(crate) use native_module_stream::*;
-pub(crate) use nm_namespace_hooks::{arm_nm_namespace_ops, nm_namespace_ops, NmNamespaceOps};
+pub(crate) use nm_namespace_hooks::{
+    arm_nm_ee_ops, arm_nm_namespace_ops, nm_ee_ops, nm_namespace_ops, NmEeOps, NmNamespaceOps,
+};
 pub use object_literal_ops::*;
 pub use object_ops::*;
 pub use object_ops_frozen::*;

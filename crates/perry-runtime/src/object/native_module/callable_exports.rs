@@ -47,13 +47,15 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     } else {
         export_module_name
     };
-    // Direct named/default `node:module` imports can materialize the callable
-    // without ever constructing a namespace object. Install its registry row
-    // here as well as at codegen import sites so Module's one canonical
-    // closure always receives the prototype/statics attachment.
-    if callable_module_name == "module" {
-        super::super::native_module_registry::js_nm_install_module();
-    }
+    // `node:module`'s attach handler (Module statics, SourceMap prototype) is
+    // registered by `js_nm_install_module()`, which codegen emits for every
+    // import form — named, default, namespace and `require("module")` — and
+    // the dynamic `require`/`getBuiltinModule` paths reach through the
+    // install-all hook. Calling it from here as well made this always-live
+    // hub the retainer of the whole `module` bucket (~130 KB in every
+    // binary). The one runtime-internal path that reaches a `module` export
+    // without an import, `MODULE_CJS` instance `.constructor`, is armed by the
+    // instance constructor (`process::node_module::js_module_module_new`).
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
@@ -126,15 +128,6 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
             );
         }
-    } else if export_module_name == "module" && property_name == "SourceMap" {
-        // A named import can materialize this callable without first lowering
-        // a namespace expression (and therefore before `js_nm_install_module`
-        // registers the optional attach handler). SourceMap's prototype is
-        // intrinsic constructor state, so attach it at the common callable
-        // creation seam instead of relying on that optional registry.
-        crate::process::module_source_map_attach_constructor(crate::value::js_nanbox_get_pointer(
-            value.get_nanbox_f64(),
-        ) as usize);
     } else if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
         // Bun.plugin values share the same callable and clearAll property.
@@ -1601,6 +1594,13 @@ pub(crate) unsafe fn nm_attach_module(
 ) -> f64 {
     if property_name == "Module" {
         value = attach_module_cjs_constructor_statics(value);
+    }
+    if property_name == "SourceMap" {
+        // SourceMap's prototype is intrinsic constructor state; every import
+        // form installs this handler before the callable can be minted.
+        crate::process::module_source_map_attach_constructor(
+            crate::value::js_nanbox_get_pointer(value) as usize,
+        );
     }
     if matches!(property_name, "flushCompileCache" | "isBuiltin") {
         set_builtin_closure_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize);

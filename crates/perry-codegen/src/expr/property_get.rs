@@ -45,7 +45,7 @@ use super::property_get_names::{
 };
 
 pub(crate) mod generic_dispatch;
-mod globalget;
+pub(crate) mod globalget;
 mod helpers;
 
 mod composed_ics;

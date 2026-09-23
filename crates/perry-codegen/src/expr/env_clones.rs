@@ -22,6 +22,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the IndexSet arm above. Returns an already-NaN-boxed
             // f64 POINTER_TAG; the property-get arms route through
             // this same singleton for `globalThis.process.env` etc.
+            crate::expr::property_get::globalget::emit_global_value_installs(ctx, "globalThis");
             Ok(ctx.block().call(DOUBLE, "js_get_global_this", &[]))
         }
         Expr::ModuleTopThis => {

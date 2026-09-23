@@ -31,7 +31,30 @@ use crate::types::{DOUBLE, I64, PTR};
 /// Lower a `PropertyGet` whose receiver is the `GlobalGet(0)` builtin-global
 /// sentinel, read by the `property` string alone (the receiver name has been
 /// collapsed during HIR lowering).
+/// Emit the runtime installer a global VALUE read needs (binary size).
+///
+/// The `process` / `console` namespaces exist from realm bootstrap, but their
+/// dynamic-dispatch buckets (and `process`'s stdio stream objects) are
+/// installed only on demand, so a program that uses them purely through
+/// member intrinsics (`console.log(…)`, `process.argv`) links none of that
+/// surface. Every site that can hand one of those objects to user code as a
+/// value — the bare global, a method read as a value, or the global object
+/// itself (`globalThis` / `global` / `self` / `globalThis[k]`) — runs the
+/// matching installer first. Idempotent and cheap (a few relaxed stores).
+pub(crate) fn emit_global_value_installs(ctx: &mut FnCtx<'_>, name: &str) {
+    let sym = match name {
+        "process" => "js_nm_install_process",
+        "console" => "js_nm_install_console",
+        "globalThis" | "global" | "self" | "window" | "frames" => {
+            "js_install_global_value_surfaces"
+        }
+        _ => return,
+    };
+    ctx.block().call_void(sym, &[]);
+}
+
 pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> Result<String> {
+    emit_global_value_installs(ctx, property);
     // `process.env` read as a VALUE (not `process.env.X`) must
     // materialize the live env object, not the `undefined` sentinel.
     // Member reads `process.env.X` are special-cased elsewhere to
@@ -323,6 +346,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
             | "profileEnd"
             | "timeStamp"
     ) {
+        emit_global_value_installs(ctx, "console");
         let mod_idx = ctx.strings.intern("console");
         let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
         let mod_len_str = "console".len().to_string();
@@ -397,6 +421,7 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
             | "getActiveResourcesInfo"
             | "hrtime"
     ) {
+        emit_global_value_installs(ctx, "process");
         let mod_idx = ctx.strings.intern("process");
         let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
         let mod_len_str = "process".len().to_string();
