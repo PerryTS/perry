@@ -29,6 +29,12 @@ fn set(handle: RuntimeHandle<'_>, key: *mut crate::StringHeader, value: f64) {
     handle.with_mut_ptr(|ptr| crate::object::js_object_set_field_by_name(ptr, key, value));
 }
 
+/// The address a handle roots right now, as an integer to compare. Never
+/// dereferenced: a caller that needs the object reads it through the handle.
+fn addr_of(handle: &RuntimeHandle<'_>) -> usize {
+    handle.with_const_ptr(|ptr: *const u8| ptr as usize)
+}
+
 unsafe fn keys_of(handle: RuntimeHandle<'_>) -> *mut ArrayHeader {
     handle.with_const_ptr(|ptr: *const ObjectHeader| crate::object::object_keys_array(ptr))
 }
@@ -131,7 +137,7 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
         let a = scope.root_string_ptr(nursery_key("gk_a"));
         let b = scope.root_string_ptr(nursery_key("gk_b"));
         let c = scope.root_string_ptr(nursery_key("gk_c"));
-        let key = |h: &RuntimeHandle<'_>| h.get_raw_const_ptr::<crate::StringHeader>() as usize;
+        let key = |h: &RuntimeHandle<'_>| addr_of(h);
         for (h, name) in [(&a, "a"), (&b, "b"), (&c, "c")] {
             assert!(
                 crate::arena::pointer_in_nursery(key(h)),
@@ -156,15 +162,15 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
         let scratch = crate::array::js_array_alloc_with_length(2);
         let scratch = scope.root_raw_mut_ptr(scratch);
         for (i, h) in [&a, &c].into_iter().enumerate() {
-            let arr = scratch.get_raw_mut_ptr::<ArrayHeader>();
             let bits = crate::value::js_nanbox_string(key(h) as i64).to_bits();
-            crate::array::js_array_set(arr, i as u32, crate::JSValue::from_bits(bits));
+            scratch.with_mut_ptr(|arr: *mut ArrayHeader| {
+                crate::array::js_array_set(arr, i as u32, crate::JSValue::from_bits(bits))
+            });
         }
-        let ac = canonical_keys::canonicalize(
-            &SharedLayout::shape_cache_entry(),
-            scratch.get_raw_const_ptr::<ArrayHeader>(),
-            2,
-        );
+        // `canonicalize` roots its own operand across its allocation.
+        let ac = scratch.with_const_ptr(|list: *const ArrayHeader| {
+            canonical_keys::canonicalize(&SharedLayout::shape_cache_entry(), list, 2)
+        });
         assert_eq!(ac.len(), 2, "premise: [a,c] canonicalized");
         let ac = scope.root_raw_mut_ptr(ac.as_ptr());
         // An `extend_key` hit: [a] + b is the grown [a,b].
@@ -223,8 +229,8 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
         // through the same keys and adopts whatever the trie hands it.
         for (label, list) in [
             ("o1", keys_of(o1)),
-            ("class", cls.get_raw_mut_ptr::<ArrayHeader>()),
-            ("[a,c]", ac.get_raw_mut_ptr::<ArrayHeader>()),
+            ("class", addr_of(&cls) as *mut ArrayHeader),
+            ("[a,c]", addr_of(&ac) as *mut ArrayHeader),
         ] {
             for i in 0..crate::array::js_array_length(list) as usize {
                 assert_slot_names_a_live_key(list, i, &moved, label);
@@ -274,7 +280,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
             packed.as_ptr(),
             packed.len() as u32,
         ));
-        let before = keys.get_raw_mut_ptr::<ArrayHeader>();
+        let before = addr_of(&keys) as *mut ArrayHeader;
         assert!(
             crate::arena::pointer_in_nursery(before as usize),
             "premise ({label}): the class keys array is young"
@@ -289,7 +295,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
         } else {
             crate::object::js_object_alloc_class_inline_keys(class_id, 0, 2, before)
         };
-        let after = keys.get_raw_mut_ptr::<ArrayHeader>();
+        let after = addr_of(&keys) as *mut ArrayHeader;
         assert_ne!(
             after, before,
             "premise ({label}): subject not live — the birth allocation did not move the \
@@ -396,7 +402,11 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
                 3,
                 "INVARIANT ({phase}): parent keys first, then own"
             );
-            assert!(!parent.get_raw_mut_ptr::<ArrayHeader>().is_null());
+            assert_ne!(
+                addr_of(&parent),
+                0,
+                "premise ({phase}): the parent keys are rooted"
+            );
         }
     }
 }
@@ -421,7 +431,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
         packed.as_ptr(),
         packed.len() as u32,
     ));
-    let current = || mine.get_raw_mut_ptr::<ArrayHeader>() as usize;
+    let current = || addr_of(&mine);
     let registered =
         || crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
     assert_eq!(

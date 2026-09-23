@@ -219,31 +219,34 @@ unsafe fn build_longlived_keys_array(
         slots.add(i).write(crate::value::TAG_UNDEFINED);
     }
     let arr_handle = scope.root_raw_mut_ptr(arr);
+    let mut arr = arr;
     for (j, key_bytes) in keys.iter().enumerate() {
-        let str_ptr = crate::string::js_string_from_bytes_longlived(
-            key_bytes.as_ptr(),
-            key_bytes.len() as u32,
-        );
-        let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let (str_ptr, reloaded) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+            crate::string::js_string_from_bytes_longlived(
+                key_bytes.as_ptr(),
+                key_bytes.len() as u32,
+            )
+        });
+        arr = reloaded;
         let bits = crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK);
         let idx = prefix_len as usize + j;
         // GC_STORE_AUDIT(BARRIERED): keys-array slot is reflected into layout metadata.
         *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64).add(idx) = bits;
         crate::array::note_array_slot_layout_only(arr, idx, bits);
     }
-    // No allocation from here on.
-    let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+    // No allocation from here on: `arr` is the address after the last one,
+    // and the prefix is read from its handle.
     if prefix_len > 0 {
-        let src = crate::array::array_elements_ptr(
-            prefix_handle.get_raw_mut_ptr::<ArrayHeader>() as *const ArrayHeader
-        ) as *const u64;
-        let dst = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
-        for i in 0..prefix_len as usize {
-            let bits = *src.add(i);
-            // GC_STORE_AUDIT(INIT): parent key copied into the unpublished array.
-            *dst.add(i) = bits;
-            crate::array::note_array_slot_layout_only(arr, i, bits);
-        }
+        prefix_handle.with_const_ptr(|prefix: *const ArrayHeader| {
+            let src = crate::array::array_elements_ptr(prefix) as *const u64;
+            let dst = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
+            for i in 0..prefix_len as usize {
+                let bits = *src.add(i);
+                // GC_STORE_AUDIT(INIT): parent key copied into the unpublished array.
+                *dst.add(i) = bits;
+                crate::array::note_array_slot_layout_only(arr, i, bits);
+            }
+        });
     }
     arr
 }

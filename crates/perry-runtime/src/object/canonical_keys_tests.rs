@@ -589,11 +589,11 @@ fn a_growing_list_hands_its_slot_index_to_each_successor() {
     // Nothing may be pruned while the chain is inspected.
     let _no_gc = crate::gc::GcSuppressScope::new();
     let scope = crate::gc::RuntimeHandleScope::new();
-    const KEYS: usize = 96;
+    const KEY_COUNT: usize = 96;
     unsafe {
         let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-        let mut lists = Vec::with_capacity(KEYS);
-        for i in 0..KEYS {
+        let mut lists = Vec::with_capacity(KEY_COUNT);
+        for i in 0..KEY_COUNT {
             let name = format!("carry_{i}");
             obj.with_mut_ptr(|o| {
                 crate::object::js_object_set_field_by_name(o, key(&name), i as f64)
@@ -603,10 +603,10 @@ fn a_growing_list_hands_its_slot_index_to_each_successor() {
         let distinct: std::collections::HashSet<_> = lists.iter().copied().collect();
         assert_eq!(
             distinct.len(),
-            KEYS,
+            KEY_COUNT,
             "premise: every length is its own canonical list"
         );
-        let holders: Vec<(usize, u32)> = lists[..KEYS - 1]
+        let holders: Vec<(usize, u32)> = lists[..KEY_COUNT - 1]
             .iter()
             .enumerate()
             .filter_map(|(i, list)| {
@@ -621,8 +621,8 @@ fn a_growing_list_hands_its_slot_index_to_each_successor() {
             &holders[..holders.len().min(6)]
         );
         assert_eq!(
-            crate::object::shapes::test_keys_index_len(lists[KEYS - 1]),
-            Some(KEYS as u32),
+            crate::object::shapes::test_keys_index_len(lists[KEY_COUNT - 1]),
+            Some(KEY_COUNT as u32),
             "INVARIANT: the newest list carries a complete slot index"
         );
     }
