@@ -224,6 +224,55 @@ fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
     }));
 }
 
+/// #11044 follow-up: `module_has_public_named_export` reads the generated
+/// `perry-api-manifest` API_MANIFEST, which only carries rows for the
+/// exports someone has bothered to document per native package — it is not
+/// exhaustive for anything but node-core builtins (see its own doc comment).
+/// `ws` happens to have a manifest row for the one name these tests
+/// re-export (`class("ws", "WebSocket")`), so it cannot tell a node-core-
+/// scoped existence check apart from an unconditional one. `bcrypt` IS a
+/// recognized `NATIVE_MODULES` entry (a real bundled native wrapper, not a
+/// Node builtin) with manifest rows for `hash`/`compare` only — real
+/// `bcrypt` also exports `genSalt`, `hashSync`, `compareSync`, `getRounds`,
+/// none of which are in the manifest at all, so
+/// `module_has_public_named_export("bcrypt", "genSalt")` is `false`. Before
+/// this fix, `is_native_module` gated straight into that existence check for
+/// every native module (not just node-core ones), so this exact re-export
+/// hit `lower_bail!` and failed to compile even though `bcrypt.genSalt` is a
+/// real export. Scoping the existence check to `is_node_core_module` — this
+/// PR's only remaining delta from what `origin/main`'s independent #11044
+/// fix (b8c2457e4) already landed — skips that check for `bcrypt` and falls
+/// through to the same permissive synthetic-import treatment `ws` gets.
+#[test]
+fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_import() {
+    let module = lower_result(r#"export { genSalt } from "bcrypt";"#).expect(
+        "bcrypt.genSalt is a real export of the bcrypt package but has no \
+         perry-api-manifest row (only hash/compare are documented); its \
+         existence cannot be checked from the manifest, so lowering must \
+         fall back to the permissive synthetic-import treatment instead of \
+         lower_bail!-ing on a false negative",
+    );
+
+    assert!(module.imports.iter().any(|import| {
+        import.is_native
+            && import.source == "bcrypt"
+            && matches!(
+                import.specifiers.as_slice(),
+                [perry_hir::ImportSpecifier::Named { imported, local }]
+                    if imported == "genSalt"
+                        && local.starts_with("__perry_builtin_reexport_")
+            )
+    }));
+    assert!(module.exports.iter().any(|export| {
+        matches!(
+            export,
+            perry_hir::Export::Named { local, exported }
+                if local.starts_with("__perry_builtin_reexport_")
+                    && exported == "genSalt"
+        )
+    }));
+}
+
 #[test]
 fn invalid_node_named_reexports_are_rejected() {
     let error = lower_result(r#"export { definitelyMissing } from "node:crypto";"#)
