@@ -978,3 +978,5 @@ mod issue_10417;
 mod issue_10432;
 #[path = "source_graph_export_regressions/issue_10758.rs"]
 mod issue_10758;
+#[path = "source_graph_export_regressions/issue_11044.rs"]
+mod issue_11044;

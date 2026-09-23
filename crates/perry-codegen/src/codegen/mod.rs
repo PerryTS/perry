@@ -3631,6 +3631,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .iter()
             .filter_map(|e| match e {
                 perry_hir::Export::Named { local, exported }
+                    // #11044: matches the broadened getter-emission gate in
+                    // artifacts.rs — `import.is_native` alone, not restricted
+                    // to node-core builtins, since non-core Perry-native
+                    // packages (ws, ioredis, ...) get the same synthetic
+                    // Import+Export pair from module_decl.rs's re-export
+                    // handling and must skip this dead-stub arm too.
                     if !hir.imports.iter().any(|import| {
                         import.is_native
                             && import.specifiers.iter().any(|specifier| {

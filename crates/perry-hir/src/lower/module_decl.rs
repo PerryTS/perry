@@ -1463,19 +1463,35 @@ pub(crate) fn lower_module_decl(
                             // A native module has no compiled source module for the
                             // driver to follow through a normal ReExport edge. Model
                             // the forwarding binding as a synthetic named import so
-                            // codegen can publish a live getter for the native ESM
-                            // export cell. This covers Node builtins and bundled npm
-                            // shims such as `ws`; leaving the latter as ReExport made
-                            // consumers reference a closure-wrapper symbol that no
-                            // source module could emit (#11044). The synthetic local
-                            // is compiler-private: `export { x } from "node:m"` does
-                            // not introduce `x` into this module's lexical scope.
+                            // codegen can publish a live getter for the builtin ESM
+                            // export cell. The synthetic local is compiler-private:
+                            // `export { x } from "node:m"` does not introduce `x`
+                            // into this module's lexical scope.
+                            // Node core builtins are the only sources with a
+                            // manifest complete enough to validate named-export
+                            // existence (`module_has_public_named_export` reads
+                            // the generated API manifest, which is exhaustive
+                            // only for core modules). Other Perry-native npm
+                            // packages (ws, ioredis, mysql2, ...) still need the
+                            // same synthetic-import treatment below — #11044:
+                            // ethers' `ws.ts` does `export { WebSocket } from
+                            // "ws"`, and without this a facade re-export of a
+                            // non-core native package fell through to the
+                            // generic `Export::ReExport` arm below, which has
+                            // no compiled source module to follow either — so
+                            // codegen expected a local function body that was
+                            // never emitted, and the link failed on
+                            // `__perry_wrap_perry_fn_<mod>__<name>`.
                             let native_source = canonicalize_native_import_source(&source);
                             if is_native_module(&native_source) {
-                                if !perry_api_manifest::module_has_public_named_export(
-                                    &native_source,
-                                    &local,
-                                ) {
+                                let is_node_core =
+                                    perry_api_manifest::is_node_core_module(&native_source);
+                                if is_node_core
+                                    && !perry_api_manifest::module_has_public_named_export(
+                                        &native_source,
+                                        &local,
+                                    )
+                                {
                                     crate::lower_bail!(
                                         named.span,
                                         "The requested module '{}' does not provide an export named '{}'",
