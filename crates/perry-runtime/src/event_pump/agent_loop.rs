@@ -293,8 +293,15 @@ enum LoopState {
     Claimed,
     /// This thread owns its agent's route slot AND its loop.
     Owner,
-    /// Not eligible: another thread already owns this agent's loop, or loop
-    /// creation failed. Parks use the legacy path.
+    /// Not eligible: another thread already owns this agent's loop. Parks use
+    /// the legacy path.
+    ///
+    /// This is the P1 coexistence rule and nothing else. It is decided by
+    /// [`claim_route`] *before* any loop is built, so a thread that reaches
+    /// `AgentLoop::new` has already won its agent's slot and a failure there
+    /// is not a decline — it is [`loop_creation_failed`], which aborts. The
+    /// only other writers are the two `claimed_flag()` arms below, which are
+    /// unreachable by construction and carry a `debug_assert!` saying so.
     Declined,
     /// `shutdown_current_thread` ran; parks use the legacy path from now on.
     ShutDown,
@@ -398,8 +405,7 @@ fn claimed_flag() -> Option<Arc<AtomicBool>> {
     CLAIM.with(|slot| slot.borrow().as_ref().map(|c| c.in_turn.clone()))
 }
 
-/// Give up this thread's route slot: at an explicit shutdown, or when loop
-/// creation failed and the thread will never own one.
+/// Give up this thread's route slot at an explicit shutdown.
 fn release_route() {
     CLAIM.with(|slot| *slot.borrow_mut() = None);
 }
@@ -476,6 +482,106 @@ pub(super) fn eligible() -> bool {
     }
 }
 
+/// `turnloop::BACKEND_NAME == name`, answerable in const context.
+const fn backend_name_is(name: &[u8]) -> bool {
+    let actual = turnloop::BACKEND_NAME.as_bytes();
+    if actual.len() != name.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < actual.len() {
+        if actual[i] != name[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Compile-time proof that this build HAS a turnloop backend. That is the
+/// whole platform gate behind [`loop_creation_failed`] being fatal.
+///
+/// turnloop ships no fallback backend: `turnloop::Loop` is
+/// `Driver<backend::Platform>`, and `backend::Platform` exists only under
+/// `turnloop_backend = kqueue | epoll | iocp | wasi_p2 | wasi_p3 | web`
+/// (turnloop's `build.rs` maps every other target to `"unsupported"`). A host
+/// turnloop cannot serve therefore fails to COMPILE here — it never reaches
+/// `Loop::new` to fail at run time. So "an unsupported host" is not a runtime
+/// cause in any binary that exists, and making the failure fatal needs no
+/// `cfg` arm keeping a legacy park for one.
+///
+/// HarmonyOS is worth naming because it looks like the exception and is not.
+/// Perry builds it as `{aarch64,x86_64}-unknown-linux-ohos`, whose rustc cfg is
+/// `target_os = "linux"` + `target_env = "ohos"` — which is why every HarmonyOS
+/// `cfg` in this crate spells `target_env = "ohos"` — so turnloop's `build.rs`
+/// selects the epoll backend there exactly as for any other Linux target.
+///
+/// What this assertion does NOT say is that `Loop::new` cannot fail on ohos.
+/// It can, for the same reasons it can on any Linux: `Epoll::new` opens an
+/// epoll fd and an eventfd, and probes `epoll_pwait2`, treating only ENOSYS as
+/// "old kernel". A sandbox that answers EPERM instead fails every call, on
+/// every device. That is a real environment fault and belongs in
+/// [`loop_creation_failed`]'s message (it names it, and the errno tells it
+/// apart from a descriptor ceiling) — but it is not a missing backend, so it
+/// is not a reason to keep a silent legacy fallback.
+///
+/// If turnloop ever gains a no-op backend for unsupported hosts, this stops
+/// holding. The assertion then fails the *build* on the affected target
+/// instead of letting a user's program abort at run time, and the legacy
+/// fallback should be restored here under a `cfg` as a deliberate choice. Note
+/// where that lands: no CI job cross-compiles this crate for `*-linux-ohos` —
+/// `harmonyos-smoke` only runs `perry-codegen-arkts` host tests — so the ohos
+/// build that would trip it is the one `perry compile --target harmonyos`
+/// drives (`perry/src/commands/compile/optimized_libs/driver.rs`), on the
+/// machine of whoever is packaging the app.
+const _: () = assert!(
+    !backend_name_is(b"unsupported"),
+    "turnloop reports no backend for this target: perry-runtime must keep the legacy park here \
+     rather than let loop_creation_failed abort a user's program"
+);
+
+/// `turnloop::Loop::new` failed on a thread that had already won its agent's
+/// route. Fatal, deliberately.
+///
+/// This used to set [`LoopState::Declined`] and keep the legacy tokio park.
+/// But `STATE` is `perry_thread_local!` and neither [`net_available`] nor
+/// [`eligible`] ever retries a decline, so ONE transient failure pinned that
+/// thread to the legacy transport for the rest of its life — an fd-ceiling bug
+/// presenting as an unexplained throughput and RSS regression on a single
+/// thread, and only under `PERRY_LOOP_STATS`, which nobody sets in production.
+/// Nor can a caller recover: every caller's fallback *is* that degradation.
+///
+/// `abort` rather than a panic or a warning. perry-runtime ships
+/// `panic = "abort"` but is built `panic = "unwind"` under `cargo test`, and a
+/// panic on a `perry/thread` or `worker_threads` agent kills only that thread —
+/// so a panic is swallowable exactly where this bug lives. A printed warning
+/// that lets the program continue is the silent degradation with extra output.
+#[cold]
+#[inline(never)]
+fn loop_creation_failed(profile: Profile, agent: AgentId, error: turnloop::Error) -> ! {
+    eprintln!(
+        "[PERRY ABORT] turnloop Loop::new failed for agent {agent} at the {profile:?} profile: \
+         {error} (kind={:?} os_error={:?} backend={}). Perry's event loop cannot be created on \
+         this thread, and `os_error` above is what tells the causes apart. (1) FILE DESCRIPTOR \
+         EXHAUSTION — EMFILE (24) or ENFILE (23). Every agent loop needs a kqueue/epoll/IOCP \
+         descriptor of its own, plus an eventfd on epoll, so a process that has run out cannot \
+         open another; raise the limit (`ulimit -n`, or `LimitNOFILE=` in a systemd unit) and \
+         re-run. (2) A SANDBOX DENYING A SYSCALL — EPERM (1) or EACCES (13). The epoll backend \
+         probes `epoll_pwait2` at construction and only treats ENOSYS as 'old kernel, use \
+         timerfd'; a seccomp filter that answers EPERM instead makes this fail on every attempt, \
+         deterministically. Relevant on sandboxed Linux/Android/HarmonyOS app processes: check the \
+         policy for epoll_pwait2, eventfd2 and timerfd_create. (3) AN UNSUPPORTED HOST — \
+         `backend=unsupported` above would say so; perry-runtime does not compile in that state, \
+         so it cannot be this unless turnloop has gained a no-op backend. Perry used to degrade \
+         this thread to the legacy tokio park instead, which turned every one of these into an \
+         invisible per-thread throughput and memory regression; it is fatal now.",
+        error.kind,
+        error.os,
+        turnloop::BACKEND_NAME,
+    );
+    std::process::abort()
+}
+
 /// Create this thread's loop on first use. Returns whether the thread owns one.
 pub(super) fn ensure_loop() -> bool {
     ensure_loop_with(Profile::Wait)
@@ -506,17 +612,13 @@ pub(super) fn ensure_loop_with(profile: Profile) -> bool {
         STATE.with(|s| s.set(LoopState::Declined));
         return false;
     };
-    let agent = match AgentLoop::new(profile, crate::agent::current_agent(), in_turn) {
+    let id = crate::agent::current_agent();
+    let agent = match AgentLoop::new(profile, id, in_turn) {
         Ok(agent) => agent,
-        Err(_) => {
-            // Descriptor exhaustion or an unsupported host. Keep the legacy
-            // park rather than failing the program; the stats line says so.
-            // Release the slot: this thread will never own a loop, and holding
-            // it would deny a sibling thread of the same agent the chance.
-            release_route();
-            STATE.with(|s| s.set(LoopState::Declined));
-            return false;
-        }
+        // Descriptor exhaustion, or a sandbox refusing one of the backend's
+        // syscalls. Fatal: see `loop_creation_failed` for why a silent fall
+        // back to the legacy park is worse than stopping.
+        Err(error) => loop_creation_failed(profile, id, error),
     };
     publish_route(&agent);
     AGENT_LOOP.with(|slot| *slot.borrow_mut() = Some(agent));
@@ -526,9 +628,10 @@ pub(super) fn ensure_loop_with(profile: Profile) -> bool {
 
 /// Rebuild this thread's loop at a larger profile, if it is not there yet.
 ///
-/// Returns false only if the rebuild failed, in which case the old loop is
-/// gone and the thread falls back to the legacy park — the same outcome as a
-/// loop that never got created, and the stats line still says so.
+/// The rebuild itself cannot fail softly: it drops the old loop first, so a
+/// failure would leave the thread with no loop at all, and that is exactly the
+/// silent degradation [`loop_creation_failed`] now aborts on. The only `false`
+/// left is the unreachable missing-claim arm below.
 fn upgrade_profile(profile: Profile) -> bool {
     let needs_upgrade = AGENT_LOOP.with(|slot| {
         slot.borrow()
@@ -564,17 +667,10 @@ fn upgrade_profile(profile: Profile) -> bool {
     };
     // `AgentLoop::drop` cleared the endpoint but kept the slot; install the
     // replacement's into the same slot.
-    let mut agent = match AgentLoop::new(
-        profile,
-        owner.unwrap_or_else(crate::agent::current_agent),
-        in_turn,
-    ) {
+    let id = owner.unwrap_or_else(crate::agent::current_agent);
+    let mut agent = match AgentLoop::new(profile, id, in_turn) {
         Ok(agent) => agent,
-        Err(_) => {
-            release_route();
-            STATE.with(|s| s.set(LoopState::Declined));
-            return false;
-        }
+        Err(error) => loop_creation_failed(profile, id, error),
     };
     if let Some(stats) = carried {
         agent.stats = stats;
@@ -1068,6 +1164,9 @@ pub fn shutdown_current_thread() {
     if stats_enabled() {
         match (&agent, previous) {
             (Some(agent), _) => print_stats(id, agent.stats),
+            // Since loop-creation failure aborts, `Declined` can only mean the
+            // P1 coexistence rule: another thread owns this agent's loop and
+            // this one pumped on the legacy path all along. That is normal.
             (None, LoopState::Declined) => eprintln!("[perry-loop] driver=legacy agent={id}"),
             // A worker agent that never parked and never submitted is the
             // ordinary case for `parallelMap` over 64 cores. Saying so once per

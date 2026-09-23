@@ -200,7 +200,7 @@ Every remaining decline, by cause:
 | still declines | cause | who closes it |
 |---|---|---|
 | any surface, in the `tokio-wait-driver` A/B arm | there is no loop at all, by construction | nobody — it is the baseline |
-| any surface, when `Loop::new` fails | descriptor exhaustion, an unsupported host | nobody — it is the fallback that keeps a program running |
+| ~~any surface, when `Loop::new` fails~~ — **no longer a decline**: it aborts (`agent_loop::loop_creation_failed`) | descriptor exhaustion. "An unsupported host" is not a runtime cause: turnloop has no no-op backend, so such a target fails to compile | closed — the fallback pinned one thread to tokio for its whole life and said so only under `PERRY_LOOP_STATS` |
 | any surface, on a second thread acting for an agent another thread owns | exactly one thread owns an agent's loop (Android's UI pump) | nobody — it is the rule, and it preserves Android |
 | `net`/`tls` after `socket.upgradeToTLS` | P1 kept the tokio socket so the TLS upgrade keeps working | a `turnloop-tls` client path |
 | `http.createServer` in a **cluster worker** | the `SO_REUSEPORT` bind is not reachable through `ListenOpts` | PerryTS/turnloop#49 |

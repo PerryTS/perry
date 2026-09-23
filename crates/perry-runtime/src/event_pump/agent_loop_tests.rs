@@ -28,6 +28,34 @@ fn stats() -> LoopStats {
     loop_statistics().expect("this thread owns a loop")
 }
 
+/// The subject of the fatal `Loop::new` path: on a host with a real turnloop
+/// backend, EVERY profile this runtime asks for is actually constructible.
+///
+/// `loop_creation_failed` aborts the process, so "nothing threw" is not a
+/// verdict here — the point is that a healthy process never reaches it, which
+/// requires both halves: a backend exists, and both `Config`s are accepted.
+/// `net_config()`'s ceilings have moved twice (perry#10351 handles, the 19 MB
+/// `WorkPort` ring), and `Driver::new` rejects a `Config` whose
+/// `events_per_turn * 3 + max_operations + max_handles` overflows.
+#[test]
+fn every_profile_is_constructible_on_a_supported_host() {
+    assert_ne!(
+        turnloop::BACKEND_NAME,
+        "unsupported",
+        "a host with no turnloop backend must not reach the fatal Loop::new path"
+    );
+    for profile in [Profile::Wait, Profile::Net] {
+        let agent = AgentLoop::new(
+            profile,
+            crate::agent::current_agent(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_or_else(|error| panic!("{profile:?} profile is not constructible: {error}"));
+        assert_eq!(agent.profile, profile);
+        drop(agent);
+    }
+}
+
 /// Claim the primary agent's route on this thread, waiting out a route held by
 /// a test thread that is still finishing.
 fn take_primary_route() {
@@ -373,6 +401,12 @@ fn sibling_worker_agents_do_not_share_a_loop() {
 /// legacy park. This is the Android shape — `perry-native` runs the JS and
 /// owns the loop, the UI thread pumps on its behalf — and it must stay
 /// exactly one owner per agent.
+///
+/// It is also what keeps the two causes of `LoopState::Declined` separated now
+/// that one of them aborts: this decline is decided by `claim_route`, so the
+/// pump thread must never reach `AgentLoop::new`. `loop_statistics().is_none()`
+/// is that assertion — and if the routing regressed, `loop_creation_failed`
+/// would take down the whole test binary rather than let it pass.
 #[test]
 fn a_second_thread_of_the_same_agent_is_declined() {
     let _g = serial();
