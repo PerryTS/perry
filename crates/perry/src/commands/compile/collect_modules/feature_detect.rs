@@ -105,11 +105,35 @@ fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     })
 }
 
+/// The Debug text of every piece of lowered code in `hir_module`: module
+/// init, top-level functions, AND class bodies (methods, accessors, static
+/// blocks, field initializers), which live under `classes`.
+fn module_hir_debug(hir_module: &perry_hir::Module) -> String {
+    format!(
+        "{:?}{:?}{:?}",
+        &hir_module.init, &hir_module.functions, &hir_module.classes
+    )
+}
+
 /// Inspect a lowered module and set the optional-feature gates it needs.
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
     hir_module: &perry_hir::Module,
 ) {
+    // #11121: ONE token corpus for every text-grep gate below, and it covers
+    // all three places lowered code lives. Class methods, accessors, static
+    // blocks and field initializers are stored under `classes`, NOT in
+    // `functions`; each gate used to build its own `init`+`functions` string
+    // and a few had been patched one at a time to add `classes` (fetch, wasm,
+    // zlib, regex, Math, diagnostics, …). The rest still missed a use inside a
+    // class body — `new node_url_1.URL(url)` in `@redis/client`'s
+    // `static parseURL` left `global-url` off, so the dynamic-construct
+    // dispatcher's `URL` arm was compiled out and the "URL" it built failed
+    // every `URL.prototype` brand check. Building the corpus once removes that
+    // false-negative class for every gate at once (the rule is zero false
+    // negatives; including more HIR can only over-include a feature).
+    let hir_debug = module_hir_debug(hir_module);
+
     // Detect fetch() usage — js_fetch_with_options lives in perry-stdlib
     if hir_module.uses_fetch {
         ctx.needs_stdlib = true;
@@ -129,10 +153,6 @@ pub(super) fn detect_optional_feature_usage(
     // matching only over-links `web-fetch` (a size cost); the rule is zero false
     // negatives.
     if !ctx.uses_fetch {
-        let hir_debug: String = format!(
-            "{:?}{:?}{:?}",
-            &hir_module.init, &hir_module.functions, &hir_module.classes
-        );
         if hir_debug.contains("class_name: \"Headers\"")
             || hir_debug.contains("class_name: \"Request\"")
             || hir_debug.contains("class_name: \"Response\"")
@@ -177,10 +197,6 @@ pub(super) fn detect_optional_feature_usage(
     // Over-matching only over-links the wasm host (a size cost); the rule
     // is zero false negatives.
     if !ctx.needs_wasm_runtime {
-        let hir_debug: String = format!(
-            "{:?}{:?}{:?}",
-            &hir_module.init, &hir_module.functions, &hir_module.classes
-        );
         if hir_debug.contains("property: \"WebAssembly\"")
             || hir_debug.contains("class_name: \"WebAssembly\"")
             || hir_debug.contains("\"WebAssembly\"")
@@ -196,7 +212,6 @@ pub(super) fn detect_optional_feature_usage(
     // dedicated HIR variants. The global WebCrypto namespace path below uses
     // a structured walk because it is an ordinary `PropertyGet`.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
         let uses_global_crypto_namespace = module_uses_global_crypto_namespace(hir_module);
         if hir_debug.contains("CryptoRandomBytes")
             || hir_debug.contains("CryptoRandomUUID")
@@ -234,10 +249,6 @@ pub(super) fn detect_optional_feature_usage(
     // `node:zlib` import selects. Scan classes too — a codec call inside a
     // static method body must not be stripped from an auto-optimized build.
     {
-        let hir_debug: String = format!(
-            "{:?}{:?}{:?}",
-            &hir_module.init, &hir_module.functions, &hir_module.classes
-        );
         if debug_hir_uses_zlib_brotli(&hir_debug) {
             ctx.uses_zlib_brotli = true;
         }
@@ -261,12 +272,8 @@ pub(super) fn detect_optional_feature_usage(
     // non-functional in Perry so it can't create a regex at runtime.
     {
         // Class methods and static initializers live under `classes`, not in
-        // `functions`; include them so a regex/glob use there cannot be
-        // stripped from an auto-optimized build.
-        let hir_debug = format!(
-            "{:?}{:?}{:?}",
-            &hir_module.init, &hir_module.functions, &hir_module.classes
-        );
+        // `functions`; `hir_debug` includes them so a regex/glob use there
+        // cannot be stripped from an auto-optimized build.
         // A named import lowers to an `ExternFuncRef` that carries only its
         // local binding name. Use the structured import record for provenance
         // instead of treating every unrelated external named `glob` as
@@ -287,7 +294,6 @@ pub(super) fn detect_optional_feature_usage(
     // user identifiers like `myTemporal` / `temporalLog`, spuriously enabling
     // the engine and undercutting the size win. JS `Date` is a separate impl.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
         if hir_debug.contains("property: \"Temporal\"") {
             ctx.uses_temporal = true;
         }
@@ -302,7 +308,6 @@ pub(super) fn detect_optional_feature_usage(
     // importing `node:events` otherwise fails to link with undefined
     // `_js_event_emitter_*` symbols. Match the lowered `Expr::New` token.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
         if hir_debug.contains("class_name: \"EventEmitter\"")
             || hir_debug.contains("class_name: \"EventEmitterAsyncResource\"")
         {
@@ -329,10 +334,6 @@ pub(super) fn detect_optional_feature_usage(
     // too: the pi call sites live in a static method body, which the
     // init+functions-only scans miss.
     {
-        let hir_debug: String = format!(
-            "{:?}{:?}{:?}",
-            &hir_module.init, &hir_module.functions, &hir_module.classes
-        );
         // Bare `Bun.*` calls have no import declaration. Lowering gives them
         // the same `module: "bun"` marker as imported calls; retain it so the
         // optimized runtime includes #9600's utility backends.
@@ -354,7 +355,6 @@ pub(super) fn detect_optional_feature_usage(
     // URLSearchParams-only program that doesn't strictly need the host parser)
     // is a benign size cost; the rule is zero false negatives.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
         if hir_debug.contains("UrlNew")
             || hir_debug.contains("UrlParse")
             || hir_debug.contains("UrlCanParse")
@@ -375,7 +375,6 @@ pub(super) fn detect_optional_feature_usage(
     // `normalize` and `Segmenter` lower to nodes carrying the name as a
     // `property`, so those use the exact `property: "<name>"` token.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
         if debug_hir_uses_string_normalization(&hir_debug) {
             ctx.uses_string_normalize = true;
         }
@@ -412,17 +411,11 @@ pub(super) fn detect_optional_feature_usage(
         // surviving mention of the name means the namespace may be used as a
         // VALUE (`const m = Math`, `Object.keys(JSON)`) — exactly when the
         // members must exist. Math value reads lose that name entirely, so
-        // also scan its supported member names. Class bodies are stored
-        // separately from init/functions; include them for Math so an
-        // extracted method in a constructor, method, accessor, or field
-        // initializer cannot be pruned. Bare matching stays over-approximate
-        // on purpose (a false positive only costs size).
-        let class_hir_debug = format!("{:?}", &hir_module.classes);
-        if hir_debug.contains("\"Math\"")
-            || class_hir_debug.contains("\"Math\"")
-            || debug_hir_uses_global_math_member(&hir_debug)
-            || debug_hir_uses_global_math_member(&class_hir_debug)
-        {
+        // also scan its supported member names. (`hir_debug` includes class
+        // bodies, so an extracted method in a constructor, method, accessor,
+        // or field initializer cannot be pruned.) Bare matching stays
+        // over-approximate on purpose (a false positive only costs size).
+        if hir_debug.contains("\"Math\"") || debug_hir_uses_global_math_member(&hir_debug) {
             ctx.uses_global_math = true;
         }
         if hir_debug.contains("\"JSON\"") {
@@ -541,10 +534,6 @@ pub(super) fn detect_optional_feature_usage(
     // diagnostics (GC-diag / typed-feedback JSON) ride the same feature and
     // degrade gracefully when off, so they need no detection.
     {
-        let hir_debug: String = format!(
-            "{:?}{:?}{:?}",
-            &hir_module.init, &hir_module.functions, &hir_module.classes
-        );
         if hir_debug.contains("method: \"getHeapSnapshot\"")
             || hir_debug.contains("method: \"writeHeapSnapshot\"")
             || hir_debug.contains("method: \"generateHeapSnapshot\"")
@@ -586,7 +575,6 @@ pub(super) fn detect_optional_feature_usage(
     // don't go through an `import 'readline'` statement, so the import-based
     // needs_stdlib detection above misses them.
     {
-        let hir_debug: String = format!("{:?}{:?}", &hir_module.init, &hir_module.functions);
         if hir_debug.contains("ProcessStdinSetRawMode")
             || hir_debug.contains("ProcessStdinOn")
             || hir_debug.contains("ProcessStdinRemoveListener")
@@ -714,6 +702,48 @@ mod tests {
         assert!(!debug_hir_uses_global_math_member(
             r#"PropertyGet { object: GlobalGet(0), property: "stringify", optional: false }"#
         ));
+    }
+
+    fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
+        let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse");
+        let hir =
+            perry_hir::lower_module(&ast, "entry", "/tmp/feature-detect/entry.ts").expect("lower");
+        let mut ctx =
+            crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
+        super::detect_optional_feature_usage(&mut ctx, &hir);
+        ctx
+    }
+
+    /// #11121: `@redis/client`'s `static parseURL` is the only URL use in its
+    /// module. A token that exists only inside a class body must still enable
+    /// the gates, or the dynamic `new ns.URL(u)` dispatcher arm is compiled out.
+    #[test]
+    fn url_use_only_inside_a_class_body_enables_the_url_gates() {
+        let ctx = detect_for_source(
+            r#"
+const node_url_1 = require("node:url");
+class C {
+  static parseURL(url: string) {
+    return new node_url_1.URL(url).hostname;
+  }
+}
+"#,
+        );
+        assert!(ctx.uses_global_url, "global-url must be enabled");
+        assert!(ctx.uses_url, "url-engine must be enabled");
+
+        let control = detect_for_source("class C { static f(x: number) { return x + 1; } }\n");
+        assert!(!control.uses_global_url && !control.uses_url);
+    }
+
+    /// Same corpus for every gate: a class-body-only use of another token-grep
+    /// gate that used to scan init+functions only.
+    #[test]
+    fn temporal_use_only_inside_a_class_body_enables_the_gate() {
+        let ctx = detect_for_source(
+            "class C { get now() { return (Temporal as any).Now.instant(); } }\n",
+        );
+        assert!(ctx.uses_temporal);
     }
 
     #[test]
