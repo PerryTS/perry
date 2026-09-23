@@ -595,6 +595,8 @@ fn tls_config() -> Result<&'static turnloop_tls::ClientConfig, String> {
                 extra_ca_pem,
                 reject_unauthorized: !environment.accepts_invalid_certificates(),
                 enable_sni: true,
+                // `None` = turnloop-tls's default provider, `ring`.
+                provider: None,
             };
             turnloop_tls::ClientConfig::new(options, unix_seconds()).map_err(|e| e.to_string())
         })

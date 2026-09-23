@@ -387,17 +387,27 @@ perex = "0.1.9"
 # to carets, which is what lifts the forced downgrades alpha.2 imposed on libc,
 # tokio, redis and wasm-bindgen across this workspace. A caret here for the same
 # reason; the exact version is pinned by Cargo.lock, locked once with the
-# owner-approved one-time publish-age override. alpha.6 carries turnloop#89
-# (ring slots allocated zeroed rather than written, which took Perry's idle RSS
-# from +17.8 % to +2.9 % against the tokio arm and flipped two RSS rows to
-# wins), #83 (multi-threaded accept / SO_REUSEPORT) and #85. Published
-# 2026-09-17T13:24:47Z, sha256
-# d04fa71225fc8a61ce9707bf1d5510ebe448a3ba00d71924f3aff8a2140e33a4 — the
+# owner-approved one-time publish-age override. alpha.7 carries turnloop#98-#106;
+# alpha.8 adds only `Detached::from_listener_fd` (turnloop#108) and semver-checks
+# rated it API-compatible, so every alpha.7 -> alpha.8 change is additive. The
+# RELEASING.md exception wants the release source commit:
+# d72fea0b4644af0b13376bf62b3b8181206d359e (turnloop release PR #109).
+# What reaches Perry: `TcpOpts` gains `connect_timeout` and `PoolConfig` gains
+# `max_undelivered`, so both need `..Default::default()` in a struct literal;
+# `Backend::poll` takes a `Budget` (invisible here — Perry implements no
+# `Backend`); and `Loop::rebuild(config)` is new. The alpha.7 change most likely
+# to be mistaken for Perry's problem is `LocalExecutor::turn` retaining
+# completions it did not issue: that is `turnloop-io`'s executor, which Perry
+# deliberately does not use (see the P5 note below). Perry drives
+# `Driver::turn(timeout, &mut Completions)`, whose body is unchanged but for the
+# new `self.budget()` argument, so there is no completion-retention change on
+# any path Perry takes. Published 2026-09-23T02:46:06Z, sha256
+# 35a7b66fdeab8e9365eb7dbe27edea9ed45e92e612558d301c69497f4373a60b — the
 # checksum Cargo.lock records, verified against the crates.io API rather than
 # against the publishing workflow going green. The soak skill's rule holds:
 # opting out is a committed, reviewable change and never a silent one, so the
 # override lives here in the diff and the lock pins the exact artifact.
-turnloop = "0.1.0-alpha.6"
+turnloop = "0.1.0-alpha.8"
 # turnloop P5 (DESIGN §5b, §12 "P5"): the sans-I/O protocol crates that
 # replace hyper's HTTP/1.1 parser and framer on Perry's server path, and
 # `tokio_rustls` on every TLS path the loop owns. Default features only — the
@@ -406,20 +416,39 @@ turnloop = "0.1.0-alpha.6"
 # issue; Perry already owns a `turnloop::Loop` and routes P1/P2/P3 tokens
 # through it, so the codecs are driven sans-I/O over the P1 socket layer
 # instead (docs/turnloop/p5-report.md, "Why sans-I/O").
-turnloop-http = { version = "0.1.0-alpha.6", default-features = false }
-turnloop-tls = { version = "0.1.0-alpha.6", default-features = false }
+#
+# `ring` is EXPLICIT here because alpha.7 made it an optional-but-default
+# feature of turnloop-tls (turnloop-http's `ring` only forwards to it and has no
+# ring-gated code of its own). In alpha.6 `ring` was an UNCONDITIONAL dependency
+# of turnloop-tls, so `default-features = false` — which is here only to keep
+# the `turnloop` feature off — still left Perry with ring. Dropping it in
+# alpha.7 would have taken two things, neither of them a mere feature flag:
+# `tls_server_end_point` is `#[cfg(feature = "ring")]`, and it is what
+# `perry-tls-session` hands turnloop-postgres as RFC 5929 channel binding for
+# SCRAM-SHA-256-PLUS, where a wrong or missing digest makes the driver offer
+# PLUS and fail the server signature. The alpha.7 replacement
+# `tls_server_end_point_hash` is NOT a drop-in: it returns which hash RFC 5929
+# selects (`EndPointHash`), not the computed `Digest`. And without `ring`,
+# turnloop-tls's `default_provider()` stops returning ring and instead demands a
+# rustls process-default provider, failing at RUNTIME ("no rustls crypto
+# provider") rather than at compile time. So this line restores exactly what
+# alpha.6 gave Perry; it does not opt into anything new.
+turnloop-http = { version = "0.1.0-alpha.8", default-features = false }
+turnloop-tls = { version = "0.1.0-alpha.8", default-features = false, features = [
+    "ring",
+] }
 # turnloop WS lane: the sans-I/O WebSocket protocol + HTTP-upgrade helpers that
 # replace tokio-tungstenite everywhere in the tree. Default features only --
 # the `turnloop` feature pulls turnloop-io's LocalExecutor, which Perry cannot
 # adopt for the same reason P5 recorded (it builds its own Driver and drops
 # every completion it did not issue). See docs/turnloop/ws-report.md.
-turnloop-websocket = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-websocket = { version = "0.1.0-alpha.8", default-features = false }
 # turnloop P6 (DESIGN §12 "P6"): the sans-I/O SMTP client and MIME builder that
 # replaces `lettre`'s tokio transport on the outbound mail path. Its `message`
 # module re-exports the same `lettre` 0.11 builder Perry's nodemailer surface
 # already uses, so only the transport changes
 # (docs/turnloop/p6-report.md).
-turnloop-smtp = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-smtp = { version = "0.1.0-alpha.8", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
 # cores that replace sqlx, the `redis` crate and the `mongodb` driver on the
 # paths Perry's bindings own. Default features only, for the same reason as the
@@ -429,8 +458,8 @@ turnloop-smtp = { version = "0.1.0-alpha.6", default-features = false }
 # it is the release that gave MySQL and MongoDB one deflate state per
 # connection, each compressed message framed as its own zlib stream; alpha.3
 # re-created the state per message and is a wire-level regression to adopt.
-turnloop-redis = { version = "0.1.0-alpha.6", default-features = false }
-turnloop-mongodb = { version = "0.1.0-alpha.6", default-features = false }
+turnloop-redis = { version = "0.1.0-alpha.8", default-features = false }
+turnloop-mongodb = { version = "0.1.0-alpha.8", default-features = false }
 hex = "0.4"
 tempfile = "3"
 itoa = "1.0"

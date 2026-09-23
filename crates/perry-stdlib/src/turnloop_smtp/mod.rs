@@ -595,6 +595,17 @@ fn pump(state: &mut EngineState, id: i64) {
                 return;
             }
             Some(Event::Reset) => {}
+            // turnloop-smtp 0.1.0-alpha.7 added this for STREAMED messages:
+            // the core pushes it only when `streaming.is_some()`, which is set
+            // only by the streaming starter. This module sends whole messages
+            // (`.send(..)` below) and never starts one, so the event cannot
+            // arrive and there is nothing to write.
+            //
+            // It is not merely ignorable, though: it means the server answered
+            // DATA with 354 and is waiting for content, so a future streaming
+            // path that leaves this arm empty would hang the exchange rather
+            // than fail it. Whoever adds streaming must handle it here.
+            Some(Event::BodyReady { .. }) => {}
             None => {
                 flush(state, id);
                 return;

@@ -483,7 +483,14 @@ pub fn accept_start(id: i64) -> NetResult<()> {
 pub fn tcp_connect(id: i64, subsystem: u8, addr: SocketAddr, nodelay: bool) -> NetResult<()> {
     with_driver(|driver| {
         let handle = driver
-            .tcp_connect(addr, &TcpOpts { nodelay }, token(OP_CONNECT, id))
+            .tcp_connect(
+                addr,
+                &TcpOpts {
+                    nodelay,
+                    ..TcpOpts::default()
+                },
+                token(OP_CONNECT, id),
+            )
             .map_err(|e| map_error(e, "connect"))?;
         let mut entry = Entry::new(handle, subsystem, false);
         entry.peer = Some(addr);

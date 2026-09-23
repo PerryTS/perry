@@ -311,6 +311,10 @@ pub fn client_config(options: &TlsClientOptions) -> Result<turnloop_tls::ClientC
             extra_ca_pem: options.extra_ca_pem.clone(),
             reject_unauthorized: options.reject_unauthorized,
             enable_sni: options.enable_sni,
+            // `None` selects turnloop-tls's own default, which is `ring` —
+            // the provider this workspace pins the `ring` feature for, and the
+            // one alpha.6 used unconditionally. Not a new choice.
+            provider: None,
         },
         unix_seconds(),
     )

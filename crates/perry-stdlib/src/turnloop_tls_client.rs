@@ -53,6 +53,8 @@ pub(crate) fn client_config() -> Option<&'static turnloop_tls::ClientConfig> {
                 extra_ca_pem,
                 reject_unauthorized: !environment.accepts_invalid_certificates(),
                 enable_sni: true,
+                // `None` = turnloop-tls's default provider, `ring`.
+                provider: None,
             };
             turnloop_tls::ClientConfig::new(options, unix_seconds()).ok()
         })

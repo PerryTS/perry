@@ -51,6 +51,8 @@ pub fn client_config() -> Result<&'static turnloop_tls::ClientConfig> {
                 // Never configurable from this crate — see the module docs.
                 reject_unauthorized: true,
                 enable_sni: true,
+                // `None` = turnloop-tls's default provider, `ring`.
+                provider: None,
             };
             turnloop_tls::ClientConfig::new(options, unix_seconds()).map_err(|e| e.to_string())
         })
