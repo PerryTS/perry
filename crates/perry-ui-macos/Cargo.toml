@@ -106,3 +106,8 @@ harness = false
 name = "native_button_image_size"
 path = "tests/native_button_image_size.rs"
 harness = false
+
+[[test]]
+name = "native_window_appearance"
+path = "tests/native_window_appearance.rs"
+harness = false
