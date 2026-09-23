@@ -1447,6 +1447,7 @@ fn lower_new_impl_inner<'a>(
                         | "String"
                         | "Date"
                         | "RegExp"
+                        | "URL"
                         | "Function"
                         | "BigInt"
                         | "Symbol"

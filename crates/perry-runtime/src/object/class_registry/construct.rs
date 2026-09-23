@@ -1771,6 +1771,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | "Number"
                 | "String"
                 | "RegExp"
+                | "URL"
                 | "Function"
         ) {
             let scope = crate::gc::RuntimeHandleScope::new();

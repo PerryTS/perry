@@ -122,6 +122,7 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "BigInt64Array" => 0xFFFF0039,
         "BigUint64Array" => 0xFFFF003A,
         "Function" => 0xFFFF00F0,
+        "URL" => 0xFFFF0063,
         // #10556: `class Sub extends EventEmitter {}` — same shape as the
         // Array/Map/Set/Error builtins above. Without this edge,
         // `new Sub() instanceof EventEmitter` never reaches the class-chain
@@ -554,6 +555,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "ReadableStream" => 0xFFFF0060u32,
                 "WritableStream" => 0xFFFF0061u32,
                 "TransformStream" => 0xFFFF0062u32,
+                "URL" => 0xFFFF0063u32,
                 // node:stream/web codec stream constructors are heap
                 // ObjectHeader instances with runtime-owned class IDs.
                 "TextEncoderStream" => 0x7FFFFF30u32,
