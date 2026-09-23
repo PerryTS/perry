@@ -200,6 +200,31 @@ fn node_named_reexports_lower_to_synthetic_native_imports() {
 }
 
 #[test]
+fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
+    let module = lower_result(r#"export { WebSocket } from "ws";"#)
+        .expect("valid bundled-package re-export should lower");
+
+    assert!(module.imports.iter().any(|import| {
+        import.is_native
+            && import.source == "ws"
+            && matches!(
+                import.specifiers.as_slice(),
+                [perry_hir::ImportSpecifier::Named { imported, local }]
+                    if imported == "WebSocket"
+                        && local.starts_with("__perry_builtin_reexport_")
+            )
+    }));
+    assert!(module.exports.iter().any(|export| {
+        matches!(
+            export,
+            perry_hir::Export::Named { local, exported }
+                if local.starts_with("__perry_builtin_reexport_")
+                    && exported == "WebSocket"
+        )
+    }));
+}
+
+#[test]
 fn invalid_node_named_reexports_are_rejected() {
     let error = lower_result(r#"export { definitelyMissing } from "node:crypto";"#)
         .expect_err("invalid builtin re-export should fail during lowering");

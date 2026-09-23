@@ -1460,15 +1460,18 @@ pub(crate) fn lower_module_decl(
                                 })
                                 .unwrap_or_else(|| local.clone());
 
-                            // A Node builtin has no compiled source module for the
+                            // A native module has no compiled source module for the
                             // driver to follow through a normal ReExport edge. Model
                             // the forwarding binding as a synthetic named import so
-                            // codegen can publish a live getter for the builtin ESM
-                            // export cell. The synthetic local is compiler-private:
-                            // `export { x } from "node:m"` does not introduce `x`
-                            // into this module's lexical scope.
+                            // codegen can publish a live getter for the native ESM
+                            // export cell. This covers Node builtins and bundled npm
+                            // shims such as `ws`; leaving the latter as ReExport made
+                            // consumers reference a closure-wrapper symbol that no
+                            // source module could emit (#11044). The synthetic local
+                            // is compiler-private: `export { x } from "node:m"` does
+                            // not introduce `x` into this module's lexical scope.
                             let native_source = canonicalize_native_import_source(&source);
-                            if perry_api_manifest::is_node_core_module(&native_source) {
+                            if is_native_module(&native_source) {
                                 if !perry_api_manifest::module_has_public_named_export(
                                     &native_source,
                                     &local,
