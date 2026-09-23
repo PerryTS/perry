@@ -347,10 +347,20 @@ impl Operation {
                 )))
             }
             Kind::InsertOne { id } => {
-                // `WriteResult::parse` only reports a failure when `ok` is 0.
                 // A duplicate key answers `ok: 1` with a `writeErrors` array,
                 // and the pre-P7 path rejected on that, so ask the response
-                // parser that knows about write errors first.
+                // parser that knows about write errors. This kind settles a
+                // plain id and so never builds a `WriteResult` at all.
+                //
+                // (Before turnloop-mongodb 0.1.0-alpha.7 this was the ONLY
+                // check that caught a write error: `WriteResult::parse` then
+                // failed only on `ok: 0`. alpha.7 made `parse` run exactly this
+                // `Error::from_response` first — the lenient parse is now
+                // `WriteResult::decode` — so the explicit calls at the kinds
+                // below are redundant rather than load-bearing. They are kept:
+                // they cost one pass over a reply that is already in memory,
+                // they produce the identical error, and they keep every kind
+                // here rejecting write errors the same visible way.)
                 Error::from_response(reply).map_err(message)?;
                 Ok(Step::Settle(Settlement::Json(std::mem::take(id))))
             }

@@ -38,11 +38,13 @@ struct Building {
     /// `Connection: upgrade` with an `Upgrade` header — Node dispatches this
     /// to `'upgrade'` rather than `'request'`, *if* a listener exists.
     ///
-    /// The decoder does not raise `Event::Upgrade` for it:
-    /// `turnloop_http::http1`'s `State::Upgrade` is only reachable in
-    /// `Mode::Response` (a client reading a 101), so on the request side an
-    /// upgrade is an ordinary head with no body and the server is the one that
-    /// has to recognize it.
+    /// Recognized here, from the head, rather than taken from the decoder.
+    /// Since turnloop-http 0.1.0-alpha.7 the request-mode decoder DOES raise
+    /// `Event::Upgrade` (it used to be reachable only in `Mode::Response`, a
+    /// client reading a 101), but that event is routed into the same arm as
+    /// `Event::End` and the routing still keys off this flag — the two do not
+    /// agree on CONNECT, which sets the decoder's `upgrade_request` but is not
+    /// an `Upgrade` header and so is not one of these.
     upgrade: bool,
     /// `Connection: upgrade` naming `websocket`, with a `Sec-WebSocket-Key`.
     /// An attached `WebSocketServer` answers these itself.
@@ -446,7 +448,25 @@ fn decode(id: i64) {
                     outcome = Step::Again;
                 }
                 Some(http1::Event::Trailers(_)) => outcome = Step::Again,
-                Some(http1::Event::End) => {
+                // `Upgrade` joins `End` here rather than getting its own arm.
+                // turnloop-http 0.1.0-alpha.7 made the REQUEST-mode decoder end
+                // an upgrade message with `Event::Upgrade` INSTEAD of
+                // `Event::End` (`upgrade_request` = CONNECT, or HTTP/1.1 with
+                // `Upgrade` + `Connection: upgrade`). Both mean the same thing
+                // on this side — the message is complete — and all the routing
+                // policy lives below, so they must not diverge.
+                //
+                // This was a silent regression waiting to happen: the old
+                // `Event::Upgrade` arm was written as unreachable and routed
+                // straight to `Step::Upgrade`, so once alpha.7 started raising
+                // it, every upgrade would have bypassed BOTH the attached
+                // `WebSocketServer` precedence and the `has_upgrade_listener`
+                // test (#4973: an upgrade with no listener is served as an
+                // ordinary request), and a CONNECT — which sets
+                // `upgrade_request` but never `Building::upgrade` — would have
+                // stopped being dispatched as a request at all. None of that is
+                // a compile error, because the arm already existed.
+                Some(http1::Event::End | http1::Event::Upgrade) => {
                     outcome = match c.building.take() {
                         // A WebSocket upgrade with a `WebSocketServer` attached
                         // to this server is answered here, before the generic
@@ -477,15 +497,6 @@ fn decode(id: i64) {
                             Step::Dispatch(request, send_continue)
                         }
                         None => Step::Again,
-                    };
-                }
-                // Unreachable on the request side (see `Building::upgrade`),
-                // and handled above when it is; kept so a later decoder that
-                // does raise it cannot fall through to "needs more input".
-                Some(http1::Event::Upgrade) => {
-                    outcome = match c.building.take() {
-                        Some(building) => Step::Upgrade(building),
-                        None => Step::Idle,
                     };
                 }
                 Some(http1::Event::Informational(_)) => outcome = Step::Again,

@@ -133,7 +133,10 @@ impl Connection {
         };
         let mut driver = Loop::new(config).map_err(turnloop_io_error)?;
         let deadline = driver.now() + budget;
-        let opts = TcpOpts { nodelay: true };
+        let opts = TcpOpts {
+            nodelay: true,
+            ..TcpOpts::default()
+        };
         let handle = driver
             .tcp_connect(addr, &opts, TOK_CONNECT)
             .map_err(turnloop_io_error)?;

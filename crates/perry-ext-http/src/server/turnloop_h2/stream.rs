@@ -164,8 +164,8 @@ pub(crate) fn on_peer_settings(conn: &mut H2Conn) {
     if session == 0 {
         return;
     }
-    // `Event::Settings` is a unit variant, so the values came from the
-    // pre-scan in `conn.rs` rather than from the core.
+    // The values come from the pre-scan in `conn.rs` rather than from the
+    // core's `Event::Settings` (see conn.rs's module docs).
     let settings = conn.peer_settings.take().unwrap_or_default();
     crate::server::http2_server::queue_turnloop_remote_settings(session, settings);
 }

@@ -32,18 +32,28 @@
 //! into `core.output()`. Returning without flushing sends a peer nothing at
 //! all, and h2spec asks for that frame by error code on ~60 of its tests.
 //!
-//! ## The pre-scan, and the three things the core will not tell you
+//! ## The pre-scan, and the three things it recovers
 //!
 //! Every frame is decoded **twice**: once by [`peek_frame`] here, once by the
 //! core. The second decode is the authoritative one; the first exists because
-//! three facts a `node:http2` session has to surface never leave `Connection`:
+//! three facts a `node:http2` session has to surface did not leave
+//! `Connection` when this was written:
 //!
 //! * **a SETTINGS acknowledgement** — consumed with `event: None`, so
-//!   `session.settings(obj, cb)` has nothing to fire its callback on;
-//! * **GOAWAY's opaque data** — `Event::Goaway` carries `last_stream` and
-//!   `code` only, and Node's `'goaway'` listener receives the third argument;
-//! * **the peer's SETTINGS values** — `Event::Settings` is a unit variant, so
+//!   `session.settings(obj, cb)` had nothing to fire its callback on;
+//! * **GOAWAY's opaque data** — `Event::Goaway` carried `last_stream` and
+//!   `code` only, and Node's `'goaway'` listener receives a third argument;
+//! * **the peer's SETTINGS values** — `Event::Settings` was a unit variant, so
 //!   `session.remoteSettings` would stay at its defaults forever.
+//!
+//! **turnloop-http 0.1.0-alpha.7 now carries all three** — `Event::SettingsAck`
+//! is an event, `Event::Goaway` has a `debug` field, and `Event::Settings`
+//! carries a `SettingsFrame`. The pre-scan was deliberately left in place at
+//! that bump rather than unwound: it is also what withholds the frame class
+//! described next, and moving three `node:http2`-visible surfaces onto a new
+//! source is a behaviour change that wants its own commit and its own h2spec
+//! run. Treat the list above as the reason the pre-scan EXISTS, not as a
+//! current statement about the core's API.
 //!
 //! The pre-scan also *withholds* one frame class from the core. `Connection`
 //! tracks exactly one outstanding SETTINGS (its own, from the constructor) and
@@ -109,12 +119,25 @@ pub(crate) enum Owned {
     /// exhaustive and the decision is visible; answering it would diverge from
     /// Node, which sends nothing.
     Unprocessed,
+    /// The peer acknowledged our SETTINGS. Before turnloop-http 0.1.0-alpha.7
+    /// this was a silent step inside the decoder rather than an event, so
+    /// nothing here ever observed it; it is carried (and ignored) to keep that
+    /// behaviour explicit rather than to start acting on it. The round-trip
+    /// timing the ack now makes measurable is unused — `session.ping()` is the
+    /// surface Node exposes for that.
+    SettingsAck,
     WindowUpdate,
 }
 
 fn own_event(event: Event<'_>) -> Owned {
     match event {
-        Event::Settings => Owned::Settings,
+        // alpha.7 gave `Settings` the peer's actual parameters
+        // (`SettingsFrame`). Still discarded here: `session.remoteSettings` is
+        // served from `stream::on_peer_settings`'s own view of the applied
+        // settings, so reading them off the frame would be a second source of
+        // the same truth. See the `remoteSettings` note below.
+        Event::Settings(_) => Owned::Settings,
+        Event::SettingsAck(_) => Owned::SettingsAck,
         Event::Headers {
             stream,
             headers,
@@ -152,7 +175,13 @@ fn own_event(event: Event<'_>) -> Owned {
         // and measurement against a raw peer showed it does not.
         Event::Unprocessed { .. } => Owned::Unprocessed,
         Event::Reset { stream, code } => Owned::Reset { stream, code },
-        Event::Goaway { last_stream, code } => Owned::Goaway { last_stream, code },
+        // `..` drops alpha.7's new `debug` (RFC 9113 §6.8 Additional Debug
+        // Data). Node surfaces it as the `'goaway'` handler's third argument;
+        // wiring it through is a behaviour ADDITION, so it is deliberately not
+        // done in a dependency bump. See the `Additional Debug Data` note below.
+        Event::Goaway {
+            last_stream, code, ..
+        } => Owned::Goaway { last_stream, code },
         Event::Ping { ack, data } => Owned::Ping { ack, data },
         Event::WindowUpdate { .. } => Owned::WindowUpdate,
     }
@@ -221,11 +250,14 @@ pub(crate) struct H2Conn {
     /// SETTINGS frames this module wrote out of band (`session.settings()`)
     /// whose acknowledgement has not arrived. See the module docs.
     pub(crate) owed_settings_acks: u32,
-    /// GOAWAY opaque data captured by the pre-scan, for the `'goaway'` event
-    /// the core's `Event::Goaway` cannot carry.
+    /// GOAWAY opaque data captured by the pre-scan, for the `'goaway'` event.
+    /// `Event::Goaway` gained a `debug` field in turnloop-http alpha.7; this
+    /// remains the source (see the module docs' pre-scan note).
     pub(crate) goaway_opaque: Vec<u8>,
     /// The peer's SETTINGS values captured by the pre-scan, for the
-    /// `'remoteSettings'` event the core's unit `Event::Settings` cannot carry.
+    /// `'remoteSettings'` event. `Event::Settings` carries a `SettingsFrame`
+    /// since turnloop-http alpha.7; this remains the source (see the module
+    /// docs' pre-scan note).
     pub(crate) peer_settings: Option<Http2SettingsState>,
     /// Connection-level frames JS asked for before the transport was ready.
     ///
@@ -1041,6 +1073,10 @@ fn apply(conn: &mut H2Conn, event: Owned) {
         // Deliberately nothing: see `Event::Unprocessed` above. Node sends no
         // frame and never surfaces the request, and so do we.
         Owned::Unprocessed => {}
+        // Deliberately nothing: turnloop-http applies the acknowledged settings
+        // itself, and before alpha.7 made this an event the decoder stepped
+        // over it silently. Ignoring it keeps that exact behaviour.
+        Owned::SettingsAck => {}
         // A peer window opened: retry whatever stalled. Which window — the
         // connection's or one stream's — does not matter, because
         // `pump_outbox` walks every stream and `send_data` answers zero for
@@ -1420,8 +1456,8 @@ mod prescan_tests {
         assert_eq!(c.owed_settings_acks, 1);
     }
 
-    /// `Event::Settings` is a unit variant, so `session.remoteSettings` comes
-    /// from here or from nowhere.
+    /// `session.remoteSettings` comes from the pre-scan, not from the core's
+    /// `Event::Settings` (see the module docs' pre-scan note).
     #[test]
     fn peer_settings_values_are_captured() {
         let mut c = conn(0, true);
@@ -1443,7 +1479,8 @@ mod prescan_tests {
         assert_eq!(c.input.len(), 9 + payload.len());
     }
 
-    /// RFC 9113 §6.8's Additional Debug Data, which `Event::Goaway` drops.
+    /// RFC 9113 §6.8's Additional Debug Data, which this module takes from the
+    /// pre-scan rather than from `Event::Goaway`'s alpha.7 `debug` field.
     #[test]
     fn goaway_opaque_data_is_captured_and_cleared() {
         let mut c = conn(0, true);
