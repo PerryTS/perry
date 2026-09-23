@@ -1,6 +1,8 @@
 //! Node-compatible rustls server-certificate verification.
 
-use super::*;
+use std::sync::Arc;
+
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 
 #[cfg(feature = "tls")]
 #[derive(Debug)]
