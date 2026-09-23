@@ -550,6 +550,30 @@ pub(crate) struct ObjectHotTables {
     /// (`.values_mut()`, GC root marking — commutative). Nothing else iterates.
     pub(crate) shape_cache_overflow:
         RefCell<crate::fast_hash::PtrHashMap<u32, (*mut ArrayHeader, u32)>>,
+    /// This agent's class_id -> (keys array address, field count) memo,
+    /// read by `alloc::registered_class_keys_array`.
+    ///
+    /// PER AGENT, because the addresses are. A class id names the same
+    /// compiled class in every agent, but each agent runs its own module
+    /// init and builds its own keys array in its own heap. When this was a
+    /// process-global `RwLock` (#10969 review, finding 3), a worker's module
+    /// init overwrote the main thread's entry with a foreign-heap address,
+    /// and each agent's weak prune then dropped the other's entry because it
+    /// could not attribute the address to its own heap. Here a foreign address
+    /// cannot be in the table at all.
+    ///
+    /// WEAK, per #6759 phase 3 and the discipline `canonical_keys` uses: the
+    /// address is rewritten on move by `alloc::scan_class_keys_roots_mut` and
+    /// the entry is dropped on death by `alloc::prune_dead_class_keys_entries`.
+    ///
+    /// `PtrHasher`, not SipHash: the key is a codegen-minted class id, never
+    /// external input, and `js_object_alloc_class_with_keys` remembers on
+    /// every construction (a `claude-code --help` profile put SipHash under
+    /// `remember_class_keys_array` at 0.175% of samples).
+    ///
+    /// Iteration-order safe: the two mutating passes rewrite independent
+    /// values and drop entries by a per-entry predicate.
+    pub(crate) class_keys_by_id: RefCell<crate::fast_hash::PtrHashMap<u32, (usize, u32)>>,
     /// Per-thread shape-transition cache for the dynamic-key write path;
     /// see the doc block above `with_transition_cache`. HEAP-allocated
     /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
@@ -586,6 +610,7 @@ impl ObjectHotTables {
                 vec![0; shapes::SHAPE_KIND_CACHE_SIZE].into_boxed_slice(),
             ),
             shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
+            class_keys_by_id: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             transition_cache: std::cell::UnsafeCell::new(
                 vec![
                     TransitionEntry {

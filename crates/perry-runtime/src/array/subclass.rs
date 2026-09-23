@@ -437,12 +437,10 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     if class_id == 0 || !is_array_subclass_class_id(class_id) {
         return 0;
     }
-    let Some((declared_keys, declared_count)) =
-        crate::object::registered_class_keys_array(class_id)
-    else {
-        return 0;
-    };
-    if declared_keys.is_null() {
+    // The class memo answers only whether a declared layout exists here; its
+    // address is read again right before the comparison below, so no
+    // allocation between the two can leave a stale copy in hand.
+    if crate::object::registered_class_keys_array(class_id).is_none() {
         return 0;
     }
     // An elements-backed instance (`super::subclass_elements`) has NO numeric
@@ -493,6 +491,14 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
         return 0;
     };
     if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        return 0;
+    }
+    let Some((declared_keys, declared_count)) =
+        crate::object::registered_class_keys_array(class_id)
+    else {
+        return 0;
+    };
+    if declared_keys.is_null() {
         return 0;
     }
     let current_keys = shape.keys as usize as *const ArrayHeader;
