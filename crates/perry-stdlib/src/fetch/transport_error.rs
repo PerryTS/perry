@@ -190,9 +190,7 @@ impl Rejection {
     pub(crate) fn message(&self) -> String {
         match self {
             Rejection::Failure(failure) => failure.cause_message.clone(),
-            Rejection::TypeError(message) | Rejection::ParseUrl { message, .. } => {
-                message.clone()
-            }
+            Rejection::TypeError(message) | Rejection::ParseUrl { message, .. } => message.clone(),
         }
     }
 
@@ -200,10 +198,8 @@ impl Rejection {
         match self {
             Rejection::Failure(failure) => failure.into_js_bits(),
             Rejection::TypeError(message) => {
-                let message = perry_runtime::js_string_from_bytes(
-                    message.as_ptr(),
-                    message.len() as u32,
-                );
+                let message =
+                    perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
                 let error = perry_runtime::error::js_typeerror_new(message);
                 perry_runtime::JSValue::pointer(error as *const u8).bits()
             }
@@ -219,10 +215,8 @@ impl Rejection {
                 let scope = perry_runtime::gc::RuntimeHandleScope::new();
                 let cause_handle = scope
                     .root_nanbox_u64(perry_runtime::JSValue::pointer(cause as *const u8).bits());
-                let message = perry_runtime::js_string_from_bytes(
-                    message.as_ptr(),
-                    message.len() as u32,
-                );
+                let message =
+                    perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
                 let error = perry_runtime::error::js_typeerror_new_with_cause(
                     message,
                     cause_handle.get_nanbox_f64(),
@@ -255,7 +249,10 @@ mod tests {
             Rejection::ParseUrl { ref message, cause: "Invalid URL", code: "ERR_INVALID_URL" }
                 if message == "Failed to parse URL from not-a-url"
         ));
-        assert_eq!(unsupported("ftp://example.test/x", "GET").message(), "unknown scheme");
+        assert_eq!(
+            unsupported("ftp://example.test/x", "GET").message(),
+            "unknown scheme"
+        );
         assert_eq!(
             unsupported("file:///etc/hosts", "GET").message(),
             "not implemented... yet..."
