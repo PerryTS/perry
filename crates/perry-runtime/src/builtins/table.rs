@@ -225,11 +225,12 @@ unsafe fn object_key_names(obj_ptr: *const crate::object::ObjectHeader) -> Vec<S
 /// iterate `0..key_count` and `continue` on a non-string key for exactly this
 /// reason; this is that same walk, with the index kept.
 unsafe fn object_key_entries(obj_ptr: *const crate::object::ObjectHeader) -> Vec<(u32, String)> {
-    let keys_array = crate::object::object_keys_array(obj_ptr);
+    let keys_array_view = crate::object::object_keys(obj_ptr);
+    let keys_array = keys_array_view.arr();
     if keys_array.is_null() {
         return Vec::new();
     }
-    let count = crate::array::js_array_length(keys_array) as usize;
+    let count = keys_array_view.count() as usize;
     let mut keys = Vec::with_capacity(count);
     for i in 0..count {
         let key_val = crate::array::js_array_get(keys_array, i as u32);

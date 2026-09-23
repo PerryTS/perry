@@ -100,7 +100,7 @@ mod c3c_tests {
             "a fresh compiled class instance waited for a by-name lookup to stamp"
         );
         assert_eq!(
-            unsafe { crate::object::object_keys_array(obj) },
+            unsafe { crate::object::object_keys(obj).arr() },
             keys,
             "the stamp and canonical keys global must describe the same shape"
         );
@@ -136,9 +136,14 @@ mod c3c_tests {
             }
             crate::gc::layout_init_pointer_free(obj as *mut u8);
 
-            assert!(try_birth_stamp_preinstalled_shape(obj, shape_id, keys, 2));
+            assert!(try_birth_stamp_preinstalled_shape(
+                obj,
+                shape_id,
+                crate::object::ObjectKeys::owned(keys),
+                2
+            ));
             assert_eq!((*obj).parent_class_id, shape_id);
-            assert_eq!(crate::object::object_keys_array(obj), keys);
+            assert_eq!(crate::object::object_keys(obj).arr(), keys);
             debug_assert_object_shape_parity(obj);
         }
     }
@@ -236,11 +241,11 @@ mod c3c_tests {
                     .expect("a surviving stamp must resolve in this agent");
                 assert_eq!(
                     descriptor.keys,
-                    crate::object::object_keys_array(obj) as u64
+                    crate::object::object_keys(obj).arr() as u64
                 );
                 assert_eq!(
                     descriptor.logical_key_count,
-                    crate::array::js_array_length(crate::object::object_keys_array(obj))
+                    crate::array::js_array_length(crate::object::object_keys(obj).arr())
                 );
                 assert_eq!(
                     descriptor.live_inline_slot_count,
@@ -290,8 +295,8 @@ mod c6804_tests {
                 "siblings of one literal shape must share one id"
             );
             assert_eq!(
-                crate::object::object_keys_array(a),
-                crate::object::object_keys_array(b),
+                crate::object::object_keys(a).arr(),
+                crate::object::object_keys(b).arr(),
                 "test premise: shared keys"
             );
         }
@@ -879,7 +884,7 @@ mod descriptor_tests_8067 {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let keys = crate::object::object_keys_array(obj) as usize;
+            let keys = crate::object::object_keys(obj).arr() as usize;
             let before = (*obj).parent_class_id;
             let before_descriptor = shape_descriptor_by_id(before).expect("birth descriptor");
             assert_eq!(before_descriptor.live_inline_slot_count, 1);
@@ -912,15 +917,15 @@ mod descriptor_tests_8067 {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let shared_keys = crate::object::object_keys_array(a);
+            let shared_keys = crate::object::object_keys(a).arr();
             let shared_id = (*a).parent_class_id;
-            assert_eq!(shared_keys, crate::object::object_keys_array(b));
+            assert_eq!(shared_keys, crate::object::object_keys(b).arr());
             assert_eq!(shared_id, (*b).parent_class_id);
 
             crate::object::js_object_set_field_by_name(a, key("sib8067_b"), 2.0);
 
-            assert_ne!(crate::object::object_keys_array(a), shared_keys);
-            assert_eq!(crate::object::object_keys_array(b), shared_keys);
+            assert_ne!(crate::object::object_keys(a).arr(), shared_keys);
+            assert_eq!(crate::object::object_keys(b).arr(), shared_keys);
             assert_eq!((*b).parent_class_id, shared_id);
             assert_ne!((*a).parent_class_id, shared_id);
             assert_eq!(
@@ -933,7 +938,7 @@ mod descriptor_tests_8067 {
                 shape_descriptor_by_id((*a).parent_class_id).expect("transitioned descriptor");
             assert_eq!(
                 transitioned.keys,
-                crate::object::object_keys_array(a) as u64
+                crate::object::object_keys(a).arr() as u64
             );
             assert_eq!(transitioned.logical_key_count, 2);
             assert_eq!(transitioned.live_inline_slot_count, 2);
@@ -1056,7 +1061,7 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let obj = crate::object::js_object_alloc(0, 0);
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj).arr();
         let id = test_shape_id_for_keys(keys as usize)
             .expect("a fresh object must have a registered shape");
 
@@ -1097,7 +1102,7 @@ fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let a = crate::object::js_object_alloc(0, 0);
-        let keys_a = crate::object::object_keys_array(a);
+        let keys_a = crate::object::object_keys(a).arr();
         let id_a = test_shape_id_for_keys(keys_a as usize).expect("shape for a");
         let record_a = shape_descriptor_by_id(id_a).expect("resolves").record;
         assert_ne!(record_a, 0);

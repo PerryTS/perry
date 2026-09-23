@@ -30,7 +30,12 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
         .unwrap_or_else(|| synthetic_class_id_for_function(new_target.get_nanbox_f64()));
     let instance =
         if let Some((keys_array, field_count)) = registered_class_keys_array(instance_cid) {
-            js_object_alloc_class_inline_keys(instance_cid, 0, field_count, keys_array)
+            crate::object::alloc::alloc_class_instance_with_keys(
+                instance_cid,
+                0,
+                field_count,
+                keys_array,
+            )
         } else {
             js_object_alloc(
                 instance_cid,

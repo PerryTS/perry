@@ -160,11 +160,12 @@ mod tests {
             0,
             "an ordinary object, not a family"
         );
-        let keys = unsafe { crate::object::object_keys_array(obj) };
+        let keys_view = unsafe { crate::object::object_keys(obj) };
+        let keys = keys_view.arr();
         let key_count = if keys.is_null() {
             0
         } else {
-            unsafe { (*keys).length }
+            keys_view.count()
         };
         assert_eq!(key_count, 0, "the stub must have no own keys");
         assert_eq!(

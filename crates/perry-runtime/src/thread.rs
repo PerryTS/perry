@@ -676,8 +676,9 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     // slot — which keeps the surviving pairs aligned and matches node
     // (postMessage of an object with deleted keys carries only live keys).
     let hole_at = |i: usize| -> bool {
-        let keys_arr = crate::object::object_keys_array(obj);
-        if keys_arr.is_null() || i >= (*keys_arr).length as usize {
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
+        if keys_arr.is_null() || i >= keys_arr_view.count() as usize {
             return false;
         }
         let keys_elements =
@@ -699,9 +700,10 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     }
 
     // Serialize keys array if present (plain objects have keys, class instances don't)
-    let keys = if !crate::object::object_keys_array(obj).is_null() {
-        let keys_arr = crate::object::object_keys_array(obj);
-        let keys_len = (*keys_arr).length as usize;
+    let keys = if !crate::object::object_keys(obj).is_null() {
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
+        let keys_len = keys_arr_view.count() as usize;
         let keys_elements =
             crate::array::array_elements_ptr(keys_arr as *const crate::array::ArrayHeader)
                 as *const f64;

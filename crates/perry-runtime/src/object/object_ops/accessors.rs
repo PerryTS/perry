@@ -151,7 +151,8 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         if type_tag_at_12 == crate::closure::CLOSURE_MAGIC {
             return f64::from_bits(TAG_UNDEF);
         }
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         if keys.is_null() {
             return f64::from_bits(TAG_UNDEF);
         }
@@ -173,7 +174,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         // accessor). A forwarded edge is rejected above rather than resolved:
         // the collector rewrites the descriptor's traced `keys` slot, so a
         // live descriptor never legitimately retains the old stub.
-        let key_count = (*keys).length as usize;
+        let key_count = keys_view.count() as usize;
         if key_count > (*keys).capacity as usize || key_count > 65536 {
             return f64::from_bits(TAG_UNDEF);
         }

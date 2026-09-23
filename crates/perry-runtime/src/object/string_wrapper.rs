@@ -188,9 +188,9 @@ mod tests {
             let check_storage = || {
                 let owner = crate::value::js_nanbox_get_pointer(boxed_h.get_nanbox_f64()) as usize;
                 assert_eq!(length(owner), Some(4096));
-                let physical_keys = crate::object::object_keys_array(owner as *const ObjectHeader);
+                let physical_keys_view = crate::object::object_keys(owner as *const ObjectHeader);
                 assert_eq!(
-                    crate::array::js_array_length(physical_keys),
+                    physical_keys_view.count(),
                     1,
                     "only length is stored"
                 );

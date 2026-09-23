@@ -18,7 +18,9 @@ fn object_has_own_key_bytes(obj: *const ObjectHeader, key_bytes: &[u8]) -> bool 
         if keys.is_null() {
             return false;
         }
-        let key_count = crate::array::js_array_length(keys) as usize;
+        // The shape's count: the keys array can be a longer shared backing.
+        let key_count = (descriptor.logical_key_count as usize)
+            .min(crate::array::js_array_length(keys) as usize);
         if key_count > 65_536 {
             return true;
         }
@@ -307,6 +309,7 @@ fn class_field_get_contract(
             && class_id == expected_class_id
             && shape_id == expected_shape_id
             && expected_field_index < descriptor.live_inline_slot_count
+            && expected_field_index < descriptor.logical_key_count
             && plain_array_index_guard(keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
             && class_field_raw_f64_layout_contract(
@@ -587,6 +590,7 @@ fn class_field_set_contract(
             && crate::object::object_is_regular(obj)
             && shape_id == expected_shape_id
             && expected_field_index < descriptor.live_inline_slot_count
+            && expected_field_index < descriptor.logical_key_count
             && plain_array_index_guard(keys, expected_field_index, true)
             && object_key_matches_field(obj, key, expected_field_index)
             && (!require_raw_f64

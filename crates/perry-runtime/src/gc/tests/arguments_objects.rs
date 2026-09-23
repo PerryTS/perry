@@ -39,7 +39,7 @@ fn arguments_share_keys_but_keep_identity_values_and_descriptors_private() {
     let second = arguments(&[4.0, 5.0, 6.0], undefined, false);
     assert_ne!(first, second);
     unsafe {
-        assert_eq!(object_keys_array(first), object_keys_array(second));
+        assert_eq!(object_keys(first).arr(), object_keys(second).arr());
     }
     // All-true indexed attributes are implicit, but reflection still exposes
     // the complete default descriptor. This also checks the optimization ran.
@@ -73,8 +73,8 @@ fn arguments_share_keys_but_keep_identity_values_and_descriptors_private() {
     assert_eq!(get(third, "1").bits(), 11.0f64.to_bits());
     assert!(get(third, "extra").is_undefined());
     unsafe {
-        assert_eq!(object_keys_array(second), object_keys_array(third));
-        assert_ne!(object_keys_array(first), object_keys_array(second));
+        assert_eq!(object_keys(second).arr(), object_keys(third).arr());
+        assert_ne!(object_keys(first).arr(), object_keys(second).arr());
     }
 }
 
@@ -104,10 +104,10 @@ fn arguments_shared_keys_survive_moving_gc_without_a_live_arguments_owner() {
     register_scanners();
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let before = arguments(&[1.0, 2.0, 3.0], undefined, false);
-    let before_keys = unsafe { object_keys_array(before) };
+    let before_keys = unsafe { object_keys(before).arr() };
     gc_collect_minor();
     let after = arguments(&[4.0, 5.0, 6.0], undefined, false);
-    let after_keys = unsafe { object_keys_array(after) };
+    let after_keys = unsafe { object_keys(after).arr() };
     assert_ne!(
         before_keys, after_keys,
         "the cached keys must actually evacuate"

@@ -414,15 +414,16 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = crate::object::object_live_slot_count(obj);
-    let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
+    let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
         // `{}`; walking the slot as an ArrayHeader would fault.
         buf.push_str("{}");
         return;
     };
+    let keys_arr = keys_view.arr() as *const crate::ArrayHeader;
     let keys_root = gc_scope.root_raw_const_ptr(keys_arr);
-    let keys_len = (*keys_arr).length;
+    let keys_len = keys_view.count();
 
     // #5989 (mirrors the plain-stringify #307 fix): iterate up to keys_len, not
     // min(num_fields, keys_len). Objects with ≥9 fields cap field_count at the
@@ -1011,16 +1012,15 @@ pub(crate) unsafe fn stringify_object_pretty(
 
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = crate::object::object_live_slot_count(obj);
-    let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
+    let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
         // `{}`; walking the slot as an ArrayHeader would fault.
         buf.push_str("{}");
         return;
     };
-    let keys_len = (*keys_arr).length;
-    let keys_elements =
-        crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64;
+    let keys_len = keys_view.count();
+    let keys_elements = crate::array::array_elements_ptr(keys_view.arr()) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
@@ -1206,16 +1206,15 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
 
     let obj = ptr as *const crate::ObjectHeader;
     let num_fields = crate::object::object_live_slot_count(obj);
-    let Some(keys_arr) = super::stringify::object_keys_array_checked(obj) else {
+    let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
         // `{}`; walking the slot as an ArrayHeader would fault.
         buf.push_str("{}");
         return;
     };
-    let keys_len = (*keys_arr).length;
-    let keys_elements =
-        crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader) as *const f64;
+    let keys_len = keys_view.count();
+    let keys_elements = crate::array::array_elements_ptr(keys_view.arr()) as *const f64;
     let fields_ptr =
         (ptr as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in

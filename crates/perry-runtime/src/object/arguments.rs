@@ -230,7 +230,12 @@ pub extern "C" fn js_arguments_object_alloc(
     let obj = scope.root_raw_mut_ptr(js_object_alloc(0, len.saturating_add(2)));
     obj.with_mut_ptr(|obj| {
         keys.with_mut_ptr(|keys| unsafe {
-            set_object_keys_array_with_live(obj, keys, len.saturating_add(2));
+            // The cached per-length list is exact and never grows.
+            set_object_keys_with_live(
+                obj,
+                crate::object::ObjectKeys::owned(keys),
+                len.saturating_add(2),
+            );
         });
     });
     for i in 0..len {
@@ -773,8 +778,9 @@ unsafe fn read_ordinary_own_value(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    let keys = crate::object::object_keys_array(obj);
-    let key_count = crate::array::js_array_length(keys) as usize;
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
+    let key_count = keys_view.count() as usize;
     let alloc_limit = std::cmp::max(
         crate::object::object_live_slot_count(obj),
         crate::object::INLINE_SLOT_FLOOR as u32,
@@ -798,8 +804,9 @@ unsafe fn write_ordinary_own_value(
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    let keys = crate::object::object_keys_array(obj);
-    let key_count = crate::array::js_array_length(keys) as usize;
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
+    let key_count = keys_view.count() as usize;
     let alloc_limit = std::cmp::max(
         crate::object::object_live_slot_count(obj),
         crate::object::INLINE_SLOT_FLOOR as u32,

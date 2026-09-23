@@ -1850,7 +1850,9 @@ fn object_key_matches_field(
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return false;
         };
-        if field_index >= descriptor.live_inline_slot_count {
+        if field_index >= descriptor.live_inline_slot_count
+            || field_index >= descriptor.logical_key_count
+        {
             return false;
         }
         let keys = descriptor.keys as usize as *const ArrayHeader;

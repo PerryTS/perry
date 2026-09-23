@@ -105,7 +105,8 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         return false;
     }
 
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     let keys_addr = keys as usize;
     if keys.is_null() || (keys_addr as u64) >> 48 != 0 {
         return false;
@@ -119,9 +120,12 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         return false;
     }
 
-    let mut own_idx = super::prop_plan::read_plan_lookup(keys_addr, key_addr);
+    // A read plan is keyed by the keys ARRAY, which lists on one growth chain
+    // share: a slot learned on a longer list is not this receiver's unless it
+    // is below this receiver's count.
+    let mut own_idx = super::prop_plan::read_plan_lookup(keys_addr, key_addr, keys_view.count());
     if own_idx.is_none() {
-        let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
+        let key_count = keys_view.count() as usize;
         if key_count > 4096 {
             return false;
         }
@@ -316,7 +320,9 @@ pub(crate) fn try_readd_stable_tombstone(
             })
         });
         let value = value_handle.get_nanbox_f64();
-        set_object_keys_array(obj, new_keys);
+        // The stable-tombstone list is private (not shape-shared, checked
+        // above), so its header length is its count.
+        set_object_keys(obj, crate::object::ObjectKeys::owned(new_keys));
         super::mark_object_dynamic_shape_unknown(obj);
         if old_keys != new_keys {
             super::shapes::shape_keys_grown(old_keys as usize, new_keys);
@@ -638,7 +644,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
         else {
             return None;
         };
-        if next_keys == 0 {
+        if next_keys.is_null() {
             return None;
         }
 
@@ -658,9 +664,9 @@ fn object_set_field_by_name_transition_fast_impl_value(
             obj,
             prev_shape_id,
             target_shape_id,
-            next_keys as *mut ArrayHeader,
+            next_keys,
         ) {
-            set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+            set_object_keys(obj, next_keys);
         }
 
         // #8113: one bound probe, reused.
@@ -728,7 +734,8 @@ mod tests {
             super::super::shapes::is_shape_id(predecessor),
             "test premise: Object.prototype has a resolvable ShapeId"
         );
-        let old_keys = unsafe { super::super::object_keys_array(prototype) };
+        let old_keys_view = unsafe { super::super::object_keys(prototype) };
+        let old_keys = old_keys_view.arr();
         let next_keys = crate::array::js_array_clone(old_keys);
         let slot = crate::array::js_array_length(next_keys);
         let next_keys = crate::array::js_array_push(

@@ -972,7 +972,7 @@ fn transition_cache_requires_exact_predecessor_shape_id() {
     );
     assert_eq!(
         transition_cache_lookup(PREDECESSOR, key),
-        Some((keys as usize, 0, TARGET))
+        Some((crate::object::ObjectKeys::new(keys as *mut ArrayHeader, 1), 0, TARGET))
     );
 
     let slot = transition_cache_slot(PREDECESSOR, key as usize);
@@ -1819,7 +1819,7 @@ fn constructor_ref_method_value_resolves_static_over_instance_method() {
 ///
 /// A buffer is a `BufferHeader` — no `class_id`, no `keys_array`. With no arm
 /// of its own it fell through to the ordinary arm, which read
-/// `crate::object::object_keys_array(obj)` out of the bytes that follow a buffer header and handed
+/// `crate::object::object_keys(obj).arr()` out of the bytes that follow a buffer header and handed
 /// that to `js_array_length`, whose lazy-array probe dereferences `addr - 8`.
 ///
 /// The two platforms fail differently, which is why this test asserts the

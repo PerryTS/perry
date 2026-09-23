@@ -661,11 +661,12 @@ fn record_canonical_test_site(proto_obj: *mut ObjectHeader) {
     }
     // The index of the KEY `"test"` in the prototype's keys array IS its field
     // index. Done once, at install, with the ordinary accessors.
-    let keys = unsafe { super::object_keys_array(proto_obj) };
+    let keys_view = unsafe { super::object_keys(proto_obj) };
+    let keys = keys_view.arr();
     if keys.is_null() {
         return;
     }
-    let count = crate::array::js_array_length(keys);
+    let count = keys_view.count();
     let mut found: Option<u32> = None;
     for i in 0..count {
         let key = crate::array::js_array_get_f64(keys, i);

@@ -501,7 +501,8 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
         // Empty array + non-extensible ⇒ integrity holds.
         return true;
     }
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     if keys.is_null() {
         return true; // no own keys + non-extensible ⇒ frozen/sealed
     }
@@ -509,7 +510,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
     if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
         return true;
     }
-    let key_count = crate::array::js_array_length(keys) as usize;
+    let key_count = keys_view.count() as usize;
     if key_count > 65536 {
         return false;
     }

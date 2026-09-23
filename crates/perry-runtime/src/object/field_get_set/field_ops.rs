@@ -346,20 +346,18 @@ pub extern "C" fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut Ar
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
-        let len = if keys_array.is_null() {
-            0
-        } else {
-            (*keys_array).length
-        };
+        // Generated code hands in a freshly built, exclusively owned list.
+        let keys = crate::object::ObjectKeys::owned(keys_array);
+        let len = keys.count();
         let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj);
         let (published, obj) = obj_handle.across_mut(|| match proof {
             Some(proof) => {
-                crate::object::canonical_keys::canonicalize(&proof, keys_array, len).as_ptr()
+                crate::object::canonical_keys::canonicalize(&proof, keys_array, len).view()
             }
             // A latched receiver's list is its own; publishing it as a shared
             // layout is what lost 407 of 8,192 keys before the proof existed.
-            None => keys_array,
+            None => keys,
         });
-        set_object_keys_array(obj, published);
+        set_object_keys(obj, published);
     }
 }

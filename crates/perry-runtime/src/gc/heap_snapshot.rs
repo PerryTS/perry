@@ -207,9 +207,10 @@ unsafe fn object_field_name(
     obj: *const crate::object::ObjectHeader,
     field_index: usize,
 ) -> Option<String> {
+    let view = crate::object::object_keys(obj);
     let keys_bits = crate::object::shapes::object_shape_descriptor(obj)
         .map(|descriptor| descriptor.keys)
-        .unwrap_or(crate::object::object_keys_array(obj) as u64);
+        .unwrap_or(view.arr() as u64);
     let keys_addr = decode_slot_target(keys_bits);
     if keys_addr < GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -219,7 +220,8 @@ unsafe fn object_field_name(
         return None;
     }
     let keys = keys_addr as *const crate::array::ArrayHeader;
-    if field_index >= (*keys).length as usize {
+    // The receiver's own count; its keys array can be a longer backing.
+    if field_index >= (*keys).length as usize || field_index >= view.count() as usize {
         return None;
     }
     let elements = crate::array::array_elements_ptr(keys_addr as *const crate::array::ArrayHeader);

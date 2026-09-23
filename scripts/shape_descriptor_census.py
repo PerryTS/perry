@@ -546,9 +546,9 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     ):
         if "clear_object_shape_stamp" in function_body(shapes, name):
             raise CensusError(f"{name} clears the shape stamp: the live-slot bound has no mirror")
-    if "clear_object_shape_stamp" in function_body(object_mod, "set_object_keys_array_with_live"):
+    if "clear_object_shape_stamp" in function_body(object_mod, "set_object_keys_with_live"):
         raise CensusError(
-            "set_object_keys_array_with_live clears the shape stamp: "
+            "set_object_keys_with_live clears the shape stamp: "
             "the live-slot bound has no mirror"
         )
     if not re.search(

@@ -447,11 +447,12 @@ pub(crate) fn class_object_own_field_bytes(
         return None;
     }
     unsafe {
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         if keys.is_null() {
             return None;
         }
-        let len = (*keys).length;
+        let len = keys_view.count();
         for i in 0..len {
             let k = crate::array::js_array_get_f64(keys, i);
             let sp = crate::value::js_get_string_pointer_unified(k) as *const crate::StringHeader;

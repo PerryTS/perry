@@ -1001,7 +1001,7 @@ mod tests {
         let key_b = js_string_from_bytes(b"b".as_ptr(), 1);
 
         unsafe {
-            assert_eq!((*crate::object::object_keys_array(obj)).length, 2);
+            assert_eq!(crate::object::object_keys(obj).count(), 2);
         }
         let a = crate::object::js_object_get_field_by_name(obj, key_a);
         assert_eq!(f64::from_bits(a.bits()), 2.0);
@@ -1010,7 +1010,7 @@ mod tests {
         assert!(b.is_pointer());
         let nested = (b.bits() & POINTER_MASK) as *const crate::ObjectHeader;
         unsafe {
-            assert_eq!((*crate::object::object_keys_array(nested)).length, 1);
+            assert_eq!(crate::object::object_keys(nested).count(), 1);
         }
     }
 
@@ -1546,7 +1546,7 @@ mod tests {
         // `{}` literal). It must stringify to "{}" — pre-fix the top-level
         // path emitted the literal "null".
         let empty = crate::object::js_object_alloc(0, 0);
-        assert!(unsafe { crate::object::object_keys_array(empty).is_null() });
+        assert!(unsafe { crate::object::object_keys(empty).is_null() });
         let boxed = crate::value::js_nanbox_pointer(empty as i64);
         let output = unsafe { js_json_stringify(boxed, TYPE_UNKNOWN) };
         assert_eq!(unsafe { str_from_header(output).unwrap() }, "{}");
@@ -1644,7 +1644,7 @@ mod tests {
         (
             value,
             crate::object::object_live_slot_count(obj),
-            (*crate::object::object_keys_array(obj)).length,
+            crate::object::object_keys(obj).count(),
         )
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
                 }
                 assert!(
                     crate::object::object_live_slot_count(obj)
-                        >= (*crate::object::object_keys_array(obj)).length
+                        >= crate::object::object_keys(obj).count()
                 );
                 arr = crate::array::js_array_push(arr, JSValue::object_ptr(obj as *mut u8));
             }

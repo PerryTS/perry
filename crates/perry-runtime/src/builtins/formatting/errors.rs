@@ -168,14 +168,14 @@ pub(super) unsafe fn format_error_subclass_headline(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_raw_const_ptr(obj_ptr);
     let keys = obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
-        crate::object::object_keys_array(obj_ptr)
+        crate::object::object_keys(obj_ptr)
     });
     let mut own_name: Option<f64> = None;
     let mut own_message: Option<f64> = None;
     if !keys.is_null() {
-        let len = crate::array::js_array_length(keys);
+        let len = keys.count();
         for index in 0..len {
-            let key = crate::array::js_array_get(keys, index);
+            let key = keys.get(index);
             if !key.is_string() {
                 continue;
             }

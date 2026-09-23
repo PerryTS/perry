@@ -693,7 +693,7 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
             "test premise: the receiver must latch"
         );
     }
-    let old_keys = unsafe { crate::object::object_keys_array(owner) } as usize;
+    let old_keys = unsafe { crate::object::object_keys(owner).arr() } as usize;
     assert_ne!(old_keys, 0, "test premise: the private key list exists");
     assert_eq!(
         crate::array::js_array_length(old_keys as *mut crate::array::ArrayHeader),
@@ -734,7 +734,7 @@ fn test_object_meta_dictionary_keys_survive_copied_minor_move() {
         unsafe { crate::object::dictionary::is_dictionary(new_owner) },
         "the moved receiver must still be in dictionary mode"
     );
-    let new_keys = unsafe { crate::object::object_keys_array(new_owner) } as usize;
+    let new_keys = unsafe { crate::object::object_keys(new_owner).arr() } as usize;
     assert_ne!(
         new_keys, 0,
         "the meta record's dictionary_keys slot was not marked: the key list \
@@ -1128,13 +1128,13 @@ fn test_shared_live_shape_descriptor_survives_and_rekeys_once() {
         assert_eq!((*a_after).parent_class_id, id);
         assert_eq!((*b_after).parent_class_id, id);
         assert_eq!(
-            crate::object::object_keys_array(a_after),
-            crate::object::object_keys_array(b_after)
+            crate::object::object_keys(a_after).arr(),
+            crate::object::object_keys(b_after).arr()
         );
-        assert_ne!(crate::object::object_keys_array(a_after) as usize, old_keys);
+        assert_ne!(crate::object::object_keys(a_after).arr() as usize, old_keys);
         assert_eq!(
             descriptor.keys,
-            crate::object::object_keys_array(a_after) as u64
+            crate::object::object_keys(a_after).arr() as u64
         );
     }
     assert_eq!(
@@ -1967,7 +1967,7 @@ fn transition_cache_entry_does_not_pin_its_target() {
         // A real object gives a real, live shape id, so the ONLY thing that can
         // make the seeded entry dead is its target.
         let obj = crate::object::js_object_alloc(0, 0);
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj).arr();
         let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
             .expect("a freshly allocated object must have a registered shape");
         assert!(

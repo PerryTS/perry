@@ -251,8 +251,13 @@ fn read_plan_slot(keys_id: usize, key_ptr: usize) -> usize {
 }
 
 /// Look up the cached own-field index for (keys_array, interned key).
+///
+/// `key_count` is the receiver's key count from its shape. A plan is keyed by
+/// the keys ARRAY, which the lists on one growth chain share, so a slot that
+/// was learned on a longer list answers only when it is below this
+/// receiver's count.
 #[inline]
-pub(crate) fn read_plan_lookup(keys_id: usize, key_ptr: usize) -> Option<u32> {
+pub(crate) fn read_plan_lookup(keys_id: usize, key_ptr: usize, key_count: u32) -> Option<u32> {
     if keys_id == 0 || key_ptr == 0 {
         return None;
     }
@@ -261,6 +266,7 @@ pub(crate) fn read_plan_lookup(keys_id: usize, key_ptr: usize) -> Option<u32> {
         let e = (*c.get())[slot];
         if e.keys_id == keys_id
             && e.key_ptr == key_ptr
+            && e.field_idx < key_count
             && e.epoch == PROP_PLAN_EPOCH.load(Ordering::Relaxed)
         {
             Some(e.field_idx)
@@ -340,11 +346,16 @@ mod tests {
         // entry, so retry the roundtrip.
         assert!((0..64).any(|_| {
             read_plan_record(keys, key, 21);
-            read_plan_lookup(keys, key) == Some(21)
+            read_plan_lookup(keys, key, u32::MAX) == Some(21)
         }));
-        assert_eq!(read_plan_lookup(keys, key + 8), None);
+        assert_eq!(read_plan_lookup(keys, key + 8, u32::MAX), None);
+        // A shorter list on the same array does not see a slot past its count.
+        assert!((0..64).any(|_| {
+            read_plan_record(keys, key, 21);
+            read_plan_lookup(keys, key, 21).is_none() && read_plan_lookup(keys, key, 22) == Some(21)
+        }));
         prop_plan_epoch_bump();
-        assert_eq!(read_plan_lookup(keys, key), None);
+        assert_eq!(read_plan_lookup(keys, key, u32::MAX), None);
     }
 
     #[test]

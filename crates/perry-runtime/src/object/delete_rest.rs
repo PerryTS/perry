@@ -328,14 +328,15 @@ pub extern "C" fn js_object_delete_field(
                 }
             }
         }
-        let mut keys = crate::object::object_keys_array(obj);
+        let mut keys_view = crate::object::object_keys(obj);
+        let mut keys = keys_view.arr();
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously
             return 1;
         }
 
         // Search through the keys array for a match
-        let key_count = crate::array::js_array_length(keys) as usize;
+        let key_count = keys_view.count() as usize;
         // #6759: shape-index + dense-slot scan (SSO-aware via the shared
         // helper, preserving #1781). The old per-element `js_array_get` walk
         // made every `delete` O(keys) full-accessor calls — measured as the
@@ -423,7 +424,8 @@ pub extern "C" fn js_object_delete_field(
             // its authoritative old keys edge instead of copying through the
             // pre-collection raw addresses.
             obj = reloaded_obj;
-            keys = crate::object::object_keys_array(obj);
+            keys_view = crate::object::object_keys(obj);
+            keys = keys_view.arr();
             let src_elements =
                 crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *const f64;
             let dst_elements =
@@ -436,7 +438,9 @@ pub extern "C" fn js_object_delete_field(
             }
             (*keys_cloned).length = key_count as u32;
             super::rebuild_array_layout_from_slots(keys_cloned);
-            set_object_keys_array(obj, keys_cloned);
+            // The fork is this receiver's own list from here on.
+            keys_view = crate::object::ObjectKeys::owned(keys_cloned);
+            set_object_keys(obj, keys_view);
             keys = keys_cloned;
             keys_owned = true;
         }
@@ -611,7 +615,8 @@ pub extern "C" fn js_object_delete_field(
             // ObjectHeader facts". `publish_object_shape_from` versions a
             // same-pointer change internally, and `keys_changed` is false here
             // so the typed layout is preserved rather than marked unknown.
-            set_object_keys_array(obj, keys);
+            // An owned (unshared) list: its header length is its count.
+            set_object_keys(obj, crate::object::ObjectKeys::owned(keys));
             super::shapes::shape_index_shift_in_place(keys as usize, i as u32, key_count as u32)
         } else {
             let keys_cloned = crate::array::js_array_alloc(new_count.max(1) as u32 + 4);
@@ -661,7 +666,7 @@ pub extern "C" fn js_object_delete_field(
             );
             // `set_object_keys_array` publishes the cloned edge while preserving
             // the predecessor's semantic generation and object kind.
-            set_object_keys_array(obj, keys_cloned);
+            set_object_keys(obj, crate::object::ObjectKeys::owned(keys_cloned));
             index_migrated
         };
 
@@ -743,7 +748,7 @@ pub extern "C" fn js_object_delete_field(
         // dropping it would throw away the rebuild this is meant to avoid —
         // the next lookup would re-hash every surviving key name.
         if !index_migrated {
-            crate::object::shapes::shape_drop(crate::object::object_keys_array(obj));
+            crate::object::shapes::shape_drop(crate::object::object_keys(obj).arr());
         }
         1
     }
@@ -1206,17 +1211,18 @@ pub extern "C" fn js_object_rest(
             });
             return rest_ptr;
         }
-        let keys =
-            src_handle.with_const_ptr::<ObjectHeader, _>(|p| crate::object::object_keys_array(p));
+        // `ObjectKeys` is a VIEW holding a raw `*mut ArrayHeader` (object_keys.rs:21),
+        // so it must not be LIVE across an allocating call any more than a bare
+        // pointer may be. Read it through the rooted receiver, take the array and
+        // the shape-owned count out of it immediately, root the array, and never
+        // touch the view again -- everything below uses `keys_handle`/`key_count`.
+        // `count()` is 0 for a keyless receiver (`ObjectKeys::NONE`), which is the
+        // same 0 the pre-`ObjectKeys` code computed with an explicit null test.
+        let keys_view =
+            src_handle.with_const_ptr::<ObjectHeader, _>(|p| crate::object::object_keys(p));
+        let keys = keys_view.arr();
         let keys_handle = scope.root_raw_mut_ptr(keys);
-
-        let key_count = if keys.is_null() {
-            0
-        } else {
-            keys_handle.with_const_ptr::<crate::array::ArrayHeader, _>(|p| {
-                crate::array::js_array_length(p)
-            }) as usize
-        };
+        let key_count = keys_view.count() as usize;
         let exclude_count = if exclude_keys.is_null() {
             0
         } else {
@@ -1270,9 +1276,11 @@ pub extern "C" fn js_object_rest(
         // Create keys array for the rest object
         let rest_keys_handle =
             scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(rest_count));
+        // A fresh list, the rest object's own until it is published, so its
+        // header length IS its count -- which is what `owned` asserts.
         rest_handle.with_mut_ptr::<ObjectHeader, _>(|rest| {
             rest_keys_handle.with_mut_ptr::<crate::array::ArrayHeader, _>(|rest_keys| {
-                set_object_keys_array(rest, rest_keys)
+                set_object_keys(rest, crate::object::ObjectKeys::owned(rest_keys))
             })
         });
 
@@ -1381,7 +1389,7 @@ mod shape_transition_tests_6759 {
                 .expect("delete must publish a by-id descriptor");
             assert_eq!(
                 descriptor.keys,
-                crate::object::object_keys_array(obj) as u64
+                crate::object::object_keys(obj).arr() as u64
             );
             assert_eq!(descriptor.logical_key_count, 2);
             assert_eq!(
@@ -1424,7 +1432,8 @@ mod shape_transition_tests_6759 {
             for (i, v) in [10.0f64, 20.0, 30.0].iter().enumerate() {
                 js_object_set_field(obj, i as u32, JSValue::from_bits(v.to_bits()));
             }
-            let keys_before = crate::object::object_keys_array(obj);
+            let keys_before_view = crate::object::object_keys(obj);
+            let keys_before = keys_before_view.arr();
             assert_eq!((*obj).class_id, CID, "test premise: a class instance");
             let before = (*obj).parent_class_id;
             assert!(
@@ -1468,7 +1477,7 @@ mod shape_transition_tests_6759 {
                 .expect("class delete must publish a by-id descriptor");
             assert_eq!(
                 descriptor.keys,
-                crate::object::object_keys_array(obj) as u64
+                crate::object::object_keys(obj).arr() as u64
             );
             assert_eq!(descriptor.logical_key_count, 2);
             assert_eq!(
@@ -1478,7 +1487,7 @@ mod shape_transition_tests_6759 {
 
             // Still true, and still what the guard compares until rung 3.
             assert_ne!(
-                crate::object::object_keys_array(obj),
+                crate::object::object_keys(obj).arr(),
                 keys_before,
                 "the keys pointer is the guard's compaction evidence and it did not change"
             );

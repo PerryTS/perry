@@ -101,11 +101,11 @@ fn json_cached_keys_ring_and_shape_follow_actual_movement() {
     unsafe {
         let value = parse(source);
         let root = scope.root_nanbox_u64(value.bits());
-        let keys_before = crate::object::object_keys_array(value.as_pointer());
+        let keys_before = crate::object::object_keys(value.as_pointer()).arr();
         let key_before = crate::json::cached_parse_key_ptr(b"moving_property");
         gc_collect_minor();
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
-        let keys_after = crate::object::object_keys_array(live.as_pointer());
+        let keys_after = crate::object::object_keys(live.as_pointer()).arr();
         let key_after = crate::json::cached_parse_key_ptr(b"moving_property");
         assert_ne!(
             keys_before, keys_after,
@@ -122,7 +122,7 @@ fn json_cached_keys_ring_and_shape_follow_actual_movement() {
         assert_output(live, source);
         let again = parse(source);
         assert_eq!(
-            crate::object::object_keys_array(again.as_pointer()),
+            crate::object::object_keys(again.as_pointer()).arr(),
             keys_after
         );
         assert_output(again, source);
@@ -143,13 +143,13 @@ fn json_retained_wide_object_keeps_evicted_keys_through_minor_and_full_gc() {
     unsafe {
         let value = parse(&source);
         let root = scope.root_nanbox_u64(value.bits());
-        let keys = crate::object::object_keys_array(value.as_pointer());
+        let keys = crate::object::object_keys(value.as_pointer()).arr();
         assert!(crate::arena::pointer_in_old_gen(keys as usize));
         let last_idx = (fields_born_old() - 1) as u32;
         let last_before = crate::array::js_array_get(keys, last_idx).bits();
         gc_collect_minor();
         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
-        let keys = crate::object::object_keys_array(live.as_pointer());
+        let keys = crate::object::object_keys(live.as_pointer()).arr();
         assert_ne!(
             last_before,
             crate::array::js_array_get(keys, last_idx).bits()

@@ -308,7 +308,7 @@ pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     }
     {
         let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
-        for (arr_ptr, _runtime_shape_id) in cache.values_mut() {
+        for (arr_ptr, _runtime_shape_id, _key_count) in cache.values_mut() {
             visitor.visit_raw_mut_ptr_slot(arr_ptr);
         }
     }

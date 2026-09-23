@@ -242,15 +242,15 @@ pub(crate) unsafe fn keys_find_slot_by_key_ptr(
 #[inline]
 pub(crate) unsafe fn keys_index_lookup(
     _obj: *const ObjectHeader,
-    keys: *const crate::array::ArrayHeader,
+    keys: ObjectKeys,
     key_bytes: &[u8],
     key_hash: u64,
 ) -> Option<u32> {
-    let key_count = crate::array::js_array_length(keys);
+    let key_count = keys.count();
     if key_count < KEYS_INDEX_THRESHOLD {
         return None;
     }
-    shapes::shape_slot_lookup(keys, key_bytes, key_hash, key_count, true)
+    shapes::shape_slot_lookup(keys.arr(), key_bytes, key_hash, key_count, true)
 }
 
 /// Record a new (key_hash → slot) entry on the POST-append keys array's

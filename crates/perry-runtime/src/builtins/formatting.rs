@@ -748,7 +748,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     if depth > inspect_depth_limit() {
                         return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                     }
-                    let _keys_array = crate::object::object_keys_array(obj_ptr);
+                    let _keys_array_view = crate::object::object_keys(obj_ptr);
+                    let _keys_array = _keys_array_view.arr();
 
                     // Always route through `format_object_as_json` so the
                     // `[util.inspect.custom]` hook lookup runs even for
@@ -1113,11 +1114,12 @@ unsafe fn format_object_as_json(
         }
     };
 
-    let keys_array = crate::object::object_keys_array(obj_ptr);
+    let keys_array_view = crate::object::object_keys(obj_ptr);
+    let keys_array = keys_array_view.arr();
     let key_count = if keys_array.is_null() {
         0
     } else {
-        crate::array::js_array_length(keys_array) as usize
+        keys_array_view.count() as usize
     };
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
@@ -1499,7 +1501,8 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         if depth > inspect_depth_limit() {
                             return inspect_finish_circular(ptr as usize, "[Object]".to_string());
                         }
-                        let keys_array = crate::object::object_keys_array(obj_ptr);
+                        let keys_array_view = crate::object::object_keys(obj_ptr);
+                        let keys_array = keys_array_view.arr();
                         let body_str = if !keys_array.is_null()
                             && (keys_array as usize) > 0x10000
                             && ((keys_array as u64) >> 48) == 0

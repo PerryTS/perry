@@ -219,14 +219,15 @@ pub(super) unsafe fn object_prototype_has_desc_field() -> bool {
     // on Object.prototype, so the per-object flag is no signal here. Every own
     // install — data write, defineProperty accessor, builtin getter — mirrors
     // its key into keys_array, so scanning it for the 6 names is sufficient.
-    let keys = crate::object::object_keys_array(ptr as *const ObjectHeader);
+    let keys_view = crate::object::object_keys(ptr as *const ObjectHeader);
+    let keys = keys_view.arr();
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         Some(_) => return true, // unexpected shape — be conservative
         None => return false,   // no keys array — nothing own
     }
-    let key_count = crate::array::js_array_length(keys) as usize;
-    let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+    let key_count = keys_view.count() as usize;
+    let (slots, slot_len) = keys_view.dense_slots();
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for i in 0..key_count.min(slot_len) {
         let stored = crate::value::JSValue::from_bits((*slots.add(i)).to_bits());
@@ -305,14 +306,15 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
         present: [false; 6],
         handles: [None; 6],
     };
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     if !keys.is_null() {
         match crate::value::addr_class::try_read_gc_header(keys as usize) {
             Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
             _ => return None, // corrupted keys slot — let the guarded path cope
         }
-        let key_count = crate::array::js_array_length(keys) as usize;
-        let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+        let key_count = keys_view.count() as usize;
+        let (slots, slot_len) = keys_view.dense_slots();
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..key_count.min(slot_len) {
             let stored = crate::value::JSValue::from_bits((*slots.add(i)).to_bits());
@@ -802,10 +804,11 @@ pub(crate) unsafe fn define_property_force_store_value(
             .1
     });
     obj = obj_reloaded;
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     if !keys.is_null() {
-        let count = crate::array::keys_array_len_capped_to_capacity(keys) as usize;
-        let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
+        let count = (keys_view.count() as usize) as usize;
+        let (slots, slot_len) = keys_view.dense_slots();
         for i in 0..count.min(slot_len) {
             let stored = JSValue::from_bits((*slots.add(i)).to_bits());
             if crate::string::js_string_key_matches(stored, key_str) {

@@ -462,7 +462,8 @@ pub(crate) fn set_field_by_name_object_tail(
             obj_flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
         let record_array_tail = crate::array::is_array_subclass_class_id((*obj).class_id);
 
-        let mut keys = crate::object::object_keys_array(obj);
+        let mut keys_view = crate::object::object_keys(obj);
+        let mut keys = keys_view.arr();
 
         // Validate keys_array is a real heap pointer or null.
         if !keys.is_null() {
@@ -496,7 +497,8 @@ pub(crate) fn set_field_by_name_object_tail(
         if keys.is_null() && crate::object::reserved_slot_floor_for_object(obj) != 0 {
             let seeded = crate::object::ensure_reserved_floor_keys(obj);
             refresh_roots_after_alloc!();
-            keys = crate::object::object_keys_array(obj);
+            keys_view = crate::object::object_keys(obj);
+            keys = keys_view.arr();
             if !seeded && keys.is_null() {
                 // Seed failed (allocation refused): DROP the write rather
                 // than run the append below, whose index-0 slot is the
@@ -567,9 +569,9 @@ pub(crate) fn set_field_by_name_object_tail(
                     obj,
                     prev_shape_id,
                     target_shape_id,
-                    next_keys as *mut ArrayHeader,
+                    next_keys,
                 ) {
-                    set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                    set_object_keys(obj, next_keys);
                 }
                 // #8113: one bound probe, reused.
                 let live_slots = crate::object::object_live_slot_count(obj);
@@ -633,18 +635,18 @@ pub(crate) fn set_field_by_name_object_tail(
                     crate::object::canonical_keys::CanonicalKeys::EMPTY,
                     key,
                 )
-                .as_ptr(),
+                .view(),
                 // A latched receiver owns its list from its first key.
                 None => {
                     let fresh = crate::array::js_array_alloc(4);
                     refresh_roots_after_alloc!();
                     let grown =
                         crate::array::js_array_push(fresh, JSValue::string_ptr(key as *mut _));
-                    grown
+                    crate::object::ObjectKeys::owned(grown)
                 }
             };
             refresh_roots_after_alloc!();
-            set_object_keys_array(obj, new_keys);
+            set_object_keys(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
 
             // Reallocate fields to hold at least one value
@@ -681,7 +683,7 @@ pub(crate) fn set_field_by_name_object_tail(
                     },
                     prev_shape_id,
                     interned_key,
-                    new_keys as usize,
+                    new_keys.arr() as usize,
                     0,
                     super::shapes::object_shape_stamp(obj),
                 );
@@ -694,7 +696,7 @@ pub(crate) fn set_field_by_name_object_tail(
             // #10868 step 2.5 stage 1: same un-latch hazard as the read
             // path's field-cache stamp — this publishes an explicit keys edge.
             if !crate::object::dictionary::is_dictionary(obj) {
-                super::shapes::stamp_object_shape(obj, new_keys, 1, 1);
+                super::shapes::stamp_object_shape(obj, new_keys.arr(), 1, 1);
             }
             return;
         }
@@ -763,7 +765,7 @@ pub(crate) fn set_field_by_name_object_tail(
         }
 
         // Search through the keys array for a match
-        let key_count = crate::array::js_array_length(keys) as usize;
+        let key_count = keys_view.count() as usize;
         let alloc_limit = std::cmp::max(
             crate::object::object_live_slot_count(obj),
             crate::object::INLINE_SLOT_FLOOR as u32,
@@ -782,7 +784,7 @@ pub(crate) fn set_field_by_name_object_tail(
             let name_len = (*key).byte_len as usize;
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             let key_hash = key_bytes_hash(name_ptr, name_len);
-            if let Some(i) = keys_index_lookup(obj, keys, name_bytes, key_hash) {
+            if let Some(i) = keys_index_lookup(obj, keys_view, name_bytes, key_hash) {
                 let i = i as usize;
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
@@ -845,8 +847,7 @@ pub(crate) fn set_field_by_name_object_tail(
                         key_count as u32,
                     );
                     refresh_roots_after_alloc!();
-                    crate::object::canonical_keys::extend_key(&proof, canonical_parent, key)
-                        .as_ptr()
+                    crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view()
                 }
                 None => {
                     // The parent's owned arm, unchanged: a dictionary's array
@@ -856,12 +857,12 @@ pub(crate) fn set_field_by_name_object_tail(
                     let grown =
                         crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
                     let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
-                    grown
+                    crate::object::ObjectKeys::owned(grown)
                 }
             };
             refresh_roots_after_alloc!();
             if new_index >= alloc_limit {
-                set_object_keys_array(obj, new_keys);
+                set_object_keys(obj, new_keys);
                 super::mark_object_dynamic_shape_unknown(obj);
                 // #7538: derive the stored bits from the REFRESHED `value` —
                 // see the twin below the linear scan.
@@ -884,20 +885,20 @@ pub(crate) fn set_field_by_name_object_tail(
                         },
                         prev_shape_id,
                         interned_key,
-                        new_keys as usize,
+                        new_keys.arr() as usize,
                         new_index as u32,
                         super::shapes::object_shape_stamp(obj),
                     );
                 }
                 keys_index_insert(
-                    crate::object::object_keys_array(obj),
+                    crate::object::object_keys(obj).arr(),
                     (new_index + 1) as u32,
                     key_hash,
                     new_index as u32,
                 );
                 return;
             }
-            set_object_keys_array(obj, new_keys);
+            set_object_keys(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
             // #7154 publication order: `gc_field_slot_range` bounds the
             // collector's view of the payload by `field_count`, so a slot at an
@@ -926,7 +927,7 @@ pub(crate) fn set_field_by_name_object_tail(
                     },
                     prev_shape_id,
                     interned_key,
-                    new_keys as usize,
+                    new_keys.arr() as usize,
                     new_index as u32,
                     super::shapes::object_shape_stamp(obj),
                 );
@@ -936,7 +937,7 @@ pub(crate) fn set_field_by_name_object_tail(
             // C3a migration above, an owned grow lands the append on the
             // migrated record rather than forcing a rebuild.
             keys_index_insert(
-                crate::object::object_keys_array(obj),
+                crate::object::object_keys(obj).arr(),
                 (new_index + 1) as u32,
                 key_hash,
                 new_index as u32,
@@ -1037,13 +1038,13 @@ pub(crate) fn set_field_by_name_object_tail(
                 let canonical_parent =
                     crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
                 refresh_roots_after_alloc!();
-                crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).as_ptr()
+                crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view()
             }
             None => {
                 let owned = scope.root_raw_mut_ptr(keys);
                 let grown = crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
                 let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
-                grown
+                crate::object::ObjectKeys::owned(grown)
             }
         };
         refresh_roots_after_alloc!();
@@ -1054,7 +1055,7 @@ pub(crate) fn set_field_by_name_object_tail(
         if new_index >= alloc_limit {
             // No inline room — store in the overflow HashMap so the value is not lost.
             // Also add the key to keys_array so Object.keys() sees it.
-            set_object_keys_array(obj, new_keys);
+            set_object_keys(obj, new_keys);
             super::mark_object_dynamic_shape_unknown(obj);
             // #7538: the bits stored into overflow must come from the
             // REFRESHED `value`. This was snapshotted ABOVE the
@@ -1099,7 +1100,7 @@ pub(crate) fn set_field_by_name_object_tail(
                     },
                     prev_shape_id,
                     interned_key,
-                    new_keys as usize,
+                    new_keys.arr() as usize,
                     new_index as u32,
                     super::shapes::object_shape_stamp(obj),
                 );
@@ -1107,7 +1108,7 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
         // Publish the canonical successor computed above.
-        set_object_keys_array(obj, new_keys);
+        set_object_keys(obj, new_keys);
         super::mark_object_dynamic_shape_unknown(obj);
 
         // Set the field at the new index and update logical field_count
@@ -1140,7 +1141,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 },
                 prev_shape_id,
                 interned_key,
-                new_keys as usize,
+                new_keys.arr() as usize,
                 new_index as u32,
                 super::shapes::object_shape_stamp(obj),
             );

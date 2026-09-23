@@ -52,7 +52,8 @@ pub(crate) fn invalidate_object_proto_tojson_state() {
 /// Request/Response` handles, and native-module namespace objects. Returns
 /// `true` (= caller must take the full slow-path resolution) on any match or
 /// whenever the array doesn't look like a well-formed keys array.
-unsafe fn keys_array_may_carry_to_json(keys: *mut crate::ArrayHeader) -> bool {
+unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> bool {
+    let keys = keys_view.arr();
     let keys_addr = keys as usize;
     if keys_addr & 0x7 != 0 {
         return true;
@@ -63,8 +64,9 @@ unsafe fn keys_array_may_carry_to_json(keys: *mut crate::ArrayHeader) -> bool {
     if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY {
         return true;
     }
-    let key_count = (*keys).length as usize;
-    if key_count > (*keys).capacity as usize {
+    // The receiver's own count; it names a prefix of the array.
+    let key_count = keys_view.count() as usize;
+    if key_count > (*keys).capacity as usize || key_count > (*keys).length as usize {
         return true;
     }
     // Wide objects (barrel namespaces etc.) keep the slow path, which probes
@@ -186,11 +188,12 @@ unsafe fn compute_object_proto_tojson_state() -> u8 {
     {
         return PROTO_TOJSON_PRESENT;
     }
-    let keys = crate::object::object_keys_array(proto);
+    let keys_view = crate::object::object_keys(proto);
+    let keys = keys_view.arr();
     if keys.is_null() {
         return PROTO_TOJSON_ABSENT;
     }
-    if keys_array_may_carry_to_json(keys) {
+    if keys_array_may_carry_to_json(keys_view) {
         return PROTO_TOJSON_PRESENT;
     }
     PROTO_TOJSON_ABSENT
@@ -223,7 +226,8 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
         return None;
     }
     let proto = proto_addr as *const crate::ObjectHeader;
-    let keys = crate::object::object_keys_array(proto);
+    let keys_view = crate::object::object_keys(proto);
+    let keys = keys_view.arr();
     let (keys_addr, keys_len) = if keys.is_null() {
         (0, 0)
     } else {
@@ -231,11 +235,11 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
         let keys_header = crate::value::addr_class::try_read_tracked_gc_header(keys_addr)?.as_ref();
         if keys_header.obj_type != crate::gc::GC_TYPE_ARRAY
             || keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || (*keys).length > (*keys).capacity
+            || keys_view.count() > (*keys).capacity
         {
             return None;
         }
-        (keys_addr, (*keys).length)
+        (keys_addr, keys_view.count())
     };
     Some(ObjectProtoToJsonSignature {
         proto_addr,
@@ -316,7 +320,8 @@ unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignat
     if (*proto).class_id != cached.class_id {
         return false;
     }
-    let keys = crate::object::object_keys_array(proto);
+    let keys_view = crate::object::object_keys(proto);
+    let keys = keys_view.arr();
     let keys_addr = keys as usize;
     if keys_addr != cached.keys_addr {
         return false;
@@ -329,8 +334,8 @@ unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignat
     };
     keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
         && keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (*keys).length == cached.keys_len
-        && (*keys).length <= (*keys).capacity
+        && keys_view.count() == cached.keys_len
+        && keys_view.count() <= (*keys).capacity
 }
 
 #[inline]
@@ -583,8 +588,9 @@ pub(super) fn test_class_chain_may_have_to_json_uncached(class_id: u32) -> bool 
 /// `JSON.stringify` time on small objects and a ~250x gap vs V8 (#6009).
 pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
-    let keys = crate::object::object_keys_array(obj);
-    if !keys.is_null() && keys_array_may_carry_to_json(keys) {
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
+    if !keys.is_null() && keys_array_may_carry_to_json(keys_view) {
         return false;
     }
     to_json_definitely_absent_after_own_keys(ptr)

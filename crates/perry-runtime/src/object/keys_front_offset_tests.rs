@@ -15,12 +15,11 @@
 //! trace — a missing property now, a SIGSEGV inside an unrelated collection
 //! later.
 
-use super::{js_object_alloc, js_object_set_field_by_name, object_keys_array};
+use super::{js_object_alloc, js_object_set_field_by_name, object_keys};
 
 /// The receiver's ordered key list, decoded.
 unsafe fn key_names(obj: *mut super::ObjectHeader) -> Vec<String> {
-    let keys = object_keys_array(obj);
-    let (slots, len) = super::keys_array_dense_slots(keys);
+    let (slots, len) = object_keys(obj).dense_slots();
     if slots.is_null() {
         return Vec::new();
     }
@@ -79,7 +78,7 @@ fn a_keys_array_with_a_consumed_front_survives_the_clone_before_push() {
         // the bit the transition cache stamps, and the only thing that sends
         // the next append down the clone-before-push branch.
         let obj = js_object_alloc(0, 8);
-        super::set_object_keys_array_with_live(obj, keys, 3);
+        super::set_object_keys_with_live(obj, super::ObjectKeys::owned(keys), 3);
         let keys_gc = (keys as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*keys_gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         assert_eq!(

@@ -227,9 +227,9 @@ pub extern "C" fn js_object_set_field_by_name(
                                     o,
                                     prev_shape_id,
                                     target_shape_id,
-                                    next_keys as *mut ArrayHeader,
+                                    next_keys,
                                 ) {
-                                    set_object_keys_array(o, next_keys as *mut ArrayHeader);
+                                    set_object_keys(o, next_keys);
                                 }
                                 // #8113: one bound probe, reused.
                                 let live_slots = crate::object::object_live_slot_count(o);

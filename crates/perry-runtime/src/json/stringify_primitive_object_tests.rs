@@ -17,10 +17,10 @@ fn primitive_object_leaf_preserves_wide_output_without_managed_scratch() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
         input.with_const_ptr(|obj: *const crate::ObjectHeader| {
-            let keys = crate::object::object_keys_array(obj);
-            assert_eq!((*keys).length, 128);
-            assert!((*keys).length <= crate::object::object_live_slot_count(obj));
-            assert!(fields_are_primitive(obj, (*keys).length));
+            let keys = crate::object::object_keys(obj);
+            assert_eq!(keys.count(), 128);
+            assert!(keys.count() <= crate::object::object_live_slot_count(obj));
+            assert!(fields_are_primitive(obj, keys.count()));
             let fields = (obj as *const u8)
                 .add(std::mem::size_of::<crate::ObjectHeader>())
                 .cast::<u64>();
@@ -60,8 +60,8 @@ fn primitive_object_leaf_uses_existing_key_order_and_omits_undefined() {
             );
         });
         input.with_const_ptr(|obj: *const crate::ObjectHeader| {
-            let keys = crate::object::object_keys_array(obj);
-            assert!((*keys).length <= crate::object::object_live_slot_count(obj));
+            let keys = crate::object::object_keys(obj);
+            assert!(keys.count() <= crate::object::object_live_slot_count(obj));
             let order = crate::object::ecma_own_key_order(keys);
             let mut output = String::new();
             emit_validated(obj, keys, order.as_deref(), &mut output);
@@ -98,7 +98,7 @@ fn primitive_object_one_pass_attempt_rolls_back_a_complex_late_field() {
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
         let value = crate::json::test_json_parse_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>();
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj);
         let mut output = String::from("prefix");
         assert!(!try_emit(obj, keys, &mut output));
         assert_eq!(output, "prefix");
@@ -112,7 +112,7 @@ fn primitive_object_one_pass_attempt_rolls_back_an_array_index_key() {
         let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
         let value = crate::json::test_json_parse_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>();
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj);
         let mut output = String::from("prefix");
         assert!(!try_emit(obj, keys, &mut output));
         assert_eq!(output, "prefix");

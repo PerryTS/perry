@@ -501,11 +501,10 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     if declared_keys.is_null() {
         return 0;
     }
-    let current_keys = shape.keys as usize as *const ArrayHeader;
-    let (current_slots, current_physical_len) = crate::object::keys_array_dense_slots(current_keys);
-    let (declared_slots, declared_physical_len) =
-        crate::object::keys_array_dense_slots(declared_keys as *const ArrayHeader);
-    let current_count = (shape.logical_key_count as usize).min(current_physical_len);
+    // Both counts come from shapes: the receiver's descriptor and the class
+    // memo's view. `dense_slots` caps each at its array's physical length.
+    let (current_slots, current_count) = shape.keys_view().dense_slots();
+    let (declared_slots, declared_physical_len) = declared_keys.dense_slots();
     let declared_count = (declared_count as usize).min(declared_physical_len);
     if current_slots.is_null() || declared_slots.is_null() || declared_count > current_count {
         return 0;

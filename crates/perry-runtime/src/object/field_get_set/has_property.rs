@@ -1409,12 +1409,13 @@ pub(crate) unsafe fn native_module_own_field_by_key(
     if target == b"__module__" {
         return None;
     }
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     if keys.is_null() {
         return None;
     }
-    let key_count = crate::array::js_array_length(keys);
-    let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+    let key_count = keys_view.count();
+    let (slots, slot_len) = keys_view.dense_slots();
     for i in 0..key_count.min(slot_len as u32) {
         let stored = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];

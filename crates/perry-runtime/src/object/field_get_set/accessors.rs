@@ -96,7 +96,8 @@ pub(crate) unsafe fn own_data_field_by_name(
     if (*obj_gc).obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     let keys_ptr = keys as usize;
     if keys.is_null() || (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
         return None;
@@ -106,7 +107,7 @@ pub(crate) unsafe fn own_data_field_by_name(
         return None;
     }
 
-    let key_count = crate::array::js_array_length(keys) as usize;
+    let key_count = keys_view.count() as usize;
     if key_count > 65536 {
         return None;
     }

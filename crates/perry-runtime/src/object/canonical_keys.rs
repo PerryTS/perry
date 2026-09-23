@@ -82,6 +82,7 @@ impl CanonicalKeys {
     /// root of the trie owns no array and costs nothing.
     pub(crate) const EMPTY: CanonicalKeys = CanonicalKeys(std::ptr::null_mut());
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn as_ptr(self) -> *mut ArrayHeader {
         self.0
@@ -100,6 +101,12 @@ impl CanonicalKeys {
     #[inline]
     pub(crate) fn is_empty(self) -> bool {
         self.0.is_null()
+    }
+
+    /// This list as a receiver's keys: the array and the list's own count.
+    #[inline]
+    pub(crate) fn view(self) -> crate::object::ObjectKeys {
+        crate::object::ObjectKeys::new(self.0, self.len())
     }
 
     /// The live key count, which equals the array's `length` by construction:

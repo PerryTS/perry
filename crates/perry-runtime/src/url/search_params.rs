@@ -559,11 +559,12 @@ pub(crate) fn try_read_as_search_params(
         // URLSearchParams stores entries in field index 0 (URL_SEARCH_PARAMS_ENTRIES).
         // If this isn't a URLSearchParams, that slot likely holds a string or
         // is missing — we detect by checking the keys array shape.
-        let keys_arr = crate::object::object_keys_array(params);
+        let keys_arr_view = crate::object::object_keys(params);
+        let keys_arr = keys_arr_view.arr();
         if keys_arr.is_null() {
             return None;
         }
-        let keys_len = (*keys_arr).length;
+        let keys_len = keys_arr_view.count();
         // URLSearchParams objects carry the `_entries` slot (and now `_owner`
         // for URL-adopted instances). The first slot is always `_entries`;
         // any extra field beyond that is fine as long as `_entries` leads.
@@ -587,11 +588,12 @@ pub(crate) fn read_record_entries(obj: *mut ObjectHeader) -> Vec<(String, String
         return Vec::new();
     }
     unsafe {
-        let keys_arr = crate::object::object_keys_array(obj);
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
         if keys_arr.is_null() {
             return Vec::new();
         }
-        let len = (*keys_arr).length as usize;
+        let len = keys_arr_view.count() as usize;
         let mut out = Vec::with_capacity(len);
         for i in 0..len {
             let key_f64 = crate::array::js_array_get_f64(keys_arr, i as u32);
@@ -1001,18 +1003,19 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         if (*obj).class_id != 0 {
             return false;
         }
-        let keys_arr = crate::object::object_keys_array(obj);
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
         if keys_arr.is_null() {
             return false;
         }
         // #5989: `keys_array` itself must be validated before deref — a
         // GC_TYPE_OBJECT receiver reached mid-transition (or with a typed
-        // layout) can carry a non-heap word here; reading `(*keys_arr).length`
+        // layout) can carry a non-heap word here; reading `keys_arr_view.count()`
         // on it SIGSEGV'd during Next.js request handling (config.js method
         // dispatch probing an arbitrary receiver through this shape check).
         // Same try_read_gc_header gate as the receiver above. Require the
         // EAGER `GC_TYPE_ARRAY` layout specifically: an object's own key list
-        // is always eager, and `(*keys_arr).length` / `js_array_get_f64` below
+        // is always eager, and `keys_arr_view.count()` / `js_array_get_f64` below
         // read the eager `ArrayHeader` fields — a `GC_TYPE_LAZY_ARRAY` doesn't
         // share that layout, so reject it (a real URLSearchParams shape never
         // has a lazy keys_array; returning false is correct).
@@ -1020,7 +1023,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
             Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
             _ => return false,
         }
-        if (*keys_arr).length == 0 {
+        if keys_arr_view.count() == 0 {
             return false;
         }
         let key0 = crate::array::js_array_get_f64(keys_arr, 0);

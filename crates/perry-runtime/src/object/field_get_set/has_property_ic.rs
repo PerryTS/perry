@@ -172,12 +172,13 @@ unsafe fn armable_own_key_shape(obj: f64, key: f64) -> Option<u32> {
     if shape == 0 {
         return None;
     }
-    let keys = crate::object::object_keys_array(obj_ptr);
+    let keys_view = crate::object::object_keys(obj_ptr);
+    let keys = keys_view.arr();
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         _ => return None,
     }
-    let key_count = crate::array::js_array_length(keys);
+    let key_count = keys_view.count();
     super::super::keys_lookup::keys_find_slot_by_bytes(keys, key_count, key_bytes)?;
     Some(shape)
 }

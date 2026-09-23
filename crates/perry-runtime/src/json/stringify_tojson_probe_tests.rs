@@ -110,7 +110,8 @@ fn json_tojson_key_array_probe_observes_replacement_without_managed_scratch() {
         for i in 0..4 {
             keys.with_mut_ptr(|keys| crate::array::js_array_set(keys, i, ordinary));
         }
-        assert!(!keys.with_mut_ptr(|keys| keys_array_may_carry_to_json(keys)));
+        let view = |keys: *mut crate::ArrayHeader| crate::object::ObjectKeys::owned(keys);
+        assert!(!keys.with_mut_ptr(|keys| keys_array_may_carry_to_json(view(keys))));
         for marker in markers() {
             for at in 0..4 {
                 let value = JSValue::string_ptr(crate::js_string_from_bytes(
@@ -121,22 +122,29 @@ fn json_tojson_key_array_probe_observes_replacement_without_managed_scratch() {
                 let before = crate::arena::arena_total_bytes();
                 let roots = crate::gc::RuntimeHandleScope::active_len_for_tests();
                 for _ in 0..100 {
-                    assert!(keys.with_mut_ptr(|keys| keys_array_may_carry_to_json(keys)));
+                    assert!(keys.with_mut_ptr(|keys| keys_array_may_carry_to_json(view(keys))));
                 }
                 assert_eq!(crate::arena::arena_total_bytes(), before);
                 assert_eq!(crate::gc::RuntimeHandleScope::active_len_for_tests(), roots);
                 keys.with_mut_ptr(|keys| crate::array::js_array_set(keys, at, ordinary));
-                assert!(!keys.with_mut_ptr(|keys| keys_array_may_carry_to_json(keys)));
+                assert!(!keys.with_mut_ptr(|keys| keys_array_may_carry_to_json(view(keys))));
             }
         }
         keys.with_mut_ptr(|arr: *mut crate::ArrayHeader| {
             let len = (*arr).length;
             (*arr).length = (*arr).capacity + 1;
-            assert!(keys_array_may_carry_to_json(arr));
+            // A malformed header: the count it reports runs past its capacity.
+            assert!(keys_array_may_carry_to_json(crate::object::ObjectKeys::new(
+                arr,
+                (*arr).length
+            )));
             (*arr).length = len;
-            assert!(keys_array_may_carry_to_json((arr as *mut u8).add(1).cast()));
+            assert!(keys_array_may_carry_to_json(crate::object::ObjectKeys::new(
+                (arr as *mut u8).add(1).cast(),
+                len
+            )));
         });
-        assert!(keys_array_may_carry_to_json(std::ptr::null_mut()));
+        assert!(keys_array_may_carry_to_json(crate::object::ObjectKeys::NONE));
     }
 }
 

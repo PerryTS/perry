@@ -95,7 +95,7 @@ fn the_latch_moves_the_key_list_into_the_meta_record() {
             !dictionary::is_dictionary(obj),
             "test premise: the latch is off by default"
         );
-        let before = super::object_keys_array(obj);
+        let before = super::object_keys(obj).arr();
         assert!(!before.is_null(), "test premise: the receiver has keys");
 
         assert!(
@@ -114,7 +114,7 @@ fn the_latch_moves_the_key_list_into_the_meta_record() {
             "the dictionary shape must draw from the dictionary namespace"
         );
 
-        let after = super::object_keys_array(obj);
+        let after = super::object_keys(obj).arr();
         assert!(!after.is_null(), "the key list must still be reachable");
         assert_ne!(
             after, before,
@@ -140,7 +140,7 @@ fn the_latch_moves_the_key_list_into_the_meta_record() {
             );
         }
         assert_eq!(
-            crate::array::js_array_length(super::object_keys_array(obj)),
+            crate::array::js_array_length(super::object_keys(obj).arr()),
             14
         );
     }

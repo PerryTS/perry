@@ -71,7 +71,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         }};
     }
     // If no keys array exists, create one with this key.
-    let mut keys = crate::object::object_keys_array(obj);
+    let mut keys = crate::object::object_keys(obj);
     if keys.is_null() {
         // #9019: a reserved-layout iterator receiver seeds its floor of
         // tombstones first, so a defineProperty key (this arm also serves
@@ -81,7 +81,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         if crate::object::reserved_slot_floor_for_object(obj) != 0 {
             let seeded = crate::object::ensure_reserved_floor_keys(obj);
             refresh_define_property_roots!();
-            keys = crate::object::object_keys_array(obj);
+            keys = crate::object::object_keys(obj);
             if !seeded && keys.is_null() {
                 // Seed failed (allocation refused): drop the key claim
                 // rather than let it take a raw internal field's index.
@@ -93,7 +93,7 @@ unsafe fn ensure_key_in_keys_array_inner(
             // object has any key at all), and the `[[Set]]` tail already
             // learns these keyless→one-key edges. Try the shared edge before
             // minting a private array, and teach it otherwise.
-            let transition_eligible_first = define_append_transition_eligible(obj, keys);
+            let transition_eligible_first = define_append_transition_eligible(obj, keys.arr());
             let prev_shape_id = if transition_eligible_first {
                 super::super::shapes::object_shape_stamp(obj)
             } else {
@@ -113,7 +113,7 @@ unsafe fn ensure_key_in_keys_array_inner(
                 if let Some((next_keys, slot_idx, target_shape_id)) = probe {
                     let live = crate::object::object_live_slot_count(obj);
                     let alloc_limit = std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
-                    if next_keys != 0
+                    if !next_keys.is_null()
                         && (writes_value || slot_idx < alloc_limit)
                         && cached_target_fits(target_shape_id, alloc_limit)
                     {
@@ -121,9 +121,9 @@ unsafe fn ensure_key_in_keys_array_inner(
                             obj,
                             prev_shape_id,
                             target_shape_id,
-                            next_keys as *mut ArrayHeader,
+                            next_keys,
                         ) {
-                            set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                            set_object_keys(obj, next_keys);
                         }
                         // Only an INLINE slot advances the live bound; see the
                         // same guard in the existing-keys arm below.
@@ -139,13 +139,14 @@ unsafe fn ensure_key_in_keys_array_inner(
             let new_keys =
                 crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
             refresh_define_property_roots!();
-            set_object_keys_array(obj, new_keys);
+            // A fresh one-key list, exclusively this receiver's.
+            set_object_keys(obj, crate::object::ObjectKeys::owned(new_keys));
             if crate::object::object_live_slot_count(obj) == 0 {
                 set_object_live_slot_count(obj, 1);
             }
             if let Some(handle) = interned.as_ref() {
                 let target_shape_id = super::super::shapes::object_shape_stamp(obj);
-                let published_keys = crate::object::object_keys_array(obj);
+                let published_keys = crate::object::object_keys(obj).arr();
                 if target_shape_id != 0
                     && target_shape_id != prev_shape_id
                     && !published_keys.is_null()
@@ -174,8 +175,9 @@ unsafe fn ensure_key_in_keys_array_inner(
     // uses for prototype validation) so a garbage slot is treated as "no keys
     // array" instead of crashing the process. (#321: defends against the
     // Effect `makeGenericTag` mis-tagged-receiver corruption.)
-    let keys_ptr = keys as usize;
-    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || !is_valid_obj_ptr(keys as *const u8) {
+    let keys_ptr = keys.arr() as usize;
+    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || !is_valid_obj_ptr(keys_ptr as *const u8)
+    {
         return;
     }
     // Check if key already exists. Past the sidecar threshold, probe the same
@@ -188,7 +190,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     // the [[Set]] append path ("the sidecar would have found it if it
     // existed"), and the append below records the new key via
     // `keys_index_insert` so the index stays fresh across the loop.
-    let key_count = crate::array::js_array_length(keys) as usize;
+    let key_count = keys.count() as usize;
     if key_count >= super::super::KEYS_INDEX_THRESHOLD as usize {
         let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let name_len = (*key).byte_len as usize;
@@ -198,7 +200,7 @@ unsafe fn ensure_key_in_keys_array_inner(
             return; // already present
         }
     } else {
-        let (slots, slot_len) = super::super::keys_array_dense_slots(keys);
+        let (slots, slot_len) = keys.dense_slots();
         for i in 0..key_count.min(slot_len) {
             let stored = JSValue::from_bits((*slots.add(i)).to_bits());
             // #1781: SSO-aware match — pre-fix an existing inline-SSO key
@@ -222,7 +224,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     // separately by the caller's `set_property_attrs`, whose keyed semantic
     // transition gives every receiver performing the same install the same
     // successor shape.
-    let transition_eligible = define_append_transition_eligible(obj, keys);
+    let transition_eligible = define_append_transition_eligible(obj, keys.arr());
     let mut interned_handle = None;
     let mut prev_shape_id = 0u32;
     if transition_eligible {
@@ -231,7 +233,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         if interned.is_some() {
             // Interning can collect, so the keys edge and the receiver's stamp
             // are re-read here rather than reused from above.
-            if crate::object::object_keys_array(obj) == keys {
+            if crate::object::object_keys(obj) == keys {
                 prev_shape_id = super::super::shapes::object_shape_stamp(obj);
                 interned_handle = interned;
             }
@@ -249,7 +251,7 @@ unsafe fn ensure_key_in_keys_array_inner(
             // value, so the overflow entry such an edge implies would never be
             // created. A data-descriptor claim does write it, so the objection
             // does not apply and refusing it forked every receiver (#10868).
-            if next_keys != 0
+            if !next_keys.is_null()
                 && (writes_value || slot_idx < alloc_limit)
                 && cached_target_fits(target_shape_id, alloc_limit)
             {
@@ -257,9 +259,9 @@ unsafe fn ensure_key_in_keys_array_inner(
                     obj,
                     prev_shape_id,
                     target_shape_id,
-                    next_keys as *mut ArrayHeader,
+                    next_keys,
                 ) {
-                    set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                    set_object_keys(obj, next_keys);
                 }
                 // Only an INLINE slot advances the live bound. An
                 // overflow-located adoption must not, or the descriptor would
@@ -287,19 +289,21 @@ unsafe fn ensure_key_in_keys_array_inner(
     let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
         Some(proof) => {
             let canonical_parent =
-                crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+                crate::object::canonical_keys::canonicalize(&proof, keys.arr(), key_count as u32);
             refresh_define_property_roots!();
-            crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).as_ptr()
+            crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view()
         }
         None => {
-            let owned = scope.root_raw_mut_ptr(keys);
-            let grown = crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
+            // A dictionary receiver's list is its own: it grows in place.
+            let owned = scope.root_raw_mut_ptr(keys.arr());
+            let grown =
+                crate::array::js_array_push(keys.arr(), JSValue::string_ptr(key as *mut _));
             let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
-            grown
+            crate::object::ObjectKeys::owned(grown)
         }
     };
     refresh_define_property_roots!();
-    set_object_keys_array(obj, new_keys);
+    set_object_keys(obj, new_keys);
     // Keep the sidecar fresh (mirrors the [[Set]] append path): the entry is
     // keyed by the OBJECT address and length-stamped, so this contiguous
     // insert lets the next probe answer without a rebuild. No-op below the
@@ -308,7 +312,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let key_hash = super::super::key_bytes_hash(name_ptr, (*key).byte_len as usize);
         super::super::keys_index_insert(
-            crate::object::object_keys_array(obj),
+            crate::object::object_keys(obj).arr(),
             key_count as u32 + 1,
             key_hash,
             key_count as u32,
@@ -354,7 +358,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     if let (Some(handle), true) = (interned_handle.as_ref(), prev_shape_id != 0) {
         if writes_value || new_index < inline_capacity {
             let target_shape_id = super::super::shapes::object_shape_stamp(obj);
-            let published_keys = crate::object::object_keys_array(obj);
+            let published_keys = crate::object::object_keys(obj).arr();
             #[cfg(feature = "shape-mint-diag")]
             crate::object::shape_mint_census::note_define_outcome(if target_shape_id == 0 {
                 "no publish: target_shape_id == 0"
@@ -513,8 +517,8 @@ mod tests {
             let sibling =
                 crate::object::js_object_alloc_with_shape(0x6B45_5901, 0, packed.as_ptr(), 0);
             assert_eq!(
-                crate::object::object_keys_array(first),
-                crate::object::object_keys_array(sibling)
+                crate::object::object_keys(first).arr(),
+                crate::object::object_keys(sibling).arr()
             );
 
             // A logical-field/key-count mismatch is not evidence that the
@@ -528,15 +532,15 @@ mod tests {
             assert!(own_key_present(first, key));
             assert!(!own_key_present(sibling, key));
             assert_ne!(
-                crate::object::object_keys_array(first),
-                crate::object::object_keys_array(sibling)
+                crate::object::object_keys(first).arr(),
+                crate::object::object_keys(sibling).arr()
             );
             assert_ne!((*first).parent_class_id, sibling_shape);
             let sibling_descriptor = crate::object::shapes::shape_descriptor_by_id(sibling_shape)
                 .expect("sibling descriptor must remain installed");
             assert_eq!(
                 sibling_descriptor.keys,
-                crate::object::object_keys_array(sibling) as u64
+                crate::object::object_keys(sibling).arr() as u64
             );
             assert_eq!(sibling_descriptor.logical_key_count, 0);
             let first_descriptor =
@@ -544,7 +548,7 @@ mod tests {
                     .expect("defineProperty growth must install an exact descriptor");
             assert_eq!(
                 first_descriptor.keys,
-                crate::object::object_keys_array(first) as u64
+                crate::object::object_keys(first).arr() as u64
             );
             assert_eq!(first_descriptor.logical_key_count, 1);
             assert_eq!(first_descriptor.live_inline_slot_count, 1);
@@ -574,8 +578,8 @@ mod tests {
                 packed.len() as u32,
             );
             assert_eq!(
-                crate::object::object_keys_array(first),
-                crate::object::object_keys_array(sibling)
+                crate::object::object_keys(first).arr(),
+                crate::object::object_keys(sibling).arr()
             );
 
             // The canonical shape array may already own a permanent mask;
@@ -584,8 +588,8 @@ mod tests {
             let extra = crate::string::js_string_from_bytes(b"extra".as_ptr(), 5);
             ensure_key_in_keys_array(first, extra);
 
-            let cloned = crate::object::object_keys_array(first);
-            assert_ne!(cloned, crate::object::object_keys_array(sibling));
+            let cloned = crate::object::object_keys(first).arr();
+            assert_ne!(cloned, crate::object::object_keys(sibling).arr());
             assert_eq!((*cloned).length, KEY_COUNT as u32 + 1);
             assert!(own_key_present(first, extra));
             assert!(!own_key_present(sibling, extra));
@@ -671,12 +675,13 @@ pub(crate) unsafe fn own_key_present_via_index(
     if super::super::string_wrapper::has_index_key(obj as usize, key) {
         return Some(true);
     }
-    let keys = crate::object::object_keys_array(obj);
-    match crate::value::addr_class::try_read_gc_header(keys as usize) {
+    let keys = crate::object::object_keys(obj);
+    match crate::value::addr_class::try_read_gc_header(keys.arr() as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
         _ => return None,
     }
-    let key_count = crate::array::js_array_length(keys);
+    let key_count = keys.count();
+    let keys = keys.arr();
     if key_count < super::super::KEYS_INDEX_THRESHOLD {
         return None;
     }
@@ -732,10 +737,11 @@ pub(crate) unsafe fn own_key_present(
     if super::super::string_wrapper::has_index_key(obj as usize, key) {
         return true;
     }
-    let keys = crate::object::object_keys_array(obj);
-    if keys.is_null() {
+    let keys_view = crate::object::object_keys(obj);
+    if keys_view.is_null() {
         return false;
     }
+    let keys = keys_view.arr();
     let keys_ptr = keys as usize;
     // Same alignment invariant for the derived keys-array pointer: when `obj` is not a
     // genuine object its would-be shape token is garbage that may land in the
@@ -749,7 +755,7 @@ pub(crate) unsafe fn own_key_present(
     if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
         return false;
     }
-    let key_count = crate::array::js_array_length(keys);
+    let key_count = keys_view.count();
     // The shared helper distinguishes a complete index miss from an index that
     // cannot answer. Complete misses are authoritative, so Object.assign's
     // growing destination does not scan every preceding key before appending;

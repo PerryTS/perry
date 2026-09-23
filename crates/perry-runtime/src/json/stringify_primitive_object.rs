@@ -40,7 +40,7 @@ pub(super) unsafe fn fields_are_primitive(obj: *const crate::ObjectHeader, count
 #[cfg(test)]
 pub(super) unsafe fn emit_validated(
     obj: *const crate::ObjectHeader,
-    keys: *const crate::ArrayHeader,
+    keys: crate::object::ObjectKeys,
     order: Option<&[u32]>,
     buf: &mut String,
 ) {
@@ -53,7 +53,7 @@ pub(super) unsafe fn emit_validated(
 /// No managed allocation, callback or safepoint occurs during the attempt.
 pub(super) unsafe fn try_emit(
     obj: *const crate::ObjectHeader,
-    keys: *const crate::ArrayHeader,
+    keys: crate::object::ObjectKeys,
     buf: &mut String,
 ) -> bool {
     emit::<true>(obj, keys, None, buf)
@@ -67,10 +67,11 @@ fn key_needs_ecma_reordering(key: &str) -> bool {
 
 unsafe fn emit<const VALIDATE: bool>(
     obj: *const crate::ObjectHeader,
-    keys: *const crate::ArrayHeader,
+    keys_view: crate::object::ObjectKeys,
     order: Option<&[u32]>,
     buf: &mut String,
 ) -> bool {
+    let keys = keys_view.arr() as *const crate::ArrayHeader;
     let saved_len = buf.len();
     let fields = (obj as *const u8)
         .add(std::mem::size_of::<crate::ObjectHeader>())
@@ -79,7 +80,7 @@ unsafe fn emit<const VALIDATE: bool>(
         crate::array::array_elements_ptr(keys as *const crate::ArrayHeader).cast::<u64>();
     buf.push('{');
     let mut first = true;
-    for j in 0..(*keys).length as usize {
+    for j in 0..keys_view.count() as usize {
         let f = order.map_or(j, |indices| indices[j] as usize);
         let key_bits = *key_slots.add(f);
         if key_bits == crate::value::TAG_HOLE {
