@@ -67,6 +67,9 @@
 # window in which a stale dereference can still be caught.
 
 set -euo pipefail
+# The runs below set GC instrument knobs; a binary compiled without the
+# `gc-instruments` runtime feature aborts on them rather than run nothing.
+export PERRY_GC_INSTRUMENTS=1
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

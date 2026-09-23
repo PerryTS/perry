@@ -34,6 +34,12 @@
 //! nothing is armed, and the only residual cost is one relaxed atomic load
 //! per event-loop wait plus one thread-local read per full cycle.
 
+// Without `gc-instruments` the census never arms (see `census_path`), and the
+// collection passes below compile to nothing; the walk, the classifier and
+// the JSON writer then have no caller. `allow` rather than a cascade of cfgs:
+// they stay compiled, so they cannot rot in the default build either.
+#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+
 use super::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -78,6 +84,11 @@ pub(crate) fn census_path() -> Option<&'static str> {
     if let Some(p) = TEST_PATH_OVERRIDE.with(|c| *c.borrow()) {
         return Some(p);
     }
+    // Built without the instruments: never enabled (`gc_init` aborted if the
+    // knob was set).
+    #[cfg(not(feature = "gc-instruments"))]
+    return None;
+    #[cfg(feature = "gc-instruments")]
     CENSUS_PATH
         .get_or_init(|| {
             std::env::var("PERRY_GC_CENSUS")
@@ -200,6 +211,12 @@ fn header_is_marked(header: *const GcHeader) -> bool {
 /// the reachable set so the sweep-entry pass can tell reachability from
 /// block-persistence retention. No-op unless armed.
 pub(super) fn census_pass1_if_armed() {
+    #[cfg(feature = "gc-instruments")]
+    census_pass1_if_armed_impl();
+}
+
+#[cfg(feature = "gc-instruments")]
+fn census_pass1_if_armed_impl() {
     if !ARMED.with(|c| c.get()) {
         return;
     }
@@ -223,6 +240,12 @@ pub(super) fn census_pass1_if_armed() {
 /// Pass 2: sweep entry of the same synchronous full cycle (all marks final,
 /// nothing swept, block persistence already applied). Consumes the arm.
 pub(super) fn census_take_if_armed_at_full_sweep_start() {
+    #[cfg(feature = "gc-instruments")]
+    census_take_if_armed_at_full_sweep_start_impl();
+}
+
+#[cfg(feature = "gc-instruments")]
+fn census_take_if_armed_at_full_sweep_start_impl() {
     if !ARMED.with(|c| c.replace(false)) {
         return;
     }

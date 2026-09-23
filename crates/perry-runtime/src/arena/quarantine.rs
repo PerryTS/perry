@@ -97,6 +97,12 @@
 //! - RSS is genuinely higher than an unprotected run for the same reason. This
 //!   is a debug instrument; do not benchmark under it.
 
+// Without the `gc-instruments` feature this instrument's entry predicate is a
+// constant "off" (inlined, so every caller's guarded branch folds away and the
+// instrument links nothing); the rest of the module stays compiled so it
+// cannot rot, hence the allow.
+#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Mutex;
@@ -143,6 +149,13 @@ thread_local! {
     static MODE_OVERRIDE: Cell<Option<FromSpaceProtection>> = const { Cell::new(None) };
 }
 
+#[cfg(not(feature = "gc-instruments"))]
+#[inline(always)]
+pub(crate) fn fromspace_protection_mode() -> FromSpaceProtection {
+    FromSpaceProtection::Off
+}
+
+#[cfg(feature = "gc-instruments")]
 pub(crate) fn fromspace_protection_mode() -> FromSpaceProtection {
     #[cfg(test)]
     if let Some(mode) = MODE_OVERRIDE.with(Cell::get) {

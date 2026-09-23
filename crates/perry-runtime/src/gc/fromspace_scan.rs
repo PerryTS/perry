@@ -45,6 +45,12 @@
 //! so a debugger/crash report captures the offending cycle rather than the
 //! downstream corruption.
 
+// Without the `gc-instruments` feature this instrument's entry predicate is a
+// constant "off" (inlined, so every caller's guarded branch folds away and the
+// instrument links nothing); the rest of the module stays compiled so it
+// cannot rot, hence the allow.
+#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+
 use super::*;
 
 /// One offending word found by the scan.
@@ -136,6 +142,13 @@ pub(super) fn resolve_scan_knobs(scan: Option<&str>, abort: Option<&str>) -> (bo
     (truthy(scan) || abort, abort)
 }
 
+#[cfg(not(feature = "gc-instruments"))]
+#[inline(always)]
+pub(super) fn fromspace_scan_enabled() -> bool {
+    false
+}
+
+#[cfg(feature = "gc-instruments")]
 pub(super) fn fromspace_scan_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();

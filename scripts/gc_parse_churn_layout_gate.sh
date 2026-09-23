@@ -52,6 +52,9 @@
 #   vacuous in a way nothing here can detect).
 
 set -euo pipefail
+# The runs below set GC instrument knobs; a binary compiled without the
+# `gc-instruments` runtime feature aborts on them rather than run nothing.
+export PERRY_GC_INSTRUMENTS=1
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PERRY_BIN="${1:-$REPO_ROOT/target/release/perry}"

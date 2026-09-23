@@ -44,6 +44,9 @@
 # Exit status: 0 if every seed passed, 1 if any seed failed, 2 on misuse.
 
 set -uo pipefail
+# The runs below set GC instrument knobs; a binary compiled without the
+# `gc-instruments` runtime feature aborts on them rather than run nothing.
+export PERRY_GC_INSTRUMENTS=1
 
 if [[ $# -lt 1 ]]; then
   sed -n '2,45p' "$0" >&2

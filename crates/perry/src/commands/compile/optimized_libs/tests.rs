@@ -1508,3 +1508,16 @@ fn wasm_usage_changes_auto_optimize_cache_key() {
         "wasm usage must change the cache key so the target dirs don't collide"
     );
 }
+
+#[test]
+fn gc_instrument_knobs_match_the_runtime() {
+    // The compiler decides whether to link the instruments; the runtime aborts
+    // when a knob it cannot serve is set. Both must name the same knobs.
+    let root = super::super::find_perry_workspace_root().unwrap();
+    let src =
+        std::fs::read_to_string(root.join("crates/perry-runtime/src/gc/instruments.rs")).unwrap();
+    let start = src.find("INSTRUMENT_KNOBS: &[&str] = &[").unwrap();
+    let end = start + src[start..].find("];").unwrap();
+    let runtime: Vec<&str> = src[start..end].split('"').skip(1).step_by(2).collect();
+    assert_eq!(runtime, super::freshness::GC_INSTRUMENT_KNOBS);
+}

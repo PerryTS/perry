@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# The runs below set GC instrument knobs; a binary compiled without the
+# `gc-instruments` runtime feature aborts on them rather than run nothing.
+export PERRY_GC_INSTRUMENTS=1
 
 # #8075/#8038: exercise native stack-map roots and streamed Response state when
 # Perry's runtime and stdlib are process-wide providers and generated code

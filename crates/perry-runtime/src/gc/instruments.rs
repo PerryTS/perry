@@ -486,3 +486,51 @@ impl Drop for FinalRemarkTimer {
         note_final_remark_duration(self.0.elapsed().as_micros().min(u128::from(u64::MAX)) as u64);
     }
 }
+
+/// Run-time knobs served by the `gc-instruments` cargo feature.
+///
+/// A binary built without the feature cannot run these instruments, and a
+/// run that sets one of them is always asking a question the instrument was
+/// supposed to answer (a stress schedule, a fault on stale from-space
+/// access, a census dump). Answering it with silence would let every gate
+/// built on the knob pass having exercised nothing, so the process aborts at
+/// startup instead — see CLAUDE.md "Four ways a gate can be unable to fail".
+pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
+    "PERRY_GC_CENSUS",
+    "PERRY_GC_PROTECT_FROMSPACE",
+    "PERRY_GC_SCHEDULE_SEED",
+    "PERRY_GC_FROMSPACE_SCAN",
+    "PERRY_GC_FROMSPACE_SCAN_ABORT",
+    "PERRY_ALLOC_SITE_SAMPLE",
+];
+
+/// The first instrument knob set (non-empty) in the environment, if any.
+pub(crate) fn requested_instrument_knob() -> Option<&'static str> {
+    INSTRUMENT_KNOBS
+        .iter()
+        .copied()
+        .find(|knob| std::env::var_os(knob).is_some_and(|v| !v.is_empty()))
+}
+
+/// Startup check for binaries built without the instruments (see above).
+#[cfg(not(feature = "gc-instruments"))]
+pub(crate) fn refuse_instrument_knobs_without_instruments() {
+    if let Some(knob) = requested_instrument_knob() {
+        instruments_unavailable(knob);
+    }
+}
+
+#[cfg(not(feature = "gc-instruments"))]
+#[cold]
+#[inline(never)]
+fn instruments_unavailable(knob: &str) -> ! {
+    use std::io::Write;
+    let _ = writeln!(
+        std::io::stderr(),
+        "perry: {knob} is set, but this binary was built without the GC \
+         instruments (cargo feature `gc-instruments`). Recompile with \
+         PERRY_GC_INSTRUMENTS=1 (or with {knob} set while compiling) so the \
+         instrument is linked in."
+    );
+    std::process::abort()
+}

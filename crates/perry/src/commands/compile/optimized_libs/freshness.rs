@@ -104,6 +104,29 @@ pub(crate) fn size_lto_fat() -> bool {
 /// runtime-gate, shared-tokio-wrapper set, version) combination gets its own
 /// incremental cache. Kept in one place so `build_optimized_libs` and its
 /// freshness tests can never drift.
+/// Run-time knobs served only by perry-runtime's `gc-instruments` feature.
+/// Must match `INSTRUMENT_KNOBS` in `perry-runtime/src/gc/instruments.rs`
+/// (pinned by `gc_instrument_knobs_match_the_runtime`).
+pub(crate) const GC_INSTRUMENT_KNOBS: &[&str] = &[
+    "PERRY_GC_CENSUS",
+    "PERRY_GC_PROTECT_FROMSPACE",
+    "PERRY_GC_SCHEDULE_SEED",
+    "PERRY_GC_FROMSPACE_SCAN",
+    "PERRY_GC_FROMSPACE_SCAN_ABORT",
+    "PERRY_ALLOC_SITE_SAMPLE",
+];
+
+/// Link the GC instruments into this build: `PERRY_GC_INSTRUMENTS=1`, or any
+/// instrument knob set while compiling (so `PERRY_GC_SCHEDULE_SEED=7 perry
+/// compile … && PERRY_GC_SCHEDULE_SEED=7 ./a.out` just works).
+pub(crate) fn gc_instruments_requested() -> bool {
+    std::env::var("PERRY_GC_INSTRUMENTS")
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+        || GC_INSTRUMENT_KNOBS
+            .iter()
+            .any(|knob| std::env::var_os(knob).is_some_and(|v| !v.is_empty()))
+}
+
 pub(crate) fn auto_optimized_cache_key(
     feature_arg: &str,
     panic_abort_safe: bool,
@@ -132,7 +155,7 @@ pub(crate) fn auto_optimized_cache_key(
     tokio_bindings.sort_unstable();
     tokio_bindings.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|tokio={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|importopts={}|tokio={}|sizeopt={}|anchors={}|instr={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -186,6 +209,7 @@ pub(crate) fn auto_optimized_cache_key(
         // so the cache key always reflects anchors=true. The field stays in the key
         // so a future change to gate it again would get its own cache dir.
         true,
+        gc_instruments_requested(),
         env!("CARGO_PKG_VERSION"),
     )
 }
@@ -291,6 +315,13 @@ pub(crate) fn auto_optimized_cross_features(
         .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
     if ctx.uses_diagnostics || gc_trace_requested {
         cross_features.push("perry-runtime/diagnostics".to_string());
+    }
+    // GC diagnostic instruments (census, from-space quarantine/scan, seeded
+    // schedule, alloc-site sampling) are ~180 KB no shipped program needs. A
+    // runtime built without them aborts at startup when one of their knobs is
+    // set, so a stress run can never silently exercise nothing.
+    if gc_instruments_requested() {
+        cross_features.push("perry-runtime/gc-instruments".to_string());
     }
     if ctx.uses_dgram {
         cross_features.push("perry-runtime/mod-dgram".to_string());

@@ -1,6 +1,10 @@
 //! WebIDL URL accessors. The URL's numbered fields are private storage;
 //! property lookup and reflection use these descriptors on URL.prototype.
 
+// Only reached through the `global-url` member-table install (see
+// `global_this::proto_methods`); a build without that feature links none of it.
+#![cfg_attr(not(feature = "global-url"), allow(dead_code))]
+
 use super::parse::*;
 use super::url_class::*;
 use super::*;

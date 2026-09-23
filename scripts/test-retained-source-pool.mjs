@@ -16,7 +16,8 @@ assert(process.argv.slice(2).every(arg => arg === '--expect-unshared'), 'unknown
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-retained-source-'));
 const source = path.join(work, 'source.ts');
 fs.copyFileSync(path.join(root, 'test-files/test_gap_retained_source_pool.ts'), source);
-const env = { ...process.env, PERRY_LL_OPT_LEVEL: 'z' };
+// The native run sets GC instrument knobs; link the instruments it needs.
+const env = { ...process.env, PERRY_LL_OPT_LEVEL: 'z', PERRY_GC_INSTRUMENTS: '1' };
 for (const key of ['PERRY_WORKSPACE_ROOT', 'PERRY_LIB_DIR', 'PERRY_RS4GC', 'PERRY_SHADOW_STACK',
   'PERRY_INLINE_SHADOW_SLOT', 'PERRY_FULL_OUTLINE_IC', 'PERRY_SAVE_LL']) delete env[key];
 const report = { work, expectedSharing: !raw, results: [] };

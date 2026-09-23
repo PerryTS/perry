@@ -56,6 +56,8 @@ const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).d
 const compilerHash = hash(compiler);
 const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PERRY_')));
 if (process.env.PERRY_RUNTIME_DIR) baseEnv.PERRY_RUNTIME_DIR = process.env.PERRY_RUNTIME_DIR;
+// The moving runs set GC instrument knobs; link the instruments they need.
+baseEnv.PERRY_GC_INSTRUMENTS = '1';
 // Optional local toolchains may include wasm-host in their coherent graph.
 const wasmArgs = process.env.PERRY_TEST_WASM === '1' ? ['--enable-wasm-runtime'] : [];
 const rows = [];
