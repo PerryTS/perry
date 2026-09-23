@@ -2,11 +2,10 @@
 // (`const EventEmitter = require("events")`) is lowered inside the CJS
 // wrapper, so it becomes a per-evaluation class. When it is constructed as
 // the parent of a subclass, its inherited methods must still read its
-// #private fields. Mirrors @redis/client's RedisClient/RedisSocket shape.
-// (@redis/client then subclasses RedisClient through `attachConfig`'s
-// `class extends BaseClass {}`, whose `extends` operand is a parameter; that
-// dynamic-heritage class expression additionally needs #11042's
-// per-evaluation class expressions and is not exercised here.)
+// #private fields. Mirrors @redis/client's RedisClient/RedisSocket shape,
+// including `attachConfig`'s `class extends BaseClass {}` built inside a
+// helper whose `extends` operand is a parameter (a per-call class expression
+// since #11042).
 //
 // Node runs test-files/*.ts as ESM (the repo's package.json has
 // "type": "module"), where a bare `require` does not exist. So this file
@@ -57,6 +56,19 @@ function cjsModuleBody(require: (id: string) => any) {
   console.log("send", s.send("PING"), s.send("SET k v"), seen.join("|"));
   console.log("brand", Client.hasSocket(s), Client.hasSocket({}));
 
+  function attachConfig({ BaseClass, commands }: { BaseClass: any; commands: Record<string, string> }) {
+    const Class = class extends BaseClass {};
+    for (const [name, reply] of Object.entries(commands)) {
+      Class.prototype[name] = function (this: any) {
+        return this.send(reply);
+      };
+    }
+    return Class;
+  }
+  const Attached = attachConfig({ BaseClass: Client, commands: { PING: "PONG" } });
+  const c: any = new Attached();
+  console.log("attached", c.kind(), c.PING(), Client.hasSocket(c), c instanceof Client);
+
   class Socket extends EventEmitter {
     #connected = false;
     connect() {
@@ -77,7 +89,7 @@ function cjsModuleBody(require: (id: string) => any) {
       return ok + ":" + events;
     }
   }
-  class Redis extends RedisLike {}
+  const Redis = attachConfig({ BaseClass: RedisLike, commands: {} });
   console.log("redis-like", new Redis().connect());
 }
 
