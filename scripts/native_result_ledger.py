@@ -77,9 +77,20 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # provider returns its newly allocated Promise pointer, matching the existing
 # ioredis command rows. 314 -> 321 rows and 279 -> 286 providers.
 #
-# __DECIMAL_DELTA_COMMENT__
-EXPECTED_ROWS = __DECIMAL_ROWS__
-EXPECTED_PROVIDERS = __DECIMAL_PROVIDERS__
+# -12 rows / -12 providers (#10704): removing decimal.js/big.js/
+# bignumber.js dropped the 12 NR_HANDLE_ID-classified js_decimal_*
+# providers from the ledger (abs/ceil/div_value/floor/minus_value/
+# mod_value/neg/plus_value/pow/round/sqrt/times_value) along with
+# their table rows in the deleted native_table/async_decimal.rs. The
+# other ~13 js_decimal_* runtime symbols the old table declared
+# (cmp/eq/gt/lt variants, to_string, from_number, etc.) returned
+# NR_F64/NR_JS_VALUE-ish kinds this ledger never classified, so they
+# don't move this count. 321 -> __ROWS__ rows and 286 -> __PROVIDERS__
+# providers; each figure is what the script reports on the resolved
+# tree, not arithmetic (#10739 -- these are CHAINED ABSOLUTES, so the
+# base moved when #11068 landed and the delta had to be re-derived).
+EXPECTED_ROWS = __ROWS__
+EXPECTED_PROVIDERS = __PROVIDERS__
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
