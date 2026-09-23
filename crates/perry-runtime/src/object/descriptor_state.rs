@@ -1238,7 +1238,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_data_descriptor_target(obj, &key, attrs);
     let st = state();
     st.descriptors.property_attrs_in_use.set(true);
@@ -1261,7 +1261,7 @@ pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAtt
     if entries.is_empty() {
         return;
     }
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_descriptor_target(obj);
     let st = state();
     st.descriptors.property_attrs_in_use.set(true);
@@ -1291,7 +1291,7 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
         return;
     }
     owner_index_remove(&state().descriptors.attr_keys_by_owner, obj, key);
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {
@@ -1510,7 +1510,7 @@ fn note_accessor_descriptor_key(key: &str) {
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_accessor_descriptor_target(obj, &key, &acc);
     let st = state();
     st.descriptors.accessors_in_use.set(true);
@@ -1579,7 +1579,7 @@ pub(crate) fn install_fresh_accessor_property(
     acc: AccessorDescriptor,
     attrs: PropertyAttrs,
 ) {
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     // #10287: one keyed transition covers the pair, exactly as the two-call
     // sequence this folds would have produced (the accessor half runs last
     // there, so its encoding is the one that survives).
@@ -1668,7 +1668,7 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
         return;
     }
     owner_index_remove(&state().descriptors.accessor_keys_by_owner, obj, key);
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {
@@ -1702,7 +1702,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
     acc: AccessorDescriptor,
     attrs: PropertyAttrs,
 ) {
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_descriptor_target(obj);
     note_accessor_descriptor_key(&key);
     // #6759 Phase C2: the meta summary must over-approximate the tables
@@ -1740,7 +1740,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
 /// `PROPERTY_DESCRIPTORS` per-object and unconditionally. The gate stays
 /// down, so the object get/set hot path is unaffected for every program.
 pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_descriptor_target(obj);
     // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
     note_meta_descriptor_key(obj, &key, false);

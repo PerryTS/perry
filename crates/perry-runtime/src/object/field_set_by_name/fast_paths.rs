@@ -207,7 +207,23 @@ pub(crate) fn object_set_field_by_name_transition_only_fast_value(
     value: f64,
     refresh: &mut Option<(f64, f64, f64)>,
 ) -> Option<f64> {
-    object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, refresh)
+    object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, false, refresh)
+}
+
+/// [`object_set_field_by_name_transition_only_fast_value`] for a CLASS
+/// instance whose store site has already proved the prototype chain does not
+/// intercept this key (`object::chain_store`). The plain-object lane refuses
+/// class instances because it cannot prove that itself; with the proof in
+/// hand the append is the same one a plain object takes. Every other check —
+/// receiver kind and flags, an own descriptor for the key, the transition
+/// edge (which exists only for a shape that lacks the key) — still runs.
+pub(crate) fn object_set_field_by_name_transition_chain_proven_value(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+    refresh: &mut Option<(f64, f64, f64)>,
+) -> Option<f64> {
+    object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, true, refresh)
 }
 
 /// Re-add a deleted property on a receiver whose ShapeId deliberately stayed
@@ -475,8 +491,15 @@ fn object_set_field_by_name_transition_fast_impl(
     value: f64,
     try_overwrite: bool,
 ) -> i32 {
-    object_set_field_by_name_transition_fast_impl_value(obj, key, value, try_overwrite, &mut None)
-        .is_some() as i32
+    object_set_field_by_name_transition_fast_impl_value(
+        obj,
+        key,
+        value,
+        try_overwrite,
+        false,
+        &mut None,
+    )
+    .is_some() as i32
 }
 
 /// Value-returning form (#9287): the returned f64 is re-read from this
@@ -490,6 +513,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
     key: *const crate::StringHeader,
     value: f64,
     try_overwrite: bool,
+    chain_proven: bool,
     refresh: &mut Option<(f64, f64, f64)>,
 ) -> Option<f64> {
     if key.is_null() || (key as usize) < 0x10000 {
@@ -591,7 +615,7 @@ fn object_set_field_by_name_transition_fast_impl_value(
         // alongside genuinely class-id-zero objects; a real user class must
         // retain the full inherited-setter/prototype walk.
         let class_id = (*obj).class_id;
-        if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
+        if !chain_proven && class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
             return None;
         }
 
@@ -602,8 +626,11 @@ fn object_set_field_by_name_transition_fast_impl_value(
         // chain (here) instead. Pass semantic class id zero for an anon shape:
         // its nonzero runtime id is an implementation detail, not a JS class
         // whose vtable/prototype chain can carry instance accessors.
+        // A chain-proven store skips this: the site's verdict IS this
+        // question, answered for the receiver's real class chain rather than
+        // the class-id-zero chain this call assumes.
         let key_f64 = f64::from_bits(JSValue::string_ptr(key as *mut _).bits());
-        if super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
+        if !chain_proven && super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
             return None;
         }
 

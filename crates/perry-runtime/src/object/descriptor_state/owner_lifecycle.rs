@@ -141,7 +141,7 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
         return;
     }
     remove_descriptor_owner_entries(st, obj);
-    super::prop_plan::prop_plan_epoch_bump();
+    super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
         if crate::object::object_is_shaped(object) {

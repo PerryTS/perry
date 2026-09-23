@@ -55,8 +55,15 @@
 //! 3. The same counter is bumped by `prop_plan::prop_plan_epoch_bump`, so it
 //!    also stands for everything the semantic property epoch stands for
 //!    (descriptor installs and clears, `delete`, per-instance prototype
-//!    recording, class-prototype-object registration, parent-static linking) —
-//!    including those events on objects that are NOT marked. Folding the two
+//!    recording, class-prototype-object registration, parent-static linking).
+//!    A descriptor install or clear, or a `delete`, bumps it only when its
+//!    owner can be a hop of a recorded chain — a MARKED ordinary object, or
+//!    one that cannot be classified ([`mutation_owner_may_be_a_recorded_hop`]).
+//!    Every consumer records through marked hops only, and the receiver's own
+//!    such mutations transition its ShapeId, so an unmarked object's
+//!    descriptors cannot change a recorded answer. Without that gate every
+//!    `Function.prototype.bind` (which names its result through descriptor
+//!    installs) invalidated every cached verdict in the process. Folding the two
 //!    into one word is what lets a cached entry re-prove itself with ONE load
 //!    and ONE compare instead of two of each.
 //!
@@ -265,6 +272,39 @@ unsafe fn meta_flag_is_set(obj: usize, flag: u64) -> bool {
 #[inline]
 pub(crate) unsafe fn object_is_marked_prototype(obj: usize) -> bool {
     meta_flag_is_set(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE)
+}
+
+/// Can a descriptor install or clear, or a `delete`, on `owner` change what
+/// a cached chain verdict answers?
+///
+/// Every consumer of [`proto_validity`] records a verdict only through
+/// prototype hops that are MARKED ordinary objects (the inherited-read cache
+/// refuses an unmarked or non-object hop; `object::chain_store` marks every
+/// hop its verdict depends on before it records). What such a mutation can
+/// change on its RECEIVER is covered by the receiver's own ShapeId, which
+/// every descriptor install, clear and delete transitions. So the mutation
+/// matters to a verdict only when `owner` can be one of those hops: a marked
+/// ordinary object, or something this function cannot classify. An unmarked
+/// ordinary object is not a hop of any recorded chain yet — linking it into
+/// one marks it first — and a function object is never recorded as a hop.
+///
+/// This is what keeps `Function.prototype.bind` (which names every bound
+/// function through descriptor installs) from invalidating every cached
+/// inherited verdict in the process on every call.
+///
+/// # Safety
+/// `owner` is a live heap address, or 0.
+pub(crate) unsafe fn mutation_owner_may_be_a_recorded_hop(owner: usize) -> bool {
+    if owner == 0 || !crate::value::addr_class::is_plausible_heap_addr(owner) {
+        return true;
+    }
+    match crate::value::addr_class::try_read_gc_header(owner) {
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            object_is_marked_prototype(owner)
+        }
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_CLOSURE => false,
+        _ => true,
+    }
 }
 
 /// The hook in the structural-mutation publication funnel

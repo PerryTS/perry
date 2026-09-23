@@ -78,6 +78,19 @@ pub(crate) fn prop_plan_epoch_bump() {
     crate::object::proto_validity::bump_proto_validity();
 }
 
+/// [`prop_plan_epoch_bump`] for a mutation of ONE object — a descriptor
+/// install or clear, or a `delete`. Both plan epochs move exactly as before;
+/// the inherited-access validity word moves only when `owner` can be a hop of
+/// a recorded chain (`proto_validity::mutation_owner_may_be_a_recorded_hop`).
+#[inline]
+pub(crate) fn prop_plan_epoch_bump_for_owner(owner: usize) {
+    PROP_PLAN_EPOCH.fetch_add(1, Ordering::Relaxed);
+    PROP_PLAN_SEMANTIC_EPOCH.fetch_add(1, Ordering::Relaxed);
+    if unsafe { crate::object::proto_validity::mutation_owner_may_be_a_recorded_hop(owner) } {
+        crate::object::proto_validity::bump_proto_validity();
+    }
+}
+
 /// Invalidate cached store plans for a reason that is NOT a semantic property
 /// change: a collection moved interned keys or pruned dead owners' side-table
 /// entries. Bumps only the pointer-identity epoch.

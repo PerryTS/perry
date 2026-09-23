@@ -1065,6 +1065,10 @@ pub fn gc_init() {
     // address cannot be recycled under the entry, and rewritten, so a
     // compacting or copying pass leaves it pointing at the same object.
     reg_scanner!(crate::object::inherited_read_cache::scan_inherited_read_cache_roots_mut);
+    // Inherited-access lane: a store site's chain verdict names its interned
+    // key and the receiver's recorded prototype, and compares them on every
+    // use, so both are STRONG roots (`object::chain_store`).
+    reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);
