@@ -1,0 +1,1 @@
+Fixed HTTP WebSocket upgrades claimed by JavaScript `upgrade` listeners. Perry now hands public packages such as `ws` the untouched `net.Socket` and a binary `Buffer` for the upgrade head, including when that head is empty, so `WebSocketServer` can complete its own handshake and emit `connection`.
