@@ -224,7 +224,7 @@ crate::perry_thread_local! {
 }
 
 fn primary() -> &'static PrimaryImage {
-    PRIMARY_IMAGE.get_or_init(|| PrimaryImage {
+    crate::once_init::get_or_init(&PRIMARY_IMAGE, || PrimaryImage {
         tables: Arc::new(ClassImageTables::new()),
         owner: std::thread::current().id(),
     })

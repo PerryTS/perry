@@ -265,7 +265,7 @@ pub(in crate::gc) fn stack_maps_initialized() -> bool {
 /// the assert stricter rather than weaker.
 fn image_has_stack_map_sections() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         loaded_stack_map_sections()
             .map(|sections| !sections.is_empty())
             .unwrap_or(true)
@@ -311,7 +311,7 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
 ) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    if !*ON.get_or_init(|| {
+    if !*crate::once_init::get_or_init(&ON, || {
         matches!(
             std::env::var("PERRY_GC_NATIVE_SLOT_VERIFY").ok().as_deref(),
             Some("1") | Some("on") | Some("true")
@@ -659,10 +659,12 @@ enum WalkerMode {
 
 fn walker_mode() -> WalkerMode {
     static MODE: OnceLock<WalkerMode> = OnceLock::new();
-    *MODE.get_or_init(|| match std::env::var("PERRY_STACKMAP_WALKER").as_deref() {
-        Ok("unwind") => WalkerMode::Unwind,
-        Ok("verify") => WalkerMode::Verify,
-        _ => WalkerMode::Fast,
+    *crate::once_init::get_or_init(&MODE, || {
+        match std::env::var("PERRY_STACKMAP_WALKER").as_deref() {
+            Ok("unwind") => WalkerMode::Unwind,
+            Ok("verify") => WalkerMode::Verify,
+            _ => WalkerMode::Fast,
+        }
     })
 }
 
@@ -775,7 +777,7 @@ pub(in crate::gc) fn initialize() {
 /// A/B measurement of what the deferral is worth.
 fn lazy_stack_maps_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         !matches!(
             std::env::var("PERRY_LAZY_STACK_MAPS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -827,7 +829,7 @@ enum IndexMode {
 
 fn index_mode() -> IndexMode {
     static MODE: OnceLock<IndexMode> = OnceLock::new();
-    *MODE.get_or_init(|| {
+    *crate::once_init::get_or_init(&MODE, || {
         if crate::gc::env_flag_enabled("PERRY_GC_STACK_MAP_CROSSCHECK") {
             IndexMode::CrossCheck
         } else if crate::gc::env_flag_enabled("PERRY_GC_STACK_MAP_EAGER") {
@@ -1261,7 +1263,7 @@ fn sve_sp_allocation_bytes(word: u32) -> Option<usize> {
 #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
 fn sve_vector_length_bytes() -> Option<usize> {
     static VECTOR_LENGTH: OnceLock<Option<usize>> = OnceLock::new();
-    *VECTOR_LENGTH.get_or_init(|| {
+    *crate::once_init::get_or_init(&VECTOR_LENGTH, || {
         // <linux/prctl.h>
         const PR_SVE_GET_VL: i32 = 51;
         const PR_SVE_VL_LEN_MASK: i32 = 0xffff;
@@ -1392,7 +1394,9 @@ mod unwind {
         // `PERRY_GC_STACKMAP_TRACE=0` ENABLE the trace, which is the opposite of
         // what every other GC knob does and what anyone typing `=0` means. The
         // shared parser fails toward the knob's documented default (OFF here).
-        *ON.get_or_init(|| crate::gc::env_flag_enabled("PERRY_GC_STACKMAP_TRACE"))
+        *crate::once_init::get_or_init(&ON, || {
+            crate::gc::env_flag_enabled("PERRY_GC_STACKMAP_TRACE")
+        })
     }
 
     unsafe extern "C" fn walk_frame<F: FnMut(ResolvedRoot)>(

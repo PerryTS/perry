@@ -1285,7 +1285,7 @@ pub(super) fn get_field_ic_miss_impl(
 #[inline]
 fn outlined_mru_hit_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         crate::gc::env_default_on_from_value(
             std::env::var("PERRY_IC_OUTLINE_FASTPATH").ok().as_deref(),
         )

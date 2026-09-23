@@ -45,7 +45,7 @@ fn widget_id(raw: i64) -> i64 {
 static GRID: OnceLock<Mutex<Grid>> = OnceLock::new();
 
 fn grid() -> &'static Mutex<Grid> {
-    GRID.get_or_init(|| {
+    crate::once_init::get_or_init(&GRID, || {
         let (w, h) = current_term_size();
         Mutex::new(Grid::new(w, h))
     })

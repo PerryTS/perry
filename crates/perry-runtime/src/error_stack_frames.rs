@@ -85,7 +85,7 @@ const MAX_FUNCTION_SPAN: usize = 64 * 1024;
 /// repeat that.
 pub(crate) fn diag_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         matches!(
             std::env::var("PERRY_ERROR_STACK_DIAG").ok().as_deref(),
             Some("1") | Some("on") | Some("true")
@@ -406,7 +406,9 @@ fn dladdr_info(ip: usize) -> Option<libc::Dl_info> {
 #[cfg(unix)]
 fn stack_symbols_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| crate::gc::env_flag_enabled("PERRY_STACK_SYMBOLS"))
+    *crate::once_init::get_or_init(&ENABLED, || {
+        crate::gc::env_flag_enabled("PERRY_STACK_SYMBOLS")
+    })
 }
 
 /// Loaded base of this executable, derived without opening the executable or
@@ -415,7 +417,7 @@ fn stack_symbols_enabled() -> bool {
 #[cfg(unix)]
 fn executable_image_base() -> Option<usize> {
     static IMAGE_BASE: OnceLock<usize> = OnceLock::new();
-    let base = *IMAGE_BASE.get_or_init(|| {
+    let base = *crate::once_init::get_or_init(&IMAGE_BASE, || {
         dladdr_info(load_static_symbol_index as *const () as usize)
             .map(|info| info.dli_fbase as usize)
             .unwrap_or(0)
@@ -586,7 +588,7 @@ struct CodeSymbolIndex {
 
 fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
     static INDEX: OnceLock<Mutex<Option<CodeSymbolIndex>>> = OnceLock::new();
-    INDEX.get_or_init(|| Mutex::new(None))
+    crate::once_init::get_or_init(&INDEX, || Mutex::new(None))
 }
 
 /// Resolve `ip` to the display name of the function containing it.

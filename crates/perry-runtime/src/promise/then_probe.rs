@@ -655,7 +655,7 @@ fn class_registry_inert(class_id: u32) -> bool {
 
 fn verify_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         matches!(
             std::env::var("PERRY_THENABLE_VERIFY").as_deref(),
             Ok("1") | Ok("on") | Ok("true")

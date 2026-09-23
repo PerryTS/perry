@@ -309,7 +309,7 @@ pub(super) const SCAVENGE_NURSERY_CAP_DEFAULT_MB: usize = 16;
 pub(super) fn gc_scavenge_nursery_cap_bytes() -> usize {
     use std::sync::OnceLock;
     static CACHED: OnceLock<usize> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         std::env::var("PERRY_GC_SCAVENGE_NURSERY_MB")
             .ok()
             .and_then(|s| s.trim().parse::<usize>().ok())
@@ -780,7 +780,9 @@ pub(super) fn external_side_old_reclaim_pressure_bytes() -> usize {
 pub(crate) fn gc_moving_safepoint_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     // Default ON; the kill switch is an explicit `=0`/`off`/`false`.
-    *CACHED.get_or_init(|| super::env_default_on_enabled("PERRY_GC_MOVING_SAFEPOINT"))
+    *crate::once_init::get_or_init(&CACHED, || {
+        super::env_default_on_enabled("PERRY_GC_MOVING_SAFEPOINT")
+    })
 }
 
 /// Phase 4 of the moving-GC project: gate the INCREMENTAL old-gen collector (the
@@ -806,7 +808,7 @@ pub(crate) fn gc_moving_safepoint_enabled() -> bool {
 /// #6972 while this doc comment still claimed the gate was off (#6987).
 pub(crate) fn gc_incremental_enabled() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         // DEFAULT ON (#6180 flip): ordinary allocation pressure is collected
         // by the budgeted incremental stepper — debt-paced assists, sound
         // across mutator windows (mark barrier + allocate-black + final
@@ -851,7 +853,7 @@ pub(crate) fn gc_moving_loop_polls_enabled() -> bool {
     }
 
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         moving_loop_polls_enabled_from_env(
             std::env::var("PERRY_GC_MOVING_LOOP_POLLS").ok().as_deref(),
         )
@@ -1041,7 +1043,7 @@ pub(super) fn gc_trace_enabled() -> bool {
     }
 
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| super::env_flag_enabled("PERRY_GC_TRACE"))
+    *crate::once_init::get_or_init(&CACHED, || super::env_flag_enabled("PERRY_GC_TRACE"))
 }
 
 #[cfg(test)]
@@ -1376,7 +1378,7 @@ pub(super) enum SafepointOnlyContract {
 pub(super) fn gc_safepoint_only_contract() -> SafepointOnlyContract {
     use std::sync::OnceLock;
     static CACHED: OnceLock<SafepointOnlyContract> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         safepoint_only_contract_from_value(std::env::var("PERRY_GC_SAFEPOINT_ONLY").ok().as_deref())
     })
 }
@@ -2830,7 +2832,9 @@ fn arena_rebaseline_all_enabled() -> bool {
         return enabled;
     }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_ARENA_REBASELINE_ALL"))
+    *crate::once_init::get_or_init(&ENABLED, || {
+        crate::gc::env_default_on_enabled("PERRY_GC_ARENA_REBASELINE_ALL")
+    })
 }
 
 #[cfg(test)]
@@ -4011,7 +4015,7 @@ pub(super) fn test_start_budgeted_minor_fallback_state_with_trace(
 pub(super) fn major_pacing_config() -> (usize, usize) {
     use std::sync::OnceLock;
     static CONFIG: OnceLock<(usize, usize)> = OnceLock::new();
-    let &(floor_bytes, growth_num) = CONFIG.get_or_init(|| {
+    let &(floor_bytes, growth_num) = crate::once_init::get_or_init(&CONFIG, || {
         const DEFAULT_FLOOR_MB: usize = 32;
         const DEFAULT_GROWTH_NUM: usize = 2;
         let floor_bytes = std::env::var("PERRY_GC_MAJOR_PACING_FLOOR_MB")

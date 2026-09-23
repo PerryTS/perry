@@ -391,7 +391,9 @@ struct PageClassStats {
 #[inline(always)]
 fn page_class_table_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_PAGE_CLASS_TABLE"))
+    *crate::once_init::get_or_init(&ENABLED, || {
+        crate::gc::env_default_on_enabled("PERRY_GC_PAGE_CLASS_TABLE")
+    })
 }
 
 /// One line under `PERRY_GC_DIAG=1`, emitted per copying minor from the

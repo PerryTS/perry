@@ -962,7 +962,9 @@ pub(super) fn verify_old_to_young_edges_covered() -> OldYoungEdgeVerifyStats {
         // in the same cycle) can be reached.
         use std::sync::OnceLock;
         static NONFATAL: OnceLock<bool> = OnceLock::new();
-        if *NONFATAL.get_or_init(|| super::env_flag_enabled("PERRY_GC_VERIFY_RS_NONFATAL")) {
+        if *crate::once_init::get_or_init(&NONFATAL, || {
+            super::env_flag_enabled("PERRY_GC_VERIFY_RS_NONFATAL")
+        }) {
             eprintln!(
                 "[gc-verify] old-young-edge-verifier (non-fatal): missing_edges={}",
                 stats.missing_edges

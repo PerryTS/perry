@@ -43,7 +43,7 @@ pub fn arena_reset_all_blocks_to_zero() {
 fn poison_fromspace_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
+    *crate::once_init::get_or_init(&ENABLED, || {
         matches!(
             std::env::var("PERRY_GC_POISON_FROMSPACE").ok().as_deref(),
             Some("1") | Some("on") | Some("true")

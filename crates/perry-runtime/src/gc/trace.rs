@@ -89,8 +89,9 @@ pub(super) fn classifier_verify_enabled() -> bool {
     // The cached process-wide switch first: this runs on every census hit, and
     // the suppression flag is a thread-local (#10182).
     static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CACHED.get_or_init(|| super::env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER"))
-        && !CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get())
+    *crate::once_init::get_or_init(&CACHED, || {
+        super::env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER")
+    }) && !CLASSIFIER_VERIFY_SUPPRESSED.with(|c| c.get())
 }
 
 crate::perry_thread_local! {

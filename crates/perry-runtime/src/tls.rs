@@ -39,7 +39,7 @@ pub struct TlsClientMetadata {
 }
 
 fn client_metadata() -> &'static Mutex<HashMap<i64, TlsClientMetadata>> {
-    TLS_CLIENT_METADATA.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&TLS_CLIENT_METADATA, || Mutex::new(HashMap::new()))
 }
 
 pub fn tls_client_metadata(handle: i64) -> Option<TlsClientMetadata> {

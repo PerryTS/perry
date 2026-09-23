@@ -176,7 +176,7 @@ unsafe fn load_api() -> Result<Api, WatchError> {
 
 fn api() -> Result<&'static Api, WatchError> {
     static API: OnceLock<Result<Api, WatchError>> = OnceLock::new();
-    API.get_or_init(|| unsafe { load_api() })
+    crate::once_init::get_or_init(&API, || unsafe { load_api() })
         .as_ref()
         .map_err(Clone::clone)
 }

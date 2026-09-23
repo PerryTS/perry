@@ -31,7 +31,7 @@ struct InternedPointerTypes {
 fn intern_pointer_type_strings() -> &'static InternedPointerTypes {
     use std::sync::OnceLock;
     static CELL: OnceLock<InternedPointerTypes> = OnceLock::new();
-    CELL.get_or_init(|| {
+    crate::once_init::get_or_init(&CELL, || {
         let mk = |bytes: &[u8]| -> f64 {
             let ptr = js_string_from_bytes_longlived(bytes.as_ptr(), bytes.len() as u32);
             f64::from_bits(STRING_TAG | (ptr as u64 & POINTER_MASK))

@@ -46,7 +46,7 @@ static SHARED_SAB_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 static SHARED_SAB_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
 fn registry() -> &'static Mutex<HashSet<usize>> {
-    SHARED_SAB_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+    crate::once_init::get_or_init(&SHARED_SAB_REGISTRY, || Mutex::new(HashSet::new()))
 }
 
 /// Layout for a SAB of `size` data bytes:

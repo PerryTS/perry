@@ -45,7 +45,7 @@
 fn eager_fn_metadata_validation() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         matches!(
             std::env::var("PERRY_EAGER_FN_METADATA_UTF8").as_deref(),
             Ok("1") | Ok("on") | Ok("true")
@@ -85,7 +85,9 @@ fn function_name_registry(
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>>> =
         OnceLock::new();
-    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&REGISTRY, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 /// Names whose bytes the registry owns, because the caller could not promise
@@ -101,7 +103,9 @@ fn function_name_overrides(
     static OVERRIDES: OnceLock<
         std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
     > = OnceLock::new();
-    OVERRIDES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&OVERRIDES, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 /// The registered name for `func_ptr`: an owned registration first, then the
@@ -339,7 +343,9 @@ fn function_source_registry() -> &'static std::sync::Mutex<
     static REGISTRY: OnceLock<
         std::sync::Mutex<std::collections::HashMap<usize, RegisteredFunctionSource<&'static [u8]>>>,
     > = OnceLock::new();
-    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&REGISTRY, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 /// Source text the registry owns, written by [`js_register_function_source`]
@@ -354,7 +360,9 @@ fn function_source_overrides() -> &'static std::sync::Mutex<
             std::collections::HashMap<usize, RegisteredFunctionSource<std::sync::Arc<[u8]>>>,
         >,
     > = OnceLock::new();
-    OVERRIDES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&OVERRIDES, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 /// Register `func_ptr` as the compiled address of a JS function whose original

@@ -33,7 +33,7 @@ type WaitTable = HashMap<usize, Vec<Arc<Waiter>>>;
 static WAIT_TABLE: OnceLock<Mutex<WaitTable>> = OnceLock::new();
 
 fn table() -> &'static Mutex<WaitTable> {
-    WAIT_TABLE.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&WAIT_TABLE, || Mutex::new(HashMap::new()))
 }
 
 fn lock_table() -> std::sync::MutexGuard<'static, WaitTable> {

@@ -46,7 +46,7 @@ thread_local! {
 #[inline]
 pub(crate) fn object_spill_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         !matches!(
             std::env::var("PERRY_OBJECT_SPILL").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -462,7 +462,7 @@ fn note_learned_inline_fields(obj_ptr: usize, class_id: u32, needed_fields: u32)
 pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
     // Bisection kill-switch: PERRY_LEARNED_INLINE=0 disables consumption.
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| {
+    if !*crate::once_init::get_or_init(&ON, || {
         !matches!(
             std::env::var("PERRY_LEARNED_INLINE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

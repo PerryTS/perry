@@ -259,7 +259,7 @@ fn resolved() -> Option<(u64, u64)> {
     }
     use std::sync::OnceLock;
     static CACHED: OnceLock<Option<(u64, u64)>> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         let seed = parse_seed(std::env::var("PERRY_GC_SCHEDULE_SEED").ok().as_deref())?;
         let rate = parse_rate(std::env::var("PERRY_GC_SCHEDULE_RATE").ok().as_deref());
         let resolved = (seed, rate_threshold(rate));
@@ -494,7 +494,7 @@ pub(crate) fn schedule_poll_stride_bytes() -> usize {
     }
     use std::sync::OnceLock;
     static CACHED: OnceLock<usize> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         parse_schedule_alloc_kb(std::env::var("PERRY_GC_SCHEDULE_ALLOC_KB").ok().as_deref())
     })
 }

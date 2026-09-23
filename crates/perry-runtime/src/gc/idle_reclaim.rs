@@ -356,7 +356,9 @@ fn idle_reclaim_enabled() -> bool {
         return forced;
     }
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| super::env_default_on_enabled("PERRY_GC_IDLE_RECLAIM"))
+    *crate::once_init::get_or_init(&CACHED, || {
+        super::env_default_on_enabled("PERRY_GC_IDLE_RECLAIM")
+    })
 }
 
 fn now_ms() -> u64 {

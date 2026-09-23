@@ -140,7 +140,7 @@ fn plan_slot(class_id: u32, key_ptr: usize) -> usize {
 
 fn plan_diag_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_PLAN_DIAG").is_some())
+    *crate::once_init::get_or_init(&ON, || std::env::var_os("PERRY_PLAN_DIAG").is_some())
 }
 
 /// Does a valid fast-store verdict exist for (class_id, interned key)?

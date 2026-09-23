@@ -517,7 +517,7 @@ fn gc_collect_minor_with_trigger_inner(
 pub fn gen_gc_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         // Generational minors are only sound with runtime write barriers:
         // minors black-leaf old parents and trust the remembered set for
         // every old→young/old→malloc edge. `PERRY_WRITE_BARRIERS=0` used
@@ -756,7 +756,7 @@ pub(super) fn gc_scavenge_enabled() -> bool {
     }
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         // ON BY DEFAULT (#7056). `PERRY_GC_SCAVENGE=0`/`off`/`false` reverts.
         //
         // This pairs with the nursery cap in `policy::effective_next_arena_trigger`

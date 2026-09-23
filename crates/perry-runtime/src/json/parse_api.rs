@@ -794,7 +794,7 @@ pub(crate) enum TapeMode {
 pub(crate) fn sso_emit_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         matches!(
             std::env::var("PERRY_SSO_FORCE").as_deref(),
             Ok("1") | Ok("on") | Ok("true")
@@ -805,10 +805,12 @@ pub(crate) fn sso_emit_enabled() -> bool {
 pub(crate) fn tape_mode_from_env() -> TapeMode {
     use std::sync::OnceLock;
     static CACHED: OnceLock<TapeMode> = OnceLock::new();
-    *CACHED.get_or_init(|| match std::env::var("PERRY_JSON_TAPE").as_deref() {
-        Ok("0") | Ok("off") | Ok("false") => TapeMode::ForceOff,
-        Ok("1") | Ok("on") | Ok("true") => TapeMode::ForceOn,
-        _ => TapeMode::Auto,
+    *crate::once_init::get_or_init(&CACHED, || {
+        match std::env::var("PERRY_JSON_TAPE").as_deref() {
+            Ok("0") | Ok("off") | Ok("false") => TapeMode::ForceOff,
+            Ok("1") | Ok("on") | Ok("true") => TapeMode::ForceOn,
+            _ => TapeMode::Auto,
+        }
     })
 }
 

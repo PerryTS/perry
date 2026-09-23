@@ -84,7 +84,7 @@ static REGEX_ON: AtomicBool = AtomicBool::new(false);
 
 /// One-time env parse; arms [`REGEX_ON`]. Called from the first probe.
 fn regex_sink() -> &'static Option<Sink> {
-    REGEX_SINK.get_or_init(|| {
+    crate::once_init::get_or_init(&REGEX_SINK, || {
         let sink = sink_from_env("PERRY_REGEX_DIAG");
         REGEX_ON.store(sink.is_some(), Ordering::Relaxed);
         sink
@@ -472,7 +472,7 @@ static IC_SINK: OnceLock<Option<Sink>> = OnceLock::new();
 static IC_ON: AtomicBool = AtomicBool::new(false);
 
 fn ic_sink() -> &'static Option<Sink> {
-    IC_SINK.get_or_init(|| {
+    crate::once_init::get_or_init(&IC_SINK, || {
         let sink = sink_from_env("PERRY_IC_DIAG");
         IC_ON.store(sink.is_some(), Ordering::Relaxed);
         sink
@@ -495,7 +495,7 @@ thread_local! {
 }
 
 fn layout_sink() -> &'static Option<Sink> {
-    LAYOUT_SINK.get_or_init(|| {
+    crate::once_init::get_or_init(&LAYOUT_SINK, || {
         let sink = sink_from_env("PERRY_LAYOUT_DIAG");
         LAYOUT_ON.store(sink.is_some(), Ordering::Relaxed);
         sink
@@ -1172,7 +1172,7 @@ static ENUM_SINK: OnceLock<Option<Sink>> = OnceLock::new();
 static ENUM_ON: AtomicBool = AtomicBool::new(false);
 
 fn enum_sink() -> &'static Option<Sink> {
-    ENUM_SINK.get_or_init(|| {
+    crate::once_init::get_or_init(&ENUM_SINK, || {
         let sink = sink_from_env("PERRY_ENUM_DIAG");
         ENUM_ON.store(sink.is_some(), Ordering::Relaxed);
         sink
@@ -1339,7 +1339,7 @@ static BUFFER_SINK: OnceLock<Option<Sink>> = OnceLock::new();
 static BUFFER_ON: AtomicBool = AtomicBool::new(false);
 
 fn buffer_sink() -> &'static Option<Sink> {
-    BUFFER_SINK.get_or_init(|| {
+    crate::once_init::get_or_init(&BUFFER_SINK, || {
         let sink = sink_from_env("PERRY_BUFFER_DIAG");
         BUFFER_ON.store(sink.is_some(), Ordering::Relaxed);
         sink

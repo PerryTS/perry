@@ -20,7 +20,7 @@ pub fn gc_diag_enabled() -> bool {
         return true;
     }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| env_flag_enabled("PERRY_GC_DIAG"))
+    *crate::once_init::get_or_init(&ENABLED, || env_flag_enabled("PERRY_GC_DIAG"))
 }
 
 #[cfg(test)]
@@ -59,7 +59,7 @@ impl Drop for GcDiagTestGuard {
 /// walks the whole heap.
 pub(crate) fn gc_verify_mark_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| env_flag_enabled("PERRY_GC_VERIFY_MARK"))
+    *crate::once_init::get_or_init(&ENABLED, || env_flag_enabled("PERRY_GC_VERIFY_MARK"))
 }
 
 pub struct GcStats {

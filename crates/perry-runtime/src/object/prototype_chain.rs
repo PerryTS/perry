@@ -314,7 +314,7 @@ pub(crate) mod residual_proto_bit_sabotage {
 }
 
 fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
-    OBJECT_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&OBJECT_PROTOTYPES, || Mutex::new(HashMap::new()))
 }
 
 /// #6759 Phase B: classify `obj_ptr` as a genuine shaped `GC_TYPE_OBJECT`

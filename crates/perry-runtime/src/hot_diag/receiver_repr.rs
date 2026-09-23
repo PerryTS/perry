@@ -105,7 +105,7 @@ static TEST_FORCE_ON: AtomicBool = AtomicBool::new(false);
 static TEST_CLASSIFICATION_ENTRIES: AtomicU64 = AtomicU64::new(0);
 
 fn receiver_repr_sink() -> &'static Option<Sink> {
-    RECEIVER_REPR_SINK.get_or_init(|| {
+    crate::once_init::get_or_init(&RECEIVER_REPR_SINK, || {
         let sink = sink_from_env("PERRY_RECEIVER_REPR_DIAG");
         RECEIVER_REPR_ON.store(sink.is_some(), Ordering::Relaxed);
         sink

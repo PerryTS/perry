@@ -582,8 +582,9 @@ fn materialize_virtual_library(path: &str) -> Result<String, String> {
     static MATERIALIZED: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, String>>,
     > = std::sync::OnceLock::new();
-    let cache =
-        MATERIALIZED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache = crate::once_init::get_or_init(&MATERIALIZED, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    });
     // Hold the lock across the whole materialization: two threads that both
     // miss would otherwise both try to create the file, and the second would
     // fail the exclusive create below. Once per library, never hot.
@@ -660,7 +661,7 @@ fn materialize_virtual_library(path: &str) -> Result<String, String> {
 fn materialized_library_dir() -> Result<&'static std::path::Path, String> {
     static DIR: std::sync::OnceLock<Result<std::path::PathBuf, String>> =
         std::sync::OnceLock::new();
-    DIR.get_or_init(|| {
+    crate::once_init::get_or_init(&DIR, || {
         let mut dir = std::env::temp_dir();
         dir.push(format!(
             "perry-ffi-{}-{:016x}",

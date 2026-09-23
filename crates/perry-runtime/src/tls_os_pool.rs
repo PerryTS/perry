@@ -74,7 +74,7 @@ unsafe fn destroy<T>(value: *mut u8) {
     }
 }
 fn key() -> libc::pthread_key_t {
-    *KEY.get_or_init(|| {
+    *crate::once_init::get_or_init(&KEY, || {
         let mut key = 0;
         if unsafe { libc::pthread_key_create(&mut key, Some(drop_pool)) } != 0 {
             panic!("cannot allocate the shared thread-local key");

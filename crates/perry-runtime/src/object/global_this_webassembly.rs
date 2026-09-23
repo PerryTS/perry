@@ -155,7 +155,9 @@ fn wasm_unsupported_rejection(api: &str) -> f64 {
 fn module_wrappers() -> &'static std::sync::Mutex<std::collections::HashMap<usize, usize>> {
     static REG: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, usize>>> =
         std::sync::OnceLock::new();
-    REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&REG, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 type ExternWrapperRegistry =
@@ -163,7 +165,9 @@ type ExternWrapperRegistry =
 
 fn extern_wrappers() -> &'static ExternWrapperRegistry {
     static REG: std::sync::OnceLock<ExternWrapperRegistry> = std::sync::OnceLock::new();
-    REG.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&REG, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 /// Fast-path latch for the GC hooks. Most programs never construct a wasm

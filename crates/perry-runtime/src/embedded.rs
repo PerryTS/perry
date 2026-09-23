@@ -114,7 +114,7 @@ pub(crate) struct EmbeddedDirEntry {
 static EMBEDDED_ASSETS: OnceLock<Mutex<Vec<EmbeddedAsset>>> = OnceLock::new();
 
 fn registry() -> &'static Mutex<Vec<EmbeddedAsset>> {
-    EMBEDDED_ASSETS.get_or_init(|| Mutex::new(Vec::new()))
+    crate::once_init::get_or_init(&EMBEDDED_ASSETS, || Mutex::new(Vec::new()))
 }
 
 /// Strip the `$perryfs/` prefix (and a single leading `./`) so `$perryfs/x`,

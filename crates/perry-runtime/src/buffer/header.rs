@@ -46,7 +46,7 @@ static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKe
     OnceLock::new();
 
 fn external_buffers() -> &'static Mutex<HashSet<usize>> {
-    EXTERNAL_BUFFER_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+    crate::once_init::get_or_init(&EXTERNAL_BUFFER_REGISTRY, || Mutex::new(HashSet::new()))
 }
 
 /// Diagnostic-only exact membership check for the legacy external-buffer ABI.
@@ -60,11 +60,13 @@ pub fn is_external_buffer(addr: usize) -> bool {
 }
 
 fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
-    EXTERNAL_UINT8ARRAY_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+    crate::once_init::get_or_init(&EXTERNAL_UINT8ARRAY_REGISTRY, || Mutex::new(HashSet::new()))
 }
 
 fn external_crypto_keys() -> &'static Mutex<HashMap<usize, CryptoKeyMeta>> {
-    EXTERNAL_CRYPTO_KEY_META_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&EXTERNAL_CRYPTO_KEY_META_REGISTRY, || {
+        Mutex::new(HashMap::new())
+    })
 }
 
 /// Called by the GC's buffer sweep when a CryptoKey-flagged `BufferHeader`
@@ -602,7 +604,7 @@ pub fn is_registered_buffer(addr: usize) -> bool {
 fn buffer_range_filter_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         !matches!(
             std::env::var("PERRY_BUFFER_RANGE_FILTER").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

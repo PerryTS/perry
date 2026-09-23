@@ -496,7 +496,7 @@ const SPIN_THROTTLE_SLEEP: Duration = Duration::from_millis(1);
 
 fn spin_throttle_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
+    *crate::once_init::get_or_init(&ENABLED, || {
         !matches!(
             std::env::var("PERRY_SPIN_THROTTLE").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

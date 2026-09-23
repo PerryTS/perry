@@ -118,7 +118,7 @@ fn publish_active_entries(registry: &NativeAsyncRegistry) {
 }
 
 fn registry() -> &'static Mutex<NativeAsyncRegistry> {
-    REGISTRY.get_or_init(|| Mutex::new(NativeAsyncRegistry::default()))
+    crate::once_init::get_or_init(&REGISTRY, || Mutex::new(NativeAsyncRegistry::default()))
 }
 
 pub(super) fn completion_work_pending() -> bool {

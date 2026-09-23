@@ -208,7 +208,7 @@ pub unsafe extern "system" fn perry_eh_personality(
 
 fn eh_trace_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_EH_TRACE").is_some())
+    *crate::once_init::get_or_init(&ON, || std::env::var_os("PERRY_EH_TRACE").is_some())
 }
 
 // Keep the personality out of dead-strip's reach in the static archives:

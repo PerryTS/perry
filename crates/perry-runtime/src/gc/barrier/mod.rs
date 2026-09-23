@@ -1167,7 +1167,9 @@ pub(super) fn generated_write_barriers_emitted() -> bool {
 pub(crate) fn write_barriers_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| super::env_default_on_enabled("PERRY_WRITE_BARRIERS"))
+    *crate::once_init::get_or_init(&CACHED, || {
+        super::env_default_on_enabled("PERRY_WRITE_BARRIERS")
+    })
 }
 
 #[inline]
@@ -1799,7 +1801,7 @@ crate::perry_thread_local! {
 fn ever_dirty_tracking_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         // #7991: value-parsed, not presence-parsed. This site read the same
         // knob as `gc::gc_verify_evacuation_enabled()` but with the opposite
         // convention, so `PERRY_GC_VERIFY_EVACUATION=0` switched the verifier

@@ -247,7 +247,7 @@ pub(crate) fn interp_safepoint() {
 fn interp_safepoints_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
+    *crate::once_init::get_or_init(&ENABLED, || {
         matches!(
             std::env::var("PERRY_GC_INTERP_SAFEPOINTS").ok().as_deref(),
             Some("1") | Some("on") | Some("true")

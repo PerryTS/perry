@@ -291,7 +291,7 @@ fn entry_index(class_id: u32, shape: u32, key_ptr: usize) -> usize {
 #[inline]
 fn cache_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         crate::gc::env_default_on_from_value(std::env::var("PERRY_INHERITED_IC").ok().as_deref())
     })
 }
@@ -329,7 +329,7 @@ fn stats_enabled() -> bool {
     #[cfg(not(test))]
     {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ON.get_or_init(|| {
+        *crate::once_init::get_or_init(&ON, || {
             std::env::var_os("PERRY_INHERITED_IC_STATS").is_some() || crate::hot_diag::ic_on()
         })
     }

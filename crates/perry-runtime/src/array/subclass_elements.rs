@@ -37,7 +37,7 @@ pub(crate) fn array_subclass_elements_enabled() -> bool {
         return forced;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         !matches!(
             std::env::var("PERRY_ARRAY_SUBCLASS_ELEMENTS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")

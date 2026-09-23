@@ -823,7 +823,7 @@ pub(crate) fn walk_pcs_from_here(_max: usize) -> Option<Vec<u64>> {
 /// answer and aborts on mismatch. Zero work when unset (one lazy bool).
 fn diff_mode() -> bool {
     static MODE: OnceLock<bool> = OnceLock::new();
-    *MODE.get_or_init(|| {
+    *crate::once_init::get_or_init(&MODE, || {
         let mode = std::env::var("PERRY_EH_WALKER");
         let on = matches!(mode.as_deref(), Ok("diff"));
         if on || matches!(mode.as_deref(), Ok("stats")) {
@@ -1013,7 +1013,7 @@ pub(crate) static FALLBACKS: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 /// owned transport where it can, falling back per-throw where it cannot.
 fn fast_transport_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         !matches!(
             std::env::var("PERRY_EH_WALKER").as_deref(),
             Ok("off") | Ok("0") | Ok("system")

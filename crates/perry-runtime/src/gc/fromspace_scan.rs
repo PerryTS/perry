@@ -152,7 +152,7 @@ pub(super) fn fromspace_scan_enabled() -> bool {
 pub(super) fn fromspace_scan_enabled() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         resolve_scan_knobs(
             std::env::var("PERRY_GC_FROMSPACE_SCAN").ok().as_deref(),
             std::env::var("PERRY_GC_FROMSPACE_SCAN_ABORT")
@@ -166,7 +166,7 @@ pub(super) fn fromspace_scan_enabled() -> bool {
 fn fromspace_scan_abort() -> bool {
     use std::sync::OnceLock;
     static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         resolve_scan_knobs(
             std::env::var("PERRY_GC_FROMSPACE_SCAN").ok().as_deref(),
             std::env::var("PERRY_GC_FROMSPACE_SCAN_ABORT")

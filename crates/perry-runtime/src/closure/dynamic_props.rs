@@ -92,7 +92,7 @@ per_test_global! {
 }
 
 fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, ClosureProps>> {
-    CLOSURE_PROPS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
+    crate::once_init::get_or_init(&CLOSURE_PROPS, || Mutex::new(new_ptr_hash_map()))
 }
 
 #[cfg(feature = "wasm-host")]
@@ -105,7 +105,7 @@ per_test_global! {
 
 #[cfg(feature = "wasm-host")]
 fn get_wasm_funcref_externals() -> &'static Mutex<PtrHashMap<usize, usize>> {
-    WASM_FUNCREF_EXTERNALS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
+    crate::once_init::get_or_init(&WASM_FUNCREF_EXTERNALS, || Mutex::new(new_ptr_hash_map()))
 }
 
 #[cfg(feature = "wasm-host")]
@@ -208,7 +208,7 @@ per_test_global! {
 }
 
 fn get_closure_deleted_keys() -> &'static Mutex<PtrHashMap<usize, HashSet<String>>> {
-    CLOSURE_DELETED_KEYS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
+    crate::once_init::get_or_init(&CLOSURE_DELETED_KEYS, || Mutex::new(new_ptr_hash_map()))
 }
 
 /// Record that `key` was `delete`d off the closure at `ptr`.
@@ -261,7 +261,10 @@ per_test_global! {
 }
 
 fn get_closure_prototypes() -> &'static Mutex<PtrHashMap<usize, u64>> {
-    CLOSURE_STATIC_PROTOTYPES.get_or_init(|| Mutex::new(new_ptr_hash_map()))
+    crate::once_init::get_or_init(
+        &CLOSURE_STATIC_PROTOTYPES,
+        || Mutex::new(new_ptr_hash_map()),
+    )
 }
 
 /// Record `Object.setPrototypeOf(closure_ptr, proto)`. `proto_bits` is the

@@ -38,7 +38,7 @@ use super::policy::{
 
 pub(crate) fn gc_heap_budget_bytes() -> Option<usize> {
     static CACHED: OnceLock<Option<usize>> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         if let Ok(v) = std::env::var("PERRY_GC_HEAP_LIMIT") {
             if let Ok(mb) = v.trim().parse::<u64>() {
                 if mb > 0 {
@@ -106,7 +106,7 @@ macro_rules! budget_scaled_accessor {
         $(#[$doc])*
         pub(crate) fn $name() -> usize {
             static CACHED: OnceLock<usize> = OnceLock::new();
-            *CACHED.get_or_init(|| budget_scaled($default, $num, $den, $floor))
+            *crate::once_init::get_or_init(&CACHED, || budget_scaled($default, $num, $den, $floor))
         }
     };
 }
@@ -137,7 +137,9 @@ budget_scaled_accessor!(
 /// One 1 MiB block is the minimum useful reserve.
 pub(crate) fn gc_block_pool_cap_bytes() -> usize {
     static CACHED: OnceLock<usize> = OnceLock::new();
-    *CACHED.get_or_init(|| gc_block_pool_cap_with_budget(gc_heap_budget_bytes()))
+    *crate::once_init::get_or_init(&CACHED, || {
+        gc_block_pool_cap_with_budget(gc_heap_budget_bytes())
+    })
 }
 
 /// Unconstrained-process block-pool allowance. Named rather than inline because
@@ -211,7 +213,7 @@ budget_scaled_accessor!(
 /// fired exactly where they matter most).
 pub(crate) fn gc_rss_pressure_dyn_bytes() -> u64 {
     static CACHED: OnceLock<u64> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         budget_scaled(
             super::oldgen::RSS_PRESSURE_BYTES as usize,
             1,
@@ -223,7 +225,7 @@ pub(crate) fn gc_rss_pressure_dyn_bytes() -> u64 {
 
 pub(crate) fn gc_rss_hard_pressure_dyn_bytes() -> u64 {
     static CACHED: OnceLock<u64> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         budget_scaled(
             super::oldgen::RSS_HARD_PRESSURE_BYTES as usize,
             2,

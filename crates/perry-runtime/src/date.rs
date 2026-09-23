@@ -287,7 +287,7 @@ fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i6
 pub fn host_time_zone_name() -> &'static str {
     use std::sync::OnceLock;
     static TZ: OnceLock<String> = OnceLock::new();
-    TZ.get_or_init(|| {
+    crate::once_init::get_or_init(&TZ, || {
         if let Some(raw) = std::env::var_os("TZ") {
             if let Some(s) = raw.to_str() {
                 // A `TZ` of `:Europe/Berlin` / `:/path/zoneinfo/Europe/Berlin`

@@ -372,7 +372,7 @@ fn wall_clock_ms() -> f64 {
 }
 
 fn perf_clock() -> &'static PerfClock {
-    PERF_CLOCK.get_or_init(|| PerfClock {
+    crate::once_init::get_or_init(&PERF_CLOCK, || PerfClock {
         monotonic_start: Instant::now(),
         time_origin_ms: wall_clock_ms(),
     })

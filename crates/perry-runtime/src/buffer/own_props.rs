@@ -40,7 +40,7 @@ type BufferProps = HashMap<usize, BufferOwnProps>;
 
 fn buffer_props() -> &'static Mutex<BufferProps> {
     static PROPS: OnceLock<Mutex<BufferProps>> = OnceLock::new();
-    PROPS.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&PROPS, || Mutex::new(HashMap::new()))
 }
 
 /// Monotonic "some buffer own prop was ever stored" flag (#6386). Hot

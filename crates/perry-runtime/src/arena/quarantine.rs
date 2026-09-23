@@ -163,7 +163,7 @@ pub(crate) fn fromspace_protection_mode() -> FromSpaceProtection {
     }
     use std::sync::OnceLock;
     static CACHED: OnceLock<FromSpaceProtection> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         parse_protection_mode(std::env::var("PERRY_GC_PROTECT_FROMSPACE").ok().as_deref())
     })
 }
@@ -205,7 +205,7 @@ pub(crate) fn parse_quarantine_depth(raw: Option<&str>) -> usize {
 pub(crate) fn quarantine_depth() -> usize {
     use std::sync::OnceLock;
     static CACHED: OnceLock<usize> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         parse_quarantine_depth(
             std::env::var("PERRY_GC_PROTECT_FROMSPACE_DEPTH")
                 .ok()
@@ -218,7 +218,7 @@ pub(crate) fn quarantine_depth() -> usize {
 fn page_size() -> usize {
     use std::sync::OnceLock;
     static CACHED: OnceLock<usize> = OnceLock::new();
-    *CACHED.get_or_init(|| {
+    *crate::once_init::get_or_init(&CACHED, || {
         let raw = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
         if raw > 0 {
             raw as usize
@@ -928,7 +928,7 @@ fn emit_native_backtrace() {}
 fn report_stale_address_holders(fault_addr: usize, object_user_ptr: Option<usize>) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
-    if !*ON.get_or_init(|| {
+    if !*crate::once_init::get_or_init(&ON, || {
         matches!(
             std::env::var("PERRY_GC_PROTECT_FROMSPACE_HOLDERS").as_deref(),
             Ok("1") | Ok("on") | Ok("true")

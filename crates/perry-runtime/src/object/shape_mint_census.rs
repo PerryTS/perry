@@ -143,11 +143,11 @@ struct Census {
 static CENSUS: OnceLock<Mutex<Census>> = OnceLock::new();
 
 fn census() -> &'static Mutex<Census> {
-    CENSUS.get_or_init(|| Mutex::new(Census::default()))
+    crate::once_init::get_or_init(&CENSUS, || Mutex::new(Census::default()))
 }
 
 fn sink() -> &'static Option<Sink> {
-    SINK.get_or_init(|| sink_from_env("PERRY_SHAPE_MINT_DIAG"))
+    crate::once_init::get_or_init(&SINK, || sink_from_env("PERRY_SHAPE_MINT_DIAG"))
 }
 
 /// One relaxed load and a compare on the unarmed path, which is every

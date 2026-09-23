@@ -67,7 +67,7 @@ impl ChildIpcState {
 static CHILD_IPC: OnceLock<Mutex<ChildIpcState>> = OnceLock::new();
 
 fn ipc_state() -> &'static Mutex<ChildIpcState> {
-    CHILD_IPC.get_or_init(|| Mutex::new(ChildIpcState::new()))
+    crate::once_init::get_or_init(&CHILD_IPC, || Mutex::new(ChildIpcState::new()))
 }
 
 fn ipc_lock() -> MutexGuard<'static, ChildIpcState> {

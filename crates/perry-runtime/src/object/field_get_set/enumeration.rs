@@ -543,7 +543,7 @@ impl VisitedSlice<'_, '_> {
 /// carries both paths and an A/B is one environment variable.
 fn lazy_shadow_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         !matches!(
             std::env::var("PERRY_FORIN_LAZY_SHADOW").ok().as_deref(),
             Some("0") | Some("off") | Some("false") | Some("no")

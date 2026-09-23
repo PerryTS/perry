@@ -389,7 +389,7 @@ pub(crate) fn module_array_value(items: &[&str]) -> f64 {
 
 fn process_exec_argv_value() -> f64 {
     static EXEC_ARGV: OnceLock<Vec<String>> = OnceLock::new();
-    let values = EXEC_ARGV.get_or_init(|| {
+    let values = crate::once_init::get_or_init(&EXEC_ARGV, || {
         let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());
         std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
         serde_json::from_str(&raw).unwrap_or_default()

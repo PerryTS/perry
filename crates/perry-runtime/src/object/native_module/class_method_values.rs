@@ -100,7 +100,8 @@ static CLASS_METHOD_NAME_INTERNER: OnceLock<RwLock<HashMap<(u32, String), &'stat
 /// closures. The key set is bounded by the program's declared class methods,
 /// even when one class expression is evaluated arbitrarily many times.
 pub(super) fn intern_class_method_name(class_id: u32, method_name: &str) -> &'static [u8] {
-    let interner = CLASS_METHOD_NAME_INTERNER.get_or_init(|| RwLock::new(HashMap::new()));
+    let interner =
+        crate::once_init::get_or_init(&CLASS_METHOD_NAME_INTERNER, || RwLock::new(HashMap::new()));
     let key = (class_id, method_name.to_string());
     if let Ok(guard) = interner.read() {
         if let Some(bytes) = guard.get(&key).copied() {

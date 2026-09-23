@@ -1733,7 +1733,7 @@ fn object_tombstone_deletes_enabled() -> bool {
         return forced;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
+    *crate::once_init::get_or_init(&ON, || {
         // DEFAULT-ON again (#9038's 6.5x populated-delete win). #9212 made
         // this opt-in because of #9200 — an unarmed successor descriptor let
         // an evacuating minor sweep a deleted receiver's live keys array —

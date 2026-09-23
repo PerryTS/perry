@@ -438,7 +438,7 @@ pub extern "C" fn js_custom_event_new(
 
 fn dom_exception_errors() -> &'static Mutex<HashSet<usize>> {
     static DOM_EXCEPTION_ERRORS: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
-    DOM_EXCEPTION_ERRORS.get_or_init(|| Mutex::new(HashSet::new()))
+    crate::once_init::get_or_init(&DOM_EXCEPTION_ERRORS, || Mutex::new(HashSet::new()))
 }
 
 /// Latched true by the first `DOMException` construction, so the per-dead-

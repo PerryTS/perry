@@ -27,7 +27,9 @@ crate::perry_thread_local! {
 
 fn for_in_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| crate::gc::env_flag_enabled("PERRY_FOR_IN_DIAG"))
+    *crate::once_init::get_or_init(&ENABLED, || {
+        crate::gc::env_flag_enabled("PERRY_FOR_IN_DIAG")
+    })
 }
 
 fn stable_miss<T>(reason: &'static str) -> Option<T> {

@@ -184,7 +184,9 @@ fn shape_layout_keyed_enabled() -> bool {
     // for dynamically learned layouts (A/B validation). Codegen-registered,
     // immutable layouts remain available because their side-mask headers
     // depend on them for correctness.
-    *E.get_or_init(|| super::env_default_on_enabled("PERRY_SHAPE_LAYOUT_KEYED"))
+    *crate::once_init::get_or_init(&E, || {
+        super::env_default_on_enabled("PERRY_SHAPE_LAYOUT_KEYED")
+    })
 }
 
 /// Borrow the shared canonical descriptor for `user_ptr`'s shape, if

@@ -494,7 +494,9 @@ fn with_shared<R>(f: impl FnOnce(&mut SharedInstance) -> R) -> Option<R> {
 
 fn force_poll() -> bool {
     static FORCE: OnceLock<bool> = OnceLock::new();
-    *FORCE.get_or_init(|| std::env::var_os(FORCE_POLL_ENV).is_some_and(|v| v == "1"))
+    *crate::once_init::get_or_init(&FORCE, || {
+        std::env::var_os(FORCE_POLL_ENV).is_some_and(|v| v == "1")
+    })
 }
 
 /// The change source behind one JS watcher. Dropping it releases the OS

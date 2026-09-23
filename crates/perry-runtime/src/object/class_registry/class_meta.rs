@@ -77,7 +77,9 @@ fn class_source_registry(
     static REGISTRY: std::sync::OnceLock<
         std::sync::Mutex<std::collections::HashMap<u32, std::sync::Arc<str>>>,
     > = std::sync::OnceLock::new();
-    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+    crate::once_init::get_or_init(&REGISTRY, || {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    })
 }
 
 /// Register the original source text of a class. Idempotent — last write wins,
@@ -182,7 +184,7 @@ pub fn class_length_for_id(class_id: u32) -> Option<u32> {
 pub(crate) fn dispatch_diag_enabled() -> bool {
     use std::sync::OnceLock;
     static EN: OnceLock<bool> = OnceLock::new();
-    *EN.get_or_init(|| {
+    *crate::once_init::get_or_init(&EN, || {
         std::env::var("PERRY_DISPATCH_DIAG")
             .map(|v| !v.is_empty() && v != "0" && v != "off" && v != "false")
             .unwrap_or(false)

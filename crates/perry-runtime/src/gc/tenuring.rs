@@ -310,7 +310,7 @@ impl Drop for TenuringSurvivalsTestGuard {
 fn tenuring_survivals_override() -> Option<u8> {
     use std::sync::OnceLock;
     static OVERRIDE: OnceLock<Option<u8>> = OnceLock::new();
-    *OVERRIDE.get_or_init(|| {
+    *crate::once_init::get_or_init(&OVERRIDE, || {
         std::env::var("PERRY_GC_TENURING_SURVIVALS")
             .ok()
             .and_then(|v| v.trim().parse::<u8>().ok())

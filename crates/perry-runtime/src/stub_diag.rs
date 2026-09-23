@@ -34,16 +34,18 @@ enum DiagMode {
 
 fn mode() -> DiagMode {
     static MODE: OnceLock<DiagMode> = OnceLock::new();
-    *MODE.get_or_init(|| match std::env::var("PERRY_STUB_DIAG").as_deref() {
-        Ok("off") | Ok("0") | Ok("false") | Ok("silent") => DiagMode::Off,
-        Ok("verbose") | Ok("all") | Ok("every") => DiagMode::Verbose,
-        _ => DiagMode::FirstCall,
+    *crate::once_init::get_or_init(&MODE, || {
+        match std::env::var("PERRY_STUB_DIAG").as_deref() {
+            Ok("off") | Ok("0") | Ok("false") | Ok("silent") => DiagMode::Off,
+            Ok("verbose") | Ok("all") | Ok("every") => DiagMode::Verbose,
+            _ => DiagMode::FirstCall,
+        }
     })
 }
 
 fn seen() -> &'static Mutex<HashSet<&'static str>> {
     static SEEN: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
-    SEEN.get_or_init(|| Mutex::new(HashSet::new()))
+    crate::once_init::get_or_init(&SEEN, || Mutex::new(HashSet::new()))
 }
 
 /// Print a single first-call warning for a stubbed FFI symbol.
@@ -85,7 +87,7 @@ pub fn perry_stub_warn(name: &'static str, reason: &'static str, issue: Option<&
 /// measurable failures for package-compat work. Read once and cached.
 pub fn strict_stubs_enabled() -> bool {
     static STRICT: OnceLock<bool> = OnceLock::new();
-    *STRICT.get_or_init(|| {
+    *crate::once_init::get_or_init(&STRICT, || {
         matches!(
             std::env::var("PERRY_STRICT_STUBS").as_deref(),
             Ok("1") | Ok("on") | Ok("true") | Ok("yes")
@@ -102,7 +104,7 @@ pub fn strict_stubs_enabled() -> bool {
 /// real `getaddrinfo`/DNS/UDP I/O. Read once and cached.
 pub fn deterministic_net_enabled() -> bool {
     static DETERMINISTIC: OnceLock<bool> = OnceLock::new();
-    *DETERMINISTIC.get_or_init(|| {
+    *crate::once_init::get_or_init(&DETERMINISTIC, || {
         matches!(
             std::env::var("PERRY_DETERMINISTIC_NET").as_deref(),
             Ok("1") | Ok("on") | Ok("true") | Ok("yes")

@@ -603,7 +603,7 @@ struct PrimaryKeyInner {
 fn primary_keys() -> &'static Mutex<HashMap<String, std::sync::Arc<PrimaryKey>>> {
     use std::sync::OnceLock;
     static KEYS: OnceLock<Mutex<HashMap<String, std::sync::Arc<PrimaryKey>>>> = OnceLock::new();
-    KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+    crate::once_init::get_or_init(&KEYS, || Mutex::new(HashMap::new()))
 }
 
 /// Handle a worker's `queryServer`: bind/reserve the address once per key, add

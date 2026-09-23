@@ -93,7 +93,7 @@ fn diag_on() -> bool {
         return true;
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("PERRY_SEGVIEW_DIAG").is_ok())
+    *crate::once_init::get_or_init(&ON, || std::env::var("PERRY_SEGVIEW_DIAG").is_ok())
 }
 
 #[inline(always)]
