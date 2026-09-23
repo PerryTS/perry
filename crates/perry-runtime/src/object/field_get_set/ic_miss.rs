@@ -1688,7 +1688,8 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
         return None;
     }
     let value = crate::proxy::private_element_receiver(value);
-    if super::super::class_registry::is_class_object_value(value) {
+    let value_is_class_object = super::super::class_registry::is_class_object_value(value);
+    if value_is_class_object {
         let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
         if !object.is_null() && js_object_get_class_id(object) == declaring_class_id {
             return Some(value.to_bits());
@@ -1708,6 +1709,11 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
     };
     if !super::super::class_registry::is_class_object_value(brand) {
         return None;
+    }
+    if !value_is_class_object {
+        // #11127/#11131: an instance carries its MOST-DERIVED evaluation; an
+        // ancestor's brand is that evaluation's pinned heritage chain.
+        return instance_ancestor_evaluation_brand(brand, declaring_class_id);
     }
     let object = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
     (!object.is_null() && js_object_get_class_id(object) == declaring_class_id)

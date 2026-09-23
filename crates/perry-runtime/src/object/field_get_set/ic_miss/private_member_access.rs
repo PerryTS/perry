@@ -265,6 +265,30 @@ pub(crate) fn private_member_set_by_name(
     true
 }
 
+/// Resolve an INSTANCE's private brand for `declaring_class_id` from the
+/// evaluation stamped on it (`stamp_private_evaluation_brand`).
+///
+/// The stamp is the most-derived class evaluation that constructed the
+/// instance: `new E()` stamps E's class object even when the private member
+/// being accessed was declared by an ancestor. Every ancestor evaluation whose
+/// constructor ran on the instance through `super()` is reachable from that
+/// stamp by the per-evaluation parent edge each fresh class object pins
+/// (`js_class_object_pin_parent`), so walk it and answer with the ancestor
+/// evaluation belonging to `declaring_class_id`'s template. Comparing only the
+/// stamp rejected every legal `this.#x` in an inherited method when both
+/// classes are per-evaluation — function-local classes (#11127), and
+/// top-level classes that capture a CommonJS-wrapper local such as
+/// `const EventEmitter = require("events")` (#11131).
+///
+/// The walk stops at the first non-class-object heritage (a static ClassRef,
+/// a closure, a builtin), which answers `None` exactly as before, and the
+/// caller still requires the per-field marker, so a brand found here never
+/// admits an uninitialized element.
+fn instance_ancestor_evaluation_brand(brand: f64, declaring_class_id: u32) -> Option<u64> {
+    super::super::class_constructors::pinned_class_object_for_ancestor(brand, declaring_class_id)
+        .map(f64::to_bits)
+}
+
 /// If the lexical class evaluation can be recovered from `brand_owner`,
 /// compare `obj` against that exact evaluation. `None` asks callers to retain
 /// the existing template-class check for ordinary (single-evaluation) classes.

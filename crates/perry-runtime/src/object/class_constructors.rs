@@ -1219,7 +1219,7 @@ static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(f64, f64) =
 /// fresh derived class's pinned parent chain. The template class-id registry
 /// identifies which constructor to replay, but it cannot identify which
 /// evaluation's captured environment belongs to that constructor.
-fn pinned_class_object_for_ancestor(start: f64, target_cid: u32) -> Option<f64> {
+pub(crate) fn pinned_class_object_for_ancestor(start: f64, target_cid: u32) -> Option<f64> {
     let mut current = start;
     let mut depth = 0usize;
     while depth < 32 && super::class_registry::is_class_object_value(current) {
