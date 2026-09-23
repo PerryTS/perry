@@ -7,6 +7,13 @@
       "function": "schedule_tls_abort",
       "receiver": "socket",
       "reason": "An already-aborted TLS connect never opens. is_open keeps its synthetic SocketState live only until deferred error and close events are delivered; has_opened must remain false so socket.pending stays true."
+    },
+    {
+      "name": "turnloop-on-connect-deferred-has-opened",
+      "path": "crates/perry-ext-net/src/turnloop_io.rs",
+      "function": "on_connect",
+      "receiver": "s",
+      "reason": "on_connect sets is_open with the endpoint addresses, then may start a direct-TLS upgrade that can fail and destroy the socket before 'connect' is emitted. has_opened/connecting are therefore set in a second lock block just before PendingNetEvent::Connect (see the #10465 comment there), so a socket destroyed by a failed upgrade is never recorded as opened."
     }
   ]
 }

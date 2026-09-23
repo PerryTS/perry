@@ -40,7 +40,7 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_ROOT = ROOT / "crates" / "perry-ext-net" / "src"
 EXCEPTIONS_PATH = ROOT / "scripts" / "ext_net_socket_open_exceptions.json"
-MIN_OPEN_SITES = 7
+MIN_OPEN_SITES = 6
 
 OPEN_ASSIGNMENT = re.compile(r"\.\s*is_open\s*=\s*true\b")
 OPEN_INITIALIZER = re.compile(r"\bis_open\s*:\s*true\b")
