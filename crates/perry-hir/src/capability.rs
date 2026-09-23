@@ -516,6 +516,7 @@ mod tests {
             headers: vec![],
             headers_dynamic: None,
             signal: None,
+            redirect: None,
         }));
         let v = audit_module_capabilities(
             &m,

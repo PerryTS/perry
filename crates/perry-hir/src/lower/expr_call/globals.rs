@@ -455,6 +455,7 @@ pub(super) fn try_global_builtins(
                             let mut headers_obj: Vec<(String, Expr)> = Vec::new();
                             let mut headers_dynamic: Option<Box<Expr>> = None;
                             let mut signal: Option<Box<Expr>> = None;
+                            let mut redirect: Option<Box<Expr>> = None;
 
                             for prop in &obj.props {
                                 if let ast::PropOrSpread::Prop(prop) = prop {
@@ -552,6 +553,10 @@ pub(super) fn try_global_builtins(
                                                     signal =
                                                         Some(Box::new(lower_expr(ctx, &kv.value)?));
                                                 }
+                                                "redirect" => {
+                                                    redirect =
+                                                        Some(Box::new(lower_expr(ctx, &kv.value)?));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -571,6 +576,7 @@ pub(super) fn try_global_builtins(
                                                     headers_dynamic = Some(Box::new(value))
                                                 }
                                                 "signal" => signal = Some(Box::new(value)),
+                                                "redirect" => redirect = Some(Box::new(value)),
                                                 _ => {}
                                             }
                                         }
@@ -588,6 +594,7 @@ pub(super) fn try_global_builtins(
                                 headers: headers_obj,
                                 headers_dynamic,
                                 signal,
+                                redirect,
                             }));
                         }
                     }
@@ -602,6 +609,7 @@ pub(super) fn try_global_builtins(
                     headers: Vec::new(),
                     headers_dynamic: None,
                     signal: None,
+                    redirect: None,
                 }));
             }
             _ => {} // Fall through to generic handling

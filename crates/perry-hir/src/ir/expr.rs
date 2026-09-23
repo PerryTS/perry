@@ -1576,6 +1576,10 @@ pub enum Expr {
         // aborted (`controller.abort()` / `AbortSignal.timeout`). Lowered to a
         // `js_fetch_set_pending_signal` call emitted just before the fetch.
         signal: Option<Box<Expr>>,
+        // The `init.redirect` mode, when present. Lowered to the pending-mode
+        // bridge immediately before `js_fetch_with_options`, whose ABI predates
+        // RequestInit redirect support.
+        redirect: Option<Box<Expr>>,
     },
     FetchGetWithAuth {
         // fetchWithAuth(url, authHeader) -> Promise<Response>

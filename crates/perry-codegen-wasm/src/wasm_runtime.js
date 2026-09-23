@@ -1329,7 +1329,7 @@ function buildImports() {
         const p = fetch(url);
         return nanboxPointer(allocHandle(p));
       },
-      fetch_with_options: (urlStr, methodVal, bodyVal, headersVal) => {
+      fetch_with_options: (urlStr, methodVal, bodyVal, headersVal, redirectVal) => {
         const url = getString(urlStr);
         const opts = {};
         if (!isUndefined(methodVal)) opts.method = getString(methodVal);
@@ -1338,6 +1338,7 @@ function buildImports() {
           const h = getHandle(headersVal);
           if (h && typeof h === 'object') opts.headers = h;
         }
+        if (!isUndefined(redirectVal)) opts.redirect = getString(redirectVal);
         const p = fetch(url, opts);
         return nanboxPointer(allocHandle(p));
       },
@@ -2234,11 +2235,12 @@ const __memDispatch = {
 
   // Fetch/Promise — args are plain JS values
   fetch_url: (urlStr) => fetch(String(urlStr)),
-  fetch_with_options: (urlStr, methodVal, bodyVal, headersVal) => {
+  fetch_with_options: (urlStr, methodVal, bodyVal, headersVal, redirectVal) => {
     const url = String(urlStr); const opts = {};
     if (methodVal !== undefined) opts.method = String(methodVal);
     if (bodyVal !== undefined) opts.body = String(bodyVal);
     if (headersVal && typeof headersVal === 'object') opts.headers = headersVal;
+    if (redirectVal !== undefined) opts.redirect = String(redirectVal);
     return fetch(url, opts);
   },
   response_json: (resp) => { if (!resp || typeof resp.json !== 'function') return undefined; return resp.json(); },

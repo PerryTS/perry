@@ -40,6 +40,7 @@ impl JsEmitter {
                 headers,
                 headers_dynamic,
                 signal,
+                redirect,
             } => {
                 self.output.push_str("fetch(");
                 self.emit_expr(url);
@@ -67,6 +68,10 @@ impl JsEmitter {
                 if let Some(sig) = signal {
                     self.output.push_str(", signal: ");
                     self.emit_expr(sig);
+                }
+                if let Some(mode) = redirect {
+                    self.output.push_str(", redirect: ");
+                    self.emit_expr(mode);
                 }
                 self.output.push_str("})");
             }

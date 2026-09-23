@@ -3,8 +3,9 @@
 //! `AbortSignal.timeout(ms)` deadline elapsing.
 //!
 //! The signal reaches the native fetch via the runtime's pending-signal stash
-//! (`js_fetch_set_pending_signal` / `js_fetch_take_pending_signal`), which keeps
-//! the 4-arg `js_fetch_with_options` ABI unchanged. At the start of
+//! (`js_fetch_set_pending_signal` / `js_fetch_take_pending_signal`), alongside
+//! the equivalent `RequestInit.redirect` bridge, which keeps the 4-arg
+//! `js_fetch_with_options` ABI unchanged. At the start of
 //! `js_fetch_with_options` (main thread) the signal's object address becomes
 //! the request's cancellation key in the turnloop client engine.
 //!
