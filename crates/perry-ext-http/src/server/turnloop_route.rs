@@ -12,14 +12,14 @@
 //! decision in one readable place and stops a new response entry point from
 //! silently reaching only HTTP/1.1.
 
-use crate::server::response::HyperResponseShape;
+use crate::server::response::ResponseShape;
 
 fn is_h2(conn: i64) -> bool {
     crate::server::turnloop_h2::owns(conn)
 }
 
 /// `res.end(body)` on a fully buffered response.
-pub(crate) fn send_response(conn: i64, seq: u64, shape: HyperResponseShape) {
+pub(crate) fn send_response(conn: i64, seq: u64, shape: ResponseShape) {
     if is_h2(conn) {
         crate::server::turnloop_h2::h2_send_response(conn, seq as u32, shape);
     } else {
@@ -28,7 +28,7 @@ pub(crate) fn send_response(conn: i64, seq: u64, shape: HyperResponseShape) {
 }
 
 /// `res.flushHeaders()` / the first `res.write(...)`: send the head now.
-pub(crate) fn begin_stream(conn: i64, seq: u64, shape: HyperResponseShape) -> bool {
+pub(crate) fn begin_stream(conn: i64, seq: u64, shape: ResponseShape) -> bool {
     if is_h2(conn) {
         crate::server::turnloop_h2::h2_begin_stream(conn, seq as u32, shape)
     } else {

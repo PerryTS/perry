@@ -7,7 +7,7 @@ use perry_ffi::{alloc_string, get_handle, get_handle_mut, register_handle, Strin
 use std::collections::HashMap;
 
 use crate::server::request::handle_to_pointer_f64;
-use crate::server::response::HyperResponseShape;
+use crate::server::response::ResponseShape;
 use crate::server::types::{
     jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
     TAG_UNDEFINED,
@@ -65,7 +65,6 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
                 request_headers,
                 listeners: HashMap::new(),
                 encoding: None,
-                response_tx: None,
                 response_status: 200,
                 response_headers: Vec::new(),
                 turnloop_conn: 0,
@@ -325,9 +324,7 @@ pub unsafe extern "C" fn js_ext_http2_stream_dispatch_method(
 
 /// `stream.end([body])` on a server-side `Http2Stream`.
 ///
-/// On turnloop the frames are encoded and submitted on this thread; on the
-/// legacy transport the shape is parked in the `oneshot` the hyper service fn
-/// is awaiting.
+/// The frames are encoded and submitted on this thread.
 fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
     let turnloop = super::turnloop_target_of_stream(handle);
     let Some(stream) = get_handle_mut::<Http2StreamHandle>(handle) else {
@@ -338,8 +335,8 @@ fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
     stream.headers_sent = true;
     let status = stream.response_status;
     // RFC 9113 §8.1.1: these carry no body, so they carry no length either.
-    // The hyper path relied on hyper to drop the header; nothing drops it on
-    // the way to a frame, so it is not added in the first place.
+    // Nothing drops the header on the way to a frame, so it is not added in
+    // the first place.
     let bodyless = matches!(status, 204 | 304) || (100..200).contains(&status);
     let mut headers = stream.response_headers.clone();
     if !bodyless
@@ -349,25 +346,17 @@ fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
     {
         headers.push(("Content-Length".to_string(), body.len().to_string()));
     }
-    let shape = HyperResponseShape {
+    let shape = ResponseShape {
         status,
         status_message: None,
-        response_version: None,
         headers,
         trailers: Vec::new(),
-        body: crate::server::response::ShapeBody::Full(body),
+        body,
         auto_content_length: false,
     };
-    match turnloop {
-        Some((conn, h2_id)) => {
-            stream.turnloop_responded = true;
-            crate::server::turnloop_h2::h2_send_response(conn, h2_id, shape);
-        }
-        None => {
-            if let Some(tx) = stream.response_tx.take() {
-                let _ = tx.send(shape);
-            }
-        }
+    if let Some((conn, h2_id)) = turnloop {
+        stream.turnloop_responded = true;
+        crate::server::turnloop_h2::h2_send_response(conn, h2_id, shape);
     }
 }
 
@@ -405,7 +394,6 @@ pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) 
     if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
         s.base.listening = false;
         s.base.connections_checking_interval_destroyed = true;
-        s.base.shutdown_tx.take();
         crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
     }
     mark_server_sessions_closed(handle);

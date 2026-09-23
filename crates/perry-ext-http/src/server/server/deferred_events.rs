@@ -43,6 +43,35 @@ pub(crate) fn queue_deferred_listening_emit(s: &mut HttpServer, callback: i64) {
     }
 }
 
+/// Register a `listen(port, cb)` callback ahead of the bind, for a `listen()`
+/// whose bind was posted to the thread that owns the loop. The callback is
+/// rooted from here on (it is in `deferred_listen_cbs`); the `'listening'`
+/// emit itself is armed by `queue_deferred_listening_emit` once the bind has
+/// succeeded on the owner.
+pub(crate) fn register_listen_callback(s: &mut HttpServer, callback: i64) {
+    if callback != 0 {
+        s.listeners
+            .entry("listening".to_string())
+            .or_default()
+            .push(callback);
+        s.deferred_listen_cbs.push(callback);
+    }
+}
+
+/// Undo `register_listen_callback` for a posted `listen()` whose bind failed:
+/// Node never runs the callback of a failed listen, and a callback left in
+/// `deferred_listen_cbs` would keep the event loop alive forever.
+pub(crate) fn withdraw_listen_callbacks(s: &mut HttpServer) {
+    let once = std::mem::take(&mut s.deferred_listen_cbs);
+    if let Some(ls) = s.listeners.get_mut("listening") {
+        for cb in &once {
+            if let Some(pos) = ls.iter().position(|x| x == cb) {
+                ls.remove(pos);
+            }
+        }
+    }
+}
+
 pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
     s.pending_close_emit = true;
     if callback != 0 {
@@ -180,19 +209,6 @@ pub(super) fn server_is_active(s: &HttpServer) -> bool {
         || !s.deferred_close_cbs.is_empty()
     {
         return true;
-    }
-    // Even if the user has called close(), the channels may still
-    // hold queued items the pump needs to drain on a subsequent tick
-    // before the program can exit cleanly.
-    if let Some(rx) = s.request_rx.as_ref() {
-        if !rx.is_closed() && rx.len() > 0 {
-            return true;
-        }
-    }
-    if let Some(rx) = s.upgrade_rx.as_ref() {
-        if !rx.is_closed() && rx.len() > 0 {
-            return true;
-        }
     }
     false
 }
@@ -405,23 +421,6 @@ pub(crate) fn queue_listen_error_parts(
     {
         queue_deferred_error_emit(&mut s.base, err);
     }
-}
-
-/// Queue a failed `listen()` from a `std::io::Error` (the hyper bind path).
-pub(crate) fn queue_listen_error(
-    server_handle: i64,
-    address: &str,
-    port: u16,
-    err: &std::io::Error,
-) {
-    let code = match err.kind() {
-        std::io::ErrorKind::AddrInUse => "EADDRINUSE",
-        std::io::ErrorKind::PermissionDenied => "EACCES",
-        std::io::ErrorKind::AddrNotAvailable => "EADDRNOTAVAIL",
-        std::io::ErrorKind::InvalidInput => "EINVAL",
-        _ => "EADDRINUSE",
-    };
-    queue_listen_error_parts(server_handle, address, port, code, 0, "listen");
 }
 
 /// Fire a server's queued `'error'` listeners, with implicit `this` bound to

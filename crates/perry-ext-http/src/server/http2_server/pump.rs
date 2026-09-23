@@ -1,145 +1,22 @@
-//! The session event-pump: inbound HTTP/2 request handling and the
-//! main-thread drain that fires queued events to JS listeners.
+//! The session event-pump: the main-thread dispatch of inbound HTTP/2
+//! requests and the drain that fires queued events to JS listeners.
 
 use super::*;
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::{body::Incoming, Request, Response};
 use perry_ffi::{
-    alloc_buffer, get_handle, get_handle_mut, iter_handles_of, register_handle, JsClosure,
-    RawClosureHeader,
+    alloc_buffer, get_handle, get_handle_mut, iter_handles_of, JsClosure, RawClosureHeader,
 };
-use tokio::sync::{mpsc, oneshot};
 
-use crate::server::request::{
-    alloc_incoming_message, handle_to_pointer_f64, with_implicit_this, IncomingMessage,
-};
-use crate::server::response::{
-    alloc_server_response_for_request, HyperResponseShape, ResponseBody,
-};
+use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
+use crate::server::response::ResponseShape;
 use crate::server::server::{synthesize_default_response_if_needed, HttpPendingRequest};
 use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK, TAG_UNDEFINED};
-
-pub(crate) async fn handle_h2_request(
-    server_handle: i64,
-    session_handle: i64,
-    peer: SocketAddr,
-    req: Request<Incoming>,
-    request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
-) -> Result<Response<ResponseBody>, hyper::Error> {
-    let method = req.method().to_string();
-    let uri = req.uri();
-    let url = match uri.query() {
-        Some(q) => format!("{}?{}", uri.path(), q),
-        None => uri.path().to_string(),
-    };
-    let mut headers_lower = HashMap::new();
-    let mut raw_headers = Vec::new();
-    headers_lower.insert(":method".to_string(), method.clone());
-    headers_lower.insert(":path".to_string(), url.clone());
-    headers_lower.insert(":scheme".to_string(), "http".to_string());
-    if let Some(authority) = uri.authority() {
-        headers_lower.insert(":authority".to_string(), authority.to_string());
-    }
-    for (n, v) in req.headers() {
-        if let Ok(vs) = v.to_str() {
-            headers_lower.insert(n.to_string().to_lowercase(), vs.to_string());
-            raw_headers.push((n.to_string(), vs.to_string()));
-        }
-    }
-    let stream_headers = headers_lower.clone();
-    let body = match req.collect().await {
-        Ok(c) => c.to_bytes().to_vec(),
-        Err(_) => Vec::new(),
-    };
-    let mut im = IncomingMessage::new(
-        method,
-        url,
-        headers_lower,
-        raw_headers,
-        body,
-        peer.ip().to_string(),
-        peer.port(),
-    );
-    im.http_version = "2.0".to_string();
-    let im_handle = alloc_incoming_message(im);
-    let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let has_stream_listener = get_handle::<Http2SecureServer>(server_handle)
-        .map(|server| crate::server::server::server_has_event_listener(&server.base, "stream"))
-        .unwrap_or(false);
-    let (sr_handle, h2_stream_handle, h2_stream_headers) = if has_stream_listener {
-        let (dummy_tx, _dummy_rx) = oneshot::channel::<HyperResponseShape>();
-        let stream_handle = register_handle(Http2StreamHandle {
-            session_handle,
-            id: next_stream_id(),
-            pending: false,
-            closed: false,
-            destroyed: false,
-            aborted: false,
-            rst_code: 0,
-            headers_sent: false,
-            sent_headers: Vec::new(),
-            request_headers: stream_headers.clone(),
-            listeners: HashMap::new(),
-            encoding: None,
-            response_tx: Some(response_tx),
-            response_status: 200,
-            response_headers: Vec::new(),
-            turnloop_conn: 0,
-            turnloop_responded: false,
-        });
-        let headers_vec = stream_headers
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<Vec<_>>();
-        (
-            alloc_server_response_for_request(dummy_tx, im_handle, None, None),
-            stream_handle,
-            headers_vec,
-        )
-    } else {
-        (
-            alloc_server_response_for_request(response_tx, im_handle, None, None),
-            0,
-            Vec::new(),
-        )
-    };
-    let pending = HttpPendingRequest {
-        server_handle,
-        request_handle: im_handle,
-        response_handle: sr_handle,
-        skip_default_response: has_stream_listener,
-        h2_stream_handle,
-        h2_stream_headers,
-        is_check_continue: false,
-    };
-    if request_tx.send(pending).await.is_err() {
-        return Ok(Response::builder()
-            .status(503)
-            .body(Full::new(Bytes::from("Server unavailable")).boxed())
-            .unwrap());
-    }
-    perry_ffi::notify_main_thread();
-    match response_rx.await {
-        Ok(shape) => Ok(shape.into_hyper()),
-        Err(_) => Ok(Response::builder()
-            .status(500)
-            .body(Full::new(Bytes::from("Handler error")).boxed())
-            .unwrap()),
-    }
-}
 
 /// Non-blocking try_recv for HTTP/2 pending requests. Called by
 /// `js_node_http_server_process_pending` in `server.rs` each tick.
 pub(crate) fn try_recv_pending_h2_nonblocking(server_handle: i64) -> Option<HttpPendingRequest> {
     // The turnloop transport queues on this thread; there is no channel and no
-    // thread hop, but the dispatch tick is the same one hyper's `mpsc` was
-    // drained on, so the event-loop phase order does not move.
+    // thread hop, and the dispatch happens on the pump's tick.
     if let Some(pending) = crate::server::turnloop_h2::take_pending(server_handle) {
         return Some(pending);
     }
@@ -150,15 +27,7 @@ pub(crate) fn try_recv_pending_h2_nonblocking(server_handle: i64) -> Option<Http
     // without this an ALPN `http/1.1` request is decoded, queued, and never
     // dispatched: `curl --http1.1` against `createSecureServer({ allowHTTP1:
     // true })` hangs forever. Measured.
-    if let Some(pending) = crate::server::turnloop_serve::take_pending(server_handle) {
-        return Some(pending);
-    }
-    if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-        if let Some(rx) = s.base.request_rx.as_mut() {
-            return rx.try_recv().ok();
-        }
-    }
-    None
+    crate::server::turnloop_serve::take_pending(server_handle)
 }
 
 /// Dispatch one HTTP/2 pending request. Per the issue #604
@@ -254,14 +123,12 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
 fn synthesize_default_h2_stream_response(stream_handle: i64) {
     let turnloop = super::turnloop_target_of_stream(stream_handle);
     if let Some(stream) = get_handle_mut::<Http2StreamHandle>(stream_handle) {
-        // "Has this stream already been answered?" — `response_tx.is_none()` on
-        // the legacy transport, an explicit flag on turnloop, which has no
-        // sender to consume.
-        let answered = match turnloop {
-            Some(_) => stream.turnloop_responded,
-            None => stream.response_tx.is_none(),
+        // "Has this stream already been answered?" A stream with no
+        // connection behind it has nothing to answer on.
+        let Some((conn, h2_id)) = turnloop else {
+            return;
         };
-        if answered {
+        if stream.turnloop_responded {
             return;
         }
         stream.headers_sent = true;
@@ -274,26 +141,16 @@ fn synthesize_default_h2_stream_response(stream_handle: i64) {
         {
             headers.push(("Content-Length".to_string(), "0".to_string()));
         }
-        let shape = HyperResponseShape {
+        let shape = ResponseShape {
             status: stream.response_status,
             status_message: None,
-            response_version: None,
             headers,
             trailers: Vec::new(),
-            body: crate::server::response::ShapeBody::Full(Vec::new()),
+            body: Vec::new(),
             auto_content_length: false,
         };
-        match turnloop {
-            Some((conn, h2_id)) => {
-                stream.turnloop_responded = true;
-                crate::server::turnloop_h2::h2_send_response(conn, h2_id, shape);
-            }
-            None => {
-                if let Some(tx) = stream.response_tx.take() {
-                    let _ = tx.send(shape);
-                }
-            }
-        }
+        stream.turnloop_responded = true;
+        crate::server::turnloop_h2::h2_send_response(conn, h2_id, shape);
     }
 }
 

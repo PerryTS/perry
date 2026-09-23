@@ -2,33 +2,15 @@
 //! listen sites.
 //!
 //! When this process is a `cluster.fork()`ed worker, every TCP bind goes
-//! through SO_REUSEPORT so N workers can share one port, and the bound
+//! through SO_REUSEPORT (turnloop's `ReusePort::Share`) so N workers can
+//! share one port, and the bound
 //! address is reported to the primary over the fork IPC channel so
 //! `cluster.on('listening')` fires Node-style. Kernel SO_REUSEPORT
 //! balancing is effectively `SCHED_NONE`; round-robin fd-passing
 //! (`SCHED_RR`) and the shared ephemeral port for `listen(0)` are #4962.
 
-use std::net::{SocketAddr, TcpListener};
-
 pub(crate) fn is_cluster_worker() -> bool {
     unsafe { perry_cluster_is_worker() != 0 }
-}
-
-/// Bind `addr`, with SO_REUSEPORT (+SO_REUSEADDR) when running as a cluster
-/// worker. Non-worker binds keep the plain `TcpListener::bind` path.
-pub(crate) fn bind_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
-    #[cfg(unix)]
-    if is_cluster_worker() {
-        use socket2::{Domain, Protocol, Socket, Type};
-        let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
-        socket.set_reuse_address(true)?;
-        socket.set_reuse_port(true)?;
-        socket.bind(&addr.into())?;
-        // Node's default listen backlog.
-        socket.listen(511)?;
-        return Ok(socket.into());
-    }
-    TcpListener::bind(addr)
 }
 
 extern "C" {

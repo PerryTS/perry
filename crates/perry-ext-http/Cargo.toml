@@ -13,7 +13,7 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-# Server-side HTTP/1.1, HTTPS, HTTP/2, and WebSocket upgrade support.
+# Attached `WebSocketServer({ server })` and WebSocket upgrades.
 perry-ext-ws.workspace = true
 perry-ext-net.workspace = true
 # P5: the sans-I/O HTTP/1.1 codec that replaces hyper's parser and framer on
@@ -21,9 +21,6 @@ perry-ext-net.workspace = true
 # see that module's header for why `turnloop_http::asynchronous` is not used.
 turnloop-http.workspace = true
 http = "1"
-hyper = { workspace = true, features = ["server", "http1", "http2"] }
-hyper-util = { workspace = true, features = ["server", "server-auto", "tokio"] }
-http-body-util.workspace = true
 tokio-rustls.workspace = true
 rustls = { workspace = true, features = ["std", "ring", "tls12"] }
 rustls_webpki = { package = "rustls-webpki", version = "0.103" }
@@ -45,9 +42,6 @@ pkcs5 = { version = "0.7", features = ["alloc", "pbes2"] }
 ring = "0.17"
 webpki-roots = "1"
 x509-cert = { version = "0.3", default-features = false }
-
-[target.'cfg(unix)'.dependencies]
-socket2.workspace = true
 
 [dev-dependencies]
 # GC and async test shims call runtime internals; production code uses only perry-ffi.

@@ -1,23 +1,15 @@
 //! `ServerResponse` — the Node.js Writable stream returned to a
-//! `(req, res) => …` handler. Phase 1 buffers chunks until `.end()`
-//! is called, then sends the assembled response back to hyper via
-//! the per-request oneshot channel.
+//! `(req, res) => …` handler. The response buffers chunks until `.end()`
+//! (or streams them once the head has been flushed), and the turnloop
+//! connection that decoded the request encodes and writes it
+//! (`turnloop_route`).
 
 use std::collections::HashMap;
-use std::convert::Infallible;
 
-use bytes::Bytes;
-use http::header::{HeaderName, HeaderValue};
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
-use hyper::body::{Body, Frame, SizeHint};
-use hyper::{HeaderMap, Response, StatusCode};
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use tokio::sync::oneshot;
 
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::response_end::call_closure0;
@@ -32,8 +24,6 @@ use crate::server::types::{
 /// signalling backpressure so producer loops (`while (res.write(buf))`)
 /// terminate instead of spinning forever (#4909).
 const DEFAULT_HIGH_WATER_MARK: usize = 16 * 1024;
-
-pub type ResponseBody = BoxBody<Bytes, Infallible>;
 
 // ------------------------------------------------------------------
 // #4907 — Node-compatible header / argument validation.
@@ -89,99 +79,6 @@ fn is_valid_link_header(value: &str) -> bool {
     params.split(';').all(|p| !p.trim().is_empty())
 }
 
-struct TrailerBody {
-    body: Option<Bytes>,
-    trailers: Option<HeaderMap>,
-}
-
-/// One frame of a streaming response body: a data chunk from
-/// `res.write(...)`, or the trailer block from `res.addTrailers` delivered
-/// after the final chunk.
-pub enum StreamFrame {
-    Data(Bytes),
-    Trailers(HeaderMap),
-}
-
-/// Streaming response body — frames flow from the JS thread
-/// (`res.write`/`res.end`) through an unbounded channel into hyper. The
-/// channel closing (sender dropped at `.end()`) ends the body. Size hint
-/// stays unknown so hyper uses chunked transfer-encoding, matching Node's
-/// wire behavior for a response whose headers flush before the body is
-/// complete. `in_flight` tracks bytes queued but not yet handed to hyper —
-/// the JS side reads it for the `res.write()` backpressure return and the
-/// `'drain'` edge.
-pub struct ChannelBody {
-    rx: tokio::sync::mpsc::UnboundedReceiver<StreamFrame>,
-    in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl Body for ChannelBody {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(StreamFrame::Data(b))) => {
-                self.in_flight
-                    .fetch_sub(b.len(), std::sync::atomic::Ordering::AcqRel);
-                Poll::Ready(Some(Ok(Frame::data(b))))
-            }
-            Poll::Ready(Some(StreamFrame::Trailers(t))) => {
-                Poll::Ready(Some(Ok(Frame::trailers(t))))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        SizeHint::new()
-    }
-}
-
-/// The body half of a [`HyperResponseShape`]: fully buffered (the classic
-/// single-shot `res.end(body)` path, which keeps Content-Length semantics)
-/// or streaming (headers flushed early by `res.flushHeaders()` /
-/// `res.write(...)`, body frames following over a channel).
-pub enum ShapeBody {
-    Full(Vec<u8>),
-    /// HTTP/1.0 body delimited by closing the connection. Unlike `Full`, this
-    /// deliberately reports no exact size so hyper does not synthesize a
-    /// Content-Length header and keep the connection open.
-    Eof(Vec<u8>),
-    Stream {
-        rx: tokio::sync::mpsc::UnboundedReceiver<StreamFrame>,
-        in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    },
-}
-
-impl Body for TrailerBody {
-    type Data = Bytes;
-    type Error = Infallible;
-
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        if let Some(body) = self.body.take() {
-            return Poll::Ready(Some(Ok(Frame::data(body))));
-        }
-        if let Some(trailers) = self.trailers.take() {
-            return Poll::Ready(Some(Ok(Frame::trailers(trailers))));
-        }
-        Poll::Ready(None)
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        // Keep the upper bound unknown when trailers are present so Hyper
-        // does not synthesize Content-Length and suppress trailing headers.
-        SizeHint::new()
-    }
-}
-
 /// Per-request handle backing `ServerResponse` JS-side.
 pub struct ServerResponse {
     pub status_code: u16,
@@ -225,26 +122,9 @@ pub struct ServerResponse {
     /// Body chunks accumulated by `.write(chunk)` calls. Assembled
     /// + flushed when `.end()` is called.
     pub buffered_body: Vec<u8>,
-    /// One-shot back to hyper's service fn — taken on `.end()`, or earlier
-    /// by `begin_streaming` when the headers flush before the body is done.
-    pub response_tx: Option<oneshot::Sender<HyperResponseShape>>,
-    /// Connection-task wakeup used by `res.destroy()` to abort the transport
-    /// without synthesizing an HTTP response.
-    pub connection_close: Option<std::sync::Arc<tokio::sync::Notify>>,
-    /// Shared with the service future so a dropped response channel caused by
-    /// `destroy()` is distinguishable from an accidental handler failure.
-    pub transport_destroyed: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Live body channel once the response head has been flushed early
-    /// (`res.flushHeaders()` / first `res.write(...)`). `Some` means
-    /// streaming mode: subsequent chunks go straight to the wire and
-    /// `.end()` closes the channel instead of sending a buffered shape.
-    pub stream_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamFrame>>,
-    /// Bytes written to the stream channel but not yet handed to hyper.
-    /// Backs the `res.write()` backpressure return (`false` past the HWM)
-    /// and the `'drain'` edge the pump emits when it sinks below it again.
-    pub stream_in_flight: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
     /// True after a streaming `res.write()` returned `false`; the pump
-    /// fires `'drain'` (once) when the in-flight count drops below the HWM.
+    /// fires `'drain'` (once) when the socket's queued bytes drop below the
+    /// HWM.
     pub needs_drain: bool,
     /// Event-name → list of registered listener closure pointers.
     pub listeners: HashMap<String, Vec<i64>>,
@@ -259,7 +139,7 @@ pub struct ServerResponse {
     pub once_listeners: HashMap<String, Vec<i64>>,
     /// #4904: true for `new http.ServerResponse(req)` instances (and any
     /// response wired through `assignSocket`) — `.end()` flushes through
-    /// `standalone_socket` instead of the hyper oneshot.
+    /// `standalone_socket` instead of a connection.
     pub standalone: bool,
     /// #4904: the JS Writable assigned via `res.assignSocket(socket)`.
     /// `TAG_UNDEFINED` while unassigned.
@@ -276,188 +156,35 @@ pub struct ServerResponse {
     /// invokes `cb` with an `ERR_STREAM_DESTROYED` error instead of buffering.
     pub destroyed: bool,
     /// P5: the turnloop connection this response writes to, and the request
-    /// ordinal it answers. `Some` replaces both channel fields above — there
-    /// is no hyper task to hand a shape to, because the handler, the codec and
-    /// the socket are all on the same thread. `seq` is what keeps a late
-    /// `res.end()` from writing onto the connection's *next* request after the
-    /// first one was destroyed.
+    /// ordinal it answers (the HTTP/2 stream id on an HTTP/2 connection). The
+    /// handler, the codec and the socket are all on the same thread, so
+    /// `res.end()` encodes and submits the response itself. `seq` is what
+    /// keeps a late `res.end()` from writing onto the connection's *next*
+    /// request after the first one was destroyed. `None` for a standalone
+    /// `new http.ServerResponse(req)` and a bare `OutgoingMessage`.
     pub turnloop: Option<(i64, u64)>,
     /// P5: the head has gone out and further writes stream straight to the
-    /// socket. The turnloop twin of `stream_tx.is_some()`.
+    /// socket.
     pub turnloop_streaming: bool,
 }
 
-/// Owned shape produced by `.end()` — the per-request oneshot channel
-/// drops back to hyper carrying this.
-pub struct HyperResponseShape {
+/// Owned shape produced by `.end()` (or by `begin_streaming` for the head
+/// alone) and handed to the connection's encoder.
+pub struct ResponseShape {
     pub status: u16,
     pub status_message: Option<String>,
-    pub response_version: Option<http::Version>,
     pub headers: Vec<(String, String)>,
     pub trailers: Vec<(String, String)>,
-    pub body: ShapeBody,
+    /// The fully buffered body; empty for a head sent ahead of a streamed
+    /// body.
+    pub body: Vec<u8>,
     /// True when Perry synthesized Content-Length for a fully buffered body,
     /// rather than the application setting it explicitly.
     pub auto_content_length: bool,
 }
 
-impl HyperResponseShape {
-    /// Build a hyper `Response<BoxBody<Bytes, Infallible>>` ready to return from the
-    /// service fn.
-    pub fn into_hyper(self) -> Response<ResponseBody> {
-        // Fast path: common status codes resolve to a pre-validated
-        // `StatusCode` constant, skipping `from_u16`'s numeric range-check
-        // + `unwrap_or` on every response. Uncommon / custom codes keep the
-        // parsing path, so the resulting status is identical for every code.
-        let status = crate::server::response_fast::status_code_const(self.status)
-            .unwrap_or_else(|| StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
-        let mut builder = Response::builder().status(status);
-        if let Some(version) = self.response_version {
-            builder = builder.version(version);
-        }
-        // `res.statusMessage = 'Custom Message'` must reach the HTTP/1
-        // status line (test-http-status-message reads it off the raw
-        // socket). hyper emits it via the ReasonPhrase extension.
-        if let Some(msg) = self.status_message.as_deref() {
-            if !msg.is_empty() {
-                if let Ok(reason) = hyper::ext::ReasonPhrase::try_from(msg.to_string()) {
-                    if let Some(ext) = builder.extensions_mut() {
-                        ext.insert(reason);
-                    }
-                }
-            }
-        }
-        for (k, v) in self.headers {
-            builder = builder.header(k, v);
-        }
-        let full = match self.body {
-            ShapeBody::Stream { rx, in_flight } => {
-                return builder.body(ChannelBody { rx, in_flight }.boxed()).unwrap();
-            }
-            ShapeBody::Eof(bytes) => {
-                return builder
-                    .body(
-                        TrailerBody {
-                            body: Some(Bytes::from(bytes)),
-                            trailers: None,
-                        }
-                        .boxed(),
-                    )
-                    .unwrap();
-            }
-            ShapeBody::Full(bytes) => bytes,
-        };
-        let trailers = self.trailers;
-        let body = if trailers.is_empty() {
-            Full::new(Bytes::from(full)).boxed()
-        } else {
-            let mut map = HeaderMap::new();
-            for (name, value) in trailers {
-                if let (Ok(name), Ok(value)) = (
-                    HeaderName::from_bytes(name.as_bytes()),
-                    HeaderValue::from_str(&value),
-                ) {
-                    map.insert(name, value);
-                }
-            }
-            TrailerBody {
-                body: Some(Bytes::from(full)),
-                trailers: Some(map),
-            }
-            .boxed()
-        };
-        builder.body(body).unwrap()
-    }
-
-    /// Node uses EOF framing for an HTTP/1.0 response that promises
-    /// no explicit length or chunked framing and whose client did not
-    /// advertise `TE: chunked`. Hyper sees a full body and would otherwise add
-    /// Content-Length, changing the connection edge.
-    pub fn apply_http10_eof_framing(&mut self, version: http::Version, request_te: Option<&str>) {
-        if version != http::Version::HTTP_10 || !self.auto_content_length {
-            return;
-        }
-        let client_accepts_chunked = request_te
-            .map(|value| {
-                value
-                    .split(',')
-                    .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
-            })
-            .unwrap_or(false);
-        if client_accepts_chunked {
-            return;
-        }
-        self.headers
-            .retain(|(name, _)| !name.eq_ignore_ascii_case("content-length"));
-        if let ShapeBody::Full(body) = &mut self.body {
-            let body = std::mem::take(body);
-            self.body = ShapeBody::Eof(body);
-        }
-    }
-
-    /// Prepare a chunked HTTP/1.0 keep-alive response for the transport
-    /// adapter. Hyper refuses chunked framing once it has seen an HTTP/1.0
-    /// request, so it receives a fixed-length body containing the already
-    /// encoded chunks; `ReadActivity` rewrites that Content-Length header to
-    /// Transfer-Encoding without changing hyper's keep-alive accounting.
-    pub fn apply_http10_chunked_framing(
-        &mut self,
-        version: http::Version,
-        request_te: Option<&str>,
-    ) -> bool {
-        if version != http::Version::HTTP_10 {
-            return false;
-        }
-        let client_accepts_chunked = request_te
-            .map(|value| {
-                value
-                    .split(',')
-                    .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
-            })
-            .unwrap_or(false);
-        let explicit_chunked_index = self.headers.iter().position(|(name, value)| {
-            name.eq_ignore_ascii_case("transfer-encoding")
-                && value
-                    .split(',')
-                    .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
-        });
-        if explicit_chunked_index.is_none() && !(client_accepts_chunked && self.auto_content_length)
-        {
-            return false;
-        }
-        let ShapeBody::Full(body) = &mut self.body else {
-            return false;
-        };
-        let body = std::mem::take(body);
-        let mut encoded = Vec::with_capacity(body.len() + 16);
-        if !body.is_empty() {
-            encoded.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
-            encoded.extend_from_slice(&body);
-            encoded.extend_from_slice(b"\r\n");
-        }
-        encoded.extend_from_slice(b"0\r\n\r\n");
-        self.headers
-            .retain(|(name, _)| !name.eq_ignore_ascii_case("content-length"));
-        if explicit_chunked_index.is_some() {
-            let index = self
-                .headers
-                .iter()
-                .position(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
-                .expect("explicit chunked header retained");
-            self.headers[index] = ("Content-Length".to_string(), encoded.len().to_string());
-        } else {
-            self.headers
-                .retain(|(name, _)| !name.eq_ignore_ascii_case("transfer-encoding"));
-            self.headers
-                .push(("Content-Length".to_string(), encoded.len().to_string()));
-        }
-        self.body = ShapeBody::Full(encoded);
-        true
-    }
-}
-
 impl ServerResponse {
-    pub fn new(response_tx: oneshot::Sender<HyperResponseShape>) -> Self {
+    pub fn new() -> Self {
         Self {
             status_code: 200,
             status_message: None,
@@ -476,11 +203,6 @@ impl ServerResponse {
             req_handle: 0,
             outgoing_message_only: false,
             buffered_body: Vec::new(),
-            response_tx: Some(response_tx),
-            connection_close: None,
-            transport_destroyed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            stream_tx: None,
-            stream_in_flight: None,
             needs_drain: false,
             listeners: HashMap::new(),
             once_listeners: HashMap::new(),
@@ -495,8 +217,7 @@ impl ServerResponse {
     }
 
     pub fn outgoing_message() -> Self {
-        let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
-        let mut response = Self::new(tx);
+        let mut response = Self::new();
         response.send_date = false;
         response.outgoing_message_only = true;
         response
@@ -1188,8 +909,7 @@ fn apply_headers_flat_array(sr: &mut ServerResponse, json: &str) {
     }
 }
 
-/// Send `bytes` over the live stream channel, charging the in-flight
-/// counter. Returns `Some(below_hwm)` when the response is streaming
+/// Stream `bytes` to the connection. Returns `Some(below_hwm)` when the response is streaming
 /// (`begin_streaming` succeeded now or earlier), `None` when it isn't —
 /// the caller falls back to the legacy buffered path.
 fn stream_write(handle: i64, bytes: &[u8]) -> Option<bool> {
@@ -1197,49 +917,22 @@ fn stream_write(handle: i64, bytes: &[u8]) -> Option<bool> {
 }
 
 /// `stream_write`, but also enqueues `callback` (if non-zero) into
-/// `pending_write_callbacks` BEFORE the data frame is published on the channel.
-///
-/// Ordering matters: the stream-frame send makes the bytes visible to the
-/// reader task, which may drain and run pending write callbacks immediately. If
-/// we pushed the callback AFTER `tx.send(...)` (as the call site used to), a
-/// receiver that drains right away could run this write's callback out of order
-/// — after later writes' callbacks or `.end()`. Registering it first keeps the
-/// callback ordered relative to the frame it belongs to and to later writes.
+/// `pending_write_callbacks` for the chunk it belongs to.
 fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool> {
     if !begin_streaming(handle) {
         return None;
     }
     // P5: the chunk is framed and submitted to the socket now, and
-    // backpressure is the socket's own queued-byte count rather than a
-    // channel's in-flight counter.
-    if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
-        if !crate::server::turnloop_route::send_body(conn, seq, bytes) {
-            return None;
-        }
-        let queued = perry_ffi::turnloop_net::queued_bytes(conn);
-        let sr = get_handle_mut::<ServerResponse>(handle)?;
-        if callback != 0 {
-            sr.pending_write_callbacks.push(callback);
-        }
-        let below_hwm = queued <= DEFAULT_HIGH_WATER_MARK;
-        if !below_hwm {
-            sr.needs_drain = true;
-        }
-        return Some(below_hwm);
+    // backpressure is the socket's own queued-byte count.
+    let (conn, seq) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop)?;
+    if !crate::server::turnloop_route::send_body(conn, seq, bytes) {
+        return None;
     }
+    let queued = perry_ffi::turnloop_net::queued_bytes(conn);
     let sr = get_handle_mut::<ServerResponse>(handle)?;
-    // Clone the channel handles so the immutable borrow of `sr` ends before we
-    // mutate `pending_write_callbacks` / `needs_drain` (the sender + Arc are
-    // cheap to clone). The `fetch_add` reserves this chunk's byte count.
-    let tx = sr.stream_tx.as_ref()?.clone();
-    let in_flight = sr.stream_in_flight.as_ref()?.clone();
-    let queued =
-        in_flight.fetch_add(bytes.len(), std::sync::atomic::Ordering::AcqRel) + bytes.len();
-    // Register the write callback BEFORE publishing the frame (see doc comment).
     if callback != 0 {
         sr.pending_write_callbacks.push(callback);
     }
-    let _ = tx.send(StreamFrame::Data(Bytes::copy_from_slice(bytes)));
     let below_hwm = queued <= DEFAULT_HIGH_WATER_MARK;
     if !below_hwm {
         sr.needs_drain = true;
@@ -1383,8 +1076,8 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
     }
 }
 
-/// Finalize a buffered response: append the final chunk, flush it back to
-/// hyper through the oneshot channel, and return the `(finish, close)`
+/// Finalize a buffered response: append the final chunk, hand it to the
+/// connection's encoder, and return the `(finish, close)`
 /// listener lists **without** firing them — the caller controls ordering so
 /// that `res.end(cb)` can run write/end callbacks before `'finish'` (Node's
 /// contract, where `'finish'` never precedes the end callback). Returns
@@ -1421,38 +1114,6 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         return Some((finish_listeners, close_listeners));
     }
 
-    // Streaming mode: the head already went to the wire. Send the final
-    // chunk + trailer block as frames and close the channel — hyper ends
-    // the (chunked) body when the sender drops.
-    if let Some(tx) = sr.stream_tx.take() {
-        if let Some(c) = final_chunk {
-            if let Some(in_flight) = sr.stream_in_flight.as_ref() {
-                in_flight.fetch_add(c.len(), std::sync::atomic::Ordering::AcqRel);
-            }
-            let _ = tx.send(StreamFrame::Data(Bytes::from(c)));
-        }
-        let trailers = sr.snapshot_trailers();
-        if !trailers.is_empty() {
-            let mut map = HeaderMap::new();
-            for (name, value) in trailers {
-                if let (Ok(name), Ok(value)) = (
-                    HeaderName::from_bytes(name.as_bytes()),
-                    HeaderValue::from_str(&value),
-                ) {
-                    map.insert(name, value);
-                }
-            }
-            let _ = tx.send(StreamFrame::Trailers(map));
-        }
-        sr.writable_ended = true;
-        sr.writable_finished = true;
-        crate::server::request::mark_connection_written(sr.req_handle);
-        sr.needs_drain = false;
-        let finish_listeners = take_event_listeners(sr, "finish");
-        let close_listeners = take_event_listeners(sr, "close");
-        return Some((finish_listeners, close_listeners));
-    }
-
     if let Some(c) = final_chunk {
         sr.buffered_body.extend_from_slice(&c);
     }
@@ -1465,29 +1126,24 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     let body = std::mem::take(&mut sr.buffered_body);
     let headers = sr.snapshot_headers();
     let trailers = sr.snapshot_trailers();
-    let shape = HyperResponseShape {
+    let shape = ResponseShape {
         status: sr.status_code,
         status_message: sr.status_message.clone(),
-        response_version: None,
         headers,
         trailers,
-        body: ShapeBody::Full(body),
+        body,
         auto_content_length,
     };
     let finish_listeners = take_event_listeners(sr, "finish");
     let close_listeners = take_event_listeners(sr, "close");
     let turnloop = sr.turnloop;
     let req_handle = sr.req_handle;
-    match turnloop {
-        // P5: the handler, the codec and the socket are on the same thread,
-        // so the response is encoded and submitted here rather than parked in
-        // a oneshot for a hyper task to pick up.
-        Some((conn, seq)) => crate::server::turnloop_route::send_response(conn, seq, shape),
-        None => {
-            if let Some(tx) = sr.response_tx.take() {
-                let _ = tx.send(shape);
-            }
-        }
+    // P5: the handler, the codec and the socket are on the same thread, so
+    // the response is encoded and submitted here. A response with no
+    // connection (the connection's request was never delivered) has nowhere
+    // to go, and is simply finished.
+    if let Some((conn, seq)) = turnloop {
+        crate::server::turnloop_route::send_response(conn, seq, shape);
     }
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         sr.writable_finished = true;
@@ -1497,8 +1153,8 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
 }
 
 /// Flush the response head to the wire now and switch the response into
-/// streaming mode: the status line + headers go back to hyper immediately
-/// with a channel-backed body, and subsequent `res.write(...)` chunks flow
+/// streaming mode: the status line + headers are written immediately, and
+/// subsequent `res.write(...)` chunks flow
 /// straight to the client (chunked transfer-encoding unless the handler set
 /// Content-Length). This is what makes Node shapes like "send headers, keep
 /// the response open, write later" (SSE, long-poll, `res.flushHeaders()`,
@@ -1515,70 +1171,35 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     if sr.writable_ended {
         return false;
     }
-    if sr.stream_tx.is_some() || sr.turnloop_streaming {
+    if sr.turnloop_streaming {
         return true;
     }
     if sr.standalone || sr.outgoing_message_only {
         return false;
     }
-    if let Some((conn, seq)) = sr.turnloop {
-        let shape = HyperResponseShape {
-            status: sr.status_code,
-            status_message: sr.status_message.clone(),
-            response_version: None,
-            headers: sr.snapshot_headers(),
-            trailers: Vec::new(),
-            body: ShapeBody::Full(Vec::new()),
-            auto_content_length: false,
-        };
-        let first = std::mem::take(&mut sr.buffered_body);
-        sr.headers_sent = true;
-        sr.turnloop_streaming = true;
-        if !crate::server::turnloop_route::begin_stream(conn, seq, shape) {
-            if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
-                sr.turnloop_streaming = false;
-            }
-            return false;
-        }
-        if !first.is_empty() {
-            crate::server::turnloop_route::send_body(conn, seq, &first);
-        }
-        return true;
-    }
-    let receiver_alive = sr
-        .response_tx
-        .as_ref()
-        .map(|tx| !tx.is_closed())
-        .unwrap_or(false);
-    if !receiver_alive {
+    let Some((conn, seq)) = sr.turnloop else {
         return false;
-    }
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let shape = HyperResponseShape {
+    };
+    let shape = ResponseShape {
         status: sr.status_code,
         status_message: sr.status_message.clone(),
-        response_version: None,
         headers: sr.snapshot_headers(),
         trailers: Vec::new(),
-        body: ShapeBody::Stream {
-            rx,
-            in_flight: in_flight.clone(),
-        },
+        body: Vec::new(),
         auto_content_length: false,
     };
+    let first = std::mem::take(&mut sr.buffered_body);
     sr.headers_sent = true;
-    let oneshot_tx = sr.response_tx.take().expect("checked above");
-    if oneshot_tx.send(shape).is_err() {
+    sr.turnloop_streaming = true;
+    if !crate::server::turnloop_route::begin_stream(conn, seq, shape) {
+        if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+            sr.turnloop_streaming = false;
+        }
         return false;
     }
-    if !sr.buffered_body.is_empty() {
-        let first = std::mem::take(&mut sr.buffered_body);
-        in_flight.fetch_add(first.len(), std::sync::atomic::Ordering::AcqRel);
-        let _ = tx.send(StreamFrame::Data(Bytes::from(first)));
+    if !first.is_empty() {
+        crate::server::turnloop_route::send_body(conn, seq, &first);
     }
-    sr.stream_tx = Some(tx);
-    sr.stream_in_flight = Some(in_flight);
     true
 }
 
@@ -1597,11 +1218,7 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
         Some((conn, _)) if sr.turnloop_streaming => {
             perry_ffi::turnloop_net::queued_bytes(conn) <= DEFAULT_HIGH_WATER_MARK
         }
-        _ => sr
-            .stream_in_flight
-            .as_ref()
-            .map(|c| c.load(std::sync::atomic::Ordering::Acquire) <= DEFAULT_HIGH_WATER_MARK)
-            .unwrap_or(false),
+        _ => false,
     };
     if !below {
         return Vec::new();
@@ -1793,15 +1410,14 @@ pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
 // #4904: standalone `new http.ServerResponse(req)` + `assignSocket` support
 // ============================================================================
 
-/// `new http.ServerResponse(req)` — a response not bound to a live hyper
-/// exchange. `req` contributes only the method (Node skips the body on
+/// `new http.ServerResponse(req)` — a response not bound to a live
+/// connection. `req` contributes only the method (Node skips the body on
 /// flush when it was a HEAD request); writes buffer until `.end()`, which
 /// flushes through the socket assigned via `res.assignSocket(socket)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -> i64 {
     crate::server::ensure_gc_scanner_registered();
-    let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
-    let mut sr = ServerResponse::new(tx);
+    let mut sr = ServerResponse::new();
     sr.standalone = true;
     sr.send_date = false;
     if JsValue::from_bits(req.to_bits()).is_pointer() {
@@ -1936,20 +1552,6 @@ pub(crate) unsafe fn socket_write_str(socket: f64, chunk: &str) {
     let chunk_val = f64::from_bits(JsValue::from_string_ptr(alloc_string(chunk).as_raw()).bits());
     let args = [chunk_val];
     let _ = js_native_call_method_str_key(socket, name.as_raw() as i64, args.as_ptr(), 1);
-}
-
-pub(crate) fn alloc_server_response_for_request(
-    response_tx: oneshot::Sender<HyperResponseShape>,
-    req_handle: i64,
-    connection_close: Option<std::sync::Arc<tokio::sync::Notify>>,
-    transport_destroyed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> i64 {
-    let mut response = ServerResponse::new(response_tx).with_request_handle(req_handle);
-    response.connection_close = connection_close;
-    if let Some(transport_destroyed) = transport_destroyed {
-        response.transport_destroyed = transport_destroyed;
-    }
-    register_handle(response)
 }
 
 fn jsvalue_truthy(value: f64) -> bool {

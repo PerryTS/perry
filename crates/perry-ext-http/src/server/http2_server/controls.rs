@@ -12,9 +12,9 @@
 //!
 //! Which sessions are still off turnloop is narrower than it was. The `h2`
 //! CLIENT is gone entirely — `http2.connect`, TLS included, is turnloop or it
-//! is an `'error'` — so what routes here is a SERVER session on the hyper
-//! declining path (`turnloop_conn == 0`, plan A), and a declined client for the
-//! moment before it is destroyed. The simulation is not extended to turnloop
+//! is an `'error'` — and every SERVER session is a turnloop connection, so
+//! what routes here is a declined client for the moment before it is
+//! destroyed. The simulation is not extended to turnloop
 //! sessions: a real SETTINGS frame and a synthetic `'remoteSettings'` on some
 //! unrelated in-process peer would fire the event twice on a loopback pair.
 

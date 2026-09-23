@@ -20,7 +20,7 @@ use turnloop_http::http1;
 
 use super::wire::{self, Framing};
 use crate::server::request::{alloc_incoming_message, IncomingMessage};
-use crate::server::response::{alloc_server_response_for_turnloop, HyperResponseShape};
+use crate::server::response::{alloc_server_response_for_turnloop, ResponseShape};
 use crate::server::server::{with_base_server, HttpPendingRequest};
 
 /// The request being decoded, before it becomes an `IncomingMessage`.
@@ -243,6 +243,18 @@ fn on_accept(listener_id: i64, conn_id: i64) {
         let _ = tl::close(conn_id);
         return;
     };
+    start_connection(conn_id, server_handle, tls, idle_close_ms);
+}
+
+/// Serve a connection that is already on this thread's loop under `conn_id`
+/// — one turnloop accepted from a listener, or one adopted from a descriptor
+/// another process accepted (a SCHED_RR cluster worker's, `adopt_connection`).
+pub(crate) fn start_connection(
+    conn_id: i64,
+    server_handle: i64,
+    tls: Option<std::sync::Arc<rustls::ServerConfig>>,
+    idle_close_ms: u64,
+) {
     let secure = tls.is_some();
     if let Some(config) = tls {
         if let Err(_message) =
@@ -649,7 +661,7 @@ fn owns(c: &Conn, seq: u64) -> bool {
 
 /// Decide the response's `Connection` / `Keep-Alive` headers and whether the
 /// connection survives it.
-fn prepare_headers(c: &mut Conn, shape: &mut HyperResponseShape) -> bool {
+fn prepare_headers(c: &mut Conn, shape: &mut ResponseShape) -> bool {
     let (version, connection) = {
         let active = c.active.as_ref().expect("an active request");
         (active.version, active.connection.clone())
@@ -681,7 +693,7 @@ fn prepare_headers(c: &mut Conn, shape: &mut HyperResponseShape) -> bool {
 }
 
 /// `res.end()` on a fully buffered response.
-pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: HyperResponseShape) {
+pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: ResponseShape) {
     let bytes = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -691,12 +703,11 @@ pub(crate) fn send_response(conn_id: i64, seq: u64, mut shape: HyperResponseShap
             let a = c.active.as_ref().expect("an active request");
             (a.method.clone(), a.version)
         };
-        let body = wire::shape_body_bytes(&shape.body).unwrap_or(&[]).to_vec();
+        let body = std::mem::take(&mut shape.body);
         // An HTTP/1.0 response that will close the connection is close-delimited
         // in Node, with no length header — but only when the length was Perry's
         // own synthesis; a handler that set `Content-Length` keeps it.
-        let eof_framed = wire::shape_is_eof_framed(&shape)
-            || (version == 0 && !keep_alive && shape.auto_content_length);
+        let eof_framed = version == 0 && !keep_alive && shape.auto_content_length;
         let framing = wire::framing_for(
             &shape.headers,
             shape.status,
@@ -774,7 +785,7 @@ pub(crate) fn send_interim(conn_id: i64, seq: u64, bytes: &[u8]) {
 
 /// `res.flushHeaders()` / the first `res.write(...)`: send the head now and
 /// stream the body afterwards.
-pub(crate) fn begin_stream(conn_id: i64, seq: u64, mut shape: HyperResponseShape) -> bool {
+pub(crate) fn begin_stream(conn_id: i64, seq: u64, mut shape: ResponseShape) -> bool {
     let prepared = with_conn(conn_id, |c| {
         if !owns(c, seq) {
             return None;
@@ -784,14 +795,8 @@ pub(crate) fn begin_stream(conn_id: i64, seq: u64, mut shape: HyperResponseShape
             let a = c.active.as_ref().expect("an active request");
             (a.method.clone(), a.version)
         };
-        let framing = wire::framing_for(
-            &shape.headers,
-            shape.status,
-            &method,
-            version,
-            None,
-            wire::shape_is_eof_framed(&shape),
-        );
+        let framing =
+            wire::framing_for(&shape.headers, shape.status, &method, version, None, false);
         wire::align_headers(&mut shape.headers, framing, shape.auto_content_length);
         let head = match wire::encode_head(
             shape.status,

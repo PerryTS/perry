@@ -3,24 +3,12 @@
 //!
 //! # Design
 //!
-//! When a hyper service fn sees a request with `Connection: Upgrade`
-//! + `Upgrade: websocket`, perry-ext-http diverges from the
-//! Phase 1 (req, res) flow. Instead:
-//!
-//! 1. The accepting tokio task awaits `hyper::upgrade::on(&mut req)`,
-//!    yielding an `Upgraded` stream after hyper sends a 101.
-//! 2. It runs `tokio_tungstenite::accept_async` on the upgraded
-//!    stream to complete the WebSocket handshake server-side.
-//! 3. The resulting `WebSocketStream<Upgraded>` is registered in
-//!    perry-ext-ws's connection registry through
-//!    `websocket_upgrade::adopt_upgraded_stream`, yielding the
-//!    standard `ws_id` that the rest of perry-ext-ws's surface
-//!    consumes.
-//! 4. The `'upgrade'` listeners on the HTTP server are fired with
-//!    `(im_f64, ws_id_f64, head_buffer_f64)`. `ws_id_f64` is the same
-//!    integer id as standalone `WebSocketServer({port})` connections,
-//!    so user code can interact with it through `ws.on('message',…)`,
-//!    `ws.send(…)`, `ws.close(…)` unchanged.
+//! The turnloop connection layer (`turnloop_serve::conn`) recognises an
+//! Upgrade request and hands the connection over — to perry-ext-ws for a
+//! WebSocket handshake answered by an attached `WebSocketServer`, or to
+//! perry-ext-net as a raw `net.Socket` for JS `'upgrade'` listeners — then
+//! queues an `HttpPendingUpgrade`. The main-thread pump fires the server's
+//! `'upgrade'` listeners here with `(req, socket, head)`.
 //!
 //! Attached WebSocket servers are native observers registered by perry-ext-ws.
 
@@ -29,25 +17,6 @@ use perry_ffi::{get_handle_mut, JsClosure, RawClosureHeader};
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::server::HttpServer;
 use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK};
-
-/// Test whether a request looks like a WebSocket upgrade — checks
-/// `Connection: Upgrade` (case-insensitive contains) and
-/// `Upgrade: websocket` (case-insensitive). Hyper's `headers()`
-/// already lowercases names, so we only normalize values.
-pub(crate) fn is_websocket_upgrade(req: &hyper::Request<hyper::body::Incoming>) -> bool {
-    let h = req.headers();
-    let connection_ok = h
-        .get("connection")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_ascii_lowercase().contains("upgrade"))
-        .unwrap_or(false);
-    let upgrade_ok = h
-        .get("upgrade")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.eq_ignore_ascii_case("websocket"))
-        .unwrap_or(false);
-    connection_ok && upgrade_ok
-}
 
 fn upgrade_head_arg(head_data: &[u8]) -> f64 {
     let head = perry_ffi::alloc_buffer(head_data);

@@ -54,6 +54,8 @@ mod wire;
 #[path = "tests.rs"]
 mod tests;
 
+use perry_ffi::agent_post::{self, AgentJob};
+
 pub(crate) use conn::{
     adopt_alpn_http1, begin_stream, connections_of, destroy_connection, finish_body, is_busy,
     note_aborted_handle, send_body, send_interim, send_response, take_aborted, take_pending,
@@ -82,14 +84,15 @@ pub(crate) fn next_id() -> i64 {
 ///
 /// Deliberately not cached: availability is a property of the calling agent.
 /// A thread acting for an agent another thread already owns has no loop and
-/// must keep the hyper path; caching its "no" would strand the owner too.
+/// posts to the owner instead ([`post_to_owner`]); caching its "no" would
+/// strand the owner too.
 ///
 /// The one-shot registration is a `Once` rather than an `AtomicBool::swap`,
 /// which is what `perry-ext-ws` uses and what this was not. `swap` publishes
 /// "registered" on entry, so a second thread arriving mid-registration skipped
 /// it and went straight to `available()` — which asks
 /// `turnloop_net::sink_installed` and, with the sink not yet in place, answered
-/// no. The caller then took the hyper path for a loop it actually had. `Once`
+/// no. The caller then declined a loop it actually had. `Once`
 /// makes that thread wait for the registration instead of racing past it.
 /// (Found by a multi-threaded `cargo test`: two `enabled()` assertions on
 /// different test threads, one green and one red in the same run.)
@@ -97,14 +100,99 @@ pub(crate) fn enabled() -> bool {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
         // Registration is refused if the runtime's completion layout does not
-        // match this crate's, which leaves `available` false and keeps every
-        // server on hyper rather than submitting work nothing can deliver.
+        // match this crate's, which leaves `available` false rather than
+        // submitting work nothing can deliver.
         tl::register_sink(SUBSYSTEM, conn::sink, alloc_id);
         // An attached `WebSocketServer` runs on this connection, so give
         // perry-ext-ws the writer it needs to reach it (see `conn::on_websocket`).
         conn::register_ws_transport();
     });
     tl::available(SUBSYSTEM)
+}
+
+/// Node's `err.code` for a listen this agent has no loop to run on.
+///
+/// Only reachable on a host where turnloop's `Loop::new` failed: every other
+/// thread either owns its agent's loop or can post to the thread that does.
+pub(crate) const NO_LOOP_CODE: &str = "ENOTSUP";
+
+/// How many times a transiently refused post is retried before the operation
+/// is reported as failed. A refusal is `Again` only while the owner is between
+/// claiming its route and publishing its loop, or while its postbox is full —
+/// both drain within a turn, so a short spin is the whole remedy.
+const POST_ATTEMPTS: usize = 64;
+
+/// One piece of work carried to the thread that owns this agent's loop.
+struct LoopJob(Box<dyn FnOnce() + Send>);
+
+impl AgentJob for LoopJob {
+    fn run(self: Box<Self>) {
+        (self.0)();
+    }
+}
+
+/// Run `op` on the thread that owns this agent's turnloop loop, which serves
+/// the same JS heap as the caller (turnloop P10, `perry_ffi::agent_post`).
+///
+/// This is what replaced the hyper accept loop a thread without its own loop
+/// used to run (perry-ext-net's `turnloop_io::on_loop` is the same route): such a thread is a second thread acting for an agent another
+/// thread already owns, so the owner binds and serves for it. It is also how a
+/// thread that is not a JS thread at all (the SCHED_RR descriptor bridge) gets
+/// a connection onto the loop — which is why this does not ask [`enabled`]
+/// first: the first thread to ask *claims* its agent's route, and a foreign
+/// thread that won that race would own a loop nobody turns.
+///
+/// Returns `false`, with `op` dropped unrun, only when no loop exists for this
+/// agent anywhere (a host where `Loop::new` failed).
+pub(crate) fn post_to_owner(op: Box<dyn FnOnce() + Send>) -> bool {
+    let mut job = Box::new(LoopJob(op));
+    for _ in 0..POST_ATTEMPTS {
+        match agent_post::post_job(job) {
+            Ok(()) => return true,
+            Err(rejected) if rejected.is_permanent() => return false,
+            Err(rejected) => {
+                job = rejected.into_job();
+                std::thread::yield_now();
+            }
+        }
+    }
+    false
+}
+
+/// Serve a connection some other process accepted — a SCHED_RR cluster
+/// worker's, whose primary owns the listening socket and passes each accepted
+/// descriptor over the cluster IPC channel (#4962).
+///
+/// The descriptor is put on this agent's loop (`turnloop_net::adopt_stream`,
+/// turnloop's `Detached::from_fd` + `Driver::attach`) on the loop's owner, and
+/// from then on it is indistinguishable from a connection turnloop accepted:
+/// the same `'connection'` event, codec, idle deadline and response path.
+///
+/// Called from the descriptor bridge thread, so the adoption is always
+/// posted. A connection that cannot be adopted is closed, which is what the
+/// peer of a worker that stopped accepting sees.
+#[cfg(any(unix, windows))]
+pub(crate) fn adopt_connection(server_handle: i64, socket: tl::AdoptedSocket) {
+    let _posted = post_to_owner(Box::new(move || {
+        // On the owner: `enabled` installs this crate's sink before the first
+        // completion for the new id can exist, and is true here.
+        if !enabled() {
+            return;
+        }
+        let id = next_id();
+        if id == perry_ffi::INVALID_HANDLE {
+            return;
+        }
+        if tl::adopt_stream(id, SUBSYSTEM, socket).is_err() {
+            return;
+        }
+        let idle_close_ms = crate::server::server::with_base_server(
+            server_handle,
+            crate::server::server::idle_close_ms,
+        )
+        .unwrap_or(0);
+        conn::start_connection(id, server_handle, None, idle_close_ms);
+    }));
 }
 
 /// Allocate the id for a connection turnloop just accepted.

@@ -75,14 +75,6 @@ pub(crate) fn unregister_internal_https_server(port: u16) {
     INTERNAL_HTTPS_SERVERS.lock().unwrap().remove(&port);
 }
 
-pub(crate) fn internal_https_token_for_port(port: u16) -> Option<String> {
-    INTERNAL_HTTPS_SERVERS
-        .lock()
-        .unwrap()
-        .get(&port)
-        .map(|server| server.forward_token.clone())
-}
-
 fn internal_https_server_for_url(url: &str) -> Option<InternalHttpsServer> {
     let url = reqwest::Url::parse(url).ok()?;
     let host = url.host_str()?;

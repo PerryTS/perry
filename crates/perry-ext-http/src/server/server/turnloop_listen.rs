@@ -40,8 +40,7 @@ pub(crate) fn note_turnloop_request_aborted(request_handle: i64) {
 
 /// Queue the `'connection'` event for a turnloop-accepted connection (P5).
 ///
-/// Shares `PENDING_CONNECTION_EVENTS` with the hyper accept loop, so the
-/// pump's drain and Node's "listeners fire with no args" shape are unchanged.
+/// Drained by the pump, whose listeners fire with no args.
 pub(crate) fn queue_turnloop_connection_event(server_handle: i64) {
     if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
         q.push(server_handle);
@@ -56,52 +55,28 @@ pub(crate) fn queue_turnloop_upgrade(pending: HttpPendingUpgrade) {
 }
 
 /// A turnloop connection reached its terminal `Closed` (P5). Parked requests
-/// on it can never flush, so they are reaped exactly as a dropped hyper
-/// connection's are.
+/// on it can never flush, so they are reaped like any dropped connection's.
 pub(crate) fn turnloop_connection_closed(_conn_id: i64) {}
 
 /// Bind and accept on the agent's turnloop loop, when this thread has one
-/// (P5). Returns the listener id, or `None` when the caller must keep the
-/// hyper path.
+/// (P5). Returns the listener id — `Some(0)` when the bind failed and the
+/// failure was queued as the server's `'error'` — or `None` when this thread
+/// has no loop, in which case the caller posts the listen to the thread that
+/// owns it (`turnloop_serve::post_to_owner`).
 ///
-/// **One reason to decline is left**, and it is the P1 coexistence rule rather
-/// than a hole:
-///
-/// * **No loop.** A thread acting for an agent another thread already owns has
-///   none, exactly as P1's net transport declines there. This is why the hyper
-///   accept loop is narrowed rather than deleted.
-///
-/// Two former reasons are closed, and neither is closed by relaxing anything:
-///
-/// * **A cluster worker.** The SO_REUSEPORT half is gone. turnloop
-///   0.1.0-alpha.6 split `ListenOpts::reuse_port` into `ReusePort::{No, Share,
-///   Distribute}` and `perry-runtime`'s `listen_opts` maps Perry's `true` to
-///   `Share`, which is precisely what `cluster_bind::bind_listener` does by
-///   hand (`socket.set_reuse_port(true)`) — so a SCHED_NONE worker, and a
-///   SCHED_RR worker whose primary did not answer, bind the same way they
-///   always did and now do it on the loop. **`Distribute` is deliberately not
-///   used**: it is the kernel-balanced variant, it is `Unsupported` on macOS
-///   and on every BSD but FreeBSD, and Perry's cluster has never had it, so
-///   asking for it would be a behaviour change on the platforms that can do it
-///   and a bind failure on the ones that cannot.
-///
-///   The SCHED_RR **fd-passing** half is NOT closed and is not reached here:
-///   the caller takes `spawn_rr_inject_loop` before it ever calls this, because
-///   the primary owns that socket and passes accepted descriptors over the
-///   cluster IPC channel. turnloop's `Driver` binds a `SocketAddr` and has no
-///   API that adopts a foreign fd (`tcp_listen`/`pipe_listen` take an address
-///   or a name; `attach` takes turnloop's own `Detached`), so that worker keeps
-///   the hyper path until turnloop grows one.
-/// * **An attached `WebSocketServer`.** Its handshake was completed by
-///   `tokio_tungstenite` over an owned stream, which a turnloop connection
-///   cannot produce. The handshake and the framing are `turnloop_websocket`'s
-///   sans-I/O core now, driven over the connection this crate keeps
-///   (`turnloop_serve::conn::on_websocket`), so no stream and no descriptor has
-///   to exist for it.
+/// A cluster worker binds here too. turnloop 0.1.0-alpha.6 split
+/// `ListenOpts::reuse_port` into `ReusePort::{No, Share, Distribute}` and
+/// `perry-runtime`'s `listen_opts` maps Perry's `true` to `Share`, which is
+/// the `SO_REUSEPORT` bind a SCHED_NONE worker (and a SCHED_RR worker whose
+/// primary did not answer) always did. **`Distribute` is deliberately not
+/// used**: it is the kernel-balanced variant, it is `Unsupported` on macOS and
+/// on every BSD but FreeBSD, and Perry's cluster has never had it. A SCHED_RR
+/// worker whose primary answered never reaches this: the primary owns that
+/// socket and passes accepted descriptors, which `ListenPlan::start_rr_inject`
+/// adopts onto the loop.
 ///
 /// `resolved` is the port the cluster primary handed back for a shared
-/// `listen(0)`; it is bound in place of the requested one, exactly as the hyper
-/// path binds it.
+/// `listen(0)`; it is bound in place of the requested one.
 pub(super) fn try_listen_on_turnloop(
     server_handle: i64,
     host: &str,
@@ -153,9 +128,7 @@ pub(super) fn try_listen_on_turnloop(
                 err.errno,
                 &err.syscall,
             );
-            // Returning the id-less `Some` would be a lie; the hyper path
-            // would then bind the same address and fail the same way, so the
-            // failure is reported once and the listen ends here.
+            // The failure is reported once and the listen ends here.
             Some(0)
         }
     }
@@ -172,9 +145,7 @@ pub(super) fn try_listen_on_turnloop(
 ///
 /// * **`reuse_port` is keyed on being a cluster worker, not on `resolved`.** A
 ///   worker whose `worker_query_listen` timed out has `resolved == None` and
-///   still has to bind with `SO_REUSEPORT` — which is what the hyper path's
-///   `cluster_bind::bind_listener` does for it, and what this path must keep
-///   doing now that it takes the bind.
+///   still has to bind with `SO_REUSEPORT`, as it always has.
 /// * **`resolved` wins the port** when the primary handed one back, which is
 ///   how N workers share one ephemeral port for `listen(0)` (#4962).
 pub(super) fn listen_plan(

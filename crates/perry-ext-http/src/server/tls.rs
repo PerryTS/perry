@@ -3,8 +3,7 @@
 //! See `https_server::js_node_https_create_server`.
 
 use std::fmt;
-use std::fmt::Write as _;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ring::aead::{self, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -12,46 +11,7 @@ use ring::digest::{digest, SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::ProducesTickets;
-use rustls::{KeyLog, ServerConfig};
-
-/// Per-connection rustls key-log sink. The TLS worker records NSS-format
-/// lines here and the main-thread HTTP pump drains them into Node's `keylog`
-/// event without invoking JS from a worker thread.
-#[derive(Debug, Default)]
-pub struct ConnectionKeyLog {
-    lines: Mutex<Vec<Vec<u8>>>,
-}
-
-impl ConnectionKeyLog {
-    pub fn drain(&self) -> Vec<Vec<u8>> {
-        self.lines
-            .lock()
-            .map(|mut lines| lines.drain(..).collect())
-            .unwrap_or_default()
-    }
-}
-
-impl KeyLog for ConnectionKeyLog {
-    fn log(&self, label: &str, client_random: &[u8], secret: &[u8]) {
-        fn append_hex(out: &mut String, bytes: &[u8]) {
-            for byte in bytes {
-                let _ = write!(out, "{byte:02x}");
-            }
-        }
-
-        let mut line =
-            String::with_capacity(label.len() + 2 + (client_random.len() + secret.len()) * 2 + 1);
-        line.push_str(label);
-        line.push(' ');
-        append_hex(&mut line, client_random);
-        line.push(' ');
-        append_hex(&mut line, secret);
-        line.push('\n');
-        if let Ok(mut lines) = self.lines.lock() {
-            lines.push(line.into_bytes());
-        }
-    }
-}
+use rustls::ServerConfig;
 
 struct TicketCipher {
     key_name: [u8; 16],
@@ -334,8 +294,8 @@ fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
 
 #[cfg(test)]
 mod tests {
-    use super::{json_value_to_pem_bytes, ConnectionKeyLog, NodeTicketKey};
-    use rustls::{server::ProducesTickets, KeyLog};
+    use super::{json_value_to_pem_bytes, NodeTicketKey};
+    use rustls::server::ProducesTickets;
     use serde_json::json;
 
     #[test]
@@ -375,14 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn keylog_records_are_nss_formatted_and_drained_once() {
-        let log = ConnectionKeyLog::default();
-        log.log("CLIENT_RANDOM", &[0xab, 0xcd], &[0x01, 0x23]);
-        assert_eq!(log.drain(), vec![b"CLIENT_RANDOM abcd 0123\n".to_vec()]);
-        assert!(log.drain().is_empty());
-    }
-
-    #[test]
     fn rotating_ticket_keys_invalidates_only_old_tickets() {
         let initial = [0x11; 48];
         let rotated = [0x22; 48];
@@ -416,7 +368,8 @@ mod tests {
     }
 }
 
-/// Build a rustls `ServerConfig` ready for `tokio_rustls::TlsAcceptor`.
+/// Build a rustls `ServerConfig` for the turnloop connection layer's server
+/// sessions (perry-ext-net's `turnloop_tls_io::install_server_session`).
 /// `alpn_protocols` is set to `[h2, http/1.1]` so an HTTP/2-aware
 /// negotiator can pick the upgraded transport on the same port —
 /// hooks into the Phase 3 ALPN handoff.

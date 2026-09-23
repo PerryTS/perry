@@ -886,19 +886,6 @@ pub(crate) fn alloc_incoming_message(im: IncomingMessage) -> i64 {
     register_handle(im)
 }
 
-pub(crate) fn mark_incoming_tls(handle: i64, servername: Option<String>) {
-    if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
-        message.is_tls = true;
-        message.tls_servername = servername;
-    }
-}
-
-pub(crate) fn mark_incoming_peer_certificate(handle: i64, common_name: Option<String>) {
-    if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
-        message.peer_certificate_cn = common_name;
-    }
-}
-
 /// Record only that the response wrote at least one byte. The req/res facade
 /// does not currently share the transport's exact byte counter, so this is a
 /// deliberate nonzero approximation rather than Node's precise total.

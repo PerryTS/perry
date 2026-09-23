@@ -3,7 +3,7 @@
 //
 // A `(req, res) => { … }` handler that finishes the response on a *later*
 // event-loop tick — an outbound `fetch()`, a `setTimeout`, any `await`
-// chain that calls `res.end()` from a microtask/timer/tokio resolution —
+// chain that calls `res.end()` from a microtask/timer/I/O resolution —
 // returns to `process_pending` before `res.end()` has run. Pre-#4728,
 // `process_pending` then synthesized a default empty 200 and freed the
 // per-request handles immediately, so the real `res.end(...)` later fired
@@ -17,7 +17,7 @@
 // response — or, as a safety net mirroring Node's `requestTimeout`,
 // synthesizes the default response and frees the handles if the handler
 // never responds within the grace window so a buggy handler can't pin a
-// hyper connection (and its request handles) forever.
+// connection (and its request handles) forever.
 // ============================================================================
 
 use std::sync::Mutex;
@@ -120,16 +120,11 @@ pub(crate) fn reap_in_flight_requests() {
                     drain_listeners.push(ls);
                 }
             }
-            // #4905: the per-request oneshot receiver died with its
-            // connection task (client disconnected / closeAllConnections)
-            // — the response can never be flushed, so don't pin the event
-            // loop for the rest of the grace window. A streaming response
-            // whose body receiver dropped is the same edge.
-            let peer_gone = get_handle::<ServerResponse>(e.response_handle)
-                .and_then(|sr| sr.response_tx.as_ref())
-                .map(|tx| tx.is_closed())
-                .unwrap_or(false)
-                || crate::server::response::stream_receiver_gone(e.response_handle);
+            // #4905: the response's connection is gone (client
+            // disconnected / closeAllConnections) — the response can never
+            // be flushed, so don't pin the event loop for the rest of the
+            // grace window.
+            let peer_gone = crate::server::response::stream_receiver_gone(e.response_handle);
             let expired = now >= e.deadline;
             if ended || expired || peer_gone {
                 // Only synthesize when we're giving up on a handler

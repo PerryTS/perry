@@ -14,20 +14,14 @@ use super::{Http2SecureServer, Http2SettingsState};
 const DEFAULT_MAX_SESSION_MEMORY_MB: usize = 10;
 
 /// Bind and accept HTTP/2 on the agent's turnloop loop, when this thread has
-/// one. Returns the listener id and the bound port, or `None` when the caller
-/// must keep the hyper path.
+/// one. Returns the listener id and the bound port (id 0 when the bind failed
+/// and was reported), or `None` when there is no listener to make: this
+/// thread has no loop (the caller posts to the owner instead), or a
+/// `createSecureServer` has no usable TLS material to install.
 ///
-/// Two reasons to decline are left: a thread acting for an agent another thread
-/// already owns has no loop, and a `createSecureServer` with no usable TLS
-/// material has nothing to install.
-///
-/// The cluster worker was a third and is not any more. It declined because it
-/// needed the `SO_REUSEPORT` bind only the hyper path's
-/// `std::net::TcpListener` could do; turnloop 0.1.0-alpha.6's
-/// `ReusePort::Share` is that same bind, so the worker takes this path now.
-/// `http2.createServer` has no SCHED_RR fd-inject loop at all (only
-/// `http.createServer` does), so the fd-passing half that is still open for
-/// plain HTTP never arises here.
+/// A cluster worker binds with turnloop 0.1.0-alpha.6's `ReusePort::Share`,
+/// the `SO_REUSEPORT` bind it used to do by hand. `http2.createServer` has no
+/// SCHED_RR descriptor path (only `http.createServer` does).
 pub(super) fn try_listen_on_turnloop(
     server_handle: i64,
     host: &str,
@@ -39,9 +33,8 @@ pub(super) fn try_listen_on_turnloop(
     let reuse_port = crate::server::cluster_bind::is_cluster_worker();
     // `noDelay` is read here, under the same handle borrow as the TLS config
     // and the settings, because the turnloop listener applies it once at bind
-    // time rather than per accepted socket. The hyper HTTP/2 path reads the
-    // same field (`http2_server.rs`) and applies it per connection; both honour
-    // `server.noDelay()`, which Node defaults to true.
+    // time rather than per accepted socket, honouring `server.noDelay()`,
+    // which Node defaults to true.
     let (tls, plaintext, settings, allow_http1, no_delay) = {
         let server = get_handle::<Http2SecureServer>(server_handle)?;
         (
@@ -53,8 +46,7 @@ pub(super) fn try_listen_on_turnloop(
         )
     };
     if !plaintext && tls.is_none() {
-        // `js_node_http2_create_secure_server` already reported why; refusing
-        // here as well would print it twice, and the hyper path refuses too.
+        // `js_node_http2_create_secure_server` already reported why.
         return None;
     }
     let tls = if plaintext { None } else { tls };
@@ -87,10 +79,9 @@ pub(super) fn try_listen_on_turnloop(
                 port,
                 err.message()
             );
-            // Returning `None` would send the hyper path at the same address to
-            // fail the same way; the failure is reported once and the listen
-            // ends here. (The missing `'error'` event is P5's open defect, not
-            // this path's — see `docs/turnloop/http2b-report.md`.)
+            // The failure is reported once and the listen ends here. (The
+            // missing `'error'` event is P5's open defect — see
+            // `docs/turnloop/http2b-report.md`.)
             Some((0, port, host.to_string()))
         }
     }

@@ -7,33 +7,15 @@
 
 use super::*;
 
-impl HyperResponseShape {
+impl ResponseShape {
     /// Inject Node-compatible default `Connection` / `Keep-Alive` headers
     /// (#2132). Node's HTTP/1.x server appends `Connection: keep-alive` plus
     /// `Keep-Alive: timeout=<keepAliveTimeout/1000>` whenever the connection
-    /// is kept alive, and `Connection: close` otherwise. Hyper drives the
-    /// transport-level keep-alive itself but does not surface these headers in
-    /// the response bytes, so byte-for-byte parity tests — and any client
-    /// reading `res.headers.connection` / `res.headers['keep-alive']` — see
-    /// them missing. Add them before handing the shape to hyper, unless the
-    /// handler already set a `Connection` header explicitly. HTTP/2 manages
-    /// connection reuse at the protocol level, so it gets neither header.
-    pub fn apply_default_connection_headers(
-        &mut self,
-        version: http::Version,
-        req_connection: Option<&str>,
-        keep_alive_timeout_ms: f64,
-    ) {
-        let wire = match version {
-            http::Version::HTTP_10 => 0u8,
-            http::Version::HTTP_2 | http::Version::HTTP_3 => 2,
-            _ => 1,
-        };
-        self.apply_default_connection_headers_for(wire, req_connection, keep_alive_timeout_ms);
-    }
-
-    /// The transport-independent form: `wire_version` is 0 for HTTP/1.0, 1 for
-    /// HTTP/1.1 and 2 for HTTP/2+, matching `turnloop_http::http1::Head::version`
+    /// is kept alive, and `Connection: close` otherwise, unless the handler
+    /// already set a `Connection` header explicitly. HTTP/2 manages connection
+    /// reuse at the protocol level, so it gets neither header.
+    ///
+    /// `wire_version` is 0 for HTTP/1.0, 1 for HTTP/1.1 and 2 for HTTP/2+, matching `turnloop_http::http1::Head::version`
     /// (which is 0 or 1) with 2 reserved for the HTTP/2 path.
     ///
     /// # `keepAliveTimeout = 0`
@@ -117,54 +99,33 @@ pub(crate) fn req_handle_of(handle: i64) -> i64 {
 /// Allocate the `ServerResponse` for a request the turnloop HTTP server
 /// decoded (P5).
 ///
-/// No oneshot, no `Notify` and no `AtomicBool`: the handler runs on the thread
-/// that owns the connection, so `res.end()` encodes and submits the write
-/// itself rather than parking a shape for another task to pick up.
+/// The handler runs on the thread that owns the connection, so `res.end()`
+/// encodes and submits the write itself.
 pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_handle: i64) -> i64 {
-    let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
-    let mut response = ServerResponse::new(tx).with_request_handle(req_handle);
-    // No hyper task is waiting on the oneshot, and its receiver was dropped
-    // above — leaving it in place would make the in-flight reaper's
-    // `tx.is_closed()` peer-gone probe true for every turnloop response and
-    // abandon every async handler on its first tick. `stream_receiver_gone`
-    // answers that probe for this path instead, from the connection handle.
-    response.response_tx = None;
+    let mut response = ServerResponse::new().with_request_handle(req_handle);
     response.turnloop = Some((conn_id, seq));
     register_handle(response)
 }
 
-/// True when a streaming response's connection died under it (hyper
-/// dropped the body receiver — client disconnect / server close).
+/// True when a response's connection died under it (client disconnect /
+/// server close): the connection handle is gone.
 pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
     let Some(sr) = get_handle::<ServerResponse>(handle) else {
         return false;
     };
-    if let Some((conn, _)) = sr.turnloop {
-        // The turnloop equivalent of hyper's dropped body receiver: the
-        // connection handle is gone.
-        return !perry_ffi::turnloop_net::is_live(conn);
+    match sr.turnloop {
+        Some((conn, _)) => !perry_ffi::turnloop_net::is_live(conn),
+        None => false,
     }
-    sr.stream_tx
-        .as_ref()
-        .map(|tx| tx.is_closed())
-        .unwrap_or(false)
 }
 
 /// `res.writeContinue()` — acknowledge an `Expect: 100-continue` request.
 ///
-/// #5080: the interim `HTTP/1.1 100 Continue` is written by hyper the moment
-/// the request body is polled (`req.collect()` in the service fn), which is
-/// what unblocks the client's withheld body before `'checkContinue'` even
-/// fires on the main thread. So by the time the handler calls
-/// `writeContinue()` the 100 is already on the wire; this entry point exists
-/// for API parity (the canonical `checkContinue` handler calls it) and is a
-/// confirmation no-op rather than a second 100 line.
+/// #5080: nothing is automatic once a `'checkContinue'` listener has taken
+/// the request over — that listener IS the decision — so the call reaches the
+/// wire here.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_continue(handle: i64) {
-    // On the hyper path the interim 100 was already flushed when the body was
-    // first polled, so this was a no-op. On turnloop nothing is automatic once
-    // a `'checkContinue'` listener has taken the request over — that listener
-    // IS the decision — so the call reaches the wire here.
     if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
         crate::server::turnloop_serve::send_interim(conn, seq, b"HTTP/1.1 100 Continue\r\n\r\n");
     }

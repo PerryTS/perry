@@ -16,8 +16,9 @@
 //! has no `h2` manifest edge left, and there is no second HTTP/2 client behind
 //! this one. An agent that cannot reach a loop gets an `'error'` from
 //! `http2.connect` (`http2_server::session::decline_client_session`), the
-//! `perry-ext-ws` rule. The SERVER rows are still bypasses: the hyper accept
-//! path in `http2_server.rs` stays for plan A's declining cases.
+//! `perry-ext-ws` rule. The SERVER rows are deletions too: a thread that does
+//! not own its agent's loop posts `listen()` to the owner
+//! (`turnloop_serve::post_to_owner`), and there is no hyper accept path left.
 //!
 //! # Why sans-I/O
 //!

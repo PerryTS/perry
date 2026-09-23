@@ -1,42 +1,24 @@
 //! `https.createServer({ key, cert }, handler)` — TLS variant of
 //! `http.createServer`. Re-uses the Phase 1 IncomingMessage /
-//! ServerResponse / event-loop machinery. The accept loop wraps each
-//! TCP stream in `tokio_rustls::TlsAcceptor` before handing the
-//! decrypted stream to hyper.
+//! ServerResponse / event-loop machinery. The turnloop connection layer
+//! installs a rustls server session (perry-ext-net's `turnloop_tls_io`) on
+//! every accepted connection before any HTTP byte is decoded.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{body::Incoming, Request, Response};
-use hyper_util::rt::TokioIo;
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
     RawClosureHeader, StringHeader,
 };
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::TlsAcceptor;
 
 use crate::server::ensure_gc_scanner_registered;
-use crate::server::request::{
-    alloc_incoming_message, handle_to_pointer_f64, with_implicit_this, IncomingMessage,
-};
-use crate::server::response::{
-    alloc_server_response_for_request, HyperResponseShape, ResponseBody,
-};
+use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
 use crate::server::server::{
     sanitize_request_timeout, signal_connections_close, HttpPendingRequest, HttpServer,
-    ReadActivity, TrackedConnection, CONNECTIONS, NEXT_CONNECTION_ID, PENDING_CONNECTION_EVENTS,
 };
 use crate::server::tls::{
     build_certless_server_config, build_server_config, has_pem_material, json_value_to_pem_bytes,
-    parse_cert_chain, parse_private_key, ConnectionKeyLog, NodeTicketKey,
+    parse_cert_chain, parse_private_key, NodeTicketKey,
 };
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
@@ -241,139 +223,6 @@ pub struct HttpsServer {
     pub certificate_cn: Option<String>,
 }
 
-struct PendingTlsClientError {
-    server_handle: i64,
-    message: String,
-}
-
-struct PendingTlsKeylog {
-    server_handle: i64,
-    lines: Vec<Vec<u8>>,
-}
-
-static PENDING_TLS_CLIENT_ERRORS: Mutex<Vec<PendingTlsClientError>> = Mutex::new(Vec::new());
-static PENDING_TLS_KEYLOGS: Mutex<Vec<PendingTlsKeylog>> = Mutex::new(Vec::new());
-
-fn queue_tls_client_error(server_handle: i64, message: String) {
-    if let Ok(mut pending) = PENDING_TLS_CLIENT_ERRORS.lock() {
-        pending.push(PendingTlsClientError {
-            server_handle,
-            message,
-        });
-    }
-    perry_ffi::notify_main_thread();
-}
-
-fn queue_tls_keylog(server_handle: i64, lines: Vec<Vec<u8>>) {
-    if lines.is_empty() {
-        return;
-    }
-    if let Ok(mut pending) = PENDING_TLS_KEYLOGS.lock() {
-        pending.push(PendingTlsKeylog {
-            server_handle,
-            lines,
-        });
-    }
-    perry_ffi::notify_main_thread();
-}
-
-/// Emit rustls key-log output after every successful handshake, even when the
-/// peer closes before sending an HTTP request. JS still runs exclusively on
-/// the main thread; the TLS worker only parks owned byte records here.
-pub(crate) fn process_pending_tls_keylogs(server_handle: i64) -> i32 {
-    let events = PENDING_TLS_KEYLOGS
-        .lock()
-        .map(|mut pending| {
-            let mut selected = Vec::new();
-            let mut index = 0;
-            while index < pending.len() {
-                if pending[index].server_handle == server_handle {
-                    selected.push(pending.remove(index));
-                } else {
-                    index += 1;
-                }
-            }
-            selected
-        })
-        .unwrap_or_default();
-    if events.is_empty() {
-        return 0;
-    }
-    let scope = perry_ffi::TransientRootScope::enter();
-    for event in &events {
-        let socket = perry_ffi::alloc_null_proto_object(&[
-            ("encrypted", JsValue::from_bool(true)),
-            ("destroyed", JsValue::from_bool(false)),
-            ("servername", JsValue::from_bool(false)),
-        ]);
-        let socket = scope.root_nanbox(f64::from_bits(socket.bits()));
-        emit_keylog_lines(server_handle, socket.get(), &event.lines);
-    }
-    events.len() as i32
-}
-
-/// Dispatch failed TLS handshakes from the main JS thread. The socket value is
-/// a minimal destroyed TLSSocket-compatible facade because rustls never yields
-/// a decrypted stream that can be adopted after a failed handshake.
-pub(crate) fn process_pending_tls_client_errors(server_handle: i64) -> i32 {
-    let events = PENDING_TLS_CLIENT_ERRORS
-        .lock()
-        .map(|mut pending| {
-            let mut selected = Vec::new();
-            let mut index = 0;
-            while index < pending.len() {
-                if pending[index].server_handle == server_handle {
-                    selected.push(pending.remove(index));
-                } else {
-                    index += 1;
-                }
-            }
-            selected
-        })
-        .unwrap_or_default();
-    if events.is_empty() {
-        return 0;
-    }
-    let this_value = handle_to_pointer_f64(server_handle);
-    for event in &events {
-        let listeners = get_handle_mut::<HttpsServer>(server_handle)
-            .map(|server| {
-                crate::server::server::take_server_event_listeners(
-                    &mut server.base,
-                    "tlsClientError",
-                )
-            })
-            .unwrap_or_default();
-        let scope = perry_ffi::TransientRootScope::enter();
-        let listeners = scope.root_addrs(&listeners);
-        let error = perry_ffi::error_value_with_code(
-            &event.message,
-            "ERR_SSL_TLS_HANDSHAKE",
-            perry_ffi::ErrorKind::Error,
-        );
-        let error = scope.root_nanbox(f64::from_bits(error.bits()));
-        let socket = perry_ffi::alloc_null_proto_object(&[
-            ("encrypted", JsValue::from_bool(true)),
-            ("destroyed", JsValue::from_bool(true)),
-            ("servername", JsValue::from_bool(false)),
-        ]);
-        let socket = scope.root_nanbox(f64::from_bits(socket.bits()));
-        for listener in &listeners {
-            let listener = listener.get();
-            if listener == 0 {
-                continue;
-            }
-            let closure = unsafe { JsClosure::from_raw(listener as *const RawClosureHeader) };
-            if !closure.is_null() {
-                with_implicit_this(this_value, || unsafe {
-                    let _ = closure.call2(error.get(), socket.get());
-                });
-            }
-        }
-    }
-    events.len() as i32
-}
-
 /// Validate and install Node's 48-byte server ticket-key blob. The rustls
 /// provider is shared by future per-connection configs, so rotation takes
 /// effect without replacing the accept loop or touching another server.
@@ -438,431 +287,89 @@ pub(super) unsafe fn listen_https_server(
         .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
     let callback = parsed.callback;
 
-    let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-
-    // #2132 — synchronous bind so `server.address().port` reflects the
-    // OS-assigned ephemeral port before the `listen(port, cb)` callback
-    // fires. See `server::js_node_http_server_listen` for the full
-    // rationale; same shape here, on top of the TLS-acceptor wrap.
-    let bind_str = format!("{}:{}", host, port);
-    let addr: SocketAddr = match bind_str.parse() {
-        Ok(a) => a,
-        Err(_) => SocketAddr::from(([0, 0, 0, 0], port)),
-    };
-    // #4914 — SO_REUSEPORT in cluster workers; plain bind otherwise.
-    let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("[node:https] bind {}:{} failed: {}", host, port, e);
-            return server_handle;
-        }
-    };
-    let actual_port = std_listener.local_addr().map(|a| a.port()).unwrap_or(port);
-    if let Err(e) = std_listener.set_nonblocking(true) {
-        eprintln!("[node:https] set_nonblocking failed: {}", e);
-        return server_handle;
-    }
-    crate::server::cluster_bind::notify_listening(&host, actual_port);
-
-    // Capture `noDelay` (default true) under the same handle lock as the TLS
-    // config, so the accept loop can apply it per connection without re-locking
-    // the handle map. Mirrors the HTTP/1 + HTTP/2 paths in server.rs.
-    let no_delay;
-    let (tls_config, certificate_cn) = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle)
-    {
-        s.base.bound_port = actual_port;
-        s.base.bound_host = host.clone();
-        s.base.listening = true;
-        s.base.shutdown_tx = Some(shutdown_tx);
-        s.base.request_rx = Some(request_rx);
-        no_delay = s.base.no_delay;
-        (s.tls_config.clone(), s.certificate_cn.clone())
-    } else {
-        return server_handle;
-    };
-
-    let tls_config = match tls_config {
-        Some(c) => c,
-        None => {
-            eprintln!("[node:https] tls config unavailable; refusing to listen");
-            return server_handle;
-        }
-    };
-    crate::tls_client::register_internal_https_server(actual_port, certificate_cn.clone());
-
-    // P5: bind and accept on the agent's turnloop loop, with the same rustls
-    // configuration driven through its unbuffered API instead of
-    // `tokio_rustls::TlsAcceptor`. Declines for the same three reasons the
-    // plain-HTTP path declines (`try_listen_on_turnloop`), plus one more: the
-    // `std::net::TcpListener` bound above is already holding the port, so it
-    // has to be released before turnloop can bind the same address.
-    if turnloop_https_listen(
-        server_handle,
-        &host,
-        actual_port,
-        std_listener,
-        tls_config.clone(),
-        no_delay,
-    ) {
-        let server_async_id =
-            crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len());
-        if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
-            s.base.async_id = server_async_id;
-            crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
-        } else {
-            crate::js_async_hooks_provider_destroy(server_async_id);
+    // P5: bind and accept on the agent's turnloop loop, with the server's
+    // rustls configuration driven through perry-ext-net's unbuffered session
+    // (`turnloop_tls_io`). A thread acting for an agent another thread owns
+    // posts the bind to the owner, exactly as `http.Server.listen` does.
+    if crate::server::turnloop_serve::enabled() {
+        if turnloop_https_listen(server_handle, &host, port) {
+            finish_https_listen(server_handle, callback);
         }
         return server_handle;
     }
-    let std_listener = match crate::server::cluster_bind::bind_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("[node:https] rebind {}:{} failed: {}", host, actual_port, e);
-            return server_handle;
-        }
-    };
-    if let Err(e) = std_listener.set_nonblocking(true) {
-        eprintln!("[node:https] set_nonblocking failed: {}", e);
-        return server_handle;
-    }
-
-    // TLS accept workers queue Rust request handles; JS callbacks run from
-    // the main-thread HTTP pump, so listener lifetime is GC-safe.
-
-    let request_tx = Arc::new(request_tx);
-    let request_tx_for_spawn = request_tx.clone();
-    let tls_config_for_spawn = tls_config;
-
-    // Use the same explicit reactor-owned scheduling path as the plain HTTP
-    // listener. HTTPS supports the same attached WebSocket-server link shape,
-    // so it must not depend on an ambient Tokio context either (#8747).
-    perry_ffi::spawn_async(async move {
-        let listener = match TcpListener::from_std(std_listener) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("[node:https] tokio adopt failed: {}", e);
-                return;
-            }
-        };
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    match accepted {
-                        Ok((stream, peer)) => {
-                            // Node sets TCP_NODELAY on accepted connections by
-                            // default. Honor the server's `noDelay` option
-                            // (default true) on the raw TCP socket before the
-                            // TLS handshake; the option persists through rustls.
-                            crate::server::server::apply_accept_no_delay(&stream, no_delay);
-                            let tls_config = tls_config_for_spawn.clone();
-                            let request_tx = request_tx_for_spawn.clone();
-                            // #4905/#4971 — register the connection so
-                            // close()/closeAllConnections/
-                            // closeIdleConnections can reach this task
-                            // from the main thread, and queue the
-                            // 'connection' emit (Node fires it on the raw
-                            // TCP connection, before the TLS handshake).
-                            let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
-                            let busy = Arc::new(AtomicUsize::new(0));
-                            let read_active = Arc::new(AtomicBool::new(false));
-                            let rewrite_chunked_header = Arc::new(AtomicBool::new(false));
-                            let close = Arc::new(tokio::sync::Notify::new());
-                            CONNECTIONS.lock().unwrap().insert(
-                                conn_id,
-                                TrackedConnection {
-                                    server_handle,
-                                    close: close.clone(),
-                                    busy: busy.clone(),
-                                    read_active: read_active.clone(),
-                                },
-                            );
-                            if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
-                                q.push(server_handle);
-                            }
-                            tokio::spawn(async move {
-                                let keylog = Arc::new(ConnectionKeyLog::default());
-                                let mut connection_config = (*tls_config).clone();
-                                connection_config.key_log = keylog.clone();
-                                let acceptor = TlsAcceptor::from(Arc::new(connection_config));
-                                let tls_stream = match acceptor.accept(stream).await {
-                                    Ok(s) => s,
-                                    Err(error) => {
-                                        queue_tls_client_error(
-                                            server_handle,
-                                            format!("TLS handshake failed: {error}"),
-                                        );
-                                        CONNECTIONS.lock().unwrap().remove(&conn_id);
-                                        return;
-                                    }
-                                };
-                                let negotiated_servername = tls_stream
-                                    .get_ref()
-                                    .1
-                                    .server_name()
-                                    .map(String::from);
-                                queue_tls_keylog(server_handle, keylog.drain());
-                                // Track read activity on the DECRYPTED
-                                // stream — handshake bytes must not mark
-                                // a request-less socket non-idle (#4971).
-                                let io = TokioIo::new(ReadActivity::new(
-                                    tls_stream,
-                                    read_active.clone(),
-                                    rewrite_chunked_header.clone(),
-                                ));
-                                let close_for_service = close.clone();
-                                let service = service_fn(move |req: Request<Incoming>| {
-                                    let request_tx = request_tx.clone();
-                                    let busy = busy.clone();
-                                    let read_active = read_active.clone();
-                                    let connection_close = close_for_service.clone();
-                                    let rewrite_chunked_header = rewrite_chunked_header.clone();
-                                    let negotiated_servername = negotiated_servername.clone();
-                                    async move {
-                                        busy.fetch_add(1, Ordering::SeqCst);
-                                        read_active.store(false, Ordering::SeqCst);
-                                        let res = handle_https_request(
-                                            server_handle,
-                                            peer,
-                                            req,
-                                            request_tx,
-                                            connection_close,
-                                            rewrite_chunked_header,
-                                            negotiated_servername,
-                                        )
-                                        .await;
-                                        busy.fetch_sub(1, Ordering::SeqCst);
-                                        res
-                                    }
-                                });
-                                let mut builder = http1::Builder::new();
-                                builder.auto_date_header(false).title_case_headers(true);
-                                let conn = builder.serve_connection(io, service).with_upgrades();
-                                tokio::pin!(conn);
-                                tokio::select! {
-                                    result = &mut conn => {
-                                        // Common when the client closes
-                                        // mid-request — silenced.
-                                        let _ = result;
-                                    }
-                                    _ = close.notified() => {
-                                        // close()/closeAllConnections/
-                                        // closeIdleConnections: dropping
-                                        // the pinned connection closes the
-                                        // socket immediately.
-                                    }
-                                }
-                                CONNECTIONS.lock().unwrap().remove(&conn_id);
-                            });
-                        }
-                        Err(e) => eprintln!("[node:https] accept error: {}", e),
-                    }
-                }
-                _ = &mut shutdown_rx => break,
-            }
-        }
-    });
-
-    // #4903 — queue the `'listening'` emit + the optional `cb` for the
-    // main-thread pump instead of firing synchronously; Node emits
-    // `'listening'` on a later tick, after `const server = ...` has been
-    // assigned. The pump binds `this` to the server when it fires them
-    // (#2132). See `server::drain_deferred_listen_for`.
     if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
-        crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+        crate::server::server::register_listen_callback(&mut s.base, callback);
+    }
+    let job_host = host.clone();
+    let posted = crate::server::turnloop_serve::post_to_owner(Box::new(move || {
+        if crate::server::turnloop_serve::enabled()
+            && turnloop_https_listen(server_handle, &job_host, port)
+        {
+            finish_https_listen(server_handle, 0);
+        } else if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+            crate::server::server::withdraw_listen_callbacks(&mut s.base);
+        }
+    }));
+    if !posted {
+        eprintln!(
+            "[node:https] bind {}:{} failed: {}",
+            host,
+            port,
+            crate::server::turnloop_serve::NO_LOOP_CODE
+        );
+        if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+            crate::server::server::withdraw_listen_callbacks(&mut s.base);
+        }
     }
 
-    // Closes #604 — `listen()` is now non-blocking. Pending requests
-    // are drained via the unified `js_node_http_server_process_pending`
-    // pump in `server.rs`, which iterates HTTP/1, HTTPS, and HTTP/2
-    // handles each tick.
+    // Closes #604 — `listen()` is non-blocking. Pending requests are drained
+    // via the unified `js_node_http_server_process_pending` pump in
+    // `server.rs`, which iterates HTTP/1, HTTPS, and HTTP/2 handles each tick.
     server_handle
 }
 
-async fn handle_https_request(
-    server_handle: i64,
-    peer: SocketAddr,
-    req: Request<Incoming>,
-    request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
-    connection_close: Arc<tokio::sync::Notify>,
-    rewrite_chunked_header: Arc<AtomicBool>,
-    negotiated_servername: Option<String>,
-) -> Result<Response<ResponseBody>, hyper::Error> {
-    let method = req.method().to_string();
-    let uri = req.uri();
-    let url = match uri.query() {
-        Some(q) => format!("{}?{}", uri.path(), q),
-        None => uri.path().to_string(),
+/// A listen that succeeded: create the server's async resource and queue the
+/// deferred `'listening'` emit + the optional `cb` for the main-thread pump.
+/// Node emits `'listening'` on a later tick, after `const server = ...` has
+/// been assigned (#4903); the pump binds `this` to the server when it fires
+/// them (#2132). See `server::drain_deferred_listen_for`.
+fn finish_https_listen(server_handle: i64, callback: i64) {
+    let server_async_id = unsafe {
+        crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len())
     };
-    let mut headers_lower = HashMap::new();
-    let mut raw_headers = Vec::new();
-    let trusted_internal = req
-        .headers()
-        .get("x-perry-internal-tls-token")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| {
-            get_handle::<HttpsServer>(server_handle)
-                .and_then(|server| {
-                    crate::tls_client::internal_https_token_for_port(server.base.bound_port)
-                })
-                .is_some_and(|expected| token == expected)
-        });
-    let mut forwarded_servername: Option<Option<String>> = None;
-    let mut forwarded_peer_cn: Option<String> = None;
-    for (n, v) in req.headers() {
-        if let Ok(vs) = v.to_str() {
-            if trusted_internal
-                && n.as_str()
-                    .eq_ignore_ascii_case("x-perry-internal-tls-token")
-            {
-                continue;
-            }
-            if trusted_internal && n.as_str().eq_ignore_ascii_case("x-perry-tls-servername") {
-                forwarded_servername = Some(if vs == "<false>" {
-                    None
-                } else {
-                    Some(vs.to_string())
-                });
-                continue;
-            }
-            if trusted_internal && n.as_str().eq_ignore_ascii_case("x-perry-tls-peer-cn") {
-                forwarded_peer_cn = Some(vs.to_string());
-                continue;
-            }
-            headers_lower.insert(n.to_string().to_lowercase(), vs.to_string());
-            raw_headers.push((n.to_string(), vs.to_string()));
-        }
-    }
-    // #2132 — capture before `req` / `headers_lower` are consumed below.
-    let http_version = req.version();
-    let req_connection = headers_lower.get("connection").cloned();
-    let req_te = headers_lower.get("te").cloned();
-    // #5080 — `Expect: 100-continue` routes to `'checkContinue'` (hyper
-    // auto-sends the interim `100 Continue` once the body is polled below).
-    let expects_continue = headers_lower
-        .get("expect")
-        .map(|v| v.to_ascii_lowercase().contains("100-continue"))
-        .unwrap_or(false);
-    let body = match req.collect().await {
-        Ok(c) => c.to_bytes().to_vec(),
-        Err(_) => Vec::new(),
-    };
-    let im_handle = alloc_incoming_message(IncomingMessage::new(
-        method,
-        url,
-        headers_lower,
-        raw_headers,
-        body,
-        peer.ip().to_string(),
-        peer.port(),
-    ));
-    crate::server::request::mark_incoming_tls(
-        im_handle,
-        forwarded_servername.unwrap_or(negotiated_servername),
-    );
-    crate::server::request::mark_incoming_peer_certificate(im_handle, forwarded_peer_cn);
-    let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let transport_destroyed = Arc::new(AtomicBool::new(false));
-    let sr_handle = alloc_server_response_for_request(
-        response_tx,
-        im_handle,
-        Some(connection_close),
-        Some(transport_destroyed.clone()),
-    );
-    let keep_alive_timeout = get_handle::<HttpsServer>(server_handle)
-        .map(|server| server.base.keep_alive_timeout)
-        .unwrap_or(5_000.0);
-    let is_check_continue = expects_continue
-        && get_handle::<HttpsServer>(server_handle).is_some_and(|server| {
-            crate::server::server::server_has_event_listener(&server.base, "checkContinue")
-        });
-    let pending = HttpPendingRequest {
-        server_handle,
-        request_handle: im_handle,
-        response_handle: sr_handle,
-        skip_default_response: false,
-        h2_stream_handle: 0,
-        h2_stream_headers: Vec::new(),
-        is_check_continue,
-    };
-    if request_tx.send(pending).await.is_err() {
-        return Ok(Response::builder()
-            .status(503)
-            .body(Full::new(Bytes::from("Server unavailable")).boxed())
-            .unwrap());
-    }
-    perry_ffi::notify_main_thread();
-    match response_rx.await {
-        Ok(mut shape) => {
-            if http_version == http::Version::HTTP_10 {
-                shape.response_version = Some(http::Version::HTTP_10);
-            }
-            let server_closing = get_handle::<HttpsServer>(server_handle)
-                .map(|server| !server.base.listening)
-                .unwrap_or(false);
-            let default_connection = if server_closing {
-                Some("close")
-            } else {
-                req_connection.as_deref()
-            };
-            shape.apply_default_connection_headers(
-                http_version,
-                default_connection,
-                keep_alive_timeout,
-            );
-            let chunked = shape.apply_http10_chunked_framing(http_version, req_te.as_deref());
-            if chunked {
-                rewrite_chunked_header.store(true, Ordering::Release);
-            } else {
-                shape.apply_http10_eof_framing(http_version, req_te.as_deref());
-            }
-            Ok(shape.into_hyper())
-        }
-        Err(_) if transport_destroyed.load(Ordering::Acquire) => std::future::pending().await,
-        Err(_) => Ok(Response::builder()
-            .status(500)
-            .body(Full::new(Bytes::from("Handler error")).boxed())
-            .unwrap()),
+    if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+        s.base.async_id = server_async_id;
+        crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+    } else {
+        unsafe { crate::js_async_hooks_provider_destroy(server_async_id) };
     }
 }
 
-/// Non-blocking try_recv for HTTPS pending requests. Called by
-/// `js_node_http_server_process_pending` in `server.rs` each tick.
-/// Hand the already-bound port to turnloop, if this thread can take that path.
+/// Bind `host:port` on this thread's turnloop loop and start accepting TLS
+/// connections. Returns whether the server is now listening; a failure is
+/// reported on stderr, as the HTTPS path always has.
 ///
-/// The `std::net::TcpListener` bound synchronously above (so
-/// `server.address().port` is right inside the `listen` callback) is dropped
-/// *first*: turnloop binds the same address itself, and two listeners on one
-/// port without `SO_REUSEPORT` is an `EADDRINUSE`. On failure the caller
-/// rebinds and keeps the hyper path, which is why the drop is safe.
-fn turnloop_https_listen(
-    server_handle: i64,
-    host: &str,
-    port: u16,
-    std_listener: std::net::TcpListener,
-    tls_config: Arc<rustls::ServerConfig>,
-    no_delay: bool,
-) -> bool {
-    // An attached `WebSocketServer` no longer declines: its handshake runs over
-    // the connection rather than over an owned stream, and the 101 and every
-    // frame go out through the same TLS layer the HTTP responses did.
-    //
-    // A cluster worker no longer declines either. turnloop 0.1.0-alpha.6's
-    // `ReusePort::Share` is what `cluster_bind::bind_listener` does by hand, so
-    // the worker binds the port it already bound above, the same way, on the
-    // loop. See `server::turnloop_listen::try_listen_on_turnloop` for why it is
-    // `Share` and not `Distribute`, and for the SCHED_RR fd-passing half that
-    // is still open — `https.createServer` has no rr-inject path at all, so a
-    // SCHED_RR worker here reaches this with the reuseport bind either way.
-    if !crate::server::turnloop_serve::enabled() {
+/// A cluster worker binds with `ReusePort::Share` (turnloop 0.1.0-alpha.6),
+/// which is what `SO_REUSEPORT` by hand used to do; see
+/// `server::turnloop_listen::try_listen_on_turnloop` for why it is `Share`
+/// and not `Distribute`. `https.createServer` has no SCHED_RR descriptor
+/// path — only `http.createServer` does — so a SCHED_RR worker binds here too.
+fn turnloop_https_listen(server_handle: i64, host: &str, port: u16) -> bool {
+    let (tls_config, certificate_cn, no_delay, idle_close_ms) =
+        match get_handle::<HttpsServer>(server_handle) {
+            Some(s) => (
+                s.tls_config.clone(),
+                s.certificate_cn.clone(),
+                s.base.no_delay,
+                crate::server::server::idle_close_ms(&s.base),
+            ),
+            None => return false,
+        };
+    let Some(tls_config) = tls_config else {
+        eprintln!("[node:https] tls config unavailable; refusing to listen");
         return false;
-    }
-    let reuse_port = crate::server::cluster_bind::is_cluster_worker();
-    let idle_close_ms = match get_handle::<HttpsServer>(server_handle) {
-        Some(server) => crate::server::server::idle_close_ms(&server.base),
-        None => return false,
     };
-    drop(std_listener);
+    let reuse_port = crate::server::cluster_bind::is_cluster_worker();
     match crate::server::turnloop_serve::listen(
         server_handle,
         host,
@@ -873,21 +380,33 @@ fn turnloop_https_listen(
         no_delay,
         idle_close_ms,
     ) {
-        Ok(_) => true,
-        Err(_) => false,
+        Ok((_id, actual_port, _bound_host)) => {
+            crate::server::cluster_bind::notify_listening(host, actual_port);
+            crate::tls_client::register_internal_https_server(actual_port, certificate_cn);
+            match get_handle_mut::<HttpsServer>(server_handle) {
+                Some(s) => {
+                    s.base.bound_port = actual_port;
+                    s.base.bound_host = host.to_string();
+                    s.base.listening = true;
+                    true
+                }
+                None => false,
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "[node:https] bind {}:{} failed: {}",
+                host,
+                port,
+                err.message()
+            );
+            false
+        }
     }
 }
 
 pub(crate) fn try_recv_pending_https_nonblocking(server_handle: i64) -> Option<HttpPendingRequest> {
-    if let Some(pending) = crate::server::turnloop_serve::take_pending(server_handle) {
-        return Some(pending);
-    }
-    if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
-        if let Some(rx) = s.base.request_rx.as_mut() {
-            return rx.try_recv().ok();
-        }
-    }
-    None
+    crate::server::turnloop_serve::take_pending(server_handle)
 }
 
 /// Dispatch one HTTPS pending request — fire `'request'` listeners,
@@ -991,39 +510,6 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     crate::server::server::finalize_or_park_request(&pending);
 }
 
-fn emit_keylog_lines(server_handle: i64, socket: f64, lines: &[Vec<u8>]) {
-    if lines.is_empty() {
-        return;
-    }
-    for line in lines {
-        // Re-read persistent listeners for every record and drain once
-        // listeners only for the first record. Snapshotting once for the
-        // whole handshake would invoke `once('keylog')` repeatedly.
-        let listeners = get_handle_mut::<HttpsServer>(server_handle)
-            .map(|server| {
-                crate::server::server::take_server_event_listeners(&mut server.base, "keylog")
-            })
-            .unwrap_or_default();
-        let scope = perry_ffi::TransientRootScope::enter();
-        let listeners = scope.root_addrs(&listeners);
-        let socket = scope.root_nanbox(socket);
-        let line = perry_ffi::alloc_buffer(line);
-        let line = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(line).bits()));
-        for callback in &listeners {
-            let callback = callback.get();
-            if callback == 0 {
-                continue;
-            }
-            unsafe {
-                let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
-                if !closure.is_null() {
-                    let _ = closure.call2(line.get(), socket.get());
-                }
-            }
-        }
-    }
-}
-
 /// `httpsServer.address()` mirroring `http.Server.address()`.
 #[no_mangle]
 pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringHeader {
@@ -1056,7 +542,6 @@ pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) 
         crate::tls_client::unregister_internal_https_server(s.base.bound_port);
         s.base.listening = false;
         s.base.connections_checking_interval_destroyed = true;
-        s.base.shutdown_tx.take();
         crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
     }
     // P5: stop accepting on the turnloop listener, if this server has one.
@@ -1084,14 +569,13 @@ pub unsafe extern "C" fn js_node_https_server_on(
 
 /// `httpsServer.closeAllConnections()` — destroy every tracked
 /// connection of this server, including ones with an in-flight request.
-/// Was a no-op stub pre-#4971; the HTTPS accept loop now registers each
-/// connection in the shared `CONNECTIONS` registry (#4905 machinery).
+/// Was a no-op stub pre-#4971.
 #[no_mangle]
 pub extern "C" fn js_node_https_server_close_all_connections(handle: i64) {
-    // Delegate to the HTTP variant: the CONNECTIONS and IN_FLIGHT
+    // Delegate to the HTTP variant: the connection and IN_FLIGHT
     // registries are shared and keyed by server handle, and the HTTP
-    // path also finalizes parked async requests whose connection task
-    // just died.
+    // path also finalizes parked async requests whose connection just
+    // died.
     crate::server::server::js_node_http_server_close_all_connections(handle);
 }
 
@@ -1219,60 +703,4 @@ pub extern "C" fn js_node_https_server_set_timeout_method(
         }
     }
     handle
-}
-
-#[cfg(test)]
-mod nodelay_tests {
-    //! The server accept loops apply the *server's* `noDelay` to each accepted
-    //! TCP socket before any TLS handshake — they must NOT hardcode `true`, the
-    //! way the HTTP/1 path in `server.rs` honors `s.no_delay`. Before this fix
-    //! the HTTPS and HTTP/2-secure accept loops both called
-    //! `stream.set_nodelay(true)` unconditionally, so a server created with
-    //! `noDelay: false` still ran with Nagle disabled (#5658). Both now route
-    //! through `apply_accept_no_delay`; these tests drive it — the literal call
-    //! the accept loops make — over a real loopback accept and read
-    //! `TCP_NODELAY` back off the accepted stream, exercising the production
-    //! wiring rather than a stand-in. `noDelay`'s default is verified ON in
-    //! `lib.rs` (`http_server_seeds_node_timeout_defaults`), so a default
-    //! server continues to get `TCP_NODELAY` on.
-
-    use crate::server::server::apply_accept_no_delay;
-    use tokio::net::{TcpListener, TcpStream};
-
-    /// Accept a loopback connection and return the SERVER-side stream — the
-    /// stream the HTTPS accept loop owns and applies `noDelay` to before the
-    /// TLS handshake. The client end is returned so the connection stays open
-    /// for the assertion.
-    async fn accept_loopback() -> (TcpStream, TcpStream) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let client = TcpStream::connect(addr).await.unwrap();
-        let (server, _) = listener.accept().await.unwrap();
-        (server, client)
-    }
-
-    /// `noDelay: false` is honored on the HTTPS accept path: the accepted TLS
-    /// socket runs with `TCP_NODELAY` OFF (Nagle on). This is the regression —
-    /// the pre-fix hardcoded `true` left it ON and this assertion failed.
-    #[tokio::test]
-    async fn https_accept_honors_no_delay_false() {
-        let (server, _client) = accept_loopback().await;
-        apply_accept_no_delay(&server, false);
-        assert!(
-            !server.nodelay().unwrap(),
-            "https server created with noDelay:false must leave TCP_NODELAY off on accepted sockets"
-        );
-    }
-
-    /// The Node default (`noDelay: true`) keeps `TCP_NODELAY` ON, so default
-    /// HTTPS servers are unchanged by the fix.
-    #[tokio::test]
-    async fn https_accept_default_no_delay_true() {
-        let (server, _client) = accept_loopback().await;
-        apply_accept_no_delay(&server, true);
-        assert!(
-            server.nodelay().unwrap(),
-            "default HTTPS server (noDelay:true) must keep TCP_NODELAY on, matching Node"
-        );
-    }
 }

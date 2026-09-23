@@ -184,7 +184,6 @@ pub(crate) fn register_turnloop_stream_handle(
         request_headers,
         listeners: HashMap::new(),
         encoding: None,
-        response_tx: None,
         response_status: 200,
         response_headers: Vec::new(),
         turnloop_conn: conn_id,

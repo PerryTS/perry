@@ -18,8 +18,6 @@
 
 use turnloop_http::http1::{BodyLength, Encoder, Head, Header};
 
-use crate::server::response::{HyperResponseShape, ShapeBody};
-
 /// How the body of one response is framed on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Framing {
@@ -222,19 +220,6 @@ fn patch_status_line(bytes: &mut Vec<u8>, status: u16, message: &str) {
     let mut line = Vec::with_capacity(16 + message.len());
     write_status_line(&mut line, status, Some(message));
     bytes.splice(..eol + 2, line);
-}
-
-/// The buffered-body half of a finished response.
-pub(crate) fn shape_body_bytes(body: &ShapeBody) -> Option<&[u8]> {
-    match body {
-        ShapeBody::Full(b) | ShapeBody::Eof(b) => Some(b.as_slice()),
-        ShapeBody::Stream { .. } => None,
-    }
-}
-
-/// Whether a finished shape asked for close-delimited framing (HTTP/1.0).
-pub(crate) fn shape_is_eof_framed(shape: &HyperResponseShape) -> bool {
-    matches!(shape.body, ShapeBody::Eof(_))
 }
 
 #[cfg(test)]

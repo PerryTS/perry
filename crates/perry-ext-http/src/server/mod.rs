@@ -10,13 +10,13 @@
 //!
 //! - `http.createServer(handler)` registers a `HttpServer` handle
 //!   carrying the user's handler closure (raw `i64`).
-//! - `server.listen({ port, host? }, cb?)` binds, spawns a hyper
-//!   accept loop on the perry-ffi blocking pool, and enters the
-//!   main-thread event loop.
-//! - Each incoming request creates an `IncomingMessage` + `ServerResponse`
-//!   handle pair, ships them to the main thread via mpsc, the user's
-//!   handler runs synchronously (any returned Promise is awaited),
-//!   then the response is flushed back through hyper.
+//! - `server.listen({ port, host? }, cb?)` binds on the agent's turnloop
+//!   loop (`turnloop_serve`; HTTP/2 in `turnloop_h2`) and returns. A thread
+//!   acting for an agent another thread owns posts the bind to the owner.
+//! - Each decoded request creates an `IncomingMessage` + `ServerResponse`
+//!   handle pair and is queued for the main-thread pump, which runs the
+//!   user's handler; `res.end()` encodes the response and submits the write
+//!   on the same thread.
 //! - Per-request event listeners (`req.on('data', cb)` / `res.on('finish', cb)`)
 //!   are stored as raw `i64` pointers on the IncomingMessage /
 //!   ServerResponse handles. A GC root scanner pins them across
@@ -27,17 +27,17 @@
 //!
 //! - `types` — shared NaN-boxing tags, runtime extern declarations,
 //!   port/host extraction helpers, body-shape helpers.
-//! - `server` — `HttpServer` handle + accept loop + handler dispatch.
+//! - `server` — `HttpServer` handle + listen + handler dispatch.
 //! - `request` — `IncomingMessage` handle + Readable-stream surface.
 //! - `response` — `ServerResponse` handle + Writable-stream surface.
-//! - `tls` — Phase 2: rustls config loader + ServerConfig builder.
-//! - `https_server` — Phase 2: `https.createServer(opts, handler)`
-//!   wired to a TLS-wrapped accept loop.
-//! - `http2_server` — Phase 3: `http2.createSecureServer` on hyper's
-//!   HTTP/2 builder with ALPN negotiation.
-//! - `upgrade` — Phase 4: `Server.on('upgrade', ...)` dispatch +
-//!   the `tokio-tungstenite` integration that lets `ws`'s
-//!   `WebSocketServer({ server })` pattern work.
+//! - `tls` — rustls config loader + ServerConfig builder.
+//! - `https_server` — `https.createServer(opts, handler)`: the same
+//!   connection layer with a TLS session installed per connection.
+//! - `http2_server` — `http2.createServer` / `createSecureServer`, served by
+//!   `turnloop_h2` with ALPN negotiation.
+//! - `upgrade` — `Server.on('upgrade', ...)` dispatch; the handshake and
+//!   framing of an attached `WebSocketServer({ server })` run on the
+//!   connection (`turnloop_serve::conn::on_websocket`).
 //!
 //! # Punted gaps
 //!
@@ -63,7 +63,6 @@ mod http2_stream_props;
 mod https_server;
 // #10428: runtime callback for http/https/http2 exports used as values.
 mod native_dispatch;
-mod raw_upgrade;
 mod request;
 mod response;
 mod response_end;
@@ -451,8 +450,7 @@ mod tests {
         let response_listener = young_gc_root();
         let response_once_listener = young_gc_root();
         let response_write_cb = young_gc_root();
-        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
-        let mut response = ServerResponse::new(response_tx);
+        let mut response = ServerResponse::new();
         response.listeners = listener_map("finish", response_listener);
         // #8163: the `once` table is a distinct holder — it must be rewritten
         // too, or `res.once('close', cb)` hands a pre-move closure to the emit.

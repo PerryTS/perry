@@ -4,11 +4,6 @@
 //! server emits, so the small-response RPS hot path is dominated by the
 //! constant work this module precomputes:
 //!
-//! - **`status_code_const`** — maps the common status codes to their
-//!   pre-validated [`StatusCode`] associated constant, so `into_hyper`
-//!   skips `StatusCode::from_u16`'s numeric range-check + `unwrap_or` on
-//!   every response. Uncommon / custom codes fall back to the parsing
-//!   path, so the resulting status is identical for every code.
 //! - **`keep_alive_header_value`** — interns the `Keep-Alive: timeout=N`
 //!   value for the timeouts a server actually runs with (Node's 5 s
 //!   default, plus 0/10/30/60/120 s), so the per-response `format!` only
@@ -24,45 +19,6 @@
 //! for any input the slow path would have handled differently, so the
 //! bytes on the wire are unchanged. The fast path is a shortcut for the
 //! common case, never a replacement for the general one.
-
-use http::StatusCode;
-
-/// The HTTP status codes a typical server emits often enough to be worth
-/// a const shortcut. Anything outside this set takes the `from_u16` path.
-///
-/// Returns the pre-validated [`StatusCode`] constant for `code`, or `None`
-/// to signal the caller should fall back to `StatusCode::from_u16(code)`.
-/// The constant is value-identical to `StatusCode::from_u16(code).unwrap()`
-/// for every code listed, so the response status is unchanged.
-#[inline]
-pub(crate) fn status_code_const(code: u16) -> Option<StatusCode> {
-    Some(match code {
-        200 => StatusCode::OK,
-        201 => StatusCode::CREATED,
-        202 => StatusCode::ACCEPTED,
-        204 => StatusCode::NO_CONTENT,
-        206 => StatusCode::PARTIAL_CONTENT,
-        301 => StatusCode::MOVED_PERMANENTLY,
-        302 => StatusCode::FOUND,
-        303 => StatusCode::SEE_OTHER,
-        304 => StatusCode::NOT_MODIFIED,
-        307 => StatusCode::TEMPORARY_REDIRECT,
-        308 => StatusCode::PERMANENT_REDIRECT,
-        400 => StatusCode::BAD_REQUEST,
-        401 => StatusCode::UNAUTHORIZED,
-        403 => StatusCode::FORBIDDEN,
-        404 => StatusCode::NOT_FOUND,
-        405 => StatusCode::METHOD_NOT_ALLOWED,
-        409 => StatusCode::CONFLICT,
-        410 => StatusCode::GONE,
-        429 => StatusCode::TOO_MANY_REQUESTS,
-        500 => StatusCode::INTERNAL_SERVER_ERROR,
-        502 => StatusCode::BAD_GATEWAY,
-        503 => StatusCode::SERVICE_UNAVAILABLE,
-        504 => StatusCode::GATEWAY_TIMEOUT,
-        _ => return None,
-    })
-}
 
 /// The interned `Keep-Alive: timeout=N` *value* for the keep-alive
 /// timeouts servers commonly run with. `secs` is the already-floored
@@ -125,26 +81,7 @@ pub(crate) fn status_line_bytes(code: u16) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Every interned status code must equal the value the slow path
-    /// (`StatusCode::from_u16`) produces — a divergence would change the
-    /// status line on the wire.
-    #[test]
-    fn status_code_const_matches_from_u16() {
-        for code in 0u16..=999 {
-            match status_code_const(code) {
-                Some(fast) => {
-                    let slow = StatusCode::from_u16(code)
-                        .unwrap_or_else(|_| panic!("interned {code} is not a valid status code"));
-                    assert_eq!(
-                        fast, slow,
-                        "interned StatusCode for {code} diverges from from_u16"
-                    );
-                }
-                None => {} // falls back to from_u16 — nothing to check.
-            }
-        }
-    }
+    use http::StatusCode;
 
     /// The interned `Keep-Alive` value must be byte-identical to the
     /// `format!` the slow path used.
@@ -162,7 +99,7 @@ mod tests {
 
     /// Each precomputed status line must equal exactly the bytes
     /// `format!("HTTP/1.1 {} {}\r\n", code, reason)` produced, where
-    /// `reason` is the canonical reason phrase hyper would also emit.
+    /// `reason` is the code's canonical reason phrase.
     #[test]
     fn status_line_bytes_match_format_with_canonical_reason() {
         for code in 0u16..=999 {
@@ -182,12 +119,10 @@ mod tests {
     }
 
     /// A code with no interned form returns `None` so the caller keeps the
-    /// general `format!` / `from_u16` path (custom codes still work).
+    /// general `format!` path (custom codes still work).
     #[test]
     fn uncommon_codes_fall_back() {
-        assert_eq!(status_code_const(418), None); // I'm a teapot — not interned.
-        assert_eq!(status_line_bytes(418), None);
-        assert_eq!(status_code_const(599), None);
+        assert_eq!(status_line_bytes(418), None); // I'm a teapot — not interned.
         assert_eq!(status_line_bytes(599), None);
     }
 }

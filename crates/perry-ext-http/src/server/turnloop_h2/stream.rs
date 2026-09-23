@@ -57,7 +57,7 @@ use turnloop_http::http1::Header;
 use turnloop_http::http2::{HeadersKind, Role};
 
 use super::conn::{flush, H2Conn};
-use crate::server::response::{HyperResponseShape, ShapeBody};
+use crate::server::response::ResponseShape;
 
 /// Node's `http2.constants.NGHTTP2_*` error codes used here.
 const INTERNAL_ERROR: u32 = 2;
@@ -520,7 +520,7 @@ fn retire(conn: &mut H2Conn, h2_id: u32) {
 
 // ── Outbound: the response path ─────────────────────────────────────────────
 
-/// Translate a `HyperResponseShape`'s header block into HTTP/2 form.
+/// Translate a `ResponseShape`'s header block into HTTP/2 form.
 ///
 /// Two things are load-bearing. The `:status` pseudo-header must come first and
 /// every name must be lowercase, or `validate_headers` rejects the block. And
@@ -559,16 +559,13 @@ pub(crate) fn body_forbidden(status: u16, head_request: bool) -> bool {
 }
 
 /// `res.end(body)` on a fully buffered response.
-pub(crate) fn h2_send_response(conn_id: i64, h2_id: u32, shape: HyperResponseShape) {
+pub(crate) fn h2_send_response(conn_id: i64, h2_id: u32, shape: ResponseShape) {
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
             return;
         };
         let head_request = conn.streams[i].no_body;
-        let body = match shape.body {
-            ShapeBody::Full(bytes) | ShapeBody::Eof(bytes) => bytes,
-            ShapeBody::Stream { .. } => Vec::new(),
-        };
+        let body = shape.body;
         let forbidden = body_forbidden(shape.status, head_request);
         // A HEAD response advertises the length it *would* have sent; the core
         // suppresses the body itself once it knows the request was a HEAD.
@@ -603,7 +600,7 @@ pub(crate) fn h2_send_response(conn_id: i64, h2_id: u32, shape: HyperResponseSha
 }
 
 /// `res.flushHeaders()` / the first `res.write(...)`: send the head now.
-pub(crate) fn h2_begin_stream(conn_id: i64, h2_id: u32, shape: HyperResponseShape) -> bool {
+pub(crate) fn h2_begin_stream(conn_id: i64, h2_id: u32, shape: ResponseShape) -> bool {
     super::conn::with_owned(conn_id, |conn| {
         let Some(i) = index_of(conn, h2_id) else {
             return false;

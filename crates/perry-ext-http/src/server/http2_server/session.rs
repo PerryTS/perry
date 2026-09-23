@@ -4,7 +4,6 @@
 use super::*;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 
 use perry_ffi::{
     get_handle, get_handle_mut, iter_handle_ids_of, iter_handles_of, iter_handles_of_mut,
@@ -14,49 +13,6 @@ use perry_ffi::{
 use crate::server::ensure_gc_scanner_registered;
 use crate::server::http2_session_settings::Http2SettingsState;
 use crate::server::types::jsvalue_to_owned_string;
-
-pub(crate) fn register_server_session(server_handle: i64, peer_addr: SocketAddr) -> i64 {
-    let session_handle = register_handle(Http2SessionHandle {
-        server_handle,
-        connection_port: peer_addr.port(),
-        session_event_emitted: false,
-        connect_event_emitted: false,
-        session_type: 0,
-        connected: true,
-        encrypted: false,
-        alpn_protocol: "h2c".to_string(),
-        connecting: false,
-        closed: false,
-        destroyed: false,
-        pending_settings_ack: true,
-        authority: String::new(),
-        local_settings: Http2SettingsState::default(),
-        remote_settings: Http2SettingsState::default(),
-        local_window_size: 65_535,
-        listeners: HashMap::new(),
-        close_callbacks: Vec::new(),
-        pending_callbacks: Vec::new(),
-        timeout_callback: 0,
-        turnloop_conn: 0,
-    });
-    let has_session_listener = get_handle::<Http2SecureServer>(server_handle)
-        .map(|server| crate::server::server::server_has_event_listener(&server.base, "session"))
-        .unwrap_or(false);
-    if has_session_listener {
-        push_h2_event(Http2PendingEvent::Session {
-            server_handle,
-            session_handle,
-        });
-    }
-    session_handle
-}
-
-pub(crate) fn mark_session_closed(session_handle: i64) {
-    if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
-        session.closed = true;
-        session.destroyed = true;
-    }
-}
 
 pub(crate) fn mark_server_sessions_closed(server_handle: i64) {
     let mut turnloop_conns = Vec::new();
@@ -642,7 +598,6 @@ mod tests {
             request_headers: HashMap::new(),
             listeners: HashMap::new(),
             encoding: None,
-            response_tx: None,
             response_status: 0,
             response_headers: Vec::new(),
             turnloop_conn: 0,

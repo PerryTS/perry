@@ -5,8 +5,7 @@
 use super::*;
 
 fn empty_response() -> ServerResponse {
-    let (tx, _rx) = oneshot::channel::<HyperResponseShape>();
-    ServerResponse::new(tx)
+    ServerResponse::new()
 }
 
 #[test]
@@ -145,19 +144,18 @@ fn on_and_once_combine_then_once_drops() {
 // the reuse decision and the timeout together, so a zero timeout produced
 // `Connection: close` on every response and no reuse at all.
 
-fn shape_with(headers: Vec<(String, String)>) -> HyperResponseShape {
-    HyperResponseShape {
+fn shape_with(headers: Vec<(String, String)>) -> ResponseShape {
+    ResponseShape {
         status: 200,
         status_message: None,
-        response_version: None,
         headers,
         trailers: Vec::new(),
-        body: ShapeBody::Full(Vec::new()),
+        body: Vec::new(),
         auto_content_length: false,
     }
 }
 
-fn header_of<'a>(shape: &'a HyperResponseShape, name: &str) -> Option<&'a str> {
+fn header_of<'a>(shape: &'a ResponseShape, name: &str) -> Option<&'a str> {
     shape
         .headers
         .iter()
