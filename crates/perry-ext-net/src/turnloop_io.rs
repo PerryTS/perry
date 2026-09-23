@@ -111,6 +111,10 @@ struct Aux {
     /// cancels outstanding operations, so closing here would cancel exactly
     /// the writes an `'end'` handler just issued (P1's third behaviour note).
     shutdown_done: bool,
+    /// Completion tokens of `end()` calls made after the first one. Node runs
+    /// every `end(cb)` callback once the stream finishes; only the first
+    /// `end()` submits the shutdown, and these complete with it.
+    extra_end_users: Vec<u64>,
     /// The readable EOF has been delivered. A TLS socket can reach it twice —
     /// the peer's `close_notify` and then the TCP FIN — and Node emits
     /// `'end'` exactly once.
@@ -120,6 +124,14 @@ struct Aux {
     /// pushed, which is the ordering the tokio path got by handshaking before
     /// it pushed the event.
     direct_tls: Option<(String, bool, crate::TlsClientConfigData)>,
+    /// Application writes to a `tls.connect` socket made before its TCP
+    /// connect completed, with their completion tokens. They must be
+    /// encrypted, so they cannot wait in the runtime's plaintext backlog —
+    /// that sent them in the clear ahead of the ClientHello. Replayed through
+    /// the TLS layer the moment it is installed.
+    held_tls_writes: Vec<(Vec<u8>, u64)>,
+    /// An `end()` made in that same window, replayed after the writes.
+    held_tls_end: Option<u64>,
 }
 
 fn aux() -> &'static Mutex<std::collections::HashMap<i64, Aux>> {
@@ -349,7 +361,21 @@ pub(crate) fn command(
     queued_out: &mut Option<u64>,
 ) -> Result<(), String> {
     let secure = crate::turnloop_tls_io::installed(id);
+    // A `tls.connect` still connecting has no TLS layer yet: hold its writes
+    // (see `Aux::held_tls_writes`).
+    let tls_pending = !secure && with_aux(id, |a| a.direct_tls.is_some());
     match cmd {
+        SocketCommand::Write(bytes, completion) if tls_pending => {
+            let held = with_aux(id, |a| {
+                a.held_tls_writes.push((bytes, completion));
+                a.held_tls_writes
+                    .iter()
+                    .map(|(b, _)| b.len())
+                    .sum::<usize>()
+            });
+            *queued_out = Some(held as u64);
+            Ok(())
+        }
         SocketCommand::Write(bytes, completion) if secure => {
             match crate::turnloop_tls_io::write(id, &bytes, completion) {
                 Ok(queued) => {
@@ -369,13 +395,45 @@ pub(crate) fn command(
         // `end()` on a TLS socket sends close_notify first; the FIN is queued
         // behind it so the peer sees an orderly shutdown rather than a
         // truncation attack.
-        SocketCommand::End(completion) if secure => {
-            with_aux(id, |a| a.write_ended = true);
-            crate::turnloop_tls_io::shutdown(id, completion)
-        }
         SocketCommand::End(completion) => {
-            with_aux(id, |a| a.write_ended = true);
-            tl::shutdown(id, completion).map_err(|e| e.message())
+            // A repeated `end()` must not submit a second shutdown: it would
+            // replace the first one's pending token (stranding that
+            // callback), and a second `shutdown(2)` answers `ENOTCONN`. It
+            // completes together with the first instead — or right away, if
+            // that one already has.
+            enum Repeat {
+                First,
+                Pending,
+                Done,
+            }
+            let repeat = with_aux(id, |a| {
+                if !a.write_ended {
+                    a.write_ended = true;
+                    Repeat::First
+                } else if a.shutdown_done {
+                    Repeat::Done
+                } else {
+                    if completion != 0 {
+                        a.extra_end_users.push(completion);
+                    }
+                    Repeat::Pending
+                }
+            });
+            match repeat {
+                Repeat::First if tls_pending => {
+                    with_aux(id, |a| a.held_tls_end = Some(completion));
+                    Ok(())
+                }
+                Repeat::First if secure => crate::turnloop_tls_io::shutdown(id, completion),
+                Repeat::First => tl::shutdown(id, completion).map_err(|e| e.message()),
+                Repeat::Pending => Ok(()),
+                Repeat::Done => {
+                    if completion != 0 {
+                        push_event(PendingNetEvent::ShutdownComplete(id, completion, None));
+                    }
+                    Ok(())
+                }
+            }
         }
         SocketCommand::Destroy => tl::close(id).map_err(|e| e.message()),
         // The accepted socket's `'connection'` callback has returned, so its
@@ -647,6 +705,7 @@ fn on_connect(id: i64) {
             destroy(id);
             return;
         }
+        replay_held_tls(id);
     }
     // #10465: clear the connect-phase flags at the same tick the JS 'connect'
     // event is emitted, so a listener observing the socket sees Node's state.
@@ -679,6 +738,37 @@ fn on_connect(id: i64) {
     }
     push_event(PendingNetEvent::Connect(id, local_server));
     start_reading(id);
+}
+
+/// Encrypt and submit what a `tls.connect` socket was given while connecting,
+/// in order, now that its session exists (`Aux::held_tls_writes`).
+fn replay_held_tls(id: i64) {
+    let (writes, end) = with_aux(id, |a| {
+        (
+            std::mem::take(&mut a.held_tls_writes),
+            a.held_tls_end.take(),
+        )
+    });
+    for (bytes, completion) in writes {
+        match crate::turnloop_tls_io::write(id, &bytes, completion) {
+            Ok(queued) => {
+                if let Ok(mut sockets) = statics::sockets().lock() {
+                    if let Some(s) = sockets.get_mut(&id) {
+                        s.bytes_queued = queued as u64;
+                    }
+                }
+            }
+            Err(message) => {
+                submission_failed(id, completion, message);
+                return;
+            }
+        }
+    }
+    if let Some(completion) = end {
+        if let Err(message) = crate::turnloop_tls_io::shutdown(id, completion) {
+            submission_failed(id, completion, message);
+        }
+    }
 }
 
 fn endpoint_to_addr(endpoint: &tl::Endpoint) -> Option<std::net::SocketAddr> {
@@ -797,8 +887,14 @@ fn release_deferred_eof(id: i64) {
 fn on_shutdown(id: i64, user: u64) {
     // Every byte queued ahead of the shutdown has left: turnloop orders a
     // handle's writes before its shutdown.
-    with_aux(id, |a| a.shutdown_done = true);
+    let extra = with_aux(id, |a| {
+        a.shutdown_done = true;
+        std::mem::take(&mut a.extra_end_users)
+    });
     push_event(PendingNetEvent::ShutdownComplete(id, user, None));
+    for user in extra {
+        push_event(PendingNetEvent::ShutdownComplete(id, user, None));
+    }
     if with_aux(id, |a| {
         std::mem::replace(&mut a.close_after_shutdown, false)
     }) {
@@ -813,10 +909,14 @@ fn on_wrote(id: i64, user: u64, len: usize, queued: usize) {
     // `bytesWritten` stays plaintext and `write(chunk, cb)` still fires when
     // the bytes have left.
     if let Some(completed) = crate::turnloop_tls_io::wrote(id, len) {
+        // `queued` is the driver's ciphertext count; `writableLength` is the
+        // application bytes still outstanding, which the layer tracks.
+        let _ = queued;
+        let outstanding = crate::turnloop_tls_io::outstanding_plaintext(id);
         let mut drain = false;
         if let Ok(mut sockets) = statics::sockets().lock() {
             if let Some(s) = sockets.get_mut(&id) {
-                s.bytes_queued = queued as u64;
+                s.bytes_queued = outstanding as u64;
                 for (_, plain_len) in &completed {
                     s.bytes_written += *plain_len as u64;
                 }

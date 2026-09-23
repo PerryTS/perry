@@ -264,8 +264,13 @@ pub fn receive(id: i64, ciphertext: &[u8]) -> Option<Received> {
     })
 }
 
-/// Encrypt and submit one application write. Returns the socket's queued
-/// ciphertext byte count, as `SocketState::command` reports it.
+/// Encrypt and submit one application write. Returns the socket's
+/// outstanding *application* bytes — Node's `writableLength` (#11111).
+///
+/// Not the driver's ciphertext queue: while the handshake runs, rustls holds
+/// the plaintext and nothing is queued on the wire yet, so a 64 KiB write
+/// would have reported 0 and `write()` returned `true` with the whole chunk
+/// still buffered.
 pub fn write(id: i64, bytes: &[u8], user: u64) -> Result<usize, String> {
     let known = with_layer(id, |l| {
         l.session.write(bytes);
@@ -280,7 +285,14 @@ pub fn write(id: i64, bytes: &[u8], user: u64) -> Result<usize, String> {
         return Err("socket is closed".to_string());
     }
     pump_session(id);
-    Ok(tl::queued_bytes(id))
+    Ok(outstanding_plaintext(id))
+}
+
+/// Application bytes written on this TLS socket and not yet acknowledged by
+/// the driver: still inside the session (mid-handshake) or queued as
+/// ciphertext. Retired by [`wrote`] exactly when `bytesWritten` grows.
+pub fn outstanding_plaintext(id: i64) -> usize {
+    with_layer(id, |l| l.pending.iter().map(|w| w.plain_len).sum()).unwrap_or(0)
 }
 
 /// `socket.end()` on a TLS socket: send `close_notify`, then shut the write
