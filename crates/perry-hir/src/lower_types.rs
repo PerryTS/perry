@@ -610,6 +610,26 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                         return Type::Any;
                     }
                 }
+                // #11128: `new C()` where `C` is a VALUE binding — a local
+                // holding a class value (`const C: any = R`, a factory's
+                // result, a destructured `require(...)` namespace) — not a
+                // class declaration, a function declaration or an import.
+                // Nothing is known about what it constructs, so the instance
+                // is `Any`. Typing it `Named("C")` named no class, and the
+                // array/collection fast-path gates read an unknown `Named`
+                // as "definitely not a string, so an array": `r.push(1)`
+                // lowered to `Expr::ArrayPush`, which rewrote the receiver
+                // local with a fresh array and never ran the user's `push`
+                // (redis's `SinglyLinkedList`). Checked before the type-args
+                // arm so `new C<T>()` does not become `Generic { base: "C" }`
+                // with the same effect.
+                if !ctx.classes_index.contains_key(name.as_str())
+                    && ctx.lookup_local(&name).is_some()
+                    && ctx.lookup_func(&name).is_none()
+                    && ctx.lookup_imported_func(&name).is_none()
+                {
+                    return Type::Any;
+                }
                 if let Some(type_args) = new_expr.type_args.as_ref() {
                     // #10894: `new Uint8Array<ArrayBuffer>(n)` — the argument
                     // is the backing buffer's type and has no runtime meaning,
