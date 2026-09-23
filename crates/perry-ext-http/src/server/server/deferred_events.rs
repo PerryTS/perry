@@ -249,6 +249,7 @@ fn listen_error_description(code: &str) -> &'static str {
         "ENOTFOUND" => "getaddrinfo ENOTFOUND",
         "EAFNOSUPPORT" => "address family not supported",
         "EMFILE" => "too many open files",
+        "ENOTSUP" => "operation not supported on socket",
         _ => "listen failed",
     }
 }
@@ -501,6 +502,43 @@ mod listen_error_tests {
         assert_eq!(
             listen_error_message(&err("EADDRINUSE", "", 0)),
             "listen EADDRINUSE: address already in use"
+        );
+    }
+
+    /// A `listen(cb)` whose bind was posted to the loop's owner registers its
+    /// callback up front (so the scanner roots it) without arming the
+    /// `'listening'` emit; a bind that then fails must take the callback back
+    /// out, or `server_is_active` would keep the process alive for it forever
+    /// and a later `'listening'` emit would still run it.
+    #[test]
+    fn a_withdrawn_listen_callback_leaves_nothing_behind() {
+        let mut server = HttpServer::with_handler(0);
+        server.listeners.insert("listening".to_string(), vec![11]);
+        register_listen_callback(&mut server, 22);
+        assert!(
+            !server.pending_listening_emit,
+            "registering must not arm the emit; only a successful bind does"
+        );
+        assert_eq!(server.listeners["listening"], vec![11, 22]);
+        assert!(server_is_active(&server));
+
+        withdraw_listen_callbacks(&mut server);
+        assert!(server.deferred_listen_cbs.is_empty());
+        assert_eq!(
+            server.listeners["listening"],
+            vec![11],
+            "a listener the program added itself must survive"
+        );
+        assert!(!server_is_active(&server));
+    }
+
+    /// A listen with no loop anywhere (a host where `Loop::new` failed) is
+    /// reported as Node would report an unsupported socket operation.
+    #[test]
+    fn no_loop_message_names_the_operation() {
+        assert_eq!(
+            listen_error_message(&err("ENOTSUP", "127.0.0.1", 8080)),
+            "listen ENOTSUP: operation not supported on socket 127.0.0.1:8080"
         );
     }
 

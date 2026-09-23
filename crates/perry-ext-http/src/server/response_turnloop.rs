@@ -15,8 +15,9 @@ impl ResponseShape {
     /// already set a `Connection` header explicitly. HTTP/2 manages connection
     /// reuse at the protocol level, so it gets neither header.
     ///
-    /// `wire_version` is 0 for HTTP/1.0, 1 for HTTP/1.1 and 2 for HTTP/2+, matching `turnloop_http::http1::Head::version`
-    /// (which is 0 or 1) with 2 reserved for the HTTP/2 path.
+    /// `wire_version` is 0 for HTTP/1.0, 1 for HTTP/1.1 and 2 for HTTP/2+,
+    /// matching `turnloop_http::http1::Head::version` (which is 0 or 1) with 2
+    /// reserved for the HTTP/2 path.
     ///
     /// # `keepAliveTimeout = 0`
     ///

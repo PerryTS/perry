@@ -171,7 +171,11 @@ pub(crate) fn post_to_owner(op: Box<dyn FnOnce() + Send>) -> bool {
 /// Called from the descriptor bridge thread, so the adoption is always
 /// posted. A connection that cannot be adopted is closed, which is what the
 /// peer of a worker that stopped accepting sees.
-#[cfg(any(unix, windows))]
+///
+/// Unix-only because its one caller is: cluster descriptor passing
+/// (`cluster_bind::recv_fd`, SCM_RIGHTS) does not exist on Windows, where
+/// Node's default scheduling policy is SCHED_NONE.
+#[cfg(unix)]
 pub(crate) fn adopt_connection(server_handle: i64, socket: tl::AdoptedSocket) {
     let _posted = post_to_owner(Box::new(move || {
         // On the owner: `enabled` installs this crate's sink before the first

@@ -178,6 +178,67 @@ pub(crate) fn idle_close_ms(server: &HttpServer) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::listen_plan;
+    use crate::server::server::HttpServer;
+    use perry_ffi::{drop_handle, get_handle, register_handle};
+
+    /// `http.Server.listen()` must reach the agent's turnloop loop on whichever
+    /// thread asks, and there is no hyper accept loop to fall back to any more.
+    /// The three outcomes are the three routes:
+    ///
+    /// * this thread owns the loop — the bind happens here, synchronously, so
+    ///   the server is listening on a real port before `listen()` returns;
+    /// * another thread owns it — the bind is posted to that owner, so nothing
+    ///   is bound or reported on this thread yet;
+    /// * no loop exists for the agent — the listen fails with Node's
+    ///   `'error'`, code `ENOTSUP`, and never reports `'listening'`.
+    ///
+    /// **The route is observed, not assumed**: an agent's route is claimed once
+    /// per thread by the first thread to ask, so which harness thread this
+    /// lands on decides it. Every arm asserts something; none is a skip.
+    #[test]
+    fn listen_reaches_the_loop_on_every_route() {
+        let owns_loop = crate::server::turnloop_serve::enabled();
+        let can_post = perry_ffi::agent_post::available();
+        let handle = register_handle(HttpServer::with_handler(0));
+        let args = crate::server::types::ListenArgs {
+            opts: 0.0,
+            host: Some("127.0.0.1".to_string()),
+            callback: 0,
+        };
+        unsafe { super::super::listen_http_server(handle, args) };
+
+        let (listening, bound_port, listening_emit, error_code) = {
+            let s = get_handle::<HttpServer>(handle).expect("server handle");
+            (
+                s.listening,
+                s.bound_port,
+                s.pending_listening_emit,
+                s.pending_error_emit.as_ref().map(|e| e.code.clone()),
+            )
+        };
+        let listener = crate::server::turnloop_serve::listener_for_server(handle);
+        if let Some(id) = listener {
+            crate::server::turnloop_serve::close_listener(id);
+        }
+        drop_handle(handle);
+
+        if owns_loop {
+            assert!(listening, "an owned loop must bind synchronously");
+            assert_ne!(bound_port, 0, "port 0 must report the kernel's port");
+            assert!(listener.is_some(), "the bind must be a turnloop listener");
+            assert!(listening_emit, "a bound server owes a 'listening' emit");
+            assert_eq!(error_code, None);
+        } else if can_post {
+            assert!(!listening, "a posted bind has not run on this thread");
+            assert!(listener.is_none());
+            assert!(!listening_emit);
+            assert_eq!(error_code, None);
+        } else {
+            assert!(!listening);
+            assert!(!listening_emit, "a failed listen never emits 'listening'");
+            assert_eq!(error_code.as_deref(), Some("ENOTSUP"));
+        }
+    }
 
     /// An ordinary server must never share its port: a second `listen()` on it
     /// is Node's `EADDRINUSE`, and the last time this argument drifted every

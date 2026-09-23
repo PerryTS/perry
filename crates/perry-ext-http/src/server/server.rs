@@ -662,6 +662,8 @@ struct ListenPlan {
     /// A SCHED_RR worker whose primary answered: the primary owns the socket
     /// and passes accepted descriptors instead of this worker binding.
     rr_inject: bool,
+    /// 4 or 6; keys the primary's descriptor channel (unix only).
+    #[cfg_attr(not(unix), allow(dead_code))]
     address_type: i32,
 }
 

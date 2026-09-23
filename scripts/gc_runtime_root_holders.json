@@ -40,24 +40,6 @@
       "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) \u2014 no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
     },
     {
-      "file": "crates/perry-ext-http/src/server/https_server.rs",
-      "name": "PENDING_TLS_CLIENT_ERRORS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Vec<PendingTlsClientError>: an i64 server HANDLE (an index into the handle side table, stable across collection -- not a heap address) plus an owned Rust String. Neither field can hold a pointer into the GC heap, so there is nothing for a scanner to visit."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/https_server.rs",
-      "name": "PENDING_TLS_KEYLOGS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Vec<PendingTlsKeylog>: an i64 server HANDLE plus Vec<Vec<u8>> of owned keylog bytes. Both are Rust-allocated; no JS heap pointer is stored, so no root scanner is required."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/server.rs",
-      "name": "CONNECTIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "TrackedConnection = {server_handle: ffi registry id, close: Notify, busy/read_active: atomics}. No JS values; server closures live in the HttpServer handle, scanned by scan_http_server_roots."
-    },
-    {
       "file": "crates/perry-ext-http/src/server/server.rs",
       "name": "PENDING_CONNECTION_EVENTS",
       "verdict": "not_a_gc_pointer",
