@@ -220,8 +220,10 @@ unsafe fn build_longlived_keys_array(
     }
     let arr_handle = scope.root_raw_mut_ptr(arr);
     for (j, key_bytes) in keys.iter().enumerate() {
-        let str_ptr =
-            crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let str_ptr = crate::string::js_string_from_bytes_longlived(
+            key_bytes.as_ptr(),
+            key_bytes.len() as u32,
+        );
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         let bits = crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK);
         let idx = prefix_len as usize + j;
@@ -233,7 +235,7 @@ unsafe fn build_longlived_keys_array(
     let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     if prefix_len > 0 {
         let src = crate::array::array_elements_ptr(
-            prefix_handle.get_raw_mut_ptr::<ArrayHeader>() as *const ArrayHeader,
+            prefix_handle.get_raw_mut_ptr::<ArrayHeader>() as *const ArrayHeader
         ) as *const u64;
         let dst = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
         for i in 0..prefix_len as usize {
@@ -336,7 +338,12 @@ fn object_alloc_class_inline_keys_impl(
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         used_preinstalled_shape
     };
-    (ptr, logical_field_count as u32, used_preinstalled_shape, keys_array)
+    (
+        ptr,
+        logical_field_count as u32,
+        used_preinstalled_shape,
+        keys_array,
+    )
 }
 
 /// Compatibility entry point for runtime callers that do not have a

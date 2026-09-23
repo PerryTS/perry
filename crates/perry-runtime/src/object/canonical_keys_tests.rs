@@ -601,7 +601,11 @@ fn a_growing_list_hands_its_slot_index_to_each_successor() {
             lists.push(obj.with_const_ptr(|o| crate::object::object_keys_array(o)));
         }
         let distinct: std::collections::HashSet<_> = lists.iter().copied().collect();
-        assert_eq!(distinct.len(), KEYS, "premise: every length is its own canonical list");
+        assert_eq!(
+            distinct.len(),
+            KEYS,
+            "premise: every length is its own canonical list"
+        );
         let holders: Vec<(usize, u32)> = lists[..KEYS - 1]
             .iter()
             .enumerate()
