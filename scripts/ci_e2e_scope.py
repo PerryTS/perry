@@ -23,7 +23,8 @@ Selection rules (a suite is a `tests/*.rs` target of a workspace crate):
     `native_proof_regressions.rs` declares with `mod`): selects `<suite>`.
   * `crates/<dir>/tests/<shared>/...` where no `<shared>.rs` suite exists (e.g.
     a `common/` helper module or a `fixtures/` data dir): every suite in that
-    crate can be affected, so all of them are selected.
+    crate can be affected, so all of them are selected, unless an explicit
+    `SOURCE_SUITE_MAP` entry names the helper's consumers.
   * `SOURCE_SUITE_MAP` — one hand-maintained exception to the rule below, for
     `crates/perry-codegen/src/`, whose suites are in-process compiles rather
     than `perry compile` subprocesses. As of #7708 it is COMPLETE for that
@@ -162,6 +163,12 @@ _CODEGEN_SUITES = [
 
 SOURCE_SUITE_MAP = {
     _CODEGEN_SRC: [("perry-codegen", suite) for suite in _CODEGEN_SUITES],
+    # #11124: selecting every codegen suite for this shared helper hits the
+    # named-suite cap before either consumer. Keep both in the uncapped tier.
+    "crates/perry-codegen/tests/native_proof_support/": [
+        ("perry-codegen", "native_proof_buffer_views"),
+        ("perry-codegen", "native_proof_regressions"),
+    ],
 }
 
 # The suites held OUT of the map, one entry per FAILING TEST, because they are
@@ -299,7 +306,10 @@ def select_split(changed, root: str):
     selected = set()
     for path in changed:
         path = path.strip()
-        from_map |= _source_map_selection(path, root)
+        mapped = _source_map_selection(path, root)
+        from_map |= mapped
+        if mapped:
+            continue
         m = _TESTS_PATH.match(path)
         if not m:
             continue
@@ -432,6 +442,14 @@ def _self_test() -> int:
                 ["crates/perry-cc/tests/common/mod.rs"],
                 [("perry-cc", "alpha"), ("perry-cc", "beta")],
             ),
+            # #11124: an explicitly mapped helper selects only its consumers.
+            (
+                ["crates/perry-codegen/tests/native_proof_support/mod.rs"],
+                [
+                    ("perry-codegen", "native_proof_buffer_views"),
+                    ("perry-codegen", "native_proof_regressions"),
+                ],
+            ),
             # cross-host UI crates are excluded
             (["crates/perry-ui-ios/tests/ui.rs"], []),
             # dedup across several paths of the same suite
@@ -472,6 +490,11 @@ def _self_test() -> int:
             if got != expected:
                 print(f"self-test FAILED for {changed}: {got} != {expected}", file=sys.stderr)
                 return 1
+
+        mapped, named = select_split(
+            ["crates/perry-codegen/tests/native_proof_support/mod.rs"], root
+        )
+        assert len(mapped) == 2 and not named, "helper consumers must bypass --cap"
 
         # An entry that matches nothing must FAIL, not select less. Sabotage the
         # map with a suite that is not on disk and require the raise.

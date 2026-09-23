@@ -167,11 +167,51 @@ fn artifact_env_lock_is_poison_tolerant_so_one_failure_cannot_cascade() {
 }
 
 /// Sabotage test for [`NativeRepsEnv`]: the env must survive an unwind out of
-/// the compile it wraps.
+/// the compile it wraps. Run the sabotage in an isolated process: the mutex
+/// cannot hide its invalid directory from concurrent, lock-free compiles
+/// in either including suite (#11124).
 #[test]
 fn artifact_env_is_restored_even_when_the_compile_unwinds() {
+    const CHILD: &str = "PERRY_TEST_NATIVE_REPS_UNWIND_CHILD";
+    const VARS: [&str; 3] = [
+        "PERRY_NATIVE_REPS",
+        "PERRY_NATIVE_REPS_DIR",
+        "PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS",
+    ];
+    if std::env::var_os(CHILD).is_none() {
+        // Exercise both removal and restoration of pre-existing values. Only
+        // Command's child environment changes; the parent never installs the
+        // sabotage values, even while other tests are compiling.
+        for populated in [false, true] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args([
+                "--exact",
+                "native_proof_support::artifact_env_is_restored_even_when_the_compile_unwinds",
+                "--test-threads=1",
+                "--nocapture",
+            ]);
+            child.env(CHILD, "1");
+            for key in VARS {
+                if populated {
+                    child.env(key, format!("before-{key}"));
+                } else {
+                    child.env_remove(key);
+                }
+            }
+            let output = child.output().unwrap();
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("native reps unwind verified"),
+                "isolated sabotage failed (populated={populated}):\n{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        return;
+    }
+
     let _guard = artifact_env_lock();
-    let before = std::env::var_os("PERRY_NATIVE_REPS");
+    let before = VARS.map(std::env::var_os);
+    const PANIC: &str = "#7493 sabotage: unwinding inside the artifact env window";
     let sabotage = std::panic::catch_unwind(|| {
         let _env = NativeRepsEnv::install(std::path::Path::new("/nonexistent/perry7493"), false);
         assert_eq!(
@@ -179,14 +219,27 @@ fn artifact_env_is_restored_even_when_the_compile_unwinds() {
             Some("1"),
             "the guard must actually install the var it claims to restore"
         );
-        panic!("#7493 sabotage: unwinding inside the artifact env window");
+        assert_eq!(
+            std::env::var_os("PERRY_NATIVE_REPS_DIR"),
+            Some(std::ffi::OsString::from("/nonexistent/perry7493")),
+        );
+        assert!(std::env::var_os("PERRY_NATIVE_REPS_ALL_TYPED_CLONE_REJECTIONS").is_none());
+        std::panic::panic_any(PANIC);
     });
-    assert!(sabotage.is_err(), "the sabotage panic should have unwound");
+    let panic = sabotage.expect_err("the sabotage panic should have unwound");
     assert_eq!(
-        std::env::var_os("PERRY_NATIVE_REPS"),
-        before,
-        "PERRY_NATIVE_REPS leaked out of a panicking compile window"
+        panic.downcast_ref::<&str>(),
+        Some(&PANIC),
+        "an installation assertion failed before the intended sabotage",
     );
+    for (key, value) in VARS.into_iter().zip(before) {
+        assert_eq!(
+            std::env::var_os(key),
+            value,
+            "{key} leaked out of a panicking compile window",
+        );
+    }
+    println!("native reps unwind verified");
 }
 
 // ---------------------------------------------------------------------------
