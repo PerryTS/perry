@@ -394,6 +394,11 @@ pub(super) fn detect_optional_feature_usage(
         // of them enables the namespace. Deliberately over-approximate — a
         // missed detection leaves `Intl.NumberFormat` undefined at runtime,
         // so err toward enabling (same contract as `temporal`).
+        // `localeCompare` is deliberately NOT a trigger: it returns a number,
+        // and its runtime path (`string/compare.rs` + the locale/option
+        // validation in `intl::validate_locale_compare`) lives outside the
+        // `intl-namespace` gate. Triggering on it linked ~390 KB of unused
+        // `Intl.*` constructors into every program that sorts with it.
         if hir_debug.contains("\"Intl\"")
             || hir_debug.contains("property: \"NumberFormat\"")
             || hir_debug.contains("property: \"DateTimeFormat\"")
@@ -408,7 +413,6 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("property: \"supportedValuesOf\"")
             || hir_debug.contains("property: \"supportedLocalesOf\"")
             || hir_debug.contains("toLocale")
-            || hir_debug.contains("localeCompare")
         {
             ctx.uses_intl_namespace = true;
         }
