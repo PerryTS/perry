@@ -26,8 +26,15 @@ async function main(): Promise<void> {
   await report("CONNECT", () => fetch("http://127.0.0.1:39123/x", { method: "CONNECT" }));
   await report("TRACE", () => fetch("http://127.0.0.1:39123/x", { method: "TRACE" }));
   await report("bad method", () => fetch("http://127.0.0.1:39123/x", { method: "BAD METHOD" }));
-  // Control: a request the transport DOES build, failing at connect.
-  await report("refused", () => fetch("http://127.0.0.1:39123/x"));
+  // Control: a request the transport DOES build, failing at connect. Only the
+  // code is printed: the engine's connect-failure message omits the address
+  // Node appends, a separate transport-layer difference this test is not about.
+  try {
+    await fetch("http://127.0.0.1:39123/x");
+    console.log("refused -> resolved");
+  } catch (error: any) {
+    console.log("refused -> " + error?.name + " " + JSON.stringify(error?.message) + " code=" + error?.cause?.code);
+  }
 }
 
 main();
