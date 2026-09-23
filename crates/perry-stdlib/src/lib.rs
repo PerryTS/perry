@@ -24,11 +24,12 @@ pub use perry_updater;
 
 // `extern "C"` shims that perry-ffi declares for use by external
 // native binding crates (#466 Phase 1 + 5 — async surface). Gated
-// on `async-runtime` because the underlying async_bridge does;
-// every wrapper that depends on these (bcrypt, argon2, ws, db
-// drivers, …) already triggers `async-runtime` through its own
-// per-binding feature, so the linkage is automatic.
-#[cfg(feature = "async-runtime")]
+// on `async-bridge` because the underlying async_bridge is; the
+// three shims that drive tokio futures (`perry_ffi_spawn_async`,
+// `perry_ffi_spawn_blocking_with_reactor`, and `perry_ffi_spawn_blocking`'s
+// tokio-pool arm) additionally need `async-runtime`, which every
+// wrapper that calls them selects through the auto-optimize driver.
+#[cfg(feature = "async-bridge")]
 pub mod perry_ffi_async;
 
 // Core modules - always available

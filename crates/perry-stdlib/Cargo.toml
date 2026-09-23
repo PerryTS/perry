@@ -116,8 +116,9 @@ external-net-pump = ["async-runtime"]
 # `.pipe()` calls through `js_ext_zlib_dispatch_method`. It also registers
 # `js_ext_zlib_native_dispatch` for captured module exports such as
 # `util.promisify(zlib.gzip)`; pump and keepalive registration is owned by
-# perry-ext-zlib.
-external-zlib-pump = ["async-runtime"]
+# perry-ext-zlib. perry-ext-zlib is synchronous (no tokio task), so this
+# needs only the promise bridge, not the tokio runtime (turnloop P8 lane L).
+external-zlib-pump = ["async-bridge"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`
@@ -194,17 +195,19 @@ database = ["database-sqlite"]
 database-sqlite = ["dep:rusqlite"]
 
 # Crypto (sha256, md5, bcrypt, jwt, etc.)
-# Implies `async-runtime` because bcrypt/jwt/argon2 hashing offloads to
-# `tokio::task::spawn_blocking`, and `ids` because `crypto.randomUUID()`
-# delegates to the `uuid` crate.
+# Implies `async-bridge` (the tokio-free promise pump) because bcrypt/argon2
+# settle through it from turnloop's blocking pool, and the Hash/Hmac stream
+# events drain through it; `ids` because `crypto.randomUUID()` delegates to
+# the `uuid` crate. It used to imply `async-runtime` for a
+# `tokio::task::spawn_blocking` that turnloop P4 already replaced.
 # `crypto` stays as the umbrella for backwards-compat; `bundled-bcrypt`
 # and `bundled-argon2` (v0.5.537) split out the two password-hashing
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-runtime", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
-bundled-bcrypt = ["dep:bcrypt", "async-runtime"]
-bundled-argon2 = ["dep:argon2", "async-runtime"]
+crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
+bundled-bcrypt = ["dep:bcrypt", "async-bridge"]
+bundled-argon2 = ["dep:argon2", "async-bridge"]
 # ethers blockchain utilities — pure Rust, no extra deps. Default-on
 # through `crypto` umbrella; the well-known flip strips this and
 # routes to perry-ext-ethers when `import 'ethers'` is detected.
@@ -223,13 +226,14 @@ bundled-ethers = []
 # strings. The `compression` umbrella stays as the union for
 # backwards compatibility (`--features compression` and the default
 # `full` build are byte-identical to the pre-split archive).
-# `async-runtime` is explicit here (not inherited): zlib's deferred
+# `async-bridge` is explicit here (not inherited): zlib's deferred
 # stream/one-shot events are queued through `common::async_bridge`'s
-# pump, which only compiles under `async-runtime`. Historically the
+# pump, which only compiles under `async-bridge`. Historically the
 # auto-optimize path always enabled it transitively (the force-added
 # `crypto` feature implied it), so `--features compression` never
-# compiled standalone — now it does.
-compression-gzip = ["dep:flate2", "async-runtime"]
+# compiled standalone — now it does. It was `async-runtime` (tokio)
+# until turnloop P8 lane L split the pump from the runtime.
+compression-gzip = ["dep:flate2", "async-bridge"]
 compression-brotli = ["compression-gzip", "dep:brotli"]
 compression-zstd = ["compression-gzip", "dep:zstd"]
 compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
@@ -238,9 +242,10 @@ compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
 # backwards-compat; v0.5.558's well-known flip toggles
 # `bundled-nodemailer` instead.
 email = ["bundled-nodemailer"]
-# `async-runtime` stays: the surrounding binding still builds its promises
-# through `common::async_bridge`. The transport itself takes no tokio thread.
-bundled-nodemailer = ["async-runtime", "turnloop-smtp-client"]
+# `async-bridge`: the surrounding binding still settles its promises
+# through `common::async_bridge`. Neither it nor the transport takes a tokio
+# thread, so since turnloop P8 lane L it no longer implies `async-runtime`.
+bundled-nodemailer = ["async-bridge", "turnloop-smtp-client"]
 # turnloop P6: SMTP on turnloop (`src/turnloop_smtp/`). Kept OUT of the
 # `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
 # the `js_smtp_*` entry points survive the well-known flip that strips
@@ -272,8 +277,19 @@ scheduler = []
 # needs to be toggled here; enabling `ids` is a harmless no-op.
 ids = []
 
-# Async runtime (tokio) - internal feature
-async-runtime = ["dep:tokio"]
+# The promise bridge — `common::async_bridge`'s main-thread settle queue and
+# pump, and the `perry_ffi_*` promise / pool / blocking C ABI external
+# wrappers settle through. Internal feature. NO tokio (turnloop P8 lane L):
+# the auto-optimize driver force-enables this for every stdlib-linking
+# program, where it used to force-enable `async-runtime`.
+async-bridge = []
+
+# Async runtime (tokio) - internal feature. The bridge plus the tokio
+# current-thread runtime (`common::tokio_bridge`), for the features that still
+# hand it tokio futures: bundled net / tls / ws sockets, reqwest fetch, the
+# container engine, and the `perry_ffi_spawn_async` / `_with_reactor` ABI that
+# perry-ext-net / perry-ext-http / the db wrappers' decline paths use.
+async-runtime = ["async-bridge", "dep:tokio"]
 
 # OCI container subsystem (perry/container, perry/compose, perry/workloads).
 # Pulls in perry-container-compose and exposes the `js_container_*` and

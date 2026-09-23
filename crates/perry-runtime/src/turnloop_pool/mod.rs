@@ -72,7 +72,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use turnloop::{Completion, Error, ErrorKind, OpId, OpResult, Payload, Token};
+use turnloop::{Completion, Error, ErrorKind, Occupancy, OpId, OpResult, Payload, Token};
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -398,15 +398,52 @@ where
     W: FnOnce() -> T + Send + 'static,
     D: FnOnce(Delivery<T>, Vec<u64>) + 'static,
 {
+    submit_with(Occupancy::Bounded, roots, work, deliver)
+}
+
+/// [`submit`] for work that holds its pool thread for as long as a connection,
+/// a nested runtime or a caller-owned blocking wait lives, rather than for as
+/// long as a computation takes.
+///
+/// turnloop's `Occupancy::Long` class (PerryTS/turnloop#42): a separately
+/// accounted, on-demand worker set, so N long jobs cannot starve the bounded
+/// set that hashing and compression run on, and a burst of bounded jobs cannot
+/// hold a long job in a queue. Delivery, cancellation and refusal are exactly
+/// [`submit`]'s. The first consumer is `perry_ffi_spawn_blocking` in a build
+/// without tokio, whose callers are not required to be short.
+pub fn submit_long<T, W, D>(work: W, deliver: D) -> Result<JobId, SubmitError>
+where
+    T: Send + 'static,
+    W: FnOnce() -> T + Send + 'static,
+    D: FnOnce(Delivery<T>) + 'static,
+{
+    submit_with(Occupancy::Long, Vec::new(), work, move |delivery, _| {
+        deliver(delivery)
+    })
+}
+
+fn submit_with<T, W, D>(
+    occupancy: Occupancy,
+    roots: Vec<u64>,
+    work: W,
+    deliver: D,
+) -> Result<JobId, SubmitError>
+where
+    T: Send + 'static,
+    W: FnOnce() -> T + Send + 'static,
+    D: FnOnce(Delivery<T>, Vec<u64>) + 'static,
+{
     if !roots.is_empty() {
         ensure_scanner_registered();
     }
     let id = POOL.with(|state| mint_id(&mut state.borrow_mut()));
-    let submitted = crate::event_pump::with_pool_driver(|driver| {
-        driver.blocking(
-            move || Ok(Payload::Boxed(Box::new(work()) as Erased)),
-            token(OP_JOB, id),
-        )
+    let job = move || Ok(Payload::Boxed(Box::new(work()) as Erased));
+    let submitted = crate::event_pump::with_pool_driver(|driver| match occupancy {
+        // `blocking` is `blocking_with(.., Bounded, ..)` minus the
+        // cancellation hand-off; kept as the literal call every P4 job has
+        // always made.
+        Occupancy::Bounded => driver.blocking(job, token(OP_JOB, id)),
+        Occupancy::Long => driver.blocking_with(move |_| job(), occupancy, token(OP_JOB, id)),
     });
     let op = match submitted {
         None => {

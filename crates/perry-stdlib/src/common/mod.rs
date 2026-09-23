@@ -3,18 +3,22 @@
 use perry_runtime::{string::str_bytes_from_jsvalue, value::JSValue, StringHeader};
 
 pub mod handle;
-// Tokio-backed promise/runtime bridge — only needed when an async feature
-// (http-server/client, websocket, databases, email, scheduler, rate-limit,
-// crypto's bcrypt path, …) pulls in `async-runtime`. Always-on code that
-// references it must also be `#[cfg(feature = "async-runtime")]`-gated.
-#[cfg(feature = "async-runtime")]
+// The promise bridge — the main-thread settle queue and pump. Tokio-free
+// since turnloop P8 lane L, and gated on `async-bridge` (which
+// `async-runtime` implies). Always-on code that references it must also be
+// `#[cfg(feature = "async-bridge")]`-gated.
+#[cfg(feature = "async-bridge")]
 pub mod async_bridge;
 pub mod dispatch;
 pub(crate) mod dispatch_http;
 pub mod net_method_values;
 mod net_socket_bridge;
-
+// The tokio current-thread runtime, for the features that still hand it tokio
+// futures. Its public names are re-exported through `async_bridge`.
 #[cfg(feature = "async-runtime")]
+mod tokio_bridge;
+
+#[cfg(feature = "async-bridge")]
 pub use async_bridge::*;
 pub use dispatch::*;
 pub use handle::*;

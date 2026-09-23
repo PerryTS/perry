@@ -205,9 +205,10 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
         Some(opts) => opts,
         None => {
             // Return rejected promise for invalid options
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, _>("Invalid mail options".to_string())
-            });
+            crate::common::async_bridge::reject_promise_later(
+                promise as *mut u8,
+                "Invalid mail options".to_string(),
+            );
             return promise;
         }
     };

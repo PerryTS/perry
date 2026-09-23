@@ -1069,7 +1069,7 @@ pub(crate) fn build_and_run_link(
                 // real pump implementations for exactly those references.
                 // --allow-multiple-definition above lets its bundled
                 // perry-runtime copy coexist with libperry_runtime.a. The
-                // async-runtime feature is force-enabled for UI builds (see
+                // async-bridge feature is force-enabled for UI builds (see
                 // build_optimized_libs), so the real js_stdlib_process_pending
                 // is guaranteed present in libperry_stdlib.a. (When
                 // ctx.needs_stdlib is true, stdlib already sits BEFORE the

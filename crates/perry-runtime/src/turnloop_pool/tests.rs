@@ -458,6 +458,78 @@ fn a_full_pool_queue_refuses_rather_than_growing_without_bound() {
     );
 }
 
+// ── Occupancy classes (PerryTS/turnloop#42) ─────────────────────────────────
+
+/// `submit_long` rides turnloop's `Occupancy::Long` set, which a saturated
+/// bounded set cannot starve: with EVERY bounded worker provably held on a
+/// gate (read from `turnloop::pool_stats`, not assumed from a thread count),
+/// a long job still runs on a pool thread and delivers on the submitting one.
+/// Had it gone to the bounded set it would queue behind the gate and the
+/// first assertion would time out.
+#[test]
+fn a_long_job_runs_while_every_bounded_worker_is_held() {
+    let fixture = Fixture::start();
+    let gate = Arc::new(Gate::default());
+    let mut held = 0u64;
+    for _ in 0..64 {
+        let gate = gate.clone();
+        submit(move || gate.wait(), |_| record(Rec::Done("held", vec![])))
+            .expect("the bounded queue has room for the holding jobs");
+        held += 1;
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let stats = turnloop::pool_stats();
+        if stats.threads > 0 && stats.busy == stats.threads {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "every bounded worker must be held before the long job, or this proves nothing: {stats:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let owner = std::thread::current().id();
+    submit_long(
+        move || std::thread::current().id(),
+        move |delivery| {
+            let Delivery::Done(worker) = delivery else {
+                panic!("a long job that ran must deliver Done, got {delivery:?}");
+            };
+            assert_ne!(worker, owner, "the long job runs on a pool thread");
+            assert_eq!(
+                std::thread::current().id(),
+                owner,
+                "and delivers on the submitting thread"
+            );
+            record(Rec::Done("long", vec![]));
+        },
+    )
+    .expect("the long set accepts a job on a loop-owning thread");
+    assert!(
+        pump_until(|| events().contains(&Rec::Done("long", vec![]))),
+        "the long job must complete while the bounded set is held: {:?}",
+        events()
+    );
+    assert!(
+        !events().contains(&Rec::Done("held", vec![])),
+        "no bounded job may have finished yet — the gate is still shut"
+    );
+
+    gate.open();
+    assert!(
+        pump_until(|| outstanding() == 0),
+        "every held job still completes, {} left",
+        outstanding()
+    );
+    let (submitted, completed, cancelled, failed) = fixture.delta();
+    assert_eq!(
+        (submitted, completed, cancelled, failed),
+        (held + 1, held + 1, 0, 0)
+    );
+}
+
 // ── Rooting ─────────────────────────────────────────────────────────────────
 
 #[test]
