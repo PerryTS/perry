@@ -1,0 +1,9 @@
+{"name":"app","port":8081,"tags":["a","b"],"nested":{"x":1.5}}
+{
+  "ok": true,
+  "list": [
+    1,
+    2,
+    3
+  ]
+}
