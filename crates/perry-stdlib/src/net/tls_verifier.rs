@@ -31,7 +31,7 @@ impl ServerCertVerifier for NodeConfiguredCaVerifier {
     ) -> Result<ServerCertVerified, rustls::Error> {
         if self.custom_identity {
             let parsed = rustls::server::ParsedCertificate::try_from(end_entity)?;
-            let provider = rustls::crypto::aws_lc_rs::default_provider();
+            let provider = rustls::crypto::ring::default_provider();
             match rustls::client::verify_server_cert_signed_by_trust_anchor(
                 &parsed,
                 &self.roots,

@@ -377,7 +377,7 @@ fn raw_handle_value(handle: i64) -> f64 {
 
 fn ensure_crypto_provider_installed() {
     RUSTLS_PROVIDER_INSTALLED.call_once(|| {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls::crypto::ring::default_provider().install_default();
     });
 }
 
@@ -960,7 +960,7 @@ unsafe fn build_server_config_from_options(
     // enable the optional `ring` module. Load the key through that same
     // provider so a TLS-only program can build without unrelated features
     // pulling `ring` in by feature unification.
-    let signing_key = rustls::crypto::aws_lc_rs::default_provider()
+    let signing_key = rustls::crypto::ring::default_provider()
         .key_provider
         .load_private_key(key)
         .map_err(|e| format!("rustls: build server config: {e}"))?;
@@ -985,7 +985,7 @@ unsafe fn build_server_config_from_options(
         versions.push(&rustls::version::TLS12);
     }
     let builder = rustls::ServerConfig::builder_with_provider(
-        rustls::crypto::aws_lc_rs::default_provider().into(),
+        rustls::crypto::ring::default_provider().into(),
     )
     .with_protocol_versions(&versions)
     .map_err(|error| format!("tls protocol versions: {error}"))?;

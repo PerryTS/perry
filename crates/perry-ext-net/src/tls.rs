@@ -350,7 +350,7 @@ impl ServerCertVerifier for NodeConfiguredCaVerifier {
     ) -> Result<ServerCertVerified, rustls::Error> {
         if self.custom_identity {
             let parsed = rustls::server::ParsedCertificate::try_from(end_entity)?;
-            let provider = rustls::crypto::aws_lc_rs::default_provider();
+            let provider = rustls::crypto::ring::default_provider();
             match rustls::client::verify_server_cert_signed_by_trust_anchor(
                 &parsed,
                 &self.roots,
@@ -429,7 +429,7 @@ pub(crate) fn build_client_config(
     // server) reached `ClientConfig::builder()` with none installed once
     // #4971 made `tls.connect` actually resolve its host. Idempotent —
     // `install_default` errors (ignored) if a provider is already set.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if !verify {
         return build_client_config_insecure(data);
     }
@@ -458,7 +458,7 @@ pub(crate) fn build_client_config(
     };
     let versions = protocol_versions(data.map_or(0b11, |data| data.version_mask));
     let builder = rustls::ClientConfig::builder_with_provider(
-        rustls::crypto::aws_lc_rs::default_provider().into(),
+        rustls::crypto::ring::default_provider().into(),
     )
     .with_protocol_versions(&versions)
     .map_err(|error| format!("tls protocol versions: {error}"))?
@@ -552,7 +552,7 @@ fn build_client_config_insecure(
 
     let versions = protocol_versions(data.map_or(0b11, |data| data.version_mask));
     let builder = rustls::ClientConfig::builder_with_provider(
-        rustls::crypto::aws_lc_rs::default_provider().into(),
+        rustls::crypto::ring::default_provider().into(),
     )
     .with_protocol_versions(&versions)
     .map_err(|error| format!("tls protocol versions: {error}"))?

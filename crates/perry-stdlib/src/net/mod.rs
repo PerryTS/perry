@@ -665,7 +665,7 @@ fn build_tls_connector(
     // server) reached `ClientConfig::builder()` with none installed once
     // #4971 made `tls.connect` actually resolve its host. Idempotent —
     // `install_default` errors (ignored) if a provider is already set.
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if !verify {
         return build_tls_connector_insecure(data);
     }
@@ -699,7 +699,7 @@ fn build_tls_connector(
     };
     let versions = tls_protocol_versions(data.map_or(0b11, |data| data.version_mask));
     let builder = rustls::ClientConfig::builder_with_provider(
-        rustls::crypto::aws_lc_rs::default_provider().into(),
+        rustls::crypto::ring::default_provider().into(),
     )
     .with_protocol_versions(&versions)
     .map_err(|error| format!("tls protocol versions: {error}"))?
@@ -825,7 +825,7 @@ fn build_tls_connector_insecure(
 
     let versions = tls_protocol_versions(data.map_or(0b11, |data| data.version_mask));
     let builder = rustls::ClientConfig::builder_with_provider(
-        rustls::crypto::aws_lc_rs::default_provider().into(),
+        rustls::crypto::ring::default_provider().into(),
     )
     .with_protocol_versions(&versions)
     .map_err(|error| format!("tls protocol versions: {error}"))?

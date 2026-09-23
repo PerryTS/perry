@@ -45,7 +45,7 @@ use crate::common::{for_each_handle_mut_of, get_handle_mut, register_handle, Han
 /// set. Mirrors `net::mod` / `tls` (#4971) and `perry-ext-net`.
 #[cfg(not(target_os = "ios"))]
 fn ensure_tls_crypto_provider() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 fn ws_file_log(msg: &str) {
@@ -402,7 +402,7 @@ fn ws_tls_connector() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
                 return Err("no trusted root certificates available for wss://".to_string());
             }
             let config = rustls::ClientConfig::builder_with_provider(
-                rustls::crypto::aws_lc_rs::default_provider().into(),
+                rustls::crypto::ring::default_provider().into(),
             )
             .with_safe_default_protocol_versions()
             .map_err(|e| format!("tls protocol versions: {}", e))?
@@ -422,7 +422,7 @@ fn ws_tls_connector() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
 fn ws_nonce() -> Result<[u8; 16], String> {
     let provider = rustls::crypto::CryptoProvider::get_default()
         .cloned()
-        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::ring::default_provider()));
     let mut nonce = [0u8; 16];
     provider
         .secure_random
