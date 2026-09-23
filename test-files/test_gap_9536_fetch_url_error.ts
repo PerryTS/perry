@@ -46,12 +46,12 @@ crates/perry-codegen/src/expr/logical_collections.rs:
 crates/perry-runtime/src/object/global_fetch.rs:
   - js_fetch_input_ptr
   - global_this_fetch_thunk
-crates/perry-stdlib/src/fetch/abort_bridge.rs:
-  - run_request
 crates/perry-stdlib/src/fetch/mod.rs:
-  - queue_fetch_transport_error
   - js_fetch_with_options
+crates/perry-stdlib/src/fetch/turnloop_bridge.rs:
+  - dispatch_inputs
+  - settle
 crates/perry-stdlib/src/fetch/transport_error.rs:
-  - from_reqwest
+  - from_client
   - into_js_bits
 */
