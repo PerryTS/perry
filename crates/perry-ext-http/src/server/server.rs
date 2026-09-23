@@ -664,8 +664,8 @@ fn serve_http_connection(
     }
     tokio::spawn(async move {
         // #4973 — when `'upgrade'` listeners exist, peek the
-        // request head before hyper writes anything: a keyless
-        // Upgrade request must reach JS as a raw net.Socket
+        // request head before hyper writes anything: an Upgrade
+        // request claimed by JS must reach it as a raw net.Socket
         // with NO response on the wire (Node semantics). Other
         // connections replay the peeked bytes to hyper.
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
@@ -1278,9 +1278,9 @@ async fn handle_request(
     // `'request'` when the server has no `'upgrade'` listeners — the
     // unconditional branch used to hijack it into a bogus 101; (b) only a
     // real WebSocket handshake (`Sec-WebSocket-Key` present) belongs on the
-    // tungstenite path — keyless Upgrade requests are served Node-style by
-    // the raw peek path in raw_upgrade.rs and only reach hyper when no
-    // listener was attached at accept time.
+    // native path only for an attached native WebSocket server. JS `'upgrade'`
+    // listeners own their handshake and are served Node-style by the raw peek
+    // path in raw_upgrade.rs.
     if crate::server::upgrade::is_websocket_upgrade(&req) {
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
             .map(|server| server_has_event_listener(server, "upgrade"))

@@ -17,20 +17,18 @@
 //!    standard `ws_id` that the rest of perry-ext-ws's surface
 //!    consumes.
 //! 4. The `'upgrade'` listeners on the HTTP server are fired with
-//!    `(im_f64, ws_id_f64, head_str_f64)`. `ws_id_f64` is the same
+//!    `(im_f64, ws_id_f64, head_buffer_f64)`. `ws_id_f64` is the same
 //!    integer id as standalone `WebSocketServer({port})` connections,
 //!    so user code can interact with it through `ws.on('message',…)`,
 //!    `ws.send(…)`, `ws.close(…)` unchanged.
 //!
 //! Attached WebSocket servers are native observers registered by perry-ext-ws.
 
-use perry_ffi::{alloc_string, get_handle_mut, JsClosure, RawClosureHeader};
+use perry_ffi::{get_handle_mut, JsClosure, RawClosureHeader};
 
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::server::HttpServer;
-use crate::server::types::{
-    js_promise_run_microtasks, POINTER_TAG, PTR_MASK, STRING_TAG, TAG_UNDEFINED,
-};
+use crate::server::types::{js_promise_run_microtasks, POINTER_TAG, PTR_MASK};
 
 /// Test whether a request looks like a WebSocket upgrade — checks
 /// `Connection: Upgrade` (case-insensitive contains) and
@@ -49,6 +47,11 @@ pub(crate) fn is_websocket_upgrade(req: &hyper::Request<hyper::body::Incoming>) 
         .map(|s| s.eq_ignore_ascii_case("websocket"))
         .unwrap_or(false);
     connection_ok && upgrade_ok
+}
+
+fn upgrade_head_arg(head_data: &[u8]) -> f64 {
+    let head = perry_ffi::alloc_buffer(head_data);
+    f64::from_bits(POINTER_TAG | (head as u64 & PTR_MASK))
 }
 
 /// Fire the `'upgrade'` event listeners with `(im, wsId, head)`.
@@ -79,14 +82,10 @@ pub(crate) fn fire_upgrade_listeners(
     // (1.0_f64) would have bits 0x3FF0_…, which `unbox_to_i64`
     // AND-masks to 0, missing the WS_CONNECTIONS lookup entirely.
     let ws_id_f64 = f64::from_bits(POINTER_TAG | (ws_id as u64 & PTR_MASK));
-    let head_str = if head_data.is_empty() {
-        f64::from_bits(TAG_UNDEFINED)
-    } else {
-        let s = String::from_utf8_lossy(&head_data).into_owned();
-        let header = alloc_string(&s);
-        f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
-    };
-    let head_str = scope.root_nanbox(head_str);
+    // Node always supplies a Buffer, including for a zero-length head. Public
+    // `ws` reads `head.length` before deciding whether to call `unshift`, and
+    // upgrade bytes are arbitrary protocol data rather than UTF-8 text.
+    let head_arg = scope.root_nanbox(upgrade_head_arg(&head_data));
 
     for cb in listeners {
         if cb.get() == 0 {
@@ -96,7 +95,7 @@ pub(crate) fn fire_upgrade_listeners(
             let raw = cb.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call3(req_f64, ws_id_f64, head_str.get());
+                let _ = closure.call3(req_f64, ws_id_f64, head_arg.get());
             }
             js_promise_run_microtasks();
         }
@@ -110,6 +109,28 @@ pub(crate) fn fire_upgrade_listeners(
 #[allow(clippy::erasing_op)]
 fn _force_link() -> u64 {
     POINTER_TAG | (PTR_MASK & 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{upgrade_head_arg, POINTER_TAG, PTR_MASK};
+
+    fn head_bytes(data: &[u8]) -> &'static [u8] {
+        let arg = upgrade_head_arg(data);
+        assert_eq!(arg.to_bits() & !PTR_MASK, POINTER_TAG);
+        let ptr = (arg.to_bits() & PTR_MASK) as *const perry_ffi::BufferHeader;
+        perry_ffi::read_buffer_bytes(ptr).expect("upgrade head buffer")
+    }
+
+    #[test]
+    fn empty_upgrade_head_is_an_empty_buffer() {
+        assert_eq!(head_bytes(&[]), &[] as &[u8]);
+    }
+
+    #[test]
+    fn upgrade_head_preserves_binary_bytes() {
+        assert_eq!(head_bytes(&[0xff, 0x00, 0x80]), &[0xff, 0x00, 0x80]);
+    }
 }
 
 /// Read owned address metadata without allocating JS objects or introducing a
