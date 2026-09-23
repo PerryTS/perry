@@ -48,6 +48,25 @@ pub(crate) struct FetchDispatch {
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) abort_key: Option<usize>,
+    /// `RequestInit.redirect`. Only `js_fetch_with_options` can carry a
+    /// non-default mode; the fixed-shape entry points (`js_fetch_get`,
+    /// `js_fetch_post`, …) have no init object to read one from and always
+    /// follow, which is what they did before this field existed.
+    pub(crate) redirect: super::FetchRedirectMode,
+}
+
+/// Perry's fetch-level mode as the engine's. The engine implements all three
+/// (`turnloop_http::client::Request::redirect`): `Manual` stops at the 3xx and
+/// hands it back with its `Location`, `Error` fails the request, and `Follow`
+/// chases up to `DEFAULT_MAX_REDIRECTS` (20 — Node's number).
+pub(super) fn engine_redirect(
+    mode: super::FetchRedirectMode,
+) -> turnloop_http::client::RedirectMode {
+    match mode {
+        super::FetchRedirectMode::Follow => turnloop_http::client::RedirectMode::Follow,
+        super::FetchRedirectMode::Manual => turnloop_http::client::RedirectMode::Manual,
+        super::FetchRedirectMode::Error => turnloop_http::client::RedirectMode::Error,
+    }
 }
 
 /// The `js_fetch_with_options` form: the same dispatch built from the resolved
@@ -62,6 +81,7 @@ pub(crate) fn dispatch_inputs(
         method,
         body,
         custom_headers,
+        redirect,
     } = inputs;
     dispatch(
         FetchDispatch {
@@ -70,6 +90,7 @@ pub(crate) fn dispatch_inputs(
             headers: custom_headers.into_iter().collect(),
             body,
             abort_key,
+            redirect,
         },
         promise_ptr,
     );
@@ -205,9 +226,7 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         method: dispatch.method,
         headers: dispatch.headers,
         body: dispatch.body,
-        // Perry's fetch has always followed redirects. `RedirectMode::Follow`
-        // with turnloop-http's own limit of 20 is Node's number.
-        redirect: turnloop_http::client::RedirectMode::Follow,
+        redirect: engine_redirect(dispatch.redirect),
         abort_key: dispatch.abort_key,
     };
     let (url, method) = (spec.url.clone(), spec.method.clone());

@@ -505,13 +505,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             headers,
             headers_dynamic,
             signal,
+            redirect,
         } => {
-            // Lower `init.signal` (if any) with the other operands so it can be
-            // stashed for `js_fetch_with_options` right before the call below.
+            // Lower `init.signal` / `init.redirect` (when present) with the
+            // other operands so they can be stashed for
+            // `js_fetch_with_options` right before the call below.
             let mut operands: Vec<&Expr> = vec![url, method, body];
-            if let Some(s) = signal {
+            let signal_index = signal.as_ref().map(|s| {
+                let index = operands.len();
                 operands.push(s);
-            }
+                index
+            });
+            let redirect_index = redirect.as_ref().map(|r| {
+                let index = operands.len();
+                operands.push(r);
+                index
+            });
             // The window is STATED, not derived (`with_operands_rooted_across_call`):
             // the across step ends in `js_fetch_headers_to_json`, which enumerates
             // the own properties of a program-supplied value and therefore can run
@@ -609,8 +618,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // Stash the AbortSignal so `js_fetch_with_options` can cancel
                     // the request when it aborts (`controller.abort()` /
                     // `AbortSignal.timeout`).
-                    if let Some(sig) = vals.get(3) {
+                    if let Some(index) = signal_index {
+                        let sig = &vals[index];
                         blk.call_void("js_fetch_set_pending_signal", &[(DOUBLE, sig)]);
+                    }
+                    if let Some(index) = redirect_index {
+                        blk.call_void("js_fetch_set_pending_redirect", &[(DOUBLE, &vals[index])]);
                     }
                     let promise = blk.call(
                         I64,

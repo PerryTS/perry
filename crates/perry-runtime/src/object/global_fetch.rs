@@ -8,26 +8,34 @@ use std::cell::Cell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+#[derive(Clone, Copy)]
+struct PendingFetchOptions {
+    signal: f64,
+    redirect: i32,
+}
+
 crate::perry_thread_local! {
-    /// The `signal` from the in-progress `fetch(url, { signal })` call, stashed
-    /// so the stdlib `js_fetch_with_options` (whose 4-arg ABI predates
-    /// AbortSignal support) can pick it up at entry without an ABI change.
+    /// Options from the in-progress `fetch(url, init)` call, stashed so the
+    /// stdlib `js_fetch_with_options` (whose 4-arg ABI predates them) can pick
+    /// them up at entry without an ABI change.
     ///
     /// **This is a GC root, and must stay one (#7231).** The `AbortSignal` is
     /// a NaN-boxed heap object, and between the stash and
     /// `js_fetch_with_options`'s consume the argument lowering for the fetch
     /// call itself still runs and allocates. The window is short, but the
     /// cell is the only reference across it.
-    static PENDING_FETCH_SIGNAL: Cell<f64> =
-        const { Cell::new(f64::from_bits(crate::value::TAG_UNDEFINED)) };
+    static PENDING_FETCH_OPTIONS: Cell<PendingFetchOptions> = const { Cell::new(PendingFetchOptions {
+        signal: f64::from_bits(crate::value::TAG_UNDEFINED),
+        redirect: 0,
+    }) };
 }
 
 /// Root + rewrite the stashed in-flight `fetch` `AbortSignal`.
 pub(crate) fn scan_pending_fetch_signal_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    PENDING_FETCH_SIGNAL.with(|cell| {
-        let mut value = cell.get();
-        if visitor.visit_nanbox_f64_slot(&mut value) {
-            cell.set(value);
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        if visitor.visit_nanbox_f64_slot(&mut options.signal) {
+            cell.set(options);
         }
     });
 }
@@ -40,7 +48,11 @@ pub(crate) fn scan_pending_fetch_signal_root_mut(visitor: &mut crate::gc::Runtim
 /// codegen `fetch(url, {static init})` fast path can emit it too.
 #[no_mangle]
 pub extern "C" fn js_fetch_set_pending_signal(signal: f64) {
-    PENDING_FETCH_SIGNAL.with(|c| c.set(signal));
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        options.signal = signal;
+        cell.set(options);
+    });
 }
 
 /// Consume and clear the pending fetch signal, returning `undefined` when none
@@ -48,10 +60,56 @@ pub extern "C" fn js_fetch_set_pending_signal(signal: f64) {
 /// fetch on the same thread).
 #[no_mangle]
 pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
-    PENDING_FETCH_SIGNAL.with(|c| {
-        let v = c.get();
-        c.set(f64::from_bits(crate::value::TAG_UNDEFINED));
-        v
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        let signal = options.signal;
+        options.signal = f64::from_bits(crate::value::TAG_UNDEFINED);
+        cell.set(options);
+        signal
+    })
+}
+
+/// Validate and stash `RequestInit.redirect` for the immediately-following
+/// `js_fetch_with_options` call. The string is read synchronously and only its
+/// mode is retained, so the bridge itself needs no GC root.
+#[no_mangle]
+pub extern "C" fn js_fetch_set_pending_redirect(redirect: f64) {
+    let mode = if redirect.to_bits() == crate::value::TAG_UNDEFINED {
+        0
+    } else {
+        let value = crate::value::JSValue::from_bits(redirect.to_bits());
+        if !value.is_string() {
+            -1
+        } else {
+            let redirect =
+                crate::value::js_nanbox_get_pointer(redirect) as *const crate::StringHeader;
+            let len = unsafe { (*redirect).byte_len as usize };
+            let bytes = unsafe { std::slice::from_raw_parts(redirect.add(1) as *const u8, len) };
+            match bytes {
+                b"follow" => 1,
+                b"error" => 2,
+                b"manual" => 3,
+                _ => -1,
+            }
+        }
+    };
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        options.redirect = mode;
+        cell.set(options);
+    });
+}
+
+/// Consume and clear the pending redirect mode. An absent option returns 0 so
+/// `fetch(Request)` can inherit the Request object's own redirect setting.
+#[no_mangle]
+pub extern "C" fn js_fetch_take_pending_redirect() -> i32 {
+    PENDING_FETCH_OPTIONS.with(|cell| {
+        let mut options = cell.get();
+        let mode = options.redirect;
+        options.redirect = 0;
+        cell.set(options);
+        mode
     })
 }
 
@@ -719,10 +777,12 @@ pub(super) extern "C" fn global_this_fetch_thunk(
     let method_ptr = fetch_option_string_ptr(init, b"method");
     let body_ptr = fetch_option_string_ptr(init, b"body");
     let headers_json_ptr = fetch_headers_json_ptr(init);
+    let redirect = fetch_option(init, b"redirect");
 
     // Hand the `init.signal` (if any) to `js_fetch_with_options` so an
     // `AbortController` / `AbortSignal.timeout` can cancel this request.
     js_fetch_set_pending_signal(fetch_option(init, b"signal"));
+    js_fetch_set_pending_redirect(redirect);
 
     let promise =
         unsafe { call_fetch_with_options(url_ptr, method_ptr, body_ptr, headers_json_ptr) };
@@ -730,5 +790,29 @@ pub(super) extern "C" fn global_this_fetch_thunk(
         f64::from_bits(crate::value::TAG_NULL)
     } else {
         crate::value::js_nanbox_pointer(promise as i64)
+    }
+}
+
+#[cfg(test)]
+mod redirect_mode_tests {
+    use super::*;
+
+    #[test]
+    fn pending_redirect_mode_is_parsed_and_consumed_once() {
+        for (text, expected) in [("follow", 1), ("error", 2), ("manual", 3), ("invalid", -1)] {
+            let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+            js_fetch_set_pending_redirect(crate::value::js_nanbox_string(ptr as i64));
+            assert_eq!(js_fetch_take_pending_redirect(), expected, "mode {text}");
+            assert_eq!(
+                js_fetch_take_pending_redirect(),
+                0,
+                "mode must be cleared after consumption"
+            );
+        }
+
+        js_fetch_set_pending_redirect(f64::from_bits(crate::value::TAG_UNDEFINED));
+        assert_eq!(js_fetch_take_pending_redirect(), 0);
+        js_fetch_set_pending_redirect(f64::from_bits(crate::value::TAG_NULL));
+        assert_eq!(js_fetch_take_pending_redirect(), -1);
     }
 }

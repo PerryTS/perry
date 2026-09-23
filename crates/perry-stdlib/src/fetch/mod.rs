@@ -11,6 +11,19 @@ use std::sync::Mutex;
 
 use crate::common::async_bridge::queue_promise_resolution;
 
+unsafe extern "C" {
+    fn js_fetch_take_pending_redirect() -> i32;
+}
+
+/// `RequestInit.redirect`, as the fetch surface sees it.
+/// `turnloop_bridge::engine_redirect` translates it for the transport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FetchRedirectMode {
+    Follow,
+    Error,
+    Manual,
+}
+
 // Web Fetch `Headers` FFI — split out to keep this file under the 2,000-line
 // lint gate (#1649). The child module sees mod.rs's private items via its
 // `use super::*`.
@@ -497,6 +510,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
             headers: Vec::new(),
             body: None,
             abort_key: None,
+            redirect: FetchRedirectMode::Follow,
         },
         promise_ptr,
     );
@@ -536,6 +550,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                 .unwrap_or_else(|| vec![("authorization".to_string(), auth_header)]),
             body: None,
             abort_key: None,
+            redirect: FetchRedirectMode::Follow,
         },
         promise_ptr,
     );
@@ -578,6 +593,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
             headers,
             body: Some(body.into_bytes()),
             abort_key: None,
+            redirect: FetchRedirectMode::Follow,
         },
         promise_ptr,
     );
@@ -629,6 +645,7 @@ pub unsafe extern "C" fn js_fetch_post(
             headers: vec![("content-type".to_string(), content_type)],
             body: Some(body),
             abort_key: None,
+            redirect: FetchRedirectMode::Follow,
         },
         promise_ptr,
     );
@@ -649,6 +666,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
     // on the main thread BEFORE allocating the promise, so a GC during the
     // allocation can't move the still-TLS-stashed signal before we read it.
     let abort_state = abort_bridge::take_pending_signal_watch();
+    let pending_redirect = js_fetch_take_pending_redirect();
 
     let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
@@ -680,6 +698,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
         body_bytes,
         string_from_header(headers_json_ptr),
         url_ptr as usize,
+        pending_redirect,
     ) {
         Ok(inputs) => inputs,
         Err(err_bits) => {

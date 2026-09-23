@@ -490,6 +490,7 @@ mod tests {
             headers: vec![],
             headers_dynamic: None,
             signal: None,
+            redirect: None,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert_eq!(v.len(), 1);
@@ -508,6 +509,7 @@ mod tests {
             headers: vec![],
             headers_dynamic: None,
             signal: None,
+            redirect: None,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert!(v.is_empty());
@@ -523,6 +525,7 @@ mod tests {
             headers: vec![],
             headers_dynamic: None,
             signal: None,
+            redirect: None,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert_eq!(v.len(), 1);
@@ -543,6 +546,7 @@ mod tests {
             headers: vec![],
             headers_dynamic: None,
             signal: None,
+            redirect: None,
         }));
         let v = audit_module_egress(
             &m,
