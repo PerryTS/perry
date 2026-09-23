@@ -119,8 +119,8 @@ unsafe fn to_numeric(value: f64) -> f64 {
     if crate::symbol::js_is_symbol(value) != 0 {
         return crate::builtins::js_number_coerce(value);
     }
-    match crate::value::to_string::to_primitive_number(value) {
-        crate::value::to_string::OrdinaryToPrimitiveOutcome::Primitive(p) => {
+    match crate::value::to_string_primitive::to_primitive_number(value) {
+        crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::Primitive(p) => {
             // A BigInt primitive stays a BigInt (that's the whole point of
             // ToNumeric); anything else re-coerces via ToNumber.
             if JSValue::from_bits(p.to_bits()).is_bigint() {
@@ -129,10 +129,10 @@ unsafe fn to_numeric(value: f64) -> f64 {
                 crate::builtins::js_number_coerce(p)
             }
         }
-        crate::value::to_string::OrdinaryToPrimitiveOutcome::DefaultString => {
+        crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::DefaultString => {
             crate::builtins::js_number_coerce(value)
         }
-        crate::value::to_string::OrdinaryToPrimitiveOutcome::TypeError => {
+        crate::value::to_string_primitive::OrdinaryToPrimitiveOutcome::TypeError => {
             throw_add_type_error(b"Cannot convert object to primitive value")
         }
     }
@@ -267,7 +267,7 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // override first (data or accessor), else the `/source/flags` literal.
     // `Symbol.toPrimitive` was already consulted by `js_to_primitive` above.
     if crate::regex::is_regex_pointer(ptr as *const u8) {
-        if let Some(primitive) = crate::value::to_string::exotic_own_value_of_primitive(
+        if let Some(primitive) = crate::value::to_string_primitive::exotic_own_value_of_primitive(
             ptr,
             crate::object::exotic_expando::ExoticKind::RegExp,
             value,

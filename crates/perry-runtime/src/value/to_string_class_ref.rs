@@ -5,7 +5,7 @@
 //! generic pointer-only coercion ladders cannot discover them; this module is
 //! the one place that representation exception lives.
 
-use super::to_string::{
+use super::to_string_primitive::{
     is_primitive_value, ordinary_to_primitive_for_toprimitive, throw_cannot_convert_to_primitive,
 };
 use super::*;
