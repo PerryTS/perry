@@ -88,11 +88,7 @@ fn canonical_prototype_has_no_enumerable_chain_keys(receiver_addr: usize) -> boo
     let prototype = prototype_addr as *const ObjectHeader;
     let keys_view = unsafe { crate::object::object_keys(prototype) };
     let keys = keys_view.arr();
-    let key_count = if keys.is_null() {
-        0
-    } else {
-        keys_view.count()
-    };
+    let key_count = if keys.is_null() { 0 } else { keys_view.count() };
     let mut no_enumerable_chain_keys = true;
     for index in 0..key_count {
         let key = crate::array::js_array_get(keys, index);

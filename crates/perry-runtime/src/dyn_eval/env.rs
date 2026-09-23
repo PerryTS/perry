@@ -266,9 +266,11 @@ fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe 
             crate::object::object_live_slot_count(o),
             crate::object::INLINE_SLOT_FLOOR as u32,
         );
-        if let Some(idx) =
-            crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize, keys_view.count())
-        {
+        if let Some(idx) = crate::object::prop_plan::read_plan_lookup(
+            keys as usize,
+            key as usize,
+            keys_view.count(),
+        ) {
             if idx < alloc_limit {
                 let v = crate::object::js_object_get_field(o, idx);
                 return ScopeProbe::Hit(f64::from_bits(v.bits()));

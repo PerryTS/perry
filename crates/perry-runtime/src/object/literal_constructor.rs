@@ -61,9 +61,7 @@ mod tests {
         // naming a moved list's old address.
         crate::gc::gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
         crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-        crate::gc::gc_register_mutable_root_scanner(
-            crate::object::scan_transition_cache_roots_mut,
-        );
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
         crate::gc::gc_register_mutable_root_scanner(
             crate::object::shapes::scan_shape_table_rekey_mut,
         );

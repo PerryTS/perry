@@ -545,8 +545,7 @@ static CANON_PUBLISHED: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 static CANON_BACKINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CANON_BACKING_SLOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Lists published by growing their parent's backing in place (cumulative).
-static CANON_IN_PLACE_APPENDS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static CANON_IN_PLACE_APPENDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Every access goes through `try_with`, never `with`.
 ///

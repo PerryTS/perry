@@ -176,7 +176,9 @@ unsafe fn ensure_key_in_keys_array_inner(
     // array" instead of crashing the process. (#321: defends against the
     // Effect `makeGenericTag` mis-tagged-receiver corruption.)
     let keys_ptr = keys.arr() as usize;
-    if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 || !is_valid_obj_ptr(keys_ptr as *const u8)
+    if (keys_ptr as u64) >> 48 != 0
+        || keys_ptr < 0x10000
+        || !is_valid_obj_ptr(keys_ptr as *const u8)
     {
         return;
     }
@@ -296,8 +298,7 @@ unsafe fn ensure_key_in_keys_array_inner(
         None => {
             // A dictionary receiver's list is its own: it grows in place.
             let owned = scope.root_raw_mut_ptr(keys.arr());
-            let grown =
-                crate::array::js_array_push(keys.arr(), JSValue::string_ptr(key as *mut _));
+            let grown = crate::array::js_array_push(keys.arr(), JSValue::string_ptr(key as *mut _));
             let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
             crate::object::ObjectKeys::owned(grown)
         }

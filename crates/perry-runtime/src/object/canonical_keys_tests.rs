@@ -395,7 +395,11 @@ fn published_prefix_survives_object_and_reflection_writers() {
                     let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, count));
                     object.with_mut_ptr(|o| {
                         full.with_mut_ptr(|a| {
-                            crate::object::set_object_keys_with_live(o, crate::object::ObjectKeys::owned(a), count)
+                            crate::object::set_object_keys_with_live(
+                                o,
+                                crate::object::ObjectKeys::owned(a),
+                                count,
+                            )
                         })
                     });
                     assert_prefix(prefix);
@@ -457,7 +461,11 @@ fn published_prefix_survives_object_and_reflection_writers() {
                     // suffix may appear when the prefix is itself published.
                     let prefix_obj = crate::object::js_object_alloc(0, 2);
                     prefix.with_mut_ptr(|a| {
-                        crate::object::set_object_keys_with_live(prefix_obj, crate::object::ObjectKeys::owned(a), 2)
+                        crate::object::set_object_keys_with_live(
+                            prefix_obj,
+                            crate::object::ObjectKeys::owned(a),
+                            2,
+                        )
                     });
                     let reflected =
                         scope.root_raw_mut_ptr(crate::object::js_object_keys(prefix_obj));
@@ -486,7 +494,9 @@ fn published_prefix_survives_stable_sso_append_grow_and_squeeze() {
         let prefix = scope.root_raw_mut_ptr(prefix.as_ptr());
         let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 3));
         obj.with_mut_ptr(|o| {
-            full.with_mut_ptr(|a| crate::object::set_object_keys_with_live(o, crate::object::ObjectKeys::owned(a), 3))
+            full.with_mut_ptr(|a| {
+                crate::object::set_object_keys_with_live(o, crate::object::ObjectKeys::owned(a), 3)
+            })
         });
         for i in 0..3 {
             let k = key(&format!("prefix_key_{i}"));

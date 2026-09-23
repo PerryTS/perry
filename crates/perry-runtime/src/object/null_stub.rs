@@ -162,11 +162,7 @@ mod tests {
         );
         let keys_view = unsafe { crate::object::object_keys(obj) };
         let keys = keys_view.arr();
-        let key_count = if keys.is_null() {
-            0
-        } else {
-            keys_view.count()
-        };
+        let key_count = if keys.is_null() { 0 } else { keys_view.count() };
         assert_eq!(key_count, 0, "the stub must have no own keys");
         assert_eq!(
             NULL_STUB_PTR.load(Ordering::Acquire) as usize,

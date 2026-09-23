@@ -537,12 +537,7 @@ pub(crate) unsafe fn call_overridden_iterator_next(
         let keys_view = super::object_keys(obj);
         let keys = keys_view.arr();
         !keys.is_null()
-            && super::keys_find_slot_by_bytes(
-                keys,
-                keys_view.count() as u32,
-                b"next",
-            )
-            .is_some()
+            && super::keys_find_slot_by_bytes(keys, keys_view.count() as u32, b"next").is_some()
     };
     if own_present {
         if !JSValue::from_bits(own.to_bits()).is_pointer() {

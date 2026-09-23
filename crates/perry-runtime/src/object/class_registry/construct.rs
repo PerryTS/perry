@@ -1500,11 +1500,11 @@ unsafe fn construct_registered_class_ref(
 ) -> f64 {
     let inst = if let Some((keys_array, field_count)) = registered_class_keys_array(instance_cid) {
         crate::object::alloc::alloc_class_instance_with_keys(
-                instance_cid,
-                0,
-                field_count,
-                keys_array,
-            )
+            instance_cid,
+            0,
+            field_count,
+            keys_array,
+        )
     } else {
         js_object_alloc(
             instance_cid,

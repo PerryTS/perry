@@ -134,17 +134,17 @@ fn json_tojson_key_array_probe_observes_replacement_without_managed_scratch() {
             let len = (*arr).length;
             (*arr).length = (*arr).capacity + 1;
             // A malformed header: the count it reports runs past its capacity.
-            assert!(keys_array_may_carry_to_json(crate::object::ObjectKeys::new(
-                arr,
-                (*arr).length
-            )));
+            assert!(keys_array_may_carry_to_json(
+                crate::object::ObjectKeys::new(arr, (*arr).length)
+            ));
             (*arr).length = len;
-            assert!(keys_array_may_carry_to_json(crate::object::ObjectKeys::new(
-                (arr as *mut u8).add(1).cast(),
-                len
-            )));
+            assert!(keys_array_may_carry_to_json(
+                crate::object::ObjectKeys::new((arr as *mut u8).add(1).cast(), len)
+            ));
         });
-        assert!(keys_array_may_carry_to_json(crate::object::ObjectKeys::NONE));
+        assert!(keys_array_may_carry_to_json(
+            crate::object::ObjectKeys::NONE
+        ));
     }
 }
 

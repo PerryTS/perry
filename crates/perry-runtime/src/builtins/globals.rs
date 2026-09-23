@@ -935,9 +935,7 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                                 src_handle.get_raw_const_ptr::<crate::object::ObjectHeader>();
                             let keys_now_view = crate::object::object_keys(src_now);
                             let keys_now = keys_now_view.arr();
-                            if keys_now.is_null()
-                                || i >= keys_now_view.count() as usize
-                            {
+                            if keys_now.is_null() || i >= keys_now_view.count() as usize {
                                 break;
                             }
                             let key_val = crate::array::js_array_get(keys_now, i as u32);

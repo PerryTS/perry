@@ -451,7 +451,8 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
             packed.as_ptr(),
             packed.len() as u32,
         ) as usize;
-        let seen = crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
+        let seen =
+            crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
         crate::object::alloc::prune_dead_class_keys_entries(&|_| false);
         let seen_after_prune =
             crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
@@ -510,16 +511,27 @@ fn a_moved_backing_keeps_every_list_on_it() {
         let short = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         set(short, nursery_key("mv_0"), 0.0);
         let before = keys_of(o);
-        assert_eq!(keys_of(short), before, "premise: [mv_0] and [mv_0..2] share a backing");
+        assert_eq!(
+            keys_of(short),
+            before,
+            "premise: [mv_0] and [mv_0..2] share a backing"
+        );
         assert!(
             crate::arena::pointer_in_nursery(before as usize),
             "premise: the backing is young"
         );
         let trace = collect_minor_trace(GcTriggerKind::Direct);
-        assert!(trace.copying_nursery.copied_objects > 0, "premise: the minor copied");
+        assert!(
+            trace.copying_nursery.copied_objects > 0,
+            "premise: the minor copied"
+        );
         let after = keys_of(o);
         assert_ne!(after, before, "premise: the minor moved the backing");
-        assert_eq!(keys_of(short), after, "both lists must follow the one backing");
+        assert_eq!(
+            keys_of(short),
+            after,
+            "both lists must follow the one backing"
+        );
         for (obj, count) in [(short, 1u32), (o, 3)] {
             let view = obj.with_const_ptr(|p: *const ObjectHeader| crate::object::object_keys(p));
             assert_eq!(view.count(), count);
@@ -536,7 +548,11 @@ fn a_moved_backing_keeps_every_list_on_it() {
         // the new address, and the tip grows in place there.
         let proof = SharedLayout::shape_cache_entry();
         let one = canonical_keys::canonicalize(&proof, after, 1);
-        assert_eq!((one.as_ptr(), one.len()), (after, 1), "the moved [mv_0] is known");
+        assert_eq!(
+            (one.as_ptr(), one.len()),
+            (after, 1),
+            "the moved [mv_0] is known"
+        );
         let two = canonical_keys::extend_key(&proof, one, nursery_key("mv_1"));
         assert_eq!((two.as_ptr(), two.len()), (after, 2));
         set(o, nursery_key("mv_3"), 3.0);

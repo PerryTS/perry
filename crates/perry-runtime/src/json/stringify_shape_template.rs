@@ -76,8 +76,7 @@ pub(crate) unsafe fn shape_template_for(obj_ptr: *const u8) -> Option<*const Sha
         for template in frame.iter().rev() {
             // A template is one key LIST: the array and the count. Lists on
             // one growth chain share an array (see `ObjectKeys`).
-            if template.keys_arr.get() == keys_arr
-                && template.shape_fields == keys_arr_view.count()
+            if template.keys_arr.get() == keys_arr && template.shape_fields == keys_arr_view.count()
             {
                 return Some(&**template as *const ShapeTemplate);
             }

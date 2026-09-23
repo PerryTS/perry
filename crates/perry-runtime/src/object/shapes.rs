@@ -141,7 +141,10 @@ impl ShapeDescriptor {
     /// which is the authority (the array can be a longer shared backing).
     #[inline]
     pub(crate) fn keys_view(&self) -> crate::object::ObjectKeys {
-        crate::object::ObjectKeys::new(self.keys as usize as *mut ArrayHeader, self.logical_key_count)
+        crate::object::ObjectKeys::new(
+            self.keys as usize as *mut ArrayHeader,
+            self.logical_key_count,
+        )
     }
 
     /// The one `keys` word the collector rewrites for this shape, or `None`
@@ -1731,8 +1734,7 @@ pub(crate) unsafe fn publish_object_shape_from(
                 // takes ownership through `cache_carrier`, but only once the
                 // learner has run, so the gate here is the receiver kind the
                 // learner is scoped to (`record_array_tail` in the append tail).
-                retire_owned_history =
-                    !crate::array::is_array_subclass_class_id((*obj).class_id);
+                retire_owned_history = !crate::array::is_array_subclass_class_id((*obj).class_id);
             }
         }
     }
@@ -2385,7 +2387,11 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
 #[cfg(test)]
 pub(crate) fn indexed_slots_for_test() -> u64 {
     let inner = crate::state::state().shapes.inner.borrow();
-    inner.indices.values().map(|ix| u64::from(ix.indexed_len)).sum()
+    inner
+        .indices
+        .values()
+        .map(|ix| u64::from(ix.indexed_len))
+        .sum()
 }
 
 /// Record a freshly appended key: `keys` (the POST-append array — a clone
