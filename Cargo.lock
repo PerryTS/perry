@@ -5496,7 +5496,7 @@ name = "perry"
 version = "0.5.1652"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "console 0.16.6",
@@ -5624,7 +5624,7 @@ name = "perry-codegen-wasm"
 version = "0.5.1652"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "perry-codegen-js",
  "perry-dispatch",
  "perry-hir",
@@ -5783,7 +5783,7 @@ dependencies = [
 name = "perry-ext-http"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "http",
  "http-body-util",
@@ -5990,7 +5990,7 @@ dependencies = [
 name = "perry-http-client"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "perry-tls-session",
  "sha1 0.11.0",
  "turnloop",
@@ -6039,7 +6039,7 @@ name = "perry-runtime"
 version = "0.5.1652"
 dependencies = [
  "ahash",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cc",
  "dirs",
  "encoding_rs",
@@ -6109,7 +6109,7 @@ dependencies = [
  "aes-gcm",
  "aes-kw",
  "argon2",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bcrypt",
  "brotli",
  "bytes",
@@ -6224,7 +6224,7 @@ dependencies = [
 name = "perry-ui-android"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "jni",
  "libc",
  "perry-audio-miniaudio",
@@ -6251,7 +6251,7 @@ version = "0.5.1652"
 dependencies = [
  "async-channel",
  "async-executor",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cairo-rs 0.22.9",
  "dirs",
  "futures-lite",
@@ -6274,7 +6274,7 @@ dependencies = [
 name = "perry-ui-ios"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "libc",
  "objc2",
@@ -6291,7 +6291,7 @@ dependencies = [
 name = "perry-ui-macos"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "libc",
  "objc2",
@@ -6323,7 +6323,7 @@ version = "0.5.1652"
 name = "perry-ui-tvos"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "libc",
  "objc2",
@@ -6340,7 +6340,7 @@ dependencies = [
 name = "perry-ui-visionos"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "libc",
  "objc2",
@@ -6371,7 +6371,7 @@ dependencies = [
 name = "perry-ui-windows"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "libc",
  "perry-audio-miniaudio",
  "perry-ffi",
@@ -6390,7 +6390,7 @@ dependencies = [
 name = "perry-ui-windows-winui"
 version = "0.5.1652"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "libc",
  "perry-ffi",
  "perry-runtime",
@@ -6404,7 +6404,7 @@ name = "perry-updater"
 version = "0.5.1652"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "ed25519-dalek 3.0.0",
  "hex",
  "perry-runtime",
