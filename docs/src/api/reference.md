@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2843 entries across 117 modules.
+Total: 2817 entries across 115 modules.
 
 ## Modules
 
@@ -24,7 +24,6 @@ Total: 2843 entries across 117 modules.
 - [`async_hooks`](#async_hooks)
 - [`bcrypt`](#bcrypt)
 - [`better-sqlite3`](#better-sqlite3)
-- [`bignumber.js`](#bignumberjs)
 - [`buffer`](#buffer)
 - [`bun`](#bun)
 - [`bun-pty`](#bun-pty)
@@ -37,7 +36,6 @@ Total: 2843 entries across 117 modules.
 - [`console`](#console)
 - [`constants`](#constants)
 - [`crypto`](#crypto)
-- [`decimal.js`](#decimaljs)
 - [`dgram`](#dgram)
 - [`diagnostics_channel`](#diagnostics_channel)
 - [`dns`](#dns)
@@ -348,12 +346,6 @@ Total: 2843 entries across 117 modules.
 - `raw` — instance
 - `run` — instance
 - `transaction` — instance
-
-## `bignumber.js`
-
-### Classes
-
-- `BigNumber`
 
 ## `buffer`
 
@@ -916,36 +908,6 @@ Total: 2843 entries across 117 modules.
 - `constants`
 - `subtle`
 - `webcrypto`
-
-## `decimal.js`
-
-### Methods
-
-- `abs` — instance
-- `ceil` — instance
-- `cmp` — instance
-- `div` — instance
-- `eq` — instance
-- `floor` — instance
-- `gt` — instance
-- `gte` — instance
-- `isNegative` — instance
-- `isPositive` — instance
-- `isZero` — instance
-- `lt` — instance
-- `lte` — instance
-- `minus` — instance
-- `mod` — instance
-- `neg` — instance
-- `plus` — instance
-- `pow` — instance
-- `round` — instance
-- `sqrt` — instance
-- `times` — instance
-- `toFixed` — instance
-- `toNumber` — instance
-- `toString` — instance
-- `valueOf` — instance
 
 ## `dgram`
 
