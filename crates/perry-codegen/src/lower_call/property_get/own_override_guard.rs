@@ -193,8 +193,7 @@ pub(crate) fn emit_own_override_branch(
             let maybe_owns = blk.icmp_ne(I16, &may, "0");
             blk.cond_br(&maybe_owns, &ask_label, builtin_label);
         } else {
-            let installed =
-                blk.load_atomic_monotonic(I32, "@PERRY_OWN_NAMED_PROP_INSTALLED", 4);
+            let installed = blk.load_atomic_monotonic(I32, "@PERRY_OWN_NAMED_PROP_INSTALLED", 4);
             let any_installed = blk.icmp_ne(I32, &installed, "0");
             blk.cond_br(&any_installed, &ask_label, builtin_label);
         }

@@ -25,3 +25,16 @@ array, a monotonic load of the install flag for every other kind -- and calls
 the predicate only when that proof fails. Measured against the previous
 revision: a hot `m.get(k)` +38.000 -> +8.000 instructions per call, a hot
 `a.indexOf(x)` +4742 -> +7.000, with an element-read control flat.
+
+Mechanics, no behaviour change: the guard pushed
+`perry-codegen/src/rooting/mod.rs` from 1993 to 2056 lines, over the 2000-line
+cap, so that file is split into three. `rooting/group.rs` takes the
+multi-point re-read scope and the accumulator combinators, `rooting/ledger.rs`
+takes the per-module Layer 1 migration ledger and its tests, and `mod.rs`
+keeps the design half, the `call_*` combinators and the #10943 materialised
+receiver. It is a pure move -- every line is carried verbatim, and `mod.rs`
+re-exports the `pub(crate)` surface by explicit name, so no caller path
+changes. No path-keyed gate referenced the old file
+(`addr_class_*`, `raw_handle_debt_files.txt`, `gc_runtime_root_holders.json`,
+`shape_descriptor_census_baseline.json` all scan other trees), so none needed
+repointing.

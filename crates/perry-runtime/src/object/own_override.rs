@@ -53,7 +53,7 @@
 //! Arming early covers every kind, including ones added later, and the only
 //! cost of a spurious arm is that the diamond's slow side runs.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 /// Has any non-`ObjectHeader` cell ever taken a named property?
 ///
@@ -83,12 +83,6 @@ pub(crate) fn note_exotic_named_prop_install() {
     if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
         PERRY_OWN_NAMED_PROP_INSTALLED.store(1, Ordering::Relaxed);
     }
-}
-
-/// Test-only: read the arm state.
-#[cfg(test)]
-pub(crate) fn test_exotic_named_prop_installed() -> bool {
-    PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) != 0
 }
 
 /// May `recv` own a property named `name` that must beat a builtin?
