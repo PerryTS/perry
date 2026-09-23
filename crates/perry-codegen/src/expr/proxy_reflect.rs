@@ -1651,7 +1651,21 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
             same_put_value_receiver_expr(a_object, b_object)
                 && same_put_value_receiver_expr(a_index, b_index)
         }
-        _ => false,
+        // #11150: every HIR producer builds a `PutValueSet` by CLONING one
+        // lowered base into both `target` and `receiver`, so two identical
+        // trees are one source evaluation. The arms above are only the cheap,
+        // allocation-free cases; any other base form — a private read
+        // (`this.#tail.next = …` puts a `PrivateGuard` under the
+        // `PropertyGet`), `super.x`, a private accessor, `new C()` — used to
+        // fall out as "distinct receiver" and take the explicit-receiver
+        // lowering, which evaluates the receiver a SECOND time, AFTER the RHS.
+        // `this.#tail.next = this.#tail = node` then wrote `next` onto the NEW
+        // node, and a getter-backed base ran its getter twice. Compare the
+        // remaining shapes structurally instead of refusing them.
+        (a, b) => {
+            std::mem::discriminant(a) == std::mem::discriminant(b)
+                && perry_hir::stable_hash::same_expr_structure(a, b)
+        }
     }
 }
 

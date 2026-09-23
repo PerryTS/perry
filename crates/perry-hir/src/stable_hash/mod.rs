@@ -80,6 +80,30 @@ pub fn hash_type_with<H: StableHasher>(ty: &Type, h: &mut H) {
     SH::hash(ty, h);
 }
 
+/// Byte-exact structural identity of two expressions, over the same
+/// serialization the hash above consumes (exhaustive, one tag per variant,
+/// length-prefixed strings), so equal byte streams mean equal trees. Fields
+/// the serialization deliberately skips are derived metadata (`byte_offset`,
+/// `cap_args_appended`), which is the identity codegen wants: #11150's
+/// `PutValueSet` receiver check asks whether two operands are clones of one
+/// source evaluation, not whether they came from one source position.
+pub fn same_expr_structure(a: &crate::ir::Expr, b: &crate::ir::Expr) -> bool {
+    struct Bytes(Vec<u8>);
+    impl StableHasher for Bytes {
+        fn write(&mut self, bytes: &[u8]) {
+            self.0.extend_from_slice(bytes);
+        }
+        fn finish(&self) -> u64 {
+            0
+        }
+    }
+    let mut left = Bytes(Vec::new());
+    SH::hash(a, &mut left);
+    let mut right = Bytes(Vec::with_capacity(left.0.len()));
+    SH::hash(b, &mut right);
+    left.0 == right.0
+}
+
 /// Local djb2 implementation, mirrored from
 /// `crates/perry/src/commands/compile/object_cache.rs:63-87`. Kept here so
 /// `perry-hir` doesn't depend on `perry`. Both must agree on the algorithm
