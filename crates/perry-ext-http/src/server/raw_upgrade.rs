@@ -10,22 +10,24 @@
 //! the listener's handwritten 101 would both reach the client, and the
 //! unconsumed body bytes (`head`) were lost.
 //!
-//! This module adds the Node-exact path for *keyless* Upgrade requests
-//! (no `Sec-WebSocket-Key` — i.e. not a real WebSocket client handshake):
+//! This module adds the Node-exact path for Upgrade requests claimed by an
+//! `'upgrade'` listener:
 //!
 //! 1. When the server has `'upgrade'` listeners, the accept task peeks the
 //!    request head off the TCP stream *before* handing anything to hyper.
-//! 2. If the head carries `Connection: …upgrade…` + an `Upgrade:` header and
-//!    no `Sec-WebSocket-Key`, the stream is handed to perry-ext-net
+//! 2. If the head carries `Connection: …upgrade…` + an `Upgrade:` header, the
+//!    stream is handed to perry-ext-net
 //!    (`adopt_upgraded_tcp_stream`) so JS sees a standard `net.Socket`
 //!    surface, and the `'upgrade'` listeners fire with the unconsumed bytes
 //!    after the head as `head`.
-//! 3. Anything else (no Upgrade header, real WS handshakes, oversized or
-//!    truncated heads) is replayed to hyper byte-for-byte through
-//!    `PrefixedStream`, preserving today's behavior.
+//! 3. Anything else (no Upgrade header, oversized or truncated heads) is
+//!    replayed to hyper byte-for-byte through `PrefixedStream`, preserving
+//!    today's behavior.
 //!
-//! Real WebSocket handshakes (key present) deliberately keep the
-//! tungstenite path so `new WebSocketServer({ server })` keeps working.
+//! Native attached WebSocket servers have no JS `'upgrade'` listener and keep
+//! the internal WebSocket path. A listener, including the one installed by
+//! the public `ws` package, owns the handshake and must receive the untouched
+//! socket even when `Sec-WebSocket-Key` is present.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -116,6 +118,18 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
 }
 
+fn is_upgrade_head(headers: &HashMap<String, String>) -> bool {
+    let connection_upgrade = headers
+        .get("connection")
+        .map(|value| {
+            value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        .unwrap_or(false);
+    connection_upgrade && headers.contains_key("upgrade")
+}
+
 /// Peek the request head and dispatch a raw `'upgrade'` if it qualifies.
 /// Only called when the server has `'upgrade'` listeners.
 pub(crate) async fn peek_and_maybe_dispatch_raw_upgrade(
@@ -147,13 +161,7 @@ pub(crate) async fn peek_and_maybe_dispatch_raw_upgrade(
         return PeekResult::Passthrough(PrefixedStream::new(buf, stream));
     };
 
-    let connection_upgrade = headers_lower
-        .get("connection")
-        .map(|v| v.to_ascii_lowercase().contains("upgrade"))
-        .unwrap_or(false);
-    let has_upgrade = headers_lower.contains_key("upgrade");
-    let has_ws_key = headers_lower.contains_key("sec-websocket-key");
-    if !connection_upgrade || !has_upgrade || has_ws_key {
+    if !is_upgrade_head(&headers_lower) {
         return PeekResult::Passthrough(PrefixedStream::new(buf, stream));
     }
 
@@ -228,4 +236,29 @@ fn parse_head(
         raw_headers.push((name.to_string(), value.to_string()));
     }
     Some((method, url, headers_lower, raw_headers))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_upgrade_head, parse_head};
+
+    fn parsed_headers(head: &[u8]) -> std::collections::HashMap<String, String> {
+        parse_head(head).expect("valid request head").2
+    }
+
+    #[test]
+    fn websocket_handshake_belongs_to_the_upgrade_listener() {
+        let headers = parsed_headers(
+            b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive, Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+        );
+
+        assert!(is_upgrade_head(&headers));
+    }
+
+    #[test]
+    fn ordinary_request_stays_on_the_http_path() {
+        let headers = parsed_headers(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+        assert!(!is_upgrade_head(&headers));
+    }
 }
