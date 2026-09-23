@@ -130,11 +130,10 @@ pub(crate) fn bind_derived_this_after_super(ctx: &mut FnCtx<'_>) {
 /// SuperCall arms) that can appear as a class heritage. `super(...)` to these
 /// must NOT be routed through the runtime-value dispatch path
 /// (`js_fetch_or_value_super`), which would invoke e.g. `Map()` without `new`
-/// and throw "Constructor requires 'new'". Perry cannot yet give a subclass
-/// instance the built-in's internal slots, so `super()` is a best-effort no-op
-/// here — enough that `class M extends Map { constructor(){ super(); } }`
-/// constructs without throwing. Refs class/subclass/builtin-objects/*/
-/// super-must-be-called.
+/// and throw "Constructor requires 'new'". Dedicated arms below either install
+/// the built-in state on the provisional receiver or construct a branded value
+/// with the subclass as `newTarget`. Refs class/subclass/builtin-objects/*/
+/// super-must-be-called and #10639.
 pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
     matches!(
         name,
@@ -152,6 +151,7 @@ pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
             | "String"
             | "Date"
             | "RegExp"
+            | "URL"
             | "Promise"
             | "Function"
             | "BigInt"
@@ -1183,6 +1183,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "String"
                             | "Date"
                             | "RegExp"
+                            | "URL"
                             | "Function"
                             | "BigInt"
                             | "Symbol"
