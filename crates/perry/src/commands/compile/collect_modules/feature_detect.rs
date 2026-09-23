@@ -87,6 +87,33 @@ fn debug_hir_uses_global_math_member(hir_debug: &str) -> bool {
         .any(|member| hir_debug.contains(&format!(r#"property: "{member}""#)))
 }
 
+/// `perry-runtime/url-engine` gate. Despite the name it is not only the host
+/// parser: `String(url)`, JSON and the setter paths recognize a URL object only
+/// under it, so it is needed wherever a URL object can exist.
+fn debug_hir_uses_url_engine(hir_debug: &str) -> bool {
+    // Dedicated `Url*` HIR variants (static `URL` / `URLSearchParams` /
+    // `URLPattern` lowering) and statically lowered `node:url` calls.
+    hir_debug.contains("UrlNew")
+        || hir_debug.contains("UrlParse")
+        || hir_debug.contains("UrlCanParse")
+        || hir_debug.contains("UrlPattern")
+        || hir_debug.contains("UrlGet")
+        || hir_debug.contains("UrlSet")
+        || hir_debug.contains("UrlInstance")
+        || hir_debug.contains("UrlSearchParams")
+        || hir_debug.contains("module: \"url\"")
+        // #11121: the URL family used as a VALUE, e.g. `new ns.URL(u)` on a
+        // `require("node:url")` namespace, which lowers to a plain
+        // `PropertyGet { property: "URL" }` + dynamic construct and carries
+        // none of the tokens above. The leading quote keeps `baseUrl` /
+        // `imageUrl` identifiers out (same token the `global-url` gate uses).
+        || hir_debug.contains("\"URL")
+        // A CommonJS `require("node:url")` / `require("url")` resolves the
+        // namespace at run time; its members are then reached dynamically.
+        || hir_debug.contains("String(\"node:url\")")
+        || hir_debug.contains("String(\"url\")")
+}
+
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     hir_module.imports.iter().any(|import| {
         !import.type_only
@@ -360,19 +387,8 @@ pub(super) fn detect_optional_feature_usage(
     // link the engine. Over-matching within the URL family (e.g. enabling for a
     // URLSearchParams-only program that doesn't strictly need the host parser)
     // is a benign size cost; the rule is zero false negatives.
-    {
-        if hir_debug.contains("UrlNew")
-            || hir_debug.contains("UrlParse")
-            || hir_debug.contains("UrlCanParse")
-            || hir_debug.contains("UrlPattern")
-            || hir_debug.contains("UrlGet")
-            || hir_debug.contains("UrlSet")
-            || hir_debug.contains("UrlInstance")
-            || hir_debug.contains("UrlSearchParams")
-            || hir_debug.contains("module: \"url\"")
-        {
-            ctx.uses_url = true;
-        }
+    if debug_hir_uses_url_engine(&hir_debug) {
+        ctx.uses_url = true;
     }
 
     // Detect `String.prototype.normalize` / `localeCompare` / `Intl.Collator`
@@ -740,6 +756,27 @@ class C {
 
         let control = detect_for_source("class C { static f(x: number) { return x + 1; } }\n");
         assert!(!control.uses_global_url && !control.uses_url);
+    }
+
+    #[test]
+    fn url_engine_gate_covers_value_form_and_dynamic_require() {
+        use super::debug_hir_uses_url_engine as uses;
+        assert!(uses(
+            r#"PropertyGet { object: LocalGet(25), property: "URL" }"#
+        ));
+        assert!(uses(r#"PropertyGet { property: "URLSearchParams" }"#));
+        assert!(uses(
+            r#"Call { callee: LocalGet(6), args: [String("node:url")] }"#
+        ));
+        assert!(uses(
+            r#"Call { callee: LocalGet(6), args: [String("url")] }"#
+        ));
+        assert!(uses(
+            r#"NativeMethodCall { module: "url", method: "fileURLToPath" }"#
+        ));
+        assert!(!uses(
+            r#"Let { name: "baseUrl", init: Some(String("https://x")) }"#
+        ));
     }
 
     /// Same corpus for every gate: a class-body-only use of another token-grep
