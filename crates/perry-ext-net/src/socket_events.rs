@@ -227,7 +227,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 }
                 // Issue #1852 — readable side ended (peer FIN). Fire the
                 // `'end'` listeners; the trailing `Close` event (pushed
-                // right after `End` in `run_socket_task`) does the actual
+                // once the socket is torn down) does the actual
                 // listener-map / socket-map teardown, so don't remove
                 // anything here.
                 let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "end"));

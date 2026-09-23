@@ -1,42 +1,27 @@
 //! Local IPC transport for `node:net` path overloads.
 //!
 //! Node maps `server.listen(path)` and `net.connect({ path })` to named pipes
-//! on Windows and Unix-domain sockets on Unix. The streams join the same
-//! SocketState command/event loop as TCP, so data, end, error, close, and
-//! server connection events keep one implementation.
-
-use std::io;
-
-#[cfg(windows)]
-use std::time::Duration;
-
-use tokio::sync::{mpsc, oneshot};
+//! on Windows and Unix-domain sockets on Unix. Both run on the agent's
+//! turnloop loop (`turnloop_io::listen_pipe` / `connect_pipe`), so data, end,
+//! error, close, and server connection events share one implementation with
+//! TCP.
 
 use crate::{
-    dispatch, ensure_gc_scanner_registered, mark_closed, next_id, next_id_or_throw, push_event,
-    run_socket_task, server_state, statics, PendingNetEvent, SocketCommand, SocketState,
-    TlsSocketMetadata, Transport,
+    dispatch, ensure_gc_scanner_registered, mark_closed, next_id_or_throw, push_event,
+    server_state, statics, PendingNetEvent, SocketState, TlsSocketMetadata,
 };
 
-#[cfg(unix)]
-use tokio::net::{UnixListener, UnixStream};
-
-#[cfg(windows)]
-use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
-
-fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
+fn allocate_socket() -> i64 {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
-    let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
-            cmd_tx: tx,
-            pending_rx: None,
+            awaiting_connect: false,
             is_open: false,
             raw_fd: None,
             refed: true,
@@ -63,7 +48,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
         .lock()
         .unwrap()
         .insert(id, Default::default());
-    (id, rx)
+    id
 }
 
 /// Read a JS string without coercing closures or option objects through a
@@ -90,85 +75,23 @@ pub(crate) fn register_connect_cb(handle: i64, cb_f64: f64) {
         .push(cb_ptr);
 }
 
-/// Publish an accepted TCP or IPC stream as a normal net.Socket and start its
-/// shared command/read loop. Admission accounting has already reserved one
-/// pending connection before this helper is called.
-pub(crate) fn register_accepted_transport(
-    server_id: i64,
-    transport: Transport,
-    local_addr: Option<std::net::SocketAddr>,
-    remote_addr: Option<std::net::SocketAddr>,
-) {
-    let raw_fd = transport.raw_fd();
-    let socket_id = next_id();
-    if socket_id == perry_ffi::INVALID_HANDLE {
-        server_state::cancel_pending_connection(server_id);
-        return;
-    }
-    let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
-    statics::sockets().lock().unwrap().insert(
-        socket_id,
-        SocketState {
-            tcp_async_id: 0,
-            connect_async_id: 0,
-            shutdown_async_id: 0,
-            cmd_tx: tx,
-            pending_rx: None,
-            is_open: true,
-            raw_fd,
-            refed: true,
-            local_addr,
-            remote_addr,
-            raw: None,
-            destroyed: false,
-            connecting: false,
-            has_opened: true,
-            writable_ended: false,
-            readable_ended: false,
-            bytes_read: 0,
-            bytes_written: 0,
-            bytes_queued: 0,
-            timeout: None,
-            type_of_service: 0,
-            server_id: Some(server_id),
-            server_connection_active: false,
-            tls: TlsSocketMetadata::default(),
-            turnloop: false,
-        },
-    );
-    statics::listeners()
-        .lock()
-        .unwrap()
-        .insert(socket_id, Default::default());
-    push_event(PendingNetEvent::ServerConnection(
-        server_id, socket_id, false,
-    ));
-    tokio::spawn(async move {
-        let mut rx = rx;
-        run_socket_task(socket_id, transport, &mut rx).await;
-    });
-}
-
 pub(crate) fn spawn_socket(path: String) -> i64 {
-    let (id, rx) = allocate_socket();
-    spawn_connect(id, path, rx);
+    let id = allocate_socket();
+    spawn_connect(id, path);
     id
 }
 
 pub(crate) fn connect_existing(handle: i64, path: String) {
-    let rx = {
+    {
         let mut sockets = statics::sockets().lock().unwrap();
-        match sockets
-            .get_mut(&handle)
-            .and_then(|socket| socket.pending_rx.take().map(|rx| (socket, rx)))
-        {
-            Some((socket, rx)) => {
+        match sockets.get_mut(&handle) {
+            Some(socket) if socket.awaiting_connect => {
+                socket.awaiting_connect = false;
                 // #10465 — `socket.connect(path)` on a `new net.Socket()`
                 // starts connecting synchronously, same as the TCP path.
                 socket.connecting = true;
-                rx
             }
-            None => {
+            _ => {
                 push_event(PendingNetEvent::Error(
                     handle,
                     "socket already connected (or unknown handle)".to_string(),
@@ -176,297 +99,60 @@ pub(crate) fn connect_existing(handle: i64, path: String) {
                 return;
             }
         }
-    };
-    spawn_connect(handle, path, rx);
+    }
+    spawn_connect(handle, path);
 }
 
-fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCommand>) {
+fn spawn_connect(id: i64, path: String) {
     let local_server = server_state::begin_local_path_connect(&path);
-    // P1: a local socket connects on the loop. Unlike an outbound TCP socket
-    // it can never be TLS-upgraded (`upgradeToTLS` already reports
-    // "unsupported for IPC sockets"), so its transport is safe to fix here.
-    if crate::turnloop_io::enabled() {
+    // A local socket connects on the loop. It can never be TLS-upgraded
+    // (`upgradeToTLS` reports "unsupported for IPC sockets").
+    set_turnloop(id, true);
+    let target = path.clone();
+    let submitted = crate::turnloop_io::on_loop(move || {
         crate::turnloop_io::note_local_connect(id, local_server);
-        match crate::turnloop_io::connect_pipe(id, &path) {
-            Ok(()) => {
-                if let Ok(mut sockets) = statics::sockets().lock() {
-                    if let Some(socket) = sockets.get_mut(&id) {
-                        socket.turnloop = true;
-                    }
-                }
-                return;
-            }
-            Err(error) if !error.no_loop => {
-                server_state::cancel_local_connect(local_server);
-                // libuv's shape (`connect ENOENT /tmp/x.sock`), which is what
-                // `build_error_object` parses into code/errno/syscall.
-                push_event(PendingNetEvent::Error(
-                    id,
-                    format!("{} {path}", error.message()),
-                ));
-                push_event(PendingNetEvent::Close(id));
-                mark_closed(id);
-                return;
-            }
-            // Lost the loop between the check and the submission: use tokio.
-            Err(_) => {}
-        }
-    }
-    crate::spawn_socket_runner(move || {
-        Box::pin(async move {
-            let stream = match connect_path(&path).await {
-                Ok(stream) => stream,
-                Err(error) => {
-                    server_state::cancel_local_connect(local_server);
-                    let mapped =
-                        perry_ffi::turnloop_net::error_from_os(error.raw_os_error(), "connect");
-                    push_event(PendingNetEvent::Error(
-                        id,
-                        format!("connect {} {path}", mapped.code),
-                    ));
-                    push_event(PendingNetEvent::Close(id));
-                    mark_closed(id);
-                    return;
-                }
-            };
-
-            let transport = Transport::Ipc(stream);
-            let raw_fd = transport.raw_fd();
-            if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
-                socket.is_open = true;
-                socket.has_opened = true;
-                socket.connecting = false;
-                socket.raw_fd = raw_fd;
-            }
-            tokio::task::yield_now().await;
-            push_event(PendingNetEvent::Connect(id, local_server));
-            run_socket_task(id, transport, &mut rx).await;
-        })
-    });
-}
-
-pub(crate) fn spawn_listener(server_id: i64, path: String, shutdown_rx: oneshot::Receiver<()>) {
-    perry_ffi::spawn_async(async move {
-        if let Err(error) = run_listener(server_id, path.clone(), shutdown_rx).await {
-            push_event(PendingNetEvent::ServerError(
-                server_id,
-                format!("bind {path}: {error}"),
-            ));
-        }
-        push_event(PendingNetEvent::ServerClose(server_id));
-        if let Ok(mut servers) = statics::servers().lock() {
-            if let Some(server) = servers.get_mut(&server_id) {
-                server.listening = false;
-            }
+        if let Err(error) = crate::turnloop_io::connect_pipe(id, &path) {
+            refuse_connect(id, &error.message(), &path, local_server);
         }
     });
+    if !submitted {
+        refuse_connect(
+            id,
+            &format!("connect {}", crate::turnloop_io::NO_LOOP_CODE),
+            &target,
+            local_server,
+        );
+    }
 }
 
-#[cfg(unix)]
-async fn connect_path(path: &str) -> io::Result<Box<dyn crate::transport::IpcStream>> {
-    UnixStream::connect(path)
-        .await
-        .map(|stream| Box::new(stream) as Box<dyn crate::transport::IpcStream>)
+/// libuv's shape (`connect ENOENT /tmp/x.sock`), which is what
+/// `build_error_object` parses into code/errno/syscall.
+fn refuse_connect(id: i64, message: &str, path: &str, local_server: Option<(i64, bool)>) {
+    set_turnloop(id, false);
+    server_state::cancel_local_connect(local_server);
+    push_event(PendingNetEvent::Error(id, format!("{message} {path}")));
+    push_event(PendingNetEvent::Close(id));
+    mark_closed(id);
 }
 
-#[cfg(unix)]
-async fn run_listener(
-    server_id: i64,
-    path: String,
-    mut shutdown_rx: oneshot::Receiver<()>,
-) -> io::Result<()> {
-    let listener = UnixListener::bind(&path)?;
-    push_event(PendingNetEvent::ServerListening(server_id));
-
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => {
-                    if let Some(info) = server_state::should_drop_ipc_connection(server_id) {
-                        push_event(PendingNetEvent::ServerDrop(server_id, info));
-                    } else {
-                        register_accepted_transport(
-                            server_id,
-                            Transport::Ipc(Box::new(stream)),
-                            None,
-                            None,
-                        );
-                    }
-                }
-                Err(error) => {
-                    push_event(PendingNetEvent::ServerError(
-                        server_id,
-                        format!("accept: {error}"),
-                    ));
-                }
-            },
-            _ = &mut shutdown_rx => break,
+fn set_turnloop(id: i64, on_loop: bool) {
+    if let Ok(mut sockets) = statics::sockets().lock() {
+        if let Some(socket) = sockets.get_mut(&id) {
+            socket.turnloop = on_loop;
         }
     }
-
-    drop(listener);
-    // Tokio deliberately leaves filesystem socket nodes behind. Only unlink
-    // after our listener has closed; bind failures never remove someone else's
-    // endpoint.
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-#[cfg(windows)]
-async fn connect_path(path: &str) -> io::Result<Box<dyn crate::transport::IpcStream>> {
-    loop {
-        match ClientOptions::new().open(path) {
-            Ok(stream) => {
-                return Ok(Box::new(stream) as Box<dyn crate::transport::IpcStream>);
-            }
-            // ERROR_PIPE_BUSY: all instances are serving clients. Match
-            // Node/libuv's wait-and-retry behavior rather than reporting a
-            // transient connector failure.
-            Err(error) if error.raw_os_error() == Some(231) => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-#[cfg(windows)]
-fn create_pipe_server(path: &str, first: bool) -> io::Result<NamedPipeServer> {
-    ServerOptions::new().first_pipe_instance(first).create(path)
-}
-
-#[cfg(windows)]
-async fn run_listener(
-    server_id: i64,
-    path: String,
-    mut shutdown_rx: oneshot::Receiver<()>,
-) -> io::Result<()> {
-    let mut listener = create_pipe_server(&path, true)?;
-    push_event(PendingNetEvent::ServerListening(server_id));
-
-    loop {
-        tokio::select! {
-            connected = listener.connect() => {
-                connected?;
-                let stream = listener;
-                // A Windows named-pipe instance accepts exactly one client.
-                // Create the next instance before publishing the accepted one
-                // so concurrent connectors do not observe a needless gap.
-                listener = create_pipe_server(&path, false)?;
-                if let Some(info) = server_state::should_drop_ipc_connection(server_id) {
-                    push_event(PendingNetEvent::ServerDrop(server_id, info));
-                    drop(stream);
-                } else {
-                    register_accepted_transport(
-                        server_id,
-                        Transport::Ipc(Box::new(stream)),
-                        None,
-                        None,
-                    );
-                }
-            }
-            _ = &mut shutdown_rx => break,
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-async fn connect_path(_path: &str) -> io::Result<Box<dyn crate::transport::IpcStream>> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "local IPC sockets are unsupported on this platform",
-    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    static NEXT_TEST_PIPE: AtomicU64 = AtomicU64::new(1);
-
-    fn unique_name() -> String {
-        let suffix = NEXT_TEST_PIPE.fetch_add(1, Ordering::Relaxed);
-        #[cfg(windows)]
-        return format!(r"\\.\pipe\perry-ext-net-{}-{suffix}", std::process::id());
-        #[cfg(unix)]
-        return std::env::temp_dir()
-            .join(format!(
-                "perry-ext-net-{}-{suffix}.sock",
-                std::process::id()
-            ))
-            .to_string_lossy()
-            .into_owned();
-        #[cfg(not(any(unix, windows)))]
-        return String::new();
-    }
-
     #[test]
     fn nanboxed_string_is_recognized_as_an_ipc_path() {
-        let path = unique_name();
+        let path = std::env::temp_dir()
+            .join(format!("perry-ext-net-{}-1.sock", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
         let header = perry_ffi::alloc_string(&path).as_raw();
         let value = f64::from_bits(perry_ffi::nanbox_string_bits(header));
         assert_eq!(unsafe { super::string_value(value) }, Some(path));
     }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn named_pipe_stream_round_trip() {
-        let path = unique_name();
-        let mut server = super::create_pipe_server(&path, true).unwrap();
-        let connect_path = path.clone();
-        let client = tokio::spawn(async move { super::connect_path(&connect_path).await });
-        server.connect().await.unwrap();
-        let mut client = super::Transport::Ipc(client.await.unwrap().unwrap());
-
-        client.write_all(b"ping").await.unwrap();
-        let mut request = [0; 4];
-        server.read_exact(&mut request).await.unwrap();
-        assert_eq!(&request, b"ping");
-
-        server.write_all(b"pong").await.unwrap();
-        let mut response = [0; 4];
-        client.read_exact(&mut response).await.unwrap();
-        assert_eq!(&response, b"pong");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn unix_socket_stream_round_trip() {
-        let path = unique_name();
-        let listener = super::UnixListener::bind(&path).unwrap();
-        let connect_path = path.clone();
-        let client = tokio::spawn(async move { super::connect_path(&connect_path).await });
-        let (mut server, _) = listener.accept().await.unwrap();
-        let mut client = super::Transport::Ipc(client.await.unwrap().unwrap());
-
-        client.write_all(b"ping").await.unwrap();
-        let mut request = [0; 4];
-        server.read_exact(&mut request).await.unwrap();
-        assert_eq!(&request, b"ping");
-
-        server.write_all(b"pong").await.unwrap();
-        let mut response = [0; 4];
-        client.read_exact(&mut response).await.unwrap();
-        assert_eq!(&response, b"pong");
-        drop(listener);
-        std::fs::remove_file(path).unwrap();
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-async fn run_listener(
-    _server_id: i64,
-    _path: String,
-    _shutdown_rx: oneshot::Receiver<()>,
-) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "local IPC sockets are unsupported on this platform",
-    ))
 }

@@ -5850,8 +5850,6 @@ dependencies = [
  "rustls-native-certs",
  "rustls-pemfile",
  "serde_json",
- "tokio",
- "tokio-rustls",
  "turnloop-tls",
 ]
 

@@ -1,19 +1,23 @@
 //! Native bindings for Node `net.Socket` — TCP plus optional TLS upgrade.
 //!
 //! Ported from `crates/perry-stdlib/src/net/mod.rs` to perry-ffi v0.5.x's
-//! stable surface as part of #466 Phase 5. Architecturally the same as the
-//! perry-stdlib copy: one tokio task per socket reads in a `select!` loop
-//! and drives an mpsc command channel for writes/end/destroy/upgrade. Read
-//! data is queued as a zero-copy `Bytes` view (sliced out of the socket
-//! task's reused read buffer) into `NET_PENDING_EVENTS` and converted
-//! to `Buffer` on the main thread inside `js_net_process_pending` — the
-//! same arena-safety rule as perry-stdlib (JSValue construction MUST run
-//! on the main thread, never on a tokio worker).
+//! stable surface as part of #466 Phase 5. Every socket and listener lives on
+//! the agent's turnloop loop (`turnloop_io`): one multishot read per socket,
+//! submissions made where the FFI call happens, and completions turned into
+//! `PendingNetEvent`s by this crate's sink. Read data is queued as a zero-copy
+//! `Bytes` view into `NET_PENDING_EVENTS` and converted to `Buffer` on the JS
+//! thread inside `js_net_process_pending` — the arena-safety rule (JSValue
+//! construction MUST run on the agent's own thread, never in the I/O path).
+//!
+//! TLS runs as a sans-I/O rustls session *above* the turnloop handle
+//! (`turnloop_tls_io`), for both `tls.connect` and `socket.upgradeToTLS`.
+//!
+//! This crate has no tokio. The tokio socket task that used to back a thread
+//! with no loop of its own is replaced by posting to the thread that owns the
+//! agent's loop (`turnloop_io::on_loop`); see that module's header.
 //!
 //! # Differences from the perry-stdlib version
 //!
-//! - Uses `perry_ffi::spawn_async` on Perry's shared runtime, with keepalive
-//!   provided by `js_ext_net_has_active_handles`.
 //! - Uses perry-ffi closures, buffers, and mutable GC root scanning; the latter
 //!   rewrites listener pointers after a copying minor collection.
 //!
@@ -23,7 +27,7 @@
 //! `tls = ["net", ...]` feature split is preserved on the perry-stdlib side
 //! for backwards compat; the well-known flip routes here.
 
-use bytes::{BufMut, Bytes};
+use bytes::Bytes;
 use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, GcRootVisitor, JsClosure,
     JsPromise, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
@@ -32,17 +36,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
-
 // #1852 — topical sub-modules split out to keep this file under the
 // 2000-line size gate. `tls` holds the rustls config + handshake; `ip`
 // holds the `net.isIP*` + auto-select-family helpers.
 mod ip;
-// Process-wide freelist of read buffers, so the socket read loop
-// recycles pooled 16 KiB capacity instead of allocating a fresh
-// `BytesMut` per read. See `buffer_pool.rs` for the rationale.
+// Process-wide freelist of read buffers, so the read sink recycles pooled
+// 16 KiB capacity instead of allocating a fresh `BytesMut` per read. See
+// `buffer_pool.rs` for the rationale.
 mod buffer_pool;
 mod bun_tcp;
 // #10429: runtime callback for `net` exports used as values.
@@ -74,8 +74,6 @@ pub use socket_emit::{
     js_ext_net_register_http_agent_socket_event_hook, js_ext_net_set_http_agent_phase,
     js_ext_net_socket_emit, js_ext_net_socket_emit_abort_error,
 };
-mod task_spawn;
-use task_spawn::spawn_socket_runner;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod provider_lifecycle;
@@ -116,8 +114,6 @@ pub use socket_facade::{
     js_ext_net_socket_tls_session_reused,
 };
 
-#[cfg(test)]
-mod nodelay_tests;
 mod server_state;
 #[cfg(test)]
 mod test_async_shims;
@@ -134,19 +130,12 @@ pub(crate) use jsvalue::{
     string_from_header_i64, unbox_pointer,
 };
 
-use crate::tls::{do_tls_handshake, record_tls_handshake, TlsClientConfigData};
+use crate::tls::TlsClientConfigData;
 
-// ─── Transport enum (plain or TLS, swappable at runtime) ─────────────────────
-//
-// Split out to `transport.rs` for the 2000-line file-size gate. The
-// `pub(crate)` re-export keeps `crate::Transport` resolving unchanged for
-// the `adopt` / `nodelay_tests` siblings and for this file.
-mod transport;
-/// `node:net` on turnloop handles — the P1 transport (`turnloop_io.rs`).
+/// `node:net` on turnloop handles — the only transport (`turnloop_io.rs`).
 mod turnloop_io;
 pub mod turnloop_tls;
 pub mod turnloop_tls_io;
-pub(crate) use transport::Transport;
 
 // ─── Handle storage ──────────────────────────────────────────────────────────
 //
@@ -232,16 +221,19 @@ pub(crate) mod statics {
 /// Backing state for an `net.Server` handle (`net.createServer(...)`).
 /// Mirrors `perry-ext-http::HttpServer` in shape but stripped to
 /// the raw-TCP surface — no hyper, no request/response channels, just
-/// the accept loop's shutdown sender + bound address. Per-server event
+/// the listen state + bound address. Per-server event
 /// listeners (`'connection'`, `'listening'`, `'close'`, `'error'`) live
 /// in the shared `statics::listeners()` map keyed by the server's id;
 /// reusing the socket listener map keeps the GC scanner walk single-
 /// pass instead of needing a second per-server scanner.
 pub(crate) struct ServerState {
     pub async_id: u64,
-    /// Set by `.listen()`, dropped by `.close()`. Send on this channel
-    /// to break the accept loop's `tokio::select!`.
-    pub shutdown_tx: Option<oneshot::Sender<()>>,
+    /// Set by `.listen()`. Keeps `has_active_handles` answering yes from the
+    /// `listen()` call until the server's registry entry is removed by its
+    /// `'close'`, including the window before the bind has been published.
+    /// It replaced the tokio accept loop's shutdown sender, whose `is_some()`
+    /// was the same question.
+    pub listen_armed: bool,
     pub bound_port: u16,
     pub bound_host: String,
     /// Named-pipe / Unix-domain-socket path for an IPC listener. TCP servers
@@ -259,15 +251,21 @@ pub(crate) struct SocketState {
     pub(crate) tcp_async_id: u64,
     pub(crate) connect_async_id: u64,
     pub(crate) shutdown_async_id: u64,
-    pub(crate) cmd_tx: mpsc::UnboundedSender<SocketCommand>,
-    /// `Some` only between `js_net_socket_alloc` and the first
-    /// `js_net_socket_method_connect`. Held here so the deferred-connect
-    /// path (issue #422: `new net.Socket()` then `sock.connect(port,host)`)
-    /// can move it into the spawned task at connect time.
-    pub(crate) pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
+    /// True only between `js_net_socket_alloc` and the first
+    /// `js_net_socket_method_connect` (issue #422: `new net.Socket()` then
+    /// `sock.connect(port, host)`). A second `connect()` finds it false and
+    /// reports "already connected"; `has_active_handles` does not count a
+    /// socket that has never been asked to connect.
+    ///
+    /// It is the whole of what the old per-socket command *receiver* parked
+    /// here meant. Commands issued while it is true are accepted and counted
+    /// but not delivered — exactly what happened to the ones that receiver
+    /// buffered, which the turnloop connect path dropped with it.
+    pub(crate) awaiting_connect: bool,
     pub(crate) is_open: bool,
     /// Borrowed OS descriptor for Node's private `socket._handle.fd` shape.
-    /// The transport task remains the sole owner and clears this on close.
+    /// turnloop owns its descriptors without exposing them, so this is unset
+    /// on every socket today; the field keeps the getter's shape.
     pub(crate) raw_fd: Option<i32>,
     /// Whether pending socket I/O keeps the process event loop alive.
     pub(crate) refed: bool,
@@ -276,9 +274,9 @@ pub(crate) struct SocketState {
     /// "undefined.address" cluster reports the actual bound port/family.
     pub(crate) local_addr: Option<SocketAddr>,
     pub(crate) remote_addr: Option<SocketAddr>,
-    /// #2154 — raw-consumer mode (see `raw_bridge`). When `Some`,
-    /// `run_socket_task` buffers inbound bytes here for `perry-ext-http` to
-    /// drain instead of firing JS `'data'` events.
+    /// #2154 — raw-consumer mode (see `raw_bridge`). When `Some`, the read
+    /// sink buffers inbound bytes here for `perry-ext-http` to drain instead
+    /// of firing JS `'data'` events.
     raw: Option<Arc<Mutex<RawReadState>>>,
     /// #2549 — Node `net.Socket` lifecycle/counter property surface.
     /// `destroyed` flips true on `.destroy()`/peer close; drives
@@ -299,8 +297,8 @@ pub(crate) struct SocketState {
     /// Node formula is "no live handle", which — once a socket has ever
     /// connected — reduces to `destroyed`, NOT `!is_open`: `is_open` itself
     /// flips false earlier than `destroyed` does (via
-    /// `server_state::mark_socket_closed`, called from `mark_closed` on the
-    /// tokio task thread as soon as teardown starts, well before the main
+    /// `server_state::mark_socket_closed`, called from `mark_closed` in the
+    /// completion sink as soon as teardown starts, well before the main
     /// thread has processed the `'end'`/`'close'` events those pushed). A
     /// `pending` getter keyed on `is_open` directly read `true` from inside
     /// the `'end'` listener, where Node still reports `false`. `destroyed`
@@ -325,44 +323,58 @@ pub(crate) struct SocketState {
     pub(crate) server_id: Option<i64>,
     pub(crate) server_connection_active: bool,
     pub(crate) tls: TlsSocketMetadata,
-    /// P1: this socket lives on the agent's turnloop loop, not on a tokio
-    /// task, so `cmd_tx` has no receiver and every command is submitted to the
-    /// driver instead. Decided once at creation and never changed — turnloop
-    /// owns its descriptor without exposing it, so there is no handover.
+    /// A connect, accept or adoption has been submitted to the agent's
+    /// turnloop loop for this socket, so its commands are submissions. False
+    /// only for a socket that never got that far — allocated and not yet
+    /// connected, or whose connect was refused before the driver took it.
     pub(crate) turnloop: bool,
 }
 
 impl SocketState {
-    /// Deliver one socket command to whichever transport owns this socket.
+    /// Deliver one socket command to the loop that owns this socket.
     ///
-    /// The single choke point for the P1 split: every `socket.write` /
-    /// `.end()` / `.destroy()` / `.setNoDelay()` call site goes through here,
-    /// so neither transport can be reached by accident.
+    /// The single choke point: every `socket.write` / `.end()` / `.destroy()`
+    /// / `.setNoDelay()` call site goes through here.
     ///
     /// Callers hold the socket registry lock, so this updates `bytes_queued`
     /// itself and returns the failure message instead of emitting it — the
     /// caller drops the lock first and then reports through
     /// [`turnloop_io::submission_failed`] or its own path.
     pub(crate) fn command(&mut self, id: i64, cmd: SocketCommand) -> Result<(), String> {
-        if self.turnloop {
-            let mut queued = None;
-            let result = turnloop_io::command(id, cmd, &mut queued);
-            if let Some(queued) = queued {
-                self.bytes_queued = queued;
-            }
-            return result;
-        }
         let bytes = match &cmd {
             SocketCommand::Write(bytes, _) => bytes.len() as u64,
             _ => 0,
         };
-        match self.cmd_tx.send(cmd) {
-            Ok(()) => {
+        if !self.turnloop {
+            // Never connected. Accepted and counted, then dropped: see
+            // `awaiting_connect`. A socket that is not even waiting for a
+            // connect any more (its connect was refused) has nothing to take
+            // the command, which is the "write failed" the old closed channel
+            // reported.
+            if self.awaiting_connect {
                 self.bytes_queued = self.bytes_queued.saturating_add(bytes);
-                Ok(())
+                return Ok(());
             }
-            Err(_) => Err("Socket write failed".to_string()),
+            return Err("Socket write failed".to_string());
         }
+        let submits = matches!(
+            cmd,
+            SocketCommand::Write(..) | SocketCommand::End(_) | SocketCommand::Destroy
+        );
+        if submits && !turnloop_io::enabled() {
+            // A second thread acting for this agent: the socket lives on the
+            // owner's loop, so the command is carried there. The queue length
+            // is provisional until the owner reports the driver's own count.
+            turnloop_io::command_on_owner(id, cmd)?;
+            self.bytes_queued = self.bytes_queued.saturating_add(bytes);
+            return Ok(());
+        }
+        let mut queued = None;
+        let result = turnloop_io::command(id, cmd, &mut queued);
+        if let Some(queued) = queued {
+            self.bytes_queued = queued;
+        }
+        result
     }
 }
 
@@ -378,17 +390,13 @@ pub(crate) fn register_turnloop_socket(
 ) {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
-    // The sender exists only so `SocketState` keeps one shape across both
-    // transports; nothing ever reads from this channel.
-    let (tx, _rx) = mpsc::unbounded_channel::<SocketCommand>();
     statics::sockets().lock().unwrap().insert(
         socket_id,
         SocketState {
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
-            cmd_tx: tx,
-            pending_rx: None,
+            awaiting_connect: false,
             is_open: true,
             raw_fd: None,
             refed: true,
@@ -420,15 +428,16 @@ pub(crate) fn register_turnloop_socket(
 
 #[cfg(test)]
 impl SocketState {
-    /// Minimal open socket state wired to a command channel — for the nodelay
-    /// command-path test, which only needs `cmd_tx` to reach `run_socket_task`.
-    pub(crate) fn for_test(cmd_tx: mpsc::UnboundedSender<SocketCommand>) -> Self {
+    /// Minimal socket state that has not reached the loop, for the byte
+    /// accounting tests. `awaiting_connect` picks whether a command is
+    /// accepted (a socket still waiting for `connect()`) or refused (one whose
+    /// connect never reached the driver).
+    pub(crate) fn for_test(awaiting_connect: bool) -> Self {
         SocketState {
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
-            cmd_tx,
-            pending_rx: None,
+            awaiting_connect,
             is_open: true,
             raw_fd: None,
             refed: true,
@@ -457,29 +466,10 @@ pub(crate) enum SocketCommand {
     Write(Vec<u8>, u64),
     End(u64),
     Destroy,
-    /// `socket.setNoDelay(enable)` — applies `TCP_NODELAY` to the live socket.
-    /// Carried as a command (rather than a flag on `SocketState`) because the
-    /// owning `TcpStream`/TLS wrapper lives in `run_socket_task`, not in the
-    /// handle map. The channel is unbounded, so a `setNoDelay` issued on a
-    /// deferred-connect socket before it connects is buffered and applied once
-    /// the task starts — after the connect site has set the Node default ON,
-    /// so an explicit opt-out wins.
-    SetNoDelay(bool),
     /// The main thread finished dispatching the accepted socket's
     /// `connection` callback. Commands queued by that callback precede this
     /// marker, so a peer FIN may now auto-close without dropping its response.
     ServerConnectionReady,
-    /// Test-only: report the live socket's `TCP_NODELAY` state back over a
-    /// oneshot, so the command-path test can observe `setNoDelay` taking
-    /// effect on the stream the task owns.
-    #[cfg(test)]
-    QueryNoDelay(oneshot::Sender<bool>),
-    UpgradeTls {
-        servername: String,
-        verify: bool,
-        config: TlsClientConfigData,
-        reply: oneshot::Sender<Result<(), String>>,
-    },
 }
 
 #[derive(Debug)]
@@ -489,7 +479,7 @@ enum PendingNetEvent {
     Connect(i64, Option<(i64, bool)>),
     SecureConnect(i64),
     /// One chunk of read data. Carried as a refcounted `Bytes` — a zero-copy
-    /// view sliced out of the socket task's reused read buffer (`split_to`) —
+    /// view sliced out of the read sink's reused buffer (`split_to`) —
     /// so the path from the receive buffer to the main-thread drain handler
     /// (which only borrows it as `&[u8]`) stays alloc-free per read.
     Data(i64, Bytes),
@@ -568,7 +558,7 @@ fn mark_closed(id: i64) {
     }
     server_state::mark_socket_closed(id);
     // #10465 — `destroyed`/`is_open`/`connecting` are NOT flipped here on
-    // purpose. `mark_closed` runs on the tokio task thread immediately after
+    // purpose. `mark_closed` runs in the completion sink immediately after
     // queuing the `Close` (and, on this path, `End`) pending events — well
     // before the main thread's `js_ext_net_drain_pending` has processed
     // either. Flipping the fields here (an earlier version of this fix did)
@@ -688,7 +678,6 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
-    let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     let tcp_async_id = init_provider(b"TCPWRAP");
     statics::sockets().lock().unwrap().insert(
         id,
@@ -696,8 +685,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             tcp_async_id,
             connect_async_id: 0,
             shutdown_async_id: 0,
-            cmd_tx: tx,
-            pending_rx: Some(rx),
+            awaiting_connect: true,
             is_open: false,
             raw_fd: None,
             refed: true,
@@ -743,15 +731,14 @@ pub unsafe extern "C" fn js_net_create_server(
         .unwrap()
         .insert(id, HashMap::new());
     // Issue #1123 followup — register the server in the dedicated
-    // `servers()` map alongside the listener-map entry. The accept
-    // loop in `js_net_server_listen` populates `shutdown_tx` + the
-    // bound address fields; `js_net_server_close` consumes the
-    // shutdown sender to wake the accept loop.
+    // `servers()` map alongside the listener-map entry.
+    // `js_net_server_listen` populates the listen state + bound address
+    // fields; `js_net_server_close` closes the listener on the loop.
     statics::servers().lock().unwrap().insert(
         id,
         ServerState {
             async_id: 0,
-            shutdown_tx: None,
+            listen_armed: false,
             bound_port: 0,
             bound_host: String::new(),
             bound_path: None,
@@ -790,11 +777,11 @@ pub unsafe extern "C" fn js_ext_net_create_server(
 // ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
 
 /// `server.listen(port | path, callback?)` — bind TCP, a Windows named pipe,
-/// or a Unix-domain socket and spawn an accept loop on the shared runtime.
+/// or a Unix-domain socket and start a multishot accept on the agent's loop.
 /// The `callback` (a NaN-boxed closure pointer in the codegen's
 /// NA_PTR slot, raw i64 here after unboxing in lower_call.rs) is
 /// registered as a one-shot `'listening'` listener; when the bind
-/// resolves, the accept-loop task pushes a `ServerListening` event so
+/// resolves, a `ServerListening` event is pushed so
 /// the main-thread pump invokes both the user's `.on('listening', cb)`
 /// listeners and the trailing `.listen(port, cb)` callback.
 ///
@@ -840,10 +827,8 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         cb => cb,
     };
 
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-
-    // Mark the server as listening + stash the shutdown sender. If the
-    // handle isn't registered, bail before touching tokio.
+    // Mark the server as listening. If the handle isn't registered, bail
+    // before touching the loop.
     {
         let mut servers = match statics::servers().lock() {
             Ok(g) => g,
@@ -854,7 +839,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             None => return,
         };
         s.async_id = server_async_id;
-        s.shutdown_tx = Some(shutdown_tx);
+        s.listen_armed = true;
         s.bound_port = port_u16;
         s.bound_host = host.clone();
         s.bound_path = path.clone();
@@ -875,154 +860,37 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         }
     }
 
-    let host_for_spawn = host.clone();
     let server_id = handle;
-
-    // P1: bind and accept on the agent's turnloop loop. `tcp_listen` binds
-    // synchronously, so an EADDRINUSE is known here — but it still reaches JS
-    // through the pending-event queue, so `'error'` stays asynchronous exactly
-    // as it was when a tokio task did the bind.
-    if turnloop_io::enabled() {
-        if let Some(path) = path.clone() {
-            match turnloop_io::listen_pipe(server_id, &path, 511) {
-                Ok(()) => {
-                    push_event(PendingNetEvent::ServerListening(server_id));
-                    return;
-                }
-                Err(err) if !err.no_loop => {
-                    fail_listen(server_id, format!("bind {}: {}", path, err.message()));
-                    return;
-                }
-                // `no_loop` means this thread lost its loop between the
-                // `enabled()` check and the bind: fall through to tokio.
-                Err(_) => {}
+    let no_loop_target = match &path {
+        Some(path) => path.clone(),
+        None => format!("{}:{}", host, port_u16),
+    };
+    // Bind and accept on the agent's turnloop loop. `tcp_listen` binds
+    // synchronously, so an EADDRINUSE is known inside the submission — but it
+    // still reaches JS through the pending-event queue, so `'error'` stays
+    // asynchronous exactly as Node's is.
+    let submitted = turnloop_io::on_loop(move || match path {
+        Some(path) => match turnloop_io::listen_pipe(server_id, &path, 511) {
+            Ok(()) => push_event(PendingNetEvent::ServerListening(server_id)),
+            Err(err) => fail_listen(server_id, format!("bind {}: {}", path, err.message())),
+        },
+        None => match turnloop_io::listen_tcp(server_id, &host, port_u16, 511) {
+            Ok(()) => {
+                publish_bound_address(server_id);
+                push_event(PendingNetEvent::ServerListening(server_id));
             }
-        } else {
-            match turnloop_io::listen_tcp(server_id, &host_for_spawn, port_u16, 511) {
-                Ok(()) => {
-                    publish_bound_address(server_id);
-                    push_event(PendingNetEvent::ServerListening(server_id));
-                    return;
-                }
-                Err(err) if !err.no_loop => {
-                    fail_listen(
-                        server_id,
-                        format!("bind {}:{}: {}", host_for_spawn, port_u16, err.message()),
-                    );
-                    return;
-                }
-                Err(_) => {}
-            }
-        }
-    }
-
-    if let Some(path) = path {
-        ipc::spawn_listener(server_id, path, shutdown_rx);
-        return;
-    }
-
-    // Run the accept loop cooperatively on Perry's shared multi-thread runtime
-    // via `spawn_async` — no throwaway current-thread runtime, no blocking-pool
-    // thread held for the server's life. The shared runtime owns the I/O
-    // reactor, so `TcpListener::bind` / `accept` work without an ambient
-    // `Handle`. The server is marked `listening` synchronously above, so
-    // `js_ext_net_has_active_handles` keeps the loop alive until `close()`.
-    perry_ffi::spawn_async(async move {
-        let bind_str = format!("{}:{}", host_for_spawn, port_u16);
-        let listener = match TcpListener::bind(&bind_str).await {
-            Ok(l) => l,
-            Err(e) => {
-                push_event(PendingNetEvent::ServerError(
-                    server_id,
-                    format!("bind {}: {}", bind_str, e),
-                ));
-                push_event(PendingNetEvent::ServerClose(server_id));
-                if let Ok(mut servers) = statics::servers().lock() {
-                    if let Some(s) = servers.get_mut(&server_id) {
-                        s.listening = false;
-                    }
-                }
-                return;
-            }
-        };
-        // Issue #1852 — record the *actual* bound address. The
-        // dominant Node test pattern is `server.listen(0, () =>
-        // client.connect(server.address().port))`: port 0 asks the OS
-        // for an ephemeral port, so the requested `port_u16` (0) is
-        // never what we end up listening on. Read `local_addr()` and
-        // overwrite the stashed port/host BEFORE firing `'listening'`,
-        // so `server.address()` inside the listen callback reports the
-        // real port (pre-fix it returned 0 and every client connected
-        // to port 0 → connection refused → hang).
-        if let Ok(local) = listener.local_addr() {
-            if let Ok(mut servers) = statics::servers().lock() {
-                if let Some(s) = servers.get_mut(&server_id) {
-                    s.bound_port = local.port();
-                    s.bound_host = local.ip().to_string();
-                }
-            }
-            let address = local.ip().to_string();
-            perry_cluster_worker_listening(
-                address.as_ptr(),
-                address.len() as u32,
-                local.port() as i32,
-                if local.is_ipv6() { 6 } else { 4 },
-            );
-        }
-        // bind succeeded — fire `'listening'`.
-        push_event(PendingNetEvent::ServerListening(server_id));
-
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    match accepted {
-                        Ok((stream, peer)) => {
-                            if let Some(info) =
-                                server_state::should_drop_connection(server_id, &stream)
-                            {
-                                push_event(PendingNetEvent::ServerDrop(server_id, info));
-                                continue;
-                            }
-                            // Node sets TCP_NODELAY on every accepted socket by
-                            // default (Nagle off). Match that so small writes
-                            // aren't delayed waiting to coalesce; a later
-                            // `socket.setNoDelay(false)` can re-enable Nagle.
-                            let _ = stream.set_nodelay(true);
-                            // Keep both endpoints for address metadata on the
-                            // accepted socket.
-                            let accepted_local = stream.local_addr().ok();
-                            ipc::register_accepted_transport(
-                                server_id,
-                                Transport::Plain(stream),
-                                accepted_local,
-                                Some(peer),
-                            );
-                        }
-                        Err(e) => {
-                            push_event(PendingNetEvent::ServerError(
-                                server_id,
-                                format!("accept: {}", e),
-                            ));
-                            // Don't break the loop on a transient
-                            // accept error — Node doesn't.
-                        }
-                    }
-                }
-                _ = &mut shutdown_rx => {
-                    break;
-                }
-            }
-        }
-        // Loop exited (close() called or fatal error) — emit
-        // a final 'close' event so user code can see the
-        // server stopped.
-        push_event(PendingNetEvent::ServerClose(server_id));
-        if let Ok(mut servers) = statics::servers().lock() {
-            if let Some(s) = servers.get_mut(&server_id) {
-                s.listening = false;
-            }
-        }
+            Err(err) => fail_listen(
+                server_id,
+                format!("bind {}:{}: {}", host, port_u16, err.message()),
+            ),
+        },
     });
+    if !submitted {
+        fail_listen(
+            server_id,
+            format!("bind {}: {}", no_loop_target, turnloop_io::NO_LOOP_CODE),
+        );
+    }
 }
 
 /// Record the address the kernel actually bound, before `'listening'` fires.
@@ -1062,10 +930,10 @@ fn fail_listen(server_id: i64, message: String) {
     }
 }
 
-/// `server.close(callback?)` — break the accept loop and fire the
-/// optional callback once it exits. The actual `'close'` listener
-/// dispatch happens in the main-thread pump when the accept-loop
-/// task pushes its terminal `ServerClose` event.
+/// `server.close(callback?)` — close the listener and fire the optional
+/// callback once it is gone. The actual `'close'` listener dispatch happens
+/// in the main-thread pump when the listener's terminal `Closed` completion
+/// pushes `ServerClose`.
 ///
 /// # Safety
 ///
@@ -1084,19 +952,28 @@ pub unsafe extern "C" fn js_net_server_close(handle: i64, callback_i64: i64) {
                 .push(callback_i64);
         }
     }
-    // P1: closing the listener cancels its multishot accept and delivers a
-    // terminal `Closed`, which is what pushes `'close'`. There is no loop to
-    // break and no shutdown channel.
-    if turnloop_io::owns(handle) {
-        turnloop_io::close_server(handle);
-        return;
-    }
-    // Drop the shutdown sender — the accept loop's `tokio::select!`
-    // wakes immediately on the receiver side and exits its loop.
-    if let Ok(mut servers) = statics::servers().lock() {
-        if let Some(s) = servers.get_mut(&handle) {
-            s.shutdown_tx.take();
+    // Closing the listener cancels its multishot accept and delivers a
+    // terminal `Closed`, which is what pushes `'close'`. Decided on the loop's
+    // owner, because only that thread can see whether the listener is live.
+    // A server that never bound (its `listen()` failed, or never ran) has no
+    // listener to close; it only stops counting as a live handle, which is
+    // what dropping the old accept loop's shutdown sender did.
+    let forget = move || {
+        if let Ok(mut servers) = statics::servers().lock() {
+            if let Some(s) = servers.get_mut(&handle) {
+                s.listen_armed = false;
+            }
         }
+    };
+    let submitted = turnloop_io::on_loop(move || {
+        if turnloop_io::owns(handle) {
+            turnloop_io::close_server(handle);
+        } else {
+            forget();
+        }
+    });
+    if !submitted {
+        forget();
     }
 }
 
@@ -1142,10 +1019,9 @@ pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader
 // ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
 
 /// `socket.connect(port, host)` / `socket.connect(path)` — initiates a TCP or
-/// IPC connection on a socket previously allocated by `new net.Socket()`. Pulls its receiver out of
-/// the `SocketState::pending_rx` slot rather than allocating a fresh
-/// channel, so any listener already registered (`sock.on('data', cb)`)
-/// sees the same handle id once the connect completes.
+/// IPC connection on a socket previously allocated by `new net.Socket()`,
+/// under that socket's own id, so any listener already registered
+/// (`sock.on('data', cb)`) sees the same handle once the connect completes.
 ///
 /// # Safety
 ///
@@ -1209,20 +1085,14 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     let port = port as u16;
     ipc::register_connect_cb(handle, callback);
 
-    let (rx, tcp_async_id) = {
+    let tcp_async_id = {
         let mut guard = statics::sockets().lock().unwrap();
         match guard.get_mut(&handle) {
-            Some(socket) => match socket.pending_rx.take() {
-                Some(rx) => (rx, socket.tcp_async_id),
-                None => {
-                    push_event(PendingNetEvent::Error(
-                        handle,
-                        "socket already connected (or unknown handle)".to_string(),
-                    ));
-                    return;
-                }
-            },
-            None => {
+            Some(socket) if socket.awaiting_connect => {
+                socket.awaiting_connect = false;
+                socket.tcp_async_id
+            }
+            _ => {
                 push_event(PendingNetEvent::Error(
                     handle,
                     "socket already connected (or unknown handle)".to_string(),
@@ -1241,93 +1111,74 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     }
 
     let local_server = server_state::begin_local_connect(&host, port);
-
     // The deferred-connect shape (`new net.Socket()` then `socket.connect()`,
     // which is also what `Bun.connect` and `net.Socket.prototype.connect`
-    // lower to) takes the same turnloop route `net.connect()` has taken since
-    // P5. It did NOT before: this entry point had no `turnloop_io::enabled()`
-    // check at all, so it spawned a tokio socket task even on the primary
-    // agent with the loop fully available — while the inventory recorded this
-    // crate's tokio edge as reached only by "a thread that could not get a
-    // loop of its own". The gate was missing, not declined.
-    //
-    // `rx` is dropped on this arm exactly as `spawn_socket_task_initialized`
-    // drops its own: a turnloop socket is driven by submissions made where the
-    // FFI call happens, so nothing reads the command channel. Taking it out of
-    // `pending_rx` above still matters — it is what makes a second
-    // `socket.connect()` report "already connected" on either transport.
-    if turnloop_io::enabled() {
-        match turnloop_io::connect_tcp(handle, &host, port, true) {
+    // lower to) takes the same route `net.connect()` does.
+    submit_tcp_connect(handle, host, port, local_server, None);
+}
+
+/// Submit an outbound TCP connect for socket `id` on the agent's loop, and
+/// report a refusal the way a failed connect is reported.
+///
+/// `direct_tls` is `tls.connect`'s request for TLS from byte zero: the session
+/// is installed the instant the connect completes, before `'connect'` is
+/// pushed.
+fn submit_tcp_connect(
+    id: i64,
+    host: String,
+    port: u16,
+    local_server: Option<(i64, bool)>,
+    direct_tls: Option<(String, bool, TlsClientConfigData)>,
+) {
+    // Published before the submission, not after it: on a thread that posts
+    // to the loop's owner, a `socket.write()` issued before the connect has
+    // run must already be routed to the loop rather than parked.
+    set_turnloop(id, true);
+    let target = host.clone();
+    let submitted = turnloop_io::on_loop(move || {
+        match turnloop_io::connect_tcp(id, &host, port, true) {
             Ok(()) => {
-                if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
-                    s.turnloop = true;
+                turnloop_io::note_local_connect(id, local_server);
+                if let Some((servername, verify, config)) = direct_tls {
+                    turnloop_io::note_direct_tls(id, servername, verify, config);
                 }
-                turnloop_io::note_local_connect(handle, local_server);
-                drop(rx);
-                return;
             }
-            Err(err) if !err.no_loop => {
-                server_state::cancel_local_connect(local_server);
-                // libuv's shape, which is Node's `err.message` and the only
-                // place `err.code` / `errno` / `syscall` come from. The tokio
-                // arm below still reports the raw `std::io::Error` Display
-                // ("Connection refused (os error 111)"), which carries none of
-                // it — that difference is pre-existing and is not this change's
-                // to fix, but a turnloop connect must not inherit it.
-                push_event(PendingNetEvent::Error(
-                    handle,
-                    format!("connect {} {}:{}", err.code, host, port),
-                ));
-                push_event(PendingNetEvent::Close(handle));
-                mark_closed(handle);
-                return;
-            }
-            // `no_loop` means this thread lost its loop between the
-            // `enabled()` check and the submission: fall through to tokio.
-            Err(_) => {}
+            Err(err) => refuse_connect(id, &err.code, &host, port, local_server),
         }
-    }
-
-    spawn_socket_runner(move || {
-        Box::pin(async move {
-            let mut rx = rx;
-            let addr = format!("{}:{}", host, port);
-            let tcp = match TcpStream::connect(&addr).await {
-                Ok(s) => s,
-                Err(e) => {
-                    server_state::cancel_local_connect(local_server);
-                    push_event(PendingNetEvent::Error(handle, format!("{}", e)));
-                    push_event(PendingNetEvent::Close(handle));
-                    mark_closed(handle);
-                    return;
-                }
-            };
-
-            // Node default: TCP_NODELAY on for a freshly-connected socket.
-            let _ = tcp.set_nodelay(true);
-            // Preserve both endpoints for socket metadata.
-            let local = tcp.local_addr().ok();
-            let remote = tcp.peer_addr().ok();
-            if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
-                s.is_open = true;
-                s.has_opened = true;
-                s.connecting = false;
-                s.local_addr = local;
-                s.remote_addr = remote;
-            }
-            tokio::task::yield_now().await;
-            push_event(PendingNetEvent::Connect(handle, local_server));
-
-            run_socket_task(handle, Transport::Plain(tcp), &mut rx).await;
-        })
     });
+    if !submitted {
+        refuse_connect(id, turnloop_io::NO_LOOP_CODE, &target, port, local_server);
+    }
+}
+
+/// A connect the driver never took: `'error'` then `'close'`, and the socket
+/// never reached the loop, so its later commands are refused rather than
+/// submitted.
+fn refuse_connect(id: i64, code: &str, host: &str, port: u16, local_server: Option<(i64, bool)>) {
+    set_turnloop(id, false);
+    server_state::cancel_local_connect(local_server);
+    // libuv's shape, which is Node's `err.message` and the only place
+    // `err.code` / `errno` / `syscall` come from (`build_error_object` parses
+    // it).
+    push_event(PendingNetEvent::Error(
+        id,
+        format!("connect {} {}:{}", code, host, port),
+    ));
+    push_event(PendingNetEvent::Close(id));
+    mark_closed(id);
+}
+
+fn set_turnloop(id: i64, on_loop: bool) {
+    if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
+        s.turnloop = on_loop;
+    }
 }
 
 // ─── FFI: tls.connect ────────────────────────────────────────────────────────
 // `js_tls_connect` lives in tls.rs (this file is at the 2000-line gate);
 // it resolves Node's connect overloads and reuses `spawn_socket_task`.
 
-/// Internal: allocate the handle, spawn the tokio task.
+/// Internal: allocate the handle and submit its connect.
 /// `direct_tls = Some((servername, verify))` runs a TLS handshake before
 /// firing 'connect'; None keeps the socket in plain TCP mode.
 pub(crate) fn spawn_socket_task(
@@ -1339,8 +1190,8 @@ pub(crate) fn spawn_socket_task(
 }
 
 /// Allocate a socket and run `initialize` after its registries exist but before
-/// the async connect task can complete. TLS uses this boundary to publish its
-/// runtime metadata without racing a fast loopback handshake.
+/// its connect can complete. TLS uses this boundary to publish its runtime
+/// metadata without racing a fast loopback handshake.
 pub(crate) fn spawn_socket_task_initialized<F>(
     host: String,
     port: u16,
@@ -1353,7 +1204,6 @@ where
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
-    let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     let local_server = direct_tls
         .is_none()
         .then(|| server_state::begin_local_connect(&host, port))
@@ -1367,8 +1217,7 @@ where
             tcp_async_id,
             connect_async_id,
             shutdown_async_id: 0,
-            cmd_tx: tx,
-            pending_rx: None,
+            awaiting_connect: false,
             is_open: false,
             raw_fd: None,
             refed: true,
@@ -1397,402 +1246,12 @@ where
         .insert(id, HashMap::new());
     initialize(id);
 
-    // P5: the outbound TCP client moves to turnloop. P1 kept it on tokio
-    // because `socket.upgradeToTLS` handed a live `TcpStream` to
-    // `tokio_rustls` mid-stream and turnloop owns its descriptor without
-    // exposing it — so a client that *might* be upgraded could not be created
-    // on the loop. TLS now runs above the turnloop handle
-    // (`turnloop_tls_io`), so the upgrade needs no descriptor at all and the
-    // premise is gone rather than the restriction relaxed.
-    //
-    // `tls.connect` (`direct_tls`) comes too: the session is installed on the
-    // socket the moment the connect completes, before `'connect'` is pushed,
-    // which is the same ordering the tokio path produced by handshaking before
-    // it pushed the event.
-    if turnloop_io::enabled() {
-        match turnloop_io::connect_tcp(id, &host, port, true) {
-            Ok(()) => {
-                if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
-                    s.turnloop = true;
-                }
-                turnloop_io::note_local_connect(id, local_server);
-                if let Some((servername, verify, config)) = direct_tls {
-                    turnloop_io::note_direct_tls(id, servername, verify, config);
-                }
-                return id;
-            }
-            // `no_loop` means this thread lost its loop between the
-            // `enabled()` check and the submission: fall through to tokio.
-            Err(err) if !err.no_loop => {
-                server_state::cancel_local_connect(local_server);
-                push_event(PendingNetEvent::Error(
-                    id,
-                    format!("connect {} {}:{}", err.code, host, port),
-                ));
-                push_event(PendingNetEvent::Close(id));
-                mark_closed(id);
-                return id;
-            }
-            Err(_) => {}
-        }
-    }
-
-    spawn_socket_runner(move || {
-        Box::pin(async move {
-            let mut rx = rx;
-            let addr = format!("{}:{}", host, port);
-            let tcp = match TcpStream::connect(&addr).await {
-                Ok(s) => s,
-                Err(e) => {
-                    server_state::cancel_local_connect(local_server);
-                    // libuv's shape, which is also Node's `err.message` and
-                    // the only place `err.code`/`errno`/`syscall` come from
-                    // (`build_error_object` parses it). The raw
-                    // `std::io::Error` Display ("Connection refused (os error
-                    // 111)") carried none of that.
-                    let mapped =
-                        perry_ffi::turnloop_net::error_from_os(e.raw_os_error(), "connect");
-                    push_event(PendingNetEvent::Error(
-                        id,
-                        format!("connect {} {}", mapped.code, addr),
-                    ));
-                    push_event(PendingNetEvent::Close(id));
-                    mark_closed(id);
-                    return;
-                }
-            };
-
-            // Node default: TCP_NODELAY on. Set it on the raw TCP socket
-            // before any TLS handshake consumes the stream — the option lives
-            // on the kernel socket and persists through the rustls wrapper.
-            let _ = tcp.set_nodelay(true);
-            // Capture endpoints before rustls consumes the stream.
-            let local = tcp.local_addr().ok();
-            let remote = tcp.peer_addr().ok();
-
-            let transport = match direct_tls {
-                Some((servername, verify, config)) => {
-                    match do_tls_handshake(tcp, &servername, verify, Some(&config)).await {
-                        Ok(tls) => {
-                            record_tls_handshake(id, &tls, &servername, verify, Some(&config));
-                            Transport::Tls(Box::new(tls))
-                        }
-                        Err(e) => {
-                            server_state::cancel_local_connect(local_server);
-                            push_event(PendingNetEvent::Error(id, e));
-                            push_event(PendingNetEvent::Close(id));
-                            mark_closed(id);
-                            return;
-                        }
-                    }
-                }
-                None => Transport::Plain(tcp),
-            };
-            let raw_fd = transport.raw_fd();
-
-            if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
-                s.is_open = true;
-                s.has_opened = true;
-                s.connecting = false;
-                s.local_addr = local;
-                s.raw_fd = raw_fd;
-                s.remote_addr = remote;
-            }
-            tokio::task::yield_now().await;
-            push_event(PendingNetEvent::Connect(id, local_server));
-
-            run_socket_task(id, transport, &mut rx).await;
-        })
-    });
-
+    // TLS runs above the turnloop handle (`turnloop_tls_io`), so a client that
+    // may later be upgraded needs no descriptor handover and lives on the loop
+    // from the start. `tls.connect` (`direct_tls`) installs its session the
+    // moment the connect completes, before `'connect'` is pushed.
+    submit_tcp_connect(id, host, port, local_server, direct_tls);
     id
-}
-
-/// The read/write/command loop. Shared by plain-TCP and direct-TLS paths.
-pub(crate) async fn run_socket_task(
-    id: i64,
-    initial_transport: Transport,
-    rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
-) {
-    let mut transport: Option<Transport> = Some(initial_transport);
-    let mut writable_ended = false;
-    let accepted_socket = statics::sockets()
-        .lock()
-        .ok()
-        .and_then(|sockets| sockets.get(&id).map(|socket| socket.server_id.is_some()))
-        .unwrap_or(false);
-    let mut server_connection_ready = !accepted_socket;
-
-    loop {
-        let t = match transport.as_mut() {
-            Some(t) => t,
-            None => break,
-        };
-
-        // Check a read buffer out of the process-wide freelist instead of
-        // allocating one per socket / reallocating one per read. `checkout`
-        // hands back an empty `BytesMut` with a ≥ 16 KiB writable window
-        // (recycling a pooled allocation in place once its prior chunk has
-        // drained; allocating only when none is reusable) — identical to a
-        // per-socket `BytesMut::with_capacity(16 KiB)` + per-read `clear()` /
-        // `reserve()`, just amortized across reads and sockets. `read_buf`
-        // fills the uninitialized tail in place (no
-        // per-read zeroing) and `split_to(n)` carves the freshly-read bytes
-        // off as a refcounted `Bytes` view for the 'data' event. The per-read
-        // 16 KiB ceiling is still enforced by the `BufMut::limit` wrapper at
-        // the read site below, so read sizing and 'data' chunk boundaries are
-        // unchanged.
-        let mut buf = buffer_pool::checkout();
-
-        // Wrap the buffer in `BufMut::limit(16 KiB)` so a single `read_buf`
-        // reads the same per-call ceiling the old fixed `[u8; 16 KiB]` scratch
-        // did: `checkout` guarantees *at least* 16 KiB of spare capacity, but
-        // `BytesMut` may over-allocate and `read_buf` would otherwise fill all
-        // of it. The adapter only borrows `buf` for the read future;
-        // `read_buf` advances `buf` itself, so `buf.len() == n` afterwards and
-        // `split_to(n)` carves off exactly the freshly-read run.
-        let mut window = (&mut buf).limit(buffer_pool::READ_BUF_CAP);
-        tokio::select! {
-            read_result = t.read_buf(&mut window) => {
-                // Release the `Limit` borrow of `buf` before touching `buf`
-                // again; `read_buf` already advanced `buf` in place.
-                drop(window);
-                match read_result {
-                    Ok(0) => {
-                        // Return the untouched buffer to the freelist before
-                        // breaking, so a peer FIN doesn't leak its pooled
-                        // capacity (the success path checks in below).
-                        buffer_pool::checkin(buf);
-                        // #2154 raw mode owns its own terminal state. Accepted
-                        // sockets may receive a request plus FIN before their
-                        // delayed `connection` callback runs. Wait for the
-                        // callback-complete marker so its queued writes/end
-                        // commands are honored. Outgoing sockets start ready
-                        // and therefore retain Node's default auto-close after
-                        // readable EOF (#6764).
-                        if raw_bridge::mark_terminal(id, None) {
-                            // Complete the writable half before dropping a TLS
-                            // transport so the peer observes close_notify rather
-                            // than an unclean EOF (#8688).
-                            let _ = t.shutdown().await;
-                            mark_closed(id);
-                            break;
-                        }
-                        push_event(PendingNetEvent::End(id));
-
-                        while accepted_socket && !writable_ended {
-                            let command = if server_connection_ready {
-                                match tokio::time::timeout(
-                                    std::time::Duration::from_millis(25),
-                                    rx.recv(),
-                                )
-                                .await
-                                {
-                                    Ok(command) => command,
-                                    Err(_) => break,
-                                }
-                            } else {
-                                rx.recv().await
-                            };
-                            match command {
-                                Some(SocketCommand::Write(bytes, completion)) => {
-                                    if let Err(e) =
-                                        lifecycle::write_socket_bytes(t, id, &bytes).await
-                                    {
-                                        let msg = format!("{}", e);
-                                        if completion != 0 {
-                                            push_event(PendingNetEvent::WriteComplete(
-                                                id,
-                                                completion,
-                                                Some(msg.clone()),
-                                            ));
-                                        }
-                                        push_event(PendingNetEvent::Error(id, msg));
-                                        break;
-                                    }
-                                    if completion != 0 {
-                                        push_event(PendingNetEvent::WriteComplete(
-                                            id,
-                                            completion,
-                                            None,
-                                        ));
-                                    }
-                                }
-                                Some(SocketCommand::End(completion)) => {
-                                    let error = t.shutdown().await.err().map(|e| e.to_string());
-                                    writable_ended = true;
-                                    push_event(PendingNetEvent::ShutdownComplete(
-                                        id,
-                                        completion,
-                                        error,
-                                    ));
-                                }
-                                Some(SocketCommand::SetNoDelay(enable)) => {
-                                    let _ = t.set_nodelay(enable);
-                                }
-                                Some(SocketCommand::ServerConnectionReady) => {
-                                    server_connection_ready = true;
-                                }
-                                #[cfg(test)]
-                                Some(SocketCommand::QueryNoDelay(reply)) => {
-                                    let _ = reply.send(t.nodelay().unwrap_or(false));
-                                }
-                                Some(SocketCommand::UpgradeTls { reply, .. }) => {
-                                    let _ = reply.send(Err(
-                                        "cannot upgrade a half-closed socket".to_string(),
-                                    ));
-                                }
-                                Some(SocketCommand::Destroy) | None => break,
-                            }
-                        }
-                        if !writable_ended {
-                            let _ = t.shutdown().await;
-                            push_event(PendingNetEvent::ShutdownComplete(id, 0, None));
-                        }
-                        push_event(PendingNetEvent::Close(id));
-                        mark_closed(id);
-                        break;
-                    }
-                    Ok(n) => {
-                        // #2154 raw mode buffers for `poll_read`; else 'data'.
-                        // `split_to(n)` hands out a zero-copy `Bytes` view of
-                        // the bytes just read and leaves `buf` empty (still
-                        // backed by the pooled allocation, now shared with the
-                        // chunk) to return to the freelist below.
-                        let chunk = buf.split_to(n).freeze();
-                        if !raw_bridge::route_data(id, &chunk) {
-                            push_event(PendingNetEvent::Data(id, chunk));
-                        }
-                        // Return the buffer to the freelist. Its next checkout
-                        // reclaims this allocation in place once `chunk` has
-                        // drained + dropped (reallocates otherwise — never
-                        // corrupting the in-flight chunk).
-                        buffer_pool::checkin(buf);
-                    }
-                    Err(e) => {
-                        // Return the buffer before breaking on a read error,
-                        // mirroring the EOF and success paths — a failed read
-                        // wrote nothing, so its pooled capacity is reusable.
-                        buffer_pool::checkin(buf);
-                        let msg = format!("{}", e);
-                        if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
-                            // rustls reports a peer that closes TCP without a
-                            // close_notify alert as UnexpectedEof. Node's TLS
-                            // socket treats that terminal read as the readable
-                            // side ending, so preserve the normal end→close
-                            // event order instead of silently losing `end`.
-                            if msg.contains("close_notify") || msg.contains("unexpected end of file") {
-                                push_event(PendingNetEvent::End(id));
-                            } else {
-                                push_event(PendingNetEvent::Error(id, msg));
-                            }
-                            push_event(PendingNetEvent::Close(id));
-                        }
-                        mark_closed(id);
-                        break;
-                    }
-                }
-            }
-            cmd = rx.recv() => {
-                // The command arm never wrote to `buf`; return the untouched
-                // buffer to the freelist for the next read instead of dropping
-                // its capacity.
-                drop(window);
-                buffer_pool::checkin(buf);
-                match cmd {
-                    Some(SocketCommand::Write(bytes, completion)) => {
-                        if let Err(e) =
-                            lifecycle::write_socket_bytes(t, id, &bytes).await
-                        {
-                            let msg = format!("{}", e);
-                            if completion != 0 {
-                                push_event(PendingNetEvent::WriteComplete(
-                                    id,
-                                    completion,
-                                    Some(msg.clone()),
-                                ));
-                            }
-                            if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
-                                push_event(PendingNetEvent::Error(id, msg));
-                                push_event(PendingNetEvent::Close(id));
-                            }
-                            mark_closed(id);
-                            break;
-                        }
-                        if completion != 0 {
-                            push_event(PendingNetEvent::WriteComplete(id, completion, None));
-                        }
-                    }
-                    Some(SocketCommand::End(completion)) => {
-                        let error = t.shutdown().await.err().map(|e| e.to_string());
-                        writable_ended = true;
-                        push_event(PendingNetEvent::ShutdownComplete(id, completion, error));
-                    }
-                    Some(SocketCommand::SetNoDelay(enable)) => {
-                        // Best-effort, matching Node: a failed setsockopt (e.g.
-                        // the peer already closed) does not error the socket.
-                        let _ = t.set_nodelay(enable);
-                    }
-                    Some(SocketCommand::ServerConnectionReady) => {
-                        server_connection_ready = true;
-                    }
-                    #[cfg(test)]
-                    Some(SocketCommand::QueryNoDelay(reply)) => {
-                        let _ = reply.send(t.nodelay().unwrap_or(false));
-                    }
-                    Some(SocketCommand::Destroy) | None => {
-                        if !raw_bridge::mark_terminal(id, None) {
-                            push_event(PendingNetEvent::Close(id));
-                        }
-                        mark_closed(id);
-                        break;
-                    }
-                    Some(SocketCommand::UpgradeTls { servername, verify, config, reply }) => {
-                        let old = transport.take();
-                        match old {
-                            Some(Transport::Plain(tcp)) => {
-                                match do_tls_handshake(tcp, &servername, verify, Some(&config)).await {
-                                    Ok(tls) => {
-                                        record_tls_handshake(
-                                            id,
-                                            &tls,
-                                            &servername,
-                                            verify,
-                                            Some(&config),
-                                        );
-                                        transport = Some(Transport::Tls(Box::new(tls)));
-                                        let _ = reply.send(Ok(()));
-                                        push_event(PendingNetEvent::SecureConnect(id));
-                                    }
-                                    Err(e) => {
-                                        let _ = reply.send(Err(e.clone()));
-                                        push_event(PendingNetEvent::Error(id, e));
-                                        push_event(PendingNetEvent::Close(id));
-                                        mark_closed(id);
-                                        break;
-                                    }
-                                }
-                            }
-                            Some(already_tls @ Transport::Tls(_)) => {
-                                transport = Some(already_tls);
-                                let _ = reply.send(Err("socket is already TLS".to_string()));
-                            }
-                            Some(ipc @ Transport::Ipc(_)) => {
-                                transport = Some(ipc);
-                                let _ = reply.send(Err(
-                                    "TLS upgrade is unsupported for IPC sockets".to_string(),
-                                ));
-                            }
-                            None => {
-                                let _ = reply.send(Err("socket closed".to_string()));
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 // ─── FFI: socket.write / end / destroy live in `lifecycle.rs` ────────────────
@@ -1827,9 +1286,9 @@ pub unsafe extern "C" fn js_net_socket_on(handle: i64, event_ptr: i64, cb: i64) 
 
 // ─── FFI: socket.upgradeToTLS(servername, verify) -> Promise ─────────────────
 
-/// `socket.upgradeToTLS(servername, verify)` — sends an UpgradeTls command
-/// to the socket task and returns a Promise that resolves when the
-/// handshake completes (or rejects on failure).
+/// `socket.upgradeToTLS(servername, verify)` — installs a client TLS session
+/// above the socket's turnloop handle and returns a Promise that resolves when
+/// the handshake completes (or rejects on failure).
 ///
 /// # Safety
 ///
@@ -1854,73 +1313,58 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
         }
     };
 
-    let (cmd_tx, turnloop) = {
+    let turnloop = {
         let sockets = statics::sockets().lock().unwrap();
         match sockets.get(&handle) {
-            Some(s) => (s.cmd_tx.clone(), s.turnloop),
+            Some(s) => s.turnloop,
             None => {
                 promise.reject_string(&format!("socket {} not found", handle));
                 return promise_raw;
             }
         }
     };
-
-    // P5: a turnloop socket upgrades in place. No descriptor changes hands —
-    // the rustls session is installed *above* the same handle, which is why
-    // P1's "turnloop owns its descriptor without exposing it" blocker is gone.
-    // The promise is held by a native-async token rather than a bare
-    // `*mut Promise` in a side table, so the runtime pins and root-scans it
-    // across the collections that happen while the handshake is in flight
-    // (#9552); the token settles on the loop thread, inside the same dispatch
-    // that sees the handshake finish.
-    if turnloop {
-        let token = perry_ffi::JsNativeAsyncCompletion::with_flags(
-            perry_ffi::PERRY_NATIVE_ASYNC_THREAD_MAIN,
-        );
-        let token_promise = token.promise();
-        // The promise minted above is unused on this path; settle it so the
-        // runtime never carries a permanently pending one.
-        promise.resolve_undefined();
-        // `begin_client_upgrade` settles the token on every failure path, so
-        // the caller does not have to get it back to reject it.
-        let _ = turnloop_tls_io::begin_client_upgrade(
-            handle,
-            servername,
-            verify != 0.0,
-            TlsClientConfigData::default(),
-            Some(token),
-        );
-        return token_promise;
-    }
-
-    let (reply_tx, reply_rx) = oneshot::channel::<Result<(), String>>();
-    let verify_bool = verify != 0.0;
-    if cmd_tx
-        .send(SocketCommand::UpgradeTls {
-            servername,
-            verify: verify_bool,
-            config: TlsClientConfigData::default(),
-            reply: reply_tx,
-        })
-        .is_err()
-    {
-        promise.reject_string("socket task is gone");
+    if !turnloop {
+        // Never connected, or its connect was refused: there is no stream to
+        // put a session on.
+        promise.reject_string("socket is not connected");
         return promise_raw;
     }
 
-    // Hand the JsPromise to a blocking thread that awaits the oneshot reply.
-    perry_ffi::spawn_blocking(move || {
-        let handle_rt = tokio::runtime::Handle::current();
-        handle_rt.block_on(async move {
-            match reply_rx.await {
-                Ok(Ok(())) => promise.resolve_undefined(),
-                Ok(Err(msg)) => promise.reject_string(&msg),
-                Err(_) => promise.reject_string("upgrade reply dropped"),
-            }
-        });
+    // The upgrade happens in place. No descriptor changes hands — the rustls
+    // session is installed *above* the same handle. The promise is held by a
+    // native-async token rather than a bare `*mut Promise` in a side table, so
+    // the runtime pins and root-scans it across the collections that happen
+    // while the handshake is in flight (#9552); the token settles on the loop
+    // thread, inside the same dispatch that sees the handshake finish.
+    let token =
+        perry_ffi::JsNativeAsyncCompletion::with_flags(perry_ffi::PERRY_NATIVE_ASYNC_THREAD_MAIN);
+    let token_promise = token.promise();
+    // The promise minted above is unused on this path; settle it so the
+    // runtime never carries a permanently pending one.
+    promise.resolve_undefined();
+    let verify = verify != 0.0;
+    // `begin_client_upgrade` settles the token on every failure path, so the
+    // caller does not have to get it back to reject it. It runs on the loop's
+    // owner, which is this thread unless a second thread is acting for the
+    // agent.
+    let token = Arc::new(Mutex::new(Some(token)));
+    let job_token = token.clone();
+    let submitted = turnloop_io::on_loop(move || {
+        let token = job_token.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let _ = turnloop_tls_io::begin_client_upgrade(
+            handle,
+            servername,
+            verify,
+            TlsClientConfigData::default(),
+            token,
+        );
     });
-
-    promise_raw
+    if !submitted {
+        if let Some(token) = token.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            token.reject_string(turnloop_io::NO_LOOP_CODE);
+        }
+    }
+    token_promise
 }
 
 // ─── Main-thread event pump ──────────────────────────────────────────────────
@@ -1930,7 +1374,7 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 /// pump).
 ///
 /// Per the arena-safety rule: JSValue construction (Buffer, error string)
-/// happens HERE on the main thread, never in the tokio read task.
+/// happens HERE on the main thread, never in the completion sink.
 ///
 /// Returns the number of events fired in this pass.
 ///
@@ -1963,36 +1407,3 @@ pub use handle_exports::{
 
 #[cfg(test)]
 mod tests;
-
-// ── An outbound TLS client for other bindings ────────────────────────────────
-
-/// A connected TLS client stream, as an object-safe trait.
-///
-/// This exists so a *caller* can use `perry-ext-net`'s TLS client without
-/// naming `tokio-rustls`. `perry-ext-ws` needs exactly this for `wss://`: it
-/// dropped `tokio-tungstenite`, whose `connect_async` used to bundle the TLS
-/// negotiation, and re-declaring a TLS stack there would put a second one in
-/// the tree for one call site.
-pub trait TlsClientStream:
-    tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
-{
-}
-impl<T> TlsClientStream for T where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static
-{
-}
-
-/// Negotiate TLS over an already-connected TCP stream, with Node's default
-/// client policy (verify the chain against the platform roots, SNI = the given
-/// servername).
-///
-/// This is the *tokio* client. A connection on a turnloop handle installs a
-/// session above the handle instead (`turnloop_tls_io::begin_client_upgrade`),
-/// because there no descriptor has to move.
-pub async fn connect_tls_client(
-    tcp: tokio::net::TcpStream,
-    servername: &str,
-) -> Result<Box<dyn TlsClientStream>, String> {
-    let stream = tls::do_tls_handshake(tcp, servername, true, None).await?;
-    Ok(Box::new(stream))
-}

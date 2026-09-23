@@ -22,10 +22,8 @@
 
 use perry_ffi::{alloc_string, nanbox_string_bits, ArrayHeader, JsValue, StringHeader};
 use std::collections::HashSet;
-use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
-use tokio::io::AsyncWriteExt;
 
 use crate::statics;
 use crate::string_from_header_i64;
@@ -133,7 +131,7 @@ pub unsafe extern "C" fn js_net_socket_get_pending(handle: i64) -> f64 {
     //
     // Deliberately keyed on `has_opened`/`destroyed`, NOT `is_open`:
     // `is_open` flips false via `server_state::mark_socket_closed`, called
-    // from the tokio task thread as soon as teardown STARTS (before the main
+    // from the completion sink as soon as teardown STARTS (before the main
     // thread has processed the `'end'`/`'close'` events that same teardown
     // just queued), while `destroyed` only flips at `'close'`-processing
     // time — the one point that actually agrees with Node's own timing (see
@@ -489,8 +487,8 @@ fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) {
         return;
     };
     if turnloop {
-        // The driver refused the submission: report it the way the tokio
-        // task's write-failure arm did, including the 'error' + teardown.
+        // The driver refused the submission: report it as a write failure,
+        // including the 'error' + teardown.
         crate::turnloop_io::submission_failed(handle, completion, message);
         return;
     }
@@ -499,37 +497,6 @@ fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) {
             dispatch_socket_completion(completion, Some(message));
         }
     }
-}
-
-fn record_socket_write_progress(handle: i64, written: usize) {
-    if written == 0 {
-        return;
-    }
-    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
-        let written = written as u64;
-        socket.bytes_queued = socket.bytes_queued.saturating_sub(written);
-        socket.bytes_written = socket.bytes_written.saturating_add(written);
-    }
-}
-
-pub(crate) async fn write_socket_bytes(
-    transport: &mut crate::Transport,
-    handle: i64,
-    bytes: &[u8],
-) -> io::Result<()> {
-    let mut written = 0;
-    while written < bytes.len() {
-        let count = transport.write(&bytes[written..]).await?;
-        if count == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::WriteZero,
-                "failed to write socket bytes",
-            ));
-        }
-        written += count;
-        record_socket_write_progress(handle, count);
-    }
-    Ok(())
 }
 
 /// `socket.write(chunk)` under the name the static NATIVE_MODULE_TABLE path
@@ -636,8 +603,8 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
         // #10465 — `writableEnded` (and `writable`) flip as soon as `.end()`
         // is CALLED, per Node's docs, not once the FIN actually flushes.
         s.writable_ended = true;
-        // Routed through `command` rather than `cmd_tx.send`: a turnloop
-        // socket has no command channel reader, so the dispatcher decides.
+        // Routed through `command`, the one place that knows which thread
+        // owns the socket's loop.
         let _ = s.command(handle, crate::SocketCommand::End(0));
     }
 }
@@ -1429,12 +1396,11 @@ mod tests {
     #[test]
     fn rejected_write_does_not_increase_bytes_written() {
         let handle = -91_238;
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        drop(rx);
+        // A socket whose connect never reached the loop refuses the write.
         statics::sockets()
             .lock()
             .unwrap()
-            .insert(handle, crate::SocketState::for_test(tx));
+            .insert(handle, crate::SocketState::for_test(false));
 
         enqueue_socket_write(handle, vec![1, 2, 3], 0);
         assert_eq!(unsafe { js_net_socket_get_bytes_written(handle) }, 0.0);
@@ -1445,15 +1411,20 @@ mod tests {
     #[test]
     fn bytes_written_includes_queue_then_keeps_only_dispatched_progress_on_close() {
         let handle = -91_239;
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        // A socket still waiting for `connect()` accepts and counts the write.
         statics::sockets()
             .lock()
             .unwrap()
-            .insert(handle, crate::SocketState::for_test(tx));
+            .insert(handle, crate::SocketState::for_test(true));
 
         enqueue_socket_write(handle, vec![1, 2, 3, 4], 0);
         assert_eq!(unsafe { js_net_socket_get_bytes_written(handle) }, 4.0);
-        record_socket_write_progress(handle, 2);
+        // Two bytes reached the wire (what the write sink records), two are
+        // still queued when the socket closes.
+        if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
+            socket.bytes_queued -= 2;
+            socket.bytes_written += 2;
+        }
         assert_eq!(unsafe { js_net_socket_get_bytes_written(handle) }, 4.0);
         crate::server_state::mark_socket_closed(handle);
         assert_eq!(unsafe { js_net_socket_get_bytes_written(handle) }, 2.0);
