@@ -3060,6 +3060,7 @@ pub(crate) mod os_uri_dates;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) mod proxy_reflect;
+pub(crate) mod put_value_store_ic;
 mod static_field_meta;
 mod static_method;
 mod string_regex_proc;

@@ -14992,10 +14992,12 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
         !ir.contains("call void @js_object_set_field_by_property_id"),
         "a sloppy store must not reach the throwing property-id setter:\n{ir}"
     );
-    // The CALL, not the symbol -- `js_put_value_set` is `declare`d in every
+    // The CALL, not the symbol -- every runtime entry is `declare`d in every
     // module, so matching the bare name would pass on a program with no store.
+    // The static-key store IC's one miss entry is `js_put_value_set` plus the
+    // site's publication, with the assignment's own strictness.
     assert!(
-        ir.contains("call double @js_put_value_set("),
+        ir.contains("call double @js_put_value_set_packed_miss("),
         "a sloppy store should reach the strictness-aware [[Set]]:\n{ir}"
     );
     assert!(
@@ -15401,32 +15403,31 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_put_value_set_ic_miss"),
-        "a static existing-field write with a call-free numeric RHS should emit the guarded PIC:\n{ir}"
+        ir.contains("call double @js_put_value_set_packed_miss("),
+        "a static existing-field write should emit the inline store with its one miss entry:\n{ir}"
     );
     assert!(
-        ir.contains("put.pic.guard") && ir.contains("put.pic.hit") && ir.contains("put.pic.miss"),
-        "the PIC must branch before header dereferences and retain a semantic miss path"
+        ir.contains("put.pic.token")
+            && ir.contains("put.pic.hit.store")
+            && ir.contains("put.pic.miss"),
+        "the store must compare the ShapeId before the store and keep a semantic miss path:\n{ir}"
     );
     assert!(
-        ir.contains("4611686018427387904") && ir.contains("1073741824"),
-        "the write PIC must mirror the read PIC's discriminated, never-reused ShapeId token"
+        ir.contains("_packed_set = private global i64 4294967295"),
+        "the site word must be born EMPTY (0xFFFF_FFFF), which no receiver word equals:\n{ir}"
+    );
+    assert_eq!(
+        ir.lines()
+            .filter(|l| l.starts_with("put.pic.way.") && l.trim_end().ends_with(':'))
+            .count(),
+        4,
+        "a word miss compares the first four ways inline before the call:\n{ir}"
     );
     assert!(
-        ir.contains("put.pic.guard2")
-            && ir.contains("put.pic.guard3")
-            && ir.contains("put.pic.guard4")
-            && ir.contains("put.pic.miss4")
-            && ir.contains("put.pic.tail")
-            && ir.contains("call double @js_put_value_set_ic_poly_tail"),
-        "the write PIC should retain four inline entries plus a bounded outlined tail"
-    );
-    assert!(
-        // #8383: inline-cache globals are now source-module-prefixed
-        // (`inline_cache_global_name`) so separately compiled modules can't
-        // collide on the same `perry_ic_N` symbol at final link.
-        ir.contains("@perry_ic_static_put_value_write_pic__0_poly_tail = private global"),
-        "the outlined ways must use a distinct zero-initialized cache:\n{ir}"
+        !ir.contains("call double @js_put_value_set_ic_miss")
+            && !ir.contains("@js_put_value_set_ic_poly_tail")
+            && !ir.contains("@js_put_value_set_ic_overflow_store"),
+        "the retired four-way PIC's entries must not be emitted:\n{ir}"
     );
 }
 
@@ -15463,8 +15464,8 @@ fn immutable_string_key_reuses_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_put_value_set_ic_miss"),
-        "an immutable string key should reuse the static write PIC:\n{ir}"
+        ir.contains("call double @js_put_value_set_packed_miss("),
+        "an immutable string key should reuse the static-key store IC:\n{ir}"
     );
     assert!(
         !ir.contains("call double @js_put_value_set("),
@@ -15509,7 +15510,7 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        ir.contains("call double @js_put_value_set_ic_miss"),
+        ir.contains("call double @js_put_value_set_packed_miss("),
         "an immutable string key promoted to module-global storage should retain its static-key metadata:\n{ir}"
     );
     assert!(
@@ -15551,7 +15552,8 @@ fn mutable_string_key_rejects_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        !ir.contains("call double @js_put_value_set_ic_miss"),
+        !ir.contains("call double @js_put_value_set_ic_miss")
+            && !ir.contains("call double @js_put_value_set_packed_miss("),
         "a mutable key must retain dynamic PropertyKey semantics:\n{ir}"
     );
     assert!(
@@ -15560,8 +15562,12 @@ fn mutable_string_key_rejects_static_write_pic() {
     );
 }
 
+/// An RHS that allocates (a collection point) used to disqualify the static
+/// PIC: the receiver sat in an unrooted register across it. The static-key
+/// store IC roots the receiver across the RHS and reads its ShapeId after it,
+/// so an allocating RHS keeps the one inline path.
 #[test]
-fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
+fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
     let object = 1u32;
     let module = module_with_classes_and_params(
         "allocating_rhs_put_value_write_pic",
@@ -15579,13 +15585,13 @@ fn static_put_value_rejects_write_pic_when_rhs_can_allocate() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        !ir.contains("call double @js_put_value_set_ic_miss"),
-        "an allocating RHS must stay on the rooted generic PutValue path"
+        ir.contains("put.pic.hit.store")
+            && ir.contains("call double @js_put_value_set_packed_miss("),
+        "an allocating RHS must keep the inline store and its semantic miss entry:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set_dyn_ic("),
-        "the rejected static PIC case must retain sloppy-mode semantics through the \
-         dynamic-key fallback:\n{ir}"
+        !ir.contains("call double @js_put_value_set_dyn_ic("),
+        "a static key must not fall back to the dynamic-key path:\n{ir}"
     );
 }
 
@@ -15757,7 +15763,9 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             "the fast clone should contain {field_count} direct numeric field stores:\n{fast_body}"
         );
         assert!(
-            ir.matches("call double @js_put_value_set_ic_miss").count() >= field_count,
+            ir.matches("call double @js_put_value_set_packed_miss(")
+                .count()
+                >= field_count,
             "a failed whole-array proof must retain every original PutValue site:\n{ir}"
         );
         if field_count == 4 {
@@ -15808,7 +15816,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     assert!(
         nonzero_start.contains("object_array_write.loop.slow.preheader")
             && nonzero_start
-                .matches("call double @js_put_value_set_ic_miss")
+                .matches("call double @js_put_value_set_packed_miss(")
                 .count()
                 >= 2,
         "guard failure must retain both original semantic PutValue sites:\n{nonzero_start}"
@@ -15854,7 +15862,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         "a runtime bound below the start has distinct final-counter semantics and must remain on the semantic loop:\n{nonzero_dynamic_bound}"
     );
     assert!(
-        nonzero_dynamic_bound.contains("call double @js_put_value_set_ic_miss"),
+        nonzero_dynamic_bound.contains("call double @js_put_value_set_packed_miss("),
         "the rejected dynamic-bound form must retain its original PutValue site:\n{nonzero_dynamic_bound}"
     );
 
@@ -15866,10 +15874,10 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     );
     assert_eq!(
         rejected
-            .matches("call double @js_put_value_set_ic_miss")
+            .matches("call double @js_put_value_set_packed_miss(")
             .count(),
-        25,
-        "the bounded rejection must preserve all five fallback entries for all five semantic write sites:\n{rejected}"
+        5,
+        "the bounded rejection must preserve the one miss entry of each of the five semantic write sites:\n{rejected}"
     );
 
     let mut nonfinite_body = loop_body(1);
@@ -15896,7 +15904,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let nonfinite = compile_ir("nested_object_write_nonfinite_loop", nonfinite_body);
     assert!(
         !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
-            && nonfinite.contains("call double @js_put_value_set_ic_miss"),
+            && nonfinite.contains("call double @js_put_value_set_packed_miss("),
         "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
     );
 }

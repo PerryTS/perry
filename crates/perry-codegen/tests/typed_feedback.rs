@@ -434,13 +434,21 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
 /// order. Matches the call, never the `declare` line, and reads the flag off
 /// the call's last operand so a test can pin WHICH mode reached the entry.
 fn put_value_set_strict_flags(ir: &str) -> Vec<&str> {
+    // The static-key store IC's one miss entry is `js_put_value_set` plus the
+    // site's publication: `(double target, i64 key, double value, i32 strict,
+    // ptr ways, ptr word)`. Its only `i32` argument is the Throw flag.
     ir.lines()
-        .filter(|line| line.contains("call double @js_put_value_set("))
+        .filter(|line| {
+            line.contains("call double @js_put_value_set(")
+                || line.contains("call double @js_put_value_set_packed_miss(")
+        })
         .map(|line| {
             let args = line.rsplit_once(')').map(|(head, _)| head).unwrap_or(line);
-            args.rsplit_once("i32 ")
-                .map(|(_, flag)| flag.trim())
-                .expect("js_put_value_set call ends in its i32 Throw flag")
+            let flag = args
+                .split("i32 ")
+                .nth(1)
+                .expect("a [[Set]] call carries its i32 Throw flag");
+            flag.split(',').next().unwrap_or(flag).trim()
         })
         .collect()
 }
@@ -619,7 +627,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
          (method call):\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
+        ir.contains("call double @js_put_value_set_packed_miss("),
         "the by-name store itself must still be lowered in a default build:\n{ir}"
     );
 }

@@ -588,29 +588,25 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
     );
+    // The static-key store's one miss entry (`expr/put_value_store_ic.rs`):
+    // target, interned key, value, strict, the site's way-cache SLOT, and the
+    // site's compact `@..._packed_set` word (null in full-outline builds).
+    module.declare_function(
+        "js_put_value_set_packed_miss",
+        DOUBLE,
+        &[DOUBLE, I64, DOUBLE, I32, PTR, PTR],
+    );
     // #9708: takes the site's cache SLOT plus the way index to prime.
     module.declare_function(
         "js_put_value_set_ic_miss",
         DOUBLE,
         &[DOUBLE, I64, DOUBLE, I32, PTR, I32],
     );
-    // #9287: validate-and-store for a constant-key IC hit whose slot word
-    // carries the overflow bit (property lives in the spill buffer).
-    module.declare_function(
-        "js_put_value_set_ic_overflow_store",
-        I32,
-        &[DOUBLE, I64, I32, DOUBLE],
-    );
     // #9287: MRU-hit load for a get-IC slot word carrying the overflow bit.
     module.declare_function(
         "js_object_get_field_ic_overflow_load",
         DOUBLE,
         &[I64, I64, I32, PTR],
-    );
-    module.declare_function(
-        "js_put_value_set_ic_poly_tail",
-        DOUBLE,
-        &[PTR, DOUBLE, I64, DOUBLE, I32],
     );
     module.declare_function(
         "js_object_array_numeric_write_guard",

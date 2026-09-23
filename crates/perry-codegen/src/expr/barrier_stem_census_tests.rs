@@ -45,7 +45,9 @@
 //! 4. Kind-specific outer gate: the value test for `ValueAndGenerationTested`
 //!    (`<stem>.barrier.maybe.<n>`) and `PointerTestedStore`
 //!    (`<stem>.gc_bookkeeping.<n>`), walked the same way, plus the
-//!    unconditional `store double` staying OUTSIDE the guard.
+//!    unconditional `store double` staying OUTSIDE the guard — in the gate's
+//!    own block or in a block every path to it runs first (the static-key
+//!    store IC tests "plain double" before it classifies a pointer).
 //!
 //! The floor is verified AGAINST SABOTAGE in this file: each of the four
 //! surgeries below must turn every stem's verdict red on otherwise-pristine
@@ -164,6 +166,62 @@ fn branch_into_exact(ir: &str, label: &str) -> Option<(String, String)> {
         current_body.push(line);
     }
     None
+}
+
+/// Labels of every block whose terminator names `%<label>` as a successor.
+fn predecessors(ir: &str, label: &str) -> Vec<String> {
+    let needle = format!("label %{label}");
+    let mut current: Option<&str> = None;
+    let mut preds = Vec::new();
+    for line in ir.lines() {
+        if let Some(l) = label_of(line) {
+            current = Some(l);
+            continue;
+        }
+        let t = line.trim();
+        if !(t.starts_with("br ") || t.starts_with("switch ")) {
+            continue;
+        }
+        let names = t.match_indices(&needle).any(|(pos, _)| {
+            matches!(
+                t.as_bytes().get(pos + needle.len()),
+                None | Some(b',') | Some(b' ') | Some(b']')
+            )
+        });
+        if names {
+            if let Some(c) = current {
+                preds.push(c.to_string());
+            }
+        }
+    }
+    preds
+}
+
+/// Is the slot store UNCONDITIONAL with respect to the value gate into
+/// `gate_label`? The store must sit in the gate's own block (`pred_body`) or
+/// in a block every path to it runs first: its chain of UNIQUE predecessors.
+/// A store that some path into the gate block can bypass is a dropped write.
+fn store_dominates_gate(ir: &str, gate_label: &str, pred_body: &str) -> bool {
+    let has_store = |body: &str| body.lines().any(|l| l.trim().starts_with("store double"));
+    if has_store(pred_body) {
+        return true;
+    }
+    let preds = predecessors(ir, gate_label);
+    let [gate_block] = preds.as_slice() else {
+        return false;
+    };
+    let mut block = gate_block.clone();
+    for _ in 0..3 {
+        let up = predecessors(ir, &block);
+        let [only] = up.as_slice() else {
+            return false;
+        };
+        if block_body_exact(ir, only).is_some_and(|b| has_store(&b)) {
+            return true;
+        }
+        block = only.clone();
+    }
+    false
 }
 
 /// Body of the block whose label is exactly `label`.
@@ -362,10 +420,7 @@ pub(super) fn verify_stem_ir(ir: &str, stem: &str, kind: StemKind) -> Result<(),
             for label in &book {
                 let pred_body =
                     verify_gate_instance(ir, stem, label, check_value_predicate, false)?;
-                if !pred_body
-                    .lines()
-                    .any(|l| l.trim().starts_with("store double"))
-                {
+                if !store_dominates_gate(ir, label, &pred_body) {
                     return Err(format!(
                         "{stem}: the slot store must stay UNCONDITIONAL, in the block                          that branches into %{label} — a guard that also skips the                          store is a dropped write:\n{pred_body}"
                     ));
@@ -907,4 +962,50 @@ fn sabotage_bypassing_the_gate_goes_red_for_every_stem() {
             "stem {stem:?}: an unconditionally-bypassed gate must be caught"
         );
     }
+}
+
+/// S5 (the static-key store IC) — the slot store moved INSIDE a guard. The IC
+/// stores in `put.pic.hit.store` and classifies the value in the blocks after
+/// it, so the census accepts a store in the value gate's unique-predecessor
+/// chain. That widening must still refuse a store that some path can skip:
+/// move it into the bookkeeping arm (the pointer-only path) and the verdict
+/// must go red.
+#[test]
+fn sabotage_moving_the_store_into_the_guard_goes_red_for_the_store_ic() {
+    assert_default_barrier_env_not_disabled();
+    let stem = "put.pic";
+    let kind = StemKind::PointerTestedStore;
+    let ir = probe_ir(stem);
+    verify_stem_ir(&ir, stem, kind).expect("pristine IR must verify first");
+    let store_label = ir
+        .lines()
+        .filter_map(label_of)
+        .find(|l| label_matches(l, "put.pic.hit.store."))
+        .expect("the store block exists")
+        .to_string();
+    let store_body = block_body_exact(&ir, &store_label).expect("store block has a body");
+    let store_line = store_body
+        .lines()
+        .find(|l| l.trim().starts_with("store double"))
+        .expect("the store block stores")
+        .to_string();
+    let book_label = all_numbered_labels(&ir, "put.pic.gc_bookkeeping.")
+        .into_iter()
+        .next()
+        .expect("the bookkeeping arm exists");
+    let mut out: Vec<String> = Vec::new();
+    for line in ir.lines() {
+        if line == store_line {
+            continue;
+        }
+        out.push(line.to_string());
+        if label_of(line) == Some(book_label.as_str()) {
+            out.push(store_line.clone());
+        }
+    }
+    let doctored = assert_changed(&ir, &out.join("\n"), "move the store into the guard");
+    assert!(
+        verify_stem_ir(&doctored, stem, kind).is_err(),
+        "a slot store that only the pointer arm performs must be caught"
+    );
 }

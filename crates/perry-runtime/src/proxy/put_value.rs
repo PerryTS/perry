@@ -291,7 +291,13 @@ pub extern "C" fn js_put_value_set(
 
     if target_bits == TAG_NULL || target_bits == TAG_UNDEFINED {
         let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
-        let msg = format!("Cannot set properties of null or undefined (setting '{key_name}')");
+        // Node's wording names which nullish value the base was.
+        let base = if target_bits == TAG_NULL {
+            "null"
+        } else {
+            "undefined"
+        };
+        let msg = format!("Cannot set properties of {base} (setting '{key_name}')");
         return throw_type_error(&msg);
     }
     let ok = if lookup(target).is_some() {
@@ -328,6 +334,10 @@ pub extern "C" fn js_put_value_set(
     }
     value_handle.get_nanbox_f64()
 }
+
+#[path = "put_value/packed_set.rs"]
+mod packed_set;
+pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 
 /// Words in a per-site static-key write cache (`[shape_token, slot]` × the
 /// four inline ways) and in its outlined poly tail. Both are views of the
@@ -485,8 +495,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
         };
         // #9287: a slot past the inline region primes too, carrying
         // IC_SLOT_OVERFLOW_BIT exactly like the dynamic-key IC's stub entries.
-        // The emitted hit path routes such slots through
-        // `js_put_value_set_ic_overflow_store`, which is `dyn_ic_try_store` —
+        // A way hit on such a slot is served by `dyn_ic_try_store` —
         // the same validate-and-store the dynamic IC has always used for
         // overflow properties (spill store, tombstone check, barriers). Before
         // this, `idx >= alloc_limit` returned without priming, so a property
@@ -533,56 +542,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
     }
 
     result
-}
-
-const STATIC_PIC_TAIL_WAYS: usize = 4;
-
-/// Outlined ways 5–8 for the static-key write PIC.
-///
-/// The generated function keeps its first four shape guards inline. Once
-/// those are full, this helper validates up to four additional cached
-/// `(shape_token, slot)` pairs before falling back to full `[[Set]]`
-/// semantics. Empty ways are filled in order and a full cache is never
-/// overwritten, so a stable eight-shape site settles instead of continuously
-/// replacing its fourth entry.
-///
-/// `tail_slot` is the tail's own [`WritePicCacheSlot`]: a site reaches this
-/// helper only once its four inline ways are full, so the tail cache is not
-/// allocated before a fifth shape actually shows up (#9708). An unallocated
-/// tail reads as four empty ways.
-#[no_mangle]
-pub extern "C" fn js_put_value_set_ic_poly_tail(
-    tail_slot: *mut WritePicCacheSlot,
-    target: f64,
-    key: *const crate::StringHeader,
-    value: f64,
-    strict: i32,
-) -> f64 {
-    if !tail_slot.is_null() {
-        unsafe {
-            let cache = crate::object::pic_slot_peek(tail_slot);
-            if cache.is_null() {
-                return js_put_value_set_ic_miss(target, key, value, strict, tail_slot, 0);
-            }
-            let c = &mut *cache;
-            for way in 0..STATIC_PIC_TAIL_WAYS {
-                let word = way * 2;
-                let token = c[word] as u64;
-                if token == 0 {
-                    return js_put_value_set_ic_miss(
-                        target, key, value, strict, tail_slot, way as i32,
-                    );
-                }
-                if let Some(result) = dyn_ic_try_store(target, token, c[word + 1] as u32, value) {
-                    return result;
-                }
-            }
-        }
-    }
-
-    // More than eight stable shapes remain bounded and semantically correct:
-    // execute the ordinary write without evicting a useful settled entry.
-    js_put_value_set_ic_miss(target, key, value, strict, std::ptr::null_mut(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -807,29 +766,6 @@ fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
 /// and bounds. What remains mutable per object is the GC header — type,
 /// forwarded, and the blocking flags `Object.freeze`-family operations set —
 /// and the hit still checks those on every store.
-/// #9287: validate-and-store for a constant-key IC hit whose slot word
-/// carries [`IC_SLOT_OVERFLOW_BIT`]. The emitted inline path has already
-/// matched the receiver's shape token against the cache, but this helper
-/// re-validates everything through [`dyn_ic_try_store`] anyway — the checks
-/// are ~10 instructions, and reusing the dynamic IC's audited path means the
-/// overflow store (spill buffer, stable-tombstone hole check, barriers,
-/// layout notes) has exactly one implementation. Returns 1 and performs the
-/// store on success; returns 0 without side effects when validation fails,
-/// and the caller falls back to `js_put_value_set_ic_miss`.
-#[no_mangle]
-pub extern "C" fn js_put_value_set_ic_overflow_store(
-    target: f64,
-    token: i64,
-    slot: i32,
-    value: f64,
-) -> i32 {
-    unsafe {
-        match dyn_ic_try_store(target, token as u64, slot as u32, value) {
-            Some(_) => 1,
-            None => 0,
-        }
-    }
-}
 
 pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 

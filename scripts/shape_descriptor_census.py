@@ -399,6 +399,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
     ]
     raw_write_pics = sources["crates/perry-codegen/src/expr/proxy_reflect.rs"]
+    raw_store_ic = sources["crates/perry-codegen/src/expr/put_value_store_ic.rs"]
 
     for pattern, label in (
         # #9706: the by-id store is a chunked slab indexed by ShapeId. Since
@@ -896,13 +897,20 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     if range_guard not in packed_prime or packed_prime.find("(*packed).store") < packed_prime.index(range_guard):
         raise CensusError("compact read PIC publication lost its valid ShapeId/slot proof")
-    for name in ("lower_put_value_static_write_ic", "lower_put_value_dyn_ic_inline"):
-        body = function_body(raw_write_pics, name)
-        if re.search(r"add\s*\(\s*I64\s*,\s*&(safe_target|t_handle)\s*,\s*\"(?:8|16)\"", body):
+    # The static-key store IC (`put_value_store_ic.rs`) replaced the four-way
+    # static write PIC (`lower_put_value_static_write_ic`); the dynamic-key IC
+    # is unchanged. Both must read the ShapeId word at +4 and nothing the
+    # retired header layout had at +8/+16.
+    for source, name in (
+        (raw_store_ic, "emit_static_store_ic"),
+        (raw_write_pics, "lower_put_value_dyn_ic_inline"),
+    ):
+        body = function_body(source, name)
+        if re.search(r"add\s*\(\s*I64\s*,\s*&(safe_target|t_handle|handle)\s*,\s*\"(?:8|16)\"", body):
             raise CensusError(f"{name} emits a removed ObjectHeader fact")
         require_code(
             body,
-            r"add\s*\(\s*I64\s*,\s*&(?:safe_target|t_handle)\s*,\s*\"4\"\s*\)",
+            r"add\s*\(\s*I64\s*,\s*&(?:safe_target|t_handle|handle)\s*,\s*\"4\"\s*\)",
             f"{name} reads the authoritative ShapeId at header offset 4",
         )
 

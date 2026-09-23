@@ -316,6 +316,9 @@ pub use ic_miss::{
     js_object_set_field_by_property_id, js_private_brand_add, js_private_brand_check,
     js_private_field_add, js_private_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
 };
+// The read path's spill flip, shared with the static-key store IC's ways
+// (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
+pub(crate) use ic_miss::PACKED_SPILL_FLIP;
 #[cfg(test)]
 pub(crate) use ic_miss::{primitive_proto_method_name_static, test_push_catch_private_hint};
 /// The one slow exit of the emitted generic property-get tower. Declared here

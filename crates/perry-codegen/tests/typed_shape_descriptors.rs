@@ -311,8 +311,9 @@ fn assert_typed_feedback_setter_after(ir: &str, start_pos: usize, context: &str)
     // `js_typed_feedback_object_set_field_by_name` wrapper, which had no
     // `strict` parameter and no prototype walk. Match the CALL: every runtime
     // entry is `declare`d in every module.
+    // The static-key store IC's miss entry is that same `[[Set]]`.
     assert!(
-        after_start.contains("call double @js_put_value_set("),
+        after_start.contains("call double @js_put_value_set_packed_miss("),
         "{context} should reach the receiver-aware runtime setter"
     );
     assert!(

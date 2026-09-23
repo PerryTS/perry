@@ -862,3 +862,13 @@ test_gap_gc_for_in_proxy_callback_roots
 
 test_gap_gc_string_suffix_cursor
 test_gap_gc_array_shift_queue
+
+# --- the static-key store IC: one inline path for any RHS --------------------
+# `o.k = v` compares the receiver ShapeId AFTER the RHS and stores inline. An
+# RHS that moves the receiver (rhs_collects), reshapes it (rhs_reshapes), a
+# young value into an old parent (old_to_young, run under VERIFY_EVACUATION),
+# and receivers that must stay on [[Set]] (generic_receivers).
+test_gap_gc_store_ic_rhs_collects
+test_gap_gc_store_ic_rhs_reshapes
+test_gap_gc_store_ic_old_to_young
+test_gap_gc_store_ic_generic_receivers

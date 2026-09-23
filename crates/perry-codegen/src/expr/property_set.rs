@@ -215,7 +215,7 @@ fn lower_runtime_property_set_by_name(
 ///
 /// Rooting is the #7154 window: the receiver is live across `value`'s
 /// lowering, which is arbitrary user code and can drive an evacuating minor.
-fn lower_put_value_property_set_by_name(
+pub(crate) fn lower_put_value_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
@@ -234,34 +234,40 @@ fn lower_put_value_property_set_by_name(
                 "dynamic_property_set_helper_edge",
             )
         },
-        |ctx, vals, (val_double, _val_bits)| {
+        |ctx, vals, (val_double, val_bits)| {
+            // `vals[0]` is the receiver RE-READ from its operand root after the
+            // value's lowering, which is arbitrary user code: a collection that
+            // moved it, or a shape change it made, is already visible here.
             let obj_box = vals[0].clone();
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-            // `undefined.x = 1` is a TypeError in BOTH modes: `GetValue` on the
-            // base runs before `PutValue` ever consults `Throw`.
-            emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
-            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
             emit_typed_feedback_property_set_observation(ctx, property, &obj_bits, |ctx| {
                 // The key is an interned heap string, so its `StringHeader*` is
                 // a mask, never an allocation.
+                let key_box = ctx.block().load(DOUBLE, &key_handle_global);
                 let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
                 ctx.block().and(I64, &key_bits, POINTER_MASK_I64)
             });
-            let strict_flag = if assignment_strict { "1" } else { "0" };
-            let _ = ctx.block().call(
-                DOUBLE,
-                "js_put_value_set",
-                &[
-                    (DOUBLE, &obj_box),
-                    (DOUBLE, &key_box),
-                    (DOUBLE, &val_double),
-                    (DOUBLE, &obj_box),
-                    (I32, strict_flag),
-                ],
+            // The one inline store path: tag, ShapeId compare, the store, the
+            // barrier; every other case calls `js_put_value_set_packed_miss`,
+            // which is `js_put_value_set` plus the site's publication.
+            // The assignment's value: the RHS on a hit, and on a miss the
+            // runtime's re-read of it from its own root (the miss is a
+            // collection point, so the pre-call register may be stale).
+            let result = super::put_value_store_ic::emit_static_store_ic(
+                ctx,
+                &obj_box,
+                property,
+                &val_double,
+                &val_bits,
+                // `undefined.x = 1` is a TypeError in BOTH modes. A nullish
+                // base fails the hit path's receiver test, and the miss entry's
+                // `[[Set]]` throws it (`js_put_value_set`: node's wording, and
+                // before `Throw` is consulted), so no guard is emitted here.
+                assignment_strict,
             );
-            Ok(val_double)
+            Ok(result)
         },
     )
 }

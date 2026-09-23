@@ -9,7 +9,8 @@
 //! A miss-handler probe put 99.9998% of 2.4M declines on that one bail.
 //!
 //! The fix primes such slots with `IC_SLOT_OVERFLOW_BIT` and routes emitted
-//! hits through `js_put_value_set_ic_overflow_store` /
+//! hits through the dynamic-key IC's validated overflow store (now served by
+//! the static-key store IC's miss entry, `js_put_value_set_packed_miss`) /
 //! `js_object_get_field_ic_overflow_load` — the dynamic-key IC's audited
 //! overflow path. What these tests guard is the INVALIDATION story of that
 //! new hit path: every case below primes the cache hot and then changes the
