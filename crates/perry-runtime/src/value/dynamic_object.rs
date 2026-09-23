@@ -819,6 +819,11 @@ mod length_handle_band_tests {
             );
 
             let ptr = raw.cast::<crate::typedarray::TypedArrayHeader>();
+            // GC_STORE_AUDIT(POINTER_FREE): TypedArrayHeader is
+            // length/capacity/kind/elem_size/_pad numerics with no pointer
+            // field, and the destination is this test's own private anonymous
+            // mmap page rather than arena-managed memory, so the store creates
+            // no heap edge for the collector to trace.
             std::ptr::write(
                 ptr,
                 crate::typedarray::TypedArrayHeader {
