@@ -374,24 +374,20 @@ fn parse_ws_url(url: &str) -> Result<WsTarget, String> {
     })
 }
 
-/// The outbound `wss://` client.
+/// The outbound `wss://` client config.
 ///
-/// perry-stdlib has no TLS *client* helper reachable from a `bundled-ws`
-/// build: `net::build_tls_connector` is private to `net` and gated on the
-/// `tls` feature (which implies `bundled-net`), and `turnloop_tls_client` is
-/// gated on the turnloop HTTP/SMTP client features and is sans-I/O besides. So
-/// the connector is built here from `tokio-rustls` + `rustls-native-certs` —
-/// both already declared in this crate's manifest for `tls-runtime`, so no new
-/// third-party crate enters the graph. The shape mirrors
-/// `net::build_tls_connector`'s verifying path.
+/// `net::build_tls_connector` is private to `net` and gated on the `tls`
+/// feature (which implies `bundled-net`), so a `bundled-ws` build builds its
+/// own here from `rustls` + `rustls-native-certs`; the shape mirrors
+/// `net::build_tls_connector`'s verifying path. The handshake runs through
+/// `crate::tls_stream::TlsStream` — perry-tls-session's sans-I/O rustls
+/// session over the tokio socket (turnloop P8 group H), no tokio-rustls.
 ///
 /// Cached: loading the system trust store per connect would be a syscall storm
 /// on a reconnecting client.
 #[cfg(not(target_os = "ios"))]
-fn ws_tls_connector() -> Result<tokio_rustls::TlsConnector, String> {
-    use tokio_rustls::rustls;
-
-    static CONNECTOR: std::sync::OnceLock<Result<tokio_rustls::TlsConnector, String>> =
+fn ws_tls_connector() -> Result<std::sync::Arc<rustls::ClientConfig>, String> {
+    static CONNECTOR: std::sync::OnceLock<Result<std::sync::Arc<rustls::ClientConfig>, String>> =
         std::sync::OnceLock::new();
     CONNECTOR
         .get_or_init(|| {
@@ -412,9 +408,7 @@ fn ws_tls_connector() -> Result<tokio_rustls::TlsConnector, String> {
             .map_err(|e| format!("tls protocol versions: {}", e))?
             .with_root_certificates(roots)
             .with_no_client_auth();
-            Ok(tokio_rustls::TlsConnector::from(std::sync::Arc::new(
-                config,
-            )))
+            Ok(std::sync::Arc::new(config))
         })
         .clone()
 }
@@ -453,12 +447,10 @@ async fn ws_client_connect(url: &str) -> Result<WsConnected, String> {
     let _ = tcp.set_nodelay(true);
     let mut stream: Box<dyn WsTransport> = if target.secure {
         let connector = ws_tls_connector()?;
-        let server_name =
-            tokio_rustls::rustls::pki_types::ServerName::try_from(target.host.clone())
-                .map_err(|_| format!("invalid TLS server name: {}", target.host))?;
+        let server_name = rustls::pki_types::ServerName::try_from(target.host.clone())
+            .map_err(|_| format!("invalid TLS server name: {}", target.host))?;
         Box::new(
-            connector
-                .connect(server_name, tcp)
+            crate::tls_stream::TlsStream::connect(tcp, connector, server_name)
                 .await
                 .map_err(|e| format!("TLS handshake failed: {}", e))?,
         )

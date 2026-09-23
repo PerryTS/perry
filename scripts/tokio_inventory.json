@@ -201,21 +201,9 @@
       "target": null,
       "surface": "every async stdlib surface: the `async-runtime` feature gates `common::async_bridge` and `perry_ffi_async`, i.e. the whole promise bridge and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI every perry-ext-* crate settles its promises through.",
       "reached_when": "always \u2014 `full` implies it, and 20 other features imply it individually",
-      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib those clients are now reqwest and tokio-rustls (the bundled sqlx / redis / mongodb copies were deleted in group H); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
+      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib those clients are now reqwest and the tokio sockets under the bundled `node:tls` server, `net` client and `wss://` connector (their TLS moved to perry-tls-session's sans-I/O session in group H, but the sockets did not) (the bundled sqlx / redis / mongodb copies were deleted in group H); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
       "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 upstream",
       "plan": "L"
-    },
-    {
-      "crate": "perry-stdlib",
-      "dep": "tokio-rustls",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "`tls.createServer()` / `tls.connect()` / `socket.upgradeToTLS()` (the bundled `node:tls` module, ~3.7k lines across `src/tls.rs` + `src/tls/`), the bundled net client's TLS in `src/net/mod.rs`, and the `wss://` client connector in `src/ws.rs` (which declares its own `dep:tokio-rustls` under `bundled-ws`).",
-      "reached_when": "the `tls-runtime` feature, which `external-net-tls` and `external-tls-server` also pull in \u2014 so this one SURVIVES the well-known flip, and the flip actively turns it ON: optimized_libs/driver.rs inserts `external-tls-server` for every `node:http` / `node:https` / `node:http2` import (the ext-net TLS preflight hook `js_tls_client_preflight` is defined here) and `external-net-tls` whenever net/http own the transport. Plus `bundled-ws` for `wss://`.",
-      "blocker": "NOT a bundled-fallback copy \u2014 group H's \u201ccompiled out of every default build\u201d framing never applied to this edge, and its own `reached_when` above said so. There is no perry-ext-* wrapper that owns a TLS SERVER: perry-ext-net has the client, and P5 moved perry-ext-http's accepted-connection TLS to turnloop-tls, but `tls.createServer()` and the preflight provider are only here. Deleting it would delete `node:tls` server support and `wss://` under `bundled-ws`, not relocate them. CORRECTION (read against the tree, 2026-09-17): the previous note said this \u201cneeds a turnloop-tls SERVER session (an accept-side counterpart to `perry-tls-session`) first\u201d, and that is half stale. An accept-side session over a turnloop handle EXISTS and is in production use \u2014 `perry_ext_net::turnloop_tls_io::install_server_session` over `perry-ext-net`'s own `turnloop_tls::TlsSession::server`, which is what `https.createServer()` and `http2.createSecureServer()` ride on the turnloop path. What is missing is that it has never been EXTRACTED into a shared crate the way `perry-tls-session` / `perry-tls-turnloop` extracted the CLIENT half; perry-stdlib cannot depend on perry-ext-net. And an extraction alone would not move this edge, because the session is the SECOND half of the job. All three surfaces that hold the edge run on TOKIO SOCKETS, not turnloop handles: `tls.rs`'s `TlsAcceptor` server (its own `tokio::net::TcpListener` accept loop), `net/mod.rs`'s `TlsConnector` client, and `ws.rs`'s `wss://` connector \u2014 which already uses `turnloop-websocket` for its CODEC while keeping a tokio stream underneath, and says in its own comment why it builds a `tokio_rustls` connector rather than reaching for the sans-I/O one. `grep turnloop` over those ~3,700 lines returns eight hits and every one is a comment or the WS codec. So the prerequisite is not one session type: it is P1 (put the bundled net/tls/ws sockets on turnloop handles) plus P5 (install sessions above them), the work perry-ext-net and perry-ext-http each had a whole phase for.",
-      "issue": "unfiled \u2014 P8; group H's other three edges were deleted, this one was not; the accept-side-session half of the blocker is closed inside perry-ext-net but not extracted",
-      "plan": "H"
     },
     {
       "crate": "perry-ui-android",
@@ -284,7 +272,7 @@
     "perry-ext-mongodb": 29,
     "perry-ext-net": 54,
     "perry-ffi": 2,
-    "perry-stdlib": 73,
+    "perry-stdlib": 81,
     "perry-ui-gtk4": 6
   }
 }

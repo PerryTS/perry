@@ -184,6 +184,13 @@ pub mod streams;
 #[cfg(feature = "bundled-streams")]
 pub use streams::*;
 
+// === TLS over a tokio transport (turnloop P8 group H) ===
+// perry-tls-session's sans-I/O rustls session driven over the tokio sockets
+// the bundled `node:tls` server, `net` client and `wss://` connector still
+// use — the replacement for their former tokio-rustls streams.
+#[cfg(any(feature = "tls-runtime", feature = "bundled-ws"))]
+pub(crate) mod tls_stream;
+
 // === WebSocket ===
 #[cfg(feature = "bundled-ws")]
 pub mod ws;

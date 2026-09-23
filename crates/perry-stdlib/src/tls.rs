@@ -22,7 +22,9 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::{rustls, server::TlsStream as ServerTlsStream, TlsAcceptor};
+// turnloop P8 group H: the server handshake is `perry-tls-session`'s sans-I/O
+// session over the accepted tokio socket (`crate::tls_stream`), not tokio-rustls.
+use crate::tls_stream::TlsStream as ServerTlsStream;
 
 const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
 const TLS_DISPATCH_MISSING_BITS: u64 = TAG_UNDEFINED_BITS;
@@ -1534,7 +1536,6 @@ pub unsafe extern "C" fn js_tls_server_listen(
             }
         }
         push_tls_event(PendingTlsEvent::ServerListening(server_id));
-        let acceptor = TlsAcceptor::from(config);
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -1548,12 +1549,12 @@ pub unsafe extern "C" fn js_tls_server_listen(
                             let peer_addr = Some(peer);
                             let original_servername =
                                 socket_api::take_original_servername(server_id);
-                            let acceptor = acceptor.clone();
+                            let config = config.clone();
                             let cert_resolver = cert_resolver.clone();
                             tokio::spawn(async move {
-                                match acceptor.accept(stream).await {
+                                match ServerTlsStream::accept(stream, config).await {
                                     Ok(tls_stream) => {
-                                        let connection = tls_stream.get_ref().1;
+                                        let connection = tls_stream.session();
                                         let protocol = match connection.protocol_version() {
                                             Some(rustls::ProtocolVersion::TLSv1_2) => Some("TLSv1.2".to_string()),
                                             Some(rustls::ProtocolVersion::TLSv1_3) => Some("TLSv1.3".to_string()),
