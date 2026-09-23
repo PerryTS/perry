@@ -383,8 +383,7 @@ pub(crate) fn has_active_handles() -> bool {
         .unwrap()
         .iter()
         .any(|(id, server)| {
-            (server.listening || server.listen_armed)
-                && crate::bun_tcp::server_keeps_alive(*id)
+            (server.listening || server.listen_armed) && crate::bun_tcp::server_keeps_alive(*id)
         })
 }
 
