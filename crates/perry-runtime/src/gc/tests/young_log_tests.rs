@@ -138,6 +138,66 @@ fn young_value_under_an_old_closure_owner_is_logged_by_the_value() {
 }
 
 #[test]
+fn layout_slot_rewrite_rearms_old_closure_for_a_young_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+
+    let owner = old_closure();
+    crate::closure::closure_set_dynamic_prop(owner, "memo", 42.0);
+    let value = young_leaf();
+    crate::closure::visit_closure_dynamic_prop_value_slots_mut(owner, |slot| unsafe {
+        *slot = string_bits(value);
+    });
+
+    let _ = gc_collect_minor();
+
+    let bits = crate::closure::closure_get_own_dynamic_prop(owner, "memo")
+        .expect("old owner keeps its rewritten entry")
+        .to_bits();
+    let value_after = (bits & POINTER_MASK) as usize;
+    assert_ne!(
+        value_after, value,
+        "the rewritten young value must be evacuated through the re-armed log"
+    );
+    assert!(crate::arena::pointer_in_nursery(value_after));
+    let row = walk("closure.dynamic_props");
+    assert!(row.partial);
+    assert!(
+        row.visited >= 1,
+        "the re-armed owner must be visited: {row:?}"
+    );
+}
+
+#[test]
+fn layout_slot_rewrite_rearms_old_closure_for_a_young_prototype() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+
+    let owner = old_closure();
+    crate::closure::closure_set_static_prototype(owner, crate::value::TAG_NULL);
+    let prototype = young_leaf();
+    crate::closure::visit_closure_static_prototype_slot_mut(owner, |slot| unsafe {
+        *slot = string_bits(prototype);
+    });
+
+    let _ = gc_collect_minor();
+
+    let bits = crate::closure::closure_static_prototype(owner).expect("prototype kept");
+    let prototype_after = (bits & POINTER_MASK) as usize;
+    assert_ne!(
+        prototype_after, prototype,
+        "the rewritten young prototype must be evacuated through the re-armed log"
+    );
+    assert!(crate::arena::pointer_in_nursery(prototype_after));
+    let row = walk("closure.dynamic_props");
+    assert!(row.partial);
+    assert!(
+        row.visited >= 1,
+        "the re-armed owner must be visited: {row:?}"
+    );
+}
+
+#[test]
 fn old_closure_entries_are_skipped_by_a_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);

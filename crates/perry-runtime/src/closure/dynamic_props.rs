@@ -498,6 +498,18 @@ pub(crate) fn visit_closure_dynamic_prop_values_mut(owner: usize, mut visit: imp
         visit(value);
     }
 
+    // `visit` may rewrite an old value to a nursery/survivor address. This
+    // path temporarily removes the entry, so the ordinary setter's pre-publish
+    // young-log note does not cover the rewritten value. Re-arm the log before
+    // putting the entry back; otherwise the next minor-scoped root walk skips
+    // the new pointer (#11117).
+    let relevant_value_bits = owner_props
+        .values
+        .values()
+        .map(|value| value.to_bits())
+        .find(|bits| crate::gc::young_log::bits_are_minor_relevant(*bits))
+        .unwrap_or(0);
+    note_young_closure_owner(owner, relevant_value_bits);
     if let Ok(mut props) = get_closure_props().lock() {
         merge_closure_prop_map(&mut props, owner, owner_props);
     }
@@ -538,6 +550,7 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
     // The visit can forward the owner itself (self-referential
     // prototype); re-key like the roots scanner does.
     let new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
+    note_young_closure_owner(new_owner, proto_bits);
     if let Ok(mut prototypes) = get_closure_prototypes().lock() {
         prototypes.insert(new_owner, proto_bits);
     }
