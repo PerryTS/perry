@@ -1,44 +1,44 @@
 //! Routes `fetch` onto the turnloop client engine, and back.
 //!
-//! Every transport-bearing `js_fetch_*` entry point calls [`try_dispatch`]
-//! first. `true` means the engine accepted the request and will settle the
-//! promise exactly once; `false` means it declined and the caller must run its
-//! existing reqwest future — the same coexistence rule P1 applied to the tokio
-//! socket task, and the reason `reqwest` is not removed from this crate.
+//! Every transport-bearing `js_fetch_*` entry point hands its request to
+//! [`dispatch`] (or a sibling). The engine is the only transport: the reqwest
+//! future that used to run when it declined is gone, and with it
+//! `perry-stdlib`'s `reqwest` dependency. A request the engine refuses to build
+//! settles the caller's promise with Node's rejection for the same input
+//! (`transport_error::Rejection`).
 //!
-//! # What declines, and why each is real
+//! # What is refused, and why each is real
 //!
 //! * **No loop for this agent at all** — the only remaining case is a host
-//!   where `Loop::new` failed. A *worker* agent is no longer one of these
-//!   (turnloop P9 gave every agent a loop), and neither is a second
-//!   thread acting for an agent another thread owns: turnloop P10 hands that
-//!   thread's whole submission to the owner (`turnloop_client::posted`).
+//!   where `Loop::new` failed. A *worker* agent is not one of these (turnloop
+//!   P9 gave every agent a loop), and neither is a second thread acting for an
+//!   agent another thread owns: turnloop P10 hands that thread's whole
+//!   submission to the owner (`turnloop_client::posted`).
 //! * **A proxy this client cannot drive** — a proxy URL whose scheme is not
-//!   `http` (socks5, https-to-proxy), or one that will not parse. An ordinary
-//!   `http://` proxy is no longer a decline: `HTTP_PROXY`/`HTTPS_PROXY` and the
-//!   process-wide `undici.setGlobalDispatcher(new ProxyAgent(…))` are both read
-//!   as a URL now, and the engine runs the CONNECT tunnel itself.
-//! * **A URL `turnloop_http::client::Request::new` rejects** (a non-http(s)
-//!   scheme, embedded credentials, a forbidden method). Declining rather than
-//!   failing keeps the existing error text, which the suite pins.
+//!   `http` (socks5, https-to-proxy), or one that will not parse.
+//!   `HTTP_PROXY`/`HTTPS_PROXY` and the process-wide
+//!   `undici.setGlobalDispatcher(new ProxyAgent(…))` with an `http://` proxy
+//!   are served: the engine runs the CONNECT tunnel itself.
+//! * **A URL or method `turnloop_http::client::Request::new` rejects** — a
+//!   non-http(s) scheme, embedded credentials, a forbidden or malformed
+//!   method. These now reject exactly as undici does; reqwest used to send the
+//!   last three.
 //!
 //! # GC
 //!
 //! `ctx` is the promise address from `js_promise_new_cross_thread`, which pins
-//! the promise across the crossing (#9552) exactly as the reqwest path relied
-//! on. Nothing else about a request is a JS value: url, method, headers and body
+//! the promise across the crossing (#9552). Nothing else about a request is a JS value: url, method, headers and body
 //! are owned Rust data copied out on this thread before submission, and the
 //! response handle is built here, on the owning thread, inside the deferred
 //! resolution — never in the sink.
 
 use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution};
-use crate::turnloop_client::{
-    self, ClientError, Declined, Outcome, RequestSpec, ResponseOut, Sink,
-};
+use crate::turnloop_client::{self, ClientError, Outcome, RequestSpec, ResponseOut, Sink};
 
 use super::{
-    alloc_fetch_handle_id, handle_to_f64, transport_error::FetchFailure, FetchResponse,
-    FETCH_RESPONSES,
+    alloc_fetch_handle_id, handle_to_f64,
+    transport_error::{FetchFailure, Rejection},
+    FetchResponse, FETCH_RESPONSES,
 };
 
 /// One fetch, as the entry points describe it.
@@ -51,34 +51,33 @@ pub(crate) struct FetchDispatch {
 }
 
 /// The `js_fetch_with_options` form: the same dispatch built from the resolved
-/// `FetchInputs`. On decline the inputs come back so the caller can run its
-/// reqwest future without rebuilding them.
-pub(crate) fn try_dispatch_inputs(
+/// `FetchInputs`.
+pub(crate) fn dispatch_inputs(
     inputs: super::request_handle::FetchInputs,
     abort_key: Option<usize>,
     promise_ptr: usize,
-) -> Result<(), super::request_handle::FetchInputs> {
-    let dispatch = FetchDispatch {
-        url: inputs.url.clone(),
-        method: inputs.method.clone(),
-        headers: inputs
-            .custom_headers
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
-        body: inputs.body.clone(),
-        abort_key,
-    };
-    if try_dispatch(dispatch, promise_ptr) {
-        Ok(())
-    } else {
-        Err(inputs)
-    }
+) {
+    let super::request_handle::FetchInputs {
+        url,
+        method,
+        body,
+        custom_headers,
+    } = inputs;
+    dispatch(
+        FetchDispatch {
+            url,
+            method,
+            headers: custom_headers.into_iter().collect(),
+            body,
+            abort_key,
+        },
+        promise_ptr,
+    );
 }
 
 /// The `js_fetch_text` form, which resolves with the decoded body text rather
 /// than a `Response` handle.
-pub(crate) fn try_dispatch_text(url: String, promise_ptr: usize) -> bool {
+pub(crate) fn dispatch_text(url: String, promise_ptr: usize) {
     let spec = RequestSpec {
         url,
         method: "GET".to_string(),
@@ -87,18 +86,22 @@ pub(crate) fn try_dispatch_text(url: String, promise_ptr: usize) -> bool {
         redirect: turnloop_http::client::RedirectMode::Follow,
         abort_key: None,
     };
+    let (url, method) = (spec.url.clone(), spec.method.clone());
     let sink = Sink {
         ctx: promise_ptr,
         on_head: None,
         on_chunk: None,
         on_done: settle_text,
     };
-    match turnloop_client::submit(spec, sink) {
-        Ok(()) => true,
-        Err(_) => {
-            turnloop_client::note_declined();
-            false
-        }
+    if let Err(declined) = turnloop_client::submit(spec, sink) {
+        turnloop_client::note_declined();
+        let message = format!(
+            "Fetch error: {}",
+            Rejection::for_declined(declined, &url, &method).message()
+        );
+        queue_deferred_resolution(promise_ptr, false, move || unsafe {
+            super::fetch_error_bits(&message)
+        });
     }
 }
 
@@ -108,16 +111,15 @@ pub(crate) fn try_dispatch_text(url: String, promise_ptr: usize) -> bool {
 /// hooks. They were added by P6 and left unused, which by CLAUDE.md's
 /// kill-policy made them an unexercised mode — a green engine test said nothing
 /// about them. `ctx` is the stream id, not a promise: this surface resolves
-/// nothing and is polled from JS instead.
-///
-/// `false` means the engine declined and the caller must run its reqwest task.
-pub(crate) fn try_dispatch_stream(
+/// nothing and is polled from JS instead, so a refusal is reported the way a
+/// connection failure is — `status = 3` with the error text.
+pub(crate) fn dispatch_stream(
     stream_id: usize,
     url: String,
     method: String,
     headers: Vec<(String, String)>,
     body: Option<Vec<u8>>,
-) -> bool {
+) {
     let spec = RequestSpec {
         url,
         method,
@@ -126,23 +128,24 @@ pub(crate) fn try_dispatch_stream(
         redirect: turnloop_http::client::RedirectMode::Follow,
         abort_key: None,
     };
+    let (url, method) = (spec.url.clone(), spec.method.clone());
     let sink = Sink {
         ctx: stream_id,
         on_head: Some(stream_head),
         on_chunk: Some(stream_chunk),
         on_done: stream_done,
     };
-    match turnloop_client::submit(spec, sink) {
-        Ok(()) => true,
-        Err(_) => {
-            turnloop_client::note_declined();
-            false
-        }
+    if let Err(declined) = turnloop_client::submit(spec, sink) {
+        turnloop_client::note_declined();
+        let message = Rejection::for_declined(declined, &url, &method).message();
+        super::with_stream(stream_id, |state| {
+            state.error = format!("Connection error: {message}");
+            state.status = 3;
+        });
     }
 }
 
-/// The FINAL response's head — the engine never reports a followed redirect's,
-/// which matches what `reqwest::Response::status()` reported here.
+/// The FINAL response's head — the engine never reports a followed redirect's.
 fn stream_head(ctx: usize, status: u16, _headers: &[(String, String)]) {
     super::with_stream(ctx, |state| {
         state.http_status = status;
@@ -161,9 +164,8 @@ fn stream_done(ctx: usize, outcome: Outcome) {
         // already went through `stream_chunk`.
         Outcome::Ok(_) => super::with_stream(ctx, |state| state.finish()),
         Outcome::Err(error) => super::with_stream(ctx, |state| {
-            // The two message prefixes the reqwest path used, kept: a failure
-            // before the head is a connection error, one after it a stream
-            // error.
+            // The surface's two message prefixes: a failure before the head is
+            // a connection error, one after it a stream error.
             state.error = if state.status >= 1 {
                 format!("Stream error: {}", error.message)
             } else {
@@ -195,31 +197,30 @@ fn settle_text(ctx: usize, outcome: Outcome) {
     }
 }
 
-/// Try the turnloop path. `false` means the caller keeps its reqwest future.
-pub(crate) fn try_dispatch(dispatch: FetchDispatch, promise_ptr: usize) -> bool {
+/// Hand one fetch to the engine. The promise is settled exactly once either
+/// way: by the engine's completion, or here with the refusal's rejection.
+pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
     let spec = RequestSpec {
         url: dispatch.url,
         method: dispatch.method,
         headers: dispatch.headers,
         body: dispatch.body,
-        // Perry's fetch has always followed redirects (reqwest's default
-        // policy). `RedirectMode::Follow` with turnloop-http's own limit of 20
-        // is Node's number; reqwest's was 10.
+        // Perry's fetch has always followed redirects. `RedirectMode::Follow`
+        // with turnloop-http's own limit of 20 is Node's number.
         redirect: turnloop_http::client::RedirectMode::Follow,
         abort_key: dispatch.abort_key,
     };
+    let (url, method) = (spec.url.clone(), spec.method.clone());
     let sink = Sink {
         ctx: promise_ptr,
         on_head: None,
         on_chunk: None,
         on_done: settle,
     };
-    match turnloop_client::submit(spec, sink) {
-        Ok(()) => true,
-        Err(Declined::NoLoop | Declined::Proxy | Declined::Unsupported | Declined::NoTls) => {
-            turnloop_client::note_declined();
-            false
-        }
+    if let Err(declined) = turnloop_client::submit(spec, sink) {
+        turnloop_client::note_declined();
+        let rejection = Rejection::for_declined(declined, &url, &method);
+        queue_deferred_resolution(promise_ptr, false, move || rejection.into_js_bits());
     }
 }
 

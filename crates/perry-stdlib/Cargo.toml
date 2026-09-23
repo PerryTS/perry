@@ -60,7 +60,10 @@ http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
 # #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API).
 # Node HTTP is provided only by perry-ext-http.
 turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http"]
-web-fetch = ["dep:reqwest", "async-runtime", "bundled-streams", "turnloop-http-client"]
+# The global `fetch` runs on the turnloop client engine only (tokio lane G
+# removed its reqwest fallback); `async-runtime` is still needed for the
+# promise bridge it settles through.
+web-fetch = ["async-runtime", "bundled-streams", "turnloop-http-client"]
 http-client = ["web-fetch"]
 
 # Web Streams API (issue #237). Per-binding gate v0.5.572 — the
@@ -312,7 +315,7 @@ perry-tls-session = { workspace = true, optional = true }
 turnloop-smtp = { workspace = true, optional = true }
 # `turnloop_http::client::Request` exposes a `url::Url`, and the canonical
 # reason phrase `Response.statusText` reports comes from `http::StatusCode`
-# — the same crate reqwest already puts in this graph.
+# — a crate the turnloop-http engine already puts in this graph.
 url = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 lazy_static.workspace = true
@@ -332,9 +335,6 @@ bytes = { workspace = true, optional = true }
 # DashMap is used by the always-on handle registry (`common/handle.rs`),
 # so it must NOT be optional — every minimal-stdlib build needs it.
 dashmap.workspace = true
-
-# HTTP Client
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false, optional = true }
 
 # WebSocket — the sans-I/O protocol core the `ws` module's codec is built on.
 # `turnloop-http` is declared with the other turnloop client engines above.

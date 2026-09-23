@@ -1,5 +1,5 @@
 //! `HeadersStore` — the insertion-ordered (lowercase-name, value) list behind
-//! every `Headers` handle, and the conversion from reqwest's `HeaderMap`.
+//! every `Headers` handle.
 //!
 //! Split out of `fetch/mod.rs` to keep that file under the 2000-line cap
 //! (`scripts/check_file_size.sh`). Nothing about the types changed; the
@@ -72,14 +72,4 @@ impl HeadersStore {
             .map(|(_, v)| v.clone())
             .collect()
     }
-}
-
-pub(super) fn headers_from_header_map(headers: &reqwest::header::HeaderMap) -> HeadersStore {
-    let mut store = HeadersStore::default();
-    for (key, value) in headers {
-        if let Ok(v) = value.to_str() {
-            store.append(key.as_str(), v);
-        }
-    }
-    store
 }

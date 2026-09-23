@@ -1,6 +1,7 @@
 //! HTTP Fetch module (node-fetch compatible)
 //!
-//! Native implementation of the 'node-fetch' npm package using reqwest.
+//! Native implementation of the 'node-fetch' npm package on the turnloop
+//! client engine (`crate::turnloop_client`).
 //! Provides fetch() function for making HTTP requests.
 
 use perry_runtime::{
@@ -11,7 +12,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::common::async_bridge::{queue_promise_resolution, spawn};
+use crate::common::async_bridge::queue_promise_resolution;
 
 // Web Fetch `Headers` FFI — split out to keep this file under the 2,000-line
 // lint gate (#1649). The child module sees mod.rs's private items via its
@@ -19,9 +20,9 @@ use crate::common::async_bridge::{queue_promise_resolution, spawn};
 mod abort_bridge;
 pub use abort_bridge::*;
 
-// turnloop P6: the outbound transport this module prefers when the agent owns a
-// loop. Every transport-bearing entry point below asks it first and keeps its
-// reqwest future only when it declines (see the bridge's module note).
+// turnloop P6: the outbound transport. Every transport-bearing entry point
+// below hands its request to it; a request it cannot build rejects (see the
+// bridge's module note).
 mod headers;
 mod request_handle;
 mod transport_error;
@@ -102,101 +103,48 @@ lazy_static::lazy_static! {
     static ref STREAM_HANDLES: Mutex<HashMap<usize, StreamState>> = Mutex::new(HashMap::new());
     static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(1);
 
-    /// Shared HTTP client — reuses connection pool, DNS cache, and TLS session cache
-    /// across all fetch() calls. Without this, each fetch allocates a fresh
-    /// reqwest::Client (~250KB of state per request) and the memory never gets
-    /// reused, causing unbounded RSS growth in long-running services.
-    ///
-    /// Sets a default `User-Agent` so endpoints that reject anonymous requests
-    /// (api.github.com being the canonical example — closes #236) work out of
-    /// the box. Per-request `User-Agent` headers passed via `fetch(url, {
-    /// headers: { "User-Agent": "..." } })` override this default; reqwest's
-    /// `RequestBuilder::header` replaces the client-level value.
-    static ref HTTP_CLIENT: reqwest::Client = fetch_client_builder()
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-
     /// Global proxy override installed by `undici.setGlobalDispatcher(new
-    /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici).
-    /// `None` = direct connections through `HTTP_CLIENT`. The client is
-    /// prebuilt at install time so per-request cost stays a clone (Arc bump).
-    static ref GLOBAL_PROXY_CLIENT: std::sync::RwLock<Option<reqwest::Client>> =
-        std::sync::RwLock::new(None);
-
-    /// The same override as data, for the turnloop engine.
-    ///
-    /// The reqwest client above is a prebuilt object and nothing can read a URL
-    /// back out of it, which is precisely why P6 had to DECLINE a proxied fetch
-    /// — its blocker said "a CONNECT tunnel driven from a URL rather than from a
-    /// prebuilt `reqwest::Client`". Keeping the `(uri, token)` beside the client
-    /// is that URL. Written under the same lock order as the client (client
-    /// first, then this) so a reader that sees one sees the other.
+    /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici),
+    /// as `(uri, token)`. `None` = direct connections. The turnloop engine
+    /// reads it per request (`turnloop_client::proxy_for`) and runs the
+    /// CONNECT tunnel itself.
     static ref GLOBAL_PROXY_URI: std::sync::RwLock<Option<(String, Option<String>)>> =
         std::sync::RwLock::new(None);
 }
 
-/// Shared builder options for every fetch client (direct or proxied).
-fn fetch_client_builder() -> reqwest::ClientBuilder {
-    let builder = reqwest::Client::builder()
-        .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .pool_max_idle_per_host(16)
-        .tcp_keepalive(std::time::Duration::from_secs(60));
-    apply_node_tls_environment(builder)
-}
-
-/// Apply the process-wide Node TLS environment to a fetch client. The
-/// variable/file resolution is shared with `node:https` through perry-ffi;
-/// this layer only translates the result into reqwest builder options.
-fn apply_node_tls_environment(mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
-    let environment = perry_ffi::node_tls_client_environment();
-    if environment.accepts_invalid_certificates() {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-    for pem in environment.ca_pems() {
-        match reqwest::Certificate::from_pem_bundle(pem) {
-            Ok(certificates) => {
-                for certificate in certificates {
-                    builder = builder.add_root_certificate(certificate);
-                }
-            }
-            Err(_) => {
-                if let Ok(certificate) = reqwest::Certificate::from_pem(pem) {
-                    builder = builder.add_root_certificate(certificate);
-                }
-            }
+/// Normalize and validate an undici `ProxyAgent` URI and token, with the
+/// acceptance rules the reqwest client this replaced applied at install time
+/// (`reqwest::Proxy::all` + `HeaderValue::from_str`), so
+/// `js_fetch_set_global_proxy`'s 0.0/1.0 answer is unchanged:
+///
+/// * a URI without a scheme (or without a host) is read as `http://<uri>`;
+/// * the scheme must be `http` or `https`, and there must be a host;
+/// * the token must be a valid header value (it is the literal
+///   `Proxy-Authorization` value).
+///
+/// The normalized URI is what is stored, so a bare `host:port` reaches the
+/// engine as the `http://` proxy it always meant. An `https://` proxy is
+/// accepted here, as before, and refused per request by the engine — see
+/// `turnloop_client::Declined::Proxy`.
+fn normalize_proxy(uri: &str, token: Option<&str>) -> Result<String, String> {
+    // reqwest's `IntoProxyScheme`: a parse that failed for want of a base, or
+    // that produced no host (`localhost:8080` reads as scheme `localhost`), is
+    // retried as `http://<uri>`; any other parse failure is final.
+    let parsed = match url::Url::parse(uri) {
+        Ok(parsed) if parsed.has_host() => parsed,
+        Ok(_) | Err(url::ParseError::RelativeUrlWithoutBase) => {
+            url::Url::parse(&format!("http://{uri}"))
+                .map_err(|e| format!("Invalid proxy URI \"{uri}\": {e}"))?
         }
+        Err(e) => return Err(format!("Invalid proxy URI \"{uri}\": {e}")),
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(format!("Invalid proxy URI \"{uri}\": unsupported proxy"));
     }
-    builder
-}
-
-/// The client every fetch path must use: the proxied client when a global
-/// dispatcher proxy is installed, the pooled direct client otherwise.
-pub(crate) fn fetch_client() -> reqwest::Client {
-    if let Ok(guard) = GLOBAL_PROXY_CLIENT.read() {
-        if let Some(client) = guard.as_ref() {
-            return client.clone();
-        }
-    }
-    HTTP_CLIENT.clone()
-}
-
-/// Build a reqwest client that routes every request through `uri`.
-/// `token` is undici's `ProxyAgent` token — the literal value for the
-/// `Proxy-Authorization` header (e.g. `Basic <base64>`). reqwest performs
-/// HTTP CONNECT tunneling for https targets automatically.
-fn build_proxy_client(uri: &str, token: Option<&str>) -> Result<reqwest::Client, String> {
-    let mut proxy =
-        reqwest::Proxy::all(uri).map_err(|e| format!("Invalid proxy URI \"{uri}\": {e}"))?;
     if let Some(token) = token {
-        let value = reqwest::header::HeaderValue::from_str(token)
-            .map_err(|e| format!("Invalid proxy token: {e}"))?;
-        proxy = proxy.custom_http_auth(value);
+        http::HeaderValue::from_str(token).map_err(|e| format!("Invalid proxy token: {e}"))?;
     }
-    fetch_client_builder()
-        .proxy(proxy)
-        .build()
-        .map_err(|e| format!("Failed to build proxy client: {e}"))
+    Ok(parsed.to_string())
 }
 
 /// Install (or clear) the process-wide fetch proxy. Called by
@@ -214,11 +162,8 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
     token_ptr: *const StringHeader,
 ) -> f64 {
     if uri_ptr.is_null() {
-        if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
-            *guard = None;
-            if let Ok(mut uri) = GLOBAL_PROXY_URI.write() {
-                *uri = None;
-            }
+        if let Ok(mut uri) = GLOBAL_PROXY_URI.write() {
+            *uri = None;
             return 1.0;
         }
         return 0.0;
@@ -227,13 +172,10 @@ pub unsafe extern "C" fn js_fetch_set_global_proxy(
         return 0.0;
     };
     let token = string_from_header(token_ptr).filter(|t| !t.is_empty());
-    match build_proxy_client(&uri, token.as_deref()) {
-        Ok(client) => {
-            if let Ok(mut guard) = GLOBAL_PROXY_CLIENT.write() {
-                *guard = Some(client);
-                if let Ok(mut stored) = GLOBAL_PROXY_URI.write() {
-                    *stored = Some((uri, token));
-                }
+    match normalize_proxy(&uri, token.as_deref()) {
+        Ok(uri) => {
+            if let Ok(mut stored) = GLOBAL_PROXY_URI.write() {
+                *stored = Some((uri, token));
                 1.0
             } else {
                 0.0
@@ -507,13 +449,6 @@ unsafe fn fetch_error_bits<S: AsRef<str>>(msg: S) -> u64 {
     JSValue::pointer(err as *const u8).bits()
 }
 
-fn queue_fetch_transport_error(promise_ptr: usize, error: &reqwest::Error, url: &str) {
-    let failure = transport_error::FetchFailure::from_reqwest(error, url);
-    crate::common::async_bridge::queue_deferred_resolution(promise_ptr, false, move || {
-        failure.into_js_bits()
-    });
-}
-
 const BODY_ALREADY_USED_MESSAGE: &str = "Body is unusable: Body has already been read";
 
 unsafe fn fetch_type_error_bits<S: AsRef<str>>(msg: S) -> u64 {
@@ -558,61 +493,16 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
         }
     };
 
-    if turnloop_bridge::try_dispatch(
+    turnloop_bridge::dispatch(
         turnloop_bridge::FetchDispatch {
-            url: url.clone(),
+            url,
             method: "GET".to_string(),
             headers: Vec::new(),
             body: None,
             abort_key: None,
         },
         promise_ptr,
-    ) {
-        return promise;
-    }
-
-    spawn(async move {
-        match fetch_client().get(&url).send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-
-                let headers = headers_from_header_map(response.headers());
-
-                let body = response.bytes().await.unwrap_or_default().to_vec();
-
-                // Store response
-                let response_id = alloc_fetch_handle_id();
-
-                FETCH_RESPONSES.lock().unwrap().insert(
-                    response_id,
-                    FetchResponse {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        body_present: true,
-                        body_used: false,
-                        type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
-                        cached_headers_id: None,
-                        cached_body_stream_id: None,
-                        body_stream_id: None,
-                    },
-                );
-
-                // Return response handle
-                let result_bits = handle_to_f64(response_id).to_bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
-            }
-            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
-        }
-    });
+    );
 
     promise
 }
@@ -639,67 +529,19 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
 
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
 
-    if turnloop_bridge::try_dispatch(
+    turnloop_bridge::dispatch(
         turnloop_bridge::FetchDispatch {
-            url: url.clone(),
+            url,
             method: "GET".to_string(),
             headers: auth_header
                 .is_empty()
                 .then(Vec::new)
-                .unwrap_or_else(|| vec![("authorization".to_string(), auth_header.clone())]),
+                .unwrap_or_else(|| vec![("authorization".to_string(), auth_header)]),
             body: None,
             abort_key: None,
         },
         promise_ptr,
-    ) {
-        return promise;
-    }
-
-    spawn(async move {
-        let client = fetch_client();
-        let mut request = client.get(&url);
-        if !auth_header.is_empty() {
-            request = request.header("Authorization", &auth_header);
-        }
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-
-                let headers = headers_from_header_map(response.headers());
-
-                let body = response.bytes().await.unwrap_or_default().to_vec();
-
-                let response_id = alloc_fetch_handle_id();
-
-                FETCH_RESPONSES.lock().unwrap().insert(
-                    response_id,
-                    FetchResponse {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        body_present: true,
-                        body_used: false,
-                        type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
-                        cached_headers_id: None,
-                        cached_body_stream_id: None,
-                        body_stream_id: None,
-                    },
-                );
-
-                let result_bits = handle_to_f64(response_id).to_bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
-            }
-            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
-        }
-    });
+    );
 
     promise
 }
@@ -728,71 +570,20 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
     let auth_header = string_from_header(auth_header_ptr).unwrap_or_default();
     let body = string_from_header(body_ptr).unwrap_or_default();
 
-    {
-        let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
-        if !auth_header.is_empty() {
-            headers.push(("authorization".to_string(), auth_header.clone()));
-        }
-        if turnloop_bridge::try_dispatch(
-            turnloop_bridge::FetchDispatch {
-                url: url.clone(),
-                method: "POST".to_string(),
-                headers,
-                body: Some(body.clone().into_bytes()),
-                abort_key: None,
-            },
-            promise_ptr,
-        ) {
-            return promise;
-        }
+    let mut headers = vec![("content-type".to_string(), "application/json".to_string())];
+    if !auth_header.is_empty() {
+        headers.push(("authorization".to_string(), auth_header));
     }
-
-    spawn(async move {
-        let client = fetch_client();
-        let mut request = client.post(&url).header("Content-Type", "application/json");
-        if !auth_header.is_empty() {
-            request = request.header("Authorization", &auth_header);
-        }
-        request = request.body(body);
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-
-                let headers = headers_from_header_map(response.headers());
-
-                let body = response.bytes().await.unwrap_or_default().to_vec();
-
-                let response_id = alloc_fetch_handle_id();
-
-                FETCH_RESPONSES.lock().unwrap().insert(
-                    response_id,
-                    FetchResponse {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        body_present: true,
-                        body_used: false,
-                        type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
-                        cached_headers_id: None,
-                        cached_body_stream_id: None,
-                        body_stream_id: None,
-                    },
-                );
-
-                let result_bits = handle_to_f64(response_id).to_bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
-            }
-            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
-        }
-    });
+    turnloop_bridge::dispatch(
+        turnloop_bridge::FetchDispatch {
+            url,
+            method: "POST".to_string(),
+            headers,
+            body: Some(body.into_bytes()),
+            abort_key: None,
+        },
+        promise_ptr,
+    );
 
     promise
 }
@@ -821,7 +612,7 @@ pub unsafe extern "C" fn js_fetch_post(
     // Probe the buffer/typed-array registry before falling back to a string read
     // so a binary body (Buffer / Uint8Array / typed array / ArrayBuffer) is sent
     // byte-for-byte instead of being shifted left 12 bytes by the StringHeader
-    // data offset (#5757). `reqwest::Body` accepts `Vec<u8>` directly.
+    // data offset (#5757).
     let form_data_body = body_metadata::serialize_form_data(body_ptr as usize);
     let form_data_content_type = form_data_body
         .as_ref()
@@ -834,68 +625,16 @@ pub unsafe extern "C" fn js_fetch_post(
         .or(form_data_content_type)
         .unwrap_or_else(|| "application/json".to_string());
 
-    if turnloop_bridge::try_dispatch(
+    turnloop_bridge::dispatch(
         turnloop_bridge::FetchDispatch {
-            url: url.clone(),
+            url,
             method: "POST".to_string(),
-            headers: vec![("content-type".to_string(), content_type.clone())],
-            body: Some(body.clone()),
+            headers: vec![("content-type".to_string(), content_type)],
+            body: Some(body),
             abort_key: None,
         },
         promise_ptr,
-    ) {
-        return promise;
-    }
-
-    spawn(async move {
-        let client = fetch_client();
-        match client
-            .post(&url)
-            .header("Content-Type", &content_type)
-            .body(body)
-            .send()
-            .await
-        {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let status_text = response
-                    .status()
-                    .canonical_reason()
-                    .unwrap_or("")
-                    .to_string();
-
-                let headers = headers_from_header_map(response.headers());
-
-                let body = response.bytes().await.unwrap_or_default().to_vec();
-
-                // Store response
-                let response_id = alloc_fetch_handle_id();
-
-                FETCH_RESPONSES.lock().unwrap().insert(
-                    response_id,
-                    FetchResponse {
-                        status,
-                        status_text,
-                        headers,
-                        body,
-                        body_present: true,
-                        body_used: false,
-                        type_name: "basic".to_string(),
-                        url: url.clone(),
-                        redirected: false,
-                        cached_headers_id: None,
-                        cached_body_stream_id: None,
-                        body_stream_id: None,
-                    },
-                );
-
-                // Return response handle
-                let result_bits = handle_to_f64(response_id).to_bits();
-                queue_promise_resolution(promise_ptr, true, result_bits);
-            }
-            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
-        }
-    });
+    );
 
     promise
 }
@@ -966,24 +705,12 @@ pub unsafe extern "C" fn js_fetch_with_options(
         return promise;
     }
 
-    // turnloop first: accepting here means no tokio task is created at all,
-    // which is what makes `tokio_ticks=0` on a fetch-only workload true. The
-    // watch is dropped on acceptance because the engine owns cancellation from
-    // then on — `js_fetch_notify_signal_aborted` reaches it directly.
+    // The watch's only job from here on is its key: the engine owns
+    // cancellation, and `js_fetch_notify_signal_aborted` reaches it directly.
     let abort_key = abort_watch
         .as_ref()
         .map(abort_bridge::FetchAbortWatch::signal_ptr);
-    let inputs = match turnloop_bridge::try_dispatch_inputs(inputs, abort_key, promise_ptr) {
-        Ok(()) => {
-            drop(abort_watch);
-            return promise;
-        }
-        Err(inputs) => inputs,
-    };
-
-    // Dispatch + abort handling live in `abort_bridge::run_request` (keeps this
-    // file under the line-size lint gate).
-    spawn(abort_bridge::run_request(promise_ptr, abort_watch, inputs));
+    turnloop_bridge::dispatch_inputs(inputs, abort_key, promise_ptr);
 
     promise
 }
@@ -1199,31 +926,7 @@ pub unsafe extern "C" fn js_fetch_text(
         }
     };
 
-    if turnloop_bridge::try_dispatch_text(url.clone(), promise_ptr) {
-        return promise;
-    }
-
-    spawn(async move {
-        match fetch_client().get(&url).send().await {
-            Ok(response) => match response.text().await {
-                Ok(text) => {
-                    let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-                    let result_bits = JSValue::pointer(result_str as *const u8).bits();
-                    queue_promise_resolution(promise_ptr, true, result_bits);
-                }
-                Err(e) => {
-                    let err_msg = format!("Read error: {}", e);
-                    let err_bits = fetch_error_bits(&err_msg);
-                    queue_promise_resolution(promise_ptr, false, err_bits);
-                }
-            },
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
-        }
-    });
+    turnloop_bridge::dispatch_text(url, promise_ptr);
 
     promise
 }
@@ -1264,80 +967,13 @@ pub unsafe extern "C" fn js_fetch_stream_start(
     // `Sink::on_head` / `Sink::on_chunk` hooks existed and NOTHING called them
     // — an unexercised mode, which CLAUDE.md's GC-knob kill policy calls a
     // decision nobody has made. This is the caller.
-    if turnloop_bridge::try_dispatch_stream(
+    turnloop_bridge::dispatch_stream(
         sid,
-        url.clone(),
-        method.clone(),
-        custom_headers
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-        body.clone().map(String::into_bytes),
-    ) {
-        return stream_id as f64;
-    }
-    spawn(async move {
-        let client = fetch_client();
-        let mut request = match method.to_uppercase().as_str() {
-            "POST" => client.post(&url),
-            "PUT" => client.put(&url),
-            "PATCH" => client.patch(&url),
-            _ => client.get(&url),
-        };
-        for (key, value) in &custom_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-        if let Some(b) = body {
-            request = request.body(b);
-        }
-        match request.send().await {
-            Ok(mut response) => {
-                let http_status = response.status().as_u16();
-                {
-                    let mut g = STREAM_HANDLES.lock().unwrap();
-                    if let Some(s) = g.get_mut(&sid) {
-                        s.http_status = http_status;
-                        s.status = 1;
-                    }
-                }
-                loop {
-                    match response.chunk().await {
-                        Ok(Some(chunk)) => {
-                            let text = String::from_utf8_lossy(&chunk).to_string();
-                            let mut g = STREAM_HANDLES.lock().unwrap();
-                            if let Some(s) = g.get_mut(&sid) {
-                                s.push_text(&text);
-                            } else {
-                                break;
-                            }
-                        }
-                        Ok(None) => {
-                            let mut g = STREAM_HANDLES.lock().unwrap();
-                            if let Some(s) = g.get_mut(&sid) {
-                                s.finish();
-                            }
-                            break;
-                        }
-                        Err(e) => {
-                            let mut g = STREAM_HANDLES.lock().unwrap();
-                            if let Some(s) = g.get_mut(&sid) {
-                                s.error = format!("Stream error: {}", e);
-                                s.status = 3;
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                let mut g = STREAM_HANDLES.lock().unwrap();
-                if let Some(s) = g.get_mut(&sid) {
-                    s.error = format!("Connection error: {}", e);
-                    s.status = 3;
-                }
-            }
-        }
-    });
+        url,
+        method,
+        custom_headers.into_iter().collect(),
+        body.map(String::into_bytes),
+    );
     stream_id as f64
 }
 
@@ -1386,7 +1022,7 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 mod headers_store;
-use headers_store::{headers_from_header_map, HeadersStore};
+use headers_store::HeadersStore;
 #[derive(Clone)]
 struct RequestRecord {
     url: String,
