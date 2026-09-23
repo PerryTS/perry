@@ -37,6 +37,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "benchmarks" / "runtime_size_budget"
 BUDGET = FIXTURES / "budget.json"
+# Messages the auto-optimize driver prints when it links something other than
+# the archive it was asked to build (crates/perry/src/commands/compile/
+# optimized_libs/driver.rs).
+FALLBACK_MARKERS = (
+    "using prebuilt libraries",
+    "Perry workspace source not found",
+    "auto-optimize: cargo build failed",
+)
 
 
 def platform_key() -> str:
@@ -56,6 +64,17 @@ def measure(perry: str, fixture: Path, work: Path) -> int:
             f"FAIL {fixture.name}: compile failed (exit {result.returncode})\n"
             f"{result.stdout[-3000:]}{result.stderr[-3000:]}"
         )
+    # A failed auto-optimize rebuild falls back to the full prebuilt archive,
+    # prints a warning and still EXITS 0 with a working (much larger) binary.
+    # That is a broken build, not a size regression; say so instead of
+    # blaming — or, worse, re-baselining to — the fallback's size.
+    log = result.stdout + result.stderr
+    for marker in FALLBACK_MARKERS:
+        if marker in log:
+            raise SystemExit(
+                f"FAIL {fixture.name}: the compile fell back ({marker!r}); its size says "
+                f"nothing about the runtime under test.\n{log[-3000:]}"
+            )
     # Interleaved exactly like the `node … 2>&1` that produced `.expected`.
     run = subprocess.run(
         [str(out)], cwd=work, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60
@@ -82,6 +101,9 @@ def main() -> int:
     parser.add_argument("--perry", default=os.environ.get("PERRY_BIN", str(ROOT / "target/release/perry")))
     args = parser.parse_args()
     args.perry = str(Path(args.perry).resolve())
+    if os.environ.get("PERRY_NO_AUTO_OPTIMIZE"):
+        print("FAIL: PERRY_NO_AUTO_OPTIMIZE is set; budgets are measured through auto-optimize")
+        return 1
 
     budget = json.loads(BUDGET.read_text()) if BUDGET.exists() else {"tolerance_pct": 2.0, "platforms": {}}
     tolerance = float(budget.get("tolerance_pct", 2.0))
