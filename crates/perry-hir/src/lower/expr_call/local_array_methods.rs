@@ -123,6 +123,12 @@ fn type_is_class_instance(
                 // corrupting it) and never ran the method.
                 || ctx.functions_index.contains_key(name.as_str())
         }
+        // #11128: `InstanceType<typeof C>` is by definition whatever `C`
+        // constructs — an instance whose own methods may share Array names
+        // (`push`, `shift`, …). It is never *proven* to be an array, so it
+        // must not fold to the array fast path; the generic dispatch still
+        // runs the Array method on a genuine array.
+        Type::Generic { base, .. } if base == "InstanceType" => true,
         Type::Generic { base, .. } => {
             !builtin_generic_bases.contains(&base.as_str())
                 && (ctx.lookup_class(base).is_some() || is_imported_class_name(base))

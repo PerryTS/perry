@@ -60,6 +60,9 @@ fn is_named_or_generic_non_array(ty: &Type) -> bool {
 fn is_push_owning_class_type(ty: &Type, ctx: &LoweringContext) -> bool {
     match ty {
         Type::Named(name) => ctx.lookup_class(name).is_some() || ctx.is_interface_type(name),
+        // #11128: an `InstanceType<typeof C>` receiver is whatever `C`
+        // constructs — never proven to be an array.
+        Type::Generic { base, .. } if base == "InstanceType" => true,
         Type::Generic { base, .. } => {
             let builtin = ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
             !builtin.contains(&base.as_str()) && ctx.lookup_class(base).is_some()

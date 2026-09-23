@@ -168,3 +168,45 @@ const lib: any = { SinglyLinkedList, EmptyAwareSinglyLinkedList };
   plain.push(7, 8);
   console.log("array-typed", plain.length, plain.pop(), plain.length);
 }
+
+// 6. the instance reaches the call through other bindings
+interface Pushy { n: number; push(v: number): Pushy; get(k: string): string; }
+{
+  const C: any = R;
+  class Holder {
+    q = new C();
+    run() {
+      this.q.push(1);
+      this.q.add(1);
+      return this.q.n + ":" + this.q.get("a") + ":" + this.q.delete("xy");
+    }
+  }
+  console.log("field", new Holder().run());
+  let r2 = new C();
+  r2 = new C();
+  r2.push(2);
+  console.log("let-reassigned", r2.n, r2.has("yes"));
+  function useIt(x: InstanceType<typeof R>) {
+    x.push(3);
+    x.add(1);
+    return x.n + ":" + x.get("i");
+  }
+  console.log("instancetype-param", useIt(new C()));
+  const iq: Pushy = new C();
+  iq.push(4);
+  console.log("interface-typed", iq.n, iq.get("b"));
+  function mk() { return new C(); }
+  const m = mk();
+  m.push(6);
+  m.add(1);
+  console.log("fn-return", m.n, m.get("z"), m.has("yes"), m.delete("q"));
+  const holder = { k: new C() };
+  holder.k.push(8);
+  console.log("object-prop", holder.k.n, holder.k.get("o"));
+  const G = class<T> { items: T[] = []; push(v: T) { this.items.push(v); return -this.items.length; } };
+  const GA: any = G;
+  const gi = new GA();
+  console.log("generic-class-value", gi.push(1), gi.push(2), gi.items.length);
+  const gt = new GA<number>();
+  console.log("generic-type-args", gt.push(5), gt.items.length);
+}
