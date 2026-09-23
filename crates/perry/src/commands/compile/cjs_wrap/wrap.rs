@@ -3,7 +3,33 @@
 
 use super::*;
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
+
+fn relative_import_specifier(from: &Path, to: &Path) -> Option<String> {
+    let from: Vec<Component<'_>> = from.components().collect();
+    let to: Vec<Component<'_>> = to.components().collect();
+    if from.first() != to.first() {
+        return None;
+    }
+    let common = from
+        .iter()
+        .zip(&to)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = PathBuf::new();
+    for _ in common..from.len() {
+        relative.push("..");
+    }
+    for component in &to[common..] {
+        relative.push(component.as_os_str());
+    }
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if relative.starts_with('.') {
+        Some(relative)
+    } else {
+        Some(format!("./{relative}"))
+    }
+}
 
 fn resolved_native_addon(
     source_path: &Path,
@@ -424,7 +450,54 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 | "_http_server" => "http",
                 other => other,
             };
-            format!("import {} from '{}';", local, import_spec)
+            // #11047: this import represents a CommonJS `require`, so bare
+            // package specifiers must use the package's `require` export
+            // condition. Leaving the original specifier here sends it through
+            // the ordinary ESM resolver after wrapping, which prefers
+            // `exports.import`. For `ws`, that selected `wrapper.mjs` instead
+            // of `index.js`; the ESM default is WebSocket but intentionally
+            // lacks the CommonJS-only `.Server` attachment.
+            //
+            // Resolve the require entry while the original call-site context
+            // is still known. Keep relative imports spelled as written so
+            // their existing cycle/deferred-module handling remains intact.
+            let resolved_require_spec = if import_spec == spec
+                && !spec.starts_with("./")
+                && !spec.starts_with("../")
+                && !std::path::Path::new(spec).is_absolute()
+            {
+                source_path
+                    .parent()
+                    .and_then(|module_dir| {
+                        super::super::collect_modules::static_require_transform::resolve_static_require(
+                            module_dir,
+                            spec,
+                            None,
+                        )
+                    })
+                    // Keep the resolved target relative to the importing
+                    // module. Absolute node_modules imports are classified as
+                    // ordinary runtime JS by the general resolver because the
+                    // original package name (and therefore compilePackages
+                    // opt-in) is no longer visible there.
+                    .and_then(|path| {
+                        source_path
+                            .parent()
+                            .and_then(|module_dir| relative_import_specifier(module_dir, &path))
+                    })
+            } else {
+                None
+            };
+            if let Some(resolved) = resolved_require_spec {
+                format!(
+                    "import {} from {};",
+                    local,
+                    serde_json::to_string(&resolved)
+                        .expect("CJS import specifier is JSON encodable")
+                )
+            } else {
+                format!("import {} from '{}';", local, import_spec)
+            }
         })
         .collect::<Vec<_>>()
         .join("\n");

@@ -207,7 +207,7 @@ fn is_bare_call(masked_source: &str, start: usize, end: usize) -> bool {
             .all(|b| b.is_ascii_whitespace())
 }
 
-pub(super) fn resolve_static_require(
+pub(in crate::commands::compile) fn resolve_static_require(
     module_dir: &Path,
     specifier: &str,
     bunfs_root: Option<&Path>,

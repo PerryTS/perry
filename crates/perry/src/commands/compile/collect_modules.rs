@@ -43,7 +43,7 @@ mod native_addon;
 mod parse_error;
 pub(crate) mod reexport_prune;
 mod script_string;
-mod static_require_transform;
+pub(super) mod static_require_transform;
 #[cfg(test)]
 mod tests;
 mod walk;
