@@ -430,7 +430,7 @@ impl RegexDiag {
             e.matches += p.matches;
         }
         let mut rows: Vec<_> = merged.into_iter().collect();
-        rows.sort_by_key(|(_, s)| {
+        crate::cold_sort::sort_by_key(&mut rows, |(_, s)| {
             std::cmp::Reverse(s.news * (1 + s.builds) + s.execs + s.tests + s.replaces + s.matches)
         });
         let _ = writeln!(
@@ -1132,7 +1132,7 @@ impl IcDiag {
             );
         }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
-        rows.sort_by_key(|s| std::cmp::Reverse(s.misses));
+        crate::cold_sort::sort_by_key(&mut rows, |s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
             out,
             "  misses   hits   same/new/inways   fresh/armed/mega   key  reasons"
@@ -1142,7 +1142,7 @@ impl IcDiag {
             let mut idx: Vec<usize> = (0..IC_MISS_REASONS)
                 .filter(|&i| s.by_reason[i] != 0)
                 .collect();
-            idx.sort_by(|a, b| s.by_reason[*b].cmp(&s.by_reason[*a]));
+            crate::cold_sort::sort_by(&mut idx, |a, b| s.by_reason[*b].cmp(&s.by_reason[*a]));
             for i in idx.iter().take(3) {
                 let _ = write!(reasons, " {}={}", IC_REASON_NAMES[*i], s.by_reason[*i]);
             }

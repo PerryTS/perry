@@ -1043,7 +1043,7 @@ pub(crate) fn class_own_symbol_member_keys(class_id: u32, is_static: bool) -> Ve
             }
         }
     });
-    keys.sort_by_key(|sym_key| unsafe {
+    crate::cold_sort::sort_by_key(&mut keys, |sym_key| unsafe {
         let ptr = *sym_key as *const crate::symbol::SymbolHeader;
         let symbol_id = if ptr.is_null() { u64::MAX } else { (*ptr).id };
         let definition_order = CLASS_SYMBOL_MEMBER_ORDERS.with(|orders| {

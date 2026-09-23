@@ -804,7 +804,7 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
             )
         })
         .collect();
-    class_rows.sort_by(|a, b| b.0.cmp(&a.0));
+    crate::cold_sort::sort_by(&mut class_rows, |a, b| b.0.cmp(&a.0));
     let class_count = class_rows.len();
     let (mut other_count, mut other_bytes) = (0u64, 0u64);
     let mut class_json = Vec::new();

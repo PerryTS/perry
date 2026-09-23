@@ -66,7 +66,7 @@ impl ClosureProps {
                 strings.push((key.clone(), value));
             }
         }
-        indexed.sort_by_key(|(index, _, _)| *index);
+        crate::cold_sort::sort_by_key(&mut indexed, |(index, _, _)| *index);
         indexed
             .into_iter()
             .map(|(_, key, value)| (key, value))

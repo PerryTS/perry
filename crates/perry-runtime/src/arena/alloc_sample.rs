@@ -253,7 +253,7 @@ pub(crate) fn report(label: &str) {
             .filter(|(_, &c)| c > 0)
             .map(|(t, &c)| (t, c))
             .collect();
-        types.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+        crate::cold_sort::sort_by_key(&mut types, |&(_, c)| std::cmp::Reverse(c));
         let mut line = String::from("[alloc-site]   by-type:");
         for (t, c) in types {
             line.push_str(&format!(
@@ -264,7 +264,7 @@ pub(crate) fn report(label: &str) {
         }
         eprintln!("{line}");
         let mut sites: Vec<(&[usize; DEPTH], &Site)> = table.sites.iter().collect();
-        sites.sort_by_key(|(_, s)| std::cmp::Reverse(s.samples));
+        crate::cold_sort::sort_by_key(&mut sites, |(_, s)| std::cmp::Reverse(s.samples));
         for (key, s) in sites.iter().take(30) {
             let n = key.iter().position(|&p| p == 0).unwrap_or(DEPTH);
             let mut top_types: Vec<(usize, u32)> = s
@@ -274,7 +274,7 @@ pub(crate) fn report(label: &str) {
                 .filter(|(_, &c)| c > 0)
                 .map(|(t, &c)| (t, c))
                 .collect();
-            top_types.sort_by_key(|&(_, c)| std::cmp::Reverse(c));
+            crate::cold_sort::sort_by_key(&mut top_types, |&(_, c)| std::cmp::Reverse(c));
             let types: Vec<String> = top_types
                 .iter()
                 .take(3)

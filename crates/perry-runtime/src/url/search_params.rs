@@ -897,7 +897,7 @@ pub extern "C" fn js_url_search_params_values_arr(params: *mut ObjectHeader) -> 
 #[no_mangle]
 pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
     let mut entries = get_url_search_params_entries(params);
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::cold_sort::sort_by(&mut entries, |a, b| a.0.cmp(&b.0));
     let mut entries_array = js_array_alloc(entries.len() as u32);
     for (key, val) in entries {
         let mut pair = js_array_alloc(2);

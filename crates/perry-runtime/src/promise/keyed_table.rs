@@ -415,7 +415,7 @@ impl<T> PromiseKeyedTable<T> {
         // `entries` is not in registration order (swap_remove reorders it), so
         // restore FIFO from the monotonic seq. Observable for overflow
         // reactions: `p.then(a); p.then(b)` must run a before b.
-        drained.sort_unstable_by_key(|entry| entry.seq);
+        crate::cold_sort::sort_by_u64_key(&mut drained, |entry| entry.seq);
         drained.into_iter().map(|entry| entry.value).collect()
     }
 
@@ -464,7 +464,9 @@ impl<T> PromiseKeyedTable<T> {
         }
         self.index.clear();
         let mut order: Vec<u32> = (0..self.entries.len() as u32).collect();
-        order.sort_unstable_by_key(|&position| self.entries[position as usize].seq);
+        crate::cold_sort::sort_by_u64_key(&mut order, |&position| {
+            self.entries[position as usize].seq
+        });
         for position in order {
             let key = self.entries[position as usize].key;
             let slot = self.index_slot_for(key, position);

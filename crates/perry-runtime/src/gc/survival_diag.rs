@@ -157,7 +157,7 @@ impl SurvivalDiag {
             return;
         }
         let mut rows: Vec<(u32, Row)> = self.rows.iter().map(|(k, r)| (*k, *r)).collect();
-        rows.sort_by_key(|(_, r)| std::cmp::Reverse(r.bytes));
+        crate::cold_sort::sort_by_key(&mut rows, |(_, r)| std::cmp::Reverse(r.bytes));
         let total_bytes: u64 = rows.iter().map(|(_, r)| r.bytes).sum();
         let total_objects: u64 = rows.iter().map(|(_, r)| r.objects).sum();
         eprintln!(
@@ -186,7 +186,7 @@ impl SurvivalDiag {
             t.promoted_bytes += r.promoted_bytes;
         }
         let mut by_origin: Vec<_> = by_origin.into_iter().collect();
-        by_origin.sort_by_key(|(_, r)| std::cmp::Reverse(r.bytes));
+        crate::cold_sort::sort_by_key(&mut by_origin, |(_, r)| std::cmp::Reverse(r.bytes));
         for (o, r) in by_origin.iter().take(12) {
             eprintln!(
                 "[gc-survival]   minor={seq} origin-total={} objects={} bytes={} permille={}",
@@ -201,7 +201,7 @@ impl SurvivalDiag {
             );
         }
         let mut by_type: Vec<_> = by_type.into_iter().collect();
-        by_type.sort_by_key(|(_, r)| std::cmp::Reverse(r.bytes));
+        crate::cold_sort::sort_by_key(&mut by_type, |(_, r)| std::cmp::Reverse(r.bytes));
         for (t, r) in by_type.iter().take(8) {
             eprintln!(
                 "[gc-survival]   minor={seq} type-total={} objects={} bytes={}",

@@ -356,8 +356,8 @@ fn parse_unwind_info(ui: &[u8], image_base: u64) -> (Vec<(u64, u32)>, Vec<(u64, 
                 _ => return None,
             }
         }
-        funcs.sort_unstable_by_key(|entry| entry.0);
-        lsdas.sort_unstable_by_key(|entry| entry.0);
+        crate::cold_sort::sort_by_u64_key(&mut funcs, |entry| entry.0);
+        crate::cold_sort::sort_by_u64_key(&mut lsdas, |entry| entry.0);
         Some((funcs, lsdas, personalities))
     })()
     .unwrap_or_default()
@@ -573,7 +573,7 @@ fn walker() -> Option<&'static Mutex<Walker>> {
                         }
                     }
                 }
-                index.sort_unstable_by_key(|e| e.0);
+                crate::cold_sort::sort_by_u64_key(&mut index, |e| e.0);
                 image.fde_index = index;
                 images.push(WalkerImage {
                     image,

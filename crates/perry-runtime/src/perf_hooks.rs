@@ -977,7 +977,7 @@ unsafe fn finish_measure(name: String, start_time: f64, duration: f64, detail_bi
 /// Order entries by startTime ascending, stable on ties (matches the order
 /// Node returns from `getEntries*` and observer lists).
 fn sort_entries_by_start_time(entries: &mut [PerfEntry]) {
-    entries.sort_by(|a, b| {
+    crate::cold_sort::sort_by(entries, |a, b| {
         a.start_time
             .partial_cmp(&b.start_time)
             .unwrap_or(std::cmp::Ordering::Equal)

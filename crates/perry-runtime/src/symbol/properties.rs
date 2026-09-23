@@ -653,7 +653,7 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
         .unwrap_or_default();
     drop(guard);
     let order = CLASS_STATIC_SYMBOL_ORDER.lock().unwrap();
-    keys.sort_by_key(|sym_key| unsafe {
+    crate::cold_sort::sort_by_key(&mut keys, |sym_key| unsafe {
         let symbol_id = (*sym_key as *const SymbolHeader)
             .as_ref()
             .map_or(u64::MAX, |symbol| symbol.id);

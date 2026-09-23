@@ -913,11 +913,13 @@ fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut V
         let order = order_for(name);
         order != Some(u32::MAX) && (order.is_some() || !internal_symbol_dispatch_alias(name))
     });
-    names.sort_by(|left, right| match (order_for(left), order_for(right)) {
-        (Some(a), Some(b)) => a.cmp(&b).then_with(|| left.cmp(right)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => left.cmp(right),
+    crate::cold_sort::sort_by(names, |left, right| {
+        match (order_for(left), order_for(right)) {
+            (Some(a), Some(b)) => a.cmp(&b).then_with(|| left.cmp(right)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left.cmp(right),
+        }
     });
 }
 

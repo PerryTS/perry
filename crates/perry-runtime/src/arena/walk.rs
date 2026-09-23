@@ -557,7 +557,7 @@ pub fn arena_walk_objects_addr_sorted(mut callback: impl FnMut(*mut u8)) {
     SURVIVOR_ARENA_1.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
     LONGLIVED_ARENA.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
     OLD_ARENA.with(|a| unsafe { collect(&*a.get(), &mut blocks) });
-    blocks.sort_unstable_by_key(|&(d, _, _)| d);
+    crate::cold_sort::sort_by_u64_key(&mut blocks, |&(d, _, _)| d as u64);
 
     for (data, block_offset, block_size) in blocks {
         let mut offset = 0usize;

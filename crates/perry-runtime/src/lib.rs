@@ -81,6 +81,7 @@ pub mod bigint;
 pub mod r#box;
 pub mod buffer;
 mod build_stamp;
+pub(crate) mod cold_sort;
 pub use build_stamp::{PERRY_RUNTIME_BUILD_ID, PERRY_RUNTIME_BUILD_STAMP};
 pub mod builtins;
 pub mod bun_compat;

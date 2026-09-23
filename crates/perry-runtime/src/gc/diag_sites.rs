@@ -348,7 +348,7 @@ pub(super) fn report_charges(label: &str) {
     let total_us: u64 = rows.iter().map(|(_, r)| r.us).sum();
     let total_calls: u64 = rows.iter().map(|(_, r)| r.calls).sum();
     let mut rows = rows;
-    rows.sort_by_key(|(_, r)| std::cmp::Reverse(r.us));
+    crate::cold_sort::sort_by_key(&mut rows, |(_, r)| std::cmp::Reverse(r.us));
     eprintln!(
         "[gc-charge] {label}: sites={} calls={total_calls} total_us={total_us}",
         rows.len()
@@ -411,7 +411,7 @@ pub(super) fn report_primitive_dispatch(label: &str) {
     let calls: u64 = rows.iter().map(|(_, v)| v.0).sum();
     let chars: u64 = rows.iter().map(|(_, v)| v.1).sum();
     let mut rows = rows;
-    rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+    crate::cold_sort::sort_by_key(&mut rows, |(_, v)| std::cmp::Reverse(v.0));
     eprintln!(
         "[gc-primitive-dispatch] {label}: names={} calls={calls} receiver_chars={chars}",
         rows.len()

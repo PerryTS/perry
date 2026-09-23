@@ -137,7 +137,7 @@ pub(super) fn report_and_reset(cycle_label: &str) -> u64 {
     if rows.is_empty() {
         return 0;
     }
-    rows.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos));
+    crate::cold_sort::sort_by(&mut rows, |a, b| b.1.nanos.cmp(&a.1.nanos));
     let total_ns: u64 = rows.iter().map(|(_, row)| row.nanos).sum();
     let total_slots: u64 = rows.iter().map(|(_, row)| row.slots).sum();
     eprintln!(

@@ -1616,7 +1616,7 @@ pub(crate) fn old_page_meta_snapshot() -> Vec<OldPageMeta> {
             .copied()
             .map(|page_meta| normalize_dirty_slots_for_epoch(page_meta, current_epoch))
             .collect::<Vec<_>>();
-        snapshot.sort_unstable_by_key(|page_meta| page_meta.page_base);
+        crate::cold_sort::sort_by_u64_key(&mut snapshot, |page_meta| page_meta.page_base as u64);
         snapshot
     })
 }
@@ -1665,7 +1665,7 @@ pub(crate) fn old_arena_block_ranges() -> Vec<(usize, usize, usize, usize)> {
                 Some((base, base + block.size, old_block_start + i, block.size))
             })
             .collect();
-        out.sort_unstable_by_key(|r| r.0);
+        crate::cold_sort::sort_by_u64_key(&mut out, |r| r.0 as u64);
         out
     })
 }

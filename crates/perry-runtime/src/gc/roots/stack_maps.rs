@@ -878,7 +878,7 @@ fn build_index_from_sections(sections: Vec<&'static [u8]>, mode: IndexMode) -> S
     // run of equal addresses: two object files can emit a map for the same
     // symbol, or the linker can fold identical code, and each entry brings its
     // own records. Deduplicating would drop one set silently.
-    functions.sort_unstable_by_key(|entry| entry.address);
+    crate::cold_sort::sort_by_u64_key(&mut functions, |entry| entry.address as u64);
 
     let eager = match mode {
         IndexMode::Lazy => None,
@@ -907,7 +907,7 @@ fn build_eager_index(sections: &[&'static [u8]]) -> EagerIndex {
             undecodable_section(section.len());
         }
     }
-    records.sort_unstable_by_key(|record| record.pc);
+    crate::cold_sort::sort_by_u64_key(&mut records, |record| record.pc as u64);
     index_records(records, roots, derived)
 }
 
