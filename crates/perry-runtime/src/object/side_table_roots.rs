@@ -295,12 +295,9 @@ pub fn scan_shape_cache_roots(mark: &mut dyn FnMut(f64)) {
     scan_shape_cache_roots_mut(&mut visitor);
 }
 
-/// #9754 measured this table and left it alone: a young-entry log here skipped
-/// NOTHING on the compiled claude-code TUI (0.0 % of 3.85 M entry visits over
-/// 107 collections) and cost 35 % MORE than this plain walk, because the
-/// canonical keys arrays live in the LONGLIVED arena, which
-/// `addr_is_minor_relevant` must answer `true` for, so no entry ever leaves
-/// the log. See the four tables that do skip 75-93 % in `gc/young_log.rs`.
+/// Strong roots for published static shapes. Canonical arrays now use the
+/// reclaimable arenas, so both cache copies must be marked and
+/// rewritten. The trie witnesses are weak and cannot substitute for this.
 pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let st = crate::state::state();
     {

@@ -40,6 +40,13 @@ fn run(inherited_proxy: bool, descriptor_trap: bool) {
     );
     gc_register_mutable_root_scanner(crate::proxy::scan_proxy_roots_mut);
     COPIED.with(|count| count.set(0));
+    // This fixture constructs cached descriptor/JSON shapes across moving
+    // collections. The isolation guard removes production's root registry;
+    // restore the cache root and its weak metadata rewrites explicitly.
+    // Long-lived canonical arrays used to conceal the missing registrations.
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_class_keys_roots_mut);
     let scope = RuntimeHandleScope::new();
     let target = object(&scope);
     crate::object::js_object_set_prototype_of(

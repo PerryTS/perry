@@ -24,9 +24,11 @@
 //! appended slot), rooted at the empty list. So the table is an EDGE map, not
 //! a content map; [`extend_slot`] is one hash probe on `(parent node, slot hash)`
 //! plus an exact check of the single appended slot; and no content is ever
-//! walked on the grow path. [`canonicalize`] — the general constructor, for a
-//! producer that hands over a whole list — is a fold of `extend_slot` over the
-//! slots: the same one path N times, not a second path.
+//! walked on a grow hit. [`canonicalize`] walks the same edges for a whole
+//! list, but materializes only the requested leaf. Unpublished prefixes use
+//! a weak descendant witness for exact slot validation, not their own arrays.
+//! Published lists always own their storage: array header lengths are exact,
+//! and GC element rewrites cannot alias a sibling's element storage.
 //!
 //! ## Node ids, not addresses, so the collector touches one `Vec`
 //!
@@ -69,11 +71,9 @@ use crate::StringHeader;
 ///
 /// The enforcement half of the funnel, and the reason it is a type rather
 /// than a comment: only this module can mint one, every producer of a keys
-/// array must accept one, and it exposes no writable element pointer. So "a
-/// producer forgot to canonicalize" is a compile error rather than a silent
-/// duplicate layout, and "a mutator edited a shared array in place" is a
-/// compile error rather than one object's key edit appearing in every object
-/// of that layout.
+/// array must accept one. Published lists own exact-length storage. The
+/// shape-shared flag enforces copy-before-mutation in object writers, but GC
+/// still rewrites element pointers: this is not an immutable backing view.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct CanonicalKeys(*mut ArrayHeader);
 
@@ -193,11 +193,7 @@ impl LiveObject {
 /// Nobody holds the membership of this class in their head, including the
 /// author of the rule. So the rule is a constructor.
 pub(crate) struct SharedLayout {
-    /// True only for the shape cache's own entry. DISCRIMINATOR (#9754):
-    /// `scan_shape_cache_roots_mut` states that the shape cache's keys arrays
-    /// live in the LONGLIVED arena. If that assumption is confined to the
-    /// cache, longlived HERE and ordinary on the grow path is enough.
-    shape_cache: bool,
+    _private: (),
 }
 
 impl SharedLayout {
@@ -213,7 +209,7 @@ impl SharedLayout {
         if obj.is_null() || crate::object::dictionary::is_dictionary(obj) {
             return None;
         }
-        Some(SharedLayout { shape_cache: false })
+        Some(SharedLayout { _private: () })
     }
 
     /// The shape cache's entries are shared layouts by construction: they are
@@ -223,7 +219,7 @@ impl SharedLayout {
     /// than implicit.
     #[inline]
     pub(crate) fn shape_cache_entry() -> Self {
-        SharedLayout { shape_cache: true }
+        SharedLayout { _private: () }
     }
 }
 
@@ -232,8 +228,11 @@ const NO_NODE: u32 = u32::MAX;
 const ROOT_NODE: u32 = 0;
 
 struct Node {
-    /// The canonical array. 0 for the root and for a free slot.
+    /// Weak representative array. Unpublished prefixes borrow a descendant
+    /// only for edge validation; they never expose it as their keys array.
+    /// 0 denotes the root or a free slot.
     addr: usize,
+    published: bool,
     parent: u32,
     edge_hash: u64,
     /// Next node in this node's `(parent, edge_hash)` bucket, or the free-list
@@ -265,6 +264,8 @@ pub(crate) struct CanonicalTable {
     reaped: u64,
     #[cfg(test)]
     edge_examinations: usize,
+    #[cfg(test)]
+    allocated_slots: u64,
 }
 
 impl CanonicalTable {
@@ -272,6 +273,7 @@ impl CanonicalTable {
         Self {
             nodes: vec![Node {
                 addr: 0,
+                published: false,
                 parent: NO_NODE,
                 edge_hash: 0,
                 next: NO_NODE,
@@ -287,6 +289,8 @@ impl CanonicalTable {
             reaped: 0,
             #[cfg(test)]
             edge_examinations: 0,
+            #[cfg(test)]
+            allocated_slots: 0,
         }
     }
 
@@ -297,9 +301,11 @@ impl CanonicalTable {
         edge_hash: u64,
         len: u32,
         all_ptr: bool,
+        published: bool,
     ) -> u32 {
         let fresh = Node {
             addr,
+            published,
             parent,
             edge_hash,
             next: NO_NODE,
@@ -318,14 +324,29 @@ impl CanonicalTable {
         self.minted += 1;
         CANON_MINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         CANON_LIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        CANON_WORDS.fetch_add(u64::from(len), std::sync::atomic::Ordering::Relaxed);
-        self.by_addr.insert(addr, id);
+        if published {
+            CANON_WORDS.fetch_add(u64::from(len), std::sync::atomic::Ordering::Relaxed);
+            self.by_addr.insert(addr, id);
+        }
         if parent != NO_NODE {
             let head = self.edges.entry((parent, edge_hash)).or_insert(NO_NODE);
             self.nodes[id as usize].next = *head;
             *head = id;
         }
         id
+    }
+
+    /// Turn a validation-only prefix into an independently owned keys list.
+    fn publish(&mut self, id: u32, addr: usize, all_ptr: bool) {
+        let node = &mut self.nodes[id as usize];
+        debug_assert!(!node.published);
+        node.addr = addr;
+        // Equal key bytes can arrive as heap strings or inline short strings.
+        // The published storage, not its former witness, owns this GC fact.
+        node.all_ptr = all_ptr;
+        node.published = true;
+        self.by_addr.insert(addr, id);
+        CANON_WORDS.fetch_add(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Retire a batch before reusing any id. Each edge bucket and collision
@@ -342,14 +363,16 @@ impl CanonicalTable {
             if node.addr == 0 {
                 continue;
             }
-            self.by_addr.remove(&node.addr);
+            if node.published {
+                self.by_addr.remove(&node.addr);
+                CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
+            }
             node.addr = 0;
             // Preserve `next` until all collision chains have been filtered.
             retired.push(id);
             self.reaped += 1;
             CANON_REAPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             CANON_LIVE.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
         }
         if retired.is_empty() {
             return;
@@ -396,6 +419,7 @@ impl CanonicalTable {
         for id in retired {
             self.nodes[id as usize] = Node {
                 addr: 0,
+                published: false,
                 parent: NO_NODE,
                 edge_hash: 0,
                 next: self.free,
@@ -559,6 +583,37 @@ fn node_of(t: &CanonicalTable, keys: CanonicalKeys) -> Option<u32> {
 ///
 /// # Safety
 /// `parent` names a live canonical array (or is empty) and `appended` is live.
+unsafe fn probe_node(
+    t: &CanonicalTable,
+    pnode: u32,
+    parent_len: u32,
+    appended: Appended,
+    h: u64,
+) -> Option<u32> {
+    let mut cur = *t.edges.get(&(pnode, h))?;
+    while cur != NO_NODE {
+        let node = &t.nodes[cur as usize];
+        if node.addr != 0 && node.len == parent_len + 1 {
+            let arr = node.addr as *const ArrayHeader;
+            // An unpublished node may use a longer descendant as its witness.
+            // Published lists always have their own exact-length header.
+            if (*arr).length == node.len || (!node.published && (*arr).length > node.len) {
+                let (slots, slot_len) = crate::object::keys_array_dense_slots(arr);
+                if (parent_len as usize) < slot_len {
+                    #[cfg(test)]
+                    canonical_keys_tests::note_slot_read();
+                    let stored = JSValue::from_bits((*slots.add(parent_len as usize)).to_bits());
+                    if appended.matches(stored) {
+                        return Some(cur);
+                    }
+                }
+            }
+        }
+        cur = node.next;
+    }
+    None
+}
+
 unsafe fn probe(
     parent: CanonicalKeys,
     parent_len: u32,
@@ -566,37 +621,10 @@ unsafe fn probe(
     h: u64,
 ) -> Option<CanonicalKeys> {
     with_table_or(None, |t| {
-        let pnode = node_of(t, parent)?;
-        let mut cur = *t.edges.get(&(pnode, h))?;
-        while cur != NO_NODE {
-            let (addr, len, next) = {
-                let node = &t.nodes[cur as usize];
-                (node.addr, node.len, node.next)
-            };
-            if addr != 0 && len == parent_len + 1 {
-                let arr = addr as *const ArrayHeader;
-                // Keep the cache entry's exact-length check before resolving
-                // slots: a forwarded stub is not a canonical array to return.
-                if (*arr).length == parent_len + 1 {
-                    let (slots, slot_len) = crate::object::keys_array_dense_slots(arr);
-                    if parent_len as usize >= slot_len {
-                        cur = next;
-                        continue;
-                    }
-                    #[cfg(test)]
-                    canonical_keys_tests::note_slot_read();
-                    // Compare the internal key slot, not JavaScript Get:
-                    // Get translates a tombstone into undefined (or a
-                    // prototype value), which would miss the same trie edge.
-                    let stored = JSValue::from_bits((*slots.add(parent_len as usize)).to_bits());
-                    if appended.matches(stored) {
-                        return Some(CanonicalKeys(addr as *mut ArrayHeader));
-                    }
-                }
-            }
-            cur = next;
-        }
-        None
+        let id = probe_node(t, node_of(t, parent)?, parent_len, appended, h)?;
+        let node = &t.nodes[id as usize];
+        node.published
+            .then_some(CanonicalKeys(node.addr as *mut ArrayHeader))
     })
 }
 
@@ -613,8 +641,8 @@ unsafe fn stamp_shared(arr: *mut ArrayHeader) {
 }
 
 /// The canonical array for `parent`'s ordered key list with one slot
-/// appended. O(1): one hash probe and one exact slot check; allocates only on
-/// a genuinely new layout.
+/// appended. A hit is O(1): one hash probe and one exact slot check. A new
+/// publication owns a copy; no intermediate unpublished prefix allocates.
 ///
 /// # Safety
 /// `parent` names a live canonical array (or is empty), `appended` is live,
@@ -651,45 +679,10 @@ pub(crate) unsafe fn extend_slot(
         Appended::Key(key) => scope.root_string_ptr(key),
         Appended::Slot(v) => scope.root_nanbox_u64(v.bits()),
     };
-    // The all-pointer allocator, when the claim holds: it declares the layout
-    // in the header, where `rebuild_array_layout_from_slots` would install a
-    // per-object side mask — and one live mask entry arms the address filter
-    // for the whole program (`Node::all_ptr`).
-    // LONGLIVED, and still load-bearing — but NOT for the reason the first
-    // version of this comment gave.
-    //
-    // It was introduced because `CLASS_KEYS_BY_ID` held the shape cache's
-    // keys array as an unscanned raw `usize`. That table is scanned and
-    // pruned now (`alloc.rs`), and scanning it DID buy what was predicted:
-    // with ordinary allocation, all seven of the GC tests that assert a keys
-    // array moves, is rewritten, and is reclaimed pass UNCHANGED, and the
-    // suite's failures fall 12 -> 6.
-    //
-    // But `descriptor_trap_collection_preserves_for_in_target_and_keys`
-    // returns 1 key of 14 again the moment allocation goes back to the
-    // nursery. So `CLASS_KEYS_BY_ID` was NOT the holder — or not the only
-    // one — and the earlier root cause was a site that had been localised,
-    // not explained. Same error as L8.3.21, caught the same way: by the fix
-    // failing to fix it.
-    //
-    // A wrong answer must not ship, so the allocator stays until the real
-    // holder is found. The cost is the retention regression L8.3.15c was
-    // withdrawn for, which seven tests name precisely and which is bounded
-    // (135 KB on tsc; majors still reclaim).
-    let allocate = || {
-        if _proof.shape_cache {
-            let a = crate::array::js_array_alloc_with_length_longlived(parent_len + 1);
-            (*a).length = 0;
-            if all_ptr {
-                crate::gc::layout_init_all_pointer_slots(a as *mut u8);
-            }
-            a
-        } else if all_ptr {
-            crate::array::js_array_alloc_pointer_elements(parent_len + 1)
-        } else {
-            crate::array::js_array_alloc(parent_len + 1)
-        }
-    };
+    // Canonical lists are weakly held and must use reclaimable storage.
+    #[cfg(test)]
+    try_with_table(|t| t.allocated_slots += u64::from(parent_len + 1));
+    let allocate = || crate::array::js_array_alloc_key_list(parent_len + 1, all_ptr);
     // Reload both operands only after the child allocation can no longer
     // move them. No GC allocation occurs while the fresh array is filled.
     let ((fresh, parent), appended) = match appended {
@@ -741,6 +734,12 @@ pub(crate) unsafe fn extend_slot(
         // after the last write is the precondition it documents.
         crate::object::gc_slots::rebuild_array_layout_from_slots(fresh);
     }
+    if all_ptr && crate::arena::pointer_in_old_gen(fresh as usize) {
+        for i in 0..(*fresh).length as usize {
+            let slot = dst.add(i) as *const u64;
+            crate::gc::runtime_write_barrier_slot(fresh as usize, slot as usize, *slot);
+        }
+    }
     stamp_shared(fresh);
 
     try_with_table(|t| {
@@ -748,7 +747,11 @@ pub(crate) unsafe fn extend_slot(
         // it is a correct list — as an orphan root: the caller still gets the
         // right content and only the edge is lost.
         let pnode = node_of(t, parent).unwrap_or(NO_NODE);
-        t.alloc_node(fresh as usize, pnode, h, parent_len + 1, all_ptr);
+        if let Some(id) = probe_node(t, pnode, parent_len, appended, h) {
+            t.publish(id, fresh as usize, all_ptr);
+        } else {
+            t.alloc_node(fresh as usize, pnode, h, parent_len + 1, all_ptr, true);
+        }
     });
     CanonicalKeys(fresh)
 }
@@ -768,6 +771,11 @@ pub(crate) unsafe fn extend_key(
 
 /// The canonical array for the ordered key list held in `keys[0..len]`.
 ///
+/// Materialize only this publication. Prefix nodes borrow a weak descendant
+/// witness for trie validation and never return that longer array to a caller.
+/// This keeps fold storage linear in input length, while all observable lists
+/// retain their own header, exact length and independent element storage.
+///
 /// The funnel's total form: whatever a producer hands in — a private clone, a
 /// cache entry, a freshly built list — what comes back is THE array for that
 /// content. When `keys` is already canonical at that length it is returned
@@ -777,7 +785,7 @@ pub(crate) unsafe fn extend_key(
 /// `keys` is a live keys array (or null) with at least `len` initialized
 /// slots, and the caller has rooted what it holds: this allocates.
 pub(crate) unsafe fn canonicalize(
-    proof: &SharedLayout,
+    _proof: &SharedLayout,
     keys: *const ArrayHeader,
     len: u32,
 ) -> CanonicalKeys {
@@ -795,27 +803,70 @@ pub(crate) unsafe fn canonicalize(
         return CanonicalKeys(keys as *mut ArrayHeader);
     }
 
-    // Fold `extend_slot` over the slots. One path, N times — the source is re-read
-    // after every step, because `extend_slot` allocates and the collector moves it.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let src = scope.root_raw_mut_ptr(keys as *mut ArrayHeader);
-    let mut out = CanonicalKeys::EMPTY;
-    for i in 0..len {
-        let slot = src.with_const_ptr(|arr| {
-            // Re-resolve grow-forward pointers and front reserves after each
-            // allocating extension; borrow slots only for this read.
-            let (slots, src_len) = crate::object::keys_array_dense_slots(arr);
-            let copied = (len as usize).min(src_len);
-            debug_assert_eq!(
-                copied, len as usize,
-                "the shape's key count outruns its keys array"
-            );
-            ((i as usize) < copied).then(|| JSValue::from_bits((*slots.add(i as usize)).to_bits()))
-        });
-        let Some(slot) = slot else { break };
-        out = extend_slot(proof, out, Appended::Slot(slot));
+    // Walk without allocating. Intermediate prefixes have no observable array:
+    // their weak representative is used only to compare one edge slot.
+    let hit = with_table_or(None, |t| {
+        let (slots, available) = crate::object::keys_array_dense_slots(keys);
+        assert!(available >= len as usize);
+        let mut parent = ROOT_NODE;
+        for i in 0..len {
+            let slot = Appended::Slot(JSValue::from_bits((*slots.add(i as usize)).to_bits()));
+            parent = probe_node(t, parent, i, slot, slot.edge_hash())?;
+        }
+        let node = &t.nodes[parent as usize];
+        node.published
+            .then_some(CanonicalKeys(node.addr as *mut ArrayHeader))
+    });
+    if let Some(hit) = hit {
+        return hit;
     }
-    out
+    let (slots, _) = crate::object::keys_array_dense_slots(keys);
+    let all_ptr =
+        (0..len).all(|i| JSValue::from_bits((*slots.add(i as usize)).to_bits()).is_string());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src = scope.root_raw_const_ptr(keys);
+    #[cfg(test)]
+    try_with_table(|t| t.allocated_slots += u64::from(len));
+    let (fresh, keys) =
+        src.across_const::<ArrayHeader, _>(|| crate::array::js_array_alloc_key_list(len, all_ptr));
+    let (slots, available) = crate::object::keys_array_dense_slots(keys);
+    assert!(available >= len as usize);
+    let dst = crate::array::array_elements_ptr(fresh) as *mut f64;
+    // GC_STORE_AUDIT(INIT): fresh is unpublished; publish length only after
+    // all elements are initialized, with no intervening GC allocation.
+    std::ptr::copy_nonoverlapping(slots, dst, len as usize);
+    (*fresh).length = len;
+    if !all_ptr {
+        crate::object::gc_slots::rebuild_array_layout_from_slots(fresh);
+    }
+    if all_ptr && crate::arena::pointer_in_old_gen(fresh as usize) {
+        for i in 0..(*fresh).length as usize {
+            let slot = dst.add(i) as *const u64;
+            crate::gc::runtime_write_barrier_slot(fresh as usize, slot as usize, *slot);
+        }
+    }
+    stamp_shared(fresh);
+    with_table_or(CanonicalKeys(fresh), |t| {
+        // Allocation may have moved/pruned witnesses. Walk again with the
+        // rooted source now copied into fresh; no table borrow spans a GC.
+        let mut parent = ROOT_NODE;
+        let mut prefix_all_ptr = true;
+        for i in 0..len {
+            let slot = Appended::Slot(JSValue::from_bits((*dst.add(i as usize)).to_bits()));
+            let h = slot.edge_hash();
+            prefix_all_ptr &= slot.is_pointer();
+            parent = match probe_node(t, parent, i, slot, h) {
+                Some(id) => id,
+                None => t.alloc_node(fresh as usize, parent, h, i + 1, prefix_all_ptr, false),
+            };
+        }
+        if t.nodes[parent as usize].published {
+            CanonicalKeys(t.nodes[parent as usize].addr as *mut ArrayHeader)
+        } else {
+            t.publish(parent, fresh as usize, all_ptr);
+            CanonicalKeys(fresh)
+        }
+    })
 }
 
 /// GC root scanner. The arrays are WEAK: rewritten on move, never marked —
@@ -839,7 +890,9 @@ pub fn scan_canonical_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             let mut next = addr;
             if visitor.visit_metadata_usize_slot(&mut next) && next != addr {
                 t.nodes[id].addr = next;
-                moved.push((addr, next, id as u32));
+                if t.nodes[id].published {
+                    moved.push((addr, next, id as u32));
+                }
             }
         }
         for (old, new, id) in moved.drain(..) {

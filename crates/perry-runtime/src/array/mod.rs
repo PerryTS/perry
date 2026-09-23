@@ -86,7 +86,8 @@ mod tests;
 mod typed_array_receiver_tests;
 
 pub(crate) use self::alloc::{
-    array_length_range_error, js_array_alloc_pointer_elements, js_array_alloc_with_length_exact,
+    array_length_range_error, js_array_alloc_key_list, js_array_alloc_pointer_elements,
+    js_array_alloc_with_length_exact,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
