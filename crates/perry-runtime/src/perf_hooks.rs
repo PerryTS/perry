@@ -207,9 +207,7 @@ pub(crate) unsafe fn is_resource_entry_object(obj: *const crate::object::ObjectH
     }
     let recorded = RESOURCE_ENTRY_KEYS_ARRAY.with(|c| c.get());
     let view = crate::object::object_keys(obj);
-    recorded != 0
-        && view.arr() as usize == recorded
-        && view.count() == RESOURCE_ENTRY_FIELD_COUNT
+    recorded != 0 && view.arr() as usize == recorded && view.count() == RESOURCE_ENTRY_FIELD_COUNT
 }
 
 unsafe fn perf_entry_type(obj: *const crate::object::ObjectHeader) -> Option<u8> {

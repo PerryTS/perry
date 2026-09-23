@@ -421,13 +421,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     // this keys global: the global holds only the array, and the array can
     // be a canonical backing longer than this class's list.
     let keys = preinstalled_class_keys(keys_array, shape_id);
-    let (ptr, birth_slots, used_preinstalled_shape, _) = object_alloc_class_inline_keys_impl(
-        class_id,
-        parent_class_id,
-        field_count,
-        keys,
-        shape_id,
-    );
+    let (ptr, birth_slots, used_preinstalled_shape, _) =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys, shape_id);
     if !used_preinstalled_shape {
         unsafe {
             crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots);
@@ -445,7 +440,10 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
 /// there. The fallback's count then differs from the id's, so the stamp
 /// declines it and publishes an exact descriptor.
 #[inline]
-fn preinstalled_class_keys(keys_array: *mut ArrayHeader, shape_id: u32) -> crate::object::ObjectKeys {
+fn preinstalled_class_keys(
+    keys_array: *mut ArrayHeader,
+    shape_id: u32,
+) -> crate::object::ObjectKeys {
     // SAFETY: a module keys global is a live keys array (or null).
     let owned = unsafe { crate::object::ObjectKeys::owned(keys_array) };
     match crate::object::shapes::shape_descriptor_by_id(shape_id) {
@@ -708,7 +706,11 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             unsafe { crate::object::ObjectKeys::owned(arr) },
         );
         debug_assert_eq!(merged.count() as usize, merged_len);
-        (merged, merged_len as u32, shape_cache_get_with_id(shape_id).1)
+        (
+            merged,
+            merged_len as u32,
+            shape_cache_get_with_id(shape_id).1,
+        )
     };
 
     let header_size = std::mem::size_of::<ObjectHeader>();
@@ -1845,8 +1847,9 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             // report a bogus, pointer-sized length, and an unclamped
             // `0..key_count` copy loop turns Object.assign / object spread into
             // a minutes-long spin).
-            let key_count = (src_keys.count() as usize)
-                .min(crate::array::keys_array_len_capped_to_capacity(src_keys.arr()));
+            let key_count = (src_keys.count() as usize).min(
+                crate::array::keys_array_len_capped_to_capacity(src_keys.arr()),
+            );
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
             for i in 0..key_count {

@@ -974,7 +974,11 @@ fn transition_cache_requires_exact_predecessor_shape_id() {
     );
     assert_eq!(
         transition_cache_lookup(PREDECESSOR, key),
-        Some((crate::object::ObjectKeys::new(keys as *mut ArrayHeader, 1), 0, TARGET))
+        Some((
+            crate::object::ObjectKeys::new(keys as *mut ArrayHeader, 1),
+            0,
+            TARGET
+        ))
     );
 
     let slot = transition_cache_slot(PREDECESSOR, key as usize);

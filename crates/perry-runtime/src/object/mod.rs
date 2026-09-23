@@ -57,11 +57,11 @@ pub(crate) use test_root_helpers::*;
 
 pub(crate) mod alloc;
 mod alloc_basic;
+pub(crate) use alloc::mark_object_plain_ordinary;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
-pub(crate) use alloc::mark_object_plain_ordinary;
 mod json_construction;
 pub(crate) use json_construction::{
     object_from_inline_json_fields, object_from_json_fields_preinstalled,
@@ -85,8 +85,8 @@ pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;
 pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
-mod census;
 pub(crate) mod canonical_keys;
+mod census;
 pub(crate) use census::object_tables_census;
 mod collection_proto_thunks;
 mod data_view_registry;
@@ -1518,10 +1518,15 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
 /// but a call: a seam with logic of its own can drift from the writer it
 /// stands in for, which is exactly what let a deleted arm site stay green.
 #[cfg(test)]
-pub(crate) fn test_shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) -> *mut ArrayHeader {
+pub(crate) fn test_shape_cache_insert(
+    shape_id: u32,
+    keys_array: *mut ArrayHeader,
+) -> *mut ArrayHeader {
     // A test hands in a freshly built, exclusively owned list.
     let keys = unsafe { ObjectKeys::owned(keys_array) };
-    shape_cache_insert(shape_id, canonical_keys::LiveObject::none(), keys).1.arr()
+    shape_cache_insert(shape_id, canonical_keys::LiveObject::none(), keys)
+        .1
+        .arr()
 }
 
 #[cfg(test)]

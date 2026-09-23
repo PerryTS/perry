@@ -189,11 +189,7 @@ mod tests {
                 let owner = crate::value::js_nanbox_get_pointer(boxed_h.get_nanbox_f64()) as usize;
                 assert_eq!(length(owner), Some(4096));
                 let physical_keys_view = crate::object::object_keys(owner as *const ObjectHeader);
-                assert_eq!(
-                    physical_keys_view.count(),
-                    1,
-                    "only length is stored"
-                );
+                assert_eq!(physical_keys_view.count(), 1, "only length is stored");
                 assert_eq!(
                     crate::state::state()
                         .descriptors

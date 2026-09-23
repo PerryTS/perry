@@ -12,7 +12,11 @@ fn key(name: &str) -> *mut StringHeader {
 /// backing's header length.
 unsafe fn names_of(view: ObjectKeys) -> Vec<String> {
     let (slots, len) = view.dense_slots();
-    assert_eq!(len, view.count() as usize, "a view must expose exactly its count");
+    assert_eq!(
+        len,
+        view.count() as usize,
+        "a view must expose exactly its count"
+    );
     (0..len)
         .map(|i| {
             let value = JSValue::from_bits((*slots.add(i)).to_bits());
@@ -66,10 +70,19 @@ fn a_growth_chain_shares_one_backing() {
         let lists = chain(&proof, &["a", "b", "c", "d"]);
         let backing = lists[0].as_ptr();
         for (i, list) in lists.iter().enumerate() {
-            assert_eq!(list.as_ptr(), backing, "list {} left the chain's backing", i + 1);
+            assert_eq!(
+                list.as_ptr(),
+                backing,
+                "list {} left the chain's backing",
+                i + 1
+            );
             assert_eq!(list.len(), i as u32 + 1);
         }
-        assert_eq!((*backing).length, 4, "the backing's length is its tip's count");
+        assert_eq!(
+            (*backing).length,
+            4,
+            "the backing's length is its tip's count"
+        );
         assert_eq!(names_of(lists[1].view()), strings(&["a", "b"]));
         assert_eq!(names_of(lists[3].view()), strings(&["a", "b", "c", "d"]));
         // The whole-list funnel and the grow path name the same node.
@@ -96,7 +109,11 @@ fn a_fork_and_a_full_backing_start_a_new_backing() {
         let lists = chain(&proof, &["a", "b", "c", "d"]);
         let backing = lists[0].as_ptr();
         let fork = extend_key(&proof, lists[1], key("x"));
-        assert_ne!(fork.as_ptr(), backing, "a fork must not write the shared backing");
+        assert_ne!(
+            fork.as_ptr(),
+            backing,
+            "a fork must not write the shared backing"
+        );
         assert_eq!(names_of(fork.view()), strings(&["a", "b", "x"]));
         assert_eq!((*backing).length, 4);
         assert_eq!(names_of(lists[1].view()), strings(&["a", "b"]));
@@ -109,7 +126,10 @@ fn a_fork_and_a_full_backing_start_a_new_backing() {
         // new, larger backing and the old one is untouched.
         let fifth = extend_key(&proof, lists[3], key("e"));
         assert_ne!(fifth.as_ptr(), backing);
-        assert!((*fifth.as_ptr()).capacity > 5, "a new backing must leave room to grow");
+        assert!(
+            (*fifth.as_ptr()).capacity > 5,
+            "a new backing must leave room to grow"
+        );
         assert_eq!(names_of(fifth.view()), strings(&["a", "b", "c", "d", "e"]));
         assert_eq!((*backing).length, 4);
         // A tombstone is not a heap pointer: an all-pointer backing forks
@@ -120,7 +140,10 @@ fn a_fork_and_a_full_backing_start_a_new_backing() {
             Appended::Slot(JSValue::from_bits(crate::value::TAG_HOLE)),
         );
         assert_ne!(hole.as_ptr(), fifth.as_ptr());
-        assert_eq!(names_of(hole.view()), strings(&["a", "b", "c", "d", "e", "<hole>"]));
+        assert_eq!(
+            names_of(hole.view()),
+            strings(&["a", "b", "c", "d", "e", "<hole>"])
+        );
         assert_eq!(names_of(fifth.view()), strings(&["a", "b", "c", "d", "e"]));
     }
 }
@@ -155,7 +178,10 @@ fn every_writer_leaves_the_other_lists_on_a_backing_unchanged() {
                     assert_eq!(tip_keys.arr(), short_keys.arr(), "premise: one backing");
                     assert_eq!(target_keys.arr(), tip_keys.arr(), "premise: one backing");
                     assert_eq!((tip_keys.count(), short_keys.count()), (3, 2));
-                    assert!((*tip_keys.arr()).capacity > 3, "premise: the tip can grow in place");
+                    assert!(
+                        (*tip_keys.arr()).capacity > 3,
+                        "premise: the tip can grow in place"
+                    );
 
                     run_writer(writer, target);
 
@@ -189,7 +215,10 @@ unsafe fn run_writer(writer: usize, obj: crate::gc::RuntimeHandle<'_>) {
     };
     let delete = |name: &str| {
         let k = key(name);
-        assert_eq!(obj.with_mut_ptr(|o| crate::object::js_object_delete_field(o, k)), 1);
+        assert_eq!(
+            obj.with_mut_ptr(|o| crate::object::js_object_delete_field(o, k)),
+            1
+        );
     };
     match writer {
         0 => set("z", 1.0),
@@ -277,7 +306,10 @@ fn a_shorter_list_on_an_indexed_backing_is_absent_past_its_count() {
         // And the same through the object model.
         let k38 = key("k38");
         let got = short.with_const_ptr(|o| crate::object::js_object_get_field_by_name(o, k38));
-        assert!(got.is_undefined(), "the short object must not read the tip's k38");
+        assert!(
+            got.is_undefined(),
+            "the short object must not read the tip's k38"
+        );
         let got = long.with_const_ptr(|o| crate::object::js_object_get_field_by_name(o, k38));
         assert_eq!(got.as_number(), 38.0);
     }
@@ -303,7 +335,10 @@ fn building_a_wide_object_indexes_linear_slots() {
         assert_eq!(object_names(obj).len(), N);
         let indexed = crate::object::shapes::indexed_slots_for_test() - before;
         eprintln!("wide object: {N} keys, {indexed} indexed slots");
-        assert!(indexed > 0, "premise: the write path must have built an index");
+        assert!(
+            indexed > 0,
+            "premise: the write path must have built an index"
+        );
         assert!(
             indexed <= 4 * N as u64,
             "{indexed} indexed slots for a {N}-key object; expected O(N)"
