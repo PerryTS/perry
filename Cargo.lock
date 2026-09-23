@@ -6169,7 +6169,6 @@ dependencies = [
  "shake",
  "spki 0.8.0",
  "tokio",
- "tokio-rustls",
  "turnloop-http",
  "turnloop-smtp",
  "turnloop-tls",

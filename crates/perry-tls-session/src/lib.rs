@@ -20,7 +20,10 @@
 //! Two properties, inherited and load-bearing:
 //!
 //! * **Client only.** A fetch never accepts, so there is no server endpoint and
-//!   no `Endpoint` trait to abstract over one.
+//!   no `Endpoint` trait to abstract over one. The two-sided shape — a server
+//!   session, or a client over a caller-built `rustls` config (Node's CA
+//!   options, `rejectUnauthorized: false`) — is [`session::TlsSession`], which
+//!   `perry-stdlib`'s `node:tls` server and bundled `net` / `ws` clients use.
 //! * **The config comes from [`turnloop_tls::ClientConfig`]**, whose
 //!   `ClientOptions` names the crypto provider explicitly — so it is unaffected
 //!   by the ring/aws-lc-rs default-provider ambiguity the `tls` / `bundled-ws`
@@ -33,6 +36,9 @@
 //! thread (P1's rule, unchanged).
 
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub mod session;
+pub use session::TlsSession;
 
 use turnloop_tls::rustls::{
     self,

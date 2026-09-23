@@ -10,8 +10,9 @@
 //!
 //! The `Transport` enum lets a single socket id keep the same handle across
 //! a plain→TLS upgrade: `SocketCommand::UpgradeTls` moves the `TcpStream`
-//! into `tokio_rustls::connect()`, then stores the resulting `TlsStream`
-//! back under the same id. This is what Postgres' `SSLRequest` flow needs —
+//! into `crate::tls_stream::TlsStream::connect()` (perry-tls-session's
+//! sans-I/O rustls session over the tokio socket — turnloop P8 group H), then
+//! stores the resulting `TlsStream` back under the same id. This is what Postgres' `SSLRequest` flow needs —
 //! write 8 bytes in plain, read one byte (`'S'`/`'N'`), then upgrade.
 //!
 //! FFI signature conventions (match NATIVE_MODULE_TABLE in perry-codegen):
@@ -43,13 +44,15 @@ mod tls_verifier;
 use tls_verifier::NodeConfiguredCaVerifier;
 
 #[cfg(feature = "tls")]
+use crate::tls_stream::TlsStream;
+#[cfg(feature = "tls")]
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+#[cfg(feature = "tls")]
 use std::sync::Arc;
+/// What `build_tls_connector` produces: the client config a handshake runs
+/// with (formerly wrapped in a `tokio_rustls::TlsConnector`).
 #[cfg(feature = "tls")]
-use tokio_rustls::rustls::client::danger::{
-    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-};
-#[cfg(feature = "tls")]
-use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
+type TlsConnector = Arc<rustls::ClientConfig>;
 
 #[cfg(feature = "tls")]
 #[derive(Clone, Default)]
@@ -716,7 +719,7 @@ fn build_tls_connector(
             .dangerous()
             .set_certificate_verifier(Arc::new(verifier));
     }
-    Ok(TlsConnector::from(Arc::new(config)))
+    Ok(Arc::new(config))
 }
 
 #[cfg(feature = "tls")]
@@ -838,7 +841,7 @@ fn build_tls_connector_insecure(
     if let Some(data) = data {
         config.alpn_protocols = data.alpn_protocols.clone();
     }
-    Ok(TlsConnector::from(Arc::new(config)))
+    Ok(Arc::new(config))
 }
 
 // ─── FFI: net.createConnection / net.connect ─────────────────────────────────
@@ -1332,8 +1335,7 @@ async fn do_tls_handshake(
     let connector = build_tls_connector(verify, data)?;
     let server_name = rustls::pki_types::ServerName::try_from(servername.to_string())
         .map_err(|e| format!("invalid servername '{}': {}", servername, e))?;
-    connector
-        .connect(server_name, tcp)
+    TlsStream::connect(tcp, connector, server_name)
         .await
         .map_err(|e| format!("tls handshake: {}", e))
 }
@@ -1345,7 +1347,7 @@ fn record_tls_handshake(
     verify: bool,
     data: Option<&TlsClientConfigData>,
 ) {
-    let connection = stream.get_ref().1;
+    let connection = stream.session();
     let protocol = match connection.protocol_version() {
         Some(rustls::ProtocolVersion::TLSv1_2) => "TLSv1.2",
         Some(rustls::ProtocolVersion::TLSv1_3) => "TLSv1.3",

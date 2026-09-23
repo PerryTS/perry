@@ -81,17 +81,17 @@ websocket = ["bundled-ws"]
 # with `turnloop-http` supplying the HTTP/1 head codec the opening handshake is
 # expressed in, driven over the tokio streams `ws.rs` already owned. It
 # replaced the old `WebSocketStream<S>` wrapper, which welded the codec to the
-# transport. `dep:url` parses the connect target; `dep:tokio-rustls` +
-# `dep:rustls-native-certs` are the outbound `wss://` client — both were
-# already declared for `tls-runtime`, so no new third-party crate enters the
-# graph. perry-stdlib must NOT depend on perry-ext-ws: it is the bundled
+# transport. `dep:url` parses the connect target; `dep:perry-tls-session`
+# (the sans-I/O rustls session `src/tls_stream.rs` drives over the tokio
+# socket — turnloop P8 group H replaced tokio-rustls with it) +
+# `dep:rustls-native-certs` are the outbound `wss://` client. perry-stdlib must NOT depend on perry-ext-ws: it is the bundled
 # alternative to that crate, so the duplication between the two `ws` bindings
 # is deliberate.
 # #6117: `dep:rustls` so the client-connect path can install a process-level
 # CryptoProvider before the first `wss://` handshake — feature unification
 # enables BOTH `ring` and `aws-lc-rs` in the final link, so rustls panics
 # unless one is installed explicitly (same as the `tls` feature's paths).
-bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:tokio-rustls", "dep:rustls", "dep:rustls-native-certs", "async-runtime"]
+bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:perry-tls-session", "dep:rustls", "dep:rustls-native-certs", "async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to
@@ -158,7 +158,7 @@ tls = ["bundled-net", "tls-runtime"]
 external-net-tls = ["tls-runtime"]
 tls-runtime = [
     "async-runtime",
-    "dep:tokio-rustls",
+    "dep:perry-tls-session",
     "dep:rustls",
     "dep:rustls-native-certs",
     "dep:rustls-pemfile",
@@ -171,7 +171,7 @@ tls-runtime = [
 # in because the wrapper owns client sockets and their event pump.
 external-tls-server = [
     "async-runtime",
-    "dep:tokio-rustls",
+    "dep:perry-tls-session",
     "dep:rustls",
     "dep:rustls-native-certs",
     "dep:rustls-pemfile",
@@ -339,8 +339,10 @@ dashmap.workspace = true
 # WebSocket — the sans-I/O protocol core the `ws` module's codec is built on.
 # `turnloop-http` is declared with the other turnloop client engines above.
 turnloop-websocket = { workspace = true, optional = true }
-# TLS (for net.Socket.upgradeToTLS and tls.connect) — rustls-only, no OpenSSL.
-tokio-rustls = { workspace = true, optional = true }
+# TLS (for net.Socket.upgradeToTLS, tls.connect, tls.createServer and wss://)
+# — rustls-only, no OpenSSL. The handshakes run on `perry-tls-session`'s
+# sans-I/O session (declared with the turnloop client engines above), not on
+# tokio-rustls (turnloop P8 group H).
 rustls = { workspace = true, optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
 rustls-pemfile = { workspace = true, optional = true }
