@@ -13,7 +13,7 @@
 //! (`PERRY_CLASS_CAPTURE_DIAG`), so a test meant for the environment path
 //! cannot pass on the instance path or the reverse.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn perry_bin() -> PathBuf {
@@ -246,12 +246,15 @@ fn a_class_declaration_captures_per_call_of_its_function() {
 #[test]
 fn a_class_expression_captures_per_evaluation() {
     check(
+        // Every instance is built before any method runs, so a shared
+        // environment (the last evaluation's) would answer for all of them.
         "function factory(tag) { return class Base { t() { return tag; } }; }
          const A = factory('a'), B = factory('b');
          class SubA extends A { t() { return 'sub' + super.t(); } }
+         const a = new A(), b = new B(), s = new SubA();
          const perCall = [];
-         for (const v of [1, 2, 3]) perCall.push(factory('x' + v));
-         console.log(new A().t(), new B().t(), new SubA().t(), perCall.map((K) => new K().t()).join(','));",
+         for (const v of [1, 2, 3]) perCall.push(new (factory('x' + v))());
+         console.log(a.t(), b.t(), s.t(), perCall.map((o) => o.t()).join(','));",
         "a b suba x1,x2,x3\n",
         &[("Base", "instance")],
     );
@@ -270,5 +273,22 @@ fn a_class_in_a_loop_body_is_not_a_single_evaluation() {
          })();",
         "p,q\n",
         &[("L", "instance")],
+    );
+}
+
+#[test]
+fn reflection_sees_only_declared_fields() {
+    check(
+        "(function () {
+           const k = 1, tag = 'n';
+           class Node2 { pos = 0; end = 5; kind = k; name() { return tag + this.kind; } }
+           const n = new Node2();
+           const forIn = [];
+           for (const key in n) forIn.push(key);
+           console.log(Object.keys(n).join(','), JSON.stringify(n), forIn.join(','),
+             Object.getOwnPropertyNames(n).join(','), JSON.stringify({ ...n }), n.name());
+         })();",
+        "pos,end,kind {\"pos\":0,\"end\":5,\"kind\":1} pos,end,kind pos,end,kind {\"pos\":0,\"end\":5,\"kind\":1} n1\n",
+        &[("Node2", "env")],
     );
 }
