@@ -124,9 +124,10 @@ pub mod subsystem {
     //! The database bindings' completion-sink slots.
     //!
     //! These are a contiguous band ABOVE the slots the server and client lanes
-    //! hardcode in their own crates (0 `perry-ext-net`, 1 `perry-ext-http`, 2
-    //! `perry-stdlib`'s turnloop HTTP client, 3 `perry-stdlib`'s SMTP, 4
-    //! `perry-ext-fastify`, 5 `perry-stdlib`'s framework server, 7 and 8
+    //! hardcode in their own crates (0 `perry-ext-net`, 1 `perry-ext-http`'s
+    //! SERVER, 2 `perry-stdlib`'s turnloop HTTP client, 3 `perry-stdlib`'s
+    //! SMTP, 4 `perry-ext-fastify`, 5 `perry-stdlib`'s framework server, 6
+    //! `perry-ext-http`'s node:http CLIENT (`client_turnloop`), 7 and 8
     //! `perry-ext-ws`). They used to be 2/4/5/6, which collided with three of
     //! those, because the P7 database lane and the P5 server lane numbered
     //! from two different ledgers. A collision needs a program that links both

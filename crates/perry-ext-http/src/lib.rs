@@ -74,6 +74,17 @@ mod continue_client;
 mod client_dispatch;
 use client_dispatch::dispatch_request;
 
+// The turnloop client lane. `try_dispatch` is offered the exchange before
+// `dispatch_request` and declines everything it does not yet cover, which is
+// what keeps `reqwest` reachable; see that module's header for the decline set.
+//
+// `pub` rather than private for one reason: a lane that silently declined
+// every request would be indistinguishable from a working one at the JS
+// surface — the "gate runs but its subject never did" shape. `try_dispatch`
+// and `available` are reachable so `tests/turnloop_client_exchange.rs` can
+// assert the subject was live. No C-ABI symbol is added.
+pub mod client_turnloop;
+
 // Client-request event drain helpers (#4905) — extracted from this file
 // to stay under the 2000-line lint cap.
 mod client_abort;
@@ -303,7 +314,7 @@ fn proxy_enabled_from_env_value(value: Option<&str>) -> bool {
 /// `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars unless this is set. perry
 /// mirrors that opt-in so its bindings are Node-conformant — reqwest would
 /// otherwise honor the proxy env unconditionally, diverging from Node.
-fn node_env_proxy_enabled() -> bool {
+pub(crate) fn node_env_proxy_enabled() -> bool {
     proxy_enabled_from_env_value(std::env::var("NODE_USE_ENV_PROXY").ok().as_deref())
 }
 
@@ -1596,6 +1607,24 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
             );
             return;
         }
+    }
+
+    // The turnloop lane gets first refusal. It runs here, on the agent thread,
+    // because a submission has to reach the loop this thread owns — not from
+    // inside `spawn_blocking`, where `dispatch_request`'s reqwest future runs.
+    // `true` means it owns the exchange and will deliver exactly one terminal
+    // event; `false` is a named decline (see `client_turnloop`'s header) and
+    // falls through to reqwest unchanged.
+    if client_turnloop::try_dispatch(
+        handle,
+        &method,
+        &url,
+        &headers,
+        &body,
+        timeout_ms,
+        agent_handle,
+    ) {
+        return;
     }
 
     dispatch_request(
