@@ -19,6 +19,128 @@ fn class_capture_diag() -> bool {
     *ON.get_or_init(|| std::env::var_os("PERRY_CLASS_CAPTURE_DIAG").is_some())
 }
 
+/// Drop the leading `prologue_len` capture rebinds of a member body that the
+/// rest of the body never names. Every member rebinds the class's whole
+/// capture union; in the class environment a rebind is a load plus a rooted
+/// slot store, so an unused one is pure per-call cost. A rebind is kept when
+/// any later statement — nested closure bodies and their capture lists
+/// included — refers to its id.
+fn prune_unused_capture_rebinds(body: &mut Vec<Stmt>, prologue_len: usize) {
+    let mut refs: Vec<LocalId> = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    for stmt in &body[prologue_len..] {
+        crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+    }
+    let mut named: std::collections::HashSet<LocalId> = refs.into_iter().collect();
+    for stmt in &body[prologue_len..] {
+        closure_capture_ids_stmt(stmt, &mut named);
+    }
+    let mut index = 0;
+    body.retain(|stmt| {
+        let keep =
+            index >= prologue_len || !matches!(stmt, Stmt::Let { id, .. } if !named.contains(id));
+        index += 1;
+        keep
+    });
+}
+
+fn closure_capture_ids_expr(expr: &Expr, out: &mut std::collections::HashSet<LocalId>) {
+    if let Expr::Closure {
+        captures,
+        mutable_captures,
+        body,
+        ..
+    } = expr
+    {
+        out.extend(captures.iter().copied());
+        out.extend(mutable_captures.iter().copied());
+        for stmt in body {
+            closure_capture_ids_stmt(stmt, out);
+        }
+    }
+    crate::walker::walk_expr_children(expr, &mut |child| closure_capture_ids_expr(child, out));
+}
+
+fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                closure_capture_ids_expr(e, out);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => closure_capture_ids_expr(e, out),
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                closure_capture_ids_expr(e, out);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            closure_capture_ids_expr(condition, out);
+            for s in then_branch.iter().chain(else_branch.iter().flatten()) {
+                closure_capture_ids_stmt(s, out);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            closure_capture_ids_expr(condition, out);
+            for s in body {
+                closure_capture_ids_stmt(s, out);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                closure_capture_ids_stmt(i, out);
+            }
+            for e in condition.iter().chain(update.iter()) {
+                closure_capture_ids_expr(e, out);
+            }
+            for s in body {
+                closure_capture_ids_stmt(s, out);
+            }
+        }
+        Stmt::Labeled { body, .. } => closure_capture_ids_stmt(body, out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body
+                .iter()
+                .chain(catch.iter().flat_map(|c| c.body.iter()))
+                .chain(finally.iter().flatten())
+            {
+                closure_capture_ids_stmt(s, out);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            closure_capture_ids_expr(discriminant, out);
+            for case in cases {
+                if let Some(t) = &case.test {
+                    closure_capture_ids_expr(t, out);
+                }
+                for s in &case.body {
+                    closure_capture_ids_stmt(s, out);
+                }
+            }
+        }
+        Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
+            out.extend(ids.iter().copied());
+        }
+        Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
+    }
+}
+
 pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,
     name: &str,
@@ -359,9 +481,17 @@ pub fn synthesize_class_captures(
                 append_self_new_args_stmt(stmt, name, &cap_args);
             }
         };
+    // In the class environment an unused rebind is pure per-call cost (see
+    // `prune_unused_capture_rebinds`); the instance path keeps its rebinds.
+    let prune = |body: &mut Vec<Stmt>| {
+        if env_mode {
+            prune_unused_capture_rebinds(body, captures_vec.len());
+        }
+    };
     for m in methods.iter_mut() {
         let id_map = rewrite_method_body(ctx, &mut m.body);
         append_self_sites(&mut m.body, &id_map);
+        prune(&mut m.body);
     }
     for (_, g) in getters
         .iter_mut()
@@ -369,6 +499,7 @@ pub fn synthesize_class_captures(
     {
         let id_map = rewrite_method_body(ctx, &mut g.body);
         append_self_sites(&mut g.body, &id_map);
+        prune(&mut g.body);
     }
     for (_, s) in setters
         .iter_mut()
@@ -376,6 +507,7 @@ pub fn synthesize_class_captures(
     {
         let id_map = rewrite_method_body(ctx, &mut s.body);
         append_self_sites(&mut s.body, &id_map);
+        prune(&mut s.body);
     }
     for member in computed_members
         .iter_mut()
@@ -383,6 +515,7 @@ pub fn synthesize_class_captures(
     {
         let id_map = rewrite_method_body(ctx, &mut member.function.body);
         append_self_sites(&mut member.function.body, &id_map);
+        prune(&mut member.function.body);
     }
 
     // Statics rebind from the decl-site snapshot and, historically, did not
@@ -440,6 +573,7 @@ pub fn synthesize_class_captures(
         prologue.append(&mut sm.body);
         sm.body = prologue;
         append_self_sites(&mut sm.body, &id_map);
+        prune(&mut sm.body);
     }
 
     // 2b-bis (#10835). STATIC accessors get the same treatment as static
@@ -483,6 +617,7 @@ pub fn synthesize_class_captures(
         prologue.append(&mut acc.body);
         acc.body = prologue;
         append_self_sites(&mut acc.body, &id_map);
+        prune(&mut acc.body);
     }
 
     // 2c. STATIC computed methods (`static [k]() {}`, and the static methods
@@ -530,6 +665,7 @@ pub fn synthesize_class_captures(
         prologue.append(&mut member.function.body);
         member.function.body = prologue;
         append_self_sites(&mut member.function.body, &id_map);
+        prune(&mut member.function.body);
     }
 
     // 3. Constructor.
