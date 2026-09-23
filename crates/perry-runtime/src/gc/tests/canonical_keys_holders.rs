@@ -422,18 +422,20 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
 fn class_keys_memo_belongs_to_the_agent_that_built_it() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    const CLASS_ID: u32 = 0x0C1_7761;
+    const AGENT_MEMO_CLASS_ID: u32 = 0x0C1_7761;
     let packed = b"pa_x\0pa_y\0";
     let scope = RuntimeHandleScope::new();
     let mine = scope.root_raw_mut_ptr(crate::object::js_build_class_keys_array(
-        CLASS_ID,
+        AGENT_MEMO_CLASS_ID,
         2,
         packed.as_ptr(),
         packed.len() as u32,
     ));
     let current = || addr_of(&mine);
-    let registered =
-        || crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
+    let registered = || {
+        crate::object::registered_class_keys_array(AGENT_MEMO_CLASS_ID)
+            .map(|(a, _)| a.arr() as usize)
+    };
     assert_eq!(
         registered(),
         Some(current()),
@@ -446,16 +448,16 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let packed = b"pa_x\0pa_y\0";
         let theirs = crate::object::js_build_class_keys_array(
-            CLASS_ID,
+            AGENT_MEMO_CLASS_ID,
             2,
             packed.as_ptr(),
             packed.len() as u32,
         ) as usize;
-        let seen =
-            crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
+        let seen = crate::object::registered_class_keys_array(AGENT_MEMO_CLASS_ID)
+            .map(|(a, _)| a.arr() as usize);
         crate::object::alloc::prune_dead_class_keys_entries(&|_| false);
-        let seen_after_prune =
-            crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
+        let seen_after_prune = crate::object::registered_class_keys_array(AGENT_MEMO_CLASS_ID)
+            .map(|(a, _)| a.arr() as usize);
         tx.send((theirs, seen, seen_after_prune))
             .expect("spawning thread is waiting");
         // Keep this thread's heap mapped until the spawning thread is done.
@@ -482,7 +484,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
     assert_eq!(
         after_worker,
         Some(current()),
-        "INVARIANT: another agent registering class {CLASS_ID:#x} must not change this agent's \
+        "INVARIANT: another agent registering class {AGENT_MEMO_CLASS_ID:#x} must not change this agent's \
          memo (it names {after_worker:x?}; this agent's array is {:#x}, the worker's {theirs:#x})",
         current()
     );
@@ -558,4 +560,100 @@ fn a_moved_backing_keeps_every_list_on_it() {
         set(o, nursery_key("mv_3"), 3.0);
         assert_eq!(keys_of(o), after, "the moved tip grows in place");
     }
+}
+
+// ------------------------------------------------- weak-table death ordering
+
+/// The step-2.5 weak tables (the class keys memo and the canonical trie)
+/// REWRITE their keys on a move and never MARK them. A dead key therefore has
+/// to leave both tables in the collection that frees its storage, before that
+/// storage can be handed out again: a survivor would be walked by the next
+/// cycle's rewrite pass as a forwarding header (#8040/#8174), and a recycled
+/// ARRAY at that address would be served as a class's keys. This is the
+/// evidence behind both `dead_owner:` verdicts in
+/// `scripts/gc_rekeyed_key_tables.json`.
+#[test]
+fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
+    const DEAD_MEMO_CLASS_ID: u32 = 0x0C1_7762;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_object_model_scanners();
+    // The rewrite passes under test: each runs over the dead key before the
+    // prune does, exactly as in production.
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::alloc::scan_class_keys_roots_mut);
+    canonical_keys::reset_for_test();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let memo = || {
+        crate::object::registered_class_keys_array(DEAD_MEMO_CLASS_ID)
+            .map(|(a, _)| a.arr() as usize)
+    };
+    let trie_names = |addr: usize| {
+        canonical_keys::published_lists_for_test()
+            .into_iter()
+            .any(|list| list as usize == addr)
+    };
+
+    // A young canonical list nothing roots, also remembered as a class's keys
+    // (the memo stores canonical lists; `remember_class_keys` is its writer).
+    let raw = crate::array::js_array_alloc(1);
+    let raw = crate::array::js_array_push(raw, crate::JSValue::from_bits(crate::value::TAG_HOLE));
+    let list = unsafe { canonical_keys::canonicalize(&SharedLayout::shape_cache_entry(), raw, 1) };
+    let addr = list.addr();
+    let capacity = unsafe { (*list.as_ptr()).capacity };
+    crate::state::state()
+        .object_hot
+        .class_keys_by_id
+        .borrow_mut()
+        .insert(DEAD_MEMO_CLASS_ID, (addr, 1, 1));
+    assert!(
+        crate::arena::pointer_in_nursery(addr),
+        "premise: the list is young"
+    );
+    assert!(trie_names(addr), "premise: the trie published the list");
+    assert_eq!(memo(), Some(addr), "premise: the memo names the list");
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_eq!(
+        trace.copying_nursery.copied_objects, 0,
+        "premise: nothing reached the list, so the minor did not copy it"
+    );
+    assert_eq!(
+        memo(),
+        None,
+        "INVARIANT: the class keys memo still names {addr:#x} after the minor that freed it"
+    );
+    assert!(
+        !trie_names(addr),
+        "INVARIANT: the canonical trie still names {addr:#x} after the minor that freed it"
+    );
+
+    // The storage really is reused -- otherwise the ordering above was never
+    // at stake -- and the reused array is not served under the old entries.
+    let mut reused = false;
+    for _ in 0..64 {
+        let next = crate::array::js_array_alloc_with_length_exact(capacity);
+        reused |= next as usize == addr;
+    }
+    assert!(
+        reused,
+        "premise: the dead list's storage was handed out again"
+    );
+    assert_eq!(
+        memo(),
+        None,
+        "INVARIANT: a recycled array served as a class's keys"
+    );
+    assert!(
+        !trie_names(addr),
+        "INVARIANT: a recycled array served as a canonical list"
+    );
+
+    crate::state::state()
+        .object_hot
+        .class_keys_by_id
+        .borrow_mut()
+        .remove(&DEAD_MEMO_CLASS_ID);
+    canonical_keys::reset_for_test();
 }

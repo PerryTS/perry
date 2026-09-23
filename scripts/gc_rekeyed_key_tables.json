@@ -122,6 +122,18 @@
       "why": "#9754: the young-log walk's per-keys-address body, the same family probe and slot-index re-key as scan_shape_table_rekey_mut; pruned by the same registered prune (and its young-log variant on minors)."
     },
     {
+      "site": "crates/perry-runtime/src/object/alloc.rs::scan_class_keys_roots_mut",
+      "table": "state().object_hot.class_keys_by_id (class -> keys array memo)",
+      "death": "dead_owner:prune_dead_class_keys_entries",
+      "why": "#10969 step 2.5: the memo is WEAK (rewrite-on-move, never marked). Registered prune (gc/dead_owner.rs DEAD_KEY_PRUNES, young_prune None so it walks the whole table on every cycle) drops an entry whose array is_dead_owner reports dead, and also one whose address no longer reads as a tracked ARRAY/LAZY_ARRAY header (object/alloc.rs prune_dead_class_keys_entries). It runs in the same collection that frees the storage and before reuse: copied minor = rewrite pass, then finalize_dead_copied_minor_from_space_side_allocations (gc/copying_phase.rs) prunes, then copying_reset_from_spaces_and_flip (gc/copying.rs) recycles; full/fallback = with_dead_collection_finalize at sweep entry (gc/oldgen.rs) before any cell is freed. Witness: gc/tests/canonical_keys_holders.rs a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused."
+    },
+    {
+      "site": "crates/perry-runtime/src/object/canonical_keys.rs::scan_canonical_keys_roots_mut",
+      "table": "CANONICAL_KEYS (canonical keys trie: nodes[].addr + by_addr)",
+      "death": "dead_owner:prune_dead_canonical_keys",
+      "why": "#10969 step 2.5: the trie holds its arrays WEAKLY (rewrite-on-move, never marked). Registered prune (gc/dead_owner.rs DEAD_KEY_PRUNES, young_prune None so it walks every node on every cycle) drops a node whose array is_dead_owner reports dead or whose address no longer reads as a tracked ARRAY/LAZY_ARRAY header (canonical_address_is_recycled), removing it from nodes and by_addr. Same ordering as the class memo: copied minor = rewrite, then finalize_dead_copied_minor_from_space_side_allocations prunes, then copying_reset_from_spaces_and_flip recycles; full/fallback prunes at sweep entry before any free. Witness: gc/tests/canonical_keys_holders.rs a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused."
+    },
+    {
       "site": "crates/perry-runtime/src/perf_hooks.rs::scan_perf_entries_roots_mut",
       "table": "PERF_ENTRY_KEYS_ARRAY",
       "death": "key_is_rooted",
