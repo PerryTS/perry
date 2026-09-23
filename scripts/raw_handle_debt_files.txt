@@ -101,7 +101,7 @@
 10 crates/perry-runtime/src/node_stream_tests_extra.rs
 4 crates/perry-runtime/src/node_submodules/mod.rs
 4 crates/perry-runtime/src/node_submodules/test.rs
-33 crates/perry-runtime/src/object/alloc.rs
+31 crates/perry-runtime/src/object/alloc.rs
 2 crates/perry-runtime/src/object/array_object_ops.rs
 2 crates/perry-runtime/src/object/bigint_dispatch.rs
 3 crates/perry-runtime/src/object/class_registry/construct.rs
@@ -110,7 +110,7 @@
 5 crates/perry-runtime/src/object/field_get_set/enumeration.rs
 2 crates/perry-runtime/src/object/field_get_set/get_field_by_name.rs
 8 crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs
-11 crates/perry-runtime/src/object/field_set_by_name/tail.rs
+9 crates/perry-runtime/src/object/field_set_by_name/tail.rs
 9 crates/perry-runtime/src/object/global_this/populate.rs
 5 crates/perry-runtime/src/object/global_this_webassembly.rs
 2 crates/perry-runtime/src/object/meta_accessors.rs
