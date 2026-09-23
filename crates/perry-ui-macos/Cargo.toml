@@ -116,3 +116,8 @@ harness = false
 name = "native_text_spacing"
 path = "tests/native_text_spacing.rs"
 harness = false
+
+[[test]]
+name = "native_window_appearance"
+path = "tests/native_window_appearance.rs"
+harness = false

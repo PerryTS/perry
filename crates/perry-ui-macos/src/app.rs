@@ -100,22 +100,9 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
         let ns_title = NSString::from_str(&title);
         window.setTitle(&ns_title);
 
-        // Match window appearance to the system setting so native controls
-        // (NSTextField, NSPopUpButton, etc.) use the correct light/dark theme.
-        // isDarkMode() is called here (after NSApp exists) to get the correct value.
-        let is_dark = super::perry_system_is_dark_mode() != 0;
-        let appearance_name = if is_dark {
-            NSString::from_str("NSAppearanceNameDarkAqua")
-        } else {
-            NSString::from_str("NSAppearanceNameAqua")
-        };
-        let appearance_cls = objc2::runtime::AnyClass::get(c"NSAppearance").unwrap();
-        let appearance: *mut objc2::runtime::AnyObject = objc2::msg_send![
-            appearance_cls, appearanceNamed: &*appearance_name
-        ];
-        if !appearance.is_null() {
-            let _: () = objc2::msg_send![&*window, setAppearance: appearance];
-        }
+        // Keep the window's appearance unset so it inherits NSApp's effective
+        // appearance. AppKit follows the system by default and honors an
+        // app-bundle `NSRequiresAquaSystemAppearance` override (#11092).
 
         APPS.with(|a| {
             let mut apps = a.borrow_mut();
