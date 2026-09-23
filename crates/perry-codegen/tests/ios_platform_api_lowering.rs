@@ -37,6 +37,7 @@ fn options(target: Option<&str>) -> CompileOptions {
         imported_vars: Default::default(),
         output_type: "executable".to_string(),
         needs_stdlib: false,
+        program_is_synchronous: false,
         needs_ui: true,
         needs_geisterhand: false,
         geisterhand_port: 7676,

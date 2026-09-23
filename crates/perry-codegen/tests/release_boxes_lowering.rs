@@ -52,6 +52,7 @@ fn entry_opts() -> CompileOptions {
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
         needs_stdlib: false,
+        program_is_synchronous: false,
         needs_ui: false,
         needs_geisterhand: false,
         geisterhand_port: 7676,
