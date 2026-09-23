@@ -204,6 +204,13 @@ fn test_json_tape_eager_materialization_handles_survive_copied_minor_gc() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
+    // This fixture constructs cached descriptor/JSON shapes across moving
+    // collections. The isolation guard removes production's root registry;
+    // restore the cache root and its weak metadata rewrites explicitly.
+    // Long-lived canonical arrays used to conceal the missing registrations.
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_class_keys_roots_mut);
     let object_input = br#"{"a":[{"b":"c"}],"d":1}"#;
     let object_tape = crate::json_tape::build_tape(object_input).unwrap();
     let object_js = {

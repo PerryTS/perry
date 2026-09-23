@@ -239,7 +239,7 @@ fn batch_prune_examines_linear_edges() {
     const K: usize = 15_000;
     let mut table = CanonicalTable::new();
     let ids: Vec<u32> = (1..=N)
-        .map(|i| table.alloc_node(i, ROOT_NODE, i as u64, 1, true))
+        .map(|i| table.alloc_node(i, ROOT_NODE, i as u64, 1, true, true))
         .collect();
     table.edge_examinations = 0;
     table.free_nodes(&ids[..K]);
@@ -265,7 +265,7 @@ fn batch_prune_filters_collision_chains_once() {
     const N: usize = 20_000;
     let mut table = CanonicalTable::new();
     let ids: Vec<u32> = (1..=N)
-        .map(|i| table.alloc_node(i, ROOT_NODE, 7, 1, true))
+        .map(|i| table.alloc_node(i, ROOT_NODE, 7, 1, true, true))
         .collect();
     let dead: Vec<u32> = ids
         .iter()
@@ -296,11 +296,11 @@ fn batch_prune_filters_collision_chains_once() {
 fn batch_prune_orphans_children_before_reusing_ids() {
     let _lock = crate::gc::global_side_table_test_lock();
     let mut table = CanonicalTable::new();
-    let parent = table.alloc_node(1, ROOT_NODE, 10, 1, true);
-    let child = table.alloc_node(2, parent, 20, 2, true);
-    let dead_child = table.alloc_node(3, parent, 20, 2, true);
-    let sibling = table.alloc_node(4, parent, 20, 2, true);
-    let grandchild = table.alloc_node(5, child, 30, 3, true);
+    let parent = table.alloc_node(1, ROOT_NODE, 10, 1, true, true);
+    let child = table.alloc_node(2, parent, 20, 2, true, true);
+    let dead_child = table.alloc_node(3, parent, 20, 2, true, true);
+    let sibling = table.alloc_node(4, parent, 20, 2, true, true);
+    let grandchild = table.alloc_node(5, child, 30, 3, true, true);
     // Duplicate and invalid ids must not corrupt the free list or census.
     table.free_nodes(&[parent, dead_child, parent, ROOT_NODE, NO_NODE]);
     assert_eq!(table.reaped, 2);
@@ -310,8 +310,8 @@ fn batch_prune_orphans_children_before_reusing_ids() {
         assert_eq!(table.nodes[id as usize].parent, NO_NODE);
         assert_eq!(table.nodes[id as usize].next, NO_NODE);
     }
-    let reused_child = table.alloc_node(6, ROOT_NODE, 40, 1, true);
-    let reused_parent = table.alloc_node(7, ROOT_NODE, 50, 1, true);
+    let reused_child = table.alloc_node(6, ROOT_NODE, 40, 1, true, true);
+    let reused_parent = table.alloc_node(7, ROOT_NODE, 50, 1, true, true);
     assert_eq!((reused_child, reused_parent), (dead_child, parent));
     assert!(!table.edges.contains_key(&(reused_parent, 20)));
     assert_eq!(table.by_addr[&2], child);
@@ -319,4 +319,257 @@ fn batch_prune_orphans_children_before_reusing_ids() {
     table.free_nodes(&[child, sibling, grandchild, reused_child, reused_parent]);
     assert!(table.edges.is_empty());
     assert!(table.by_addr.is_empty());
+}
+
+/// A family with disjoint first edges has exactly F*N trie nodes. Only its
+/// published leaves need arrays, not every unobserved fold prefix.
+#[test]
+fn published_family_allocates_linear_element_slots() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        const F: usize = 4;
+        const N: usize = 128;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        for family in 0..F {
+            let names: Vec<String> = (0..N).map(|i| format!("family_{family}_key_{i}")).collect();
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            let list = canonicalize(&proof, raw_list(&names), N as u32);
+            scope.root_raw_mut_ptr(list.as_ptr());
+            assert_eq!(list.len(), N as u32);
+        }
+        let slots = with_table_or(0, |t| t.allocated_slots);
+        eprintln!(
+            "published family: {F} leaves, {} nodes, {slots} allocated slots",
+            F * N
+        );
+        assert!(
+            slots <= (2 * F * N) as u64,
+            "unpublished prefixes allocated quadratic storage: {slots}"
+        );
+    }
+}
+
+unsafe fn assert_prefix(list: crate::gc::RuntimeHandle<'_>) {
+    list.with_const_ptr::<ArrayHeader, _>(|a| {
+        assert_eq!((*a).length, 2);
+        let (slots, len) = crate::object::keys_array_dense_slots(a);
+        assert_eq!(len, 2);
+        for (i, expected) in ["prefix_key_0", "prefix_key_1"].iter().enumerate() {
+            let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
+            let value = JSValue::from_bits((*slots.add(i)).to_bits());
+            assert_eq!(
+                crate::string::js_string_key_bytes(value, &mut sso),
+                Some(expected.as_bytes())
+            );
+        }
+    });
+}
+
+/// Published full/prefix lists stay independent across all key mutation
+/// families: ordinary append/define, dictionary append/grow, compact delete,
+/// tombstone/squeeze, and mutation of the materialized reflection result.
+#[test]
+fn published_prefix_survives_object_and_reflection_writers() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        for tombstones in [false, true] {
+            let _mode = crate::object::delete_rest::test_scope_tombstone_deletes(tombstones);
+            for dictionary in [false, true] {
+                for count in [8, 40] {
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let names: Vec<String> =
+                        (0..count).map(|i| format!("prefix_key_{i}")).collect();
+                    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                    let full =
+                        canonicalize(&SharedLayout::shape_cache_entry(), raw_list(&names), count);
+                    let full = scope.root_raw_mut_ptr(full.as_ptr());
+                    let prefix = full
+                        .with_const_ptr(|a| canonicalize(&SharedLayout::shape_cache_entry(), a, 2));
+                    let prefix = scope.root_raw_mut_ptr(prefix.as_ptr());
+                    full.with_const_ptr::<ArrayHeader, _>(|a| {
+                        prefix.with_const_ptr(|b| assert_ne!(a, b))
+                    });
+                    let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, count));
+                    object.with_mut_ptr(|o| {
+                        full.with_mut_ptr(|a| {
+                            crate::object::set_object_keys_array_with_live(o, a, count)
+                        })
+                    });
+                    assert_prefix(prefix);
+                    if dictionary {
+                        assert!(object.with_mut_ptr(|o| {
+                            crate::object::dictionary::latch_object_to_dictionary(o)
+                        }));
+                        object.with_const_ptr(|o| {
+                            full.with_mut_ptr(|a| {
+                                assert_ne!(crate::object::object_keys_array(o), a)
+                            })
+                        });
+                    }
+                    // Both dictionary push/grow and ordinary canonical append.
+                    for i in count..count + 12 {
+                        let k = key(&format!("prefix_key_{i}"));
+                        object.with_mut_ptr(|o| {
+                            crate::object::js_object_set_field_by_name(o, k, i as f64)
+                        });
+                        assert_prefix(prefix);
+                    }
+                    let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+                    for (name, value) in [
+                        ("value", 17.0),
+                        ("enumerable", f64::from_bits(crate::value::TAG_TRUE)),
+                    ] {
+                        let k = key(name);
+                        descriptor.with_mut_ptr(|o| {
+                            crate::object::js_object_set_field_by_name(o, k, value)
+                        });
+                    }
+                    let defined = key("defined_key");
+                    object.with_const_ptr::<crate::ObjectHeader, _>(|o| {
+                        descriptor.with_const_ptr::<crate::ObjectHeader, _>(|d| {
+                            crate::object::js_object_define_property(
+                                crate::value::js_nanbox_pointer(o as i64),
+                                crate::value::js_nanbox_string(defined as i64),
+                                crate::value::js_nanbox_pointer(d as i64),
+                            );
+                        })
+                    });
+                    assert_prefix(prefix);
+                    for i in 0..count {
+                        let k = key(&format!("prefix_key_{i}"));
+                        assert_eq!(
+                            object.with_mut_ptr(|o| crate::object::js_object_delete_field(o, k)),
+                            1
+                        );
+                        assert_prefix(prefix);
+                    }
+                    let result = object.with_const_ptr(|o| crate::object::js_object_keys(o));
+                    prefix.with_mut_ptr(|a| assert_ne!(result, a));
+                    let result = crate::array::js_array_sort_default(result);
+                    crate::array::js_array_set(result, 0, JSValue::number(99.0));
+                    let result = crate::array::js_array_push(result, JSValue::number(100.0));
+                    crate::array::js_array_set_length(result, 0.0);
+                    assert_prefix(prefix);
+                    // The shape is the reflection authority; no descendant
+                    // suffix may appear when the prefix is itself published.
+                    let prefix_obj = crate::object::js_object_alloc(0, 2);
+                    prefix.with_mut_ptr(|a| {
+                        crate::object::set_object_keys_array_with_live(prefix_obj, a, 2)
+                    });
+                    let reflected =
+                        scope.root_raw_mut_ptr(crate::object::js_object_keys(prefix_obj));
+                    assert_prefix(reflected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn published_prefix_survives_stable_sso_append_grow_and_squeeze() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _mode = crate::object::delete_rest::test_scope_tombstone_deletes(true);
+    reset_for_test();
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let full = canonicalize(
+            &SharedLayout::shape_cache_entry(),
+            raw_list(&["prefix_key_0", "prefix_key_1", "prefix_key_2"]),
+            3,
+        );
+        let full = scope.root_raw_mut_ptr(full.as_ptr());
+        let prefix =
+            full.with_const_ptr(|a| canonicalize(&SharedLayout::shape_cache_entry(), a, 2));
+        let prefix = scope.root_raw_mut_ptr(prefix.as_ptr());
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 3));
+        obj.with_mut_ptr(|o| {
+            full.with_mut_ptr(|a| crate::object::set_object_keys_array_with_live(o, a, 3))
+        });
+        for i in 0..3 {
+            let k = key(&format!("prefix_key_{i}"));
+            assert_eq!(
+                obj.with_mut_ptr(|o| crate::object::js_object_delete_field(o, k)),
+                1
+            );
+        }
+        assert_eq!(
+            obj.with_const_ptr(|o| crate::object::shapes::object_shape_hole_count(o)),
+            3
+        );
+        for n in 0..13 {
+            let name = format!("k{n}");
+            let sso = JSValue::try_short_string(name.as_bytes()).unwrap();
+            let (_, moved, _) = obj
+                .with_mut_ptr(|o| {
+                    crate::object::try_readd_stable_tombstone(o, f64::from_bits(sso.bits()), 1.0)
+                })
+                .expect("must exercise the stable SSO append, including capacity growth");
+            obj.set_raw_mut_ptr(moved);
+            assert_prefix(prefix);
+            assert_eq!(
+                obj.with_mut_ptr(|o| crate::object::js_object_delete_dynamic(
+                    o,
+                    f64::from_bits(sso.bits())
+                )),
+                1
+            );
+            assert_prefix(prefix);
+        }
+        obj.with_const_ptr(|o| {
+            assert_eq!(
+                crate::array::js_array_length(crate::object::object_keys_array(o)),
+                0
+            );
+            assert_eq!(crate::object::shapes::object_shape_hole_count(o), 0);
+        });
+        let k = key("heap_key_after_squeeze");
+        assert!(obj
+            .with_mut_ptr(|o| crate::object::try_readd_stable_tombstone(
+                o,
+                crate::value::js_nanbox_string(k as i64),
+                2.0
+            ))
+            .is_some());
+        assert_prefix(prefix);
+    }
+}
+
+/// A metadata prefix's witness and its eventual publication can use different
+/// representations of equal key bytes. GC layout follows the actual storage.
+#[test]
+fn publishing_prefix_refreshes_pointer_layout() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        for witness_sso in [false, true] {
+            reset_for_test();
+            let proof = SharedLayout::shape_cache_entry();
+            let make = |sso: bool, names: &[&str]| {
+                let mut a = crate::array::js_array_alloc(names.len() as u32);
+                for name in names {
+                    let v = if sso {
+                        JSValue::try_short_string(name.as_bytes()).unwrap()
+                    } else {
+                        JSValue::string_ptr(key(name))
+                    };
+                    a = crate::array::js_array_push(a, v);
+                }
+                a
+            };
+            let full = canonicalize(&proof, make(witness_sso, &["a", "b"]), 2);
+            let prefix = canonicalize(&proof, make(!witness_sso, &["a"]), 1);
+            assert_ne!(full.addr(), prefix.addr());
+            with_table_or((), |t| {
+                let id = node_of(t, prefix).unwrap();
+                assert_eq!(t.nodes[id as usize].all_ptr, witness_sso);
+            });
+            let fork = extend_key(&proof, prefix, key("c"));
+            with_table_or((), |t| {
+                let id = node_of(t, fork).unwrap();
+                assert_eq!(t.nodes[id as usize].all_ptr, witness_sso);
+            });
+        }
+    }
 }

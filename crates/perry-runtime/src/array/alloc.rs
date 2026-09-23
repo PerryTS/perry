@@ -161,6 +161,30 @@ pub(crate) fn js_array_alloc_pointer_elements(capacity: u32) -> *mut ArrayHeader
     ptr
 }
 
+/// Allocate storage for an independently owned canonical key list. These
+/// lists never grow, so no minimum-capacity reserve or initialized slack is
+/// needed. The caller fills every slot before publishing length and records
+/// old-to-young barriers if a large allocation is born in old generation.
+pub(crate) fn js_array_alloc_key_list(capacity: u32, all_ptr: bool) -> *mut ArrayHeader {
+    let capacity = array_capacity_or_throw(capacity);
+    let ptr = arena_alloc_gc(
+        array_byte_size(capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = capacity;
+        clear_array_numeric_layout(ptr);
+        if all_ptr {
+            crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
+        } else {
+            crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        }
+    }
+    ptr
+}
+
 /// Create a new empty array (convenience alias for `js_array_alloc(0)`).
 /// Used by perry-ui audio code.
 #[no_mangle]
