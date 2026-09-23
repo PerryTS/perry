@@ -762,3 +762,127 @@ fn an_adopted_stream_is_an_ordinary_socket_on_the_loop() {
     );
     assert_eq!(super::live_handles(), before);
 }
+
+/// perry#11106: one socket's burst of small writes must not be one driver
+/// operation each. The loop's operation table is shared and bounded (32,768
+/// on the net profile), so 40,000 writes used to fail the 32,769th submission
+/// with `ENOMEM` — and the destroy that followed cancelled every byte already
+/// queued. Now they coalesce behind the one in flight.
+#[test]
+fn a_write_burst_larger_than_the_operation_table_is_delivered_whole() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT && e.id == server)
+            && e.iter().any(|e| e.kind == NET_CONNECT && e.id == client)),
+        "the connection must establish on both ends: {:?}",
+        events()
+    );
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("server read");
+
+    const WRITES: usize = 40_000;
+    const CHUNK: usize = 64;
+    let mut queued = 0;
+    for i in 0..WRITES {
+        queued = super::write(client, vec![b'a'; CHUNK], i as u64 + 1)
+            .unwrap_or_else(|e| panic!("write #{} refused: {e:?}", i + 1));
+    }
+    assert_eq!(queued, WRITES * CHUNK, "every accepted byte is queued");
+    let submitted = NET.with(|net| net.borrow().entries.get(&client).map(|e| e.inflight));
+    assert_eq!(
+        submitted,
+        Some(MAX_INFLIGHT_WRITES),
+        "the burst must hold at most the in-flight cap of driver operations"
+    );
+    super::shutdown(client, 7).expect("end() behind the burst");
+
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_EOF && e.id == conn)),
+        "the peer must see the FIN: {:?}",
+        events().iter().rev().take(4).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        payload(NET_DATA, conn).len(),
+        WRITES * CHUNK,
+        "every byte precedes the FIN"
+    );
+    let wrote: Vec<u64> = events()
+        .iter()
+        .filter(|e| e.kind == NET_WROTE && e.id == client)
+        .map(|e| e.user)
+        .collect();
+    assert_eq!(wrote.len(), WRITES, "one completion per caller write");
+    assert!(
+        wrote.iter().enumerate().all(|(i, &u)| u == i as u64 + 1),
+        "completions keep submission order"
+    );
+    let last = events()
+        .into_iter()
+        .filter(|e| e.kind == NET_WROTE && e.id == client)
+        .last()
+        .expect("a final write completion");
+    assert_eq!(last.queued, 0, "the queue drained to zero");
+    assert!(events()
+        .iter()
+        .any(|e| e.kind == NET_SHUTDOWN && e.id == client && e.user == 7));
+    assert!(
+        !events().iter().any(|e| e.kind == NET_ERROR),
+        "no write may fail: {:?}",
+        events()
+            .iter()
+            .filter(|e| e.kind == NET_ERROR)
+            .collect::<Vec<_>>()
+    );
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+/// Writes and an `end()` issued before the connect completes wait in the
+/// backlog and go out, in order, once it does.
+#[test]
+fn writes_and_end_before_connect_are_delivered_after_it() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert_eq!(super::write(client, b"early,".to_vec(), 1), Ok(6));
+    assert_eq!(super::write(client, b"bird".to_vec(), 2), Ok(10));
+    assert_eq!(super::queued_bytes(client), 10);
+    super::shutdown(client, 3).expect("end() while connecting");
+    assert!(
+        super::write(client, b"late".to_vec(), 4).is_err(),
+        "a write after end() is refused"
+    );
+
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT && e.id == server)),
+        "accept: {:?}",
+        events()
+    );
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("server read");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_EOF && e.id == conn)),
+        "the peer must see the data and then the FIN: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, conn), b"early,bird");
+    let users: Vec<u64> = events()
+        .iter()
+        .filter(|e| (e.kind == NET_WROTE || e.kind == NET_SHUTDOWN) && e.id == client)
+        .map(|e| e.user)
+        .collect();
+    assert_eq!(users, vec![1, 2, 3], "writes complete, then the shutdown");
+    assert_eq!(super::queued_bytes(client), 0);
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}

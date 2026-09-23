@@ -1521,4 +1521,112 @@ mod tests {
 
         statics::sockets().lock().unwrap().remove(&handle);
     }
+
+    fn js_bool(b: bool) -> u64 {
+        JsValue::from_bool(b).bits()
+    }
+
+    /// #11111 — `write()` is Node's boolean, judged after the chunk is
+    /// counted, and a `false` arms `writableNeedDrain`.
+    #[test]
+    fn write_returns_node_boolean_against_the_high_water_mark() {
+        let handle = -91_240;
+        // Still waiting for `connect()`: writes are accepted and counted,
+        // which is exactly where Node's own `false` is deterministic.
+        statics::sockets()
+            .lock()
+            .unwrap()
+            .insert(handle, crate::SocketState::for_test(true));
+
+        let accepted = enqueue_socket_write(handle, vec![0; 5], 0);
+        assert_eq!(
+            write_return_value(handle, accepted).to_bits(),
+            js_bool(true)
+        );
+        assert_eq!(
+            unsafe { js_net_socket_get_writable_need_drain(handle) }.to_bits(),
+            js_bool(false)
+        );
+
+        let hwm = WRITABLE_HIGH_WATER_MARK as usize;
+        let accepted = enqueue_socket_write(handle, vec![0; hwm], 0);
+        assert_eq!(
+            write_return_value(handle, accepted).to_bits(),
+            js_bool(false),
+            "a chunk that reaches the high-water mark returns false"
+        );
+        assert_eq!(
+            unsafe { js_net_socket_get_writable_length(handle) },
+            (hwm + 5) as f64
+        );
+        assert_eq!(
+            unsafe { js_net_socket_get_writable_need_drain(handle) }.to_bits(),
+            js_bool(true)
+        );
+        assert_eq!(
+            unsafe { js_net_socket_get_writable_high_water_mark(handle) },
+            65536.0
+        );
+
+        statics::sockets().lock().unwrap().remove(&handle);
+    }
+
+    /// A refused write, or one after `end()`, is `false` — never `undefined`.
+    #[test]
+    fn refused_or_ended_writes_return_false() {
+        let handle = -91_241;
+        statics::sockets()
+            .lock()
+            .unwrap()
+            .insert(handle, crate::SocketState::for_test(false));
+        let accepted = enqueue_socket_write(handle, vec![1], 0);
+        assert!(!accepted, "a socket whose connect never started refuses");
+        assert_eq!(
+            write_return_value(handle, accepted).to_bits(),
+            js_bool(false)
+        );
+
+        if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
+            *socket = crate::SocketState::for_test(true);
+            socket.writable_ended = true;
+        }
+        let accepted = enqueue_socket_write(handle, vec![1], 0);
+        assert_eq!(
+            write_return_value(handle, accepted).to_bits(),
+            js_bool(false)
+        );
+
+        statics::sockets().lock().unwrap().remove(&handle);
+        assert_eq!(
+            write_return_value(handle, true).to_bits(),
+            js_bool(false),
+            "an unknown socket is false too"
+        );
+    }
+
+    /// `'drain'` is owed exactly once per `false`, only when the queue is
+    /// empty, and never once the writable side is ending or destroyed.
+    #[test]
+    fn drain_fires_once_when_the_queue_empties_and_not_after_end() {
+        let mut socket = crate::SocketState::for_test(true);
+        assert!(!take_drain(&mut socket), "no false return, no drain");
+
+        socket.need_drain = true;
+        socket.bytes_queued = 10;
+        assert!(!take_drain(&mut socket), "not while bytes are still queued");
+        socket.bytes_queued = 0;
+        assert!(take_drain(&mut socket));
+        assert!(
+            !socket.need_drain,
+            "writableNeedDrain clears with the event"
+        );
+        assert!(!take_drain(&mut socket), "exactly once");
+
+        socket.need_drain = true;
+        socket.writable_ended = true;
+        assert!(!take_drain(&mut socket), "Node skips 'drain' while ending");
+        socket.writable_ended = false;
+        socket.destroyed = true;
+        assert!(!take_drain(&mut socket), "or once destroyed");
+    }
 }
