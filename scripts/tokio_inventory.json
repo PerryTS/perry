@@ -259,7 +259,7 @@
     "perry-ext-mongodb": 29,
     "perry-ext-net": 54,
     "perry-ffi": 2,
-    "perry-stdlib": 71,
+    "perry-stdlib": 79,
     "perry-ui-gtk4": 6
   }
 }
