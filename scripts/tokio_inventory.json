@@ -234,7 +234,7 @@
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
     "perry-ffi": 2,
-    "perry-stdlib": 74,
+    "perry-stdlib": 80,
     "perry-ui-gtk4": 6
   }
 }
