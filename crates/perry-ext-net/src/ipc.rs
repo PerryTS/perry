@@ -36,6 +36,7 @@ fn allocate_socket() -> i64 {
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            need_drain: false,
             timeout: None,
             type_of_service: 0,
             server_id: None,

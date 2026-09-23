@@ -249,15 +249,14 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
     }
 
     let result = match method {
-        "write" if !args.is_empty() => {
-            crate::js_ext_net_socket_write3(
-                handle,
-                args[0],
-                args.get(1).copied().unwrap_or_else(undefined),
-                args.get(2).copied().unwrap_or_else(undefined),
-            );
-            undefined()
-        }
+        // #11111 — Node's boolean: drain-aware writers (mongodb's
+        // `writeCommand`) wait for `'drain'` on anything falsy.
+        "write" if !args.is_empty() => crate::js_ext_net_socket_write3(
+            handle,
+            args[0],
+            args.get(1).copied().unwrap_or_else(undefined),
+            args.get(2).copied().unwrap_or_else(undefined),
+        ),
         "end" => {
             crate::js_ext_net_socket_end3(
                 handle,
@@ -628,6 +627,20 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             _ => f64::from_bits(
                 JsValue::from_string_ptr(crate::js_net_socket_get_ready_state(handle)).bits(),
             ),
+        })
+    } else if crate::js_ext_net_is_socket_handle(handle) != 0
+        && matches!(
+            prop,
+            "writableLength" | "writableHighWaterMark" | "writableNeedDrain" | "bufferSize"
+        )
+    {
+        // #11111 — the write-queue surface a drain-aware writer reads next to
+        // `write()`'s return value.
+        Some(match prop {
+            "writableLength" => crate::js_net_socket_get_writable_length(handle),
+            "writableHighWaterMark" => crate::js_net_socket_get_writable_high_water_mark(handle),
+            "writableNeedDrain" => crate::js_net_socket_get_writable_need_drain(handle),
+            _ => crate::js_net_socket_get_buffer_size(handle),
         })
     } else if prop == "_writableState" && crate::js_ext_net_is_socket_handle(handle) != 0 {
         Some(json_str_to_value(crate::js_net_socket_get_writable_state(

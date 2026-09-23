@@ -79,6 +79,7 @@ pub(super) fn event_provider_id(ev: &PendingNetEvent) -> u64 {
         | PendingNetEvent::Data(id, _)
         | PendingNetEvent::End(id)
         | PendingNetEvent::WriteComplete(id, _, _)
+        | PendingNetEvent::Drain(id)
         | PendingNetEvent::Error(id, _)
         | PendingNetEvent::AbortError(id)
         | PendingNetEvent::Close(id) => statics::sockets()

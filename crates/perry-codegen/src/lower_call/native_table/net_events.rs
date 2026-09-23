@@ -190,7 +190,8 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         // receives f64 arguments, while NA_JSV uses the integer ABI for
         // runtimes whose signatures explicitly take raw i64 bits.
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_VOID,
+        // #11111 — Node's boolean (NaN-boxed), not `undefined`.
+        ret: NR_F64,
     },
     NativeModSig {
         module: "net",

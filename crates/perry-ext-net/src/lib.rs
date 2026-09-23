@@ -317,7 +317,14 @@ pub(crate) struct SocketState {
     pub(crate) readable_ended: bool,
     pub(crate) bytes_read: u64,
     pub(crate) bytes_written: u64,
+    /// Bytes `write()` accepted that have not left yet — Node's
+    /// `writableLength`, which `write()`'s return value is judged against.
     pub(crate) bytes_queued: u64,
+    /// #11111 — a `write()` returned `false` (the queue reached
+    /// `writableHighWaterMark`) and `'drain'` has not fired since. Node's
+    /// `writableNeedDrain`; cleared when the queue empties and `'drain'` is
+    /// emitted.
+    pub(crate) need_drain: bool,
     pub(crate) timeout: Option<u64>,
     pub(crate) type_of_service: u8,
     pub(crate) server_id: Option<i64>,
@@ -412,6 +419,7 @@ pub(crate) fn register_turnloop_socket(
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            need_drain: false,
             timeout: None,
             type_of_service: 0,
             server_id: Some(server_id),
@@ -452,6 +460,7 @@ impl SocketState {
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            need_drain: false,
             timeout: None,
             type_of_service: 0,
             server_id: None,
@@ -487,6 +496,8 @@ enum PendingNetEvent {
     End(i64),
     /// A queued `socket.write` finished with a completion token and optional error.
     WriteComplete(i64, u64, Option<String>),
+    /// #11111 — the write queue emptied after a `write()` returned `false`.
+    Drain(i64),
     /// `socket.end()` writable shutdown with a completion token and optional error.
     ShutdownComplete(i64, u64, Option<String>),
     Close(i64),
@@ -700,6 +711,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            need_drain: false,
             timeout: None,
             type_of_service: 0,
             server_id: None,
@@ -1233,6 +1245,7 @@ where
             bytes_read: 0,
             bytes_written: 0,
             bytes_queued: 0,
+            need_drain: false,
             timeout: None,
             type_of_service: 0,
             server_id: None,

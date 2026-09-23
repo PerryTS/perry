@@ -248,6 +248,8 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // readable side has ended, then closes.
                 crate::turnloop_io::finish_read_end(id);
             }
+            // #11111 — the queue emptied after a `write()` returned false.
+            PendingNetEvent::Drain(id) => emit_socket_no_arg(id, "drain"),
             PendingNetEvent::WriteComplete(_, completion, error)
             | PendingNetEvent::ShutdownComplete(_, completion, error) => {
                 lifecycle::dispatch_socket_completion(completion, error);

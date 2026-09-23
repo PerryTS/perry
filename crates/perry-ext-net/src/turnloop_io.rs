@@ -813,13 +813,18 @@ fn on_wrote(id: i64, user: u64, len: usize, queued: usize) {
     // `bytesWritten` stays plaintext and `write(chunk, cb)` still fires when
     // the bytes have left.
     if let Some(completed) = crate::turnloop_tls_io::wrote(id, len) {
+        let mut drain = false;
         if let Ok(mut sockets) = statics::sockets().lock() {
             if let Some(s) = sockets.get_mut(&id) {
                 s.bytes_queued = queued as u64;
                 for (_, plain_len) in &completed {
                     s.bytes_written += *plain_len as u64;
                 }
+                drain = crate::lifecycle::take_drain(s);
             }
+        }
+        if drain {
+            push_event(PendingNetEvent::Drain(id));
         }
         for (user, _) in completed {
             if user != 0 {
@@ -828,11 +833,18 @@ fn on_wrote(id: i64, user: u64, len: usize, queued: usize) {
         }
         return;
     }
+    let mut drain = false;
     if let Ok(mut sockets) = statics::sockets().lock() {
         if let Some(s) = sockets.get_mut(&id) {
             s.bytes_written += len as u64;
             s.bytes_queued = queued as u64;
+            drain = crate::lifecycle::take_drain(s);
         }
+    }
+    // #11111 — Node's `afterWrite` emits `'drain'` BEFORE the callbacks of
+    // the writes that just completed.
+    if drain {
+        push_event(PendingNetEvent::Drain(id));
     }
     if user != 0 {
         push_event(PendingNetEvent::WriteComplete(id, user, None));

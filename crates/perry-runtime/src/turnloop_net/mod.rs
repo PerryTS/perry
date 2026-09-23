@@ -65,6 +65,7 @@ pub mod abi;
 pub mod census;
 pub(crate) mod errors;
 mod sink;
+mod write_queue;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -126,6 +127,66 @@ struct PendingWrite {
     /// Zero means "no callback"; it is never used for routing.
     user: u64,
     len: usize,
+    /// The final caller write covered by one driver operation. A backlog
+    /// flush hands the driver many caller writes as ONE buffer, so a single
+    /// `Wrote` completion retires every entry up to and including this one.
+    last: bool,
+}
+
+/// How many driver write operations one socket may have outstanding.
+///
+/// Every `socket.write()` used to become its own driver operation. The
+/// operation table is shared by every handle on the loop and bounded
+/// (`agent_loop::net_config`'s `max_operations`), so one burst of small
+/// writes — 40,000 × 64 bytes, perry#11106 — filled it: the 32,769th
+/// submission failed `ENOMEM`, the socket was destroyed, and the close
+/// cancelled every queued byte. The peer received nothing.
+///
+/// Node never has that shape either: libuv runs one write request per stream
+/// at a time and `stream.Writable` buffers the rest, flushing them together
+/// (`writev`) when the active one finishes. This mirrors it — writes that
+/// arrive while one is in flight wait in the socket's [`Backlog`], and each
+/// completion submits the whole backlog as one buffer.
+const MAX_INFLIGHT_WRITES: usize = 1;
+
+/// Writes (and a deferred `end()`) accepted from the caller but not yet
+/// handed to the driver.
+///
+/// Held outside [`Entry`] so it survives a connect plan's failed attempts: a
+/// write issued while `localhost` is still resolving, or while the first
+/// family's attempt is failing, belongs to the connection that finally
+/// succeeds (perry#11106's pre-connect sibling). Before this, a write with no
+/// entry yet answered `ENOENT` and a write queued on a failed attempt was
+/// cancelled with that attempt's handle.
+#[derive(Default)]
+struct Backlog {
+    bytes: Vec<u8>,
+    writes: Vec<PendingWrite>,
+    /// `end()` arrived while writes were still waiting here or the socket was
+    /// still connecting; the shutdown is submitted right behind them.
+    shutdown: Option<u64>,
+}
+
+impl Backlog {
+    fn push(&mut self, bytes: Vec<u8>, user: u64) {
+        let len = bytes.len();
+        if self.bytes.is_empty() {
+            // The common case is a single waiting write: keep its buffer
+            // rather than copying it.
+            self.bytes = bytes;
+        } else {
+            self.bytes.extend_from_slice(&bytes);
+        }
+        self.writes.push(PendingWrite {
+            user,
+            len,
+            last: false,
+        });
+    }
+
+    fn is_idle(&self) -> bool {
+        self.writes.is_empty() && self.shutdown.is_none()
+    }
 }
 
 /// Everything Perry knows about one turnloop-backed socket or listener.
@@ -141,9 +202,15 @@ struct Entry {
     accept_op: Option<OpId>,
     read_op: Option<OpId>,
     writes: VecDeque<PendingWrite>,
-    /// Bytes handed to the driver and not yet reported written — Node's
-    /// `socket.writableLength`, and the input to its `write()` return value.
+    /// Bytes handed to the driver and not yet reported written. Together with
+    /// the socket's [`Backlog`] this is Node's `socket.writableLength`, and
+    /// the input to its `write()` return value ([`queued_bytes`]).
     queued: usize,
+    /// Driver write operations outstanding, bounded by [`MAX_INFLIGHT_WRITES`].
+    inflight: usize,
+    /// A client connect has not completed yet. Writes wait in the backlog
+    /// until `Connected`, so a failed attempt cannot take them with it.
+    connecting: bool,
     /// `close` was submitted; the entry survives until its `Closed` arrives.
     closing: bool,
     referenced: bool,
@@ -163,6 +230,8 @@ impl Entry {
             read_op: None,
             writes: VecDeque::new(),
             queued: 0,
+            inflight: 0,
+            connecting: false,
             closing: false,
             referenced: true,
             local: None,
@@ -221,6 +290,8 @@ struct NetState {
     entries: HashMap<i64, Entry>,
     plans: HashMap<i64, ConnectPlan>,
     timers: HashMap<i64, TimerEntry>,
+    /// Keyed like `entries`; see [`Backlog`] for why it is not a field there.
+    backlogs: HashMap<i64, Backlog>,
 }
 
 crate::perry_thread_local! {
@@ -416,6 +487,7 @@ pub fn tcp_connect(id: i64, subsystem: u8, addr: SocketAddr, nodelay: bool) -> N
             .map_err(|e| map_error(e, "connect"))?;
         let mut entry = Entry::new(handle, subsystem, false);
         entry.peer = Some(addr);
+        entry.connecting = true;
         NET.with(|net| net.borrow_mut().entries.insert(id, entry));
         Ok(())
     })
@@ -473,6 +545,7 @@ pub fn pipe_connect(id: i64, subsystem: u8, path: &Path) -> NetResult<()> {
             .map_err(|e| map_error(e, "connect"))?;
         let mut entry = Entry::new(handle, subsystem, false);
         entry.path = Some(path.to_path_buf());
+        entry.connecting = true;
         NET.with(|net| net.borrow_mut().entries.insert(id, entry));
         Ok(())
     })
@@ -685,23 +758,14 @@ pub fn read_start(id: i64) -> NetResult<()> {
 /// Ordering is turnloop's: `write` completes the *whole* buffer, and queued
 /// writes on one handle preserve submission order, so there is no partial-write
 /// bookkeeping here and no per-write channel.
+///
+/// At most [`MAX_INFLIGHT_WRITES`] of a socket's writes are driver operations
+/// at once; the rest wait in its [`Backlog`] and go out together
+/// (`write_queue`). A write issued before the connect completes waits there
+/// too, so it reaches the connection that succeeds.
 pub fn write(id: i64, bytes: Vec<u8>, user: u64) -> NetResult<usize> {
     with_driver(|driver| {
-        NET.with(|net| {
-            let mut net = net.borrow_mut();
-            let entry = net.entries.get_mut(&id).ok_or_else(|| not_found("write"))?;
-            if entry.listener || entry.closing {
-                return Err(map_error(Error::new(ErrorKind::InvalidInput), "write"));
-            }
-            let len = bytes.len();
-            driver
-                .write(entry.handle, WriteBuf::Owned(bytes), token(OP_WRITE, id))
-                .map_err(|e| map_error(e, "write"))?;
-            census::note_submit(OP_WRITE);
-            entry.writes.push_back(PendingWrite { user, len });
-            entry.queued += len;
-            Ok(entry.queued)
-        })
+        NET.with(|net| write_queue::accept_write(driver, &mut net.borrow_mut(), id, bytes, user))
     })
     .unwrap_or_else(|| Err(no_loop()))
 }
@@ -710,25 +774,7 @@ pub fn write(id: i64, bytes: Vec<u8>, user: u64) -> NetResult<usize> {
 /// (`socket.end()`), leaving the read side open for the peer's reply.
 pub fn shutdown(id: i64, user: u64) -> NetResult<()> {
     with_driver(|driver| {
-        NET.with(|net| {
-            let mut net = net.borrow_mut();
-            let entry = net
-                .entries
-                .get_mut(&id)
-                .ok_or_else(|| not_found("shutdown"))?;
-            if entry.listener || entry.closing {
-                return Err(map_error(Error::new(ErrorKind::InvalidInput), "shutdown"));
-            }
-            // The user token rides the pending-write queue's tail slot so the
-            // `Shutdown` completion can echo it back; a zero-length entry never
-            // affects `queued`.
-            driver
-                .shutdown(entry.handle, token(OP_SHUTDOWN, id))
-                .map_err(|e| map_error(e, "shutdown"))?;
-            census::note_submit(OP_SHUTDOWN);
-            entry.writes.push_back(PendingWrite { user, len: 0 });
-            Ok(())
-        })
+        NET.with(|net| write_queue::accept_shutdown(driver, &mut net.borrow_mut(), id, user))
     })
     .unwrap_or_else(|| Err(no_loop()))
 }
@@ -740,7 +786,12 @@ pub fn close(id: i64) -> NetResult<()> {
     with_driver(|driver| {
         NET.with(|net| {
             let mut net = net.borrow_mut();
-            let entry = net.entries.get_mut(&id).ok_or_else(|| not_found("close"))?;
+            let Some(entry) = net.entries.get_mut(&id) else {
+                // Nothing to close (a connect still resolving, or a second
+                // close): whatever was waiting to be written goes with it.
+                net.backlogs.remove(&id);
+                return Err(not_found("close"));
+            };
             if entry.closing {
                 return Ok(());
             }
@@ -789,9 +840,10 @@ pub fn peer_addr(id: i64) -> Option<SocketAddr> {
     NET.with(|net| net.borrow().entries.get(&id).and_then(|e| e.peer))
 }
 
-/// Bytes handed to the driver and not yet reported written.
+/// Bytes accepted by [`write`] and not yet reported written — handed to the
+/// driver or still waiting behind the one in flight.
 pub fn queued_bytes(id: i64) -> usize {
-    NET.with(|net| net.borrow().entries.get(&id).map_or(0, |e| e.queued))
+    NET.with(|net| write_queue::total_queued(&net.borrow(), id))
 }
 
 /// Whether `id` names a live turnloop-backed handle on this thread.
@@ -874,10 +926,14 @@ pub(crate) fn dispatch(completion: Completion) {
                 let mut net = net.borrow_mut();
                 if let Some(entry) = net.entries.get_mut(&id) {
                     entry.local = local;
+                    entry.connecting = false;
                 }
                 net.plans.remove(&id);
             });
             sink::emit(subsystem, NetCompletion::connect(id));
+            // Writes (and an `end()`) issued while connecting go out now, in
+            // the order they were made.
+            write_queue::flush_after(subsystem, id, true);
         }
         OpResult::Accepted { conn, peer } => {
             accept_connection(subsystem, id, conn, Some(peer));
@@ -902,24 +958,25 @@ pub(crate) fn dispatch(completion: Completion) {
             sink::emit(subsystem, NetCompletion::eof(id));
         }
         OpResult::Wrote(n) => {
-            let (user, queued) = NET.with(|net| {
-                let mut net = net.borrow_mut();
-                let Some(entry) = net.entries.get_mut(&id) else {
-                    return (0, 0);
-                };
-                let user = entry.writes.pop_front().map_or(0, |w| w.user);
-                entry.queued = entry.queued.saturating_sub(n);
-                (user, entry.queued)
-            });
-            sink::emit(subsystem, NetCompletion::wrote(id, user, n, queued));
+            // One driver write may cover many caller writes (a flushed
+            // backlog); each still gets its own completion, in order.
+            let retired = NET.with(|net| write_queue::retire(&mut net.borrow_mut(), id, OP_WRITE));
+            debug_assert!(
+                retired.is_empty() || retired.iter().map(|r| r.1).sum::<usize>() == n,
+                "a write completes its whole buffer"
+            );
+            // Submit what queued up behind it before reporting, so a sink
+            // that writes again appends behind the batch now in flight.
+            write_queue::flush_after(subsystem, id, false);
+            for (user, len, queued) in retired {
+                sink::emit(subsystem, NetCompletion::wrote(id, user, len, queued));
+            }
         }
         OpResult::Shutdown => {
             let user = NET.with(|net| {
-                let mut net = net.borrow_mut();
-                net.entries
-                    .get_mut(&id)
-                    .and_then(|entry| entry.writes.pop_front())
-                    .map_or(0, |w| w.user)
+                write_queue::retire(&mut net.borrow_mut(), id, OP_SHUTDOWN)
+                    .first()
+                    .map_or(0, |r| r.0)
             });
             sink::emit(subsystem, NetCompletion::shutdown(id, user));
         }
@@ -927,13 +984,19 @@ pub(crate) fn dispatch(completion: Completion) {
             NET.with(|net| net.borrow_mut().entries.remove(&id));
             let retrying = NET.with(|net| {
                 let mut net = net.borrow_mut();
-                match net.plans.get_mut(&id) {
+                let retrying = match net.plans.get_mut(&id) {
                     Some(plan) if plan.retrying => {
                         plan.retrying = false;
                         true
                     }
                     _ => false,
+                };
+                // A failed attempt's backlog belongs to the next attempt;
+                // the socket's own close takes it with the socket.
+                if !retrying {
+                    net.backlogs.remove(&id);
                 }
+                retrying
             });
             if retrying {
                 // A failed connect attempt, not the socket the caller sees.
@@ -943,20 +1006,15 @@ pub(crate) fn dispatch(completion: Completion) {
             }
         }
         OpResult::Err(err) => {
-            let (user, queued) = if op_class == OP_WRITE || op_class == OP_SHUTDOWN {
-                NET.with(|net| {
-                    let mut net = net.borrow_mut();
-                    let Some(entry) = net.entries.get_mut(&id) else {
-                        return (0, 0);
-                    };
-                    let w = entry.writes.pop_front();
-                    let user = w.as_ref().map_or(0, |w| w.user);
-                    entry.queued = entry.queued.saturating_sub(w.map_or(0, |w| w.len));
-                    (user, entry.queued)
-                })
+            let users: Vec<u64> = if op_class == OP_WRITE || op_class == OP_SHUTDOWN {
+                NET.with(|net| write_queue::retire(&mut net.borrow_mut(), id, op_class))
+                    .into_iter()
+                    .map(|r| r.0)
+                    .collect()
             } else {
-                (0, queued_bytes(id))
+                Vec::new()
             };
+            let queued = queued_bytes(id);
             if terminal {
                 clear_op(id, op_class);
             }
@@ -965,10 +1023,7 @@ pub(crate) fn dispatch(completion: Completion) {
                 // Absorbed into the next address attempt.
                 return;
             }
-            sink::emit(
-                subsystem,
-                NetCompletion::error(id, user, queued, mapped, terminal),
-            );
+            write_queue::report_error(subsystem, id, &users, queued, mapped, terminal);
         }
         OpResult::Cancelled | OpResult::Stopped => {
             clear_op(id, op_class);
@@ -976,14 +1031,7 @@ pub(crate) fn dispatch(completion: Completion) {
             // socket that is closing does not report a permanently non-empty
             // write buffer to `writableLength`.
             if op_class == OP_WRITE || op_class == OP_SHUTDOWN {
-                NET.with(|net| {
-                    let mut net = net.borrow_mut();
-                    if let Some(entry) = net.entries.get_mut(&id) {
-                        if let Some(w) = entry.writes.pop_front() {
-                            entry.queued = entry.queued.saturating_sub(w.len);
-                        }
-                    }
-                });
+                NET.with(|net| write_queue::retire(&mut net.borrow_mut(), id, op_class));
             }
         }
         // P1 submits no timer, signal, process, datagram, blocking or posted
@@ -1012,7 +1060,11 @@ fn resolve_completed(subsystem: u8, id: i64, result: OpResult) {
             }
         }
         OpResult::Err(err) => {
-            NET.with(|net| net.borrow_mut().plans.remove(&id));
+            NET.with(|net| {
+                let mut net = net.borrow_mut();
+                net.plans.remove(&id);
+                net.backlogs.remove(&id);
+            });
             let mut mapped = map_error(err, "getaddrinfo");
             // libuv (and therefore Node) reports a failed name lookup as
             // ENOTFOUND whatever the resolver's own errno was, and Node's own
@@ -1021,7 +1073,11 @@ fn resolve_completed(subsystem: u8, id: i64, result: OpResult) {
             sink::emit(subsystem, NetCompletion::error(id, 0, 0, mapped, true));
         }
         OpResult::Cancelled | OpResult::Stopped => {
-            NET.with(|net| net.borrow_mut().plans.remove(&id));
+            NET.with(|net| {
+                let mut net = net.borrow_mut();
+                net.plans.remove(&id);
+                net.backlogs.remove(&id);
+            });
         }
         _ => {}
     }
@@ -1042,7 +1098,11 @@ fn attempt_next_address(id: i64) {
         return;
     };
     let Some(addr) = next else {
-        NET.with(|net| net.borrow_mut().plans.remove(&id));
+        NET.with(|net| {
+            let mut net = net.borrow_mut();
+            net.plans.remove(&id);
+            net.backlogs.remove(&id);
+        });
         let err = last_error.unwrap_or(NodeError {
             code: "ECONNREFUSED",
             errno: 0,
@@ -1129,6 +1189,7 @@ pub(crate) fn reset_for_test() {
         let mut net = net.borrow_mut();
         net.entries.clear();
         net.plans.clear();
+        net.backlogs.clear();
     });
 }
 
