@@ -79,6 +79,49 @@ fn publish_lowered_fn_artifacts(llmod: &mut LlModule, artifacts: LoweredFnArtifa
     }
 }
 
+/// The node-stream base a no-own-ctor class initializes through a runtime
+/// helper instead of a parent constructor symbol.
+fn builtin_stream_parent_runtime(class: &perry_hir::Class) -> Option<&'static str> {
+    match class.extends_name.as_deref() {
+        Some("Writable") => Some("js_node_stream_writable_subclass_init"),
+        Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
+        Some("Transform") => Some("js_node_stream_transform_subclass_init"),
+        Some("PassThrough") => Some("js_node_stream_passthrough_subclass_init"),
+        _ => None,
+    }
+}
+
+/// The ancestor a no-own-ctor class's synthesized `super(...args)` reaches:
+/// the nearest one with a local constructor body or an imported constructor
+/// symbol, walking past constructor-free local classes (an empty class
+/// implicitly forwards to its own super), and stopping at a dynamic heritage
+/// edge or at a name that is not a local class.
+fn synthesized_super_parent(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> Option<String> {
+    if builtin_stream_parent_runtime(class).is_some() {
+        return None;
+    }
+    let mut effective_parent: Option<&str> = class.extends_name.as_deref();
+    while let Some(pname) = effective_parent {
+        let Some(pc) = ctx.classes.get(pname).copied() else {
+            break;
+        };
+        let has_local_body = pc.constructor.is_some();
+        let has_imported_ctor = ctx
+            .imported_class_ctors
+            .get(pname)
+            .map(|ctor| ctor.stops_constructor_walk())
+            .unwrap_or(false);
+        if has_local_body || has_imported_ctor {
+            break;
+        }
+        if pc.extends_expr.is_some() {
+            break;
+        }
+        effective_parent = pc.extends_name.as_deref();
+    }
+    effective_parent.map(str::to_string)
+}
+
 /// Compile a class instance method as a top-level LLVM function with the
 /// signature `perry_method_<class>_<name>(this_box: double, args: double…)
 /// -> double`. The first parameter (`this`) is stored in a slot whose
@@ -858,7 +901,24 @@ pub(super) fn compile_method(
         // The runtime parent constructor initializes everything above its
         // dynamic edge. Classes from that edge's owner through this leaf are
         // derived and must wait until the synthesized super call below.
-        if dynamic_parent_owner.is_none() {
+        // #11120: a no-own-ctor class whose synthesized `super(...args)` calls
+        // a LOCAL ancestor's standalone constructor symbol (below) stages
+        // nothing here. That constructor installs the field initializers of
+        // every class from the root through itself, so staging the root as
+        // well ran it twice ("Cannot initialize a private field twice" for a
+        // `#field`); the classes after it are installed by the tail below.
+        let local_parent_ctor = if class.constructor.is_none() && dynamic_parent_owner.is_none() {
+            synthesized_super_parent(&ctx, class).filter(|parent| {
+                !matches!(parent.as_str(), "Readable" | "PassThrough")
+                    && ctx
+                        .classes
+                        .get(parent.as_str())
+                        .is_some_and(|pc| pc.constructor.is_some())
+            })
+        } else {
+            None
+        };
+        if dynamic_parent_owner.is_none() && local_parent_ctor.is_none() {
             let init_mode = if class.extends_name.is_some() {
                 crate::lower_call::FieldInitMode::AncestorsOnly
             } else if class.extends_expr.is_some() {
@@ -896,36 +956,9 @@ pub(super) fn compile_method(
         if class.constructor.is_none()
             && (class.extends_name.is_some() || class.extends_expr.is_some())
         {
-            let builtin_parent_runtime = match class.extends_name.as_deref() {
-                Some("Writable") => Some("js_node_stream_writable_subclass_init"),
-                Some("Duplex") => Some("js_node_stream_duplex_subclass_init"),
-                Some("Transform") => Some("js_node_stream_transform_subclass_init"),
-                Some("PassThrough") => Some("js_node_stream_passthrough_subclass_init"),
-                _ => None,
-            };
-            let mut effective_parent: Option<&str> = if builtin_parent_runtime.is_some() {
-                None
-            } else {
-                class.extends_name.as_deref()
-            };
-            while let Some(pname) = effective_parent {
-                let Some(pc) = ctx.classes.get(pname).copied() else {
-                    break;
-                };
-                let has_local_body = pc.constructor.is_some();
-                let has_imported_ctor = ctx
-                    .imported_class_ctors
-                    .get(pname)
-                    .map(|ctor| ctor.stops_constructor_walk())
-                    .unwrap_or(false);
-                if has_local_body || has_imported_ctor {
-                    break;
-                }
-                if pc.extends_expr.is_some() {
-                    break;
-                }
-                effective_parent = pc.extends_name.as_deref();
-            }
+            let builtin_parent_runtime = builtin_stream_parent_runtime(class);
+            let effective_parent_owned = synthesized_super_parent(&ctx, class);
+            let effective_parent: Option<&str> = effective_parent_owned.as_deref();
             // Wall 51: a class with a DYNAMIC parent (`extends_expr`, e.g.
             // `class X extends _mod.Parent {}`) must route its synthesized
             // super through the runtime dynamic-parent dispatcher below
@@ -1310,9 +1343,16 @@ pub(super) fn compile_method(
             // run, so they can read state set by the parent body (e.g. drizzle's
             // PgText.enumValues = this.config.enumValues — this.config is set
             // in Column body via super-chain). Refs #420.
-            let post_init_mode = dynamic_parent_owner
-                .map(crate::lower_call::FieldInitMode::FromInclusive)
-                .unwrap_or(crate::lower_call::FieldInitMode::SelfOnly);
+            // #11120: after a LOCAL ancestor's constructor symbol ran, every
+            // class below it is still uninstalled — ctor-less intermediates
+            // included, which `SelfOnly` used to skip.
+            let post_init_mode = match (dynamic_parent_owner, local_parent_ctor) {
+                (Some(owner), _) => crate::lower_call::FieldInitMode::FromInclusive(owner),
+                (None, Some(parent)) => {
+                    crate::lower_call::FieldInitMode::BetweenExclusiveTo(parent)
+                }
+                (None, None) => crate::lower_call::FieldInitMode::SelfOnly,
+            };
             crate::lower_call::apply_field_initializers_recursive(
                 &mut ctx,
                 &class.name,
