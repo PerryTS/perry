@@ -3,8 +3,10 @@
 - **A prototype write on one evaluation of a function-body class expression
   leaked to every other evaluation and never became an own key** (#11134).
   A class expression that lowers to a per-evaluation class object
-  (`ClassExprFresh`: statics, captures, private elements, or dynamic heritage)
-  gets its own `.prototype` per evaluation, but two write paths keyed the write
+  (`ClassExprFresh`: statics, captures, private elements, a used self-binding,
+  or dynamic heritage on a class WITHOUT static methods — a dynamic-heritage
+  class that declares a static method still takes the shared-template path and
+  is not covered here) gets its own `.prototype` per evaluation, but two write paths keyed the write
   by the shared class TEMPLATE instead:
   - literal `C.prototype.m = v` (and the aliased `const p = C.prototype;
     p.m = v`) lowered to `RegisterPrototypeMethod`, i.e.

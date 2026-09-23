@@ -99,7 +99,26 @@ const c: any = new Client();
 const m: any = new Multi();
 console.log("heritage values", c.get(), c.set(), typeof c.exec, c.base(), m.exec(), typeof m.get, m.other());
 
-// 5. controls: a module-level class and a function-body class DECLARATION
+// 5. a NAMED class expression writing through its own inner binding from a
+//    static block (the write runs while the class is being defined). Called
+//    through a function value so the factory is not inlined.
+function staticBlock(v: number) {
+  const C = class C {
+    static tag = v;
+    static {
+      (C.prototype as any).m = v;
+      (C.prototype as any)["k" + v] = v;
+    }
+  };
+  return C;
+}
+const makers: Array<(v: number) => any> = [staticBlock];
+const S1 = makers[0](1);
+const S2 = makers[0](2);
+show("static block S1", S1, "m");
+console.log("static block values", (new S1() as any).m, (new S2() as any).m, (new S1() as any).k2, (new S2() as any).k1);
+
+// 6. controls: a module-level class and a function-body class DECLARATION
 class Top {}
 (Top.prototype as any).t = 1;
 show("top", Top, "t");
