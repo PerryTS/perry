@@ -162,7 +162,7 @@
 10 crates/perry-runtime/src/v8.rs
 3 crates/perry-runtime/src/value/dyn_index.rs
 6 crates/perry-runtime/src/value/dynamic_arith.rs
-1 crates/perry-runtime/src/value/to_string.rs
+1 crates/perry-runtime/src/value/to_string_primitive.rs
 19 crates/perry-runtime/src/wasi.rs
 4 crates/perry-runtime/src/weakref.rs
 19 crates/perry-runtime/src/webassembly.rs
