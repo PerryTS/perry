@@ -244,7 +244,10 @@ fn deferred_connect_reaches_the_loop_on_every_route() {
         (sockets[&h].turnloop, sockets[&h].awaiting_connect)
     };
     let handles_after = perry_ffi::turnloop_net::live_handles();
-    assert!(!awaiting, "connect() must consume the awaiting-connect state");
+    assert!(
+        !awaiting,
+        "connect() must consume the awaiting-connect state"
+    );
     if owns_loop {
         // Leave no in-flight connect behind for a sibling test's pump.
         crate::lifecycle::js_ext_net_destroy_socket(h);

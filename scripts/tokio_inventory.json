@@ -56,9 +56,9 @@
       "optional": false,
       "target": null,
       "surface": "`http.createServer()` / `https.createServer()` on a declining path, `http2.createServer` / `createSecureServer` on a declining path, the SCHED_RR cluster worker's fd-inject loop, and the raw-`'upgrade'` peeler",
-      "reached_when": "a thread that could not get a loop of its own -- since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed; also a SCHED_RR cluster worker, which is Node's non-Windows DEFAULT policy. NO LONGER a SO_REUSEPORT cluster worker, and no longer a server with `new WebSocketServer({ server })` attached at listen time.",
-      "blocker": "TWO reasons now, and the SO_REUSEPORT one is gone. (1) The P1 coexistence rule: a thread that cannot get a loop of its own keeps this accept loop. (2) The SCHED_RR cluster worker, which is a DIFFERENT thing from the SO_REUSEPORT worker and is not closed by it: the primary owns the listening socket and passes accepted descriptors over the cluster IPC channel (`spawn_rr_inject_loop`), and turnloop's `Driver` has no API that adopts a foreign fd -- `tcp_listen`/`pipe_listen` take an address or a pipe name and `attach` takes turnloop's own `Detached`. SCHED_RR is Node's non-Windows default (`NODE_CLUSTER_SCHED_POLICY` unset => rr), so this is the common cluster case, not an edge. CLOSED: the SO_REUSEPORT half. turnloop 0.1.0-alpha.6 split `ListenOpts::reuse_port` into `ReusePort::{No, Share, Distribute}` and `perry-runtime`'s `listen_opts` maps Perry's `true` to `Share`, which is exactly `cluster_bind::bind_listener`'s `socket.set_reuse_port(true)`; `try_listen_on_turnloop` (http, https and http2) takes that bind now instead of declining. NOT `Distribute`, which is `Unsupported` on macOS and every BSD but FreeBSD. Also CLOSED earlier: the attached `WebSocketServer` (see docs/turnloop/ws-report.md).",
-      "issue": "unfiled \u2014 P8",
+      "reached_when": "a thread that does not own its agent's loop -- since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent -- or a host where Loop::new failed; also a SCHED_RR cluster worker, which is Node's non-Windows DEFAULT policy. NO LONGER a SO_REUSEPORT cluster worker, and no longer a server with `new WebSocketServer({ server })` attached at listen time.",
+      "blocker": "No missing turnloop capability is left; what remains is the deletion itself, sequenced behind #11084. Both halves of the old blocker are closed. (1) The P1 coexistence rule: a thread that does not own its agent's loop posts its work to the thread that does (`perry_ffi::agent_post`, turnloop P10) -- both serve the same JS heap. perry-ext-net does exactly that for every socket, listener, TLS session and deadline since it dropped tokio (`turnloop_io::on_loop`), which is the worked example for this crate: route a declined thread's `listen()` to the owner's `try_listen_on_turnloop` instead of building a hyper accept loop. The one decline posting cannot serve, a host where Loop::new failed, reports ENOTSUP there rather than keeping a second event loop. (2) The SCHED_RR fd-inject premise ('turnloop's Driver has no API that adopts a foreign fd') was stale: turnloop has had `Driver::attach(Detached)` since alpha.6 and `Detached::from_fd` / `from_listener_fd` (alpha.8, turnloop#108), and perry-runtime now exposes it to bindings as `turnloop_net::adopt_stream` (C ABI `js_perry_net_adopt_stream`, perry-ffi `turnloop_net::adopt_stream`), which puts a connected stream fd/SOCKET on the agent's loop under a binding-chosen id -- exactly what `spawn_rr_inject_loop`'s descriptors from `cluster_bind::recv_fd` need, once `turnloop_serve` can take a connection it did not accept itself. What is left: delete the hyper HTTP/1.1 and HTTP/2 accept loops (`server.rs`'s `serve_http_connection` + `spawn_rr_inject_loop`, `https_server.rs`, `http2_server.rs`), the raw-'upgrade' peeler (`raw_upgrade.rs`, `upgrade.rs` -- #11084 is rewriting both on the hyper path right now, which is why this lane did not touch them), and feed the RR descriptors through `adopt_stream` into turnloop_serve. CLOSED earlier: the SO_REUSEPORT half (alpha.6 `ReusePort::Share`) and the attached `WebSocketServer` (docs/turnloop/ws-report.md).",
+      "issue": "unfiled -- P8; perry#10395 (the posting route) is the pattern",
       "plan": "A"
     },
     {
@@ -68,8 +68,8 @@
       "optional": false,
       "target": null,
       "surface": "as `hyper` above \u2014 the `server-auto` connection builder",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed",
-      "blocker": "goes with hyper: the `server-auto` connection builder and `TokioIo`.",
+      "reached_when": "as `hyper` above: a thread that does not own its agent's loop, or a host where Loop::new failed",
+      "blocker": "goes with hyper: the `server-auto` connection builder and `TokioIo`. No blocker of its own; see the `hyper` row.",
       "issue": "unfiled \u2014 P8",
       "plan": "A"
     },
@@ -93,7 +93,7 @@
       "target": null,
       "surface": "every row above, plus the three raw-TcpStream client bypasses. NO LONGER `http2.connect`: the HTTP/2 client is turnloop-only now (the `h2` row is gone), and `node:http2` reaches no tokio of its own.",
       "reached_when": "always (the node:http client) or a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed (the server)",
-      "blocker": "the union of the rows above, and NOT group D's own work -- the plan's row D already said so (\u201cits last, once C and E are done\u201d). E is done and D's `h2` half is done; what is left is `reqwest` + `tokio-rustls` (plan C, the node:http/https CLIENT: ~1,950 lines of `agent.rs` plus three raw `tokio::net::TcpStream` bypasses) and `hyper` + `hyper-util` (plan A, the declining HTTP/1.1 and HTTP/2 SERVER accept loops plus the SCHED_RR fd-inject loop). `node:http2`'s CLIENT reaches no tokio at all now -- `http2_server/session.rs` contains no `tokio::` code -- so this edge is held open entirely by A and C. Note for whoever closes A: deleting the hyper accept loops removes every I/O-DRIVING tokio use but NOT tokio's type vocabulary, which is baked into structs both transports build (`ServerResponse::{response_tx, stream_tx, stream_in_flight, connection_close}`, `HttpServer::{shutdown_tx, request_rx, upgrade_rx}`, `Http2StreamHandle::response_tx`, `ShapeBody::Stream`) and kept alive by the shared dispatchers that branch `match turnloop { Some / None }`. That is a separable second step.",
+      "blocker": "the union of the rows above, and NOT group D's own work -- the plan's row D already said so (\u201cits last, once C and E are done\u201d). E is done and D's `h2` half is done; what is left is `reqwest` + `tokio-rustls` (plan C, the node:http/https CLIENT: ~1,950 lines of `agent.rs` plus three raw `tokio::net::TcpStream` bypasses) and `hyper` + `hyper-util` (plan A, the declining HTTP/1.1 and HTTP/2 SERVER accept loops plus the SCHED_RR fd-inject loop -- plan A's perry-ext-net half is done, and its `adopt_upgraded_tcp_stream` now takes a `std::net::TcpStream`, so no tokio type crosses into perry-ext-net any more). `node:http2`'s CLIENT reaches no tokio at all now -- `http2_server/session.rs` contains no `tokio::` code -- so this edge is held open entirely by A and C. Note for whoever closes A: deleting the hyper accept loops removes every I/O-DRIVING tokio use but NOT tokio's type vocabulary, which is baked into structs both transports build (`ServerResponse::{response_tx, stream_tx, stream_in_flight, connection_close}`, `HttpServer::{shutdown_tx, request_rx, upgrade_rx}`, `Http2StreamHandle::response_tx`, `ShapeBody::Stream`) and kept alive by the shared dispatchers that branch `match turnloop { Some / None }`. That is a separable second step.",
       "issue": "unfiled \u2014 P8",
       "plan": "D"
     },
@@ -156,30 +156,6 @@
       "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mongodb` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: `spawn_blocking` + `Handle::current().block_on` per operation. Goes with the driver.",
       "issue": "#10339",
       "plan": "J"
-    },
-    {
-      "crate": "perry-ext-net",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`net.createServer()`, `net.connect()`, `tls.connect()`, `socket.upgradeToTLS()`, and node:net IPC",
-      "reached_when": "ALWAYS, for two shapes, and that is a correction to what this row said before: (1) two transport-agnostic paths call tokio timers on the turnloop path too -- `server_state::schedule_server_connection`'s 1 ms sleep, reached from `push_event`, the single event funnel `turnloop_io` itself uses, and `tls::schedule_tls_abort`'s 25 ms sleep on the already-aborted `tls.connect` signal path; and (2) `SocketState::cmd_tx`/`pending_rx` and `ServerState::shutdown_tx` are tokio channels on EVERY socket and server, turnloop ones included. Otherwise: a thread that could not get a loop of its own -- since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed.",
-      "blocker": "FIVE reasons, and the 'declining path' is only one of them. (1) The per-socket record embeds tokio channels (`SocketState::cmd_tx`, `pending_rx`, `ServerState::shutdown_tx`); a turnloop socket builds a pair and drops the receiver purely to fill the field. (2) Two shared paths call `tokio::time::sleep` -- `server_state.rs`'s `schedule_server_connection` behind `push_event`, and `tls.rs`'s `schedule_tls_abort`. (3) `adopt::adopt_upgraded_tcp_stream` takes a `tokio::net::TcpStream` BY VALUE across the crate boundary; its one caller is perry-ext-http's hyper raw-`'upgrade'` peeler (`server/raw_upgrade.rs:174`), so this edge cannot close before plan A's perry-ext-http half does. (4) `transport.rs`'s `Transport` enum is tokio's `TcpStream` plus a `tokio_rustls` `TlsStream`, built on the still-live tokio arms. (5) The P1 coexistence rule itself: a thread with no loop keeps the tokio socket task. CLOSED since this row was written: `js_net_socket_method_connect` (`new net.Socket()` then `socket.connect()`, and `Bun.connect`) had NO `turnloop_io::enabled()` gate at all and always built a tokio socket task; it takes turnloop now, which is what made (1)-(4) the whole remaining list. Also closed: `rustls` was spelled through `tokio_rustls`'s re-export in `tls.rs`, so the config builder both transports share read as tokio's; it is named through this crate's own `rustls` dep now.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "A"
-    },
-    {
-      "crate": "perry-ext-net",
-      "dep": "tokio-rustls",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`tls.connect()` and `socket.upgradeToTLS()` on a declining path",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed",
-      "blocker": "goes with the tokio socket task -- `transport.rs`'s `Transport::Tls(tokio_rustls::client::TlsStream<TcpStream>)` and `tls.rs`'s `TlsConnector`. NO LONGER also the rustls re-export: `build_client_config`, the one piece of `tls.rs` both transports share, names `rustls` through this crate's own direct dependency now.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "A"
     },
     {
       "crate": "perry-stdlib",
@@ -282,7 +258,6 @@
     "perry-ext-http": 103,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
-    "perry-ext-net": 54,
     "perry-ffi": 2,
     "perry-stdlib": 73,
     "perry-ui-gtk4": 6

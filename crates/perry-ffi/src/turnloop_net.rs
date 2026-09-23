@@ -251,8 +251,12 @@ extern "C" {
         err: *mut RawNetError,
     ) -> i32;
     fn js_perry_net_read_start(id: i64, err: *mut RawNetError) -> i32;
-    fn js_perry_net_adopt_stream(id: i64, subsystem: i32, socket: i64, err: *mut RawNetError)
-        -> i32;
+    fn js_perry_net_adopt_stream(
+        id: i64,
+        subsystem: i32,
+        socket: i64,
+        err: *mut RawNetError,
+    ) -> i32;
     fn js_perry_net_timer_arm(id: i64, subsystem: i32, delay_ms: u64, err: *mut RawNetError)
         -> i32;
     fn js_perry_net_timer_cancel(id: i64, err: *mut RawNetError) -> i32;
@@ -587,6 +591,8 @@ pub fn adopt_stream(id: i64, subsystem: u8, socket: AdoptedSocket) -> Result<(),
         {
             // No runtime to hand it to: honour the "consumed on every outcome"
             // contract by closing it here.
+            // SAFETY (both arms): `raw` came from `into_raw_*` just above and
+            // nothing else owns it, so this is its one reconstruction.
             #[cfg(unix)]
             drop(unsafe {
                 <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(raw as i32)

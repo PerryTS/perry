@@ -144,6 +144,12 @@
       "why": "HashMap<i64 socket HANDLE, Aux> holding the per-socket state the turnloop transport needs and SocketState has no field for: whether the peer's FIN arrived before the 'connection' callback, whether the post-EOF shutdown should be followed by a close, and whether an 'error' and a 'close' have been emitted -- plus the server_state::begin_local_connect reservation, a server HANDLE and a bool; and, since P5, whether the write side was already ended, whether the readable EOF was already delivered, and a pending `tls.connect` request (a servername String, a bool and a TlsClientConfigData of owned PEM/DER byte vectors). Rule S fires on those i64s; every one is a handle-band id used to look a record up in crate::statics::sockets() or servers(), never a heap address and never dereferenced. No JS value reaches this map: read bytes are copied into a Bytes before the sink returns and write bytes were already owned Vecs. forget_aux removes the entry on the terminal close."
     },
     {
+      "file": "crates/perry-ext-net/src/turnloop_io.rs",
+      "name": "DEADLINES",
+      "verdict": "not_a_gc_pointer",
+      "why": "deadlines(): HashMap<i64 deadline id, Deadline>. The key is a handle-band id reserved for one turnloop timer and freed when it fires; each Deadline variant carries only i64 server/socket HANDLES (a deferred loopback ServerConnection, or an already-aborted tls.connect). Rule S fires on those i64s; every one is the key used to look a record up in crate::statics::sockets() or servers() and the payload of a PendingNetEvent, never a heap address and never dereferenced. No JS value reaches this map. It replaced two tokio sleeps (server_state::schedule_server_connection, tls::schedule_tls_abort); on_timer removes the entry when the deadline fires."
+    },
+    {
       "file": "crates/perry-ext-net/src/turnloop_tls_io.rs",
       "name": "LAYERS",
       "verdict": "covered_elsewhere",

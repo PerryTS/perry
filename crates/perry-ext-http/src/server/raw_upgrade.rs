@@ -173,9 +173,10 @@ pub(crate) async fn peek_and_maybe_dispatch_raw_upgrade(
     let im_handle = alloc_incoming_message(im);
     // perry-ext-net takes the connection as a plain `std` stream and hands it
     // to the agent's turnloop loop; tokio only has to let go of it here.
-    let socket_id = stream
-        .into_std()
-        .map_or(perry_ffi::INVALID_HANDLE, perry_ext_net::adopt_upgraded_tcp_stream);
+    let socket_id = stream.into_std().map_or(
+        perry_ffi::INVALID_HANDLE,
+        perry_ext_net::adopt_upgraded_tcp_stream,
+    );
     // #6441: `adopt_upgraded_tcp_stream` returns `INVALID_HANDLE` and drops the
     // stream when the shared net handle-id band is exhausted (or no loop exists
     // for this agent), as does a stream tokio could not release. Abort the upgrade
