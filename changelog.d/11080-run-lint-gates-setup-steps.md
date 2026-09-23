@@ -1,0 +1,3 @@
+### Fixed
+
+- `scripts/run_lint_gates.sh` runs again. `c038156e98` added a `lint` step that installs cargo-xwin from a verified release asset; its nine `run` lines are all downloads and PATH edits, so the extractor yielded zero commands for the step and refused to run at all — taking the whole local lint replay with it, for every gate, not just that one. Setup-only steps are now named in a `setup_only` registry alongside the existing `ci_only` one, and the exemption is checked in both directions: a renamed or removed step fails, and a setup step that later grows a real gate command fails rather than hiding it. Both directions are covered by `--self-test`. (#11080)

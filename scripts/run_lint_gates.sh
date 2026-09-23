@@ -71,6 +71,26 @@ if [[ "${1:-}" == "--self-test" ]]; then
         exit 1
     fi
 
+    # A setup-only step must stay EXEMPT-AND-CHECKED, not become a hiding place.
+    if _self_renamed="$(RUN_LINT_GATES_FIXTURE=setup-only-renamed bash "$0" --list 2>&1)"; then
+        echo "run_lint_gates self-test FAILED: a stale setup_only entry exited zero" >&2
+        exit 1
+    fi
+    if [[ "$_self_renamed" != *"yielded zero commands"* ]]; then
+        echo "run_lint_gates self-test FAILED: renamed setup step did not report an empty step" >&2
+        printf '%s\n' "$_self_renamed" >&2
+        exit 1
+    fi
+    if _self_grew="$(RUN_LINT_GATES_FIXTURE=setup-only-grew-a-gate bash "$0" --list 2>&1)"; then
+        echo "run_lint_gates self-test FAILED: a setup_only step that grew a gate exited zero" >&2
+        exit 1
+    fi
+    if [[ "$_self_grew" != *"now yields gate command(s)"* ]]; then
+        echo "run_lint_gates self-test FAILED: grown setup step did not report a hidden gate" >&2
+        printf '%s\n' "$_self_grew" >&2
+        exit 1
+    fi
+
     if ! _self_compile="$(bash "$0" --list 2>&1)"; then
         echo "run_lint_gates self-test FAILED: real workflow extraction failed" >&2
         printf '%s\n' "$_self_compile" >&2
@@ -155,6 +175,16 @@ elif fixture == "warnings-extra-command":
         if step.get("name") == "rustc warnings (host-compatible, all targets)":
             step["run"] += "\ncargo check -p perry-runtime --lib\n"
             break
+elif fixture == "setup-only-renamed":
+    for step in workflow["jobs"]["lint"]["steps"]:
+        if step.get("name") == "Install cargo-xwin for Windows type-check":
+            step["name"] = "Install cargo-xwin (renamed)"
+            break
+elif fixture == "setup-only-grew-a-gate":
+    for step in workflow["jobs"]["lint"]["steps"]:
+        if step.get("name") == "Install cargo-xwin for Windows type-check":
+            step["run"] += "\npython3 scripts/check_file_size.sh\n"
+            break
 elif fixture:
     sys.stderr.write(f"run_lint_gates: unknown self-test fixture: {fixture}\n")
     sys.exit(3)
@@ -176,6 +206,20 @@ ci_only = {
         "reason": "needs the CI plan's shard count",
     },
 }
+# Steps that legitimately contain NO gate command: they install or fetch a
+# tool the later gates use. They assert nothing, so there is nothing to replay
+# locally, but they still have a `run:` block and would otherwise be read as an
+# extraction failure. Named explicitly, with the same discipline as `ci_only`:
+# a new setup step cannot silently become a third entry, and an entry that
+# stops matching (step renamed, or it grows a real gate command) FAILS, so this
+# list cannot rot into a way of hiding a gate.
+setup_only = {
+    "Install cargo-xwin for Windows type-check": (
+        "downloads a pinned, sha256-verified release asset and extends PATH; "
+        "installs the tool the Windows type-check gate then runs"
+    ),
+}
+matched_setup = set()
 matched_skips = set()
 records = []
 errors = []
@@ -247,13 +291,28 @@ for index, step in enumerate(steps, start=1):
             step_records.append(("run", step_name, line, ""))
 
     if not step_records:
-        errors.append(f"step '{step_name}' has a run: block but yielded zero commands")
+        if step_name in setup_only:
+            matched_setup.add(step_name)
+        else:
+            errors.append(f"step '{step_name}' has a run: block but yielded zero commands")
+    elif step_name in setup_only:
+        # It grew a real command: the entry is now hiding a gate.
+        errors.append(
+            f"setup-only step '{step_name}' now yields gate command(s); "
+            "remove its setup_only entry so the gate is replayed locally"
+        )
     records.extend(step_records)
 
 if not fixture:
     for key, rule in ci_only.items():
         if key not in matched_skips:
             errors.append(f"explicit CI-only skip '{rule['step']}' no longer matches the workflow")
+    for step_name in setup_only:
+        if step_name not in matched_setup:
+            errors.append(
+                f"setup-only step '{step_name}' no longer matches the workflow; "
+                "delete its setup_only entry"
+            )
 
 compile_records = []
 for job_name in ("warnings", "check"):
