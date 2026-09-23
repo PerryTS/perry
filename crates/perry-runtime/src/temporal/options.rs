@@ -1345,7 +1345,7 @@ fn require_string_field(obj: *const crate::object::ObjectHeader, name: &str) -> 
         // further ToString coercion. A plain object with only the default
         // `Object.prototype.toString` (`None`) yields `"[object Object]"`, which
         // IS a string (and then fails the month-code/offset syntax check).
-        match unsafe { crate::value::to_string::ordinary_to_primitive_string(raw) } {
+        match unsafe { crate::value::to_string_primitive::ordinary_to_primitive_string(raw) } {
             Some(prim) => {
                 if JSValue::from_bits(prim.to_bits()).is_string() {
                     return Some(read_string(prim));
