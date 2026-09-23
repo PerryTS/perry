@@ -413,6 +413,43 @@ pub(crate) fn canonical_module() -> Module {
     m
 }
 
+/// #11150: `same_expr_structure` is the `PutValueSet` receiver identity
+/// codegen falls back to. It must say "same" for a clone (including a
+/// private-guarded base, the shape that used to be refused) and "different"
+/// for any tree that differs in a hashed field.
+#[test]
+fn same_expr_structure_matches_clones_and_rejects_differences() {
+    let private_tail = |field: &str, op: u8| Expr::PropertyGet {
+        object: Box::new(Expr::PrivateGuard {
+            class_name: "L".to_string(),
+            class_id: 1,
+            field_name: field.to_string(),
+            kind: 0,
+            op,
+            receiver_is_brand_owner: false,
+            object: Box::new(Expr::This),
+        }),
+        property: format!("#<perry:private-value:1:{}>", field),
+        byte_offset: 7,
+    };
+    let base = private_tail("#tail", 0);
+    assert!(same_expr_structure(&base, &base.clone()));
+    // Derived metadata is not identity: a different source offset is still
+    // the same tree.
+    let mut moved = base.clone();
+    if let Expr::PropertyGet { byte_offset, .. } = &mut moved {
+        *byte_offset = 99;
+    }
+    assert!(same_expr_structure(&base, &moved));
+    assert!(!same_expr_structure(&base, &private_tail("#head", 0)));
+    assert!(!same_expr_structure(&base, &private_tail("#tail", 1)));
+    assert!(!same_expr_structure(&Expr::This, &Expr::LocalGet(0)));
+    assert!(!same_expr_structure(
+        &Expr::String("ab".to_string()),
+        &Expr::String("a".to_string())
+    ));
+}
+
 /// Pinned djb2 hash of `canonical_module()`. If the hash walk
 /// changes shape, update this value AND the example binary's
 /// expected output below.
