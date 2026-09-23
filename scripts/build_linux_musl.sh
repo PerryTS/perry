@@ -21,13 +21,13 @@ abort_target_dir="${PERRY_ABORT_TARGET_DIR:-target-abort}"
 case "$target" in
   x86_64-unknown-linux-musl)
     expected_machine=x86_64
-    rustflags="-C force-unwind-tables=yes -C force-frame-pointers=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
+    rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C force-frame-pointers=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_x86_64_unknown_linux_musl=musl-gcc
     export AR_x86_64_unknown_linux_musl=ar
     ;;
   aarch64-unknown-linux-musl)
     expected_machine=aarch64
-    rustflags="-C force-unwind-tables=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
+    rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_aarch64_unknown_linux_musl=musl-gcc
     export AR_aarch64_unknown_linux_musl=ar
     ;;

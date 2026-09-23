@@ -25,8 +25,18 @@ global-min-publish-age = "7 days"
 # file entirely (cargo uses exactly one rustflags source) — carry the flag
 # in your RUSTFLAGS too. The runtime self-checks on the first `try` and
 # aborts loudly if the tables are missing (perry-runtime/src/eh.rs).
+#
+# `-Z use-sync-unwind=yes` asks for SYNCHRONOUS tables — exact at call sites
+# only. That is every PC the transport ever unwinds from (throws, GC
+# safepoints and `_Unwind_Backtrace` all start at a call; no signal handler
+# throws). Asynchronous tables (the default for force-unwind-tables) also
+# describe every epilogue instruction, which Apple's compact-unwind encoder
+# cannot express, so ~90% of runtime functions fell back to a DWARF FDE:
+# ~500 KB of `__eh_frame` in every macOS binary. Synchronous tables encode
+# compactly and `eh_walker` decodes compact FRAME/FRAMELESS entries directly.
+# Nightly-only, like the rest of this toolchain (rust-toolchain.toml).
 [build]
-rustflags = ["-C", "force-unwind-tables=yes"]
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 
 # #9486: x86_64 needs frame pointers, and cannot inherit them from `[build]`.
 #
@@ -47,4 +57,4 @@ rustflags = ["-C", "force-unwind-tables=yes"]
 # self-checks on the first `try` and aborts loudly, so the mistake is loud
 # rather than silent — but it is still a mistake).
 [target.'cfg(target_arch = "x86_64")']
-rustflags = ["-C", "force-unwind-tables=yes", "-C", "force-frame-pointers=yes"]
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-C", "force-frame-pointers=yes"]

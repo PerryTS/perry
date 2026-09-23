@@ -1023,6 +1023,12 @@ pub(crate) fn build_optimized_libs(
         // first `throw` that crosses a runtime frame aborts.
         if !panic_immediate {
             rustflags.push("-C force-unwind-tables=yes".to_string());
+            // Synchronous tables: exact at call sites, which is every PC
+            // the exception transport unwinds from, and compact-encodable
+            // on Apple targets (async tables force a DWARF FDE per
+            // function — ~500 KB of `__eh_frame`). Mirrors
+            // `.cargo/config.toml`.
+            rustflags.push("-Zuse-sync-unwind=yes".to_string());
         }
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
     }
