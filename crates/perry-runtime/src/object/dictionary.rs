@@ -9,12 +9,11 @@
 //! cannot be retired by ownership, so a workload that produces unboundedly
 //! many distinct key lists — a `Map`-like object built by name with thousands
 //! of keys, a per-request object keyed by user input — would accumulate
-//! interned shapes for the life of the process. There is also a cost half:
-//! under one canonical keys array per layout an append can no longer mutate
-//! in place, so an object whose key list is unique to it pays a copy of
-//! length *k* per append, i.e. **O(k²)** over *k* appends.
+//! interned shapes for the life of the process: one ShapeId and one trie node
+//! per key it ever added. (The storage is linear: the lists of a growth chain
+//! share one canonical backing, which a tip append grows in place.)
 //!
-//! Dictionary mode bounds both. An object whose keys have stopped being worth
+//! Dictionary mode bounds that. An object whose keys have stopped being worth
 //! interning keeps them itself, and stops minting shapes for them.
 //!
 //! # The representation, and why the shape stays honest
@@ -191,19 +190,20 @@ pub(crate) fn test_clear_layout_id_budget() {
 
 /// Resolve the knob once. Value-parsed, not presence-parsed: #7991 shipped a
 /// knob that `PERRY_GC_DIAG=0` turned ON.
-/// The compiled-in trigger-1 threshold, armed BY DEFAULT.
+/// The compiled-in trigger-1 threshold (a unique RUN, see
+/// [`should_latch_to_dictionary`]), armed BY DEFAULT.
 ///
-/// #10868 step 2.5: per-prefix canonicalization makes a receiver with a key
-/// list unique to it allocate one array per prefix — k(k+1)/2 element words.
-/// Measured, not projected: 8,192 keys cost 461 MB unlatched and 50 MB
-/// latched, and the 65,536-key membership test allocated past 24 GB
-/// unlatched and passes in 0.03 s latched. §L8.3.2 wrote this down before
-/// either stage existed — "canonical arrays cannot ship ahead of dictionary
-/// mode without a cliff" — so the latch is the bound canonical keys stand on,
-/// and a bound that is off by default is not a bound.
+/// #10868 step 2.5: a receiver with a key list unique to it mints one ShapeId
+/// and one canonical trie node per key it adds, retained while its backing
+/// lives. When every prefix was its own array it also cost k(k+1)/2 element
+/// words (8,192 keys: 461 MB unlatched, 50 MB latched); one backing per
+/// growth chain made that storage linear, so what the latch bounds now is the
+/// per-key identity. §L8.3.2's rule stands: a bound that is off by default is
+/// not a bound.
 ///
-/// 1,024 keys is ~4 MB of prefix arrays, which is the point the quadratic
-/// stops being free. The env var still overrides, in both directions.
+/// On `ts.transpileModule` this threshold latches 2 receivers, as many as the
+/// former raw key-count trigger did at the same number. The env var still
+/// overrides, in both directions.
 const DEFAULT_LATCH_MIN_KEYS: u64 = 1024;
 
 #[cold]
@@ -329,27 +329,27 @@ pub(crate) fn test_reset_counters() {
 ///
 /// TWO independent triggers, not one:
 ///
-/// 1. **Unbounded key growth.** An interned shape is shared and cannot be
+/// 1. **Unique key growth.** An interned shape is shared and cannot be
 ///    retired by ownership the way today's private ones are (97.8% of records
 ///    are retired today), so a receiver whose key list is unique to it and
-///    grows without bound must stop interning. Policy.
+///    grows without bound must stop interning. Policy. The argument is the
+///    list's UNIQUE RUN (`canonical_keys::take_unique_run`): how many keys the
+///    lineage grew by, one receiver's append at a time, since another arrival
+///    last reached it — not the key count, which would also latch every
+///    member of a family of objects that merely share a long list.
 /// 2. **Layout-id exhaustion** ([`note_layout_id_budget`]). The canonical
 ///    layout id is 24 bits; when none is left the receiver cannot be interned
 ///    at all and dictionary mode is the only place for it. Correctness, not
 ///    policy — which is why it ignores the key-count threshold.
 ///
-/// **Stubbed: it can only answer `true` when the latch is explicitly armed.**
-/// The production trigger belongs to the content-key work (L8.3.13): the
-/// condition that matters is "this object's key list is unique to it", and
-/// that is not answerable until shape identity is content-keyed — today
-/// `fresh_keys_new_list` is 0.1 % of mints, so a predicate written against
-/// today's facts would be measuring the transition cache, not the program.
-/// Until then the latch is driven directly, by the tests and by
-/// `PERRY_OBJECT_DICTIONARY_MIN_KEYS`, and the counters above say which.
+/// Uniqueness is answerable now that shape identity is content-keyed: the
+/// canonical trie sees every list a receiver creates by appending, and every
+/// arrival at an existing one except through the transition cache.
+/// `PERRY_OBJECT_DICTIONARY_MIN_KEYS` sets the minimum run.
 ///
 /// Off, this is one relaxed load and a compare.
 #[inline]
-pub(crate) fn should_latch_to_dictionary(logical_key_count: u32) -> bool {
+pub(crate) fn should_latch_to_dictionary(unique_run: u32) -> bool {
     match LATCH_ARMED.load(Ordering::Relaxed) {
         0 => return false,
         -1 => {
@@ -366,8 +366,9 @@ pub(crate) fn should_latch_to_dictionary(logical_key_count: u32) -> bool {
         EXHAUSTION_LATCHES.fetch_add(1, Ordering::Relaxed);
         return true;
     }
-    // Trigger 1: unbounded growth of a key list unique to this receiver.
-    u64::from(logical_key_count) >= LATCH_MIN_KEYS.load(Ordering::Relaxed)
+    // Trigger 1: growth of a key list unique to this receiver. A run of 0 is a
+    // list this publish did not create, which trigger 1 never latches.
+    unique_run != 0 && u64::from(unique_run) >= LATCH_MIN_KEYS.load(Ordering::Relaxed)
 }
 
 /// The object's private key list, or null when it has none.
@@ -448,8 +449,10 @@ unsafe fn store_keys_array(meta: *mut ObjectMeta, keys: *mut ArrayHeader) {
     );
 }
 
-/// A fresh generation in the dictionary namespace.
-fn next_generation() -> u64 {
+/// A fresh generation in the dictionary namespace. Every semantic transition
+/// of a dictionary receiver draws from here (`shapes::transition_object_shape_semantics`),
+/// so its identity never leaves the namespace.
+pub(crate) fn next_generation() -> u64 {
     let n = DICTIONARY_GENERATION_NEXT.fetch_add(1, Ordering::Relaxed);
     debug_assert!(
         n < DICTIONARY_GENERATION_TAG,

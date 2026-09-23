@@ -836,6 +836,14 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
     let Some(current) = super::object_shape_descriptor(obj) else {
         return 0;
     };
+    // A dictionary receiver's identity comes from its own generation
+    // namespace and its keys live in its meta (its shape is keyless): this
+    // publisher would stamp an ordinary-namespace generation over it. Decline,
+    // and both callers take the compacting delete, which republishes through
+    // `dictionary::publish_keys`.
+    if crate::object::dictionary::is_dictionary(obj) {
+        return 0;
+    }
     let predecessor = super::object_shape_stamp(obj);
     // A delete is a STRUCTURAL transition, so the Array-subclass
     // named-prefix proof has to go: it is the one identity that deliberately
@@ -845,12 +853,13 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
     // shape transition exists to close. Every other transition publisher
     // already clears it; the hole-delete publishes did not.
     crate::array::clear_array_subclass_named_prefix_token(obj);
-    // The key count comes from the ARRAY, not the lineage: an O(1) hole
-    // delete leaves the length untouched, and the caller has not yet written
-    // the hole, so both agree here. Reading the array keeps this function
-    // honest if a future caller publishes after a length change.
+    // The key count comes from the SHAPE, which owns it: an O(1) hole delete
+    // leaves the count untouched, and a keys array's header length is only
+    // an upper bound on it (a canonical backing is as long as its longest
+    // list). Both lanes that publish here hold an owned array whose length
+    // they have not changed, so the two agree anyway.
     let keys_ptr = current.keys as usize as *mut super::ArrayHeader;
-    let logical_key_count = crate::array::keys_array_len_capped_to_capacity(keys_ptr) as u32;
+    let logical_key_count = current.logical_key_count;
     let generation =
         delete_transition_generation(predecessor, key_hash, slot).unwrap_or_else(|| {
             let generation =

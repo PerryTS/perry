@@ -26,9 +26,33 @@
 //! plus an exact check of the single appended slot; and no content is ever
 //! walked on a grow hit. [`canonicalize`] walks the same edges for a whole
 //! list, but materializes only the requested leaf. Unpublished prefixes use
-//! a weak descendant witness for exact slot validation, not their own arrays.
-//! Published lists always own their storage: array header lengths are exact,
-//! and GC element rewrites cannot alias a sibling's element storage.
+//! a weak descendant witness for exact slot validation.
+//!
+//! ## One BACKING per growth chain (V8's descriptor-array sharing)
+//!
+//! The lists on a linear chain — `[a]`, `[a,b]`, `[a,b,c]` — are prefixes of
+//! each other, so they share ONE backing array that holds the tip's keys. A
+//! node is `(backing, count)`: `[a,b]` is "the first two entries of that
+//! backing". Extending the tip by one key appends in place ([`extend_slot`]):
+//! amortized growth, no copy, no new array. A FORK — a different key appended
+//! to a node the backing has already grown past — copies that node's prefix
+//! into a new backing and continues there, as does a tip whose backing is
+//! full.
+//!
+//! What makes this sound:
+//! * the SHAPE owns the count. A descriptor is `(keys, logical_key_count)`,
+//!   and every consumer reads an object's keys through
+//!   [`crate::object::ObjectKeys`], which has no way to read past its count.
+//!   A backing's header `length` is the tip's count and nobody else's;
+//! * a backing's prefix is immutable. The only in-place write to a backing
+//!   is this module's tip append, past every published count. Every other
+//!   writer refuses a `GC_FLAG_SHAPE_SHARED` array and copies first, and every
+//!   backing carries that flag from birth;
+//! * the collector sees one ordinary array: its header length covers every
+//!   written slot, it is traced and moved as a whole, and nodes and
+//!   descriptors hold `(backing, count)` — never an interior pointer. A key
+//!   string that moves is rewritten in the backing once, which is the right
+//!   answer for every list sharing it: they name the same key.
 //!
 //! ## Node ids, not addresses, so the collector touches one `Vec`
 //!
@@ -49,10 +73,10 @@
 //!
 //! That answers L8.3.15c's retention worry, which assumed the intern table
 //! would hold its arrays: **it holds none**. A node whose array died is
-//! dropped, retention is proportional to LIVE layouts, and step 2.5 therefore
-//! introduces no latch trigger of its own. (`ShapeObjectKind::Dictionary`
-//! ships in the same PR regardless, per L8.3.15f, so whichever PR later wires
-//! a trigger already has the kind beneath it.)
+//! dropped, and retention is proportional to LIVE layouts. What the table
+//! does supply is the dictionary latch's signal: a node's unique RUN, the keys
+//! its lineage grew by one receiver's append at a time since another arrival
+//! reached it ([`take_unique_run`]).
 //!
 //! Dropping a node whose array died can ORPHAN its children: they stay
 //! adoptable and extendable, but a later walk from the root rebuilds the chain
@@ -67,62 +91,65 @@ use crate::array::ArrayHeader;
 use crate::JSValue;
 use crate::StringHeader;
 
-/// A keys array this table owns.
+/// A canonical key list this table owns: a backing array and the list's own
+/// key count, a prefix of that backing.
 ///
 /// The enforcement half of the funnel, and the reason it is a type rather
 /// than a comment: only this module can mint one, every producer of a keys
-/// array must accept one. Published lists own exact-length storage. The
-/// shape-shared flag enforces copy-before-mutation in object writers, but GC
-/// still rewrites element pointers: this is not an immutable backing view.
+/// list must accept one. The backing's header length is the length of the
+/// longest list on it and says nothing about this one; [`Self::len`] is the
+/// list's count.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct CanonicalKeys(*mut ArrayHeader);
+pub(crate) struct CanonicalKeys {
+    arr: *mut ArrayHeader,
+    count: u32,
+}
 
 impl CanonicalKeys {
     /// The empty ordered key list. A keyless shape's `keys` fact is 0, so the
     /// root of the trie owns no array and costs nothing.
-    pub(crate) const EMPTY: CanonicalKeys = CanonicalKeys(std::ptr::null_mut());
+    pub(crate) const EMPTY: CanonicalKeys = CanonicalKeys {
+        arr: std::ptr::null_mut(),
+        count: 0,
+    };
 
-    #[cfg(test)]
+    #[inline]
+    fn new(arr: *mut ArrayHeader, count: u32) -> Self {
+        CanonicalKeys { arr, count }
+    }
+
+    /// The backing array.
     #[inline]
     pub(crate) fn as_ptr(self) -> *mut ArrayHeader {
-        self.0
+        self.arr
     }
 
     #[inline]
     pub(crate) fn as_const_ptr(self) -> *const ArrayHeader {
-        self.0 as *const ArrayHeader
+        self.arr as *const ArrayHeader
     }
 
     #[inline]
     pub(crate) fn addr(self) -> usize {
-        self.0 as usize
+        self.arr as usize
     }
 
     #[inline]
     pub(crate) fn is_empty(self) -> bool {
-        self.0.is_null()
+        self.arr.is_null()
     }
 
-    /// This list as a receiver's keys: the array and the list's own count.
+    /// This list as a receiver's keys: the backing and the list's own count.
     #[inline]
     pub(crate) fn view(self) -> crate::object::ObjectKeys {
-        crate::object::ObjectKeys::new(self.0, self.len())
+        crate::object::ObjectKeys::new(self.arr, self.count)
     }
 
-    /// The live key count, which equals the array's `length` by construction:
-    /// a canonical array is exactly as long as the list it names, because a
-    /// prefix is its own node.
-    ///
-    /// # Safety
-    /// The table prunes a dead address before anything can read it, so a
-    /// handle in hand names a live array.
+    /// The list's key count — a prefix of the backing, never the backing's
+    /// header length.
     #[inline]
     pub(crate) fn len(self) -> u32 {
-        if self.0.is_null() {
-            0
-        } else {
-            unsafe { (*self.0).length }
-        }
+        self.count
     }
 }
 
@@ -224,9 +251,10 @@ const NO_NODE: u32 = u32::MAX;
 const ROOT_NODE: u32 = 0;
 
 struct Node {
-    /// Weak representative array. Unpublished prefixes borrow a descendant
-    /// only for edge validation; they never expose it as their keys array.
-    /// 0 denotes the root or a free slot.
+    /// Weak backing array. A published node's list is its first `len`
+    /// entries; an unpublished prefix borrows a descendant's backing only for
+    /// edge validation and never exposes it as its keys. 0 denotes the root or
+    /// a free slot.
     addr: usize,
     published: bool,
     parent: u32,
@@ -246,16 +274,30 @@ struct Node {
     /// measured at 3% (`alloc.rs`'s #7510 note). A child's answer is its
     /// parent's AND the appended slot's, so it costs one bit and no walk.
     all_ptr: bool,
+    /// Element capacity of the backing this node ALLOCATED, or 0. Exactly one
+    /// node per backing owns it (the list it was allocated for), so the live
+    /// backing census is a sum over nodes and needs no per-backing table.
+    backing_slots: u32,
+    /// Keys this lineage has grown by, one receiver's append at a time, since
+    /// a node on it was last REACHED by another arrival (a probe hit, a
+    /// declared whole list, or a receiver that latched away from it). 0 means
+    /// reached. The dictionary trigger reads it: a list no other receiver has
+    /// reached is unique to the object growing it. See [`take_unique_run`].
+    run: u32,
 }
 
 /// The canonical trie for one agent.
 pub(crate) struct CanonicalTable {
     nodes: Vec<Node>,
     free: u32,
-    /// Canonical array address -> node id.
-    by_addr: HashMap<usize, u32>,
+    /// `(backing address, count)` -> published node id. Many lists share one
+    /// backing, so the address alone names a chain, not a list.
+    by_addr: HashMap<(usize, u32), u32>,
     /// `(parent node, appended-slot hash)` -> first candidate node.
     edges: HashMap<(u32, u64), u32>,
+    /// `(backing, count, node)` of the list the last append CREATED, for the
+    /// publish that immediately follows it ([`take_unique_run`]).
+    last_created: (usize, u32, u32),
     minted: u64,
     reaped: u64,
     #[cfg(test)]
@@ -277,10 +319,13 @@ impl CanonicalTable {
                 // The empty list is vacuously all-pointer, which is what makes
                 // a one-key list's answer just "is this key a heap string".
                 all_ptr: true,
+                backing_slots: 0,
+                run: 0,
             }],
             free: NO_NODE,
             by_addr: HashMap::new(),
             edges: HashMap::new(),
+            last_created: (0, 0, NO_NODE),
             minted: 0,
             reaped: 0,
             #[cfg(test)]
@@ -307,6 +352,8 @@ impl CanonicalTable {
             next: NO_NODE,
             len,
             all_ptr,
+            backing_slots: 0,
+            run: 0,
         };
         let id = if self.free != NO_NODE {
             let id = self.free;
@@ -322,7 +369,8 @@ impl CanonicalTable {
         CANON_LIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if published {
             CANON_WORDS.fetch_add(u64::from(len), std::sync::atomic::Ordering::Relaxed);
-            self.by_addr.insert(addr, id);
+            CANON_PUBLISHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.by_addr.insert((addr, len), id);
         }
         if parent != NO_NODE {
             let head = self.edges.entry((parent, edge_hash)).or_insert(NO_NODE);
@@ -341,8 +389,36 @@ impl CanonicalTable {
         // The published storage, not its former witness, owns this GC fact.
         node.all_ptr = all_ptr;
         node.published = true;
-        self.by_addr.insert(addr, id);
-        CANON_WORDS.fetch_add(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
+        let len = node.len;
+        self.by_addr.insert((addr, len), id);
+        CANON_WORDS.fetch_add(u64::from(len), std::sync::atomic::Ordering::Relaxed);
+        CANON_PUBLISHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Record that `id`'s list was published on a backing allocated for it,
+    /// with `slots` elements of capacity.
+    fn own_backing(&mut self, id: u32, slots: u32) {
+        self.nodes[id as usize].backing_slots = slots;
+        CANON_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        CANON_BACKING_SLOTS.fetch_add(u64::from(slots), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// `id` was just created by one receiver appending to `parent`: its run is
+    /// the parent's plus one (a reached parent, or the root, restarts it).
+    fn note_created(&mut self, id: u32, parent: u32) {
+        let parent_run = if parent == NO_NODE || parent as usize >= self.nodes.len() {
+            0
+        } else {
+            self.nodes[parent as usize].run
+        };
+        let node = &mut self.nodes[id as usize];
+        node.run = parent_run.saturating_add(1);
+        self.last_created = (node.addr, node.len, id);
+    }
+
+    /// Another arrival reached `id`: its lineage is not unique to one object.
+    fn note_reached(&mut self, id: u32) {
+        self.nodes[id as usize].run = 0;
     }
 
     /// Retire a batch before reusing any id. Each edge bucket and collision
@@ -360,8 +436,19 @@ impl CanonicalTable {
                 continue;
             }
             if node.published {
-                self.by_addr.remove(&node.addr);
+                self.by_addr.remove(&(node.addr, node.len));
                 CANON_WORDS.fetch_sub(u64::from(node.len), std::sync::atomic::Ordering::Relaxed);
+                CANON_PUBLISHED.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            if node.backing_slots != 0 {
+                // Every list on a backing dies with it (the prune asks about
+                // the address), so its owner dying is the backing dying.
+                CANON_BACKINGS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                CANON_BACKING_SLOTS.fetch_sub(
+                    u64::from(node.backing_slots),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                node.backing_slots = 0;
             }
             node.addr = 0;
             // Preserve `next` until all collision chains have been filtered.
@@ -412,6 +499,9 @@ impl CanonicalTable {
 
         // Only now can `next` become a free-list link. No remaining edge or
         // live child's parent can reference any of these retired slots.
+        if retired.contains(&self.last_created.2) {
+            self.last_created = (0, 0, NO_NODE);
+        }
         for id in retired {
             self.nodes[id as usize] = Node {
                 addr: 0,
@@ -421,6 +511,8 @@ impl CanonicalTable {
                 next: self.free,
                 len: 0,
                 all_ptr: true,
+                backing_slots: 0,
+                run: 0,
             };
             self.free = id;
         }
@@ -446,6 +538,15 @@ static CANON_REAPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// Element words held by live canonical arrays — the side-table bytes this
 /// stage is measured on, times eight.
 static CANON_WORDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Live PUBLISHED lists (`live` also counts validation-only prefixes).
+static CANON_PUBLISHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Live backing arrays, and their element capacity: the storage the lists
+/// above actually occupy, since one backing serves a whole growth chain.
+static CANON_BACKINGS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CANON_BACKING_SLOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Lists published by growing their parent's backing in place (cumulative).
+static CANON_IN_PLACE_APPENDS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// Every access goes through `try_with`, never `with`.
 ///
@@ -571,7 +672,7 @@ fn node_of(t: &CanonicalTable, keys: CanonicalKeys) -> Option<u32> {
     if keys.is_empty() {
         return Some(ROOT_NODE);
     }
-    t.by_addr.get(&keys.addr()).copied()
+    t.by_addr.get(&(keys.addr(), keys.count)).copied()
 }
 
 /// Probe the trie for `parent + appended`, validating the appended slot
@@ -591,9 +692,9 @@ unsafe fn probe_node(
         let node = &t.nodes[cur as usize];
         if node.addr != 0 && node.len == parent_len + 1 {
             let arr = node.addr as *const ArrayHeader;
-            // An unpublished node may use a longer descendant as its witness.
-            // Published lists always have their own exact-length header.
-            if (*arr).length == node.len || (!node.published && (*arr).length > node.len) {
+            // A node's list is a prefix of its backing (published) or of a
+            // descendant's (a witness): the backing holds at least `len`.
+            if (*arr).length >= node.len {
                 let (slots, slot_len) = crate::object::keys_array_dense_slots(arr);
                 if (parent_len as usize) < slot_len {
                     #[cfg(test)]
@@ -619,8 +720,13 @@ unsafe fn probe(
     with_table_or(None, |t| {
         let id = probe_node(t, node_of(t, parent)?, parent_len, appended, h)?;
         let node = &t.nodes[id as usize];
-        node.published
-            .then_some(CanonicalKeys(node.addr as *mut ArrayHeader))
+        let hit = node
+            .published
+            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len));
+        if hit.is_some() {
+            t.note_reached(id);
+        }
+        hit
     })
 }
 
@@ -660,25 +766,34 @@ pub(crate) unsafe fn extend_slot(
     // re-derived by walking the list.
     // A torn-down table cannot promise an all-pointer layout, so `false` is
     // the safe default: the mask path is correct for any content.
-    let all_ptr = with_table_or(false, |t| {
+    let parent_all_ptr = with_table_or(false, |t| {
         node_of(t, parent)
             .map(|id| t.nodes[id as usize].all_ptr)
             .unwrap_or(false)
-    }) && appended.is_pointer();
+    });
+    let all_ptr = parent_all_ptr && appended.is_pointer();
+
+    // The tip of its backing grows in place: no copy, no new array.
+    if let Some(child) = append_at_tip(parent, appended, h, parent_all_ptr, all_ptr) {
+        return child;
+    }
 
     // Nothing may be held across the allocation: no table borrow (a collection
     // re-enters this table through its scanner and its prune) and both
     // operands rooted, because a collection here moves them.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let parent_handle = scope.root_raw_mut_ptr(parent.0);
+    let parent_handle = scope.root_raw_mut_ptr(parent.as_ptr());
     let appended_handle = match appended {
         Appended::Key(key) => scope.root_string_ptr(key),
         Appended::Slot(v) => scope.root_nanbox_u64(v.bits()),
     };
-    // Canonical lists are weakly held and must use reclaimable storage.
+    // Canonical lists are weakly held and must use reclaimable storage. The
+    // new backing starts a chain (a fork, or a tip whose backing was full),
+    // so it is sized for the chain to keep growing in place.
+    let capacity = backing_capacity(parent_len + 1);
     #[cfg(test)]
-    try_with_table(|t| t.allocated_slots += u64::from(parent_len + 1));
-    let allocate = || crate::array::js_array_alloc_key_list(parent_len + 1, all_ptr);
+    try_with_table(|t| t.allocated_slots += u64::from(capacity));
+    let allocate = || crate::array::js_array_alloc_key_list(capacity, all_ptr);
     // Reload both operands only after the child allocation can no longer
     // move them. No GC allocation occurs while the fresh array is filled.
     let ((fresh, parent), appended) = match appended {
@@ -694,7 +809,7 @@ pub(crate) unsafe fn extend_slot(
             (result, Appended::Slot(JSValue::from_bits(slot.to_bits())))
         }
     };
-    let parent = CanonicalKeys(parent);
+    let parent = CanonicalKeys::new(parent, parent_len);
 
     // A collection during the allocation may have published this exact node
     // through another path, or pruned the parent. Re-probe before writing.
@@ -743,13 +858,90 @@ pub(crate) unsafe fn extend_slot(
         // it is a correct list — as an orphan root: the caller still gets the
         // right content and only the edge is lost.
         let pnode = node_of(t, parent).unwrap_or(NO_NODE);
-        if let Some(id) = probe_node(t, pnode, parent_len, appended, h) {
+        let id = if let Some(id) = probe_node(t, pnode, parent_len, appended, h) {
             t.publish(id, fresh as usize, all_ptr);
+            id
         } else {
-            t.alloc_node(fresh as usize, pnode, h, parent_len + 1, all_ptr, true);
-        }
+            t.alloc_node(fresh as usize, pnode, h, parent_len + 1, all_ptr, true)
+        };
+        t.own_backing(id, capacity);
+        t.note_created(id, pnode);
     });
-    CanonicalKeys(fresh)
+    CanonicalKeys::new(fresh, parent_len + 1)
+}
+
+/// Capacity for a new backing whose first list has `len` keys: room for the
+/// chain to grow in place by half again, so a chain of N keys costs O(N)
+/// copying in total.
+#[inline]
+fn backing_capacity(len: u32) -> u32 {
+    if len <= 4 {
+        4
+    } else {
+        len.saturating_add(len / 2)
+    }
+}
+
+/// Append `appended` to `parent` IN PLACE when `parent` is the tip of its
+/// backing and the backing has room. Returns `None` when it cannot — a fork
+/// (the backing already grew past `parent` with a different key; the probe
+/// missed), a full backing, the empty list, or a non-pointer key on an
+/// all-pointer backing — and the caller starts a new backing instead.
+///
+/// Allocates nothing, so nothing moves: the slot is written first and the
+/// header length published after it, and the collector can never observe a
+/// length covering an unwritten slot. The only in-place write any backing
+/// ever sees, and it lands past every published count, so no list sharing
+/// the backing changes.
+///
+/// # Safety
+/// `parent` names a live canonical list and `appended` is live.
+unsafe fn append_at_tip(
+    parent: CanonicalKeys,
+    appended: Appended,
+    h: u64,
+    parent_all_ptr: bool,
+    all_ptr: bool,
+) -> Option<CanonicalKeys> {
+    let backing = parent.as_ptr();
+    if backing.is_null() {
+        return None;
+    }
+    let parent_len = parent.len();
+    if (*backing).length != parent_len || parent_len >= (*backing).capacity {
+        return None;
+    }
+    // An all-pointer backing declares every slot a heap pointer to the
+    // collector; a key that is not one forks into a mixed backing.
+    if parent_all_ptr && !all_ptr {
+        return None;
+    }
+    let pnode = with_table_or(None, |t| node_of(t, parent))?;
+    debug_assert!(
+        crate::value::addr_class::try_read_tracked_gc_header(backing as usize)
+            .is_some_and(|gc| (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0),
+        "a canonical backing is shape-shared from birth"
+    );
+    CANON_IN_PLACE_APPENDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // The array store helper writes the slot, notes its layout (a mixed
+    // backing keeps its per-slot mask) and runs the write barrier (an old
+    // backing can take a young key).
+    crate::array::note_array_slot(
+        backing,
+        parent_len as usize,
+        appended.element_word().to_bits(),
+    );
+    (*backing).length = parent_len + 1;
+    try_with_table(|t| {
+        let id = if let Some(id) = probe_node(t, pnode, parent_len, appended, h) {
+            t.publish(id, backing as usize, all_ptr);
+            id
+        } else {
+            t.alloc_node(backing as usize, pnode, h, parent_len + 1, all_ptr, true)
+        };
+        t.note_created(id, pnode);
+    });
+    Some(CanonicalKeys::new(backing, parent_len + 1))
 }
 
 /// [`extend_slot`] with an incoming interned key string — the grow path's form.
@@ -788,15 +980,9 @@ pub(crate) unsafe fn canonicalize(
     if keys.is_null() || len == 0 {
         return CanonicalKeys::EMPTY;
     }
-    let already = with_table_or(false, |t| {
-        t.by_addr
-            .get(&(keys as usize))
-            .copied()
-            .map(|id| t.nodes[id as usize].len == len)
-            .unwrap_or(false)
-    });
+    let already = with_table_or(false, |t| t.by_addr.contains_key(&(keys as usize, len)));
     if already {
-        return CanonicalKeys(keys as *mut ArrayHeader);
+        return CanonicalKeys::new(keys as *mut ArrayHeader, len);
     }
 
     // Walk without allocating. Intermediate prefixes have no observable array:
@@ -810,8 +996,14 @@ pub(crate) unsafe fn canonicalize(
             parent = probe_node(t, parent, i, slot, slot.edge_hash())?;
         }
         let node = &t.nodes[parent as usize];
-        node.published
-            .then_some(CanonicalKeys(node.addr as *mut ArrayHeader))
+        let hit = node
+            .published
+            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len));
+        // A declared whole list is not one receiver's growth.
+        if hit.is_some() {
+            t.note_reached(parent);
+        }
+        hit
     });
     if let Some(hit) = hit {
         return hit;
@@ -842,7 +1034,7 @@ pub(crate) unsafe fn canonicalize(
         }
     }
     stamp_shared(fresh);
-    with_table_or(CanonicalKeys(fresh), |t| {
+    with_table_or(CanonicalKeys::new(fresh, len), |t| {
         // Allocation may have moved/pruned witnesses. Walk again with the
         // rooted source now copied into fresh; no table borrow spans a GC.
         let mut parent = ROOT_NODE;
@@ -857,10 +1049,12 @@ pub(crate) unsafe fn canonicalize(
             };
         }
         if t.nodes[parent as usize].published {
-            CanonicalKeys(t.nodes[parent as usize].addr as *mut ArrayHeader)
+            let node = &t.nodes[parent as usize];
+            CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len)
         } else {
             t.publish(parent, fresh as usize, all_ptr);
-            CanonicalKeys(fresh)
+            t.own_backing(parent, len);
+            CanonicalKeys::new(fresh, len)
         }
     })
 }
@@ -892,8 +1086,12 @@ pub fn scan_canonical_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             }
         }
         for (old, new, id) in moved.drain(..) {
-            t.by_addr.remove(&old);
-            t.by_addr.insert(new, id);
+            let len = t.nodes[id as usize].len;
+            t.by_addr.remove(&(old, len));
+            t.by_addr.insert((new, len), id);
+            if t.last_created.2 == id {
+                t.last_created.0 = new;
+            }
         }
     });
 }
@@ -945,6 +1143,44 @@ fn canonical_address_is_recycled(addr: usize) -> bool {
     }
 }
 
+/// The unique run of `keys` if the append that just produced it CREATED it,
+/// else 0 — and consumes the answer, so only the publish that follows the
+/// append sees it.
+///
+/// This is the dictionary trigger's signal: how many keys this lineage grew
+/// by, one receiver's append at a time, since another arrival last reached a
+/// node on it. Arrivals the trie observes are probe hits, declared whole
+/// lists, and receivers that latched away ([`note_latched_away`]). A second
+/// receiver that follows a lineage through the TRANSITION CACHE is not
+/// observed (that path never reaches the trie), so a lineage shared only that
+/// way reads as unique past its last observed arrival; the latch that
+/// follows marks it reached, which bounds how many followers can latch.
+pub(crate) fn take_unique_run(keys: crate::object::ObjectKeys) -> u32 {
+    with_table_or(0, |t| {
+        let (addr, count, id) = t.last_created;
+        if addr == 0 || addr != keys.arr() as usize || count != keys.count() {
+            return 0;
+        }
+        t.last_created = (0, 0, NO_NODE);
+        let node = &t.nodes[id as usize];
+        if node.addr == addr && node.len == count {
+            node.run
+        } else {
+            0
+        }
+    })
+}
+
+/// A receiver latched to dictionary mode from `keys`: the next receiver to
+/// arrive there is following it, so the lineage is not unique past it.
+pub(crate) fn note_latched_away(keys: crate::object::ObjectKeys) {
+    try_with_table(|t| {
+        if let Some(&id) = t.by_addr.get(&(keys.arr() as usize, keys.count())) {
+            t.note_reached(id);
+        }
+    });
+}
+
 /// `(live nodes, nodes ever minted, nodes reaped)`. The census reads this;
 /// nothing branches on it.
 pub(crate) fn canonical_stats() -> (usize, u64, u64) {
@@ -955,10 +1191,21 @@ pub(crate) fn canonical_stats() -> (usize, u64, u64) {
     )
 }
 
-/// Total element words held by live canonical arrays — the side-table bytes
-/// this stage is measured on.
+/// Total key count of live published lists — what the lists NAME. With
+/// shared backings this exceeds the storage; see [`canonical_storage_stats`].
 pub(crate) fn canonical_element_words() -> u64 {
     CANON_WORDS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `(live published lists, live backing arrays, their element capacity,
+/// in-place tip appends ever)`. The census reads this; nothing branches on it.
+pub(crate) fn canonical_storage_stats() -> (u64, u64, u64, u64) {
+    (
+        CANON_PUBLISHED.load(std::sync::atomic::Ordering::Relaxed),
+        CANON_BACKINGS.load(std::sync::atomic::Ordering::Relaxed),
+        CANON_BACKING_SLOTS.load(std::sync::atomic::Ordering::Relaxed),
+        CANON_IN_PLACE_APPENDS.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 /// Every published canonical list in this agent's trie, as an array address.
@@ -981,3 +1228,7 @@ pub(crate) fn reset_for_test() {
 #[cfg(test)]
 #[path = "canonical_keys_tests.rs"]
 mod canonical_keys_tests;
+
+#[cfg(test)]
+#[path = "canonical_keys_backing_tests.rs"]
+mod canonical_keys_backing_tests;

@@ -68,6 +68,10 @@ pub(crate) const CLASS_ID_PERFORMANCE_OBSERVER_ENTRY_LIST: u32 = 0xFFFF_008F;
 /// returned by mark/measure and the getEntries* arrays.
 const PERF_ENTRY_SHAPE: u32 = 0x7FFF_FF40;
 const PERF_ENTRY_KEYS: &[u8] = b"name\0entryType\0startTime\0duration\0detail\0";
+/// Key count of a `PERF_ENTRY_SHAPE` object.
+const PERF_ENTRY_FIELD_COUNT: u32 = 5;
+/// Key count of the `performance.nodeTiming` entry.
+const NODE_TIMING_FIELD_COUNT: u32 = 12;
 
 /// Shape for a `PerformanceResourceTiming` entry. Node exposes these as
 /// prototype accessors (so `Object.keys(entry)` is empty there and non-empty
@@ -183,13 +187,16 @@ pub(crate) unsafe fn is_perf_entry_object(obj: *const crate::object::ObjectHeade
     if obj.is_null() {
         return false;
     }
-    let keys = crate::object::object_keys(obj).arr() as usize;
+    // A key LIST is the array and its count: lists on one growth chain share
+    // an array, so the count must match the entry shape's too.
+    let view = crate::object::object_keys(obj);
+    let keys = view.arr() as usize;
     let recorded = PERF_ENTRY_KEYS_ARRAY.with(|c| c.get());
-    if recorded != 0 && keys == recorded {
+    if recorded != 0 && keys == recorded && view.count() == PERF_ENTRY_FIELD_COUNT {
         return true;
     }
     let resource = RESOURCE_ENTRY_KEYS_ARRAY.with(|c| c.get());
-    resource != 0 && keys == resource
+    resource != 0 && keys == resource && view.count() == RESOURCE_ENTRY_FIELD_COUNT
 }
 
 /// True when `obj` is a `PerformanceResourceTiming` entry — the wider shape
@@ -199,7 +206,10 @@ pub(crate) unsafe fn is_resource_entry_object(obj: *const crate::object::ObjectH
         return false;
     }
     let recorded = RESOURCE_ENTRY_KEYS_ARRAY.with(|c| c.get());
-    recorded != 0 && crate::object::object_keys(obj).arr() as usize == recorded
+    let view = crate::object::object_keys(obj);
+    recorded != 0
+        && view.arr() as usize == recorded
+        && view.count() == RESOURCE_ENTRY_FIELD_COUNT
 }
 
 unsafe fn perf_entry_type(obj: *const crate::object::ObjectHeader) -> Option<u8> {
@@ -554,7 +564,7 @@ unsafe fn entry_to_object(e: &PerfEntry) -> f64 {
     let detail_handle = scope.root_nanbox_f64(f64::from_bits(e.detail_bits));
     let obj = js_object_alloc_with_shape(
         PERF_ENTRY_SHAPE,
-        5,
+        PERF_ENTRY_FIELD_COUNT,
         PERF_ENTRY_KEYS.as_ptr(),
         PERF_ENTRY_KEYS.len() as u32,
     );
@@ -1223,7 +1233,7 @@ unsafe fn make_node_timing_object() -> f64 {
         let uv_metrics_handle = scope.root_nanbox_f64(uv_metrics);
         let obj = js_object_alloc_with_shape(
             NODE_TIMING_SHAPE,
-            12,
+            NODE_TIMING_FIELD_COUNT,
             NODE_TIMING_KEYS.as_ptr(),
             NODE_TIMING_KEYS.len() as u32,
         );
@@ -1255,7 +1265,8 @@ pub(crate) unsafe fn is_node_timing_object(obj: *const crate::object::ObjectHead
         return false;
     }
     let recorded = NODE_TIMING_KEYS_ARRAY.with(|c| c.get());
-    recorded != 0 && crate::object::object_keys(obj).arr() as usize == recorded
+    let view = crate::object::object_keys(obj);
+    recorded != 0 && view.arr() as usize == recorded && view.count() == NODE_TIMING_FIELD_COUNT
 }
 
 /// `performance.nodeTiming.toJSON()` — the milestone numbers plus the entry

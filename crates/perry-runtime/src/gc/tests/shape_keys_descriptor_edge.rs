@@ -236,11 +236,14 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
     let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
     let id = unsafe { shapes::object_shape_stamp(obj) };
     assert!(shapes::is_shape_id(id), "the receiver stays stamped");
-    assert_eq!(
-        shapes::test_shape_ids_for_keys(after.keys as usize),
-        vec![id],
+    // A family is every descriptor on one keys ARRAY, and one canonical
+    // backing serves a whole growth chain: the receiver's `[k0, k1]` shares
+    // it with the `[k0]` it grew from. All of them follow the move.
+    let family = shapes::test_shape_ids_for_keys(after.keys as usize);
+    assert!(
+        family.contains(&id),
         "#9706: the family index must be re-keyed to the forwarded address \
-         (before={:#x} after={:#x} under-before={:?} record-keys={:#x})",
+         (before={:#x} after={:#x} family={family:?} under-before={:?} record-keys={:#x})",
         before.keys,
         after.keys,
         shapes::test_shape_ids_for_keys(before.keys as usize),
@@ -248,6 +251,13 @@ fn the_reverse_indices_follow_a_moved_keys_array() {
             .map(|d| d.keys)
             .unwrap_or(0)
     );
+    for member in &family {
+        assert_eq!(
+            shapes::shape_descriptor_by_id(*member).map(|d| d.keys),
+            Some(after.keys),
+            "#9706: family member {member} still names another array"
+        );
+    }
     assert!(
         shapes::test_shape_ids_for_keys(before.keys as usize).is_empty(),
         "#9706: nothing may stay indexed under the from-space address"
@@ -705,6 +715,9 @@ fn canonical_prefix_and_full_list_survive_element_rewrites() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::support::register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    // The shape table's descriptors name those same young lists; its weak
+    // rewrite must run too, or a descriptor keeps a moved list's old address.
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::object::canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     let raw = scope.root_raw_mut_ptr(crate::array::js_array_alloc(3));

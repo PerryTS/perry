@@ -396,3 +396,54 @@ fn layout_id_exhaustion_latches_whatever_the_key_count() {
         assert_eq!(get_key(obj, "dictx_d"), 4.0);
     }
 }
+
+/// Trigger 1 latches a key list UNIQUE to its receiver, not a long one: a
+/// family of objects built the same way shares its lineage, so at most the
+/// receivers that extend it past what an earlier one reached latch — here
+/// only the first. A raw key-count trigger at the same threshold latches all
+/// four (it did, before the trigger read the canonical trie's unique run).
+#[test]
+fn a_family_sharing_a_long_list_does_not_latch_but_a_unique_list_does() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _restore = scopeguard_latch();
+    unsafe {
+        dictionary::test_arm_latch(Some(40));
+        dictionary::test_reset_counters();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let family: Vec<_> = (0..4)
+            .map(|_| {
+                let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+                for i in 0..60 {
+                    obj.with_mut_ptr(|o| set_key(o, &format!("dictfam_{i:02}"), i as f64));
+                }
+                obj
+            })
+            .collect();
+        let latched: Vec<bool> = family
+            .iter()
+            .map(|obj| obj.with_const_ptr(|o| dictionary::is_dictionary(o)))
+            .collect();
+        assert_eq!(
+            latched,
+            [true, false, false, false],
+            "only the receiver that grew the lineage first may latch"
+        );
+        assert_eq!(dictionary::dictionary_latches(), 1);
+        for obj in &family {
+            for i in [0, 39, 40, 59] {
+                assert_eq!(
+                    obj.with_mut_ptr(|o| get_key(o, &format!("dictfam_{i:02}"))),
+                    i as f64
+                );
+            }
+        }
+        // A list unique to its receiver latches once its run reaches the
+        // threshold.
+        let unique = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+        for i in 0..45 {
+            unique.with_mut_ptr(|o| set_key(o, &format!("dictuniq_{i:02}"), i as f64));
+        }
+        assert!(unique.with_const_ptr(|o| dictionary::is_dictionary(o)));
+        assert_eq!(dictionary::dictionary_latches(), 2);
+    }
+}
