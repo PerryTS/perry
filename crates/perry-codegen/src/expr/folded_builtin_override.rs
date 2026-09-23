@@ -392,10 +392,8 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             Some(value) => value,
             None => lower_expr(ctx, receiver_expr)?,
         };
-        let receiver_is_array = matches!(
-            expr,
-            Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. }
-        ) || crate::type_analysis::is_array_expr(ctx, receiver_expr);
+        let receiver_is_array = matches!(expr, Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. })
+            || crate::type_analysis::is_array_expr(ctx, receiver_expr);
         emit_own_override_branch(
             ctx,
             call.method,
