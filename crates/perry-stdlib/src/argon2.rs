@@ -4,7 +4,7 @@
 //! Provides secure password hashing using Argon2id algorithm.
 
 use crate::common::async_bridge::pool_for_promise_deferred;
-use crate::common::spawn_for_promise;
+use crate::common::async_bridge::reject_promise_later;
 use crate::common::string_from_header_lossy as string_from_header;
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -22,9 +22,7 @@ pub unsafe extern "C" fn js_argon2_hash(password_ptr: *const StringHeader) -> *m
     let password = match string_from_header(password_ptr) {
         Some(p) => p,
         None => {
-            spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, _>("Invalid password".to_string())
-            });
+            reject_promise_later(promise as *mut u8, "Invalid password".to_string());
             return promise;
         }
     };
@@ -90,9 +88,7 @@ pub unsafe extern "C" fn js_argon2_verify(
     let hash_str = match string_from_header(hash_ptr) {
         Some(h) => h,
         None => {
-            spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, _>("Invalid hash".to_string())
-            });
+            reject_promise_later(promise as *mut u8, "Invalid hash".to_string());
             return promise;
         }
     };
@@ -100,9 +96,7 @@ pub unsafe extern "C" fn js_argon2_verify(
     let password = match string_from_header(password_ptr) {
         Some(p) => p,
         None => {
-            spawn_for_promise(promise as *mut u8, async move {
-                Err::<u64, _>("Invalid password".to_string())
-            });
+            reject_promise_later(promise as *mut u8, "Invalid password".to_string());
             return promise;
         }
     };

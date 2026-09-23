@@ -199,10 +199,10 @@
       "kind": "normal",
       "optional": true,
       "target": null,
-      "surface": "every async stdlib surface: the `async-runtime` feature gates `common::async_bridge` and `perry_ffi_async`, i.e. the whole promise bridge and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI every perry-ext-* crate settles its promises through.",
-      "reached_when": "always \u2014 `full` implies it, and 20 other features imply it individually",
-      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib those clients are now reqwest and tokio-rustls (the bundled sqlx / redis / mongodb copies were deleted in group H); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
-      "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 upstream",
+      "surface": "the tokio HALF of the async bridge only (turnloop P8 lane L split it out): `common::tokio_bridge` \u2014 the current-thread `RUNTIME`, its wait-driver tick, `spawn` / `spawn_for_promise*` \u2014 plus the `perry_ffi_spawn_async` / `perry_ffi_spawn_blocking_with_reactor` C ABI and `perry_ffi_spawn_blocking`'s tokio-pool arm. The promise bridge itself (`common::async_bridge`'s settle queue and pump, and the promise / pool / blocking `perry_ffi_*` shims) is tokio-free under the `async-bridge` feature, which is what the auto-optimize driver now force-enables.",
+      "reached_when": "the `async-runtime` feature, which is selected only by (1) a Cargo feature whose code hands tokio a future \u2014 `web-fetch` (reqwest), `bundled-net` / `tls-runtime` / `external-tls-server` / `external-net-tls` / `bundled-ws` (tokio sockets), `external-net-pump` / `external-ws-pump` / `external-http-server-pump` / `external-http-client-pump` (perry-ext-net / -ws / -http hand futures to `perry_ffi_spawn_async`), `container`; or (2) the auto-optimize driver, for every shared-tokio wrapper (`binding_needs_shared_tokio`: net, ws, http, https, http2, undici, fastify, mongodb, ioredis, redis, nodemailer) and for pg / mysql2. `full` still implies it, so every PERRY_NO_AUTO_OPTIMIZE / prebuilt-archive build links tokio. It is NO LONGER forced onto every auto-optimized program: one that uses only crypto, bcrypt, argon2, zlib (bundled or perry-ext-zlib), readline, worker_threads, timers or a UI backend links no tokio.",
+      "blocker": "each selector in `reached_when` has to go; then `tokio_bridge.rs` and the three `cfg(feature = \"async-runtime\")` shims in `perry_ffi_async.rs` delete whole and `async-runtime` collapses into `async-bridge` \u2014 nothing in `async_bridge.rs` has to move. In order: G (#11101) leaves `web-fetch` tokio-free, after which it needs only `async-bridge`; H (#11102) plus P1 put the bundled net / tls / ws sockets on turnloop handles; A moves perry-ext-net / -http off `perry_ffi_spawn_async` and `_with_reactor`; B removes the db wrappers' decline paths, which call `Handle::current()` inside `perry_ffi_spawn_blocking` (with perry-ext-net's `upgradeTLS` reply wait, the only reason that shim still needs tokio's pool in a tokio build); K takes `container` off tokio. PerryTS/turnloop#42 is NOT a blocker any more: `Occupancy::Long` shipped in turnloop 0.1.0-alpha.5 (Perry pins alpha.6), and the tokio-free `perry_ffi_spawn_blocking` already runs on it through `turnloop_pool::submit_long`.",
+      "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 closed (Occupancy::Long, turnloop 0.1.0-alpha.5+); lane L split the bridge from the runtime",
       "plan": "L"
     },
     {
@@ -283,7 +283,7 @@
     "perry-ext-mongodb": 29,
     "perry-ext-net": 54,
     "perry-ffi": 2,
-    "perry-stdlib": 73,
+    "perry-stdlib": 74,
     "perry-ui-gtk4": 6
   }
 }

@@ -325,11 +325,12 @@ fn scan_readline_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'
 
 // ---------------------------------------------------------------------------
 // Pump-registration shim. The async_bridge module is gated on the
-// `async-runtime` feature; without it, `ensure_pump_registered` doesn't
+// `async-bridge` feature; without it, `ensure_pump_registered` doesn't
 // exist. We still want a project to compile when it imports `readline`
-// without pulling in tokio (e.g. a one-shot rl.close() smoke test).
-// When async-runtime is off, this is a no-op — rl.close() still fires
-// synchronously, but live stdin events won't drain.
+// without the bridge (e.g. a one-shot rl.close() smoke test). When
+// async-bridge is off, this is a no-op — rl.close() still fires
+// synchronously, but live stdin events won't drain. (The bridge has not
+// needed tokio since turnloop P8 lane L.)
 // ---------------------------------------------------------------------------
 
 /// Provider for `process.stdin.listeners(event)`.
@@ -477,7 +478,7 @@ extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: 
     // The provider is already installed before this callback can run. Avoid
     // re-entering bridge registration while pre-provider listeners are being
     // migrated; only the pump and shared reader need arming here.
-    #[cfg(all(feature = "async-runtime", not(test)))]
+    #[cfg(all(feature = "async-bridge", not(test)))]
     crate::common::async_bridge::ensure_pump_registered();
     start_shared_stdin_reader();
 }
@@ -597,7 +598,7 @@ fn try_register_pump() {
     // `js_readline_process_pending`; initializing the whole stdlib dispatch
     // graph here requires the generated-program bootstrap and throws in the
     // standalone Rust test harness.
-    #[cfg(all(feature = "async-runtime", not(test)))]
+    #[cfg(all(feature = "async-bridge", not(test)))]
     crate::common::async_bridge::ensure_pump_registered();
     ensure_stdin_listeners_provider_registered();
 }

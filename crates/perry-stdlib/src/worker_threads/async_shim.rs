@@ -3,9 +3,12 @@
 //!
 //! `common/mod.rs` states the contract this exists to satisfy:
 //!
-//! > Tokio-backed promise/runtime bridge — only needed when an async feature …
-//! > pulls in `async-runtime`. **Always-on code that references it must also be
-//! > `#[cfg(feature = "async-runtime")]`-gated.**
+//! > The promise bridge … gated on `async-bridge` (which `async-runtime`
+//! > implies). **Always-on code that references it must also be
+//! > `#[cfg(feature = "async-bridge")]`-gated.**
+//!
+//! (Before turnloop P8 lane L the bridge was gated on `async-runtime`, i.e. on
+//! tokio; it is tokio-free now, and so are the four entry points below.)
 //!
 //! `worker_threads` is always-on and referenced it in eleven places across five
 //! files, so `cargo build -p perry-stdlib --no-default-features` did not
@@ -30,13 +33,13 @@
 //! between creation and the pump's resolution — and an inline settle spans no
 //! collection point, so a plain `js_promise_new_cross_thread` is the correct counterpart.
 
-#[cfg(feature = "async-runtime")]
+#[cfg(feature = "async-bridge")]
 pub(crate) use crate::common::async_bridge::{
     ensure_pump_registered, js_promise_new_for_native_resolution, queue_deferred_resolution,
     queue_promise_resolution,
 };
 
-#[cfg(not(feature = "async-runtime"))]
+#[cfg(not(feature = "async-bridge"))]
 mod inline {
     /// No bridge means no pump to register.
     pub(crate) fn ensure_pump_registered() {}
@@ -73,7 +76,7 @@ mod inline {
     }
 }
 
-#[cfg(not(feature = "async-runtime"))]
+#[cfg(not(feature = "async-bridge"))]
 pub(crate) use inline::{
     ensure_pump_registered, js_promise_new_for_native_resolution, queue_deferred_resolution,
     queue_promise_resolution,
