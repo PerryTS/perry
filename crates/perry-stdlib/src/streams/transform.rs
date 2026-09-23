@@ -991,13 +991,26 @@ pub(super) fn run_web_compression_codec(
         (WebCompressionFormat::DeflateRaw, true) => {
             DeflateDecoder::new(input).read_to_end(&mut out)?;
         }
+        #[cfg(feature = "streams-brotli")]
         (WebCompressionFormat::Brotli, false) => {
             let mut reader = brotli::CompressorReader::new(input, 4096, 11, 22);
             reader.read_to_end(&mut out)?;
         }
+        #[cfg(feature = "streams-brotli")]
         (WebCompressionFormat::Brotli, true) => {
             let mut reader = brotli::Decompressor::new(input, 4096);
             reader.read_to_end(&mut out)?;
+        }
+        // Unreachable through JS: `parse_web_compression_format` refuses
+        // "brotli" at construction when the codec is not compiled in. Kept so
+        // the match stays exhaustive and a future direct caller gets an error,
+        // not silently empty output.
+        #[cfg(not(feature = "streams-brotli"))]
+        (WebCompressionFormat::Brotli, _) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Brotli CompressionStream support is not compiled into this binary",
+            ));
         }
     }
     Ok(out)
@@ -1128,7 +1141,19 @@ unsafe fn parse_web_compression_format(value: f64, constructor_name: &str) -> We
         return WebCompressionFormat::DeflateRaw;
     }
     if value_string_equals(value, b"brotli") {
+        #[cfg(feature = "streams-brotli")]
         return WebCompressionFormat::Brotli;
+        // Fail LOUDLY at construction rather than on the first write. Should be
+        // unreachable: auto-optimize enables `streams-brotli` whenever the
+        // program references CompressionStream/DecompressionStream or has
+        // deferred dynamic code. If it is ever hit, that detection missed.
+        #[cfg(not(feature = "streams-brotli"))]
+        throw_type_error_with_code(
+            &format!(
+                "Failed to construct '{constructor_name}': Brotli support is not compiled into this binary (perry-stdlib feature `streams-brotli`)"
+            ),
+            "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM",
+        );
     }
     let received =
         js_string_value_to_string(value, true).unwrap_or_else(|| "undefined".to_string());

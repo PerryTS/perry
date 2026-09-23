@@ -278,12 +278,14 @@ fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
 #[test]
 fn web_compression_formats_round_trip() {
     let input = b"hello stream/web compression";
-    for format in [
+    let mut formats = vec![
         WebCompressionFormat::Gzip,
         WebCompressionFormat::Deflate,
         WebCompressionFormat::DeflateRaw,
-        WebCompressionFormat::Brotli,
-    ] {
+    ];
+    #[cfg(feature = "streams-brotli")]
+    formats.push(WebCompressionFormat::Brotli);
+    for format in formats {
         let compressed = run_web_compression_codec(format, false, input).unwrap();
         assert!(!compressed.is_empty());
         let decompressed = run_web_compression_codec(format, true, &compressed).unwrap();

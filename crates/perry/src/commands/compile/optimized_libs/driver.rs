@@ -542,6 +542,16 @@ pub(crate) fn build_optimized_libs(
             features.insert("compression-zstd");
         }
     }
+    // WHATWG compression streams: `bundled-streams` no longer carries the
+    // Brotli codec, because `web-fetch` implies it for `response.body` and the
+    // format `match` kept the whole encoder live in every fetch program. Layer
+    // `streams-brotli` on only when the program names CompressionStream /
+    // DecompressionStream, or has deferred dynamic code that could.
+    if features.contains("bundled-streams")
+        && (ctx.uses_web_compression_stream || perry_hir::has_deferred_dynamic_code_sites())
+    {
+        features.insert("streams-brotli");
+    }
     // perry-stdlib unconditionally re-bundles perry-updater (so user code
     // calling `perry/updater` resolves at link time without extra wiring).
     // perry-updater used to reference the extern `js_crypto_ed25519_verify`

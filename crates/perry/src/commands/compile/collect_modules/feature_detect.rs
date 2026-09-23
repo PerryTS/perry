@@ -51,6 +51,21 @@ fn debug_hir_uses_zlib_zstd(hir_debug: &str) -> bool {
     hir_debug.contains("zstd") || hir_debug.contains("Zstd") || hir_debug.contains("ZSTD")
 }
 
+/// WHATWG compression streams → the `streams-brotli` codec. Unlike
+/// [`debug_hir_uses_zlib_brotli`] this CANNOT key on "brotli": the format is
+/// a runtime argument (`new CompressionStream(fmt)`), and a format read from a
+/// variable leaves no literal in the HIR. So any reference to either
+/// constructor enables the codec. Direct construction lowers to
+/// `New { class_name: "CompressionStream", .. }`; an alias
+/// (`const C = CompressionStream`) to `PropertyGet { property:
+/// "CompressionStream", .. }` — the name survives both. Checked separately
+/// because "DecompressionStream" does not contain "CompressionStream" (the
+/// `c` is lowercase). A fully computed global name is not seen; that case
+/// fails loudly at construction in perry-stdlib rather than silently.
+fn debug_hir_uses_web_compression_stream(hir_debug: &str) -> bool {
+    hir_debug.contains("CompressionStream") || hir_debug.contains("DecompressionStream")
+}
+
 fn debug_hir_uses_get_builtin_module(hir_debug: &str) -> bool {
     hir_debug.contains("property: \"getBuiltinModule\"")
         || (hir_debug.contains("module: \"process\"")
@@ -281,6 +296,9 @@ pub(super) fn detect_optional_feature_usage(
         }
         if debug_hir_uses_zlib_zstd(&hir_debug) {
             ctx.uses_zlib_zstd = true;
+        }
+        if debug_hir_uses_web_compression_stream(&hir_debug) {
+            ctx.uses_web_compression_stream = true;
         }
     }
 
@@ -631,8 +649,8 @@ pub(super) fn detect_optional_feature_usage(
 mod tests {
     use super::{
         debug_hir_uses_get_builtin_module, debug_hir_uses_global_math_member, debug_hir_uses_regex,
-        debug_hir_uses_string_normalization, debug_hir_uses_zlib_brotli, debug_hir_uses_zlib_zstd,
-        imports_fs_promises_glob,
+        debug_hir_uses_string_normalization, debug_hir_uses_web_compression_stream,
+        debug_hir_uses_zlib_brotli, debug_hir_uses_zlib_zstd, imports_fs_promises_glob,
     };
     use perry_hir::{Import, ImportSpecifier, Module, ModuleKind};
 
@@ -676,6 +694,28 @@ mod tests {
             r#"NativeMethodCall { module: "zlib", method: "gzipSync" } method: "gunzipSync""#;
         assert!(!debug_hir_uses_zlib_brotli(gzip_only));
         assert!(!debug_hir_uses_zlib_zstd(gzip_only));
+    }
+
+    #[test]
+    fn web_compression_stream_gate_keys_on_the_constructor_not_the_format() {
+        // Strings taken verbatim from `--print-hir` dumps, not guessed.
+        // A runtime format: the literal "brotli" appears nowhere, which is
+        // exactly what a zlib-style `contains("rotli")` detector would miss.
+        let runtime_format = r#"New { class_name: "CompressionStream", args: [LocalGet(0)], type_args: [], byte_offset: 50, cap_args_appended: 0 }"#;
+        assert!(!debug_hir_uses_zlib_brotli(runtime_format));
+        assert!(debug_hir_uses_web_compression_stream(runtime_format));
+        // DecompressionStream is checked on its own: its `c` is lowercase.
+        assert!(debug_hir_uses_web_compression_stream(
+            r#"New { class_name: "DecompressionStream", args: [String("deflate")] }"#
+        ));
+        // An alias lowers to a property read on globalThis.
+        assert!(debug_hir_uses_web_compression_stream(
+            r#"PropertyGet { object: GlobalGet(0), property: "CompressionStream", byte_offset: 0 }"#
+        ));
+        // A fetch-only program reads a response body but never names either
+        // constructor — that is the ~820 KB encoder this gate keeps out.
+        let fetch_only = r#"Call { callee: GlobalGet(3) } PropertyGet { property: "text" } PropertyGet { property: "body" }"#;
+        assert!(!debug_hir_uses_web_compression_stream(fetch_only));
     }
 
     #[test]

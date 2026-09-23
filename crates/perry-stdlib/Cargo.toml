@@ -23,7 +23,7 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "turnloop-smtp-client"]
+full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -67,7 +67,15 @@ http-client = ["web-fetch"]
 # well-known flip routes `import 'streams'` to perry-ext-streams
 # by stripping this feature. Default-on through `default = ["full"]`
 # and through the `http-client` umbrella for legacy callers.
-bundled-streams = ["dep:flate2", "dep:brotli"]
+# The WHATWG `CompressionStream`/`DecompressionStream` Brotli codec is split
+# out of `bundled-streams`: `web-fetch` implies `bundled-streams` for
+# `response.body`, and a runtime `match` over every compression format kept
+# the whole Brotli ENCODER (~820 KB) live in every fetch program. Auto-optimize
+# adds `streams-brotli` when the HIR references `CompressionStream` or
+# `DecompressionStream` (the format is a runtime string, so it cannot key on
+# the literal "brotli"), and on deferred dynamic code.
+bundled-streams = ["dep:flate2"]
+streams-brotli = ["bundled-streams", "dep:brotli"]
 
 # WebSocket — `websocket` umbrella retained for backwards-compat;
 # v0.5.571's well-known flip toggles `bundled-ws` instead so

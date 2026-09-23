@@ -838,6 +838,14 @@ pub struct CompilationContext {
     /// (`zstdCompressSync`, `createZstdCompress`, `ZSTD_*`, …) →
     /// `compression-zstd` (the bundled zstd C library).
     pub uses_zlib_zstd: bool,
+    /// Whether any TS module references the WHATWG `CompressionStream` or
+    /// `DecompressionStream` global. Adds `streams-brotli` on top of
+    /// `bundled-streams`, so a program that pulls in streams only for
+    /// `fetch`'s `response.body` never links the Brotli encoder. Keyed on
+    /// the constructor rather than the literal "brotli": the format is a
+    /// runtime string (`new CompressionStream(fmt)`), so a literal match
+    /// would miss a format read from a variable or `process.argv`.
+    pub uses_web_compression_stream: bool,
     /// Whether any TS module needs the regular-expression engine — a regex
     /// literal / `RegExp`, a regex-coercing string method (`.match` /
     /// `.matchAll` / `.search`), or a glob API (`path.matchesGlob` /
@@ -1281,6 +1289,7 @@ impl CompilationContext {
             uses_crypto_builtins: false,
             uses_zlib_brotli: false,
             uses_zlib_zstd: false,
+            uses_web_compression_stream: false,
             uses_regex: false,
             uses_temporal: false,
             uses_event_emitter: false,
