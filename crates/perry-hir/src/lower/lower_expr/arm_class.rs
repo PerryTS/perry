@@ -295,8 +295,26 @@ pub(crate) fn lower_class_expr(
     } else {
         None
     };
+    // #11042: a class expression with DYNAMIC heritage (`class extends <runtime
+    // value>` — a factory parameter, a local, a computed expression) takes the
+    // fresh path even when it carries nothing else per-evaluation. On the
+    // shared-template `ClassRef` path every evaluation IS the same class: one
+    // class id, one parent edge (last evaluation wins), one prototype-method
+    // table. `@redis/client`'s `attachConfig({ BaseClass })` evaluates
+    // `class extends BaseClass {}` once for `RedisClient` and once for
+    // `RedisClientMultiCommand`; the second evaluation re-parented the first,
+    // and its `Class.prototype[name] = …` command writes landed on the same
+    // table, so a client instance lost its EventEmitter ancestry and `.on`
+    // resolved to the `events` module's static `on(emitter, name)`. The fresh
+    // path already pins each evaluation's heritage on its own class object
+    // (`js_class_object_pin_parent`, #6438/#9364/#10624) and gives each its own
+    // `.prototype`, so routing dynamic heritage through it makes the two
+    // evaluations distinct classes. A statically resolved parent
+    // (`extends_expr == None`) cannot differ between evaluations and keeps the
+    // cheaper shared template.
     if !at_module_top
-        && (!named_statics.is_empty()
+        && (parent_expr.is_some()
+            || !named_statics.is_empty()
             || !computed_keys.is_empty()
             || !captured_args.is_empty()
             || !static_block_names.is_empty()
