@@ -48,6 +48,7 @@ fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
 }
 
 mod class_heritage;
+mod decl_self_binding;
 mod from_ast;
 mod member_helpers;
 mod member_registration;
@@ -70,6 +71,10 @@ pub fn lower_class_decl(
     // Resolve through any active scope-local rename so a disambiguated
     // duplicate class registers (and self-references) under its unique name.
     let name = ctx.resolve_class_name(class_decl.ident.sym.as_str());
+    // #11157: consume the declaration arm's request before anything below can
+    // lower a nested class declaration.
+    let self_binding_wanted = std::mem::take(&mut ctx.class_decl_self_binding_wanted);
+    ctx.class_decl_self_binding = None;
     validate_legacy_decorator_surface(&class_decl.class, &name)?;
     validate_class_element_early_errors(&class_decl.class, &name)?;
     let class_id = match ctx.lookup_class(&name) {
@@ -442,6 +447,14 @@ pub fn lower_class_decl(
     } else {
         (None, None, None, None)
     };
+
+    // #11157: a function-body declaration with a runtime heritage value or
+    // private elements is evaluated per evaluation (`ClassExprFresh`). Give
+    // its members the evaluated class, not the template, for its own name.
+    let class_self_binding = (self_binding_wanted
+        && (extends_expr.is_some()
+            || decl_self_binding::class_body_has_private_names(&class_decl.class)))
+    .then(|| decl_self_binding::push_decl_self_binding(ctx, class_decl.ident.sym.as_ref(), &name));
 
     // Issue #10486: the branches above deliberately leave `extends_name`
     // None when the heritage identifier resolves to a lexically-scoped
@@ -1193,8 +1206,17 @@ pub fn lower_class_decl(
     // unpatched capture slot (test262 static-field-init-this-inside-arrow).
     for sf in &mut static_fields {
         if let Some(init) = &mut sf.init {
-            crate::analysis::substitute_lexical_this_in_expr(init, &Expr::ClassRef(name.clone()));
+            match class_self_binding {
+                Some(self_id) => decl_self_binding::substitute_static_this_with_self(init, self_id),
+                None => crate::analysis::substitute_lexical_this_in_expr(
+                    init,
+                    &Expr::ClassRef(name.clone()),
+                ),
+            }
         }
+    }
+    if let Some(self_id) = class_self_binding {
+        decl_self_binding::pop_decl_self_binding(ctx, self_id);
     }
 
     // Exit type parameter scope

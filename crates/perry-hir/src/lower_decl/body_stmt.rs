@@ -17,10 +17,13 @@ use super::class_computed::push_deduped_class_computed_keys;
 use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
 use super::*;
 
+mod class_self_binding;
 mod detect;
 mod for_await;
 pub(crate) mod gen_capture_scan;
 mod nested_fn_decl;
+
+use class_self_binding::{decl_self_binding_owner, lower_body_class_decl};
 
 use gen_capture_scan::nested_generator_references_outer_locals;
 
@@ -338,7 +341,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let already_exists = ctx.pending_classes.iter().any(|c| c.name == class_name)
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
-                let class = lower_class_decl(ctx, class_decl, false)?;
+                let (class, decl_self_binding) = lower_body_class_decl(ctx, class_decl)?;
                 if let Some(extends_expr) = &class.extends_expr {
                     result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
                         class_name: class.name.clone(),
@@ -388,7 +391,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 let fresh_binding = has_private_elements
                     || class.extends_expr.is_some()
                     || !computed_keys.is_empty()
-                    || (!captured_exprs.is_empty() && !has_static_state);
+                    || (!captured_exprs.is_empty() && !has_static_state)
+                    // #11157: members that captured the self-binding need it.
+                    || decl_self_binding.is_some();
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
                     class
                         .static_fields
@@ -447,6 +452,15 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         ),
                     );
                 }
+                let evaluation_owner = decl_self_binding_owner(
+                    ctx,
+                    decl_self_binding,
+                    &class.name,
+                    &captured_exprs,
+                    &named_statics,
+                    &computed_keys,
+                    &computed_statics,
+                );
                 let template_name = class.name.clone();
                 ctx.pending_classes.push(class);
                 // #6465/#5893/#9502 (see `fresh_binding` above): bind the
@@ -471,7 +485,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         ty: Type::Any,
                         init: Some(Expr::ClassExprFresh {
                             template: template_name,
-                            evaluation_owner: None,
+                            evaluation_owner,
                             named_statics,
                             computed_keys,
                             computed_statics,

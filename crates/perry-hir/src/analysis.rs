@@ -493,6 +493,7 @@ pub fn substitute_lexical_this_in_expr(expr: &mut Expr, replacement: &Expr) {
         Expr::Closure {
             body,
             captures_this,
+            captures,
             params,
             ..
         } => {
@@ -507,6 +508,14 @@ pub fn substitute_lexical_this_in_expr(expr: &mut Expr, replacement: &Expr) {
                 // slot so the closure-cache key doesn't include a stale
                 // implicit-this snapshot.
                 *captures_this = false;
+                // #11157: a local replacement (a per-evaluation class's
+                // self-binding) is read from the closure body now, so the
+                // closure must capture it like any other outer local.
+                if let Expr::LocalGet(id) = replacement {
+                    if !captures.contains(id) {
+                        captures.push(*id);
+                    }
+                }
             }
         }
         _ => crate::walker::walk_expr_children_mut(expr, &mut |child| {

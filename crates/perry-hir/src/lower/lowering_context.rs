@@ -386,6 +386,19 @@ pub struct LoweringContext {
     /// while lowering that ClassBody, while nested classes can still capture
     /// an outer class expression's evaluated value.
     pub(crate) class_expr_self_bindings: Vec<(String, usize, LocalId)>,
+    /// #11157: set by the function-body class-DECLARATION arm right before it
+    /// calls `lower_class_decl`, and consumed there. When the declaration is
+    /// already known to take the per-evaluation `ClassExprFresh` path (dynamic
+    /// heritage or private elements), `lower_class_decl` then registers a
+    /// `class_expr_self_bindings` entry for the class name — exactly what a
+    /// named class expression gets — so the members' own references to the
+    /// class resolve to this evaluation instead of the shared template.
+    pub(crate) class_decl_self_binding_wanted: bool,
+    /// #11157: the compiler-private self-binding local `lower_class_decl`
+    /// registered for the declaration it just lowered (see above), handed
+    /// back to the declaration arm so it can become the `ClassExprFresh`
+    /// evaluation owner.
+    pub(crate) class_decl_self_binding: Option<LocalId>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
     /// Lexical stack of private-name scopes — one entry per enclosing class

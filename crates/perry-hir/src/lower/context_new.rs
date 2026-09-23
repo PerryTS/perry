@@ -91,6 +91,8 @@ impl LoweringContext {
             current_class_inner_name: None,
             pending_class_inner_name: None,
             class_expr_self_bindings: Vec::new(),
+            class_decl_self_binding_wanted: false,
+            class_decl_self_binding: None,
             current_class_member_is_static: false,
             private_scopes: Vec::new(),
             object_super_home_stack: Vec::new(),
