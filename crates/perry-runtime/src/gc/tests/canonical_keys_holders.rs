@@ -53,9 +53,9 @@ struct NoConservativeScan(Option<crate::gc::roots::ConservativeStackScanMode>);
 
 impl NoConservativeScan {
     fn new() -> Self {
-        Self(crate::gc::roots::set_conservative_stack_scan_override(Some(
-            crate::gc::roots::ConservativeStackScanMode::Disabled,
-        )))
+        Self(crate::gc::roots::set_conservative_stack_scan_override(
+            Some(crate::gc::roots::ConservativeStackScanMode::Disabled),
+        ))
     }
 }
 
@@ -104,10 +104,7 @@ unsafe fn assert_slot_names_a_live_key(
         "INVARIANT ({label}): list {list:p} slot {index} names a forwarded cell at {addr:#x}"
     );
     let s = addr as *const crate::StringHeader;
-    let bytes = std::slice::from_raw_parts(
-        crate::string::string_data(s),
-        (*s).byte_len as usize,
-    );
+    let bytes = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
     assert!(
         [b"gk_a".as_slice(), b"gk_b", b"gk_c"].contains(&bytes),
         "INVARIANT ({label}): list {list:p} slot {index} names {:?}",
@@ -171,17 +168,18 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
         assert_eq!(ac.len(), 2, "premise: [a,c] canonicalized");
         let ac = scope.root_raw_mut_ptr(ac.as_ptr());
         // An `extend_key` hit: [a] + b is the grown [a,b].
-        let prefix_a = canonical_keys::canonicalize(
-            &SharedLayout::shape_cache_entry(),
-            keys_of(o1),
-            1,
-        );
+        let prefix_a =
+            canonical_keys::canonicalize(&SharedLayout::shape_cache_entry(), keys_of(o1), 1);
         let ab = canonical_keys::extend_key(
             &SharedLayout::shape_cache_entry(),
             prefix_a,
             key(&b) as *const crate::StringHeader,
         );
-        assert_eq!(ab.as_ptr(), keys_of(o1), "premise: extend_key hit the grown [a,b]");
+        assert_eq!(
+            ab.as_ptr(),
+            keys_of(o1),
+            "premise: extend_key hit the grown [a,b]"
+        );
         // A receiver that dies before the minor: [a,c,b]. Its handle scope
         // ends here, so nothing roots it at the collection.
         {
@@ -192,11 +190,17 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
             set(dead, key(&b) as *mut _, 3.0);
         }
         let published_before = canonical_keys::published_lists_for_test().len();
-        assert!(published_before >= 4, "premise: several lists published ({published_before})");
+        assert!(
+            published_before >= 4,
+            "premise: several lists published ({published_before})"
+        );
         let before = [key(&a), key(&b), key(&c)];
 
         let trace = collect_minor_trace(GcTriggerKind::Direct);
-        assert!(trace.copying_nursery.copied_objects > 0, "premise: the minor copied");
+        assert!(
+            trace.copying_nursery.copied_objects > 0,
+            "premise: the minor copied"
+        );
         let after = [key(&a), key(&b), key(&c)];
         let moved: Vec<(usize, usize)> = before.iter().copied().zip(after).collect();
         assert!(
@@ -231,7 +235,11 @@ fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
         set(o2, nursery_key("gk_b"), 2.0);
         set(o2, nursery_key("gk_c"), 3.0);
         let list = keys_of(o2);
-        assert_eq!(crate::array::js_array_length(list), 3, "premise: o2 has three keys");
+        assert_eq!(
+            crate::array::js_array_length(list),
+            3,
+            "premise: o2 has three keys"
+        );
         for i in 0..3 {
             assert_slot_names_a_live_key(list, i, &moved, "fresh receiver");
         }
@@ -321,8 +329,18 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     for (phase, parent_cid, child_cid, names) in [
-        ("miss", 0x0C1_7751u32, 0x0C1_7752u32, ["dm_a", "dm_b", "dm_c"]),
-        ("hit", 0x0C1_7753u32, 0x0C1_7754u32, ["dh_a", "dh_b", "dh_c"]),
+        (
+            "miss",
+            0x0C1_7751u32,
+            0x0C1_7752u32,
+            ["dm_a", "dm_b", "dm_c"],
+        ),
+        (
+            "hit",
+            0x0C1_7753u32,
+            0x0C1_7754u32,
+            ["dh_a", "dh_b", "dh_c"],
+        ),
     ] {
         unsafe {
             let parent_packed = format!("{}\0{}\0", names[0], names[1]);
@@ -404,8 +422,13 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
         packed.len() as u32,
     ));
     let current = || mine.get_raw_mut_ptr::<ArrayHeader>() as usize;
-    let registered = || crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
-    assert_eq!(registered(), Some(current()), "premise: this agent registered its array");
+    let registered =
+        || crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
+    assert_eq!(
+        registered(),
+        Some(current()),
+        "premise: this agent registered its array"
+    );
 
     let (tx, rx) = std::sync::mpsc::channel::<(usize, Option<usize>, Option<usize>)>();
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
@@ -422,7 +445,8 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
         crate::object::alloc::prune_dead_class_keys_entries(&|_| false);
         let seen_after_prune =
             crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
-        tx.send((theirs, seen, seen_after_prune)).expect("spawning thread is waiting");
+        tx.send((theirs, seen, seen_after_prune))
+            .expect("spawning thread is waiting");
         // Keep this thread's heap mapped until the spawning thread is done.
         let _ = done_rx.recv();
     });

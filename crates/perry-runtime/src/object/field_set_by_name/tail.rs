@@ -839,11 +839,8 @@ pub(crate) fn set_field_by_name_object_tail(
             // called without what it returns.
             let new_keys = match crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
                 Some(proof) => {
-                    let canonical_parent = crate::object::canonical_keys::canonicalize(
-                        &proof,
-                        keys,
-                        key_count as u32,
-                    );
+                    let canonical_parent =
+                        crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
                     refresh_roots_after_alloc!();
                     crate::object::canonical_keys::extend_key(&proof, canonical_parent, key)
                         .as_ptr()

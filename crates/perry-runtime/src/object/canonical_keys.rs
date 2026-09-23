@@ -742,6 +742,23 @@ pub(crate) unsafe fn extend_slot(
             t.alloc_node(fresh as usize, pnode, h, parent_len + 1, all_ptr, true);
         }
     });
+    // The child is the parent plus this one slot, so the parent's slot index
+    // is the child's minus one entry. `h` is that entry's hash exactly when
+    // the slot is a key string: both hash the key's bytes with
+    // `key_bytes_hash`, and the index holds nothing for any other slot.
+    let index_hash = match appended {
+        Appended::Key(key) => (!key.is_null()).then_some(h),
+        Appended::Slot(v) => {
+            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            crate::string::js_string_key_bytes(v, &mut sso).map(|_| h)
+        }
+    };
+    crate::object::shapes::shape_keys_extended(
+        parent.as_const_ptr(),
+        parent_len,
+        fresh,
+        index_hash,
+    );
     CanonicalKeys(fresh)
 }
 
