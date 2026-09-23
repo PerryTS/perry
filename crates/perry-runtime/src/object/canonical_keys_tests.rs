@@ -573,3 +573,53 @@ fn publishing_prefix_refreshes_pointer_layout() {
         }
     }
 }
+
+/// #10969: a list grown key by key hands its slot index to each successor.
+///
+/// Every length of a growing list is its own canonical array. Without the
+/// carry, the find-before-append of each set indexed the whole current list
+/// again, so an N-key object built key by key indexed O(N^2) slots —
+/// 2,199,657 on `ts.transpileModule` against 75,775 before canonical
+/// identity. With it, the index moves along the chain: only the newest list
+/// holds one, and it covers the whole list.
+#[test]
+fn a_growing_list_hands_its_slot_index_to_each_successor() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    // Nothing may be pruned while the chain is inspected.
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    const KEYS: usize = 96;
+    unsafe {
+        let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let mut lists = Vec::with_capacity(KEYS);
+        for i in 0..KEYS {
+            let name = format!("carry_{i}");
+            obj.with_mut_ptr(|o| {
+                crate::object::js_object_set_field_by_name(o, key(&name), i as f64)
+            });
+            lists.push(obj.with_const_ptr(|o| crate::object::object_keys_array(o)));
+        }
+        let distinct: std::collections::HashSet<_> = lists.iter().copied().collect();
+        assert_eq!(distinct.len(), KEYS, "premise: every length is its own canonical list");
+        let holders: Vec<(usize, u32)> = lists[..KEYS - 1]
+            .iter()
+            .enumerate()
+            .filter_map(|(i, list)| {
+                crate::object::shapes::test_keys_index_len(*list).map(|n| (i + 1, n))
+            })
+            .collect();
+        assert!(
+            holders.is_empty(),
+            "INVARIANT: an earlier length must not keep a slot index of its own; {} of \
+             them do (length, indexed): {:?}",
+            holders.len(),
+            &holders[..holders.len().min(6)]
+        );
+        assert_eq!(
+            crate::object::shapes::test_keys_index_len(lists[KEYS - 1]),
+            Some(KEYS as u32),
+            "INVARIANT: the newest list carries a complete slot index"
+        );
+    }
+}

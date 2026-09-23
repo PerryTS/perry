@@ -2407,6 +2407,18 @@ pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
     }
 }
 
+/// How many keys the slot index for `keys` covers, or `None` without one.
+#[cfg(test)]
+pub(crate) fn test_keys_index_len(keys: *const ArrayHeader) -> Option<u32> {
+    crate::state::state()
+        .shapes
+        .inner
+        .borrow()
+        .indices
+        .get(&(keys as usize))
+        .map(|index| index.indexed_len)
+}
+
 /// Drop only the validated slot-index accelerator for a keys array that was
 /// compacted/retired (delete path). Descriptors are weak and exact-fact gated,
 /// but are not eagerly removed: another live sibling may still name one. The
