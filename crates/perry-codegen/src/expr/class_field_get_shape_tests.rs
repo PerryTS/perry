@@ -396,3 +396,75 @@ fn raw_f64_class_field_read_guard_keeps_class_id_and_intact_bit() {
         "the GcHeader word mask is back on the read guard:\n{ir}"
     );
 }
+
+/// Every `probe` function body (the entry and its clones) in `ir`, and
+/// nothing else: the class constructors in the same module carry the WRITE
+/// guard's own `class_field_inline.*` blocks.
+fn probe_bodies(ir: &str) -> String {
+    let mut out = String::new();
+    let mut from = 0;
+    while let Some(rel) = ir[from..].find("\ndefine ") {
+        let start = from + rel + 1;
+        let end = ir[start..]
+            .find("\n}\n")
+            .map(|e| start + e + 3)
+            .unwrap_or(ir.len());
+        let header = &ir[start..start + ir[start..].find('\n').unwrap_or(0)];
+        if header.contains("__probe") {
+            out.push_str(&ir[start..end]);
+            out.push('\n');
+        }
+        from = end;
+    }
+    assert!(!out.is_empty(), "no probe function in:\n{ir}");
+    out
+}
+
+/// `probe(p: Point)` where `Point` has `subclasses` field-less subclasses.
+fn hierarchy_ir(subclasses: u32) -> String {
+    let mut m = probe_module(Type::Any);
+    for i in 0..subclasses {
+        let mut sub = point_class(Type::Any);
+        sub.id = 200 + i;
+        sub.name = format!("Sub{i}");
+        sub.extends_name = Some("Point".to_string());
+        sub.fields = Vec::new();
+        m.classes.push(sub);
+    }
+    String::from_utf8(
+        compile_module(&m, super::class_field_barrier_tests::ir_opts()).expect("module compiles"),
+    )
+    .expect("LLVM IR should be UTF-8")
+}
+
+/// A read whose declared class has a subclass the guard cannot name goes to
+/// the generic IC. Past `MAX_CLASS_FIELD_SUBCLASS_ARMS` every arm is dropped,
+/// so a subclass instance would miss the class guard on every read and pay
+/// `js_class_field_get_ic` behind it (Zod's `ZodType` base-class reads);
+/// within the cap the arms name every subclass and the class route stays.
+/// Both halves are asserted, so the test fails if the routing never fires
+/// AND if it fires where the arms already cover the hierarchy.
+#[test]
+fn uncovered_subclass_routes_the_read_to_the_generic_ic() {
+    let covered = probe_bodies(&hierarchy_ir(1));
+    let covered_deref = block_body(&covered, "class_field_inline.deref")
+        .unwrap_or_else(|| panic!("one armed subclass must keep the class route:\n{covered}"));
+    assert_eq!(
+        covered_deref
+            .matches("load volatile i32, ptr @perry_class_guard_shape_")
+            .count(),
+        2,
+        "the declared class and its one subclass arm:\n{covered_deref}"
+    );
+
+    let wide = probe_bodies(&hierarchy_ir(9));
+    assert!(
+        block_body(&wide, "class_field_inline.deref").is_none(),
+        "nine subclasses overflow the arms: the class guard would miss every \
+         subclass receiver, so the read must not take the class route:\n{wide}"
+    );
+    assert!(
+        wide.contains("_packed_get") && !wide.contains("call double @js_class_field_get_ic("),
+        "the read must be served by the generic IC's per-site word:\n{wide}"
+    );
+}

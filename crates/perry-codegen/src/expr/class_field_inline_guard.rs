@@ -166,6 +166,38 @@ pub(crate) fn class_field_subclass_arms(
     arms
 }
 
+/// Does `arms` name EVERY transitive subclass of `class_name`?
+///
+/// When it does not — the hierarchy overflowed [`MAX_CLASS_FIELD_SUBCLASS_ARMS`]
+/// (every arm is then dropped), or a subclass shadows the field, declares it
+/// at another representation, or has no canonical keys global — an instance
+/// of that subclass can never match the class-field guard, and every read of
+/// it pays the guard AND the `js_class_field_get_ic` call behind it. In a
+/// base-class method of a wide hierarchy that is every read: measured on Zod
+/// 3.23 (`ZodType` has 36 subclasses), 17,400 of the 27,800 executed
+/// class-field reads per 200 schema parses took that miss call.
+///
+/// A site whose receivers the class guard cannot name belongs on the generic
+/// IC instead: its per-site word learns whichever ShapeId the site actually
+/// sees and serves it with one compare, and its ways serve the next few.
+/// This is the routing half of "one fast path real code actually takes".
+pub(crate) fn class_field_arms_cover_every_subclass(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    arms: &[ClassFieldSubclassArm],
+) -> bool {
+    let Some(&declared_id) = ctx.class_ids.get(class_name) else {
+        return true;
+    };
+    ctx.class_ids.iter().all(|(sub_name, &sub_id)| {
+        sub_name == class_name
+            || sub_id == 0
+            || sub_id == declared_id
+            || !is_transitive_subclass(ctx, sub_name, class_name)
+            || arms.iter().any(|arm| arm.class_id == sub_id)
+    })
+}
+
 /// Is `name` a transitive subclass of `ancestor`? Cycle- and depth-guarded:
 /// heavily-modular packages declare same-named classes across modules, and the
 /// name-keyed `ctx.classes` can then form a parent cycle (see
