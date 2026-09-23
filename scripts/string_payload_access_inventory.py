@@ -212,8 +212,15 @@ def collect_inventory(root: Path = REPO_ROOT) -> tuple[list[Finding], int]:
     for crate_dir in crate_dirs(root):
         crate = crate_dir.name
         for path in sorted(crate_dir.rglob("*.rs")):
-            rel_path = path.relative_to(root).as_posix()
-            if any(part.startswith(".") or part == "target" for part in path.parts):
+            rel = path.relative_to(root)
+            rel_path = rel.as_posix()
+            # Filter on the path RELATIVE to the repo root. `path.parts` is
+            # absolute, so a checkout living under any dot-prefixed directory
+            # -- `.claude/worktrees/agent-<id>/` is where agents run -- matched
+            # `part.startswith(".")` on every file and skipped the entire
+            # workspace. The scan then found nothing and the gate reported each
+            # baseline row as "found 0", i.e. "everything was converted".
+            if any(part.startswith(".") or part == "target" for part in rel.parts):
                 continue
             files_scanned += 1
             text = path.read_text(encoding="utf-8")
@@ -359,6 +366,30 @@ const EXAMPLE: &str = ".add(std::mem::size_of::<StringHeader>())";
         source.write_text(planted, encoding="utf-8")
         discovered, files_scanned = collect_inventory(temp_root)
         expect(files_scanned == 1, "synthetic crate source was not scanned exactly once")
+
+        # The same tree, one level under a DOT-PREFIXED directory. Agents run
+        # from `.claude/worktrees/agent-<id>/`, and the filter used to test the
+        # ABSOLUTE path, so every file was skipped and the scan silently
+        # returned nothing. A tempdir alone cannot catch this: `/var/folders/...`
+        # has no dot component.
+        dot_root = temp_root / ".agentdir" / "checkout"
+        dot_crate = dot_root / "crates" / "synthetic-crate"
+        (dot_crate / "src").mkdir(parents=True)
+        (dot_crate / "Cargo.toml").write_text(
+            '[package]\nname = "synthetic-crate"\nversion = "0.0.0"\n',
+            encoding="utf-8",
+        )
+        (dot_crate / "src" / "lib.rs").write_text(planted, encoding="utf-8")
+        dot_found, dot_scanned = collect_inventory(dot_root)
+        expect(
+            dot_scanned == 1,
+            "a checkout under a dot-prefixed directory scanned no files "
+            "(the filter is testing the absolute path again)",
+        )
+        expect(
+            counts_for(dot_found) == counts_for(findings),
+            "a checkout under a dot-prefixed directory lost findings",
+        )
         expect(
             counts_for(discovered) == counts_for(findings),
             "filesystem inventory disagreed with direct source scanning",
@@ -403,6 +434,17 @@ def main(argv: list[str] | None = None) -> int:
         return run_self_tests()
 
     findings, files_scanned = collect_inventory()
+    # A scan of zero files is not a clean tree, it is a broken scan. Without
+    # this, every baseline row reads "found 0" and the failure text invites
+    # `--write-baseline`, which would zero the ratchet and satisfy it forever.
+    if files_scanned == 0:
+        print(
+            "string-payload access inventory: SCANNED NO FILES -- this is a broken "
+            "scan, not a converted tree. Do NOT run --write-baseline. Check that "
+            "crates/ exists under the repo root being scanned.",
+            file=sys.stderr,
+        )
+        return 1
     actual = counts_for(findings)
     if args.write_baseline:
         write_baseline(args.baseline, actual)
