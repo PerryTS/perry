@@ -588,7 +588,7 @@ impl Appended {
                 if key.is_null() {
                     return 0x4E55_4C4C_4B45_5900;
                 }
-                let data = (key as *const u8).add(std::mem::size_of::<StringHeader>());
+                let data = crate::string::string_data(key);
                 crate::object::keys_lookup::key_bytes_hash(data, (*key).byte_len as usize)
             }
             Appended::Slot(v) => {
