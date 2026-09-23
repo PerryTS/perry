@@ -234,8 +234,8 @@ pub(super) fn hidden_pipeline_callback_done_key() -> *mut crate::string::StringH
 }
 
 #[inline]
-pub(super) fn hidden_compose_live_pipe_consume_key() -> *mut crate::string::StringHeader {
-    hidden_key(STREAM_COMPOSE_LIVE_PIPE_CONSUME_KEY)
+pub(super) fn hidden_readable_live_push_key() -> *mut crate::string::StringHeader {
+    hidden_key(STREAM_READABLE_LIVE_PUSH_KEY)
 }
 
 #[inline]
