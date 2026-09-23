@@ -472,6 +472,12 @@ fn write_return_value(handle: i64, accepted: bool) -> f64 {
             if !accepted || s.destroyed || s.writable_ended {
                 return Some(false);
             }
+            if s.awaiting_connect {
+                // `new net.Socket()` written before `connect()`: Node refuses
+                // the write (`ERR_SOCKET_CLOSED`) and returns false. No
+                // `'drain'` is owed, since nothing will ever be flushed.
+                return Some(false);
+            }
             let below = s.bytes_queued < WRITABLE_HIGH_WATER_MARK;
             if !below {
                 s.need_drain = true;
@@ -1531,27 +1537,28 @@ mod tests {
     #[test]
     fn write_returns_node_boolean_against_the_high_water_mark() {
         let handle = -91_240;
-        // Still waiting for `connect()`: writes are accepted and counted,
-        // which is exactly where Node's own `false` is deterministic.
-        statics::sockets()
-            .lock()
-            .unwrap()
-            .insert(handle, crate::SocketState::for_test(true));
+        // A socket whose connect has started: `bytes_queued` is what the
+        // driver reports after each accepted write, set directly here.
+        let mut socket = crate::SocketState::for_test(true);
+        socket.awaiting_connect = false;
+        statics::sockets().lock().unwrap().insert(handle, socket);
+        let set_queued = |n: u64| {
+            if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
+                s.bytes_queued = n;
+            }
+        };
 
-        let accepted = enqueue_socket_write(handle, vec![0; 5], 0);
-        assert_eq!(
-            write_return_value(handle, accepted).to_bits(),
-            js_bool(true)
-        );
+        set_queued(5);
+        assert_eq!(write_return_value(handle, true).to_bits(), js_bool(true));
         assert_eq!(
             unsafe { js_net_socket_get_writable_need_drain(handle) }.to_bits(),
             js_bool(false)
         );
 
-        let hwm = WRITABLE_HIGH_WATER_MARK as usize;
-        let accepted = enqueue_socket_write(handle, vec![0; hwm], 0);
+        let hwm = WRITABLE_HIGH_WATER_MARK;
+        set_queued(hwm + 5);
         assert_eq!(
-            write_return_value(handle, accepted).to_bits(),
+            write_return_value(handle, true).to_bits(),
             js_bool(false),
             "a chunk that reaches the high-water mark returns false"
         );
@@ -1568,6 +1575,34 @@ mod tests {
             65536.0
         );
 
+        statics::sockets().lock().unwrap().remove(&handle);
+    }
+
+    /// CodeRabbit on #11130: `new net.Socket()` written before `connect()` is
+    /// `false` in Node (the write fails with `ERR_SOCKET_CLOSED`), for a small
+    /// chunk too, and it must not leave a `'drain'` owed that nothing clears.
+    #[test]
+    fn write_before_connect_is_called_returns_false_and_owes_no_drain() {
+        let handle = -91_242;
+        statics::sockets()
+            .lock()
+            .unwrap()
+            .insert(handle, crate::SocketState::for_test(true));
+        let accepted = enqueue_socket_write(handle, vec![0; 2], 0);
+        assert_eq!(
+            write_return_value(handle, accepted).to_bits(),
+            js_bool(false)
+        );
+        let accepted = enqueue_socket_write(handle, vec![0; 65_536], 0);
+        assert_eq!(
+            write_return_value(handle, accepted).to_bits(),
+            js_bool(false)
+        );
+        assert_eq!(
+            unsafe { js_net_socket_get_writable_need_drain(handle) }.to_bits(),
+            js_bool(false),
+            "no drain is owed for bytes that will never be flushed"
+        );
         statics::sockets().lock().unwrap().remove(&handle);
     }
 

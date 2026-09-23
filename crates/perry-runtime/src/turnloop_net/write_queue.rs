@@ -80,8 +80,14 @@ pub(super) fn accept_write(
         backlogs,
         ..
     } = &mut *net;
+    // Between two attempts of a connect plan the failed attempt's entry is
+    // still there, closing, until its `Closed` starts the next address. A
+    // write in that window belongs to the attempt that follows, not to the
+    // handle being torn down (it used to be refused, which reported
+    // `'error'` and destroyed a socket that was about to connect).
+    let retrying = plans.get(&id).is_some_and(|p| p.retrying);
     match entries.get_mut(&id) {
-        Some(entry) => {
+        Some(entry) if !retrying => {
             if entry.listener || entry.closing {
                 return Err(invalid("write"));
             }
@@ -102,15 +108,16 @@ pub(super) fn accept_write(
                 backlog.push(bytes, user);
             }
         }
-        // Still resolving: no handle exists yet to hold the write.
-        None if plans.contains_key(&id) => {
+        // Still resolving (no handle yet), or between attempts.
+        _ if plans.contains_key(&id) => {
             let backlog = backlogs.entry(id).or_default();
             if backlog.shutdown.is_some() {
                 return Err(invalid("write"));
             }
             backlog.push(bytes, user);
         }
-        None => return Err(not_found("write")),
+        // No entry and no plan (`retrying` implies a plan, so never `Some`).
+        _ => return Err(not_found("write")),
     }
     Ok(total_queued(net, id))
 }
@@ -123,13 +130,23 @@ pub(super) fn accept_shutdown(
     id: i64,
     user: u64,
 ) -> NetResult<()> {
+    let retrying = net.plans.get(&id).is_some_and(|p| p.retrying);
     let deferred = match net.entries.get(&id) {
+        // Between attempts: see `accept_write`.
+        Some(_) if retrying => true,
         Some(entry) if entry.listener || entry.closing => return Err(invalid("shutdown")),
         Some(entry) => entry.connecting,
         None if net.plans.contains_key(&id) => true,
         None => return Err(not_found("shutdown")),
     };
-    net.backlogs.entry(id).or_default().shutdown = Some(user);
+    let backlog = net.backlogs.entry(id).or_default();
+    if backlog.shutdown.is_some() {
+        // A second shutdown while the first still waits would replace its
+        // token and strand that caller's callback; the binding coalesces
+        // repeated `end()` calls before they get here.
+        return Err(invalid("shutdown"));
+    }
+    backlog.shutdown = Some(user);
     if deferred {
         return Ok(());
     }

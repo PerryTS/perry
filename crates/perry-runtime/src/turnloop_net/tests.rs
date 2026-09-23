@@ -886,3 +886,124 @@ fn writes_and_end_before_connect_are_delivered_after_it() {
     }
     pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
 }
+
+/// CodeRabbit on #11130: a write or `end()` issued while a connect plan is
+/// between two attempts — the refused attempt's handle still closing, the
+/// next address not started — belongs to the attempt that follows. It used to
+/// hit the closing entry and be refused, which the binding reports as
+/// `'error'` plus a destroy of a socket that was about to connect.
+#[test]
+fn writes_between_connect_attempts_reach_the_attempt_that_succeeds() {
+    let _fixture = Fixture::start();
+    let (server, live) = listen_local();
+    // A port nothing listens on: bound once, then released.
+    let dead = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
+        l.local_addr().expect("probe addr")
+    };
+    let client = 2;
+    NET.with(|net| {
+        net.borrow_mut().plans.insert(
+            client,
+            ConnectPlan {
+                subsystem: SUBSYSTEM,
+                nodelay: true,
+                remaining: [dead, live].into_iter().collect(),
+                retrying: false,
+                last_error: None,
+            },
+        )
+    });
+    super::attempt_next_address(client);
+
+    let retrying = || {
+        NET.with(|net| {
+            net.borrow()
+                .plans
+                .get(&client)
+                .is_some_and(|plan| plan.retrying)
+        })
+    };
+    let limit = Instant::now() + Duration::from_secs(5);
+    while !retrying() && Instant::now() < limit {
+        pump();
+    }
+    assert!(
+        retrying(),
+        "the first attempt must be refused and its handle closing, or this \
+         test never reached the window it is about: {:?}",
+        events()
+    );
+    assert_eq!(
+        super::write(client, b"between-attempts".to_vec(), 5),
+        Ok(16),
+        "a write between attempts is accepted, not refused"
+    );
+    super::shutdown(client, 6).expect("end() between attempts is accepted");
+
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT && e.id == server)),
+        "the second attempt must connect: {:?}",
+        events()
+    );
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("server read");
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_EOF && e.id == conn)),
+        "data, then FIN: {:?}",
+        events()
+    );
+    assert_eq!(payload(NET_DATA, conn), b"between-attempts");
+    let users: Vec<u64> = events()
+        .iter()
+        .filter(|e| (e.kind == NET_WROTE || e.kind == NET_SHUTDOWN) && e.id == client)
+        .map(|e| e.user)
+        .collect();
+    assert_eq!(users, vec![5, 6]);
+    assert!(
+        !events()
+            .iter()
+            .any(|e| e.kind == NET_ERROR && e.id == client),
+        "the refused first address is absorbed, never reported: {:?}",
+        events()
+    );
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+/// A second shutdown while the first still waits for the connect is refused
+/// rather than silently replacing the first one's completion token.
+#[test]
+fn a_second_deferred_shutdown_does_not_replace_the_first() {
+    let _fixture = Fixture::start();
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    super::shutdown(client, 1).expect("first end() while connecting");
+    assert!(
+        super::shutdown(client, 2).is_err(),
+        "the second must not overwrite token 1"
+    );
+    assert!(
+        pump_until(|e| e.iter().any(|e| e.kind == NET_SHUTDOWN && e.id == client)),
+        "the shutdown completes after the connect: {:?}",
+        events()
+    );
+    let users: Vec<u64> = events()
+        .iter()
+        .filter(|e| e.kind == NET_SHUTDOWN && e.id == client)
+        .map(|e| e.user)
+        .collect();
+    assert_eq!(users, vec![1], "the first end()'s token is the one echoed");
+
+    for id in [client, server] {
+        let _ = super::close(id);
+    }
+    if let Some(conn) = accepted_id(server) {
+        let _ = super::close(conn);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() >= 2);
+}
