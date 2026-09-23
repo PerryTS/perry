@@ -378,28 +378,6 @@ pub(crate) fn try_lower_static_dispatch(
         ) {
             return Ok(None);
         }
-        // A class with a runtime-resolved parent may inherit a static getter
-        // whose value is callable. The by-name static-method dispatcher sees
-        // only a method name and cannot call that getter result. Read the
-        // property first, then call the value with the class as `this`.
-        let mut current = Some(cls_name.clone());
-        let mut has_dynamic_parent = false;
-        for _ in 0..64 {
-            let Some(name) = current else { break };
-            let Some(class) = ctx.classes.get(&name) else {
-                break;
-            };
-            if class.extends_expr.is_some() {
-                has_dynamic_parent = true;
-                break;
-            }
-            current = class.extends_name.clone();
-        }
-        if has_dynamic_parent {
-            return crate::lower_call::console_promise::try_lower_closure_call_fallthrough(
-                ctx, callee, args,
-            );
-        }
         let receiver_is_dispatchable_class = matches!(object, Expr::ClassRef(_))
             || matches!(object, Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name))
             || matches!(object, Expr::PropertyGet { object: inner, property, .. }

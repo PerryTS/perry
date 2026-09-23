@@ -968,6 +968,7 @@ pub(crate) fn lookup_class_symbol_method_in_chain(
 }
 
 include!("parent_static/private_and_dynamic.rs");
+include!("parent_static/static_accessor_call.rs");
 
 /// Presence-only check (`[[HasProperty]]`, never `[[Get]]`) for a Symbol-keyed
 /// METHOD or ACCESSOR declared on `class_id` or any ancestor. These computed
@@ -1714,6 +1715,13 @@ pub unsafe extern "C" fn js_class_static_method_call(
         crate::object::static_this_disarm();
         crate::object::static_private_owner_pop();
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+        return result;
+    }
+    // #10893: not a static METHOD — a static ACCESSOR on the class-id chain
+    // whose value is callable. See `try_static_accessor_value_call`.
+    if let Some(result) =
+        try_static_accessor_value_call(class_id, name, receiver, args_ptr, args_len)
+    {
         return result;
     }
     // #1787 / #321: not a static METHOD — try a static FIELD holding a
