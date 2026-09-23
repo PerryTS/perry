@@ -56,7 +56,7 @@ http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
 #
 # #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API).
 # Node HTTP is provided only by perry-ext-http.
-turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http"]
+turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http", "dep:base64"]
 # The global `fetch` runs on the turnloop client engine only (tokio lane G
 # removed its reqwest fallback); `async-runtime` is still needed for the
 # promise bridge it settles through.
