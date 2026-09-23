@@ -329,6 +329,60 @@ pub unsafe extern "C" fn js_perry_net_pipe_connect(
     )
 }
 
+/// Adopt an already-connected stream socket as a connected socket on this
+/// thread's loop (see [`super::adopt_stream`]).
+///
+/// `socket` is a file descriptor on Unix and a `SOCKET` on Windows. **It is
+/// consumed on every outcome**, success or failure: a refusal closes it, so the
+/// caller never owns it again after this call. A negative value is refused
+/// (`EINVAL`) and nothing is closed.
+///
+/// # Safety
+/// `socket` must be an open, connected stream socket that the caller owns and
+/// that nothing else will use or close; `err` must be null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_adopt_stream(
+    id: i64,
+    subsystem: i32,
+    socket: i64,
+    err: *mut PerryNetError,
+) -> i32 {
+    if socket < 0 {
+        return finish(
+            Err(super::map_error(
+                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
+                "adopt",
+            )),
+            err,
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the caller transfers ownership of an open descriptor.
+        let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(socket as i32) };
+        finish(super::adopt_stream(id, subsystem.max(0) as u8, fd), err)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::FromRawSocket;
+        // SAFETY: the caller transfers ownership of an open socket.
+        let sock = unsafe { std::os::windows::io::OwnedSocket::from_raw_socket(socket as u64) };
+        finish(super::adopt_stream(id, subsystem.max(0) as u8, sock), err)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (id, subsystem);
+        finish(
+            Err(super::map_error(
+                turnloop::Error::new(turnloop::ErrorKind::Unsupported),
+                "adopt",
+            )),
+            err,
+        )
+    }
+}
+
 /// Start multishot reading on a connected socket.
 ///
 /// # Safety

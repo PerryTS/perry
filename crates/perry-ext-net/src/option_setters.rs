@@ -17,9 +17,6 @@ extern "C" {
     pub(crate) fn js_net_validate_connect_port(value: f64);
     fn js_net_validate_socket_timeout(value: f64);
     fn js_net_validate_tos(value: f64) -> i32;
-    // perry-runtime/src/value/truthy.rs — general JS ToBoolean over the C ABI.
-    // Used by `setNoDelay` to coerce its argument the way Node does.
-    fn js_is_truthy(value: f64) -> i32;
 }
 
 // ─── Chainable no-op socket/server options (issue #1852) ─────────────────────
@@ -112,25 +109,23 @@ pub extern "C" fn js_net_socket_set_type_of_service(handle: i64, tos: f64) -> i6
     handle
 }
 
-/// `socket.setNoDelay([enable])` — toggle Nagle's algorithm (`TCP_NODELAY`)
-/// on the live socket. Node coerces the arg as `enable === undefined || !!enable`,
-/// so a bare `setNoDelay()` enables nodelay (the connection default), and an
-/// explicit `setNoDelay(false)` re-enables Nagle. The owning `TcpStream` lives
-/// in `run_socket_task`, so the request is forwarded as a `SetNoDelay` command
-/// over the socket's channel; returns the handle for chaining.
+/// `socket.setNoDelay([enable])` — chainable, returns the handle.
+///
+/// `TCP_NODELAY` is fixed when turnloop creates the socket: on for a client
+/// (`TcpOpts`, Node's default), and the listener's `AcceptDefaults` for an
+/// accepted one. turnloop has no socket-option call for a live handle, so a
+/// later `setNoDelay()` cannot change it; the flag is not observable from JS
+/// either way. This was already true of every turnloop socket before tokio
+/// left this crate — the only transport that could apply it was the tokio
+/// socket task. Needs a turnloop socket-option API to finish.
 ///
 /// # Safety
 ///
 /// `arg_bits` is a NaN-boxed JSValue passed as raw bits (the codegen NA_F64
-/// slot, re-bitcast here); it is not dereferenced.
+/// slot); it is not read.
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_set_no_delay(handle: i64, arg_bits: i64) -> i64 {
-    let arg = f64::from_bits(arg_bits as u64);
-    let enable = perry_ffi::JsValue::from_bits(arg.to_bits()).is_undefined()
-        || unsafe { js_is_truthy(arg) } != 0;
-    if let Some(s) = crate::statics::sockets().lock().unwrap().get_mut(&handle) {
-        let _ = s.command(handle, crate::SocketCommand::SetNoDelay(enable));
-    }
+    let _ = arg_bits;
     handle
 }
 

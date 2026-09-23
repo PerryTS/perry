@@ -1,4 +1,4 @@
-//! A process-wide freelist of read buffers, so the socket read loop
+//! A process-wide freelist of read buffers, so the socket read path
 //! reuses pooled 16 KiB capacity instead of allocating a fresh
 //! `BytesMut` on every read.
 //!
@@ -36,19 +36,18 @@
 //! Behavior is unchanged: `checkout` always hands back an empty buffer
 //! with ≥ 16 KiB of writable capacity, identical to what
 //! `BytesMut::with_capacity(16 KiB)` + per-read `clear()`/`reserve()`
-//! produced. The 16 KiB per-read window cap still lives at the read
-//! site (the `BufMut::limit` wrapper in `run_socket_task`); this module
-//! only owns buffer *recycling*, never read sizing or chunk boundaries.
+//! produced. Read sizing and chunk boundaries belong to the read site
+//! (turnloop's pooled read lease, copied out in
+//! `turnloop_io::deliver_plaintext`); this module only owns buffer
+//! *recycling*.
 //!
 //! # Concurrency
 //!
-//! Socket tasks run cooperatively on Perry's shared multi-thread tokio
-//! runtime, so a task may check a buffer
-//! out on one reactor worker and — after migrating across an `.await`
-//! — check it back in on another. The freelist is therefore a
+//! Reads are delivered on whichever thread owns an agent's loop, and a
+//! process can run several agents, so the freelist is a
 //! `Mutex<VecDeque<BytesMut>>`, matching the other process-wide `statics`
 //! maps in this crate. The lock is held only for the O(1) `pop_front` /
-//! `push_back`; it is never held across an `.await`.
+//! `push_back`.
 //!
 //! # FIFO, not LIFO
 //!
@@ -66,9 +65,8 @@ use bytes::BytesMut;
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
-/// Per-read window size — kept in sync with the `BufMut::limit(16 KiB)`
-/// cap at the read site in `run_socket_task`. Every pooled buffer is
-/// reserved to at least this capacity on checkout.
+/// Per-read window size. Every pooled buffer is reserved to at least this
+/// capacity on checkout.
 pub(crate) const READ_BUF_CAP: usize = 16 * 1024;
 
 /// Upper bound on idle buffers parked in the freelist. The pool exists
@@ -139,12 +137,7 @@ fn checkin_to(pool: &Mutex<VecDeque<BytesMut>>, buf: BytesMut) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::{BufMut, Bytes};
-
-    // NOTE: the `perry_ffi_spawn_async` no-op link stub that lets the
-    // `perry-ext-net` test binary link without the perry-stdlib edge is
-    // defined once in `jsvalue.rs`'s `#[cfg(test)]` module and covers
-    // the whole test binary — these tests don't redefine it.
+    use bytes::Bytes;
 
     // Pool-data-structure tests run against a TEST-LOCAL freelist via
     // `checkout_from` / `checkin_to`, never the process-wide `pool()`. That
@@ -330,63 +323,57 @@ mod tests {
 
     // ─── Differential read-path test against a real socket ──────────────
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener, TcpStream};
 
-    /// Drive the *exact* pooled read-loop core — `checkout` → 16 KiB
-    /// `BufMut::limit` window → `read_buf` → `split_to(n).freeze()` →
-    /// `checkin` — over a real loopback TCP connection, collecting every
-    /// chunk in the order delivered. Each chunk is kept alive (mirroring
-    /// the global pending-events queue, where a chunk outlives the read
-    /// iteration that produced it) so the pool's recycle-under-live-chunks
-    /// path is genuinely exercised. Returns the chunk sizes and the
-    /// concatenated bytes, so a caller can assert byte-identity and the
-    /// 16 KiB chunk-boundary behavior. This is the step-2 differential
-    /// posture: prove the pool delivers byte-identical data and event
-    /// ordering, not just that the pool data structure behaves.
-    async fn read_all_pooled(payload: &[u8]) -> (Vec<usize>, Vec<u8>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    /// Drive the *exact* pooled delivery core — a read of at most 16 KiB
+    /// (turnloop's pooled lease stands in as a fixed scratch here) →
+    /// `checkout` → `extend_from_slice` → `split_to(n).freeze()` → `checkin`,
+    /// which is `turnloop_io::deliver_plaintext` — over a real loopback TCP
+    /// connection, collecting every chunk in the order delivered. Each chunk
+    /// is kept alive (mirroring the global pending-events queue, where a chunk
+    /// outlives the read that produced it) so the pool's
+    /// recycle-under-live-chunks path is genuinely exercised. Returns the
+    /// chunk sizes and the concatenated bytes, so a caller can assert
+    /// byte-identity and the 16 KiB chunk-boundary behavior.
+    fn read_all_pooled(payload: &[u8]) -> (Vec<usize>, Vec<u8>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
 
         // Writer half: connect and stream the payload, then close (FIN).
         let payload_owned = payload.to_vec();
-        let writer = tokio::spawn(async move {
-            let mut c = TcpStream::connect(addr).await.unwrap();
-            c.write_all(&payload_owned).await.unwrap();
-            c.shutdown().await.unwrap();
+        let writer = std::thread::spawn(move || {
+            let mut c = TcpStream::connect(addr).unwrap();
+            c.write_all(&payload_owned).unwrap();
+            c.shutdown(Shutdown::Write).unwrap();
         });
 
-        let (mut server, _) = listener.accept().await.unwrap();
+        let (mut server, _) = listener.accept().unwrap();
 
         // Read CONCURRENTLY with the writer — do NOT join the writer first.
         // For payloads larger than the combined OS send + receive buffers,
         // `write_all` cannot complete until the server drains the socket, so
-        // awaiting the writer up front would deadlock. The writer is joined
-        // after the read loop instead. The per-read 16 KiB `BufMut::limit`
-        // window is what bounds each chunk (asserted by the caller), so the
-        // boundary validation holds regardless of TCP segmentation timing.
+        // joining the writer up front would deadlock.
+        let mut lease = vec![0u8; READ_BUF_CAP];
         let mut chunks: Vec<Bytes> = Vec::new(); // kept alive like the queue
         let mut sizes = Vec::new();
         let mut joined = Vec::new();
         loop {
-            // Mirror `run_socket_task` exactly.
-            let mut buf = checkout();
-            let mut window = (&mut buf).limit(READ_BUF_CAP);
-            let n = server.read_buf(&mut window).await.unwrap();
-            drop(window);
+            let n = server.read(&mut lease).unwrap();
             if n == 0 {
-                break; // peer FIN — the loop's `Ok(0)` 'end'/'close' path
+                break; // peer FIN — the sink's EOF path
             }
+            // Mirror `turnloop_io::deliver_plaintext` exactly.
+            let mut buf = checkout();
+            buf.extend_from_slice(&lease[..n]);
             let chunk = buf.split_to(n).freeze();
+            checkin(buf);
             sizes.push(chunk.len());
             joined.extend_from_slice(&chunk);
             chunks.push(chunk); // outlives the iteration, as in the queue
-            checkin(buf);
         }
 
-        // The read loop saw FIN, so the writer has finished and closed;
-        // join it to surface any send-side error and avoid a detached task.
-        writer.await.unwrap();
+        writer.join().unwrap();
         (sizes, joined)
     }
 
@@ -396,11 +383,11 @@ mod tests {
     /// the same per-read 16 KiB chunk boundaries the step-2 fixed-window
     /// loop did. A pool that corrupted, dropped, or reordered bytes — or
     /// that broke the 16 KiB window cap — would fail here.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn pooled_reads_are_byte_identical_across_sizes() {
+    #[test]
+    fn pooled_reads_are_byte_identical_across_sizes() {
         // Small single message — fits in one read well under the window.
         let small = b"hello world".to_vec();
-        let (sizes, joined) = read_all_pooled(&small).await;
+        let (sizes, joined) = read_all_pooled(&small);
         assert_eq!(joined, small, "small payload must round-trip byte-for-byte");
         assert!(
             sizes.iter().all(|&s| s <= READ_BUF_CAP),
@@ -409,7 +396,7 @@ mod tests {
 
         // Exactly the 16 KiB window boundary.
         let boundary: Vec<u8> = (0..READ_BUF_CAP).map(|i| (i % 251) as u8).collect();
-        let (sizes, joined) = read_all_pooled(&boundary).await;
+        let (sizes, joined) = read_all_pooled(&boundary);
         assert_eq!(joined, boundary, "16 KiB-boundary payload must round-trip");
         assert!(
             sizes.iter().all(|&s| s <= READ_BUF_CAP),
@@ -422,7 +409,7 @@ mod tests {
         let big: Vec<u8> = (0..(READ_BUF_CAP * 4 + 777))
             .map(|i| (i % 256) as u8)
             .collect();
-        let (sizes, joined) = read_all_pooled(&big).await;
+        let (sizes, joined) = read_all_pooled(&big);
         assert_eq!(joined, big, ">16 KiB payload must reassemble byte-for-byte");
         assert!(
             sizes.iter().all(|&s| s <= READ_BUF_CAP),

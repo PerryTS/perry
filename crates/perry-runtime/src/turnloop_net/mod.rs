@@ -479,6 +479,63 @@ pub fn pipe_connect(id: i64, subsystem: u8, path: &Path) -> NetResult<()> {
     .unwrap_or_else(|| Err(no_loop()))
 }
 
+/// An already-connected stream socket a host created outside the loop.
+///
+/// A file descriptor on Unix and a `SOCKET` on Windows — the two platforms
+/// whose turnloop backend can adopt a foreign transport.
+#[cfg(unix)]
+pub type AdoptedSocket = std::os::fd::OwnedFd;
+/// See the Unix definition.
+#[cfg(windows)]
+pub type AdoptedSocket = std::os::windows::io::OwnedSocket;
+
+/// Adopt an already-connected stream socket as a connected socket on this
+/// agent's loop, under the caller's `id`.
+///
+/// This is how a connection some *other* transport produced becomes a
+/// turnloop socket: the HTTP client's raw `'upgrade'` hands its connection to
+/// `node:net`, and that connection was opened by a transport that is not this
+/// loop's. Before this existed the only way to keep such a stream alive was a
+/// tokio socket task in the receiving binding.
+///
+/// The endpoints are read off the descriptor *before* it is handed over,
+/// because turnloop reports addresses only for sockets it connected or
+/// accepted itself.
+///
+/// Ownership of `socket` passes here on every outcome: a refusal — no loop on
+/// this thread, a descriptor turnloop cannot classify, the handle ceiling —
+/// closes it rather than handing it back, so a caller never has to decide
+/// whether it still owns a descriptor.
+#[cfg(any(unix, windows))]
+pub fn adopt_stream(id: i64, subsystem: u8, socket: AdoptedSocket) -> NetResult<()> {
+    if subsystem as usize >= sink::MAX_SUBSYSTEMS {
+        return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+    }
+    let (local, peer) = {
+        let sock = socket2::SockRef::from(&socket);
+        (
+            sock.local_addr().ok().and_then(|a| a.as_socket()),
+            sock.peer_addr().ok().and_then(|a| a.as_socket()),
+        )
+    };
+    with_driver(move |driver| {
+        #[cfg(unix)]
+        let detached = turnloop::Detached::from_fd(socket);
+        #[cfg(windows)]
+        let detached = turnloop::Detached::from_socket(socket);
+        let detached = detached.map_err(|e| map_error(e, "adopt"))?;
+        let handle = driver
+            .attach(detached, token(OP_READ, id))
+            .map_err(|e| map_error(e, "adopt"))?;
+        let mut entry = Entry::new(handle, subsystem, false);
+        entry.local = local;
+        entry.peer = peer;
+        NET.with(|net| net.borrow_mut().entries.insert(id, entry));
+        Ok(())
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
 /// Arm — or move — a subsystem-owned one-shot deadline `delay_ms` from now.
 ///
 /// `id` is the caller's own id for the deadline; it must not collide with a

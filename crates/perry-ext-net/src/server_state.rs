@@ -6,7 +6,6 @@ use perry_ffi::{
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Mutex, OnceLock};
-use tokio::net::TcpStream;
 
 use crate::{statics, PendingNetEvent};
 
@@ -34,20 +33,18 @@ fn connection_order_state() -> &'static Mutex<ConnectionOrderState> {
 }
 
 fn schedule_server_connection(server_id: i64, socket_id: i64) {
-    perry_ffi::spawn_async(async move {
-        // `js_run_stdlib_pump` can reach ext-net twice in one invocation
-        // (the stdlib feature arm and the auxiliary-pump registry). Crossing
-        // the timer boundary lets the compiled await poll observe the client
-        // callback before the server connection becomes visible.
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        statics::pending_events()
-            .lock()
-            .unwrap()
-            .push(PendingNetEvent::ServerConnection(
-                server_id, socket_id, true,
-            ));
-        perry_ffi::notify_main_thread();
-    });
+    // `js_run_stdlib_pump` can reach ext-net twice in one invocation (the
+    // stdlib feature arm and the auxiliary-pump registry). Crossing a timer
+    // boundary lets the compiled await poll observe the client callback before
+    // the server connection becomes visible. The timer is a 1 ms deadline on
+    // the loop, which delivers the deferred `ServerConnection(.., true)`.
+    crate::turnloop_io::arm_deadline(
+        1,
+        crate::turnloop_io::Deadline::ServerConnection {
+            server_id,
+            socket_id,
+        },
+    );
 }
 
 fn take_completed_local_connect(state: &mut ConnectionOrderState, server_id: i64) -> bool {
@@ -215,25 +212,14 @@ pub(crate) fn build_drop_object(info: &DropInfo) -> f64 {
     f64::from_bits(JsValue::from_object_ptr(obj as *mut u8).bits())
 }
 
-pub(crate) fn should_drop_connection(server_id: i64, stream: &TcpStream) -> Option<DropInfo> {
-    reserve_connection(server_id, stream.local_addr().ok(), stream.peer_addr().ok())
-}
-
-/// Admission check for a connection turnloop accepted.
-///
-/// The turnloop twin of [`should_drop_connection`], which reads the endpoints
-/// off a `tokio::net::TcpStream`. turnloop hands the addresses back directly,
-/// so this takes them rather than a stream.
+/// Admission check for a connection turnloop accepted. turnloop hands the
+/// endpoints back directly, so this takes them rather than a stream.
 pub(crate) fn should_drop_accepted(
     server_id: i64,
     local: Option<std::net::SocketAddr>,
     peer: Option<std::net::SocketAddr>,
 ) -> Option<DropInfo> {
     reserve_connection(server_id, local, peer)
-}
-
-pub(crate) fn should_drop_ipc_connection(server_id: i64) -> Option<DropInfo> {
-    reserve_connection(server_id, None, None)
 }
 
 fn reserve_connection(
@@ -388,7 +374,7 @@ pub(crate) fn has_active_handles() -> bool {
         return true;
     }
     if statics::sockets().lock().unwrap().values().any(|socket| {
-        socket.refed && !socket.destroyed && (socket.is_open || socket.pending_rx.is_none())
+        socket.refed && !socket.destroyed && (socket.is_open || !socket.awaiting_connect)
     }) {
         return true;
     }
@@ -397,7 +383,7 @@ pub(crate) fn has_active_handles() -> bool {
         .unwrap()
         .iter()
         .any(|(id, server)| {
-            (server.listening || server.shutdown_tx.is_some())
+            (server.listening || server.listen_armed)
                 && crate::bun_tcp::server_keeps_alive(*id)
         })
 }
