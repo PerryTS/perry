@@ -22,12 +22,12 @@ fn class<'a>(hir: &'a crate::ir::Module, name: &str) -> &'a crate::ir::Class {
 fn package_member_named_like_a_builtin_is_a_dynamic_parent() {
     let hir = lower(
         r#"
-        const whatwg_url_1 = require("whatwg-url");
-        const lib = { Map: class {} };
+        import * as whatwg_url_1 from "whatwg-url";
+        const lib = { Map: class {}, Label: class {} };
         class Decl extends whatwg_url_1.URL {}
         const Expr = class extends whatwg_url_1.URL {};
         class Paren extends (lib).Map {}
-        class Label extends whatwg_url_1.Label {}
+        class LabelSub extends lib.Label {}
         "#,
     );
     for name in ["Decl", "Expr", "Paren"] {
@@ -43,7 +43,7 @@ fn package_member_named_like_a_builtin_is_a_dynamic_parent() {
         );
     }
     // A trailing name codegen does not route as a built-in is unchanged.
-    let label = class(&hir, "Label");
+    let label = class(&hir, "LabelSub");
     assert_eq!(label.extends_name.as_deref(), Some("Label"));
     assert!(label.extends_expr.is_some());
 }
