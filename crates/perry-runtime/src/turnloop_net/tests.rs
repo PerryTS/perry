@@ -750,7 +750,8 @@ fn an_adopted_stream_is_an_ordinary_socket_on_the_loop() {
     );
     peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut reply = [0u8; 5];
-    peer.read_exact(&mut reply).expect("the peer reads the reply");
+    peer.read_exact(&mut reply)
+        .expect("the peer reads the reply");
     assert_eq!(&reply, b"world");
 
     super::close(id).expect("close the adopted stream");
