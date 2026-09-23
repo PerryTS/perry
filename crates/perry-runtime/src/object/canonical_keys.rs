@@ -965,6 +965,18 @@ pub(crate) fn canonical_element_words() -> u64 {
     CANON_WORDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Every published canonical list in this agent's trie, as an array address.
+#[cfg(test)]
+pub(crate) fn published_lists_for_test() -> Vec<*mut ArrayHeader> {
+    with_table_or(Vec::new(), |t| {
+        t.nodes
+            .iter()
+            .filter(|node| node.published && node.addr != 0)
+            .map(|node| node.addr as *mut ArrayHeader)
+            .collect()
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
     let _ = CANONICAL_KEYS.try_with(|t| *t.borrow_mut() = CanonicalTable::new());

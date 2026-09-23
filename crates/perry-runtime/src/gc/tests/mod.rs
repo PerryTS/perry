@@ -12,6 +12,7 @@ mod block_skip;
 mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
+mod canonical_keys_holders;
 mod census;
 mod census_block_windows;
 mod census_whole_block;
