@@ -482,7 +482,7 @@ dotenvy = "0.15"
 # Archive creation (for publish command)
 flate2 = "1"
 tar = "0.4"
-base64 = "0.22"
+base64 = "0.23"
 # RFC 6455 §4.2.2's `Sec-WebSocket-Accept` digest. Already in the lockfile
 # through perry-stdlib's optional `sha1`, so naming it here adds no package.
 sha1 = "0.11"
