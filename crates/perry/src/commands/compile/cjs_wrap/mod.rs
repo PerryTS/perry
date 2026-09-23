@@ -49,6 +49,8 @@ mod issue_10662_tests;
 #[cfg(test)]
 mod issue_6585_tests;
 #[cfg(test)]
+mod package_resolution_tests;
+#[cfg(test)]
 mod parcel_watcher_tests;
 #[cfg(test)]
 mod preamble_canary_tests;

@@ -3,6 +3,7 @@
 
 use super::*;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 fn relative_import_specifier(from: &Path, to: &Path) -> Option<String> {
@@ -131,7 +132,7 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     // here, which is correct for the overwhelming majority of CJS-wrapped
     // files (dependencies). The real per-module entry status is threaded
     // explicitly from `collect_modules.rs`, the only place that knows it.
-    wrap_commonjs_for_target(source, source_path, None, false)
+    wrap_commonjs_for_target(source, source_path, None, false, None)
 }
 
 pub(in crate::commands::compile) fn wrap_commonjs_for_target(
@@ -139,8 +140,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     source_path: &Path,
     target: Option<&str>,
     is_entry_module: bool,
+    compile_packages: Option<&HashSet<String>>,
 ) -> String {
-    wrap_commonjs_with_body_offset(source, source_path, target, is_entry_module).0
+    wrap_commonjs_with_body_offset(
+        source,
+        source_path,
+        target,
+        is_entry_module,
+        compile_packages,
+    )
+    .0
 }
 
 /// Like [`wrap_commonjs_for_target`], but also returns the byte offset within
@@ -155,6 +164,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     source_path: &Path,
     target: Option<&str>,
     is_entry_module: bool,
+    compile_packages: Option<&HashSet<String>>,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -465,6 +475,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 && !spec.starts_with("./")
                 && !spec.starts_with("../")
                 && !std::path::Path::new(spec).is_absolute()
+                && compile_packages.is_none_or(|packages| {
+                    let (package_name, _) =
+                        super::super::resolve::parse_package_specifier(spec);
+                    packages.contains("*") || packages.contains(&package_name)
+                })
             {
                 source_path
                     .parent()

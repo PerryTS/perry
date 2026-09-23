@@ -17,55 +17,6 @@ use std::path::PathBuf;
 mod hoist_scanner;
 mod source_graph;
 
-/// Issue #11047: once a CommonJS `require("pkg")` is wrapped as an ESM import,
-/// package resolution must retain require-call semantics. `ws` exposes an ESM
-/// default under `exports.import`, but only its `exports.require` entry adds
-/// the legacy `WebSocket.Server` property.
-#[test]
-fn cjs_bare_require_uses_package_require_export_condition() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let package = dir.path().join("node_modules/dual-entry");
-    fs::create_dir_all(&package).expect("create package");
-    fs::write(
-        package.join("package.json"),
-        r#"{
-  "name": "dual-entry",
-  "exports": {
-    ".": {
-      "import": "./wrapper.mjs",
-      "require": "./index.js"
-    }
-  }
-}"#,
-    )
-    .expect("write package.json");
-    fs::write(
-        package.join("wrapper.mjs"),
-        "export default class WebSocket {}\n",
-    )
-    .expect("write ESM entry");
-    fs::write(
-        package.join("index.js"),
-        "module.exports = class WebSocket {};\n",
-    )
-    .expect("write CJS entry");
-
-    let entry = dir.path().join("entry.js");
-    let wrapped = wrap_commonjs(
-        "const WebSocket = require('dual-entry');\nmodule.exports = WebSocket;\n",
-        &entry,
-    );
-    let expected = "node_modules/dual-entry/index.js\";";
-    assert!(
-        wrapped.contains(expected),
-        "expected require-condition entry ending in `{expected}`, got:\n{wrapped}"
-    );
-    assert!(
-        !wrapped.contains("wrapper.mjs"),
-        "CommonJS require must not select the import-condition entry:\n{wrapped}"
-    );
-}
-
 // #5247: the wrapped output must report where the ORIGINAL body begins, and
 // because blanking/hoisting preserve newlines, the prefix line count lets a
 // wrapped body line map back to its original-source line. This is the unit
@@ -77,7 +28,7 @@ fn cjs_wrap_body_offset_maps_back_to_original_line() {
     // line `L - prefix_line_count`.
     let original = "function f() {\n  return new Nope();\n}\nmodule.exports = f;\n";
     let path = PathBuf::from("/tmp/x/index.js");
-    let (wrapped, body_off) = wrap_commonjs_with_body_offset(original, &path, None, false);
+    let (wrapped, body_off) = wrap_commonjs_with_body_offset(original, &path, None, false, None);
     let body_off = body_off.expect("body should be locatable in wrapped output");
     // Prefix line count = newlines before the body in the wrapped output.
     let prefix_lines = wrapped.as_bytes()[..body_off]
@@ -798,6 +749,7 @@ exports.spawn = function spawn() { return terminalCtor; };
         &PathBuf::from("/tmp/node_modules/node-pty/lib/index.js"),
         Some("windows"),
         false,
+        None,
     );
     assert!(
         wrapped.contains("import _lazyreq_0 from './windowsTerminal';"),
@@ -833,6 +785,7 @@ exports.spawn = function spawn() { return terminalCtor; };
         &PathBuf::from("/tmp/node_modules/node-pty/lib/index.js"),
         Some("linux"),
         false,
+        None,
     );
     assert!(
         wrapped.contains("from './unixTerminal'"),
