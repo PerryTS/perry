@@ -347,6 +347,7 @@ pub(crate) fn lower_class_expr(
         // captured outer id, in `captures_vec` order — read them back in
         // that same order as `LocalGet(outer_id)`, evaluated here where
         // the captures are still live.
+        ctx.fresh_evaluation_classes.insert(synthetic_name.clone());
         let fresh_expr = Expr::ClassExprFresh {
             template: synthetic_name.clone(),
             evaluation_owner: self_binding.filter(|_| self_binding_used),

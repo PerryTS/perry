@@ -925,6 +925,19 @@ fn lower_assignment_target(
                     }
                     _ => None,
                 };
+                // #11134: a fresh-per-evaluation class expression's prototype
+                // is a distinct object per evaluation; a template-keyed
+                // registration would leak the write to every evaluation. Let
+                // the ordinary PutValue path write it onto this evaluation's
+                // `.prototype`.
+                let resolved = match resolved {
+                    Some(ProtoOwner::Class(class_name))
+                        if ctx.fresh_evaluation_classes.contains(&class_name) =>
+                    {
+                        None
+                    }
+                    other => other,
+                };
                 match resolved {
                     Some(ProtoOwner::Class(class_name)) => {
                         return Ok(Expr::RegisterPrototypeMethod {

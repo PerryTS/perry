@@ -1250,7 +1250,16 @@ fn target_set(target: f64, key: f64, value: f64) {
     // back without touching the allocator.
     let key_ptr = crate::builtins::js_string_coerce(property_key) as *const crate::StringHeader;
     let target_addr = extract_pointer(target.to_bits()) as usize;
-    if let Some(class_id) = crate::object::class_id_for_decl_prototype_object(target_addr) {
+    // #11134: a per-evaluation class prototype (`ClassExprFresh`) is reported
+    // by `class_id_for_decl_prototype_object` for reflection (#11043), but the
+    // runtime method registry below is keyed by the SHARED template id. A write
+    // routed there would leak to every other evaluation and never become an own
+    // key of this prototype; it is an ordinary data write to this object.
+    let decl_class_id =
+        crate::object::class_id_for_decl_prototype_object(target_addr).filter(|_| {
+            crate::object::field_get_set::class_evaluation_prototype_class_id(target_addr).is_none()
+        });
+    if let Some(class_id) = decl_class_id {
         // Imported `C.prototype.m = value` materializes the declaration's
         // prototype object before PutValue reaches this shared write tail.
         // Keep the runtime method registry authoritative so instance dispatch

@@ -448,6 +448,12 @@ pub struct LoweringContext {
     /// claimed by more than one class expression resolve by binding identity
     /// instead (see [`InferredClassBindings::class_key_for`]).
     pub(crate) inferred_class_bindings: InferredClassBindings,
+    /// #11134: registration keys of function-body class EXPRESSIONS that lower
+    /// to `ClassExprFresh`. Each evaluation owns its own `.prototype` object, so
+    /// `C.prototype.m = v` must be an ordinary write to THAT object, never a
+    /// `RegisterPrototypeMethod` into the template-keyed side table (which
+    /// every evaluation of the template shares).
+    pub(crate) fresh_evaluation_classes: HashSet<String>,
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
