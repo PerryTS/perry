@@ -257,7 +257,8 @@ fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe 
         return ScopeProbe::Bail;
     }
     unsafe {
-        let keys = crate::object::object_keys_array(o);
+        let keys_view = crate::object::object_keys(o);
+        let keys = keys_view.arr();
         if keys.is_null() {
             return ScopeProbe::Bail;
         }
@@ -265,15 +266,17 @@ fn scope_probe(env: f64, key: *const crate::string::StringHeader) -> ScopeProbe 
             crate::object::object_live_slot_count(o),
             crate::object::INLINE_SLOT_FLOOR as u32,
         );
-        if let Some(idx) = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize) {
+        if let Some(idx) =
+            crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize, keys_view.count())
+        {
             if idx < alloc_limit {
                 let v = crate::object::js_object_get_field(o, idx);
                 return ScopeProbe::Hit(f64::from_bits(v.bits()));
             }
             return ScopeProbe::Bail;
         }
-        let full = crate::array::js_array_length(keys) as usize;
-        let n = crate::array::keys_array_len_capped_to_capacity(keys);
+        let full = keys_view.count() as usize;
+        let n = keys_view.count() as usize;
         for i in 0..n as u32 {
             let kv = crate::array::js_array_get(keys, i);
             if crate::string::js_string_key_matches(kv, key) {

@@ -37,7 +37,7 @@ fn gc_recovers_keys_and_live_slots_from_shape_id() {
 
             let slots = super::support::test_heap_child_slots_for_user(obj as *mut u8);
             assert_eq!(
-                crate::object::object_keys_array(obj) as u64,
+                crate::object::object_keys(obj).arr() as u64,
                 descriptor.keys
             );
 

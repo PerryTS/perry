@@ -100,7 +100,7 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
         return false;
     }
     let obj = ptr as *const crate::ObjectHeader;
-    let potential_keys_ptr = crate::object::object_keys_array(obj) as u64;
+    let potential_keys_ptr = crate::object::object_keys(obj).arr() as u64;
     // `ptr` being GC-tracked only proves the *allocation* is real — not that it is
     // an `ObjectHeader`. A Promise / WeakMap / ArrayBuffer / any other GC layout
     // reaches here too (e.g. via a static TYPE_OBJECT hint), and then this slot is
@@ -113,8 +113,9 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
         && ptr_is_tracked_heap_object(potential_keys_ptr as *const u8);
 
     if looks_like_valid_pointer {
-        let keys_arr = crate::object::object_keys_array(obj);
-        let keys_len = (*keys_arr).length;
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
+        let keys_len = keys_arr_view.count();
         let keys_cap = (*keys_arr).capacity;
         let field_count = crate::object::object_live_slot_count(obj);
         // keys_len is authoritative — the logical property count. field_count
@@ -151,7 +152,8 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     if !ptr_is_tracked_heap_object(ptr) {
         return false;
     }
-    let keys = crate::object::object_keys_array(ptr as *const crate::ObjectHeader);
+    let keys_view = crate::object::object_keys(ptr as *const crate::ObjectHeader);
+    let keys = keys_view.arr();
     if keys.is_null() {
         return true;
     }
@@ -161,7 +163,7 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     if !ptr_is_tracked_heap_object(keys as *const u8) {
         return false;
     }
-    (*keys).length == 0
+    keys_view.count() == 0
 }
 
 /// The object's keys array, but only when it is genuinely a tracked heap
@@ -171,12 +173,13 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
 /// field. Loading that as an `ArrayHeader` faults. Walkers bail to `{}` on `None`.
 pub(super) unsafe fn object_keys_array_checked(
     obj: *const crate::ObjectHeader,
-) -> Option<*const crate::ArrayHeader> {
-    let keys = crate::object::object_keys_array(obj) as *const crate::ArrayHeader;
+) -> Option<crate::object::ObjectKeys> {
+    let view = crate::object::object_keys(obj);
+    let keys = view.arr() as *const crate::ArrayHeader;
     if keys.is_null() || !ptr_is_tracked_heap_object(keys as *const u8) {
         return None;
     }
-    Some(keys)
+    Some(view)
 }
 
 /// Check if a NaN-boxed value is a closure (function).
@@ -1028,7 +1031,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // crash inside a `@hono/perry-server` handler). Emit "{}" and return — an
     // empty object has no children, so it can't be part of a cycle and the
     // circular-reference tracking below is unnecessary.
-    if crate::object::object_keys_array(ptr as *const crate::ObjectHeader).is_null() {
+    if crate::object::object_keys(ptr as *const crate::ObjectHeader).is_null() {
         // A null `keys_array` means no own enumerable properties — but a class
         // instance with no instance fields (only methods, e.g. a `class {
         // toJSON() {…} }`) still has a `toJSON` on its prototype/vtable that
@@ -1088,8 +1091,9 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // `read_field_bits` which routes overflow reads through
     // `js_object_get_field`'s overflow_get fallback.
     let has_overflow_fields = unsafe {
-        let keys_arr = crate::object::object_keys_array(obj);
-        !keys_arr.is_null() && (*keys_arr).length > num_fields
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
+        !keys_arr.is_null() && keys_arr_view.count() > num_fields
     };
     // The shape-template fast path emits every key in the shape; it can't
     // honor per-key `enumerable: false`, so fall through to the slow path
@@ -1120,14 +1124,14 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             }
         }
     }
-    let Some(keys_arr) = object_keys_array_checked(obj) else {
+    let Some(keys_view) = object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
         // `{}`; walking the slot as an ArrayHeader would fault.
         buf.push_str("{}");
         return;
     };
-    let keys_len = (*keys_arr).length;
+    let keys_len = keys_view.count();
     // Root the object for the enumeration below and re-derive the keys/field
     // buffers from the CURRENT header on every access: a user getter
     // (`json_object_getter_value`), a `toJSON` somewhere inside a nested
@@ -1141,7 +1145,8 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     let obj_handle = scope.root_raw_const_ptr(obj);
     let key_at = |f: u32| -> f64 {
         obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
-            let keys_arr = crate::object::object_keys_array(obj);
+            let keys_arr_view = crate::object::object_keys(obj);
+            let keys_arr = keys_arr_view.arr();
             let keys_elements =
                 crate::array::array_elements_ptr(keys_arr as *const crate::ArrayHeader)
                     as *const f64;
@@ -1183,7 +1188,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         && !has_overflow_fields
         && (*obj).class_id == 0
         && !crate::object::object_has_descriptors(ptr as usize)
-        && super::stringify_primitive_object::try_emit(obj, keys_arr, buf)
+        && super::stringify_primitive_object::try_emit(obj, keys_view, buf)
     {
         if depth > MAX_FAST_DEPTH {
             STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -1195,7 +1200,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // array-index keys first (ascending numeric), then string keys in
     // insertion order. `None` means no array-index keys, so insertion order
     // already matches spec and the loop walks `0..actual_fields` directly.
-    let key_order = crate::object::ecma_own_key_order(keys_arr);
+    let key_order = crate::object::ecma_own_key_order(keys_view);
 
     // Deferred toJSON + closure checks (issue #67 tightening): scan fields
     // once to detect if any field is actually a closure. For data-only

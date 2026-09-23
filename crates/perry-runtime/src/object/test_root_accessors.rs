@@ -15,7 +15,7 @@ pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
         .shape_cache_overflow
         .borrow()
         .get(&shape_id)
-        .map(|(ptr, _)| *ptr as usize)
+        .map(|(ptr, _, _)| *ptr as usize)
         .unwrap_or(0);
     (inline, overflow)
 }

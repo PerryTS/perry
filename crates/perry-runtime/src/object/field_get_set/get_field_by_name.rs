@@ -331,7 +331,8 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                     if class_id != 0
                         && class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
                     {
-                        let keys = crate::object::object_keys_array(o);
+                        let keys_view = crate::object::object_keys(o);
+                        let keys = keys_view.arr();
                         if !keys.is_null()
                             && ((keys as u64) >> 48) == 0
                             && crate::value::addr_class::is_above_handle_band(keys as usize)
@@ -343,6 +344,7 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                             if let Some(idx) = super::super::prop_plan::read_plan_lookup(
                                 keys as usize,
                                 key as usize,
+                                keys_view.count(),
                             ) {
                                 prime_read_stub(o, key, idx, (idx as usize) < alloc_limit);
                                 return if (idx as usize) < alloc_limit {
@@ -357,8 +359,7 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                             let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                                 as *const crate::gc::GcHeader;
                             if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY {
-                                let key_count =
-                                    crate::array::keys_array_len_capped_to_capacity(keys);
+                                let key_count = keys_view.count() as usize;
                                 if key_count <= 4096 {
                                     // #8936/#8950's shared resolver: the shape's
                                     // hash index answers in O(1), with the raw

@@ -57,7 +57,8 @@ pub(crate) struct ShapeTemplate {
 #[inline]
 pub(crate) unsafe fn shape_template_for(obj_ptr: *const u8) -> Option<*const ShapeTemplate> {
     let obj = obj_ptr as *const crate::ObjectHeader;
-    let keys_arr = crate::object::object_keys_array(obj);
+    let keys_arr_view = crate::object::object_keys(obj);
+    let keys_arr = keys_arr_view.arr();
     if keys_arr.is_null() {
         return None;
     }
@@ -73,7 +74,11 @@ pub(crate) unsafe fn shape_template_for(obj_ptr: *const u8) -> Option<*const Sha
     // drift from itself.
     let hit = with_shape_cache_frame(|frame| {
         for template in frame.iter().rev() {
-            if template.keys_arr.get() == keys_arr {
+            // A template is one key LIST: the array and the count. Lists on
+            // one growth chain share an array (see `ObjectKeys`).
+            if template.keys_arr.get() == keys_arr
+                && template.shape_fields == keys_arr_view.count()
+            {
                 return Some(&**template as *const ShapeTemplate);
             }
         }
@@ -157,18 +162,19 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     if crate::url::is_url_object_shape(obj as *mut crate::ObjectHeader) {
         return None;
     }
-    let keys_arr = crate::object::object_keys_array(obj);
+    let keys_arr_view = crate::object::object_keys(obj);
+    let keys_arr = keys_arr_view.arr();
     if keys_arr.is_null() {
         return None;
     }
-    let shape_fields = (*keys_arr).length;
+    let shape_fields = keys_arr_view.count();
     if shape_fields == 0 || shape_fields > 32 {
         return None;
     }
     // #2438: array-index keys must enumerate first in ascending numeric order,
     // which the insertion-ordered prefix template can't express. Bail to the
     // generic slow path (`stringify_object_inner`), which reorders per spec.
-    if crate::object::keys_contain_array_index(keys_arr) {
+    if crate::object::keys_contain_array_index(keys_arr_view) {
         return None;
     }
     // `keys_len` is authoritative — it is the LOGICAL property count, and the
@@ -343,7 +349,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     let Some((keys_arr, live_inline_slots)) = crate::object::object_keys_and_live_slots(obj) else {
         return false;
     };
-    if keys_arr != template.keys_arr.get() {
+    if keys_arr.arr() != template.keys_arr.get() || keys_arr.count() != template.shape_fields {
         return false;
     }
 

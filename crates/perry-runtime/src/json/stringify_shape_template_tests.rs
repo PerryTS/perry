@@ -17,7 +17,7 @@ fn shape_template_declines_element_descriptors_before_output() {
             crate::object::PropertyAttrs::new(true, false, true),
         );
         assert_eq!(
-            crate::object::object_keys_array(obj),
+            crate::object::object_keys(obj).arr(),
             template.keys_arr.get()
         );
         let mut output = String::from("unchanged");

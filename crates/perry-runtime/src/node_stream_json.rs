@@ -33,7 +33,8 @@ pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut St
     // keys array for BOTH flag keys, instead of two exported-getter scans
     // (`own_field_by_key_bytes` × 2) whose per-element `js_array_get` +
     // SSO-materializing compare dominated small-object stringify profiles.
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     let keys_ptr = keys as usize;
     if keys.is_null() || keys_ptr < 0x10000 {
         return false;
@@ -41,7 +42,7 @@ pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut St
     if gc_type_for_ptr(keys_ptr) != Some(crate::gc::GC_TYPE_ARRAY) {
         return false;
     }
-    let key_count = (*keys).length as usize;
+    let key_count = keys_view.count() as usize;
     if key_count > 65_536 || key_count > (*keys).capacity as usize {
         return false;
     }

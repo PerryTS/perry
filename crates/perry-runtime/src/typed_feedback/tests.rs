@@ -93,7 +93,7 @@ fn class_instance(
         packed.len() as u32,
     );
     let key = crate::string::js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32);
-    let keys = unsafe { crate::object::object_keys_array(obj) };
+    let keys = unsafe { crate::object::object_keys(obj).arr() };
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     (obj, keys, key, receiver)
 }
@@ -1859,7 +1859,7 @@ fn typed_feedback_class_field_get_guard_falls_back_after_shape_transition() {
     let key_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(obj, key_y, 10.0);
     assert_ne!(
-        unsafe { crate::object::object_keys_array(obj) },
+        unsafe { crate::object::object_keys(obj).arr() },
         original_keys
     );
 
@@ -3139,7 +3139,7 @@ fn class_field_get_ic_records_the_fallback_and_answers_by_name_on_a_guard_fail()
     let key_y = crate::string::js_string_from_bytes(b"y".as_ptr(), 1);
     crate::object::js_object_set_field_by_name(obj, key_y, 10.0);
     assert_ne!(
-        unsafe { crate::object::object_keys_array(obj) },
+        unsafe { crate::object::object_keys(obj).arr() },
         original_keys,
         "the fixture must actually transition the shape, or the FAIL arm never runs"
     );

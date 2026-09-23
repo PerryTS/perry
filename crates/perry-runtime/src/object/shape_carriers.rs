@@ -76,7 +76,7 @@ pub(crate) fn recompute_after_full_trace() {
             note_shape_id(entry.runtime_shape_id);
         }
     }
-    for &(keys, runtime_shape_id) in state.object_hot.shape_cache_overflow.borrow().values() {
+    for &(keys, runtime_shape_id, _) in state.object_hot.shape_cache_overflow.borrow().values() {
         if !keys.is_null() {
             note_shape_id(runtime_shape_id);
         }

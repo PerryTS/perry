@@ -345,7 +345,7 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
         let value = parser.parse_value();
         assert!(parser.finish());
         let object = value.as_pointer::<crate::ObjectHeader>();
-        assert_eq!(crate::object::object_keys_array(object), keys_array);
+        assert_eq!(crate::object::object_keys(object).arr(), keys_array);
         assert_eq!((*object).parent_class_id, shape_id);
 
         PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -410,7 +410,7 @@ fn warm_shape_fallback_keeps_duplicate_semantics_after_key_cache_eviction() {
         let value = parser.parse_value();
         assert!(parser.finish());
         let object = value.as_pointer::<crate::ObjectHeader>();
-        let keys = crate::object::object_keys_array(object);
+        let keys = crate::object::object_keys(object).arr();
         assert_eq!((*keys).length, 4, "the second id must replace the first");
         let id = cached_parse_key_ptr(b"id");
         assert_eq!(

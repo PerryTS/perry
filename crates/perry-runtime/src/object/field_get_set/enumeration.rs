@@ -1029,19 +1029,19 @@ pub(crate) fn canonical_array_index(s: &str) -> Option<u32> {
 /// Returns `None` when no key is an array index — i.e. the keys are already in
 /// spec order — so callers keep their zero-extra-allocation insertion-order
 /// fast path for the overwhelmingly common case.
-pub(crate) unsafe fn ecma_own_key_order(keys: *const ArrayHeader) -> Option<Vec<u32>> {
+pub(crate) unsafe fn ecma_own_key_order(keys: crate::object::ObjectKeys) -> Option<Vec<u32>> {
     // Cheap first pass: bail with zero allocation when no key is an array
     // index — the overwhelmingly common case, where insertion order already
     // satisfies OrdinaryOwnPropertyKeys. (Also covers a null `keys`.)
     if !keys_contain_array_index(keys) {
         return None;
     }
-    let len = crate::array::js_array_length(keys);
+    let len = keys.count();
     let mut int_keys: Vec<(u32, u32)> = Vec::new();
     let mut str_positions: Vec<u32> = Vec::new();
     let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for i in 0..len {
-        let key_val = crate::array::js_array_get(keys, i);
+        let key_val = keys.get(i);
         let idx = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
             .and_then(|b| std::str::from_utf8(b).ok())
             .and_then(canonical_array_index);
@@ -1062,10 +1062,11 @@ pub(crate) unsafe fn ecma_own_key_order(keys: *const ArrayHeader) -> Option<Vec<
 /// for paths that just need to know whether spec reordering is required (e.g.
 /// the JSON.stringify shape-template fast path) without building the full
 /// permutation. (#2438)
-pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool {
-    if keys.is_null() {
+pub(crate) unsafe fn keys_contain_array_index(keys_view: crate::object::ObjectKeys) -> bool {
+    if keys_view.is_null() {
         return false;
     }
+    let keys = keys_view.arr() as *const ArrayHeader;
     // Hot on the JSON.stringify path — called once per serialized object
     // (#6009). Keys arrays are always materialized dense GC arrays, so read
     // the element slots raw instead of paying the exported `js_array_get`
@@ -1080,7 +1081,8 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
                 (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY && (*keys).length <= (*keys).capacity
             {
-                let len = (*keys).length as usize;
+                // The receiver's own count, a prefix of the array.
+                let len = ((*keys).length as usize).min(keys_view.count() as usize);
                 let elements =
                     crate::array::array_elements_ptr(keys as *const ArrayHeader) as *const f64;
                 let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -1106,7 +1108,7 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
         }
     }
     // Fallback for anything that doesn't look like a plain dense keys array.
-    let len = crate::array::js_array_length(keys);
+    let len = keys_view.count().min(crate::array::js_array_length(keys));
     let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for i in 0..len {
         let key_val = crate::array::js_array_get(keys, i);
@@ -1510,7 +1512,8 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 }
             }
         }
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         if keys.is_null() {
             return crate::array::js_array_alloc(0);
         }
@@ -1528,12 +1531,12 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // O(table-size) owner scan for every owner that *might* hold entries,
         // now an O(1) owner-index lookup.
         let has_descriptors = super::super::owner_has_property_descriptors(obj as usize);
-        let len = crate::array::js_array_length(keys) as usize;
+        let len = keys_view.count() as usize;
         // #2438: enumerate in ECMA-262 OrdinaryOwnPropertyKeys order —
         // array-index keys first (ascending numeric), then string keys in
         // insertion order. `None` means no array-index keys, so insertion
         // order already matches spec and we walk `0..len` with no extra alloc.
-        let order = ecma_own_key_order(keys);
+        let order = ecma_own_key_order(keys_view);
         let pos = |j: usize| -> u32 {
             match &order {
                 Some(ord) => ord[j],
@@ -1830,9 +1833,10 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // field_count — same fix as Object.entries above. Without
         // this, objects with overflow fields silently returned only
         // their first 8 values.
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         let count = if !keys.is_null() {
-            crate::array::js_array_length(keys) as usize
+            keys_view.count() as usize
         } else {
             crate::object::object_live_slot_count(obj) as usize
         };
@@ -1840,7 +1844,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
 
         // #2438: walk slots in OrdinaryOwnPropertyKeys order so values line up
         // with the spec key order (and with `Object.keys`/`Object.entries`).
-        let order = ecma_own_key_order(keys);
+        let order = ecma_own_key_order(keys_view);
         let pos = |j: usize| -> u32 {
             match &order {
                 Some(ord) => ord[j],
@@ -1874,7 +1878,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..count {
             let i = pos(j);
-            if keys.is_null() || i >= crate::array::js_array_length(keys) {
+            if keys.is_null() || i >= keys_view.count() {
                 continue;
             }
             let key_val = crate::array::js_array_get(keys, i);

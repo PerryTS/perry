@@ -126,7 +126,8 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                 return result;
             }
         }
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         // Iterate up to keys_len (the logical property count), not
         // field_count. Parser-built and dict-built objects with ≥9
         // fields cap field_count at the inline alloc_limit (8) and
@@ -137,7 +138,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
         // Mirrors the same fix in `js_object_keys` and the
         // `actual_fields = keys_len` line in `json.rs::stringify_object`.
         let count = if !keys.is_null() {
-            crate::array::js_array_length(keys) as usize
+            keys_view.count() as usize
         } else {
             crate::object::object_live_slot_count(obj) as usize
         };
@@ -145,7 +146,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
 
         // #2438: emit pairs in OrdinaryOwnPropertyKeys order (array-index keys
         // first, ascending; then string keys in insertion order).
-        let order = ecma_own_key_order(keys);
+        let order = ecma_own_key_order(keys_view);
         let pos = |j: usize| -> u32 {
             match &order {
                 Some(ord) => ord[j],
@@ -179,7 +180,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
         let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..count {
             let i = pos(j);
-            if keys.is_null() || i >= crate::array::js_array_length(keys) {
+            if keys.is_null() || i >= keys_view.count() {
                 continue;
             }
             let key_val = crate::array::js_array_get(keys, i);

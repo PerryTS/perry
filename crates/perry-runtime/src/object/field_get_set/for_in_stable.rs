@@ -86,11 +86,12 @@ fn canonical_prototype_has_no_enumerable_chain_keys(receiver_addr: usize) -> boo
     // that allocates and could move the unrooted receiver passed to this native
     // helper before its shape pointer is returned.
     let prototype = prototype_addr as *const ObjectHeader;
-    let keys = unsafe { crate::object::object_keys_array(prototype) };
+    let keys_view = unsafe { crate::object::object_keys(prototype) };
+    let keys = keys_view.arr();
     let key_count = if keys.is_null() {
         0
     } else {
-        crate::array::js_array_length(keys)
+        keys_view.count()
     };
     let mut no_enumerable_chain_keys = true;
     for index in 0..key_count {
@@ -177,7 +178,7 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     };
     if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
         || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || unsafe { crate::array::keys_array_len_capped_to_capacity(keys) } != 1
+        || descriptor.logical_key_count != 1
     {
         return stable_miss("keys_array");
     }

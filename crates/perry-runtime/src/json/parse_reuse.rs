@@ -199,7 +199,7 @@ pub(crate) unsafe fn remember_parse_object_template(
     let entry = ParseObjectTemplate {
         source,
         source_len: source_len as u16,
-        keys_array: crate::object::object_keys_array(object),
+        keys_array: crate::object::object_keys(object).arr(),
         shape_id: crate::object::shapes::object_shape_stamp(object),
         values,
         len: len as u8,

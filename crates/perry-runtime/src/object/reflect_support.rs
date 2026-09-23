@@ -188,7 +188,8 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // the consult-only key index below, so no handle round-trip is needed:
         // there is no collection point between reading these pointers and
         // consuming them.
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         // Defence in depth for the class the buffer arm above closes by
         // routing: `keys_array` is only an `ArrayHeader` when `obj` really is
         // an `ObjectHeader`, and a receiver kind with no arm here reaches this
@@ -199,7 +200,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         if keys.is_null() || !crate::value::addr_class::is_plausible_heap_addr(keys as usize) {
             return false;
         }
-        let key_count = crate::array::js_array_length(keys);
+        let key_count = keys_view.count();
         // #6759's shared key index answers this exact question — "is this
         // string key one of the receiver's own keys" — in O(1) at or above
         // `KEYS_INDEX_THRESHOLD` and with a raw dense-slot compare below it.

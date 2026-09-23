@@ -725,11 +725,12 @@ pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
         // The bag is an ordinary object, so its `keys_array` already holds the
         // keys in ECMA-262 insertion order — no sort, and no ordering of our
         // own to keep in step with node's.
-        let keys = crate::object::object_keys_array(bag);
+        let keys_view = crate::object::object_keys(bag);
+        let keys = keys_view.arr();
         if keys.is_null() {
             return Vec::new();
         }
-        let len = (*keys).length as usize;
+        let len = keys_view.count() as usize;
         let mut out = Vec::with_capacity(len);
         for i in 0..len {
             let key_val = crate::array::js_array_get_f64(keys, i as u32);

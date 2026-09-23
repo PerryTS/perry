@@ -1382,13 +1382,15 @@ fn lower_put_value_dyn_ic_inline(
         // surviving target's address on move and `prune_dead_transition_
         // cache_entries` clears entries whose target died — so at mutator
         // time a nonzero next_keys always points at the SAME live array it
-        // named at insert. The one live hazard is that shared array growing
-        // in place after insert, which this exact-length check rejects (the
-        // runtime lookup's own rule; content-id equality replaces its byte
-        // compare exactly for the 6..=8-byte namespace).
+        // named at insert. The target is that array's first `slot + 1` keys:
+        // a canonical backing can have grown past them at its tip since, and
+        // its prefix never changes, so it must hold AT LEAST that many (the
+        // runtime lookup's own rule, `transition_edge_places_key`; content-id
+        // equality replaces its byte compare exactly for the 6..=8-byte
+        // namespace).
         let nk_ptr = blk.inttoptr(I64, &e_next_keys);
         let nk_len = blk.load(I32, &nk_ptr);
-        let nk_len_ok = blk.icmp_eq(I32, &nk_len, &slot_plus_1);
+        let nk_len_ok = blk.icmp_uge(I32, &nk_len, &slot_plus_1);
         blk.cond_br(&nk_len_ok, &trans_dispatch_label, &slow_label);
     }
 

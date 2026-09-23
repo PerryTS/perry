@@ -15,25 +15,25 @@ use super::*;
 // (keys array address, field count) memo). See its field docs for why it is
 // per agent and weak.
 
-fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut ArrayHeader) {
-    if class_id == 0 || keys_array.is_null() {
+fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::ObjectKeys) {
+    if class_id == 0 || keys.is_null() {
         return;
     }
     crate::state::state()
         .object_hot
         .class_keys_by_id
         .borrow_mut()
-        .insert(class_id, (keys_array as usize, field_count));
+        .insert(class_id, (keys.arr() as usize, field_count, keys.count()));
     // #6759 C5a: harvest this class's declared instance-field names into
     // the process-wide name-hash set the per-key inline-guard vetting
     // consults — and retro-check them against prototype-level descriptor
     // keys installed BEFORE this class registered (module-init ordering
     // must not create an unsound skip).
     unsafe {
-        let count = field_count.min(crate::array::js_array_length(keys_array)) as usize;
+        let count = field_count.min(keys.count()) as usize;
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..count {
-            let v = crate::array::js_array_get(keys_array, i as u32);
+            let v = keys.get(i as u32);
             if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
                 super::descriptor_state::note_declared_instance_field_name(b);
             }
@@ -97,8 +97,10 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
 /// This agent's memoized keys array for `class_id`. The address is current
 /// only until the next allocation: a caller that allocates before its last
 /// use must root it or read this again after the allocation.
-pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHeader, u32)> {
-    let (addr, field_count) = crate::state::state()
+pub(crate) fn registered_class_keys_array(
+    class_id: u32,
+) -> Option<(crate::object::ObjectKeys, u32)> {
+    let (addr, field_count, key_count) = crate::state::state()
         .object_hot
         .class_keys_by_id
         .borrow()
@@ -107,7 +109,10 @@ pub(crate) fn registered_class_keys_array(class_id: u32) -> Option<(*mut ArrayHe
     if addr == 0 {
         return None;
     }
-    Some((addr as *mut ArrayHeader, field_count))
+    Some((
+        crate::object::ObjectKeys::new(addr as *mut ArrayHeader, key_count),
+        field_count,
+    ))
 }
 
 /// #1175: allocate an object whose `[[Prototype]]` is null. Same layout as
@@ -275,9 +280,9 @@ fn object_alloc_class_inline_keys_impl(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
-    keys_array: *mut ArrayHeader,
+    keys: crate::object::ObjectKeys,
     preinstalled_shape_id: u32,
-) -> (*mut ObjectHeader, u32, bool, *mut ArrayHeader) {
+) -> (*mut ObjectHeader, u32, bool, crate::object::ObjectKeys) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
     }
@@ -296,9 +301,10 @@ fn object_alloc_class_inline_keys_impl(
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
 
-    // `keys_array` is a raw copy of the caller's root and is not nameable
-    // past this call; the helper hands back its post-allocation address.
-    let (ptr, keys_array) = alloc_instance_keeping_keys(total_size, keys_array);
+    // `keys` names a raw copy of the caller's root and is not nameable past
+    // this call; the helper hands back its post-allocation address.
+    let (ptr, keys_array) = alloc_instance_keeping_keys(total_size, keys.arr());
+    let keys = crate::object::ObjectKeys::new(keys_array, keys.count());
 
     let used_preinstalled_shape = unsafe {
         (*ptr).class_id = class_id;
@@ -314,14 +320,14 @@ fn object_alloc_class_inline_keys_impl(
             && crate::object::shapes::try_birth_stamp_preinstalled_shape(
                 ptr,
                 preinstalled_shape_id,
-                keys_array,
+                keys,
                 logical_field_count as u32,
             );
         if !used_preinstalled_shape {
             // #8113: the birth live-slot bound is a PARAMETER now — it used to
             // be read back out of the `(*ptr).field_count` store that stood
             // here.
-            set_object_keys_array_with_live(ptr, keys_array, logical_field_count as u32);
+            set_object_keys_with_live(ptr, keys, logical_field_count as u32);
         }
 
         // PerryTS/perry#4717: initialize ALL `max(field_count, 8)` field slots to
@@ -345,7 +351,7 @@ fn object_alloc_class_inline_keys_impl(
         ptr,
         logical_field_count as u32,
         used_preinstalled_shape,
-        keys_array,
+        keys,
     )
 }
 
@@ -359,6 +365,11 @@ fn object_alloc_class_inline_keys_impl(
 /// `shapes::birth_stamp_object_shape`. The mint is one shape-table probe and
 /// this is not the compiled hot path (compiled `new C(…)` sites call
 /// `js_object_alloc_class_inline_keys_stamped` with a module-init id).
+///
+/// The C entry takes a bare array, so it can only be handed an array whose
+/// header length IS the list (an exclusively owned or exact one). Runtime
+/// callers that hold a class's keys as a view — the class memo, a JSON shape
+/// hint — call [`alloc_class_instance_with_keys`] with the view's count.
 #[no_mangle]
 pub extern "C" fn js_object_alloc_class_inline_keys(
     class_id: u32,
@@ -366,17 +377,24 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     field_count: u32,
     keys_array: *mut ArrayHeader,
 ) -> *mut ObjectHeader {
-    let (ptr, birth_slots, _, keys_array) =
-        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array, 0);
+    let keys = unsafe { crate::object::ObjectKeys::owned(keys_array) };
+    alloc_class_instance_with_keys(class_id, parent_class_id, field_count, keys)
+}
+
+/// [`js_object_alloc_class_inline_keys`] for a caller that holds the class's
+/// keys as a view, count included.
+pub(crate) fn alloc_class_instance_with_keys(
+    class_id: u32,
+    parent_class_id: u32,
+    field_count: u32,
+    keys: crate::object::ObjectKeys,
+) -> *mut ObjectHeader {
+    let (ptr, birth_slots, _, keys) =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys, 0);
     unsafe {
-        let key_count = if keys_array.is_null() {
-            0
-        } else {
-            (*keys_array).length
-        };
         let id = crate::object::shapes::shape_id_for_keys_ensure(
-            keys_array as *const ArrayHeader,
-            key_count,
+            keys.arr() as *const ArrayHeader,
+            keys.count(),
         );
         crate::object::shapes::birth_stamp_object_shape(ptr, id, birth_slots);
     }
@@ -399,11 +417,15 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> *mut ObjectHeader {
+    // The key count comes from the shape the module-init code minted beside
+    // this keys global: the global holds only the array, and the array can
+    // be a canonical backing longer than this class's list.
+    let keys = preinstalled_class_keys(keys_array, shape_id);
     let (ptr, birth_slots, used_preinstalled_shape, _) = object_alloc_class_inline_keys_impl(
         class_id,
         parent_class_id,
         field_count,
-        keys_array,
+        keys,
         shape_id,
     );
     if !used_preinstalled_shape {
@@ -412,6 +434,29 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
         }
     }
     ptr
+}
+
+/// A class keys global's keys, with the count its module-init ShapeId names.
+/// A worker agent may not have installed that id yet, and an id that names a
+/// different array is not this global's; both fall back to the array itself,
+/// which module init built exact. So does an id whose count the array no
+/// longer holds: the id's facts diverged from the global beside it, and a
+/// count past the array's initialized slots would name keys that are not
+/// there. The fallback's count then differs from the id's, so the stamp
+/// declines it and publishes an exact descriptor.
+#[inline]
+fn preinstalled_class_keys(keys_array: *mut ArrayHeader, shape_id: u32) -> crate::object::ObjectKeys {
+    // SAFETY: a module keys global is a live keys array (or null).
+    let owned = unsafe { crate::object::ObjectKeys::owned(keys_array) };
+    match crate::object::shapes::shape_descriptor_by_id(shape_id) {
+        Some(descriptor)
+            if descriptor.keys == keys_array as u64
+                && descriptor.logical_key_count <= owned.count() =>
+        {
+            descriptor.keys_view()
+        }
+        _ => owned,
+    }
 }
 
 /// Build (or fetch from SHAPE_CACHE) the keys_array for a class.
@@ -434,18 +479,18 @@ pub extern "C" fn js_build_class_keys_array(
         .wrapping_add(1000000);
     let cached = shape_cache_get(shape_id);
     if !cached.is_null() {
-        remember_class_keys_array(class_id, field_count, cached);
-        return cached;
+        remember_class_keys(class_id, field_count, cached);
+        return cached.arr();
     }
     if field_count == 0 || packed_keys_len == 0 || packed_keys.is_null() {
         let arr = crate::array::js_array_alloc_with_length_longlived(0);
-        let (_, arr) = shape_cache_insert(
+        let (_, keys) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
-            arr,
+            crate::object::ObjectKeys::new(arr, 0),
         );
-        remember_class_keys_array(class_id, field_count, arr);
-        return arr;
+        remember_class_keys(class_id, field_count, keys);
+        return keys.arr();
     }
     let keys_bytes = unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
     let keys: Vec<&[u8]> = keys_bytes
@@ -486,13 +531,17 @@ pub extern "C" fn js_build_class_keys_array(
     unsafe {
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
     }
-    let (_, arr) = shape_cache_insert(
+    // The builder's array is exclusively owned until `shape_cache_insert`
+    // canonicalizes it.
+    let (_, keys) = shape_cache_insert(
         shape_id,
         crate::object::canonical_keys::LiveObject::none(),
-        arr,
+        unsafe { crate::object::ObjectKeys::owned(arr) },
     );
-    remember_class_keys_array(class_id, field_count, arr);
-    arr
+    remember_class_keys(class_id, field_count, keys);
+    // Generated code keeps only the array; `js_object_alloc_class_inline_keys_stamped`
+    // recovers the count from the ShapeId minted beside it.
+    keys.arr()
 }
 
 /// Allocate a class instance with a shape-cached keys array for field names.
@@ -549,22 +598,23 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         // Issue #179: shape-cache keys_array lives in the longlived arena
         // (see `js_build_class_keys_array` for the rationale).
         let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
-        let (_, arr) = shape_cache_insert(
+        let (_, keys) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
-            arr,
+            unsafe { crate::object::ObjectKeys::owned(arr) },
         );
-        (arr, shape_cache_get_with_id(shape_id).1)
+        (keys, shape_cache_get_with_id(shape_id).1)
     };
 
-    let (ptr, keys_arr) = alloc_instance_keeping_keys(total_size, keys_arr);
+    let (ptr, arr) = alloc_instance_keeping_keys(total_size, keys_arr.arr());
+    let keys_arr = crate::object::ObjectKeys::new(arr, keys_arr.count());
     unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        set_object_keys_array_with_live(ptr, keys_arr, field_count);
+        set_object_keys_with_live(ptr, keys_arr, field_count);
         // #6759 C3 rung 2, completed: birth-stamp here too. #8009 stamped the
         // COMPILED entry point (`js_object_alloc_class_inline_keys_stamped`)
         // and left this one lazily self-healing, which is a SPLIT population
@@ -573,7 +623,7 @@ pub extern "C" fn js_object_alloc_class_with_keys(
         // `shapes::birth_stamp_object_shape`.
         crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
     }
-    remember_class_keys_array(class_id, field_count, keys_arr);
+    remember_class_keys(class_id, field_count, keys_arr);
     ptr
 }
 
@@ -617,7 +667,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     } else {
         None
     };
-    let Some((parent_arr, _parent_fc)) = parent_keys else {
+    let Some((parent_keys, _parent_fc)) = parent_keys else {
         // No dynamic parent layout available — own-only fallback keeps the
         // prior baseline (correct for parentless / builtin-parent classes).
         return js_object_alloc_class_with_keys(
@@ -628,7 +678,8 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             own_packed_keys_len,
         );
     };
-    let parent_len = unsafe { (*parent_arr).length };
+    let parent_arr = parent_keys.arr();
+    let parent_len = parent_keys.count();
 
     // Cache the merged keys-array per class. The shape id is namespaced away
     // from the own-only shape (`+ 2_000_000`) so it can't collide with the
@@ -636,7 +687,7 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
     let shape_id = class_id.wrapping_mul(10007).wrapping_add(2_000_000);
     let (cached, cached_runtime_id) = shape_cache_get_with_id(shape_id);
     let (merged_arr, field_count, runtime_shape_id) = if !cached.is_null() {
-        (cached, unsafe { (*cached).length }, cached_runtime_id)
+        (cached, cached.count(), cached_runtime_id)
     } else {
         let own_keys: Vec<&[u8]> = if own_packed_keys.is_null() || own_packed_keys_len == 0 {
             Vec::new()
@@ -651,19 +702,21 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
         // builder roots it across its own allocations and copies it last.
         let arr = unsafe { build_longlived_keys_array(parent_arr, parent_len, &own_keys) };
         // No object exists yet, so nothing unrooted crosses this call.
-        let (_, arr) = shape_cache_insert(
+        let (_, merged) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
-            arr,
+            unsafe { crate::object::ObjectKeys::owned(arr) },
         );
-        (arr, merged_len as u32, shape_cache_get_with_id(shape_id).1)
+        debug_assert_eq!(merged.count() as usize, merged_len);
+        (merged, merged_len as u32, shape_cache_get_with_id(shape_id).1)
     };
 
     let header_size = std::mem::size_of::<ObjectHeader>();
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let fields_size = alloc_field_count * std::mem::size_of::<JSValue>();
     let total_size = header_size + fields_size;
-    let (ptr, merged_arr) = alloc_instance_keeping_keys(total_size, merged_arr);
+    let (ptr, arr) = alloc_instance_keeping_keys(total_size, merged_arr.arr());
+    let merged_arr = crate::object::ObjectKeys::new(arr, merged_arr.count());
     unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_cid;
@@ -674,13 +727,13 @@ pub extern "C" fn js_object_alloc_class_dynamic_parent(
             // GC_STORE_AUDIT(INIT): freshly allocated object field slot is initialized pointer-free.
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
-        set_object_keys_array_with_live(ptr, merged_arr, field_count);
+        set_object_keys_with_live(ptr, merged_arr, field_count);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
         // The dynamically-parented subclass shape needs the same birth stamp
         // as every other class instance, or its sites split the same way.
         crate::object::shapes::birth_stamp_object_shape(ptr, runtime_shape_id, field_count);
     }
-    remember_class_keys_array(class_id, field_count, merged_arr);
+    remember_class_keys(class_id, field_count, merged_arr);
     ptr
 }
 
@@ -750,12 +803,12 @@ pub extern "C" fn js_object_alloc_with_shape(
         let arr = unsafe { build_longlived_keys_array(ptr::null_mut(), 0, &keys) };
         // No unrooted receiver crosses this call: the object is held in
         // `obj_scope` and reloaded below.
-        let (_, arr) = shape_cache_insert(
+        let (_, keys) = shape_cache_insert(
             shape_id,
             crate::object::canonical_keys::LiveObject::none(),
-            arr,
+            unsafe { crate::object::ObjectKeys::owned(arr) },
         );
-        (arr, shape_cache_get_with_id(shape_id).1)
+        (keys, shape_cache_get_with_id(shape_id).1)
     };
 
     unsafe {
@@ -777,7 +830,7 @@ pub extern "C" fn js_object_alloc_with_shape(
                 field_count,
             );
         if !stamped_from_cache {
-            set_object_keys_array_with_live(obj_ptr, keys_arr, field_count);
+            set_object_keys_with_live(obj_ptr, keys_arr, field_count);
             // #6804: birth-stamp the runtime ShapeId (see `ShapeCacheEntry`) —
             // newborn literals carry their stable identity immediately, so
             // typed_feedback tokens and the id-keyed FIELD_CACHE never see a
@@ -857,7 +910,7 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         crate::gc::layout_init_pointer_free(new_ptr as *mut u8);
         // Empty keys array with capacity reserved for the static props to come.
         let new_keys_arr = crate::array::js_array_alloc(extra_count);
-        set_object_keys_array(new_ptr, new_keys_arr);
+        set_object_keys(new_ptr, crate::object::ObjectKeys::owned(new_keys_arr));
         return new_ptr;
     }
 
@@ -923,17 +976,14 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     // Build keys array: copy ONLY src keys. Static keys are NOT added here — codegen uses
     // js_object_set_field_by_name for each static prop, which appends new keys via
     // js_array_push. Pre-size the keys capacity to avoid immediate reallocation on append.
-    let src_keys_arr = crate::object::object_keys_array(src_ptr);
+    let src_keys = crate::object::object_keys(src_ptr);
     let new_keys_arr = crate::array::js_array_alloc(src_field_count + extra_count);
     let new_keys_elements =
         crate::array::array_elements_ptr(new_keys_arr as *const crate::array::ArrayHeader)
             as *mut f64;
 
-    if !src_keys_arr.is_null() && (src_keys_arr as usize) >= 0x10000 {
-        let src_key_len = (*src_keys_arr).length as usize;
-        let src_key_elements =
-            crate::array::array_elements_ptr(src_keys_arr as *const crate::array::ArrayHeader)
-                as *const f64;
+    if !src_keys.is_null() && (src_keys.arr() as usize) >= 0x10000 {
+        let (src_key_elements, src_key_len) = src_keys.dense_slots();
         let copy_count = src_key_len.min(src_field_count as usize);
         for i in 0..copy_count {
             // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
@@ -945,7 +995,8 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
         (*new_keys_arr).length = 0;
     }
 
-    set_object_keys_array(new_ptr, new_keys_arr);
+    // The clone's list is its own until it is published.
+    set_object_keys(new_ptr, crate::object::ObjectKeys::owned(new_keys_arr));
 
     new_ptr
 }
@@ -1019,11 +1070,11 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     }
 
     // Iterate src's keys and copy each value via set_field_by_name.
-    let src_keys = crate::object::object_keys_array(src);
-    if src_keys.is_null() || (src_keys as usize) < 0x10000 {
+    let src_keys = crate::object::object_keys(src);
+    if src_keys.is_null() || (src_keys.arr() as usize) < 0x10000 {
         return;
     }
-    let key_count = crate::array::js_array_length(src_keys) as usize;
+    let key_count = src_keys.count() as usize;
     let src_field_count = crate::object::object_live_slot_count(src) as usize;
     let alloc_limit = std::cmp::max(src_field_count, crate::object::INLINE_SLOT_FLOOR);
     let header_size = std::mem::size_of::<ObjectHeader>();
@@ -1036,7 +1087,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     // slots ≥ alloc_limit through `js_object_get_field`, the copy
     // silently dropped 9th..Nth properties.
     for i in 0..key_count {
-        let key_val = crate::array::js_array_get(src_keys, i as u32);
+        let key_val = src_keys.get(i as u32);
         // #1781: SSO-aware copy — pre-fix the `is_string()` here
         // silently dropped any ≤5-byte key stored as a SHORT_STRING_TAG
         // value, so `Object.assign(target, src)` lost `src.id`,
@@ -1780,18 +1831,22 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             let names = src_h.with_const_ptr(|src: *const ObjectHeader| {
                 js_object_get_own_property_names(crate::value::js_nanbox_pointer(src as i64))
             });
-            crate::value::js_nanbox_get_pointer(names) as *mut crate::ArrayHeader
+            // A fresh result array: exclusively owned.
+            crate::object::ObjectKeys::owned(
+                crate::value::js_nanbox_get_pointer(names) as *mut crate::ArrayHeader
+            )
         } else {
-            crate::object::object_keys_array(src)
+            crate::object::object_keys(src)
         };
-        let keys_h = scope.root_raw_mut_ptr(src_keys);
-        if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
-            // Cap the key count at the keys array's capacity: a malformed keys
-            // array can report a bogus, pointer-sized length, and an unclamped
-            // `0..key_count` copy loop turns Object.assign / object spread into a
-            // minutes-long spin (each `js_array_get` on the phantom tail walks
-            // the slow sparse path). Same guard as the wide-key field-get walk.
-            let key_count = crate::array::keys_array_len_capped_to_capacity(src_keys);
+        let keys_h = scope.root_raw_mut_ptr(src_keys.arr());
+        if !src_keys.is_null() && (src_keys.arr() as usize) >= 0x10000 {
+            // The receiver's count, snapshotted before any getter runs; the
+            // view caps it at the array's capacity (a malformed keys array can
+            // report a bogus, pointer-sized length, and an unclamped
+            // `0..key_count` copy loop turns Object.assign / object spread into
+            // a minutes-long spin).
+            let key_count = (src_keys.count() as usize)
+                .min(crate::array::keys_array_len_capped_to_capacity(src_keys.arr()));
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
             for i in 0..key_count {

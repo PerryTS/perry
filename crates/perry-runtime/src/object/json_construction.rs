@@ -31,13 +31,15 @@ unsafe fn finish_inline_json_object(
     (*object).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh inline JSON objects have no metadata edge.
     (*object).meta = ptr::null_mut();
-    if !shapes::try_birth_stamp_preinstalled_shape(object, shape_id, keys, count as u32) {
+    // A JSON record has exactly one key per field.
+    let keys_view = super::ObjectKeys::new(keys, count as u32);
+    if !shapes::try_birth_stamp_preinstalled_shape(object, shape_id, keys_view, count as u32) {
         // A pending moving collection can rewrite a noncanonical cached keys
         // array without preserving a manually installed/test shape id. The
         // ordinary canonical cache stays on the single-probe path; recover a
         // matching descriptor only for the stale-id case.
         let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
-        set_object_keys_array_with_live(object, keys, count as u32);
+        set_object_keys_with_live(object, keys_view, count as u32);
         shapes::birth_stamp_object_shape(object, id, count as u32);
     }
     mark_object_plain_ordinary(object);
@@ -206,9 +208,10 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         // GC_STORE_AUDIT(INIT): fresh record has no metadata edge.
         (*obj).meta = ptr::null_mut();
         // Keep shape publication in the existing mint-and-stamp funnel.
-        if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys, count as u32) {
+        let keys_view = super::ObjectKeys::new(keys, count as u32);
+        if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys_view, count as u32) {
             let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
-            set_object_keys_array_with_live(obj, keys, count as u32);
+            set_object_keys_with_live(obj, keys_view, count as u32);
             shapes::birth_stamp_object_shape(obj, id, count as u32);
         }
         crate::gc::layout_init_pointer_free(raw);

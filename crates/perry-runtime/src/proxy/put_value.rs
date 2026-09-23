@@ -463,7 +463,11 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         }
 
-        let mut own_idx = crate::object::prop_plan::read_plan_lookup(keys as usize, key as usize);
+        let mut own_idx = crate::object::prop_plan::read_plan_lookup(
+            keys as usize,
+            key as usize,
+            shape.logical_key_count,
+        );
         if own_idx.is_none() {
             let key_count = shape.logical_key_count as usize;
             if key_count > 4096 {

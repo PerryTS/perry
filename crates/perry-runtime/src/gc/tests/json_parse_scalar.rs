@@ -41,7 +41,7 @@ fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
             assert_eq!((*header).obj_type, GC_TYPE_OBJECT);
             assert_ne!((*header)._reserved & OBJ_FLAG_PLAIN_ORDINARY, 0);
             assert_eq!(crate::object::object_live_slot_count(object), 3);
-            let keys = crate::object::object_keys_array(object);
+            let keys = crate::object::object_keys(object).arr();
             assert_eq!((*keys).length, 3);
             let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
                 as *const crate::JSValue;
@@ -100,7 +100,7 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
             .as_pointer::<crate::ObjectHeader>();
         assert_ne!(output_address, moved as usize);
         unsafe {
-            let keys = crate::object::object_keys_array(moved);
+            let keys = crate::object::object_keys(moved).arr();
             assert_eq!((*keys).length, 2);
             assert!(crate::string::js_string_key_matches_bytes(
                 crate::array::js_array_get(keys, 0),
@@ -423,7 +423,7 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
     });
     assert!(gc_collection_count() > before);
     let object = value.as_pointer::<crate::ObjectHeader>();
-    let moved_keys = unsafe { crate::object::object_keys_array(object) };
+    let moved_keys = unsafe { crate::object::object_keys(object).arr() };
     assert_ne!(
         keys_address, moved_keys as usize,
         "canonical array must move"
@@ -435,7 +435,7 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
     let object = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits())
         .as_pointer::<crate::ObjectHeader>();
     unsafe {
-        let keys = crate::object::object_keys_array(object);
+        let keys = crate::object::object_keys(object).arr();
         assert_eq!((*keys).length, 2);
         assert!(crate::string::js_string_key_matches_bytes(
             crate::array::js_array_get(keys, 0),
@@ -533,7 +533,7 @@ fn json_empty_parse_allocates_only_fresh_output_without_suppression() {
             assert_ne!((*header)._reserved & OBJ_FLAG_PLAIN_ORDINARY, 0);
             assert_eq!((*object).class_id, 0);
             assert!((*object).meta.is_null());
-            assert!(crate::object::object_keys_array(object).is_null());
+            assert!(crate::object::object_keys(object).arr().is_null());
             assert_eq!(crate::object::object_live_slot_count(object), 0);
         }
     }
@@ -592,7 +592,7 @@ fn assert_empty_parse_moves_input_and_output(fallible: bool) {
         as *mut crate::object::ObjectHeader;
     assert_ne!(moved as usize, output_address, "output must actually move");
     unsafe {
-        assert!(crate::object::object_keys_array(moved).is_null());
+        assert!(crate::object::object_keys(moved).arr().is_null());
         assert_eq!(crate::object::object_live_slot_count(moved), 0);
         let header = (moved as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
         assert_ne!((*header)._reserved & OBJ_FLAG_PLAIN_ORDINARY, 0);

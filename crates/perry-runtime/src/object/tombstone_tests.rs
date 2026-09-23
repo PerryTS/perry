@@ -88,7 +88,7 @@ fn tombstone_hole_never_reaches_template_prefixes() {
         let back = crate::child_process::v8_serde::v8_deserialize(&payload);
         let back_obj =
             crate::value::js_nanbox_get_pointer(back) as *const crate::object::ObjectHeader;
-        let back_keys = crate::object::object_keys_array(back_obj);
+        let back_keys = crate::object::object_keys(back_obj).arr();
         assert_eq!(
             crate::array::keys_array_len_capped_to_capacity(back_keys),
             18,
@@ -151,7 +151,7 @@ fn tombstone_hole_count_survives_readd_append() {
             let k = crate::string::js_string_from_bytes(b"hc_key_05".as_ptr(), 9);
             js_object_set_field_by_name(obj, k, 5.0);
         }
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj).arr();
         let stored = crate::array::keys_array_len_capped_to_capacity(keys);
         assert!(
             stored <= 40,
@@ -307,7 +307,7 @@ fn small_churn_first_delete_forks_owned_tombstone() {
             super::delete_rest::js_object_delete_field(obj, first_delete),
             1
         );
-        let owned_keys = crate::object::object_keys_array(obj);
+        let owned_keys = crate::object::object_keys(obj).arr();
         assert_eq!(
             crate::array::keys_array_len_capped_to_capacity(owned_keys),
             1
@@ -349,7 +349,7 @@ fn small_churn_first_delete_forks_owned_tombstone() {
                 1
             );
         }
-        let squeezed_keys = crate::object::object_keys_array(obj);
+        let squeezed_keys = crate::object::object_keys(obj).arr();
         assert_eq!(
             crate::array::keys_array_len_capped_to_capacity(squeezed_keys),
             0,
@@ -576,7 +576,7 @@ fn delete_transition_leaves_tag_hole_in_the_vacated_slot() {
         let victim = crate::string::js_string_from_bytes(b"holeslot_04".as_ptr(), 11);
         assert_eq!(super::delete_rest::js_object_delete_field(obj, victim), 1);
 
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj).arr();
         let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
         assert!(slot_len > 4);
         assert_eq!(

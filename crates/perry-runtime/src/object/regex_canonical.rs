@@ -30,11 +30,12 @@ fn native(value: f64, function: *const u8) -> bool {
 }
 
 fn field_index(proto: *mut ObjectHeader, name: &[u8]) -> Option<u32> {
-    let keys = unsafe { super::object_keys_array(proto) };
+    let keys_view = unsafe { super::object_keys(proto) };
+    let keys = keys_view.arr();
     if keys.is_null() {
         return None;
     }
-    (0..crate::array::js_array_length(keys)).find(|&i| unsafe {
+    (0..keys_view.count()).find(|&i| unsafe {
         crate::string::js_string_key_matches_bytes(
             JSValue::from_bits(crate::array::js_array_get_f64(keys, i).to_bits()),
             name,

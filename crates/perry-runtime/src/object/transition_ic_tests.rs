@@ -104,7 +104,7 @@ fn transition_cache_hits_a_content_entry_through_a_fresh_key() {
     assert_ne!(fresh as usize, inserted as usize);
     assert_eq!(
         transition_cache_lookup(PREDECESSOR, fresh),
-        Some((keys as usize, 0, TARGET)),
+        Some((crate::object::ObjectKeys::new(keys as *mut ArrayHeader, 1), 0, TARGET)),
         "a fresh key with equal bytes must reach the cached edge"
     );
 

@@ -992,8 +992,9 @@ mod view_mode_tests {
             crate::object::js_object_get_field(proto, unsafe {
                 // The test deliberately uses the recorded data-slot value as
                 // its witness: installing the accessor must not overwrite it.
-                let keys = crate::object::object_keys_array(proto);
-                let count = crate::array::js_array_length(keys);
+                let keys_view = crate::object::object_keys(proto);
+                let keys = keys_view.arr();
+                let count = keys_view.count();
                 (0..count)
                     .find(|&i| {
                         let key = crate::array::js_array_get_f64(keys, i);

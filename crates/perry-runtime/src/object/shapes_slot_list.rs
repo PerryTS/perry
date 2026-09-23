@@ -1188,8 +1188,9 @@ mod tests {
                 packed.as_ptr(),
                 packed.len() as u32,
             );
-            let shared_keys = crate::object::object_keys_array(deleting);
-            assert_eq!(shared_keys, crate::object::object_keys_array(sibling));
+            let shared_keys_view = crate::object::object_keys(deleting);
+            let shared_keys = shared_keys_view.arr();
+            assert_eq!(shared_keys, crate::object::object_keys(sibling).arr());
             let keys_gc = crate::value::addr_class::try_read_gc_header(shared_keys as usize)
                 .expect("test premise: shared keys must be a live GC allocation");
             assert_ne!(
@@ -1213,9 +1214,10 @@ mod tests {
                 crate::object::js_object_delete_field(deleting, victim_key),
                 1
             );
-            let private_keys = crate::object::object_keys_array(deleting);
+            let private_keys_view = crate::object::object_keys(deleting);
+            let private_keys = private_keys_view.arr();
             assert_ne!(private_keys, shared_keys);
-            assert_eq!(crate::object::object_keys_array(sibling), shared_keys);
+            assert_eq!(crate::object::object_keys(sibling).arr(), shared_keys);
 
             assert_eq!(
                 shape_slot_lookup(

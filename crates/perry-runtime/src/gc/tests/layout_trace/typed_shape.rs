@@ -141,8 +141,8 @@ fn test_typed_shape_descriptor_visible_for_shape_keyed_objects() {
     let second = crate::object::js_object_alloc_class_inline_keys(0x6957_01, 0, 2, keys);
     unsafe {
         assert_eq!(
-            crate::object::object_keys_array(first),
-            crate::object::object_keys_array(second),
+            crate::object::object_keys(first).arr(),
+            crate::object::object_keys(second).arr(),
             "same-shape objects must share one canonical keys array"
         );
     }

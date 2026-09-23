@@ -95,7 +95,7 @@ fn a_class_instance_primes_an_id_token_after_rung1() {
         let obj = crate::object::js_object_alloc(0x6080, 8);
         let key = crate::string::js_string_from_bytes(b"pic6080_x".as_ptr(), 9);
         crate::object::js_object_set_field_by_name(obj, key, 7.0);
-        let keys = crate::object::object_keys_array(obj);
+        let keys = crate::object::object_keys(obj).arr();
         assert!(!keys.is_null(), "test premise: field append built keys");
         assert_eq!((*obj).class_id, 0x6080, "test premise: a class instance");
 

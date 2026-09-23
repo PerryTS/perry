@@ -494,11 +494,12 @@ mod tests {
             assert_eq!(header.obj_type, crate::gc::GC_TYPE_OBJECT);
             let obj = addr as *mut crate::object::ObjectHeader;
             assert_eq!(unsafe { (*obj).class_id }, kind.class_id());
-            let keys = unsafe { crate::object::object_keys_array(obj) };
+            let keys_view = unsafe { crate::object::object_keys(obj) };
+            let keys = keys_view.arr();
             let key_count = if keys.is_null() {
                 0
             } else {
-                unsafe { (*keys).length }
+                keys_view.count()
             };
             assert_eq!(key_count, 0, "a {kind:?} handle must have no own keys");
             assert!(

@@ -584,11 +584,12 @@ impl Serializer {
     /// JSON stringifier: names live in `keys_array`, values are positional
     /// (inline slots up to `max(field_count, 8)`, the rest via overflow).
     unsafe fn write_object_fields(&mut self, obj: *const ObjectHeader) -> u64 {
-        let keys_arr = crate::object::object_keys_array(obj);
+        let keys_arr_view = crate::object::object_keys(obj);
+        let keys_arr = keys_arr_view.arr();
         if keys_arr.is_null() {
             return 0;
         }
-        let keys_len = (*keys_arr).length;
+        let keys_len = keys_arr_view.count();
         let num_fields = crate::object::object_live_slot_count(obj);
         let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
         let fields_ptr = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const f64;

@@ -71,7 +71,7 @@ pub(crate) unsafe fn reserved_slot_floor_for_object(obj: *mut ObjectHeader) -> u
 /// # Safety
 /// `obj` must be a live `GC_TYPE_OBJECT` allocation.
 pub(crate) unsafe fn ensure_reserved_floor_keys(obj: *mut ObjectHeader) -> bool {
-    if !super::object_keys_array(obj).is_null() {
+    if !super::object_keys(obj).is_null() {
         return false;
     }
     let floor = reserved_slot_floor_for_object(obj);
@@ -142,7 +142,10 @@ unsafe fn stamp_reserved_floor_shape(
         keys, floor, live, generation, kind, floor,
     ));
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);
-    shapes::debug_assert_object_shape_parity_for_keys(obj, keys as *mut ArrayHeader);
+    shapes::debug_assert_object_shape_parity_for_keys(
+        obj,
+        super::ObjectKeys::new(keys as *mut ArrayHeader, floor),
+    );
     id
 }
 

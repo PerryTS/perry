@@ -1492,11 +1492,12 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
-    let keys_array = crate::object::object_keys_array(obj_ptr);
+    let keys_array_view = crate::object::object_keys(obj_ptr);
+    let keys_array = keys_array_view.arr();
     if keys_array.is_null() {
         return None;
     }
-    let key_count = crate::array::js_array_length(keys_array) as usize;
+    let key_count = keys_array_view.count() as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys_array, i as u32);
         if !key_val.is_string() {
@@ -1568,12 +1569,13 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
-    let keys_array = crate::object::object_keys_array(obj_ptr);
+    let keys_array_view = crate::object::object_keys(obj_ptr);
+    let keys_array = keys_array_view.arr();
     if keys_array.is_null() {
         return None;
     }
     let target = option_name.as_bytes();
-    let key_count = crate::array::js_array_length(keys_array) as usize;
+    let key_count = keys_array_view.count() as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys_array, i as u32);
         if !key_val.is_string() {

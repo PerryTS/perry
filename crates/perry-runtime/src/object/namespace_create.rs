@@ -243,7 +243,7 @@ mod sso_tests_1781 {
             let keys = crate::array::js_array_alloc(4);
             let sso = JSValue::try_short_string(b"id").expect("SSO");
             crate::array::js_array_push_f64(keys, f64::from_bits(sso.bits()));
-            super::super::set_object_keys_array(obj, keys);
+            super::super::set_object_keys(obj, super::super::ObjectKeys::owned(keys));
 
             let incoming = crate::string::js_string_from_bytes(b"id".as_ptr(), 2);
             assert!(

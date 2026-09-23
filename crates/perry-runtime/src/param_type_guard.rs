@@ -401,7 +401,8 @@ impl GuardState<'_> {
     /// This ran per descriptor FIELD, so a two-field object paid for the whole
     /// header validation twice.
     unsafe fn object_keys(&self, object: *const ObjectHeader) -> ObjectKeys {
-        let keys = crate::object::object_keys_array(object);
+        let keys_view = crate::object::object_keys(object);
+        let keys = keys_view.arr();
         if keys.is_null() {
             return ObjectKeys::Absent;
         }
@@ -413,7 +414,7 @@ impl GuardState<'_> {
         {
             return ObjectKeys::Invalid;
         }
-        let key_len = (*keys).length as usize;
+        let key_len = keys_view.count() as usize;
         let key_capacity = (*keys).capacity as usize;
         let required = match crate::gc::GC_HEADER_SIZE
             .checked_add(std::mem::size_of::<ArrayHeader>())

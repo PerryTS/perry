@@ -439,11 +439,12 @@ pub(super) unsafe fn dispatch_raw_pointer(
             }
 
             // Field name scan on this object
-            let keys = crate::object::object_keys_array(obj);
+            let keys_view = crate::object::object_keys(obj);
+            let keys = keys_view.arr();
             if !keys.is_null() {
                 let keys_ptr = keys as usize;
                 if (keys_ptr as u64) >> 48 == 0 && keys_ptr >= 0x10000 {
-                    let key_count = crate::array::js_array_length(keys) as usize;
+                    let key_count = keys_view.count() as usize;
                     if key_count <= 65536 {
                         let method_bytes = method_name.as_bytes();
                         for i in 0..key_count {

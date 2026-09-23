@@ -400,7 +400,7 @@ mod tests {
                 .expect("Stats must carry a shape descriptor");
             assert_eq!(descriptor.logical_key_count, 21);
             assert_eq!(descriptor.live_inline_slot_count, STATS_REGULAR_COUNT);
-            assert!(!crate::object::object_keys_array(obj).is_null());
+            assert!(!crate::object::object_keys(obj).is_null());
 
             let key = crate::string::js_string_from_bytes(b"isFile".as_ptr(), 6);
             let method = crate::object::js_object_get_field_by_name_f64(obj, key);

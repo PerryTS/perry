@@ -46,8 +46,7 @@ unsafe fn record(bits: u64) -> Option<Record> {
     let descriptor = crate::object::shapes::shape_descriptor_by_id(
         crate::object::shapes::object_shape_stamp(obj),
     )?;
-    let keys = descriptor.keys as usize as *const crate::ArrayHeader;
-    let len = key_count(keys)?;
+    let len = key_count(descriptor.keys_view())?;
     if len > descriptor.live_inline_slot_count as usize
         || size < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + len * 8
     {
@@ -61,7 +60,10 @@ unsafe fn record(bits: u64) -> Option<Record> {
     })
 }
 
-unsafe fn key_count(keys: *const crate::ArrayHeader) -> Option<usize> {
+/// The shape's key count, after validating that its keys array really holds
+/// that many dense slots (the count names a prefix of the array).
+unsafe fn key_count(view: crate::object::ObjectKeys) -> Option<usize> {
+    let keys = view.arr() as *const crate::ArrayHeader;
     let len = if keys.is_null() {
         0
     } else {
@@ -74,7 +76,10 @@ unsafe fn key_count(keys: *const crate::ArrayHeader) -> Option<usize> {
         {
             return None;
         }
-        let len = (*keys).length as usize;
+        if view.count() > (*keys).length {
+            return None;
+        }
+        let len = view.count() as usize;
         if len > MAX_FIELDS
             || (kh.size as usize)
                 < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>() + len * 8
@@ -142,12 +147,13 @@ impl Emitter {
         bucket: usize,
     ) -> Option<usize> {
         let descriptor = crate::object::shapes::shape_descriptor_by_id(shape)?;
-        let keys_array = descriptor.keys as usize as *const crate::ArrayHeader;
-        let len = key_count(keys_array)?;
+        let keys_view = descriptor.keys_view();
+        let keys_array = keys_view.arr() as *const crate::ArrayHeader;
+        let len = key_count(keys_view)?;
         if self.count == MAX_SHAPES
             || len > descriptor.live_inline_slot_count as usize
             || !super::stringify_tojson_probe::to_json_definitely_absent_without_gc(object.cast())
-            || crate::object::keys_contain_array_index(keys_array)
+            || crate::object::keys_contain_array_index(keys_view)
         {
             return None;
         }

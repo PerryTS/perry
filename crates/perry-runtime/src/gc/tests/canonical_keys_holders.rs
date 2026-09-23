@@ -36,7 +36,7 @@ fn addr_of(handle: &RuntimeHandle<'_>) -> usize {
 }
 
 unsafe fn keys_of(handle: RuntimeHandle<'_>) -> *mut ArrayHeader {
-    handle.with_const_ptr(|ptr: *const ObjectHeader| crate::object::object_keys_array(ptr))
+    handle.with_const_ptr(|ptr: *const ObjectHeader| crate::object::object_keys(ptr).arr())
 }
 
 /// The production scanners for every table these scenarios touch. The
@@ -301,7 +301,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
             "premise ({label}): subject not live — the birth allocation did not move the \
              keys array, so this run proved nothing. Check the trigger arming."
         );
-        let installed = crate::object::object_keys_array(obj);
+        let installed = crate::object::object_keys(obj).arr();
         assert_eq!(
             installed, after,
             "INVARIANT ({label}): the instance must be born with the keys array's LIVE \
@@ -390,7 +390,7 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
                 "premise ({phase}): subject not live — the birth allocation did not move the \
                  merged list"
             );
-            let installed = crate::object::object_keys_array(inst);
+            let installed = crate::object::object_keys(inst).arr();
             assert_eq!(
                 installed, merged_after,
                 "INVARIANT ({phase}): a dynamically-parented instance must be born with the \
@@ -433,7 +433,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
     ));
     let current = || addr_of(&mine);
     let registered =
-        || crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
+        || crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
     assert_eq!(
         registered(),
         Some(current()),
@@ -451,10 +451,10 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
             packed.as_ptr(),
             packed.len() as u32,
         ) as usize;
-        let seen = crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
+        let seen = crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
         crate::object::alloc::prune_dead_class_keys_entries(&|_| false);
         let seen_after_prune =
-            crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a as usize);
+            crate::object::registered_class_keys_array(CLASS_ID).map(|(a, _)| a.arr() as usize);
         tx.send((theirs, seen, seen_after_prune))
             .expect("spawning thread is waiting");
         // Keep this thread's heap mapped until the spawning thread is done.

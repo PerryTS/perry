@@ -182,11 +182,12 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     if let Some(result) = emit_repeated_output(obj, header) {
         return Some(result);
     }
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     if keys.is_null() {
         return emit_empty_object(obj);
     }
-    let fields = (*keys).length as usize;
+    let fields = keys_view.count() as usize;
     if fields == 0 {
         return emit_empty_object(obj);
     }
@@ -673,7 +674,8 @@ unsafe fn emit_cached_record_memo(
 
 #[inline(never)]
 unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
-    let keys = crate::object::object_keys_array(obj);
+    let keys_view = crate::object::object_keys(obj);
+    let keys = keys_view.arr();
     if let Some(prefix) = key_prefix_plan(obj, keys, fields) {
         let repeat_eligible = (*prefix).receiver == obj as usize
             && (*prefix).receiver_epoch == crate::object::prop_plan::prop_plan_semantic_epoch();
@@ -748,7 +750,8 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let (result, output, malloc_tracked) = json_output_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
     let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
-        let keys = crate::object::object_keys_array(obj);
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
         output.write(b'{');
         let mut at = 1usize;
         for i in 0..fields {

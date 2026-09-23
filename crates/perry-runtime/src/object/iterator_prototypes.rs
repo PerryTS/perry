@@ -534,11 +534,12 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     // one null check.
     let own_present = own.to_bits() != crate::value::TAG_UNDEFINED || {
         let obj = crate::value::js_nanbox_get_pointer(iter.get_nanbox_f64()) as *const ObjectHeader;
-        let keys = super::object_keys_array(obj);
+        let keys_view = super::object_keys(obj);
+        let keys = keys_view.arr();
         !keys.is_null()
             && super::keys_find_slot_by_bytes(
                 keys,
-                crate::array::js_array_length(keys) as u32,
+                keys_view.count() as u32,
                 b"next",
             )
             .is_some()
