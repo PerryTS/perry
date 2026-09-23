@@ -5,6 +5,20 @@ use crate::weakref::{
     js_weakset_add, js_weakset_new,
 };
 
+/// The copying-nursery guard takes the thread's scanner registry away. A weak
+/// entry is born through the static shape cache, whose keys array is a young
+/// canonical list: without the object-model scanners a minor moves that array
+/// and leaves the cache naming its old address, and the next entry is born
+/// with keys from reused memory.
+fn guard(slot_count: u32) -> CopyingNurseryTestGuard {
+    let guard = CopyingNurseryTestGuard::new(slot_count);
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    guard
+}
+
 fn rooted(slot: u32) -> f64 {
     f64::from_bits(js_shadow_slot_get(slot))
 }
@@ -26,7 +40,7 @@ fn entry_count() -> usize {
 
 #[test]
 fn weakmap_index_identity_overwrite_delete_and_reuse() {
-    let _guard = CopyingNurseryTestGuard::new(4);
+    let _guard = guard(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     root_map();
     // Distinct objects with identical (empty) fields must be distinct keys.
@@ -78,7 +92,7 @@ fn weakmap_index_entry_visits_are_linear() {
     // Counts the actual entry-array reads, including index rebuilds and
     // validation. This fails deterministically for the old n(n +/- 1)/2 scans.
     for n in [1_000u32, 10_000, 100_000] {
-        let _guard = CopyingNurseryTestGuard::new(n + 1);
+        let _guard = guard(n + 1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         root_map();
         for slot in 1..=n {
@@ -120,7 +134,7 @@ fn weakmap_index_entry_visits_are_linear() {
 
 #[test]
 fn weakmap_index_rebuilds_after_moving_minors_and_full_collection() {
-    let _guard = CopyingNurseryTestGuard::new(4);
+    let _guard = guard(4);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _tenuring = crate::gc::tenuring::set_survivals_for_test(2);
     root_map();
@@ -180,7 +194,7 @@ fn weakmap_index_rebuilds_after_moving_minors_and_full_collection() {
 
 #[test]
 fn weakmap_index_does_not_root_keys_or_alias_recycled_addresses() {
-    let _guard = CopyingNurseryTestGuard::new(2);
+    let _guard = guard(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     root_map();
     // Only the map/index sees this key. Assert tombstoning directly, with no
@@ -225,7 +239,7 @@ fn weakmap_index_does_not_root_keys_or_alias_recycled_addresses() {
 
 #[test]
 fn weakset_uses_the_same_index_after_collection_and_reuse() {
-    let _guard = CopyingNurseryTestGuard::new(2);
+    let _guard = guard(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let set = js_weakset_new();
     js_shadow_slot_set(0, ptr_bits(set as usize));
@@ -260,7 +274,7 @@ fn weakset_uses_the_same_index_after_collection_and_reuse() {
 
 #[test]
 fn weakmap_index_revalidates_a_cached_slot_tombstoned_between_slices() {
-    let _guard = CopyingNurseryTestGuard::new(3);
+    let _guard = guard(3);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::weakref::test_support::clear_weak_holders();
     root_map();
@@ -299,7 +313,7 @@ fn weakmap_index_revalidates_a_cached_slot_tombstoned_between_slices() {
 
 #[test]
 fn weakmap_index_survives_explicit_full_gc_with_forced_movement() {
-    let _guard = CopyingNurseryTestGuard::new(3);
+    let _guard = guard(3);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _schedule =
         crate::gc::schedule::ScheduleGuard::set(7, crate::gc::schedule::rate_threshold(1.0));

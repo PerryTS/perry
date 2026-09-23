@@ -1716,21 +1716,24 @@ pub(crate) unsafe fn publish_object_shape_from(
                 return old_id;
             }
             let shared = (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
-            debug_assert!(
-                !shared,
-                "shared keys array mutated in place under an immutable ShapeId"
-            );
-            if shared {
-                return old_id;
+            // A SHARED keys array is a canonical backing: the lists on one
+            // growth chain are prefixes of it, each with its own descriptor,
+            // and a prefix never changes (only the tip is appended, past every
+            // published count). Moving to a longer or shorter prefix of it is
+            // an ordinary transition with no history to retire. An OWNED
+            // array has one carrier, whose earlier same-address versions this
+            // publish supersedes.
+            if !shared {
+                // An Array-subclass receiver is the one owner whose history IS
+                // reinstalled: `array_tail_transition` learns the (predecessor,
+                // successor) pair right after this publish returns and its
+                // reverse edge stamps the predecessor back on `pop`. That cache
+                // takes ownership through `cache_carrier`, but only once the
+                // learner has run, so the gate here is the receiver kind the
+                // learner is scoped to (`record_array_tail` in the append tail).
+                retire_owned_history =
+                    !crate::array::is_array_subclass_class_id((*obj).class_id);
             }
-            // An Array-subclass receiver is the one owner whose history IS
-            // reinstalled: `array_tail_transition` learns the (predecessor,
-            // successor) pair right after this publish returns and its
-            // reverse edge stamps the predecessor back on `pop`. That cache
-            // takes ownership through `cache_carrier`, but only once the
-            // learner has run, so the gate here is the receiver kind the
-            // learner is scoped to (`record_array_tail` in the append tail).
-            retire_owned_history = !crate::array::is_array_subclass_class_id((*obj).class_id);
         }
     }
 
@@ -1827,7 +1830,13 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     });
     let keys = current.keys as usize as *mut ArrayHeader;
     let key_count = current.logical_key_count;
-    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // A dictionary receiver's identity lives in its own namespace, disjoint
+    // from both ordinary ones (see `object/dictionary.rs`).
+    let generation = if crate::object::dictionary::is_dictionary(obj) {
+        crate::object::dictionary::next_generation()
+    } else {
+        SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    };
     if generation == 0 {
         shape_id_exhausted_abort();
     }
@@ -1960,6 +1969,11 @@ pub(crate) unsafe fn transition_object_shape_semantics_for_prototype(
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
+    // A dictionary receiver's shape is its own; there is no sharing to earn,
+    // and its generation must stay in the dictionary namespace.
+    if crate::object::dictionary::is_dictionary(obj) {
+        return transition_object_shape_semantics(obj);
+    }
     let Some(generation) =
         deterministic_prototype_generation(object_shape_stamp(obj), prototype_serial, link_kind)
     else {
@@ -2009,6 +2023,11 @@ pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
+    // As for a prototype divergence: a dictionary receiver's shape is its
+    // own, and its generation stays in the dictionary namespace.
+    if crate::object::dictionary::is_dictionary(obj) {
+        return transition_object_shape_semantics(obj);
+    }
     let Some(generation) =
         deterministic_semantic_generation(object_shape_stamp(obj), key_bytes, attrs)
     else {
@@ -2219,6 +2238,17 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
     }
 }
 
+/// A shape-shared keys array's prefix never changes: the only in-place write
+/// any such array sees is a canonical backing's tip append, past every
+/// published count (`canonical_keys::append_at_tip`); every other writer
+/// copies first. So one index serves every list on it.
+unsafe fn keys_prefix_is_immutable(keys: *const ArrayHeader) -> bool {
+    crate::value::addr_class::try_read_gc_header(keys as usize).is_some_and(|gc| {
+        gc.obj_type == crate::gc::GC_TYPE_ARRAY
+            && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+    })
+}
+
 /// Build (or extend) the slot map for `keys` covering `key_count` keys.
 unsafe fn index_range(shape: &mut ShapeIndex, keys: *const ArrayHeader, key_count: u32) {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -2280,11 +2310,16 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let shape = match inner.indices.get_mut(&keys_id) {
         Some(s) => {
-            if s.indexed_len > key_count {
-                // Shrink (delete/compaction): slots are untrustworthy.
+            if s.indexed_len > key_count && !keys_prefix_is_immutable(keys) {
+                // An owned array that shrank (delete/compaction): slots are
+                // untrustworthy.
                 inner.indices.remove(&keys_id);
                 return KeysIndexVerdict::Unindexed;
             }
+            // A canonical backing's index covers its longest list, and a
+            // shorter list on it answers from the same index: every candidate
+            // below is kept only if its slot is below THIS list's count, and
+            // is content-validated, so a slot of a longer list can only miss.
             s
         }
         None => {
@@ -2301,7 +2336,9 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
     if shape.indexed_len < key_count {
         index_range(shape, keys, key_count);
     }
-    let complete = shape.indexed_len == key_count;
+    // Complete for THIS list when it covers at least its `key_count` slots:
+    // a shorter list on a canonical backing is a prefix of what was indexed.
+    let complete = shape.indexed_len >= key_count;
     let absent = if complete {
         KeysIndexVerdict::Absent
     } else {
@@ -2342,6 +2379,13 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
     // Hash-bucket candidates existed but none matched: with a complete index
     // that still proves absence (the bucket held colliding OTHER keys).
     absent
+}
+
+/// Total slots covered by every live slot index (test instrumentation).
+#[cfg(test)]
+pub(crate) fn indexed_slots_for_test() -> u64 {
+    let inner = crate::state::state().shapes.inner.borrow();
+    inner.indices.values().map(|ix| u64::from(ix.indexed_len)).sum()
 }
 
 /// Record a freshly appended key: `keys` (the POST-append array — a clone

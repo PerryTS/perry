@@ -1103,13 +1103,14 @@ fn transition_edge_places_key(
         }
         let keys = next_keys as *const ArrayHeader;
         // A single-key transition edge (prev + key) always produces a target
-        // shape of exactly `slot_idx + 1` keys, with `key` at the last slot.
-        // Requiring the EXACT length (not just `slot_idx < length`) also
-        // rejects the "shared target grew in place after caching" case — where
-        // the cached `target_len` still matches but the actual array is now
-        // longer, so adopting it would give the object a keys_array with more
-        // keys than field_count tracks (keys present, values undefined).
-        if (*keys).length != slot_idx.wrapping_add(1) {
+        // list of exactly `slot_idx + 1` keys, with `key` at the last slot.
+        // The target is `(next_keys, slot_idx + 1)`: its count comes from the
+        // edge, never from the array. A cached array can be a canonical
+        // backing whose tip has grown past the target since; its first
+        // `slot_idx + 1` keys never change (a shape-shared array is appended
+        // only at its tip, past every published count), so it still holds the
+        // target as long as it is at least that long.
+        if (*keys).length <= slot_idx {
             return false;
         }
         let stored = crate::array::js_array_get(keys, slot_idx);
@@ -1163,13 +1164,29 @@ fn transition_cache_lookup(
         // owner (whose keys_array points at the same memory) must
         // now treat the array as shared.
         unsafe {
+            // Only a SHARED array's prefix is immutable. An array that was
+            // still owned until this stamp may have been rewritten in place by
+            // its owner since the insert, so it must still be exactly the
+            // target's length (the rule before shared backings); a shared one
+            // may have grown past it at its tip.
+            // `transition_edge_places_key` above already proved this address
+            // is a tracked array header.
+            let was_shared = (*((entry.next_keys as *const u8)
+                .wrapping_sub(crate::gc::GC_HEADER_SIZE)
+                as *const crate::gc::GcHeader))
+                .gc_flags
+                & crate::gc::GC_FLAG_SHAPE_SHARED
+                != 0;
             if !transition_cache_stamp_shape_shared(entry.next_keys) {
                 #[cfg(feature = "shape-mint-diag")]
                 shape_mint_census::note_transition_miss(shape_mint_census::TcMiss::Unshared);
                 return None;
             }
             let keys = entry.next_keys as *const ArrayHeader;
-            if (*keys).length != expected_len || (*keys).length > (*keys).capacity {
+            if (*keys).length < expected_len
+                || (!was_shared && (*keys).length != expected_len)
+                || (*keys).length > (*keys).capacity
+            {
                 #[cfg(feature = "shape-mint-diag")]
                 shape_mint_census::note_transition_miss(shape_mint_census::TcMiss::TargetLen);
                 return None;
@@ -1259,7 +1276,9 @@ fn transition_cache_insert(
         {
             let expected_len = slot_idx.saturating_add(1);
             let keys = next_keys as *const ArrayHeader;
-            if (*keys).length == expected_len && (*keys).length <= (*keys).capacity {
+            // The target is the array's first `expected_len` keys (see
+            // `transition_edge_places_key`).
+            if (*keys).length >= expected_len && (*keys).length <= (*keys).capacity {
                 target_len = expected_len;
             }
         }
@@ -1790,13 +1809,15 @@ unsafe fn set_object_keys_with_live(
     // `publish_object_shape_from` and every other post-birth publish now
     // route through — this call site no longer needs to remember the note.
     shapes::publish_object_shape_from(obj, predecessor, keys, live_inline_slot_count);
-    // #10868 step 2.5 stage 1. The predicate is stubbed off (see
-    // `dictionary::should_latch_to_dictionary`, one relaxed load when off);
-    // armed, this is where a receiver stops interning its key list.
+    // #10868 step 2.5: this is where a receiver whose key list is unique to
+    // it stops interning (`dictionary::should_latch_to_dictionary`). The run
+    // is nonzero only when the append that produced `keys` created the list.
     if !keys_array.is_null() {
-        let key_count = keys.count();
-        if dictionary::should_latch_to_dictionary(key_count) {
-            dictionary::latch_object_to_dictionary(obj);
+        let unique_run = canonical_keys::take_unique_run(keys);
+        if dictionary::should_latch_to_dictionary(unique_run)
+            && dictionary::latch_object_to_dictionary(obj)
+        {
+            canonical_keys::note_latched_away(keys);
         }
     }
 }

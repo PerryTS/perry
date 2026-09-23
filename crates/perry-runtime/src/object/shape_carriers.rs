@@ -46,7 +46,9 @@ fn stable_target_resolves(entry: TransitionEntry) -> bool {
             return false;
         }
         let keys = entry.next_keys as *const ArrayHeader;
-        if (*keys).length != expected_len || (*keys).length > (*keys).capacity {
+        // The target is the backing's first `expected_len` keys; a canonical
+        // backing that grew past them since (its tip) still holds them.
+        if (*keys).length < expected_len || (*keys).length > (*keys).capacity {
             return false;
         }
     }

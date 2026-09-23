@@ -210,7 +210,11 @@ fn test_json_tape_eager_materialization_handles_survive_copied_minor_gc() {
     // Long-lived canonical arrays used to conceal the missing registrations.
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    // The shape table's descriptors name those same young lists; its weak
+    // rewrite must run too, or a descriptor keeps a moved list's old address.
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::scan_class_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     let object_input = br#"{"a":[{"b":"c"}],"d":1}"#;
     let object_tape = crate::json_tape::build_tape(object_input).unwrap();
     let object_js = {

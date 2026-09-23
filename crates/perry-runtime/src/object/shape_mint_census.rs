@@ -111,8 +111,10 @@ struct Census {
     by_site_cause: HashMap<((&'static str, u32), MintCause), u64>,
     /// Ordered key-name list content hashes ever seen.
     key_lists: HashSet<u64>,
-    /// Distinct keys-array addresses ever minted under.
-    keys_addrs: HashSet<u64>,
+    /// Distinct `(keys-array address, key count)` lists ever minted under.
+    /// A pair, not the address: the lists of one growth chain share a
+    /// backing array, so the address alone names a chain.
+    keys_addrs: HashSet<(u64, u32)>,
     /// Family size at mint, bucketed: 0,1,2,3-4,5-8,9-16,17-64,65+.
     family_hist: [u64; 8],
     /// Per-key-list mint counts, for the worst offenders.
@@ -447,7 +449,7 @@ pub(crate) fn note_mint(
     let Ok(mut c) = census().lock() else {
         return;
     };
-    c.keys_addrs.insert(keys);
+    c.keys_addrs.insert((keys, logical_key_count));
     let list_known = !c.key_lists.insert(key_list_hash);
 
     let cause = classify_mint(
@@ -511,7 +513,7 @@ pub(crate) fn dump() {
         mints
     ));
     out.push_str(&format!(
-        "  distinct keys ADDRESSES  {}\n  distinct key-NAME lists  {}\n",
+        "  distinct keys ADDRESSES  {} (address, count)\n  distinct key-NAME lists  {}\n",
         c.keys_addrs.len(),
         c.key_lists.len()
     ));
@@ -531,13 +533,20 @@ pub(crate) fn dump() {
     {
         let (live, canon_minted, reaped) = crate::object::canonical_keys::canonical_stats();
         let words = crate::object::canonical_keys::canonical_element_words();
+        let (published, backings, backing_slots, in_place) =
+            crate::object::canonical_keys::canonical_storage_stats();
         out.push_str(&format!(
-            "  canonical keys trie: live {}  minted {}  reaped {}  elements {} ({} KB)\n",
-            live,
-            canon_minted,
-            reaped,
-            words,
-            words * 8 / 1024
+            "  canonical keys trie: live {}  minted {}  reaped {}  listed keys {}\n",
+            live, canon_minted, reaped, words
+        ));
+        out.push_str(&format!(
+            "  canonical storage: published lists {}  backings {}  slots {} ({} KB)  \
+             in-place appends {}\n",
+            published,
+            backings,
+            backing_slots,
+            backing_slots * 8 / 1024,
+            in_place
         ));
         // The named witness for the funnel sabotage. One canonical array per
         // ordered key list means a mint can only ever have seen as many

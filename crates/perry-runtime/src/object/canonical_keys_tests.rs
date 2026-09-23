@@ -314,8 +314,8 @@ fn batch_prune_orphans_children_before_reusing_ids() {
     let reused_parent = table.alloc_node(7, ROOT_NODE, 50, 1, true, true);
     assert_eq!((reused_child, reused_parent), (dead_child, parent));
     assert!(!table.edges.contains_key(&(reused_parent, 20)));
-    assert_eq!(table.by_addr[&2], child);
-    assert_eq!(table.by_addr[&4], sibling);
+    assert_eq!(table.by_addr[&(2, 2)], child);
+    assert_eq!(table.by_addr[&(4, 2)], sibling);
     table.free_nodes(&[child, sibling, grandchild, reused_child, reused_parent]);
     assert!(table.edges.is_empty());
     assert!(table.by_addr.is_empty());

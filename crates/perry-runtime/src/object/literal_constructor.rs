@@ -55,6 +55,18 @@ mod tests {
         let _evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
         let _verification = crate::gc::knob_overrides::VerifyEvacuationTestGuard::on();
         crate::gc::register_runtime_handle_root_scanner_for_tests();
+        // The isolation guard removes production's root registry. The keys
+        // lists are young canonical arrays the setter's collection moves, so
+        // the object-model rewrites must run or the receiver's shape keeps
+        // naming a moved list's old address.
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+        crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::scan_transition_cache_roots_mut,
+        );
+        crate::gc::gc_register_mutable_root_scanner(
+            crate::object::shapes::scan_shape_table_rekey_mut,
+        );
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let setter = crate::closure::js_closure_alloc(collecting_setter as *const u8, 0);
