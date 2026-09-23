@@ -1974,7 +1974,10 @@ pub(crate) unsafe fn nm_get_own_descriptor(
         "process" | "process.namespace" | "process.default"
     ) && key_name == "permission"
     {
-        let value = crate::process::process_metadata_property("permission")
+        // Through the `process` constant registry: a descriptor read needs the
+        // `process` value, whose every source installs that registry row.
+        let value = super::native_module_registry::nm_const_lookup("process")
+            .and_then(|f| unsafe { f("process", "permission", 0.0, false) })
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
         return Some(build_data_descriptor(value, false, true, false));
     }

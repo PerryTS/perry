@@ -1168,10 +1168,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_box = lower_expr(ctx, index)?;
                 // A computed key can name `process` / `console` (or read a
                 // console method off the collapsed `console` receiver).
-                crate::expr::property_get::globalget::emit_global_value_installs(
-                    ctx,
-                    "globalThis",
-                );
+                crate::expr::property_get::globalget::emit_global_value_installs(ctx, "globalThis");
                 let blk = ctx.block();
                 let key_handle = unbox_str_handle(blk, &key_box);
                 return Ok(blk.call(

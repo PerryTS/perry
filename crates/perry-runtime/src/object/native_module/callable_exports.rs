@@ -1598,9 +1598,9 @@ pub(crate) unsafe fn nm_attach_module(
     if property_name == "SourceMap" {
         // SourceMap's prototype is intrinsic constructor state; every import
         // form installs this handler before the callable can be minted.
-        crate::process::module_source_map_attach_constructor(
-            crate::value::js_nanbox_get_pointer(value) as usize,
-        );
+        crate::process::module_source_map_attach_constructor(crate::value::js_nanbox_get_pointer(
+            value,
+        ) as usize);
     }
     if matches!(property_name, "flushCompileCache" | "isBuiltin") {
         set_builtin_closure_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize);

@@ -483,12 +483,11 @@ pub(crate) unsafe fn get_native_module_constant(
         // (see `nm_const_*` below): this hub is live in every binary, so a
         // direct arm here would link that module's surface into programs
         // that never import it.
-        "inspector" | "inspector/promises" | "tls" | "zlib" | "zlib.constants" | "http"
-        | "https" | "cluster" => {
+        "process" | "inspector" | "inspector/promises" | "tls" | "zlib" | "zlib.constants"
+        | "http" | "https" | "cluster" => {
             let f = super::super::native_module_registry::nm_const_lookup(module_name)?;
             f(module_name, property, namespace_obj, is_cjs_default_object)
         }
-        "process" => crate::process::process_metadata_property(property),
         "dns" => match property {
             "promises" => {
                 crate::dns::dns_promises_init_servers_from_callback_if_unset();
@@ -1138,6 +1137,18 @@ fn fs_const_tail_reference(prop: &str) -> Option<f64> {
     v.map(|n| n as f64)
 }
 
+/// `process` metadata properties — registered by `js_nm_install_process()`,
+/// which codegen emits at every site that yields `process` as a value or
+/// reads one of its members by name.
+pub(crate) unsafe fn nm_const_process(
+    _module_name: &str,
+    property: &str,
+    _namespace_obj: f64,
+    _is_cjs_default_object: bool,
+) -> Option<f64> {
+    crate::process::process_metadata_property(property)
+}
+
 /// `node:inspector` constants/value exports — registered by `js_nm_install_inspector()` and
 /// reached only through [`get_native_module_constant`]'s registry arm.
 pub(crate) unsafe fn nm_const_inspector(
@@ -1509,4 +1520,3 @@ mod sqlite_const_table_tests {
         }
     }
 }
-

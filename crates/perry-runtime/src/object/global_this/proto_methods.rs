@@ -1301,7 +1301,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             unsafe { install_web_builtin_to_string_tag(proto_obj, "URL") };
             let proto =
                 crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
+            // Gated like the other `global-url` member tables: the compiler
+            // enables it for any program that names `URL`, so a program that
+            // cannot reach this prototype links none of the accessors.
+            #[cfg(feature = "global-url")]
             crate::url::prototype::install_url_prototype_accessors(proto);
+            #[cfg(not(feature = "global-url"))]
+            let _ = proto;
         }
         "AbortController" => unsafe {
             install_web_builtin_to_string_tag(proto_obj, "AbortController")

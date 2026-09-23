@@ -276,7 +276,10 @@ pub extern "C" fn js_nm_install_child_process() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
-    nm_register_const(NmBucket::Cluster, super::native_module::constants::nm_const_cluster);
+    nm_register_const(
+        NmBucket::Cluster,
+        super::native_module::constants::nm_const_cluster,
+    );
     nm_register_attach(
         NmBucket::Cluster,
         super::native_module::callable_exports::nm_attach_cluster,
@@ -346,7 +349,10 @@ pub extern "C" fn js_nm_install_fs() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_http() {
-    nm_register_const(NmBucket::Http, super::native_module::constants::nm_const_http);
+    nm_register_const(
+        NmBucket::Http,
+        super::native_module::constants::nm_const_http,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Http as usize].store(
         nm_dispatch_http as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -354,7 +360,10 @@ pub extern "C" fn js_nm_install_http() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_inspector() {
-    nm_register_const(NmBucket::Inspector, super::native_module::constants::nm_const_inspector);
+    nm_register_const(
+        NmBucket::Inspector,
+        super::native_module::constants::nm_const_inspector,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Inspector as usize].store(
         nm_dispatch_inspector as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -416,6 +425,10 @@ pub extern "C" fn js_nm_install_process() {
         Ordering::Relaxed,
     );
     crate::process::arm_process_stdio_properties();
+    nm_register_const(
+        NmBucket::Process,
+        super::native_module::constants::nm_const_process,
+    );
 }
 
 /// Install the dispatch surface behind the `process` / `console` VALUES
@@ -567,7 +580,10 @@ pub extern "C" fn js_nm_install_wasi() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_zlib() {
-    nm_register_const(NmBucket::Zlib, super::native_module::constants::nm_const_zlib);
+    nm_register_const(
+        NmBucket::Zlib,
+        super::native_module::constants::nm_const_zlib,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Zlib as usize].store(
         nm_dispatch_zlib as NmDispatchFn as *mut (),
         Ordering::Relaxed,
