@@ -423,6 +423,7 @@ fn collect_module_one(
                 &canonical,
                 target,
                 cjs_is_entry_module,
+                Some(&ctx.compile_packages),
             );
             // Newlines before the original body in the wrapped output = the
             // wrapper prefix line count. Recorded only when the body was
@@ -441,6 +442,7 @@ fn collect_module_one(
                 &canonical,
                 target,
                 cjs_is_entry_module,
+                Some(&ctx.compile_packages),
             )
         }
     } else {
