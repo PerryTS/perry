@@ -183,6 +183,7 @@ mod artifact_source_text;
 mod artifacts;
 mod boxed_locals;
 mod cjs_exports;
+mod class_artifacts;
 #[cfg(test)]
 mod clone_suffix_tests;
 mod closure;
@@ -199,6 +200,7 @@ mod declared_string_add_tests;
 mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
+mod export_value_wrappers;
 pub(crate) mod func_registry;
 mod function;
 mod function_source_header;
