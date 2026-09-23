@@ -46,7 +46,7 @@ use perry_runtime::turnloop_net as tl;
 use perry_tls_session::TlsSession;
 
 use super::{
-    liveness, listeners, next_tls_handle_id, push_tls_event, servers, socket_api, sockets,
+    listeners, liveness, next_tls_handle_id, push_tls_event, servers, socket_api, sockets,
     tls_server_connection_finished, tls_server_connection_started, DynamicCertResolver,
     PendingTlsEvent, TlsSocketState,
 };
@@ -86,7 +86,9 @@ fn handle_of(id: i64) -> Option<i64> {
 }
 
 fn timer_handle_of(id: i64) -> Option<i64> {
-    (TIMER_BAND..BAND_END).contains(&id).then(|| id - TIMER_BAND)
+    (TIMER_BAND..BAND_END)
+        .contains(&id)
+        .then(|| id - TIMER_BAND)
 }
 
 /// What an accepted connection is handshaken with — captured at `listen()`,
@@ -232,8 +234,8 @@ pub(super) fn listen(server_id: i64, host: String, port: u16, acceptor: Acceptor
             }
         }
         let Some(local) = bound else {
-            let reason = last_error
-                .unwrap_or_else(|| "could not resolve to any address".to_string());
+            let reason =
+                last_error.unwrap_or_else(|| "could not resolve to any address".to_string());
             return bind_failed(server_id, format!("bind {bind}: {reason}"));
         };
         if let Some(server) = servers().lock().unwrap().get_mut(&server_id) {
@@ -383,7 +385,10 @@ fn handshake_failed_record(
             server_handle: Some(server_id),
         },
     );
-    listeners().lock().unwrap().insert(socket_id, HashMap::new());
+    listeners()
+        .lock()
+        .unwrap()
+        .insert(socket_id, HashMap::new());
     push_tls_event(PendingTlsEvent::ServerTlsClientError(
         server_id,
         socket_id,
@@ -494,8 +499,7 @@ fn established(socket_id: i64, conn: &mut Conn) {
                 max_send_fragment: 16 * 1024,
                 allow_half_open: conn.allow_half_open,
                 locally_constructed: false,
-                authorization_error: (!authorized)
-                    .then(|| "UNABLE_TO_GET_ISSUER_CERT".to_string()),
+                authorization_error: (!authorized).then(|| "UNABLE_TO_GET_ISSUER_CERT".to_string()),
                 protocol,
                 alpn_protocol,
                 servername,
@@ -505,7 +509,10 @@ fn established(socket_id: i64, conn: &mut Conn) {
             },
         );
     }
-    listeners().lock().unwrap().insert(socket_id, HashMap::new());
+    listeners()
+        .lock()
+        .unwrap()
+        .insert(socket_id, HashMap::new());
     push_tls_event(PendingTlsEvent::ServerSecureConnection(
         conn.server_id,
         socket_id,

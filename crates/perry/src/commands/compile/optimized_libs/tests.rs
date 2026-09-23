@@ -501,7 +501,10 @@ fn only_tokio_bundling_wrappers_select_async_runtime() {
 #[test]
 fn every_tokio_bundling_wrapper_is_co_built() {
     for binding in super::super::well_known::iter_well_known() {
-        let module = binding.package.strip_prefix("node:").unwrap_or(&binding.package);
+        let module = binding
+            .package
+            .strip_prefix("node:")
+            .unwrap_or(&binding.package);
         if binding_bundles_tokio(module) {
             assert!(
                 binding_needs_shared_tokio(module),

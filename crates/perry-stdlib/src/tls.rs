@@ -1381,11 +1381,7 @@ pub unsafe extern "C" fn js_tls_server_listen(
         if cb != 0 {
             register_listener(handle, "listening".to_string(), cb, true);
         }
-        (
-            config,
-            server.cert_resolver.clone(),
-            server.allow_half_open,
-        )
+        (config, server.cert_resolver.clone(), server.allow_half_open)
     };
     let (config, cert_resolver, allow_half_open) = config;
     turnloop_server::listen(

@@ -101,7 +101,10 @@ fn listening_server() -> (i64, u16) {
     // SAFETY: as above; `server` came from `js_tls_create_server`.
     unsafe { js_tls_server_listen(server, 0.0, undefined, undefined) };
     let port = servers().lock().unwrap().get(&server).unwrap().bound_port;
-    assert_ne!(port, 0, "the listener must be bound before listen() returns");
+    assert_ne!(
+        port, 0,
+        "the listener must be bound before listen() returns"
+    );
     assert!(
         perry_runtime::turnloop_net::sink_installed(turnloop_server::SUBSYSTEM),
         "the TLS server's completion sink was never installed"
@@ -118,7 +121,11 @@ fn close_server(server: i64) {
     // SAFETY: `server` came from `js_tls_create_server`.
     unsafe { js_tls_server_close(server, undefined) };
     let mut seen = Vec::new();
-    drive_until(&mut seen, |_| {}, |_| !servers().lock().unwrap().contains_key(&server));
+    drive_until(
+        &mut seen,
+        |_| {},
+        |_| !servers().lock().unwrap().contains_key(&server),
+    );
 }
 
 #[test]

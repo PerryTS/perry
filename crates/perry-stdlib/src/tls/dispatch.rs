@@ -24,8 +24,8 @@ use super::{
     js_tls_socket_is_session_reused, js_tls_socket_set_key_cert,
     js_tls_socket_set_max_send_fragment, json_value_from_str, jsvalue_to_bytes, listener_count,
     nanbox_handle, nanbox_str, pointer_addr, raw_handle_value, register_listener,
-    remove_all_listeners, remove_listener, servers, sockets, string_from_header, undefined,
-    turnloop_server, TAG_UNDEFINED_BITS,
+    remove_all_listeners, remove_listener, servers, sockets, string_from_header, turnloop_server,
+    undefined, TAG_UNDEFINED_BITS,
 };
 
 /// Whether `handle` is an established server-side connection whose turnloop

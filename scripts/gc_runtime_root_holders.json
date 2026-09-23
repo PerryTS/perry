@@ -1431,6 +1431,12 @@
       "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
     },
     {
+      "file": "crates/perry-stdlib/src/tls/turnloop_server.rs",
+      "name": "ACCEPTORS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-listener handshake inputs for the node:tls server's turnloop accept path, keyed by the TLS server handle id: an Arc<rustls::ServerConfig>, an Option<Arc<DynamicCertResolver>> (rustls CertifiedKeys plus DER bytes) and a bool. Rust-owned state only; no NaN-boxed value and no heap pointer. The server's JS callbacks (SNICallback / ALPNCallback / listeners) live in TLS_SERVERS / TLS_LISTENERS, which the registered scan_tls_roots visits."
+    },
+    {
       "file": "crates/perry-ui-android/src/app.rs",
       "name": "PENDING_CONFIG",
       "verdict": "not_a_gc_pointer",
