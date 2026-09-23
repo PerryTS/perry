@@ -17,6 +17,7 @@ const CLASS_ID_SUBTLE_CRYPTO: u32 = 0xFFFF00C1;
 const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
 /// `value instanceof Function` reserved id (see `js_instanceof`).
 const CLASS_ID_FUNCTION: u32 = 0xFFFF00F0;
+const CLASS_ID_URL: u32 = 0xFFFF0063;
 
 mod dynamic_dispatch;
 mod static_dispatch;
@@ -212,6 +213,7 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "BigInt" => 0xFFFF00D3,
         "Symbol" => 0xFFFF00D4,
         "Date" => 0xFFFF0020,
+        "URL" => CLASS_ID_URL,
         "Error" => crate::error::CLASS_ID_ERROR,
         "TypeError" => crate::error::CLASS_ID_TYPE_ERROR,
         "RangeError" => crate::error::CLASS_ID_RANGE_ERROR,

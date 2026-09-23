@@ -108,6 +108,15 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             false_val
         };
     }
+    if class_id == CLASS_ID_URL {
+        let addr = value_addr(value);
+        let branded = addr != 0 && crate::url::is_url_object_shape(addr as *mut ObjectHeader);
+        return if branded || recorded_prototype_instanceof_builtin(value, "URL") == Some(true) {
+            true_val
+        } else {
+            false_val
+        };
+    }
     // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
     let classic_stream_name = match class_id {
         0xFFFF0070 => Some("Stream"),
