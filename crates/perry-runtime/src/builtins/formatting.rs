@@ -1156,6 +1156,23 @@ unsafe fn format_object_as_json(
             continue;
         }
 
+        // Perry's hidden runtime-internal own keys physically live in the
+        // keys_array but are not JS properties at all: the #6438 class-object
+        // parent edge (`__perry_parent_class`), the #10624 constructing-class
+        // instance pin (`__perry_ctor_class_object`), the Map/Set subclass
+        // backing store, WeakMap entries, capture snapshots, private brands.
+        // `is_internal_runtime_key` is the one exact allowlist every other
+        // own-key consumer already applies — `Object.keys`, `for…in`,
+        // `getOwnPropertyNames`, `JSON.stringify`, `hasOwnProperty`, spread.
+        // util.inspect was the lone hold-out, so a per-evaluation class object
+        // (or any instance constructed from one) rendered
+        // `{ __perry_ctor_class_object: … }` in its body where Node prints
+        // nothing. `showHidden` deliberately does NOT reveal them: it exposes
+        // non-enumerable JS properties, and these are runtime bookkeeping.
+        if crate::object::is_internal_runtime_key(&key_str) {
+            continue;
+        }
+
         // Error inspection consumes an own `name` into the headline. Node
         // does not print it again as an enumerable body property unless
         // showHidden asks for the complete reflective surface.
@@ -1596,6 +1613,9 @@ fn format_inspect_property_key(key: &str) -> String {
 
 #[cfg(test)]
 mod inspect_property_key_tests;
+
+#[cfg(test)]
+mod internal_key_hiding_tests;
 
 #[inline]
 fn looks_like_raw_heap_pointer(value: f64) -> bool {
