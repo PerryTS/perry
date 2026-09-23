@@ -216,3 +216,15 @@ function useInstance(x: InstanceType<typeof R>) {
   const gt = new GA<number>();
   console.log("generic-type-args", gt.push(5), gt.items.length);
 }
+
+// 7. a local class value shadowing an outer `function C` of the same name
+function C(this: any) { this.k = 1; }
+{
+  const C: any = R;
+  const r = new C<number>();
+  const ret = r.push(1);
+  console.log("shadow-fn type-args", r.n, ret === r, r.get("s"));
+  const r2 = new C();
+  r2.push(2);
+  console.log("shadow-fn plain", r2.n, r2.has("yes"));
+}

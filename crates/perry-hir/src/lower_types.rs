@@ -622,11 +622,15 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 // local with a fresh array and never ran the user's `push`
                 // (redis's `SinglyLinkedList`). Checked before the type-args
                 // arm so `new C<T>()` does not become `Generic { base: "C" }`
-                // with the same effect.
+                // with the same effect. The in-scope local wins even when an
+                // outer `function C` or an import of the same name exists:
+                // `lookup_func`/`lookup_imported_func` are scope-blind, so
+                // excluding them let a shadowing `const C: any = R` fall
+                // through to `Generic { base: "C" }` and fold `push`.
+                // Function declarations and imports are not locals, so their
+                // own `new` keeps its `Named` type.
                 if !ctx.classes_index.contains_key(name.as_str())
                     && ctx.lookup_local(&name).is_some()
-                    && ctx.lookup_func(&name).is_none()
-                    && ctx.lookup_imported_func(&name).is_none()
                 {
                     return Type::Any;
                 }

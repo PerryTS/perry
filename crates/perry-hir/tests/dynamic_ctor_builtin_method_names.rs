@@ -157,3 +157,37 @@ fn declared_class_and_builtin_constructors_keep_their_types() {
     let hir = lower("const a = new Array();\na.push(1);\n");
     assert!(hir.contains("ArrayPush"), "{hir}");
 }
+
+/// CodeRabbit on #11137: a local class value that shadows an outer
+/// `function C` (whose name stays in the scope-blind function index) must
+/// still type `new C<T>()` as unknown, not `Generic { base: "C" }`.
+#[test]
+fn local_class_value_shadowing_outer_function_is_not_an_array() {
+    for (method, args) in CALLS {
+        for ctor in ["new C<number>()", "new C()"] {
+            let source = format!(
+                "class R {{ n = 0; {method}(...a: any[]) {{ this.n += 1; return this; }} }}\n\
+                 function C(this: any) {{ this.k = 1; }}\n\
+                 {{ const C: any = R; const r = {ctor}; r.{method}({args}); }}\n"
+            );
+            let hir = lower(&source);
+            for fold in ARRAY_FOLDS {
+                assert!(
+                    !hir.contains(fold),
+                    "shadowed outer function: `{ctor}.{method}({args})` lowered to {fold}\n{hir}"
+                );
+            }
+        }
+    }
+}
+
+/// Control: `new` of a function declaration and of an imported name keeps
+/// its `Named` type (function-constructor / imported-class method dispatch).
+#[test]
+fn function_declaration_and_import_constructors_keep_named_type() {
+    let hir = lower("function D(this: any) { this.k = 1; }\nconst d = new D();\n");
+    assert!(hir.contains("name: \"d\", ty: Named(\"D\")"), "{hir}");
+    let hir = lower("import { Q } from \"./q\";\nconst q = new Q();\nq.push(1);\n");
+    assert!(hir.contains("name: \"q\", ty: Named(\"Q\")"), "{hir}");
+    assert!(!hir.contains("ArrayPush"), "{hir}");
+}
