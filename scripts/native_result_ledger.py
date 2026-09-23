@@ -85,12 +85,12 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # other ~13 js_decimal_* runtime symbols the old table declared
 # (cmp/eq/gt/lt variants, to_string, from_number, etc.) returned
 # NR_F64/NR_JS_VALUE-ish kinds this ledger never classified, so they
-# don't move this count. 321 -> __ROWS__ rows and 286 -> __PROVIDERS__
+# don't move this count. 321 -> 309 rows and 286 -> 274
 # providers; each figure is what the script reports on the resolved
 # tree, not arithmetic (#10739 -- these are CHAINED ABSOLUTES, so the
 # base moved when #11068 landed and the delta had to be re-derived).
-EXPECTED_ROWS = __ROWS__
-EXPECTED_PROVIDERS = __PROVIDERS__
+EXPECTED_ROWS = 309
+EXPECTED_PROVIDERS = 274
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
