@@ -12,9 +12,9 @@ use std::time::Instant;
 
 use perry_runtime::turnloop_net as tl;
 use turnloop_http::client::{self as tlc, Acquire, PoolKey};
-use turnloop_http::compression::StreamingDecoder;
 use turnloop_http::http1;
 
+use super::content_decoding::{apply_default_accept_encoding, ContentDecoder};
 use super::{
     deliver, Conn, Engine, Outcome, Req, ResponseOut, BODY_LIMIT, CONNECTED, DECODED, ENGINE,
     REDIRECTS, REUSED, SUBSYSTEM, TUNNELS,
@@ -37,7 +37,7 @@ pub(crate) struct ClientError {
 }
 
 impl ClientError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub(super) fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -301,6 +301,10 @@ fn send_head(engine: &mut Engine, conn_id: i64) {
             concat!("perry/", env!("CARGO_PKG_VERSION")).as_bytes(),
         ));
     }
+    // undici's default `Accept-Encoding`, per hop (#10475). Without it a server
+    // that negotiates compression never compresses for Perry, which is what
+    // hid the missing decoding for so long.
+    apply_default_accept_encoding(&mut head, req.request.url.scheme() == "https");
     // Let the encoder synthesize framing: a caller-supplied `content-length` or
     // `transfer-encoding` either duplicates it or conflicts with the body we
     // actually hold, and `Encoder::start` rejects the conflict outright.
@@ -878,7 +882,12 @@ fn feed(engine: &mut Engine, conn_id: i64, input: &[u8]) -> usize {
         // timeout closing the socket: every fetch took five seconds and no
         // connection was ever reusable.
         match produced {
-            Produced::Head(head) => on_head(engine, conn_id, *head),
+            Produced::Head(head) => {
+                if let Err(error) = on_head(engine, conn_id, *head) {
+                    fail_conn(engine, conn_id, error);
+                    return pos;
+                }
+            }
             Produced::End => {
                 on_end(engine, conn_id);
                 // `on_end` may have released the connection to the pool and
@@ -925,46 +934,43 @@ fn absorb(req: &mut Req, chunk: &[u8]) -> Result<(), ClientError> {
         }
         return Ok(());
     }
-    let decoder = req.decoder.as_mut().unwrap();
-    let mut pos = 0;
-    let mut out = [0u8; 8192];
-    loop {
-        let step = decoder
-            .process(&chunk[pos..], &mut out, false)
-            .map_err(|e| ClientError::new(e.code, e.message))?;
-        pos += step.consumed;
-        if step.written > 0 {
-            let produced = &out[..step.written];
-            if req.streaming {
-                if let Some(on_chunk) = req.sink.on_chunk {
-                    on_chunk(req.sink.ctx, produced);
-                }
-            } else {
-                if req.decoded.len() + produced.len() > BODY_LIMIT {
-                    return Err(ClientError::new("UND_ERR_BODY_TOO_LARGE", "body too large"));
-                }
-                req.decoded.extend_from_slice(produced);
+    let Req {
+        decoder,
+        decoded,
+        streaming,
+        sink,
+        ..
+    } = req;
+    let decoder = decoder.as_mut().unwrap();
+    decoder.feed(chunk, &mut |produced| {
+        if *streaming {
+            if let Some(on_chunk) = sink.on_chunk {
+                on_chunk(sink.ctx, produced);
             }
+        } else {
+            if decoded.len() + produced.len() > BODY_LIMIT {
+                return Err(ClientError::new("UND_ERR_BODY_TOO_LARGE", "body too large"));
+            }
+            decoded.extend_from_slice(produced);
         }
-        if step.finished || (step.consumed == 0 && step.written == 0) {
-            return Ok(());
-        }
-        if pos >= chunk.len() {
-            return Ok(());
-        }
-    }
+        Ok(())
+    })
 }
 
-fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) {
+/// `Err` fails the connection (undici rejects a response carrying more than
+/// five content codings before reading its body).
+fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) -> Result<(), ClientError> {
     let Engine {
         conns, requests, ..
     } = &mut *engine;
     let Some(conn) = conns.get_mut(&conn_id) else {
-        return;
+        return Ok(());
     };
-    let Some(req_id) = conn.request else { return };
+    let Some(req_id) = conn.request else {
+        return Ok(());
+    };
     let Some(req) = requests.get_mut(&req_id) else {
-        return;
+        return Ok(());
     };
     req.body.clear();
     req.decoded.clear();
@@ -987,21 +993,16 @@ fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) {
     };
     if !will_follow {
         if let Some(encoding) = head.get("content-encoding") {
-            let name = String::from_utf8_lossy(encoding)
-                .trim()
-                .to_ascii_lowercase();
-            if !name.is_empty() && name != "identity" {
-                match StreamingDecoder::new(&name, BODY_LIMIT) {
-                    Ok(decoder) => {
-                        DECODED.fetch_add(1, Ordering::Relaxed);
-                        req.decoder = Some(Box::new(decoder));
-                    }
-                    // An encoding turnloop-http does not implement is left
-                    // encoded, which is exactly what the reqwest path did with
-                    // every encoding (it enables none of reqwest's decompression
-                    // features), so an unknown one is no worse than before.
-                    Err(_) => {}
+            let value = String::from_utf8_lossy(encoding);
+            match ContentDecoder::for_header(&value, BODY_LIMIT) {
+                Ok(Some(decoder)) => {
+                    DECODED.fetch_add(1, Ordering::Relaxed);
+                    req.decoder = Some(Box::new(decoder));
                 }
+                // A coding undici does not decode (or `identity`): the body is
+                // delivered as received, as Node does.
+                Ok(None) => {}
+                Err(error) => return Err(error),
             }
         }
         if req.sink.on_head.is_some() {
@@ -1013,6 +1014,7 @@ fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) {
         }
     }
     req.head = Some(head);
+    Ok(())
 }
 
 fn header_pairs(head: &http1::Head) -> Vec<(String, String)> {
@@ -1053,27 +1055,24 @@ fn on_end(engine: &mut Engine, conn_id: i64) {
     };
     // Finish any decoder that still holds buffered output.
     if let Some(req) = engine.requests.get_mut(&req_id) {
-        if let Some(decoder) = req.decoder.as_mut() {
-            let mut out = [0u8; 8192];
-            loop {
-                match decoder.process(&[], &mut out, true) {
-                    Ok(step) => {
-                        if step.written > 0 {
-                            if req.streaming {
-                                if let Some(on_chunk) = req.sink.on_chunk {
-                                    on_chunk(req.sink.ctx, &out[..step.written]);
-                                }
-                            } else {
-                                req.decoded.extend_from_slice(&out[..step.written]);
-                            }
-                        }
-                        if step.finished || step.written == 0 {
-                            break;
-                        }
+        let Req {
+            decoder,
+            decoded,
+            streaming,
+            sink,
+            ..
+        } = req;
+        if let Some(decoder) = decoder.as_mut() {
+            decoder.finish(&mut |produced| {
+                if *streaming {
+                    if let Some(on_chunk) = sink.on_chunk {
+                        on_chunk(sink.ctx, produced);
                     }
-                    Err(_) => break,
+                } else {
+                    decoded.extend_from_slice(produced);
                 }
-            }
+                Ok(())
+            });
         }
     }
     let location = head

@@ -88,6 +88,7 @@ use perry_runtime::turnloop_net as tl;
 use turnloop_http::client::{self as tlc, ConnectionId, PoolKey, RedirectMode};
 use turnloop_http::http1;
 
+mod content_decoding;
 mod exchange;
 mod posted;
 
@@ -327,8 +328,9 @@ struct Req {
     head: Option<http1::Head>,
     /// Accumulated body of the response currently being decoded, still encoded.
     body: Vec<u8>,
-    /// Decoder for a `Content-Encoding`d body; `None` for identity.
-    decoder: Option<Box<turnloop_http::compression::StreamingDecoder>>,
+    /// Decoder chain for a `Content-Encoding`d body; `None` when the body is
+    /// delivered as received (no coding, or one undici would not decode).
+    decoder: Option<Box<content_decoding::ContentDecoder>>,
     /// Decoded body. For a streaming sink this stays empty and chunks go out as
     /// they are produced.
     decoded: Vec<u8>,

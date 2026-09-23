@@ -327,6 +327,124 @@ fn every_supported_content_encoding_round_trips() {
     assert!(StreamingDecoder::new("identity", super::BODY_LIMIT).is_ok());
 }
 
+/// Drive a `ContentDecoder` the way the engine does: body chunks through
+/// `feed`, then one `finish`.
+fn decode_chain(header: &str, body: &[u8], chunk: usize) -> Option<Vec<u8>> {
+    let mut decoder =
+        super::content_decoding::ContentDecoder::for_header(header, super::BODY_LIMIT)
+            .expect("header accepted")?;
+    let mut out = Vec::new();
+    for piece in body.chunks(chunk) {
+        decoder
+            .feed(piece, &mut |p| {
+                out.extend_from_slice(p);
+                Ok(())
+            })
+            .expect("feed");
+    }
+    decoder.finish(&mut |p| {
+        out.extend_from_slice(p);
+        Ok(())
+    });
+    Some(out)
+}
+
+/// `zlib.brotliCompressSync('{"compressed":true}')` from Node 26.5.1. Kept as
+/// bytes so the test needs no Brotli *encoder* feature.
+const BR_COMPRESSED_TRUE: &[u8] = &[
+    11, 9, 128, 123, 34, 99, 111, 109, 112, 114, 101, 115, 115, 101, 100, 34, 58, 116, 114, 117,
+    101, 125, 3,
+];
+
+/// #10475: every coding undici decodes, single and stacked, asserted on the
+/// decoded CONTENT, whole-body and in 3-byte chunks.
+#[test]
+fn content_decoder_chain_matches_undici() {
+    let plain: &[u8] = br#"{"compressed":true}"#;
+    let big: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+    for chunk in [usize::MAX, 3] {
+        assert_eq!(decode_chain("gzip", &gzip(plain), chunk).unwrap(), plain);
+        assert_eq!(decode_chain("X-GZIP", &gzip(plain), chunk).unwrap(), plain);
+        assert_eq!(
+            decode_chain("deflate", &zlib_deflate(plain), chunk).unwrap(),
+            plain
+        );
+        assert_eq!(
+            decode_chain("br", BR_COMPRESSED_TRUE, chunk).unwrap(),
+            plain
+        );
+        // `Content-Encoding: deflate, gzip` = deflate applied first, so gzip
+        // comes off first. Large enough that each stage fills its 8 KiB
+        // scratch buffer many times over.
+        let stacked = gzip(&zlib_deflate(&big));
+        assert_eq!(decode_chain("deflate, gzip", &stacked, chunk).unwrap(), big);
+    }
+    // A coding undici does not know — `identity` included — disables decoding
+    // for the whole body rather than half-decoding it.
+    assert!(decode_chain("gzip, snappy", &gzip(plain), 64).is_none());
+    assert!(decode_chain("identity", plain, 64).is_none());
+    assert!(decode_chain("", plain, 64).is_none());
+    // More than five codings rejects, with undici's message.
+    let err = super::content_decoding::ContentDecoder::for_header(
+        "gzip,gzip,gzip,gzip,gzip,gzip",
+        super::BODY_LIMIT,
+    )
+    .err()
+    .expect("six codings must reject");
+    assert_eq!(
+        err.message,
+        "too many content-encodings in response: 6, maximum allowed is 5"
+    );
+    // Corrupt input fails the body instead of passing garbage through.
+    let mut decoder =
+        super::content_decoding::ContentDecoder::for_header("gzip", super::BODY_LIMIT)
+            .unwrap()
+            .unwrap();
+    assert!(decoder.feed(b"not gzip at all", &mut |_| Ok(())).is_err());
+}
+
+/// #10475: undici's default `Accept-Encoding`, keyed on the hop's scheme, and
+/// a caller's own value wins.
+#[test]
+fn default_accept_encoding_matches_undici() {
+    use super::content_decoding::apply_default_accept_encoding;
+    let head_with = |headers: &[(&str, &str)]| http1::Head {
+        method: "GET".into(),
+        target: "/".into(),
+        status: 0,
+        version: 1,
+        headers: headers
+            .iter()
+            .map(|(n, v)| http1::Header::new(n, v.as_bytes()))
+            .collect(),
+        keep_alive: true,
+    };
+    let value = |head: &http1::Head| {
+        let values: Vec<String> = head
+            .headers
+            .iter()
+            .filter(|h| h.name == "accept-encoding")
+            .map(|h| String::from_utf8_lossy(&h.value).to_string())
+            .collect();
+        values.join("|")
+    };
+    let mut head = head_with(&[]);
+    apply_default_accept_encoding(&mut head, false);
+    assert_eq!(value(&head), "gzip, deflate");
+    let mut head = head_with(&[]);
+    apply_default_accept_encoding(&mut head, true);
+    assert_eq!(value(&head), "br, gzip, deflate, zstd");
+    let mut head = head_with(&[("Accept-Encoding", "identity")]);
+    apply_default_accept_encoding(&mut head, true);
+    assert_eq!(value(&head), "identity");
+    let mut head = head_with(&[("range", "bytes=0-1")]);
+    apply_default_accept_encoding(&mut head, false);
+    assert_eq!(value(&head), "identity");
+    let mut head = head_with(&[("range", "bytes=0-1"), ("accept-encoding", "gzip")]);
+    apply_default_accept_encoding(&mut head, false);
+    assert_eq!(value(&head), "gzip, identity");
+}
+
 fn gzip(input: &[u8]) -> Vec<u8> {
     use flate2::write::GzEncoder;
     use std::io::Write;
