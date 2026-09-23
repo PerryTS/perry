@@ -956,6 +956,10 @@ pub fn lower_module_full_with_platform_globals(
     // unresolved-constructor guard (see `pre_scan/class_decl_names.rs`).
     pre_scan_class_decl_names(ast_module, &mut ctx);
 
+    // Class definitions evaluated at most once keep their captured
+    // environment with the class (`synthesize_class_captures`).
+    ctx.run_once_class_spans = super::run_once::run_once_class_spans(ast_module);
+
     // Pre-scan for WeakRef/FinalizationRegistry variable declarations so subsequent
     // method-call lowering (`x.deref()`, `x.register(...)`, `x.unregister(...)`) can
     // route via the dedicated HIR variants without relying on type inference.

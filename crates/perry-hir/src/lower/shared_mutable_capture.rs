@@ -1365,6 +1365,19 @@ fn is_redundant_cell_propagation(items: &[Expr], index_uses: &HashSet<LocalId>) 
         && matches!(value.as_ref(), Expr::LocalGet(id) if *id == written)
 }
 
+/// The class-environment twin of [`is_redundant_cell_propagation`]:
+/// `Sequence([LocalSet(id, _) | Update { id }, ClassEnvSet { value: LocalGet(id) }])`.
+fn is_redundant_env_propagation(items: &[Expr], index_uses: &HashSet<LocalId>) -> bool {
+    let [write, Expr::ClassEnvSet { value, .. }] = items else {
+        return false;
+    };
+    let written = match write {
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => *id,
+        _ => return false,
+    };
+    index_uses.contains(&written) && matches!(value.as_ref(), Expr::LocalGet(id) if *id == written)
+}
+
 fn rewrite_stmts(stmts: &mut [Stmt], shared: &HashSet<LocalId>, index_uses: &HashSet<LocalId>) {
     for s in stmts.iter_mut() {
         rewrite_stmt(s, shared, index_uses);
@@ -1512,7 +1525,10 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // shared cell needs no propagation — the field already holds the same
         // cell — and keeping it makes the sequence yield the cell handle instead
         // of the write's value (`return n++` returned `[3]`, not 2; #10489).
-        Expr::Sequence(items) if is_redundant_cell_propagation(items, index_uses) => {
+        Expr::Sequence(items)
+            if is_redundant_cell_propagation(items, index_uses)
+                || is_redundant_env_propagation(items, index_uses) =>
+        {
             let write = items.swap_remove(0);
             *expr = write;
             rewrite_expr(expr, shared, index_uses);
@@ -1553,6 +1569,13 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         } if matches!(object.as_ref(), Expr::This) && property.starts_with("__perry_cap_") => {
             return;
         }
+        // Constructor PUBLISH `ClassEnvSet { value: LocalGet(param) }`: the
+        // environment holds the whole array handle, exactly like the instance
+        // stash above. Any other value is an ordinary expression.
+        Expr::ClassEnvSet { value, .. } if matches!(value.as_ref(), Expr::LocalGet(id) if index_uses.contains(id)) =>
+        {
+            return;
+        }
         Expr::Update { id, op, prefix } if index_uses.contains(id) => {
             *expr = Expr::IndexUpdate {
                 object: Box::new(Expr::LocalGet(*id)),
@@ -1580,6 +1603,7 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         Expr::RefreshClassExprCaptures {
             class_value,
             captures,
+            ..
         } => {
             rewrite_expr(class_value, shared, index_uses);
             for capture in captures.iter_mut() {

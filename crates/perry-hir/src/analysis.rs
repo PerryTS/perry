@@ -663,10 +663,19 @@ pub fn remap_local_ids_in_stmts(
 /// by inspecting the original id, then runs the standard remap on the
 /// LocalSet/Update inside the wrap so the resulting Sequence references the
 /// fresh per-method id everywhere consistently.
+/// Where a member's write to a captured binding is propagated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureWriteTarget {
+    /// The per-instance `this.<field>` snapshot (`__perry_cap_*`).
+    Field(String),
+    /// Slot `index` of the class environment (`Expr::ClassEnvSet`).
+    Env { class_name: String, index: u32 },
+}
+
 pub fn remap_local_ids_in_stmts_with_field_propagation(
     stmts: &mut Vec<Stmt>,
     map: &std::collections::HashMap<LocalId, LocalId>,
-    field_propagation: &std::collections::HashMap<LocalId, String>,
+    field_propagation: &std::collections::HashMap<LocalId, CaptureWriteTarget>,
 ) {
     if map.is_empty() && field_propagation.is_empty() {
         return;
@@ -679,7 +688,7 @@ pub fn remap_local_ids_in_stmts_with_field_propagation(
 fn remap_local_ids_in_stmt_propagating(
     stmt: &mut Stmt,
     map: &std::collections::HashMap<LocalId, LocalId>,
-    fp: &std::collections::HashMap<LocalId, String>,
+    fp: &std::collections::HashMap<LocalId, CaptureWriteTarget>,
 ) {
     match stmt {
         Stmt::Let { init, .. } => {
@@ -778,11 +787,11 @@ fn remap_local_ids_in_stmt_propagating(
 fn remap_with_propagation(
     expr: &mut Expr,
     map: &std::collections::HashMap<LocalId, LocalId>,
-    fp: &std::collections::HashMap<LocalId, String>,
+    fp: &std::collections::HashMap<LocalId, CaptureWriteTarget>,
 ) {
     // Detect captured LocalSet / Update at THIS position. Use the
     // pre-remap (outer) id to look up the field name.
-    let captured_field: Option<(LocalId, String)> = match expr {
+    let captured_field: Option<(LocalId, CaptureWriteTarget)> = match expr {
         Expr::LocalSet(id, _) => fp.get(id).map(|f| (*id, f.clone())),
         Expr::Update { id, .. } => fp.get(id).map(|f| (*id, f.clone())),
         _ => None,
@@ -797,14 +806,20 @@ fn remap_with_propagation(
         // After remap, the LocalSet/Update's id is fresh_id (or unchanged
         // if outer_id wasn't in `map`).
         let fresh_id = *map.get(&outer_id).unwrap_or(&outer_id);
-        *expr = Expr::Sequence(vec![
-            original,
-            Expr::PropertySet {
+        let value = Box::new(Expr::LocalGet(fresh_id));
+        let propagate = match field_name {
+            CaptureWriteTarget::Field(property) => Expr::PropertySet {
                 object: Box::new(Expr::This),
-                property: field_name,
-                value: Box::new(Expr::LocalGet(fresh_id)),
+                property,
+                value,
             },
-        ]);
+            CaptureWriteTarget::Env { class_name, index } => Expr::ClassEnvSet {
+                class_name,
+                index,
+                value,
+            },
+        };
+        *expr = Expr::Sequence(vec![original, propagate]);
         return;
     }
     // Not a captured write at this position. Recurse via the standard

@@ -79,6 +79,7 @@ mod const_fold_fn;
 mod eval_super_scan;
 pub(crate) mod fn_ctor_env;
 mod global_eval_hoist;
+mod run_once;
 mod shared_mutable_capture;
 pub(crate) mod type_widening;
 pub(crate) use closure_analysis::*;

@@ -3000,6 +3000,7 @@ mod boolean_number_tests;
 mod call_spread;
 pub(crate) mod calls;
 mod child_proc;
+pub(crate) mod class_env;
 mod closure;
 mod compare;
 pub(crate) mod region_guard;

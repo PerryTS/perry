@@ -620,6 +620,32 @@ pub(crate) fn emit_module_globals(
             static_field_globals.insert((c.name.clone(), sf.name.clone()), name);
         }
     }
+    // Class capture environments (`Expr::ClassEnvGet`/`ClassEnvSet`): one
+    // module-state global per published slot, filed under a key no static
+    // field can spell so the GC-root registration and every lowering context
+    // pick them up with the static fields. Starts `undefined`; the class
+    // evaluation (`RegisterClassCaptures` / `ClassExprFresh`) and the
+    // constructor fill it.
+    for c in &hir.classes {
+        for index in 0..crate::expr::class_env::class_env_slot_count(c) {
+            let name = format!(
+                "perry_classenv_{}__{}__{}",
+                module_prefix,
+                sanitize_member(&c.name),
+                index,
+            );
+            if external_globals_emitted.insert(name.clone()) {
+                llmod.add_module_state_global(&name, DOUBLE, "0x7FFC000000000001");
+            }
+            static_field_globals.insert(
+                (
+                    c.name.clone(),
+                    perry_hir::cap_fields::class_env_slot_key(index),
+                ),
+                name,
+            );
+        }
+    }
     // Register foreign static-field globals from imported classes. The source
     // module emits the defining external global (above); the consumer just
     // declares a reference and adds it to its own `static_field_globals` map

@@ -480,6 +480,35 @@ pub enum Expr {
     RefreshClassExprCaptures {
         class_value: Box<Expr>,
         captures: Vec<Expr>,
+        /// The template class whose members read their captures from the
+        /// class environment (`ClassEnvGet`), when the class takes that path.
+        /// The refresh then also rewrites the environment slots, so members
+        /// observe a captured binding initialized after the class evaluated.
+        env_class: Option<String>,
+    },
+
+    /// Read slot `index` of a class's capture ENVIRONMENT: the per-class
+    /// storage holding the class-definition evaluation's captured outer
+    /// values, the way V8 keeps them in the closure context. Emitted for
+    /// classes whose definition is evaluated at most once (see
+    /// `lower::run_once`). Their instance members read captures here instead
+    /// of from per-instance `__perry_cap_*` fields, so instances carry no
+    /// hidden capture keys and the slot of every real field does not depend
+    /// on the class's capture count. Codegen lowers it to one load of a
+    /// module-state global.
+    ClassEnvGet {
+        class_name: String,
+        index: u32,
+    },
+
+    /// Write slot `index` of a class's capture environment (see
+    /// `ClassEnvGet`). Emitted where a member or the constructor assigns a
+    /// captured binding, and where the constructor publishes its capture
+    /// params. Evaluates to `value`.
+    ClassEnvSet {
+        class_name: String,
+        index: u32,
+        value: Box<Expr>,
     },
 
     /// Read slot `index` of a class's decl-site capture snapshot

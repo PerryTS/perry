@@ -37,6 +37,7 @@ where
         | Expr::SuperPropertyGet { .. }
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
+        | Expr::ClassEnvGet { .. }
         | Expr::Update { .. }
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
@@ -595,11 +596,15 @@ where
         Expr::RefreshClassExprCaptures {
             class_value,
             captures,
+            ..
         } => {
             f(class_value);
             for c in captures {
                 f(c);
             }
+        }
+        Expr::ClassEnvSet { value, .. } => {
+            f(value);
         }
         Expr::ClassCaptureValue { fallback, .. } => {
             if let Some(fb) = fallback {

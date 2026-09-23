@@ -5,6 +5,20 @@ use crate::lower::LoweringContext;
 
 use super::class_members::collect_method_captures;
 
+/// `PERRY_NO_CLASS_ENV=1` keeps every capturing class on the per-instance
+/// `__perry_cap_*` snapshot (bisection escape hatch, like `PERRY_NO_5951`).
+fn class_env_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("PERRY_NO_CLASS_ENV").is_none())
+}
+
+/// `PERRY_CLASS_CAPTURE_DIAG=1`: one stderr line per capturing class naming
+/// where its captures live (`env` or `instance`) and how many there are.
+fn class_capture_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_CLASS_CAPTURE_DIAG").is_some())
+}
+
 pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,
     name: &str,
@@ -25,6 +39,10 @@ pub fn synthesize_class_captures(
     // module-level global. One slot, overwritten by every evaluation of the
     // enclosing factory.
     static_accessor_fn_ids: &[crate::types::FuncId],
+    // The class definition is evaluated at most once (`lower::run_once`), so
+    // its captured environment is unique: members read and write it in the
+    // class environment instead of per-instance `__perry_cap_*` fields.
+    run_once: bool,
 ) {
     let cap_salt = ctx.cap_salt();
     let module_level_ids = ctx.module_level_ids.clone();
@@ -120,6 +138,27 @@ pub fn synthesize_class_captures(
         return;
     }
 
+    // One environment per class definition. Only a definition evaluated at
+    // most once has a single environment every instance, static and
+    // extracted method can share; the rest keep the per-instance snapshot.
+    let env_mode = run_once && class_env_enabled();
+    if env_mode {
+        ctx.register_class_env(name.to_string());
+    }
+    if class_capture_diag() {
+        eprintln!(
+            "[class-capture] module={} class={} captures={} storage={}",
+            ctx.source_file_path,
+            name,
+            captures_vec.len(),
+            if env_mode { "env" } else { "instance" }
+        );
+    }
+    let env_get = |index: usize| Expr::ClassEnvGet {
+        class_name: name.to_string(),
+        index: index as u32,
+    };
+
     // Walk the parent chain to find which `__perry_cap_<id>` fields
     // are already declared by an ancestor. Inherited fields share the
     // same instance slot via the runtime's by-name lookup; declaring
@@ -150,9 +189,11 @@ pub fn synthesize_class_captures(
         })
         .collect();
 
-    // 1. Hidden fields keyed by outer id, skipping inherited.
+    // 1. Hidden fields keyed by outer id, skipping inherited. A class-
+    //    environment class declares none: its instances carry only their own
+    //    fields.
     for &cid in &captures_vec {
-        if inherited_cap_ids.contains(&cid) {
+        if env_mode || inherited_cap_ids.contains(&cid) {
             continue;
         }
         fields.push(ClassField {
@@ -165,7 +206,7 @@ pub fn synthesize_class_captures(
             decorators: Vec::new(),
         });
     }
-    if let Some(existing) = ctx.lookup_class_field_names(name) {
+    if let Some(existing) = ctx.lookup_class_field_names(name).filter(|_| !env_mode) {
         let mut updated: Vec<String> = existing.to_vec();
         for &cid in &captures_vec {
             let field_name = crate::cap_fields::cap_field_name(cap_salt, cid);
@@ -208,10 +249,24 @@ pub fn synthesize_class_captures(
     // expression, return value, condition); nested captured writes
     // like `(stored = v).toString()` only update the local — rare
     // enough to defer to a follow-up.
-    let field_propagation: std::collections::HashMap<LocalId, String> = captures_vec
-        .iter()
-        .map(|&cid| (cid, crate::cap_fields::cap_field_name(cap_salt, cid)))
-        .collect();
+    let field_propagation: std::collections::HashMap<LocalId, crate::analysis::CaptureWriteTarget> =
+        captures_vec
+            .iter()
+            .enumerate()
+            .map(|(index, &cid)| {
+                let target = if env_mode {
+                    crate::analysis::CaptureWriteTarget::Env {
+                        class_name: name.to_string(),
+                        index: index as u32,
+                    }
+                } else {
+                    crate::analysis::CaptureWriteTarget::Field(crate::cap_fields::cap_field_name(
+                        cap_salt, cid,
+                    ))
+                };
+                (cid, target)
+            })
+            .collect();
 
     // Helper closure: build a fresh-id map for one function's body,
     // rewrite the body refs (with field-write propagation), and
@@ -239,12 +294,10 @@ pub fn synthesize_class_captures(
             // `undefined` and threw at boot, #5437). When the field is still
             // undefined, fall back to the class's decl-site capture snapshot
             // (same machinery as the ctor param rebinds above).
-            prologue.push(Stmt::Let {
-                id: new_id,
-                name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
-                ty,
-                mutable: true,
-                init: Some(Expr::ClassCaptureValue {
+            let init = if env_mode {
+                env_get(index)
+            } else {
+                Expr::ClassCaptureValue {
                     class_name: name.to_string(),
                     index: index as u32,
                     fallback: Some(Box::new(Expr::PropertyGet {
@@ -253,7 +306,14 @@ pub fn synthesize_class_captures(
                         property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                     })),
                     prefer_fallback: true,
-                }),
+                }
+            };
+            prologue.push(Stmt::Let {
+                id: new_id,
+                name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
+                ty,
+                mutable: true,
+                init: Some(init),
             });
         }
         // Rewrite first (so closure captures lists pick up the new ids
@@ -325,6 +385,23 @@ pub fn synthesize_class_captures(
         append_self_sites(&mut member.function.body, &id_map);
     }
 
+    // Statics rebind from the decl-site snapshot and, historically, did not
+    // propagate their writes. In the class environment a static shares the
+    // one environment with every instance member, so its writes propagate
+    // there too.
+    let remap_static =
+        |body: &mut Vec<Stmt>, id_map: &std::collections::HashMap<LocalId, LocalId>| {
+            if env_mode {
+                crate::analysis::remap_local_ids_in_stmts_with_field_propagation(
+                    body,
+                    id_map,
+                    &field_propagation,
+                );
+            } else {
+                crate::analysis::remap_local_ids_in_stmts(body, id_map);
+            }
+        };
+
     // 2b. STATIC methods: no instance carries `__perry_cap_*` fields, so
     // the prologue rebinds read the decl-site snapshot instead
     // (`ClassCaptureValue { class_name, index }` →
@@ -347,15 +424,19 @@ pub fn synthesize_class_captures(
                     .cloned()
                     .unwrap_or(Type::Any),
                 mutable: true,
-                init: Some(Expr::ClassCaptureValue {
-                    class_name: name.to_string(),
-                    index: index as u32,
-                    fallback: None,
-                    prefer_fallback: false,
+                init: Some(if env_mode {
+                    env_get(index)
+                } else {
+                    Expr::ClassCaptureValue {
+                        class_name: name.to_string(),
+                        index: index as u32,
+                        fallback: None,
+                        prefer_fallback: false,
+                    }
                 }),
             });
         }
-        crate::analysis::remap_local_ids_in_stmts(&mut sm.body, &id_map);
+        remap_static(&mut sm.body, &id_map);
         prologue.append(&mut sm.body);
         sm.body = prologue;
         append_self_sites(&mut sm.body, &id_map);
@@ -386,15 +467,19 @@ pub fn synthesize_class_captures(
                     .cloned()
                     .unwrap_or(Type::Any),
                 mutable: true,
-                init: Some(Expr::ClassCaptureValue {
-                    class_name: name.to_string(),
-                    index: index as u32,
-                    fallback: None,
-                    prefer_fallback: false,
+                init: Some(if env_mode {
+                    env_get(index)
+                } else {
+                    Expr::ClassCaptureValue {
+                        class_name: name.to_string(),
+                        index: index as u32,
+                        fallback: None,
+                        prefer_fallback: false,
+                    }
                 }),
             });
         }
-        crate::analysis::remap_local_ids_in_stmts(&mut acc.body, &id_map);
+        remap_static(&mut acc.body, &id_map);
         prologue.append(&mut acc.body);
         acc.body = prologue;
         append_self_sites(&mut acc.body, &id_map);
@@ -429,15 +514,19 @@ pub fn synthesize_class_captures(
                     .cloned()
                     .unwrap_or(Type::Any),
                 mutable: true,
-                init: Some(Expr::ClassCaptureValue {
-                    class_name: name.to_string(),
-                    index: index as u32,
-                    fallback: None,
-                    prefer_fallback: false,
+                init: Some(if env_mode {
+                    env_get(index)
+                } else {
+                    Expr::ClassCaptureValue {
+                        class_name: name.to_string(),
+                        index: index as u32,
+                        fallback: None,
+                        prefer_fallback: false,
+                    }
                 }),
             });
         }
-        crate::analysis::remap_local_ids_in_stmts(&mut member.function.body, &id_map);
+        remap_static(&mut member.function.body, &id_map);
         prologue.append(&mut member.function.body);
         member.function.body = prologue;
         append_self_sites(&mut member.function.body, &id_map);
@@ -562,15 +651,33 @@ pub fn synthesize_class_captures(
                 prefer_fallback: true,
             }),
         )));
-        assignment_stmts.push(Stmt::Expr(Expr::PropertySet {
-            object: Box::new(Expr::This),
-            property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
-            value: Box::new(Expr::LocalGet(fresh_param_id)),
+        assignment_stmts.push(Stmt::Expr(if env_mode {
+            Expr::ClassEnvSet {
+                class_name: name.to_string(),
+                index: index as u32,
+                value: Box::new(Expr::LocalGet(fresh_param_id)),
+            }
+        } else {
+            Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
+                value: Box::new(Expr::LocalGet(fresh_param_id)),
+            }
         }));
     }
     // Rewrite user-written ctor body BEFORE inserting the rebind + assignment
-    // stmts (which already reference the fresh ids directly).
-    crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
+    // stmts (which already reference the fresh ids directly). A class-
+    // environment ctor also propagates its own writes, like every member: the
+    // environment is shared, so a method the ctor calls must see them.
+    if env_mode {
+        crate::analysis::remap_local_ids_in_stmts_with_field_propagation(
+            &mut ctor.body,
+            &ctor_id_map,
+            &field_propagation,
+        );
+    } else {
+        crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
+    }
     append_self_sites(&mut ctor.body, &ctor_id_map);
     // Finding #2: the param REBINDS (`param = param-or-snapshot`) go at
     // FUNCTION ENTRY (index 0), BEFORE any pre-`super()` user code — a derived
@@ -612,7 +719,13 @@ pub fn synthesize_class_captures(
     // bundles fold it into a comma sequence (`super(a), this.x = b, …` —
     // Next's `AppRouteRouteModule`), an `if (super(), …)` test or a `try`,
     // all of which landed the stash at constructor entry (#8546 follow-up).
-    let early_insert_at = if has_heritage {
+    // The environment needs no `this`: a class-environment ctor publishes its
+    // capture params at entry, before any user statement (a base ctor that
+    // dispatches into this class's override reads them before `super()`
+    // returns).
+    let early_insert_at = if env_mode {
+        Some(rebind_count)
+    } else if has_heritage {
         // No direct `super()` anywhere in the body (a closure calls it, or a
         // value-bearing `return` takes the override path): there is no point
         // at which `this` is known to be bound, so skip the early stash. The

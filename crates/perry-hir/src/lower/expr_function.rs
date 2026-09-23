@@ -1563,7 +1563,7 @@ fn compute_closure_captures(
 /// mutate an object retained by an earlier factory call.
 pub(crate) fn apply_class_expr_capture_refreshes(
     body: &mut Vec<Stmt>,
-    entries: Vec<(LocalId, Vec<LocalId>)>,
+    entries: Vec<(LocalId, Vec<LocalId>, Option<String>)>,
 ) {
     if entries.is_empty() {
         return;
@@ -1573,7 +1573,7 @@ pub(crate) fn apply_class_expr_capture_refreshes(
     let mut refreshes = Vec::new();
     let mut refresh_capsets = Vec::new();
     let mut seen_owners = std::collections::HashSet::new();
-    for (owner, ids) in entries {
+    for (owner, ids, env_class) in entries {
         if seen_owners.insert(owner) {
             owner_lets.push(Stmt::Let {
                 id: owner,
@@ -1589,6 +1589,7 @@ pub(crate) fn apply_class_expr_capture_refreshes(
         let refresh = Stmt::Expr(Expr::RefreshClassExprCaptures {
             class_value: Box::new(Expr::LocalGet(owner)),
             captures: ids.iter().map(|id| Expr::LocalGet(*id)).collect(),
+            env_class,
         });
         refresh_capsets.push((refresh.clone(), ids.iter().copied().collect()));
         refreshes.push(refresh);

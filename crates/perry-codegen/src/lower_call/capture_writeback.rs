@@ -53,6 +53,8 @@ pub(crate) fn emit_class_capture_writeback(
         .collect();
     // The cap args occupy the last cap_params.len() slots of new_args.
     let cap_args_start = new_args.len().saturating_sub(cap_params.len());
+    // Capture param order is environment slot order.
+    let env_slots = crate::expr::class_env::class_env_slot_count(class);
 
     for (cap_idx, param) in cap_params.iter().enumerate() {
         let Some(name_outer_id) = perry_hir::cap_fields::cap_field_outer_id(&param.name) else {
@@ -89,18 +91,29 @@ pub(crate) fn emit_class_capture_writeback(
         if outer_slot.is_none() && !outer_is_canonical_i32 {
             continue;
         }
-        // Read the updated capture value from the instance field.
-        let field_name = &param.name;
-        let key_idx = ctx.strings.intern(field_name);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-        let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-        let key_handle = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
-        let val = ctx.block().call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, obj_handle), (I64, &key_handle)],
-        );
+        // Read the updated capture value: from the class environment when the
+        // class keeps its captures there (its constructor published every
+        // slot), otherwise from the instance field.
+        let val = if env_slots > 0 {
+            let Some(slot) =
+                crate::expr::class_env::class_env_global(ctx, &class.name, cap_idx as u32)
+            else {
+                continue;
+            };
+            ctx.block().load(DOUBLE, &slot)
+        } else {
+            let field_name = &param.name;
+            let key_idx = ctx.strings.intern(field_name);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let key_handle = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+            ctx.block().call(
+                DOUBLE,
+                "js_object_get_field_by_name_f64",
+                &[(I64, obj_handle), (I64, &key_handle)],
+            )
+        };
         // Store the updated value. Handle boxed locals (shared across multiple
         // closures) via js_box_set; plain locals via a direct slot store.
         // `outer_id` here is the current-scope id (resolved via new_args or

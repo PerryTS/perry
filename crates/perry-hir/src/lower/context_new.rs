@@ -196,6 +196,8 @@ impl LoweringContext {
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),
+            run_once_class_spans: HashSet::new(),
+            class_env_classes: HashSet::new(),
             body_class_expr_captures: Vec::new(),
             let_class_aliases: Vec::new(),
             global_this_aliases: HashSet::new(),

@@ -30,6 +30,13 @@ pub fn cap_field_name(salt: u64, id: u32) -> String {
     format!("{CAP_FIELD_PREFIX}{id}m{:012x}", salt & 0xFFFF_FFFF_FFFF)
 }
 
+/// Codegen's `static_field_globals` key for slot `index` of a class's capture
+/// environment (`Expr::ClassEnvGet`/`ClassEnvSet`). The leading `\u{1}` keeps
+/// it disjoint from every real static field name.
+pub fn class_env_slot_key(index: u32) -> String {
+    format!("\u{1}perry_env{index}")
+}
+
 /// Parse the outer local id from a cap field/param name. Accepts both the
 /// salted `__perry_cap_<id>m<salt>` form and the legacy `__perry_cap_<id>`
 /// (still produced by pre-salt HIR in caches/tests).

@@ -158,6 +158,18 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
     }
 
     fn class_needs_specialization(class: &Class, param_ids: &[LocalId]) -> bool {
+        // A class whose captures live in the class environment was defined
+        // by a factory that runs at most once. That one evaluation already
+        // publishes the environment, and a per-call-site clone would read the
+        // original class's environment under a new name.
+        let publishes_env = class.constructor.as_ref().is_some_and(|c| {
+            c.body
+                .iter()
+                .any(|s| matches!(s, Stmt::Expr(Expr::ClassEnvSet { .. })))
+        });
+        if publishes_env {
+            return false;
+        }
         let param_set: HashSet<LocalId> = param_ids.iter().copied().collect();
         let has_capture_params = class
             .constructor

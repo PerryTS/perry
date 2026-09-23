@@ -1025,6 +1025,12 @@ pub struct LoweringContext {
     /// here so the `Expr::New { class_name }` lowering can append
     /// `LocalGet(id)` for each captured id at every construction site.
     pub(crate) class_captures: Vec<(String, Vec<LocalId>)>,
+    /// Spans of the class definitions evaluated at most once
+    /// (`lower::run_once`), computed once per module before lowering.
+    pub(crate) run_once_class_spans: HashSet<(u32, u32)>,
+    /// Classes whose captures live in the class environment
+    /// (`Expr::ClassEnvGet`/`ClassEnvSet`) rather than on instances.
+    pub(crate) class_env_classes: HashSet<String>,
     /// #6604/#6654: capturing class EXPRESSIONS lowered while the CURRENT
     /// function body is being lowered —
     /// `(per_evaluation_owner_local, captured_outer_ids)`,
@@ -1042,7 +1048,9 @@ pub struct LoweringContext {
     /// every other body-lowering path must truncate back to its entry mark so
     /// entries (whose ids are only meaningful in THEIR OWN function scope)
     /// never leak into an enclosing body's refresh statements.
-    pub(crate) body_class_expr_captures: Vec<(LocalId, Vec<LocalId>)>,
+    /// The third element names the template class when it keeps its
+    /// captures in the class environment, so the refresh rewrites that too.
+    pub(crate) body_class_expr_captures: Vec<(LocalId, Vec<LocalId>, Option<String>)>,
     /// Issue #740: `let_name → class_name` for `let/const/var <name> = <ClassRef>`
     /// initializers. Lets `Expr::New { class_name }` (where `class_name` is
     /// the source-level identifier of an alias binding) resolve to the

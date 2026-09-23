@@ -707,6 +707,7 @@ pub(crate) fn lower_class_from_ast(
         &mut constructor,
         &mut static_methods,
         &static_accessor_fn_ids,
+        ctx.class_definition_runs_once(class.span),
     );
 
     Ok(Class {

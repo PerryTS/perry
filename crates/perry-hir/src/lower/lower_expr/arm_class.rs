@@ -281,6 +281,9 @@ pub(crate) fn lower_class_expr(
     // update only the object that was actually evaluated in this invocation.
     // Module top is skipped — module-level ids are stripped from capture lists
     // by `filter_module_level_captures`, so there is nothing to refresh.
+    let env_class = ctx
+        .is_class_env(&synthetic_name)
+        .then(|| synthetic_name.clone());
     let capture_owner = if !at_module_top && (!captured_args.is_empty() || self_binding_used) {
         let ids = ctx
             .lookup_class_captures(&synthetic_name)
@@ -292,7 +295,8 @@ pub(crate) fn lower_class_expr(
             // initializers can read the self-binding before ClassExprFresh
             // returns. Empty entries materialize that local without emitting a
             // capture refresh.
-            ctx.body_class_expr_captures.push((owner, ids));
+            ctx.body_class_expr_captures
+                .push((owner, ids, env_class.clone()));
             Some(owner)
         } else if ids.is_empty() {
             None
@@ -301,7 +305,8 @@ pub(crate) fn lower_class_expr(
                 format!("__perry_class_expr_capture_owner_{synthetic_name}"),
                 crate::types::Type::Any,
             );
-            ctx.body_class_expr_captures.push((owner, ids));
+            ctx.body_class_expr_captures
+                .push((owner, ids, env_class.clone()));
             Some(owner)
         }
     } else {

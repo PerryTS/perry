@@ -478,6 +478,22 @@ impl LoweringContext {
 
     /// Look up the captured outer-scope LocalIds for a class. Returns `None`
     /// for plain (non-capturing) classes.
+    /// Record that `class_name` keeps its captures in the class environment.
+    pub(crate) fn register_class_env(&mut self, class_name: String) {
+        self.class_env_classes.insert(class_name);
+    }
+
+    /// Whether `class_name` keeps its captures in the class environment.
+    pub(crate) fn is_class_env(&self, class_name: &str) -> bool {
+        self.class_env_classes.contains(class_name)
+    }
+
+    /// Whether the class node spanning `span` is evaluated at most once.
+    pub(crate) fn class_definition_runs_once(&self, span: swc_common::Span) -> bool {
+        !(span.lo.0 == 0 && span.hi.0 == 0)
+            && self.run_once_class_spans.contains(&(span.lo.0, span.hi.0))
+    }
+
     pub(crate) fn lookup_class_captures(&self, class_name: &str) -> Option<&[LocalId]> {
         self.class_captures
             .iter()
