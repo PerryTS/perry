@@ -183,25 +183,13 @@
     },
     {
       "crate": "perry-stdlib",
-      "dep": "reqwest",
-      "kind": "normal",
-      "optional": true,
-      "target": null,
-      "surface": "the global `fetch()`, the `js_fetch_stream_start` SSE line-poll surface and the bundled `axios.rs` mirror \u2014 each of them only when the turnloop engine DECLINES. None of the three reaches reqwest unconditionally any more: P6 routed `fetch`, a later lane routed the stream surface through the engine's `Sink::on_head`/`on_chunk` hooks, and this lane routed `axios.rs`.",
-      "reached_when": "a genuine absence of a loop for the whole AGENT: a host where `Loop::new` failed \u2014 the only remaining case now that the `tokio-wait-driver` A/B arm has been deleted. **The agent-shaped decline is CLOSED** (turnloop P10): a second thread acting for an agent another thread already owns \u2014 a host pump thread, Android's UI thread for `perry-native` \u2014 now hands its whole submission to that owner through `perry_ffi::agent_post` instead of running a reqwest future for itself. Not a worker agent either (P9 gave every agent a loop). Plus two request-shaped declines: a proxy URL whose scheme is not `http`, and a URL `turnloop_http::client::Request::new` rejects (a non-http(s) scheme, embedded credentials, a forbidden fetch method).",
-      "blocker": "P6 named three and TWO WERE ALREADY CLOSED IN THE TREE when this lane read it, the annotation having gone stale: the proxy CONNECT tunnel is driven from a URL rather than from a prebuilt `reqwest::Client` (`turnloop_client::proxy_for` resolves the proxy, `exchange`'s `Tunnel` runs the CONNECT, and `tunnels_total()` is its liveness counter), and the `Sink::on_head`/`on_chunk` hooks have a caller (`fetch::turnloop_bridge::try_dispatch_stream`), so they are no longer an unexercised mode. The third \u2014 \u201cper-agent loops for the decline\u201d \u2014 is closed by turnloop P10 for the case that was actually left, and this lane wired it: `turnloop_client::submit` posts to the thread that owns this agent's loop when this thread does not, and `abort_signal` posts with it so `controller.abort()` is not silently inert for exactly the requests that moved. WHAT IS LEFT IS NOT A HOLE BUT AN ABSENCE, and since the `tokio-wait-driver` A/B arm was deleted it is a SINGLE cause, the same one every plan-A edge names: a host where `Loop::new` failed has no loop to post to. Two request-shaped declines also still reach reqwest, and are narrower than they read: an `https://` proxy, and a URL the fetch policy layer rejects where reqwest is the more permissive of the two (it sends embedded credentials as Basic auth, and will send CONNECT/TRACE/TRACK). A `socks5://` proxy is NOT one of them: reqwest is built here without its `socks` feature and every socks arm of its connector is behind that cfg, so declining a socks proxy routes it to a transport that cannot do it either \u2014 the decline is kept only because the two paths' error TEXT differs and the suite pins reqwest's.",
-      "issue": "unfiled \u2014 P6 named all three, P8 confirmed them; P11 removed the axios/node-fetch half of group G; the proxy tunnel and the stream sink landed before this lane, and the agent-shaped decline is closed by #10395 step 2's `agent_post`",
-      "plan": "G"
-    },
-    {
-      "crate": "perry-stdlib",
       "dep": "tokio",
       "kind": "normal",
       "optional": true,
       "target": null,
       "surface": "every async stdlib surface: the `async-runtime` feature gates `common::async_bridge` and `perry_ffi_async`, i.e. the whole promise bridge and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI every perry-ext-* crate settles its promises through.",
       "reached_when": "always \u2014 `full` implies it, and 20 other features imply it individually",
-      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib those clients are now reqwest and tokio-rustls (the bundled sqlx / redis / mongodb copies were deleted in group H); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
+      "blocker": "this is the hardest edge in the tree and it is NOT a separable layer: `async_bridge::RUNTIME` is tokio because its clients hand it tokio futures. Inside perry-stdlib the only client left is tokio-rustls (the bundled sqlx / redis / mongodb copies were deleted in group H, and group G deleted the reqwest fetch fallback); every perry-ext-* driver reaches the same runtime through the `perry_ffi_*` C seam, so the bridge's work did not go away with them. It goes when the last of them goes, not before. P4's v1 shims (`spawn_blocking`, `spawn_blocking_with_reactor`, `spawn_async`) cannot move onto turnloop's bounded pool because their callers hold a thread for a CONNECTION's lifetime, not a job's (PerryTS/turnloop#42).",
       "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 upstream",
       "plan": "L"
     },
@@ -283,7 +271,7 @@
     "perry-ext-mongodb": 29,
     "perry-ext-net": 54,
     "perry-ffi": 2,
-    "perry-stdlib": 73,
+    "perry-stdlib": 71,
     "perry-ui-gtk4": 6
   }
 }

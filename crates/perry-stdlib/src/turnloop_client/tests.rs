@@ -385,11 +385,11 @@ fn debug_tracing_is_off_by_default() {
     );
 }
 
-/// A request the engine cannot serve must DECLINE rather than fail: the caller
-/// still has a working reqwest transport, and turning a decline into an error
-/// would delete a working configuration.
+/// A request the engine cannot serve is refused by the policy layer, which is
+/// what makes `submit` return `Declined::Unsupported` — and the caller reject
+/// with Node's error for it (`fetch::transport_error::Rejection`).
 #[test]
-fn an_unsupported_url_declines_rather_than_failing() {
+fn an_unsupported_url_is_refused_by_the_policy_layer() {
     for url in [
         "ftp://example.test/x",
         "file:///etc/hosts",
@@ -673,7 +673,7 @@ fn p10_sink_done(_ctx: usize, _outcome: super::Outcome) {
 
 /// turnloop P10, end to end through `submit`: a thread that cannot get a loop
 /// of its own hands the whole request to the thread that owns one, instead of
-/// declining to reqwest.
+/// being refused.
 ///
 /// Three discriminating facts, not one "nothing threw":
 ///
@@ -719,7 +719,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
         // `Unsupported`, `Proxy` and `NoTls` are properties of the request and
         // of process-wide configuration, so the agent's owner would refuse them
         // for exactly the same reason — and by then the caller has been told
-        // the engine took the request and has not spawned its fallback.
+        // the engine took the request and can no longer reject it itself.
         // `submit` therefore prepares the request BEFORE it chooses a
         // transport; this is the assertion that pins that order, and it is made
         // here because this is the thread that would otherwise post. Were the
@@ -741,8 +741,11 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
                     on_done: p10_sink_done,
                 },
             ),
-            Err(super::Declined::Unsupported),
-            "an unsupported URL must decline to the caller's fallback, not be \
+            Err(super::Declined::Unsupported(turnloop_http::Error::new(
+                "ERR_INVALID_URL",
+                "unsupported URL scheme"
+            ))),
+            "an unsupported URL must be refused to the caller, not be \
              handed to a thread that would refuse it identically"
         );
         let spec = super::RequestSpec {

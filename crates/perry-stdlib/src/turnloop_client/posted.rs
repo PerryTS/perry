@@ -1,9 +1,9 @@
 //! turnloop P10: run an outbound request on the loop of the agent this thread
 //! is acting for.
 //!
-//! # The decline this deletes
+//! # The decline this deleted
 //!
-//! `perry-stdlib`'s `reqwest` edge is held open by one sentence — *"a thread
+//! `perry-stdlib`'s `reqwest` edge was held open by one sentence — *"a thread
 //! that could not get a loop of its own"*. Since turnloop P9 gave every JS
 //! agent a loop, that thread is not a worker: it is a **second thread acting
 //! for an agent another thread already owns**. Android is the shape, with
@@ -21,8 +21,8 @@
 //! Only [`Declined::NoLoop`] is a property of the *thread*. `Unsupported`,
 //! `Proxy` and `NoTls` are properties of the *request* and of process-wide
 //! configuration, so the owner would refuse them for the same reason — and by
-//! then the caller has been told the engine took the request and has not
-//! spawned its fallback. `submit` therefore prepares the request before it
+//! then the caller has been told the engine took the request, so it could not
+//! reject it with the refusal's own error. `submit` therefore prepares the request before it
 //! chooses a transport, and only a thread-shaped decline reaches this module.
 //!
 //! # GC
@@ -54,9 +54,8 @@ impl AgentJob for PostedRequest {
         if super::submit_on_owner(spec, sink).is_err() {
             // We are on the owner and it refused anyway — it lost its route
             // between the post and this turn. There is no falling back from
-            // here: the caller was told the engine took this request, so its
-            // reqwest future was never spawned and nothing else will settle the
-            // promise. A promise nobody settles is the one outcome a caller
+            // here: the caller was told the engine took this request, so
+            // nothing else will settle the promise. A promise nobody settles is the one outcome a caller
             // cannot recover from, so report the failure rather than drop it.
             (sink.on_done)(
                 sink.ctx,
@@ -97,7 +96,7 @@ pub(super) fn available() -> bool {
 /// `Ok(())` keeps [`super::submit`]'s contract: the sink will be called exactly
 /// once, over there. `Err(Declined::NoLoop)` means no loop exists for this
 /// agent at all — the only case is a host where `Loop::new` failed — and the
-/// caller must run its reqwest future.
+/// caller must reject.
 ///
 /// One qualification on "will be called", inherited from `agent_post`: a job
 /// still queued when the owner's loop goes down is dropped without being
@@ -109,9 +108,8 @@ pub(super) fn try_submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> 
         Ok(()) => Ok(()),
         // `Again` is the owner between claiming its route and publishing its
         // loop, or a full postbox. Both read to the caller the same way
-        // `NoRoute` does — keep your own transport for this one request — and a
-        // fetch is a one-shot, so there is nothing queued behind it that a
-        // fallback could reorder.
+        // `NoRoute` does. They used to fall back to a reqwest future for this
+        // one request; with no second transport they now reject it.
         Err(_) => Err(Declined::NoLoop),
     }
 }

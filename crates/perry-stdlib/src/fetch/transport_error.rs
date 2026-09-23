@@ -1,6 +1,11 @@
-//! Convert reqwest transport failures to the error shape exposed by Node fetch.
+//! The error shapes a failed `fetch` rejects with, matching Node's.
+//!
+//! Two families: a transport failure is `TypeError: fetch failed` whose
+//! `cause` carries the system error ([`FetchFailure`]); a request undici
+//! refuses to *construct* is a bare `TypeError` naming the problem
+//! ([`Rejection`]).
 
-use std::error::Error as StdError;
+use crate::turnloop_client::Declined;
 
 pub(crate) struct FetchFailure {
     cause_message: String,
@@ -15,27 +20,10 @@ pub(crate) struct FetchFailure {
 }
 
 impl FetchFailure {
-    pub(crate) fn from_reqwest(error: &reqwest::Error, url: &str) -> Self {
-        let mut chain = String::new();
-        let mut cause_message = error.to_string();
-        let mut current: Option<&(dyn StdError + 'static)> = Some(error);
-        while let Some(source) = current {
-            let text = source.to_string();
-            if !text.is_empty() {
-                cause_message = text.clone();
-            }
-            chain.push_str(&text.to_ascii_lowercase());
-            chain.push(' ');
-            current = source.source();
-        }
-        Self::classify(url, &chain, cause_message)
-    }
-
     /// The turnloop client engine's failure, which already carries Node's
     /// `cause.code` and `syscall` rather than a prose chain to classify.
     /// `getaddrinfo ENOTFOUND` keeps the `errno` and `hostname` Node reports,
-    /// because that is the one shape callers match on (the reqwest path
-    /// synthesized the same triple).
+    /// because that is the one shape callers match on.
     pub(crate) fn from_client(
         code: &'static str,
         message: String,
@@ -79,24 +67,13 @@ impl FetchFailure {
         }
     }
 
-    fn classify(url: &str, chain: &str, fallback_message: String) -> Self {
-        let hostname = reqwest::Url::parse(url)
-            .ok()
-            .and_then(|parsed| parsed.host_str().map(str::to_owned));
-        if looks_like_dns_failure(chain) {
-            let hostname = hostname.unwrap_or_default();
-            return Self {
-                cause_message: format!("getaddrinfo ENOTFOUND {hostname}"),
-                code: Some("ENOTFOUND"),
-                errno: Some(-3008),
-                syscall: Some("getaddrinfo"),
-                hostname: Some(hostname),
-                cause_name: None,
-            };
-        }
+    /// `fetch failed` whose cause is a plain `Error(message)`, optionally
+    /// carrying a `code` — undici's shape for a request it accepted but cannot
+    /// carry (`unknown scheme`, an unsupported proxy).
+    pub(crate) fn refused(message: &str, code: Option<&'static str>) -> Self {
         Self {
-            cause_message: fallback_message,
-            code: None,
+            cause_message: message.to_string(),
+            code,
             errno: None,
             syscall: None,
             hostname: None,
@@ -138,49 +115,183 @@ impl FetchFailure {
     }
 }
 
-fn looks_like_dns_failure(chain: &str) -> bool {
-    chain.contains("dns error")
-        || chain.contains("failed to lookup address")
-        || chain.contains("failed to lookup")
-        || chain.contains("name or service not known")
-        || chain.contains("nodename nor servname")
-        || chain.contains("no such host")
-        || chain.contains("name resolution")
-        || chain.contains("name not resolved")
+/// How a request the turnloop engine refused to build rejects.
+///
+/// Before the reqwest fallback was removed, each of these was a *decline*: the
+/// caller ran a reqwest future instead, and the rejection text was whatever
+/// reqwest produced (or, for embedded credentials and `CONNECT`/`TRACE`, the
+/// request simply went out — reqwest is more permissive than undici). Each arm
+/// below is Node 26.5.1's answer for the same input, measured rather than
+/// inferred; `test_gap_fetch_refused_requests.ts` pins them.
+pub(crate) enum Rejection {
+    /// `TypeError: fetch failed` with a cause.
+    Failure(FetchFailure),
+    /// A bare `TypeError(message)` with no cause.
+    TypeError(String),
+    /// `TypeError(message)` whose cause is a `TypeError(cause)` carrying `code`:
+    /// the `Failed to parse URL from …` shape.
+    ParseUrl {
+        message: String,
+        cause: &'static str,
+        code: &'static str,
+    },
+}
+
+impl Rejection {
+    /// Map an engine refusal for `url`/`method` to Node's rejection.
+    pub(crate) fn for_declined(declined: Declined, url: &str, method: &str) -> Self {
+        match declined {
+            Declined::Unsupported(error) => match error.message {
+                "invalid URL" => Rejection::ParseUrl {
+                    message: format!("Failed to parse URL from {url}"),
+                    cause: "Invalid URL",
+                    code: "ERR_INVALID_URL",
+                },
+                "unsupported URL scheme" => {
+                    let scheme = url::Url::parse(url)
+                        .map(|parsed| parsed.scheme().to_string())
+                        .unwrap_or_default();
+                    // undici's scheme fetch: `file:` is a named stub, every
+                    // other scheme it does not know is `unknown scheme`.
+                    let cause = if scheme == "file" {
+                        "not implemented... yet..."
+                    } else {
+                        "unknown scheme"
+                    };
+                    Rejection::Failure(FetchFailure::refused(cause, None))
+                }
+                "URL contains credentials" => Rejection::TypeError(format!(
+                    "Request cannot be constructed from a URL that includes credentials: {url}"
+                )),
+                "invalid method" => {
+                    Rejection::TypeError(format!("'{method}' is not a valid HTTP method."))
+                }
+                "forbidden fetch method" => {
+                    Rejection::TypeError(format!("'{method}' HTTP method is unsupported."))
+                }
+                other => Rejection::Failure(FetchFailure::refused(other, Some(error.code))),
+            },
+            Declined::Proxy(error) => {
+                Rejection::Failure(FetchFailure::refused(error.message, Some(error.code)))
+            }
+            Declined::NoLoop => Rejection::Failure(FetchFailure::refused(
+                "no event loop is available for this agent",
+                None,
+            )),
+            Declined::NoTls => Rejection::Failure(FetchFailure::refused(
+                "TLS client configuration is unavailable",
+                None,
+            )),
+        }
+    }
+
+    /// The one-line text the non-`Response` surfaces (`js_fetch_text`, the SSE
+    /// stream poller) report instead of an error object.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Rejection::Failure(failure) => failure.cause_message.clone(),
+            Rejection::TypeError(message) | Rejection::ParseUrl { message, .. } => {
+                message.clone()
+            }
+        }
+    }
+
+    pub(crate) fn into_js_bits(self) -> u64 {
+        match self {
+            Rejection::Failure(failure) => failure.into_js_bits(),
+            Rejection::TypeError(message) => {
+                let message = perry_runtime::js_string_from_bytes(
+                    message.as_ptr(),
+                    message.len() as u32,
+                );
+                let error = perry_runtime::error::js_typeerror_new(message);
+                perry_runtime::JSValue::pointer(error as *const u8).bits()
+            }
+            Rejection::ParseUrl {
+                message,
+                cause,
+                code,
+            } => {
+                let cause_message =
+                    perry_runtime::js_string_from_bytes(cause.as_ptr(), cause.len() as u32);
+                perry_runtime::node_submodules::register_error_code_pub(cause_message, code);
+                let cause = perry_runtime::error::js_typeerror_new(cause_message);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let cause_handle = scope
+                    .root_nanbox_u64(perry_runtime::JSValue::pointer(cause as *const u8).bits());
+                let message = perry_runtime::js_string_from_bytes(
+                    message.as_ptr(),
+                    message.len() as u32,
+                );
+                let error = perry_runtime::error::js_typeerror_new_with_cause(
+                    message,
+                    cause_handle.get_nanbox_f64(),
+                );
+                perry_runtime::JSValue::pointer(error as *const u8).bits()
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn unsupported(url: &str, method: &str) -> Rejection {
+        let error = turnloop_http::client::Request::new(url, method)
+            .err()
+            .expect("the policy layer must refuse this request");
+        Rejection::for_declined(Declined::Unsupported(error), url, method)
+    }
+
+    /// Each refusal the engine can report maps to Node 26.5.1's text. The
+    /// policy layer's messages are matched by string, so this also fails if a
+    /// `turnloop-http` bump rewords one — which would otherwise silently
+    /// degrade the answer to the generic `fetch failed` arm.
     #[test]
-    fn dns_failure_has_node_fetch_cause_diagnostics() {
-        let failure = FetchFailure::classify(
-            "https://example.invalid/mcp",
-            "error sending request dns error failed to lookup address information",
-            "opaque reqwest error".to_string(),
-        );
+    fn engine_refusals_map_to_node_rejections() {
+        assert!(matches!(
+            unsupported("not-a-url", "GET"),
+            Rejection::ParseUrl { ref message, cause: "Invalid URL", code: "ERR_INVALID_URL" }
+                if message == "Failed to parse URL from not-a-url"
+        ));
+        assert_eq!(unsupported("ftp://example.test/x", "GET").message(), "unknown scheme");
         assert_eq!(
-            failure.cause_message,
-            "getaddrinfo ENOTFOUND example.invalid"
+            unsupported("file:///etc/hosts", "GET").message(),
+            "not implemented... yet..."
         );
-        assert_eq!(failure.code, Some("ENOTFOUND"));
-        assert_eq!(failure.errno, Some(-3008));
-        assert_eq!(failure.syscall, Some("getaddrinfo"));
-        assert_eq!(failure.hostname.as_deref(), Some("example.invalid"));
+        assert!(matches!(
+            unsupported("http://user:pass@example.test/x", "GET"),
+            Rejection::TypeError(ref m) if m ==
+                "Request cannot be constructed from a URL that includes credentials: \
+                 http://user:pass@example.test/x"
+        ));
+        assert!(matches!(
+            unsupported("http://example.test/x", "CONNECT"),
+            Rejection::TypeError(ref m) if m == "'CONNECT' HTTP method is unsupported."
+        ));
+        assert!(matches!(
+            unsupported("http://example.test/x", "BAD METHOD"),
+            Rejection::TypeError(ref m) if m == "'BAD METHOD' is not a valid HTTP method."
+        ));
     }
 
     #[test]
-    fn unclassified_failure_keeps_deepest_source_message() {
-        let failure = FetchFailure::classify(
-            "https://example.com/",
-            "opaque transport failure",
-            "opaque transport failure".to_string(),
+    fn an_undrivable_proxy_is_a_fetch_failure_carrying_its_code() {
+        let rejection = Rejection::for_declined(
+            Declined::Proxy(turnloop_http::Error::new(
+                "UND_ERR_NOT_SUPPORTED",
+                "only HTTP proxies are supported",
+            )),
+            "https://example.test/",
+            "GET",
         );
-        assert_eq!(failure.cause_message, "opaque transport failure");
-        assert_eq!(failure.code, None);
-        assert_eq!(failure.errno, None);
-        assert_eq!(failure.syscall, None);
-        assert_eq!(failure.hostname, None);
+        match rejection {
+            Rejection::Failure(failure) => {
+                assert_eq!(failure.cause_message, "only HTTP proxies are supported");
+                assert_eq!(failure.code, Some("UND_ERR_NOT_SUPPORTED"));
+            }
+            _ => panic!("an unsupported proxy is a transport failure, not a TypeError"),
+        }
     }
 }

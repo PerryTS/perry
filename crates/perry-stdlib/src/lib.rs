@@ -109,12 +109,12 @@ pub(crate) mod turnloop_tls_client;
 pub mod turnloop_smtp;
 
 // === turnloop P6: outbound HTTP/1.1 on turnloop handles ===
-// The transport `fetch` and `axios` take whenever this agent has a loop —
-// directly when this thread owns it, and through turnloop P10's `agent_post`
-// when another thread of the same agent does. The reqwest client stays beside
-// it for what the engine declines: an undrivable proxy, a URL the fetch policy
-// layer rejects, and a genuine absence of an agent loop (a host where
-// `Loop::new` failed). See `turnloop_client`'s module note.
+// The only transport `fetch` has — directly when this thread owns the agent's
+// loop, and through turnloop P10's `agent_post` when another thread of the
+// same agent does. What the engine refuses (an undrivable proxy, a URL the
+// fetch policy layer rejects, a host where `Loop::new` failed) rejects with
+// Node's error; there is no reqwest fallback any more. See `turnloop_client`'s
+// module note.
 #[cfg(feature = "turnloop-http-client")]
 pub mod turnloop_client;
 
@@ -136,8 +136,8 @@ pub mod fetch;
 //
 // The definitions genuinely need Fetch machinery (`FETCH_RESPONSES`,
 // `consume_response_body`), so they cannot simply move out; and making the http
-// features depend on `web-fetch` would link `reqwest` — an HTTP *client* — into
-// every `node:http` *server* build. Instead the symbols always exist, and
+// features depend on `web-fetch` would link an HTTP *client* into every
+// `node:http` *server* build. Instead the symbols always exist, and
 // without Web Fetch they answer "nothing to bridge", which is exactly right:
 // with no `fetch` module there are no `Response` objects to snapshot.
 #[cfg(not(feature = "web-fetch"))]

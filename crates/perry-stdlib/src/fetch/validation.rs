@@ -54,7 +54,7 @@ pub(crate) fn is_redirect_status(status: i32) -> bool {
 }
 
 pub(crate) fn parse_redirect_location(raw: &str) -> Result<String, ()> {
-    reqwest::Url::parse(raw)
+    url::Url::parse(raw)
         .map(|parsed| parsed.to_string())
         .map_err(|_| ())
 }

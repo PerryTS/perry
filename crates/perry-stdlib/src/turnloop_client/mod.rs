@@ -2,9 +2,10 @@
 //!
 //! P1 put Perry's sockets on turnloop and P5 put the HTTP/1.1 *server* codec and
 //! TLS there. This is the client half: `fetch`, `axios` and anything else that
-//! issues an outbound request stops being a `reqwest` future driven by a tokio
-//! tick and becomes a state machine driven by `NET_*` completions on the
-//! agent's own `turnloop::Loop`.
+//! issues an outbound request is a state machine driven by `NET_*` completions
+//! on the agent's own `turnloop::Loop` rather than a `reqwest` future driven by
+//! a tokio tick. Since lane G of the tokio removal it is the ONLY transport:
+//! `perry-stdlib` no longer depends on `reqwest` at all.
 //!
 //! # What drives what
 //!
@@ -32,15 +33,15 @@
 //!                             Sink::on_done → queue_promise_resolution
 //! ```
 //!
-//! # Who still declines
+//! # What is refused
 //!
-//! `reqwest` stays beside this engine for what it cannot serve, which is the P1
-//! coexistence rule rather than an omission. Since turnloop P10 that list no
-//! longer includes a thread without a loop of its own: `submit` posts to the
-//! thread that owns the agent's loop (`posted`). What is left is a genuine
-//! absence of a loop for the whole agent — a host where `Loop::new` failed —
-//! plus three request-shaped declines the owner would refuse identically
-//! (`Declined`).
+//! A thread without a loop of its own is not refused: since turnloop P10
+//! `submit` posts to the thread that owns the agent's loop (`posted`). What is
+//! left is a genuine absence of a loop for the whole agent — a host where
+//! `Loop::new` failed — plus three request-shaped refusals the owner would make
+//! identically (`Declined`). Each used to fall back to a `reqwest` future; each
+//! now rejects the caller's promise with Node's error for the same input
+//! (`fetch::transport_error::Rejection`).
 //!
 //! Every policy decision — redirects, the pool, the per-phase deadlines, the
 //! proxy environment, `Content-Encoding` — comes from `turnloop_http::client`
@@ -72,8 +73,8 @@
 //!
 //! **No JS value and no heap pointer reaches the driver**, exactly as in P1 and
 //! P5. A request carries owned `String`/`Vec<u8>` and the `usize` address of a
-//! promise created by `js_promise_new_cross_thread`, which pins it (#9552) the
-//! same way the reqwest path already did; reads land in turnloop's pooled
+//! promise created by `js_promise_new_cross_thread`, which pins it (#9552);
+//! reads land in turnloop's pooled
 //! buffers and are copied out inside the dispatch call. So this module registers
 //! no GC root scanner, and `scripts/gc_runtime_root_holders.py` needs no entry
 //! for it.
@@ -108,9 +109,8 @@ const ID_BASE: i64 = 1 << 40;
 /// Ids wrap inside `[ID_BASE, ID_CEILING)`; `turnloop_net` tokens carry 56 bits.
 const ID_CEILING: i64 = 1 << 55;
 
-/// Matches the reqwest client `fetch` has always built
-/// (`fetch_client_builder`): `pool_max_idle_per_host(16)`,
-/// `pool_idle_timeout(90s)`. Preserving those two numbers is what keeps the
+/// Matches the reqwest client `fetch` used to build:
+/// `pool_max_idle_per_host(16)`, `pool_idle_timeout(90s)`. Preserving those two numbers is what keeps the
 /// migration invisible to a long-running service's connection behaviour.
 const POOL_MAX_PER_HOST: usize = 16;
 const POOL_IDLE: Duration = Duration::from_secs(90);
@@ -135,9 +135,9 @@ static DECODED: AtomicU64 = AtomicU64::new(0);
 /// if this is zero, which is exactly the assertion the proxy fixture makes.
 static TUNNELS: AtomicU64 = AtomicU64::new(0);
 
-/// Why a submission could not be served here. Every variant is a real
-/// configuration the reqwest path still handles, which is why the fallback is
-/// not deleted (P1's coexistence rule).
+/// Why a submission could not be served. There is no other transport behind
+/// this engine any more, so the caller turns every variant into a rejection
+/// (`fetch::transport_error::Rejection::for_declined`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Declined {
     /// No loop exists for this AGENT — not merely for this thread.
@@ -147,24 +147,23 @@ pub(crate) enum Declined {
     /// that does, so the case left is a genuine absence: a host where
     /// `Loop::new` failed.
     NoLoop,
-    /// A proxy this client cannot drive. An `http://` proxy is served here now
+    /// A proxy this client cannot drive. An `http://` proxy is served here
     /// — `turnloop_http::client::Route` supplies the CONNECT head and the
     /// tunnel decision, and `exchange` runs it — so this variant is reached
-    /// only for a proxy URL `ProxyEnvironment::proxy_for` refuses: a scheme
-    /// other than `http` (socks5, https-to-proxy), or one that will not parse.
+    /// only for a proxy URL that is not `http` (socks5, https-to-proxy), or one
+    /// that will not parse. The error is the policy layer's
+    /// (`UND_ERR_NOT_SUPPORTED` / `ERR_INVALID_URL`).
     ///
-    /// Only the `https://`-proxy half of that is a configuration the fallback
-    /// actually serves. reqwest is built here without its `socks` feature, and
-    /// every socks arm of its connector is behind that `cfg`, so a
-    /// `socks5://` proxy fails on the fallback too — declining routes it to a
-    /// transport that cannot do it either. Kept as a decline rather than
-    /// promoted to an error because the two paths' error TEXT differs and the
-    /// suite pins reqwest's.
-    Proxy,
-    /// Not an `http:`/`https:` URL, or the URL is malformed in a way
-    /// `client::Request::new` rejects for a reason the caller must report the
-    /// existing way.
-    Unsupported,
+    /// The `https://`-proxy half used to fall back to reqwest, which could
+    /// speak TLS to a proxy. That configuration now rejects: carrying it needs
+    /// `turnloop_http::client::ProxyEnvironment::proxy_for` to accept an
+    /// `https` proxy and this engine to run TLS-in-TLS. A `socks5://` proxy
+    /// loses nothing — reqwest was built without its `socks` feature, so it
+    /// failed there too.
+    Proxy(turnloop_http::Error),
+    /// Not an `http:`/`https:` URL, embedded credentials, or a method fetch
+    /// refuses: the error `client::Request::new` returned.
+    Unsupported(turnloop_http::Error),
     /// TLS is wanted but the client configuration could not be built.
     NoTls,
 }
@@ -542,11 +541,11 @@ pub(crate) fn become_the_owner_for_test() -> OwnerLease {
 /// of the thread that made it.
 ///
 /// Computed *before* the transport is chosen, and that order is the point: a
-/// decline that belongs to the request must still reach the caller's fallback.
+/// refusal that belongs to the request must reach the caller with its own error.
 /// The agent's owner would refuse an unsupported URL, an undrivable proxy or a
 /// missing TLS config for exactly the same reason this thread would, and by the
 /// time the job lands over there the caller has already been told the engine
-/// took the request and never spawned its reqwest future. Only
+/// took the request. Only
 /// [`Declined::NoLoop`] is a property of the thread, and only that one is worth
 /// posting.
 struct Prepared {
@@ -555,7 +554,7 @@ struct Prepared {
 }
 
 fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
-    let request = tlc::Request::new(&spec.url, &spec.method).map_err(|_| Declined::Unsupported)?;
+    let request = tlc::Request::new(&spec.url, &spec.method).map_err(Declined::Unsupported)?;
     let proxy = proxy_for(&request.url)?;
     if request.url.scheme() == "https" && exchange::tls_config().is_none() {
         return Err(Declined::NoTls);
@@ -565,8 +564,8 @@ fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
 
 /// Take the turnloop path for one outbound request.
 ///
-/// `Err(Declined)` means the caller must keep its existing transport for this
-/// request; nothing has been allocated and no completion will arrive. `Ok(())`
+/// `Err(Declined)` means the request was refused: nothing has been allocated,
+/// no completion will arrive, and the caller must settle it itself. `Ok(())`
 /// means the sink will be called exactly once.
 ///
 /// # The thread that has no loop of its own
@@ -578,12 +577,11 @@ fn prepare(spec: &RequestSpec) -> Result<Prepared, Declined> {
 /// whole submission to the owner ([`posted`]), which is a thread serving the
 /// *same* JS heap, so the promise is settled where that agent's values live.
 /// Only a genuine absence of a loop — a host where `Loop::new` failed —
-/// still declines to reqwest.
+/// is refused.
 pub(crate) fn submit(spec: RequestSpec, sink: Sink) -> Result<(), Declined> {
     let direct = tl::available();
     if !direct && !posted::available() {
-        // No loop anywhere for this agent, so the caller's own transport is the
-        // only one. Decline BEFORE preparing the request: `prepare` reaches
+        // No loop anywhere for this agent. Refuse BEFORE preparing the request: `prepare` reaches
         // `tls_config()`, whose first call loads the platform root store.
         return Err(Declined::NoLoop);
     }
@@ -703,12 +701,12 @@ pub(super) fn proxy_for(url: &url::Url) -> Result<Option<url::Url>, Declined> {
     // `undici.setGlobalDispatcher(new ProxyAgent(uri, token))` is a process-wide
     // override rather than an environment variable, and it wins over the
     // environment for every origin — undici's own rule, and what the reqwest
-    // client this replaced did (`fetch_client()` returned the proxied client
+    // client that preceded this engine did (`fetch_client()` returned the proxied client
     // unconditionally once one was installed). `NO_PROXY` does not apply to it.
     if let Some((uri, token)) = global_dispatcher_proxy() {
-        let mut parsed = url::Url::parse(&uri).map_err(|_| Declined::Proxy)?;
+        let mut parsed = url::Url::parse(&uri).map_err(|_| Declined::Proxy(INVALID_PROXY))?;
         if parsed.scheme() != "http" || parsed.host_str().is_none() {
-            return Err(Declined::Proxy);
+            return Err(Declined::Proxy(HTTP_PROXIES_ONLY));
         }
         // undici's `token` is the literal `Proxy-Authorization` value. The
         // route derives that header from the proxy URL's userinfo, so a token
@@ -731,8 +729,15 @@ pub(super) fn proxy_for(url: &url::Url) -> Result<Option<url::Url>, Declined> {
             .or_else(|| var("no_proxy"))
             .unwrap_or_default(),
     };
-    env.proxy_for(url).map_err(|_| Declined::Proxy)
+    env.proxy_for(url).map_err(Declined::Proxy)
 }
+
+/// The policy layer's own two proxy refusals, reused for the
+/// `setGlobalDispatcher` proxy so both sources reject identically.
+const INVALID_PROXY: turnloop_http::Error =
+    turnloop_http::Error::new("ERR_INVALID_URL", "invalid proxy");
+const HTTP_PROXIES_ONLY: turnloop_http::Error =
+    turnloop_http::Error::new("UND_ERR_NOT_SUPPORTED", "only HTTP proxies are supported");
 
 fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
