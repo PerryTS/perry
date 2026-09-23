@@ -83,10 +83,16 @@ pub(crate) unsafe fn try_static_accessor_value_call(
     let key_handle = scope.root_string_ptr(key);
     // Codegen passes the receiver's raw NaN-boxed bits here (a ClassRef is an
     // INT32 box, not a heap pointer); match that encoding exactly.
-    let callee = crate::object::js_object_get_field_by_name_f64(
-        receiver_handle.get_nanbox_u64() as *const ObjectHeader,
-        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-    );
+    // #7341: the key is read INSIDE `with_const_ptr` rather than hoisted into a
+    // bare `get_raw_const_ptr`, because the read sits in argument position to a
+    // call — the shape `across_*` cannot convert. `js_object_get_field_by_name_f64`
+    // is a self-rooting runtime entry point, which is what `with_const_ptr` is for.
+    let callee = key_handle.with_const_ptr::<crate::StringHeader, _>(|key_ptr| {
+        crate::object::js_object_get_field_by_name_f64(
+            receiver_handle.get_nanbox_u64() as *const ObjectHeader,
+            key_ptr,
+        )
+    });
     if !crate::collection_iter::is_callable(callee) {
         return None;
     }
