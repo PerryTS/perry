@@ -394,6 +394,15 @@ pub fn lower_class_decl(
                     Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
                     Err(_) => (None, Some(parent_name), None, None),
                 }
+            } else if member_heritage_hides_global_builtin(ctx, member, &parent_name) {
+                // #11139: a trailing name that codegen routes as a JS built-in
+                // (`class ConnectionString extends whatwg_url_1.URL`) keeps no
+                // static name or link, so `super()` runs the member's own
+                // constructor through the dynamic parent path.
+                match lower_class_heritage_expr(ctx, super_class) {
+                    Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                    Err(_) => (None, None, None, None),
+                }
             } else {
                 // A NAMED cross-module member-extends (`class NodeNextRequest
                 // extends _index.BaseNextRequest`). The static `extends_name`

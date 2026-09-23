@@ -240,6 +240,14 @@ pub(crate) fn lower_class_from_ast(
                     Ok(expr) => (None, Some(parent_name), None, Some(Box::new(expr))),
                     Err(_) => (None, Some(parent_name), None, None),
                 }
+            } else if member_heritage_hides_global_builtin(ctx, member, &parent_name) {
+                // #11139: keep in lockstep with the matching arm in
+                // `lower_class_decl` — `extends ns.URL` is ns's property, not
+                // the global built-in the bare name would select in codegen.
+                match lower_class_heritage_expr(ctx, super_class) {
+                    Ok(expr) => (None, None, None, Some(Box::new(expr))),
+                    Err(_) => (None, None, None, None),
+                }
             } else {
                 // Named cross-module member-extends — route through `extends_expr`
                 // UNCONDITIONALLY so `super()` runs the parent ctor at runtime even
