@@ -744,6 +744,8 @@ unsafe fn layout_all_pointer_array_append(
 }
 
 pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits: u64) {
+    #[cfg(test)]
+    crate::object::TEST_LAYOUT_NOTE_SLOT_CALLS.with(|calls| calls.set(calls.get() + 1));
     if slot_index > 16_000_000 {
         return;
     }
@@ -1056,15 +1058,12 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
 }
 
 /// Existing-slot layout note with the value that was overwritten.
-///
-/// The GC slot mask records one bit of information: whether a slot can carry a
-/// heap edge. Replacing one pointer-bearing value with another cannot change
-/// that bit. Arrays still have a second, independent invariant to maintain —
-/// their homogeneous element-shape record — so the pointer-over-pointer path
+/// The GC slot mask records whether a slot can carry a heap edge. Replacing one
+/// pointer-bearing value with another leaves that bit unchanged. Arrays also
+/// maintain a homogeneous element-shape record, so the pointer-over-pointer path
 /// runs that hook after validating/chasing the owner header and then stops
 /// before the typed-layout and per-slot-mask machinery. Object-backed packed
 /// numeric proofs are retired for the same reason as in [`layout_note_slot`].
-///
 /// Scalar-over-scalar keeps the historical fast return. A change in either
 /// direction uses the complete note so pointer masks and typed descriptors are
 /// updated exactly as before.

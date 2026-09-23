@@ -954,6 +954,12 @@
       "why": "View-mode diagnostic tally of install-time RegExp.prototype.test walks. A plain AtomicU64 incremented once by record_canonical_test_site and read as a count by tests; it never stores an address or NaN-boxed value. The actual prototype and closure roots live together in REGEXP_PROTOTYPE_TEST_SITE and are visited by scan_canonical_test_site_roots_mut."
     },
     {
+      "file": "crates/perry-runtime/src/object/spill.rs",
+      "name": "TEST_LAYOUT_NOTE_SLOT_CALLS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<usize> counter for asserting spill overwrites skip the full layout-note path when the pointer kind is unchanged. It stores only a call count and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/object/shapes.rs",
       "name": "SHAPE_YOUNG_LOG_SUPPRESSED",
       "verdict": "not_a_gc_pointer",
