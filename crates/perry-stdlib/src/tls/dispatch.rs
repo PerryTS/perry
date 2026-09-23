@@ -25,8 +25,18 @@ use super::{
     js_tls_socket_set_max_send_fragment, json_value_from_str, jsvalue_to_bytes, listener_count,
     nanbox_handle, nanbox_str, pointer_addr, raw_handle_value, register_listener,
     remove_all_listeners, remove_listener, servers, sockets, string_from_header, undefined,
-    TlsSocketCommand, TAG_UNDEFINED_BITS,
+    turnloop_server, TAG_UNDEFINED_BITS,
 };
+
+/// Whether `handle` is an established server-side connection whose turnloop
+/// transport accepts `write` / `end` / `destroy`.
+fn has_live_transport(handle: i64) -> bool {
+    sockets()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .is_some_and(|socket| socket.live_transport)
+}
 
 fn tls_server_method_name_static(method: &str) -> Option<&'static [u8]> {
     match method {
@@ -290,35 +300,27 @@ pub unsafe fn dispatch_tls_handle(handle: i64, method: &str, args: &[f64]) -> f6
         }
         match method {
             "write" if !args.is_empty() => {
-                if let Some(socket) = sockets().lock().unwrap().get(&handle) {
-                    if let Some(tx) = &socket.cmd_tx {
-                        if let Some(bytes) = jsvalue_to_bytes(args[0]) {
-                            let _ = tx.send(TlsSocketCommand::Write(bytes));
-                        }
+                if has_live_transport(handle) {
+                    if let Some(bytes) = jsvalue_to_bytes(args[0]) {
+                        turnloop_server::write(handle, bytes);
                     }
                 }
                 return f64::from_bits(TAG_UNDEFINED_BITS);
             }
             "end" => {
-                if let Some(socket) = sockets().lock().unwrap().get(&handle) {
-                    if let Some(tx) = &socket.cmd_tx {
-                        if let Some(value) = args.first().copied() {
-                            if let Some(bytes) = jsvalue_to_bytes(value) {
-                                if !bytes.is_empty() {
-                                    let _ = tx.send(TlsSocketCommand::Write(bytes));
-                                }
-                            }
-                        }
-                        let _ = tx.send(TlsSocketCommand::End);
-                    }
+                if has_live_transport(handle) {
+                    let bytes = args
+                        .first()
+                        .copied()
+                        .and_then(|value| jsvalue_to_bytes(value))
+                        .filter(|bytes| !bytes.is_empty());
+                    turnloop_server::end(handle, bytes);
                 }
                 return f64::from_bits(TAG_UNDEFINED_BITS);
             }
             "destroy" => {
-                if let Some(socket) = sockets().lock().unwrap().get(&handle) {
-                    if let Some(tx) = &socket.cmd_tx {
-                        let _ = tx.send(TlsSocketCommand::Destroy);
-                    }
+                if has_live_transport(handle) {
+                    turnloop_server::destroy(handle);
                 }
                 return f64::from_bits(TAG_UNDEFINED_BITS);
             }

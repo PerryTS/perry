@@ -26,7 +26,8 @@ mod prebuilt_core;
 pub(crate) use driver::build_optimized_libs;
 pub(crate) use freshness::{
     auto_optimized_archives_are_fresh, auto_optimized_build_stamp, auto_optimized_cache_key,
-    auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_needs_shared_tokio,
+    auto_optimized_cross_features, auto_optimized_source_fingerprint, binding_bundles_tokio,
+    binding_needs_shared_tokio,
     effective_size_panic_immediate_abort, resolve_auto_well_known_libs,
     retain_workspace_declared_features, size_lto_fat, size_opt_level,
 };

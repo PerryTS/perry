@@ -192,9 +192,11 @@ pub(crate) fn build_optimized_libs(
             // needs perry-stdlib to HAVE one. Since the promise bridge stopped
             // implying tokio (`async-bridge`), `async-runtime` is selected per
             // program, and this is where every tokio-using wrapper selects it
-            // — the same predicate the shared-tokio rebuild and the #7629
-            // coherence check key on, so the three cannot disagree.
-            if needs_shared_tokio {
+            // — the same predicate the #7629 coherence check keys on, so the
+            // two cannot disagree. It is narrower than the co-build set above:
+            // perry-ext-net / -ws / -undici / -nodemailer are co-built but
+            // carry no tokio, so a program importing only those links none.
+            if binding_bundles_tokio(module_normalized) {
                 features.insert("async-runtime");
             }
             // For CPU-only wrappers we can use the workspace-built
@@ -354,26 +356,29 @@ pub(crate) fn build_optimized_libs(
             // async feature; if it did, ensure it stays.
             //
             // turnloop P8 lane L split the tokio runtime out of the
-            // bridge, so the two halves are asserted separately: the
-            // CPU-only wrappers need only the bridge, while the ones
-            // whose stdlib twin ran on tokio sockets / reqwest keep
-            // `async-runtime` (their wrappers are also shared-tokio,
-            // above; this is the belt to that brace).
+            // bridge. Every wrapper that replaces a bundled binding needs
+            // the bridge; the few that still hand perry-stdlib tokio
+            // futures select `async-runtime` above
+            // (`binding_bundles_tokio`). The rule that used to add
+            // `async-runtime` here for the `bundled-ws` / `bundled-net` /
+            // `http-client` wrappers is gone: perry-ext-ws and
+            // perry-ext-net run on turnloop and carry no tokio, and
+            // `http-client` (`node-fetch`) has no wrapper at all.
             let original_features =
                 crate::commands::stdlib_features::module_to_features(module_normalized);
             if original_features.iter().any(|f| {
                 matches!(
                     *f,
-                    "bundled-bcrypt" | "bundled-argon2" | "bundled-nodemailer" | "bundled-streams"
+                    "bundled-bcrypt"
+                        | "bundled-argon2"
+                        | "bundled-nodemailer"
+                        | "bundled-streams"
+                        | "bundled-ws"
+                        | "bundled-net"
+                        | "http-client"
                 )
             }) {
                 features.insert("async-bridge");
-            }
-            if original_features
-                .iter()
-                .any(|f| matches!(*f, "bundled-ws" | "bundled-net" | "http-client"))
-            {
-                features.insert("async-runtime");
             }
             // turnloop P8 group H: the bundled pg / mysql2 / mongodb
             // modules were deleted, so `module_to_features` names no feature
@@ -394,8 +399,9 @@ pub(crate) fn build_optimized_libs(
             // by perry-ext-fetch). A ProxyAgent-only program never calls
             // `fetch()` in a way `uses_fetch` detects, so re-assert
             // `web-fetch` here or the wrapper's extern reference dangles
-            // at link time. (`web-fetch` implies `async-runtime`, which
-            // the wrapper's JsPromise surface needs anyway.)
+            // at link time. (`web-fetch` implies `async-bridge`, which the
+            // wrapper's JsPromise surface needs anyway; since turnloop P8
+            // lane L it no longer implies tokio.)
             if module_normalized == "undici" {
                 features.insert("web-fetch");
             }
@@ -577,9 +583,11 @@ pub(crate) fn build_optimized_libs(
     // turnloop P8 lane L: this force used to be `async-runtime`, i.e. tokio,
     // so tokio was in every stdlib-linking binary. The bridge is tokio-free
     // now, and `async-runtime` is selected only by a feature that hands tokio
-    // a future (Cargo implies it: web-fetch, bundled net/tls/ws, the
-    // external net/ws/http pumps) or by a shared-tokio wrapper
-    // (above). A program that needs none of those links no tokio.
+    // a future (Cargo implies it: bundled net / ws, the external http pumps)
+    // or by a wrapper that bundles tokio (`binding_bundles_tokio`, above). A
+    // program that needs none of those links no tokio — which, since lane L's
+    // second slice, includes one whose only network imports are `fetch`,
+    // `net`, `tls` and `ws` (the TLS server included).
     features.insert("async-bridge");
     let feature_arg = features_to_cargo_arg(&features);
 

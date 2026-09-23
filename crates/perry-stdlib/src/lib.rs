@@ -181,9 +181,13 @@ pub use streams::*;
 
 // === TLS over a tokio transport (turnloop P8 group H) ===
 // perry-tls-session's sans-I/O rustls session driven over the tokio sockets
-// the bundled `node:tls` server, `net` client and `wss://` connector still
-// use — the replacement for their former tokio-rustls streams.
-#[cfg(any(feature = "tls-runtime", feature = "bundled-ws"))]
+// the bundled `net` client (`tls`) and `wss://` connector (`bundled-ws`) still
+// use — the replacement for their former tokio-rustls streams. The `node:tls`
+// server no longer needs it: its sockets are turnloop handles
+// (`tls/turnloop_server.rs`, turnloop P8 lane L), so `tls-runtime` alone —
+// what `external-net-tls` selects for every net / http program — links no
+// tokio.
+#[cfg(any(feature = "tls", feature = "bundled-ws"))]
 pub(crate) mod tls_stream;
 
 // === WebSocket ===

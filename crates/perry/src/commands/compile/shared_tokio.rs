@@ -215,13 +215,15 @@ fn archive_tokio_id(path: &Path) -> Option<String> {
 /// Library basenames (`perry_ext_http`, …) whose archive MUST bundle the same
 /// tokio as perry-stdlib's.
 ///
-/// Derived from the same predicate the auto-optimize rebuild uses to decide
-/// which wrappers to fold into its cargo invocation, so the check and the fix
-/// can never drift apart.
+/// Derived from the same predicate the auto-optimize driver uses to decide
+/// which wrappers need perry-stdlib's tokio (`binding_bundles_tokio`), so the
+/// check and the feature selection can never drift apart. Every such wrapper
+/// is also in the co-build set (`binding_needs_shared_tokio`), which is what
+/// makes the invariant hold by construction on the auto-optimize path.
 pub(crate) fn shared_tokio_lib_stems() -> BTreeSet<String> {
     super::well_known::iter_well_known()
         .filter(|b| {
-            super::optimized_libs::binding_needs_shared_tokio(
+            super::optimized_libs::binding_bundles_tokio(
                 b.package.strip_prefix("node:").unwrap_or(&b.package),
             )
         })
@@ -397,13 +399,16 @@ mod tests {
     #[test]
     fn shared_tokio_stems_cover_the_wrappers_that_own_sockets() {
         let stems = shared_tokio_lib_stems();
-        // The two archives #7629's witnesses abort in.
+        // The archive #7629's witnesses abort in, which still bundles tokio.
         assert!(stems.contains("perry_ext_http"), "{stems:?}");
-        assert!(stems.contains("perry_ext_net"), "{stems:?}");
-        assert!(stems.contains("perry_ext_ws"), "{stems:?}");
-        // A CPU-only wrapper must NOT be in the set: it never enters a tokio
-        // runtime context, so requiring a shared compilation would fail links
-        // that work.
+        assert!(stems.contains("perry_ext_ioredis"), "{stems:?}");
+        assert!(stems.contains("perry_ext_mongodb"), "{stems:?}");
+        // A wrapper with no tokio must NOT be in the set: it never enters a
+        // tokio runtime context, so requiring a shared compilation would fail
+        // links that work. perry-ext-net (#11105) and perry-ext-ws run on
+        // turnloop since tokio lanes A/L; bcrypt is CPU-only.
+        assert!(!stems.contains("perry_ext_net"), "{stems:?}");
+        assert!(!stems.contains("perry_ext_ws"), "{stems:?}");
         assert!(!stems.contains("perry_ext_bcrypt"), "{stems:?}");
     }
 

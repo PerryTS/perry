@@ -4,7 +4,7 @@
 //! pump is registered. It used to walk every TLS server and socket under their
 //! locks. `KEEPALIVE` now counts exactly the records that walk would have found:
 //! servers that are listening or draining connections after `close()`, and
-//! server-side sockets with a live command channel. Every state change a record
+//! server-side sockets with a live turnloop transport. Every state change a record
 //! makes is bracketed by `keeps_alive` before and after, under that record's
 //! map lock, and every removal releases what the record held.
 
@@ -18,7 +18,7 @@ pub(super) fn server_keeps_alive(server: &TlsServerState) -> bool {
 }
 
 pub(super) fn socket_keeps_alive(socket: &TlsSocketState) -> bool {
-    socket.server_side && socket.cmd_tx.is_some()
+    socket.server_side && socket.live_transport
 }
 
 /// Apply one record's transition from `before` to `after`.

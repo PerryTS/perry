@@ -291,7 +291,7 @@ pub unsafe extern "C" fn js_tls_socket_set_key_cert(handle: i64, value: f64) -> 
                 (
                     socket.server_handle,
                     socket.servername.clone(),
-                    socket.cmd_tx.is_none(),
+                    !socket.live_transport,
                 )
             })
             .unwrap_or((None, None, false));

@@ -1,11 +1,12 @@
 //! A TLS stream over a tokio transport, driven by `perry-tls-session`'s
 //! sans-I/O [`TlsSession`] instead of `tokio_rustls` (turnloop P8 group H).
 //!
-//! The three bundled surfaces that negotiate TLS here — the `node:tls` server
-//! (`tls.rs`), the bundled `net` client's `tls.connect` / `upgradeToTLS`
-//! (`net/mod.rs`) and the `wss://` connector (`ws.rs`) — still run on tokio
-//! sockets: those are `async_bridge::RUNTIME`'s, which is group L and stays for
-//! now. What moves is the TLS engine. It is the same `rustls::unbuffered` core
+//! The two bundled surfaces that negotiate TLS here — the bundled `net`
+//! client's `tls.connect` / `upgradeToTLS` (`net/mod.rs`) and the `wss://`
+//! connector (`ws.rs`) — still run on tokio sockets: those are
+//! `async_bridge::RUNTIME`'s, which is group L and stays for now. (The
+//! `node:tls` server that also used this moved to turnloop handles in lane L;
+//! [`TlsStream::accept`] stays for this module's own server-side tests.) What moves is the TLS engine. It is the same `rustls::unbuffered` core
 //! `turnloop-tls` wraps and perry-ext-net's turnloop path already drives, so
 //! perry-stdlib no longer depends on `tokio-rustls` at all.
 //!
@@ -88,8 +89,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> TlsStream<IO> {
     }
 
     /// Server handshake over an accepted `io` (the `TlsAcceptor::accept`
-    /// replacement). Used by the `node:tls` server (`tls-runtime`).
-    #[cfg_attr(not(feature = "tls-runtime"), allow(dead_code))]
+    /// replacement). The `node:tls` server used it until it moved to turnloop
+    /// (`tls/turnloop_server.rs`); kept for the client's round-trip tests.
+    #[cfg(test)]
     pub(crate) async fn accept(io: IO, config: Arc<rustls::ServerConfig>) -> io::Result<Self> {
         let session = TlsSession::server(config).map_err(io::Error::other)?;
         let mut stream = Self::new(io, session);
@@ -98,7 +100,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin> TlsStream<IO> {
     }
 
     /// The negotiated session, for protocol / ALPN / SNI / peer-chain queries.
-    #[cfg_attr(not(any(feature = "tls-runtime", feature = "tls")), allow(dead_code))]
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
     pub(crate) fn session(&self) -> &TlsSession {
         &self.session
     }

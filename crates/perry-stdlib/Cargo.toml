@@ -58,9 +58,11 @@ http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
 # Node HTTP is provided only by perry-ext-http.
 turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http", "dep:perry-base64"]
 # The global `fetch` runs on the turnloop client engine only (tokio lane G
-# removed its reqwest fallback); `async-runtime` is still needed for the
-# promise bridge it settles through.
-web-fetch = ["async-runtime", "bundled-streams", "turnloop-http-client"]
+# removed its reqwest fallback), so it needs only the promise bridge it settles
+# through (`async-bridge`), not tokio (turnloop P8 lane L). `dep:base64` rides
+# on `turnloop-http-client` because `turnloop_client::decode_basic` (proxy
+# `Basic` credentials) compiles under that feature alone.
+web-fetch = ["async-bridge", "bundled-streams", "turnloop-http-client"]
 http-client = ["web-fetch"]
 
 # Web Streams API (issue #237). Per-binding gate v0.5.572 — the
@@ -100,10 +102,10 @@ bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:per
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to
-# perry-ext-ws. Retains the shared async runtime needed by that extension;
-# the extension registers its pump and keepalive contributor directly with
-# perry-runtime (#9696).
-external-ws-pump = ["async-runtime"]
+# perry-ext-ws. The extension registers its pump and keepalive contributor
+# directly with perry-runtime (#9696). perry-ext-ws runs on turnloop and
+# carries no tokio, so this needs only the promise bridge (turnloop P8 lane L).
+external-ws-pump = ["async-bridge"]
 
 # Raw TCP sockets (`net.Socket` — Postgres wire driver, custom protocols).
 # `net` umbrella retained for backwards-compat; v0.5.571's
@@ -114,9 +116,11 @@ bundled-net = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.579) when
 # the well-known flip strips `bundled-net` and routes `import 'net'`
-# to perry-ext-net. Selects ext-net dispatch adapters and the shared async
-# runtime. The extension itself registers its pump and keepalive contributor.
-external-net-pump = ["async-runtime"]
+# to perry-ext-net. Selects ext-net dispatch adapters. The extension itself
+# registers its pump and keepalive contributor. perry-ext-net runs every
+# socket on turnloop and carries no tokio (#11105), so this needs only the
+# promise bridge (turnloop P8 lane L).
+external-net-pump = ["async-bridge"]
 
 # Activated by `optimized_libs::build_optimized_libs` (#1843) when the
 # well-known flip routes `node:zlib` to perry-ext-zlib and strips
@@ -163,7 +167,7 @@ external-events-construct = []
 tls = ["bundled-net", "tls-runtime"]
 external-net-tls = ["tls-runtime"]
 tls-runtime = [
-    "async-runtime",
+    "async-bridge",
     "dep:perry-tls-session",
     "dep:rustls",
     "dep:rustls-native-certs",
@@ -176,7 +180,7 @@ tls-runtime = [
 # is routed to perry-ext-net. Unlike `tls`, this must not pull bundled-net back
 # in because the wrapper owns client sockets and their event pump.
 external-tls-server = [
-    "async-runtime",
+    "async-bridge",
     "dep:perry-tls-session",
     "dep:rustls",
     "dep:rustls-native-certs",

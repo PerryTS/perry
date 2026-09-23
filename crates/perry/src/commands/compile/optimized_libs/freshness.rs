@@ -801,3 +801,38 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         | "nodemailer"
     )
 }
+
+/// True if this binding's wrapper archive still BUNDLES tokio — its own
+/// `Cargo.toml` depends on tokio and it hands tokio futures to perry-stdlib's
+/// runtime (`perry_ffi_spawn_async` / `_with_reactor`) or calls
+/// `Handle::current()`. Only these need perry-stdlib's `async-runtime`, and
+/// only their archives are compared by the #7629 link check.
+///
+/// A strict subset of [`binding_needs_shared_tokio`], which is the set the
+/// auto-optimize driver co-builds in the stdlib's cargo invocation. The two
+/// diverged in turnloop P8 lane L: perry-ext-net (#11105) and perry-ext-ws run
+/// on turnloop and carry no tokio, perry-ext-nodemailer dropped lettre's tokio
+/// transport (P6), and perry-ext-undici never had one — so a program that
+/// imports only those links no tokio at all. They stay in the co-build set
+/// (it still gives them the stdlib's own perry-runtime / perry-ffi
+/// compilation), but asking for `async-runtime` on their behalf would put
+/// tokio back into every net / ws program for nothing.
+///
+/// `pg` / `mysql2` are not here because they are not in the co-build set
+/// either; the driver selects `async-runtime` for their decline paths by
+/// module name.
+pub(crate) fn binding_bundles_tokio(module: &str) -> bool {
+    matches!(
+        module,
+        // perry-ext-http: hyper / tokio-rustls servers and its reqwest-era
+        // client paths (tokio lanes A / C).
+        "http"
+        | "https"
+        | "http2"
+        // perry-ext-mongodb / perry-ext-ioredis: `Handle::current().block_on`
+        // inside `perry_ffi_spawn_blocking` (group B/J).
+        | "mongodb"
+        | "ioredis"
+        | "redis"
+    )
+}

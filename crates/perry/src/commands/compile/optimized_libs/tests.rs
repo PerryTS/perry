@@ -483,6 +483,34 @@ fn net_needs_shared_tokio() {
     assert!(binding_needs_shared_tokio("net"));
 }
 
+/// turnloop P8 lane L: only wrappers that still bundle tokio make the driver
+/// select perry-stdlib's `async-runtime`. perry-ext-net / -ws run on turnloop,
+/// so a program importing only `net` / `ws` must link no tokio.
+#[test]
+fn only_tokio_bundling_wrappers_select_async_runtime() {
+    for module in ["http", "https", "http2", "mongodb", "ioredis", "redis"] {
+        assert!(binding_bundles_tokio(module), "{module} bundles tokio");
+    }
+    for module in ["net", "ws", "undici", "nodemailer", "bcrypt", "zlib"] {
+        assert!(!binding_bundles_tokio(module), "{module} carries no tokio");
+    }
+}
+
+/// Every wrapper that bundles tokio must also be co-built with the stdlib
+/// archive, or the #7629 link check would refuse its default build.
+#[test]
+fn every_tokio_bundling_wrapper_is_co_built() {
+    for binding in super::super::well_known::iter_well_known() {
+        let module = binding.package.strip_prefix("node:").unwrap_or(&binding.package);
+        if binding_bundles_tokio(module) {
+            assert!(
+                binding_needs_shared_tokio(module),
+                "{module} bundles tokio but is not co-built with perry-stdlib"
+            );
+        }
+    }
+}
+
 #[test]
 fn cpu_only_wrappers_do_not_need_shared_tokio() {
     // bcrypt / argon2 / sharp / dotenv all route through

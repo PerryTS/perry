@@ -552,7 +552,7 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 // rather than a prediction. Refusing here instead would also
                 // fail the cases where the two invocations happen to unify to
                 // the same tokio, and those link and run correctly.
-                if binding_needs_shared_tokio(module.strip_prefix("node:").unwrap_or(module)) {
+                if binding_bundles_tokio(module.strip_prefix("node:").unwrap_or(module)) {
                     eprintln!(
                         "warning: `{}` needs {}, which is not on disk. \
                          PERRY_NO_AUTO_OPTIMIZE=1 forbids the specialized rebuild, so the \

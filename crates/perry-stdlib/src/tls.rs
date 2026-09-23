@@ -3,13 +3,15 @@
 //! Client socket transport still lives in `net`; this module covers the
 //! module-level helpers, SecureContext shape, TLS server acceptor, and the
 //! TLSSocket introspection surface layered over rustls.
+//!
+//! The server's sockets are turnloop handles (`turnloop_server`), with
+//! `perry-tls-session`'s sans-I/O rustls session above them. There is no tokio
+//! in this module (turnloop P8 lane L).
 
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex, Once, OnceLock};
-use std::task::{Context, Poll};
 
 use crate::common::string_from_header;
 use perry_runtime::{
@@ -19,12 +21,6 @@ use perry_runtime::{
     JSValue, ObjectHeader, StringHeader,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot};
-// turnloop P8 group H: the server handshake is `perry-tls-session`'s sans-I/O
-// session over the accepted tokio socket (`crate::tls_stream`), not tokio-rustls.
-use crate::tls_stream::TlsStream as ServerTlsStream;
 
 const TAG_UNDEFINED_BITS: u64 = 0x7FFC_0000_0000_0001;
 const TLS_DISPATCH_MISSING_BITS: u64 = TAG_UNDEFINED_BITS;
@@ -33,10 +29,15 @@ mod client_verifier;
 mod dispatch;
 mod event_pump;
 mod liveness;
-#[cfg(test)]
+// Drives the turnloop listener, so it borrows the HTTP client's loop-owner
+// lease (the one serializer for tests that must own this agent's loop).
+#[cfg(all(test, feature = "turnloop-http-client"))]
 mod liveness_tests;
 mod module_api;
 mod socket_api;
+mod turnloop_server;
+#[cfg(all(test, feature = "turnloop-http-client"))]
+mod turnloop_server_tests;
 // Re-export the handle-dispatch and module-level entry points so
 // `crate::tls::…` (and the `pub use tls::*` glob in `lib.rs`) keep resolving
 // them exactly as before the split.
@@ -76,7 +77,9 @@ thread_local! {
 }
 
 struct TlsServerState {
-    shutdown_tx: Option<oneshot::Sender<()>>,
+    /// A turnloop listener is open for this server (`turnloop_server`), so
+    /// `close()` has one to close.
+    listener_open: bool,
     bound_port: u16,
     bound_host: String,
     listening: bool,
@@ -152,7 +155,12 @@ impl rustls::server::ResolvesServerCert for EmptyCertResolver {
 }
 
 struct TlsSocketState {
-    cmd_tx: Option<mpsc::UnboundedSender<TlsSocketCommand>>,
+    /// The socket is an established server-side connection on a live turnloop
+    /// handle (`turnloop_server`): `write` / `end` / `destroy` reach it. It
+    /// replaced a tokio task's command channel, and keeps that channel's
+    /// liveness meaning: set once the handshake completes, cleared only when
+    /// the record is removed at `'close'`.
+    live_transport: bool,
     #[allow(dead_code)] // captured socket local address for future localAddress exposure
     local_addr: Option<SocketAddr>,
     #[allow(dead_code)] // captured socket peer address for future remoteAddress exposure
@@ -171,12 +179,6 @@ struct TlsSocketState {
     server_handle: Option<i64>,
 }
 
-enum TlsSocketCommand {
-    Write(Vec<u8>),
-    End,
-    Destroy,
-}
-
 enum PendingTlsEvent {
     ServerListening(i64),
     ServerSecureConnection(i64, i64),
@@ -187,36 +189,6 @@ enum PendingTlsEvent {
     SocketEnd(i64),
     SocketClose(i64),
     SocketError(i64, String),
-}
-
-struct TlsServerTransport(ServerTlsStream<TcpStream>);
-
-impl AsyncRead for TlsServerTransport {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for TlsServerTransport {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().0).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
-    }
 }
 
 fn undefined() -> f64 {
@@ -416,16 +388,6 @@ fn scan_tls_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
 fn push_tls_event(event: PendingTlsEvent) {
     pending_events().lock().unwrap().push(event);
     perry_runtime::event_pump::js_notify_main_thread();
-}
-
-fn schedule_tls_socket_close(socket_id: i64) {
-    crate::common::async_bridge::spawn(async move {
-        // Node emits readable `end` before the socket's terminal `close` turn.
-        // The boundary also lets `server.close()` observe the connection count
-        // reaching zero and queue its callback between those socket events.
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        push_tls_event(PendingTlsEvent::SocketClose(socket_id));
-    });
 }
 
 fn tls_server_connection_started(server_id: i64) -> bool {
@@ -1052,7 +1014,7 @@ unsafe fn failed_server_socket(server_handle: i64, servername: Option<String>) -
     sockets().lock().unwrap().insert(
         socket_id,
         TlsSocketState {
-            cmd_tx: None,
+            live_transport: false,
             local_addr: None,
             peer_addr: None,
             authorized: false,
@@ -1269,89 +1231,6 @@ unsafe fn build_error_object_with_code(message: &str, code: Option<&str>) -> f64
     error
 }
 
-async fn run_tls_socket_task(
-    socket_id: i64,
-    stream: ServerTlsStream<TcpStream>,
-    mut rx: mpsc::UnboundedReceiver<TlsSocketCommand>,
-) {
-    let mut transport = TlsServerTransport(stream);
-    let mut buf = vec![0u8; 16 * 1024];
-    loop {
-        tokio::select! {
-            read_result = transport.read(&mut buf) => {
-                match read_result {
-                    Ok(0) => {
-                        // Reply to the peer's close_notify before dropping TCP.
-                        // Otherwise the client intermittently sees UnexpectedEof.
-                        let _ = transport.shutdown().await;
-                        push_tls_event(PendingTlsEvent::SocketEnd(socket_id));
-                        if let Some(server_id) = sockets()
-                            .lock()
-                            .unwrap()
-                            .get(&socket_id)
-                            .and_then(|socket| socket.server_handle)
-                        {
-                            tls_server_connection_finished(server_id);
-                        }
-                        schedule_tls_socket_close(socket_id);
-                        break;
-                    }
-                    Ok(n) => {
-                        push_tls_event(PendingTlsEvent::SocketData(socket_id, buf[..n].to_vec()));
-                    }
-                    Err(e) => {
-                        push_tls_event(PendingTlsEvent::SocketError(socket_id, e.to_string()));
-                        if let Some(server_id) = sockets()
-                            .lock()
-                            .unwrap()
-                            .get(&socket_id)
-                            .and_then(|socket| socket.server_handle)
-                        {
-                            tls_server_connection_finished(server_id);
-                        }
-                        schedule_tls_socket_close(socket_id);
-                        break;
-                    }
-                }
-            }
-            cmd = rx.recv() => {
-                match cmd {
-                    Some(TlsSocketCommand::Write(bytes)) => {
-                        if let Err(e) = transport.write_all(&bytes).await {
-                            push_tls_event(PendingTlsEvent::SocketError(socket_id, e.to_string()));
-                            if let Some(server_id) = sockets()
-                                .lock()
-                                .unwrap()
-                                .get(&socket_id)
-                                .and_then(|socket| socket.server_handle)
-                            {
-                                tls_server_connection_finished(server_id);
-                            }
-                            schedule_tls_socket_close(socket_id);
-                            break;
-                        }
-                    }
-                    Some(TlsSocketCommand::End) => {
-                        let _ = transport.shutdown().await;
-                    }
-                    Some(TlsSocketCommand::Destroy) | None => {
-                        if let Some(server_id) = sockets()
-                            .lock()
-                            .unwrap()
-                            .get(&socket_id)
-                            .and_then(|socket| socket.server_handle)
-                        {
-                            tls_server_connection_finished(server_id);
-                        }
-                        schedule_tls_socket_close(socket_id);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_create_server(options_bits: i64, listener_bits: i64) -> i64 {
     crate::common::async_bridge::ensure_pump_registered();
@@ -1387,7 +1266,7 @@ pub unsafe extern "C" fn js_tls_create_server(options_bits: i64, listener_bits: 
     servers().lock().unwrap().insert(
         id,
         TlsServerState {
-            shutdown_tx: None,
+            listener_open: false,
             bound_port: 0,
             bound_host: String::new(),
             listening: false,
@@ -1435,7 +1314,7 @@ pub unsafe extern "C" fn js_tls_tlssocket_constructor(socket_bits: i64, options_
     sockets().lock().unwrap().insert(
         handle,
         TlsSocketState {
-            cmd_tx: None,
+            live_transport: false,
             local_addr: None,
             peer_addr: None,
             authorized: false,
@@ -1490,8 +1369,6 @@ pub unsafe extern "C" fn js_tls_server_listen(
             .config
             .clone()
             .unwrap_or_else(build_empty_server_config);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        server.shutdown_tx = Some(shutdown_tx);
         server.bound_port = port;
         server.bound_host = host.clone();
         liveness::update_server(server, |server| {
@@ -1506,158 +1383,21 @@ pub unsafe extern "C" fn js_tls_server_listen(
         }
         (
             config,
-            shutdown_rx,
             server.cert_resolver.clone(),
             server.allow_half_open,
         )
     };
-    let (config, mut shutdown_rx, cert_resolver, allow_half_open) = config;
-    let server_id = handle;
-    crate::common::async_bridge::spawn(async move {
-        let bind = format!("{}:{}", host, port);
-        let listener = match TcpListener::bind(&bind).await {
-            Ok(listener) => listener,
-            Err(e) => {
-                push_tls_event(PendingTlsEvent::ServerError(
-                    server_id,
-                    format!("bind {bind}: {e}"),
-                ));
-                push_tls_event(PendingTlsEvent::ServerClose(server_id));
-                if let Some(server) = servers().lock().unwrap().get_mut(&server_id) {
-                    liveness::update_server(server, |server| server.listening = false);
-                }
-                return;
-            }
-        };
-        if let Ok(local) = listener.local_addr() {
-            if let Some(server) = servers().lock().unwrap().get_mut(&server_id) {
-                server.bound_port = local.port();
-                server.bound_host = local.ip().to_string();
-            }
-        }
-        push_tls_event(PendingTlsEvent::ServerListening(server_id));
-        loop {
-            tokio::select! {
-                accepted = listener.accept() => {
-                    match accepted {
-                        Ok((stream, peer)) => {
-                            if !tls_server_connection_started(server_id) {
-                                drop(stream);
-                                continue;
-                            }
-                            let local_addr = stream.local_addr().ok();
-                            let peer_addr = Some(peer);
-                            let original_servername =
-                                socket_api::take_original_servername(server_id);
-                            let config = config.clone();
-                            let cert_resolver = cert_resolver.clone();
-                            tokio::spawn(async move {
-                                match ServerTlsStream::accept(stream, config).await {
-                                    Ok(tls_stream) => {
-                                        let connection = tls_stream.session();
-                                        let protocol = match connection.protocol_version() {
-                                            Some(rustls::ProtocolVersion::TLSv1_2) => Some("TLSv1.2".to_string()),
-                                            Some(rustls::ProtocolVersion::TLSv1_3) => Some("TLSv1.3".to_string()),
-                                            _ => None,
-                                        };
-                                        let alpn_protocol = connection.alpn_protocol()
-                                            .map(|value| String::from_utf8_lossy(value).into_owned());
-                                        let servername = original_servername
-                                            .or_else(|| connection.server_name().map(str::to_string));
-                                        let own_certificate = cert_resolver
-                                            .as_ref()
-                                            .map(|resolver| resolver.selected(servername.as_deref()).1)
-                                            .unwrap_or_default();
-                                        let peer_certificate = connection.peer_certificates()
-                                            .and_then(|certificates| certificates.first())
-                                            .map(|certificate| certificate.as_ref().to_vec())
-                                            .unwrap_or_default();
-                                        let authorized = !peer_certificate.is_empty();
-                                        let socket_id = next_tls_handle_id();
-                                        let (tx, rx) = mpsc::unbounded_channel::<TlsSocketCommand>();
-                                        {
-                                            let mut registry = sockets().lock().unwrap();
-                                            // A server-side socket with a command
-                                            // channel keeps the loop alive.
-                                            liveness::step(false, true);
-                                            registry.insert(
-                                                socket_id,
-                                                TlsSocketState {
-                                                    cmd_tx: Some(tx),
-                                                    local_addr,
-                                                    peer_addr,
-                                                    authorized,
-                                                    server_side: true,
-                                                    max_send_fragment: 16 * 1024,
-                                                    allow_half_open,
-                                                    locally_constructed: false,
-                                                    authorization_error: (!authorized)
-                                                        .then(|| "UNABLE_TO_GET_ISSUER_CERT".to_string()),
-                                                    protocol,
-                                                    alpn_protocol,
-                                                    servername,
-                                                    peer_certificate,
-                                                    own_certificate,
-                                                    server_handle: Some(server_id),
-                                                },
-                                            );
-                                        }
-                                        listeners().lock().unwrap().insert(socket_id, HashMap::new());
-                                        push_tls_event(PendingTlsEvent::ServerSecureConnection(
-                                            server_id,
-                                            socket_id,
-                                        ));
-                                        run_tls_socket_task(socket_id, tls_stream, rx).await;
-                                    }
-                                    Err(e) => {
-                                        let socket_id = next_tls_handle_id();
-                                        sockets().lock().unwrap().insert(
-                                            socket_id,
-                                            TlsSocketState {
-                                                cmd_tx: None,
-                                                local_addr,
-                                                peer_addr,
-                                                authorized: false,
-                                                server_side: true,
-                                                max_send_fragment: 16 * 1024,
-                                                allow_half_open,
-                                                locally_constructed: false,
-                                                authorization_error: Some(e.to_string()),
-                                                protocol: None,
-                                                alpn_protocol: None,
-                                                servername: None,
-                                                peer_certificate: Vec::new(),
-                                                own_certificate: Vec::new(),
-                                                server_handle: Some(server_id),
-                                            },
-                                        );
-                                        listeners().lock().unwrap().insert(socket_id, HashMap::new());
-                                        push_tls_event(PendingTlsEvent::ServerTlsClientError(
-                                            server_id,
-                                            socket_id,
-                                            format!("tls handshake: {e}"),
-                                            None,
-                                        ));
-                                        tls_server_connection_finished(server_id);
-                                    }
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            push_tls_event(PendingTlsEvent::ServerError(
-                                server_id,
-                                format!("accept: {e}"),
-                            ));
-                        }
-                    }
-                }
-                _ = &mut shutdown_rx => {
-                    break;
-                }
-            }
-        }
-        tls_server_begin_close(server_id);
-    });
+    let (config, cert_resolver, allow_half_open) = config;
+    turnloop_server::listen(
+        handle,
+        host,
+        port,
+        turnloop_server::Acceptor {
+            config,
+            cert_resolver,
+            allow_half_open,
+        },
+    );
     handle
 }
 
@@ -1667,14 +1407,14 @@ pub unsafe extern "C" fn js_tls_server_close(handle: i64, callback_bits: i64) ->
     if cb != 0 {
         register_listener(handle, "close".to_string(), cb, true);
     }
-    let shutdown_tx = servers()
+    let listener_open = servers()
         .lock()
         .unwrap()
         .get_mut(&handle)
-        .and_then(|server| server.shutdown_tx.take());
+        .is_some_and(|server| std::mem::take(&mut server.listener_open));
     tls_server_begin_close(handle);
-    if let Some(shutdown_tx) = shutdown_tx {
-        let _ = shutdown_tx.send(());
+    if listener_open {
+        turnloop_server::close_listener(handle);
     }
     handle
 }
