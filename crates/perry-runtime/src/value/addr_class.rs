@@ -238,6 +238,18 @@ pub(crate) unsafe fn try_read_gc_header(addr: usize) -> Option<&'static GcHeader
     if !is_plausible_heap_addr(addr) {
         return None;
     }
+    // A GC allocation's user address is always `align_of::<GcHeader>()`-aligned
+    // (GC_HEADER_SIZE is a multiple of it), so a misaligned address can never
+    // name one. Without this the magnitude checks above admit IN-RANGE garbage
+    // such as 0xABCDEF and the deref below is UB — in a debug build, a
+    // non-unwinding "misaligned pointer dereference" abort that takes the whole
+    // test binary down. `try_read_tracked_gc_header` has always checked this;
+    // this function's own contract already promises to return `None` "without
+    // touching memory for ... out-of-range garbage", and in-range garbage
+    // deserves the same. Costs one AND on a path that then dereferences.
+    if !addr.is_multiple_of(std::mem::align_of::<GcHeader>()) {
+        return None;
+    }
     try_read_gc_header_known_plausible(addr)
 }
 
