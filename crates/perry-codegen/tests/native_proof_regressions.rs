@@ -15098,7 +15098,7 @@ fn ir_function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
 }
 
 #[test]
-fn this_method_value_uses_receiver_snapshot_bind() {
+fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
     let mut snapshot = class(8955, "Snapshot", Vec::new());
     snapshot.methods.push(Function {
         id: 89550,
@@ -15146,9 +15146,16 @@ fn this_method_value_uses_receiver_snapshot_bind() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     let capture = ir_function_body(&ir, "Snapshot__capture(");
+    // `this.method` is an ordinary [[Get]] of an inherited method: the class's
+    // one canonical value, as for any other receiver. A per-read receiver
+    // snapshot allocated and named a bound closure on every read.
     assert!(
-        capture.contains("call double @js_class_method_snapshot_bind"),
-        "a this.method value read must capture the receiver instead of using the canonical owner marker:\n{capture}"
+        capture.contains("call double @js_class_method_bind_by_id"),
+        "a this.method value read must answer the canonical method value:\n{capture}"
+    );
+    assert!(
+        !capture.contains("js_class_method_snapshot_bind"),
+        "a this.method value read must not build a receiver snapshot:\n{capture}"
     );
 }
 
