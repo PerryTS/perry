@@ -495,6 +495,8 @@ impl Drop for FinalRemarkTimer {
 /// access, a census dump). Answering it with silence would let every gate
 /// built on the knob pass having exercised nothing, so the process aborts at
 /// startup instead — see CLAUDE.md "Four ways a gate can be unable to fail".
+// Read only by the feature-off startup check below.
+#[cfg_attr(feature = "gc-instruments", allow(dead_code))]
 pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_CENSUS",
     "PERRY_GC_PROTECT_FROMSPACE",
@@ -505,6 +507,7 @@ pub(crate) const INSTRUMENT_KNOBS: &[&str] = &[
 ];
 
 /// The first instrument knob set (non-empty) in the environment, if any.
+#[cfg_attr(feature = "gc-instruments", allow(dead_code))]
 pub(crate) fn requested_instrument_knob() -> Option<&'static str> {
     INSTRUMENT_KNOBS
         .iter()
