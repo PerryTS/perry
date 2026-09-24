@@ -110,3 +110,31 @@ fn object_create_keeps_distinct_prototypes_and_instanceof_chains() {
         js_object_get_prototype_of(other).to_bits()
     );
 }
+
+#[test]
+fn object_create_prototype_is_reclaimed_once_its_owner_dies() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let proto = super::cycle_state::alloc_tracked_test_object();
+    let obj = js_object_create(f64::from_bits(ptr_bits(proto as usize)));
+    // Positive control: while the owner is rooted, its prototype survives a
+    // full collection through the owner's meta record alone.
+    js_shadow_slot_set(0, obj.to_bits());
+    super::dead_owner_side_tables::full_gc_with_no_block_persistence();
+    assert!(
+        malloc_user_ptr_tracked(proto as *mut u8),
+        "a live owner must keep its prototype"
+    );
+    let obj = f64::from_bits(js_shadow_slot_get(0));
+    assert_eq!(
+        js_object_get_prototype_of(obj).to_bits(),
+        ptr_bits(proto as usize)
+    );
+    // Once the owner is unreachable nothing else may hold the prototype.
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    super::dead_owner_side_tables::full_gc_with_no_block_persistence();
+    assert!(
+        !malloc_user_ptr_tracked(proto as *mut u8),
+        "an unreachable Object.create prototype must be collected"
+    );
+}

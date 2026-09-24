@@ -409,7 +409,10 @@ fn several_object_create_receivers_do_not_evict_each_other() {
         let neg = inherited_read_cache_neg_served();
         let reads = (objs.len() * rounds) as u64;
 
-        assert_eq!(primes, 1, "equivalent receivers should share one cache entry");
+        assert_eq!(
+            primes, 1,
+            "equivalent receivers should share one cache entry"
+        );
 
         // At most ONE decline, and it is expected rather than tolerated.
         //

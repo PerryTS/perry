@@ -464,19 +464,20 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner_handle = scope.root_raw_mut_ptr(obj_ptr as *mut u8);
     let prototype_handle = scope.root_heap_word_u64(proto_bits);
-    let prototype_serial: Option<u64> = unsafe {
-        let prototype = crate::value::JSValue::from_bits(proto_bits);
-        if prototype.is_pointer() {
-            crate::object::proto_validity::mark_object_as_prototype(
-                prototype.as_pointer::<crate::ObjectHeader>() as usize,
-            )
-        } else if proto_bits == crate::value::TAG_NULL {
-            Some(crate::object::proto_validity::NULL_PROTOTYPE_SERIAL)
-        } else {
-            None
-        }
-    };
-    let obj_ptr = owner_handle.get_raw_mut_ptr::<u8>() as usize;
+    let (prototype_serial, obj_ptr): (Option<u64>, *mut u8) =
+        owner_handle.across_mut::<u8, _>(|| unsafe {
+            let prototype = crate::value::JSValue::from_bits(proto_bits);
+            if prototype.is_pointer() {
+                crate::object::proto_validity::mark_object_as_prototype(
+                    prototype.as_pointer::<crate::ObjectHeader>() as usize,
+                )
+            } else if proto_bits == crate::value::TAG_NULL {
+                Some(crate::object::proto_validity::NULL_PROTOTYPE_SERIAL)
+            } else {
+                None
+            }
+        });
+    let obj_ptr = obj_ptr as usize;
     let proto_bits = prototype_handle.get_heap_word_u64();
     if !ARRAY_TARGET_PROTO_RECORDED.load(Ordering::Relaxed)
         && obj_ptr >= crate::gc::GC_HEADER_SIZE + 0x1000

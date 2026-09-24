@@ -83,11 +83,16 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
     let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
-    crate::object::prototype_chain::object_link_created_prototype(
-        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        proto.get_nanbox_u64(),
-    );
-    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    // The link is a self-rooting entry point: it roots the owner and the
+    // prototype before its meta-record allocation, so the handle is re-read
+    // afterwards for the post-collection address.
+    obj.with_mut_ptr::<ObjectHeader, _>(|owner| {
+        crate::object::prototype_chain::object_link_created_prototype(
+            owner as usize,
+            proto.get_nanbox_u64(),
+        )
+    });
+    obj.with_mut_ptr::<ObjectHeader, _>(|owner| crate::value::js_nanbox_pointer(owner as i64))
 }
 
 /// Object.getPrototypeOf(obj):
