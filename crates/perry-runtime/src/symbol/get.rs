@@ -769,8 +769,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // missed, so consult it too (#11170). Prototype refs keep the
         // user-symbol-only rule.
         let is_proto_ref_receiver = crate::object::class_prototype_ref_id(obj_f64).is_some();
-        if sym_key != 0
-            && (!crate::symbol::is_well_known_symbol(sym_key) || !is_proto_ref_receiver)
+        if sym_key != 0 && (!crate::symbol::is_well_known_symbol(sym_key) || !is_proto_ref_receiver)
         {
             let is_proto_ref = is_proto_ref_receiver;
             if let Some((func_ptr, param_count, has_rest)) =
