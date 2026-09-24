@@ -16,15 +16,15 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const netCjs = require("net");
 
-function describe(label: string, socket: any) {
+function describe(label: string, socket: any): string {
   const proto = Object.getPrototypeOf(socket);
-  console.log(
+  return [
     label,
     "null:", proto === null,
     "is Socket.prototype:", proto === net.Socket.prototype,
     "ctor is Socket:", proto !== null && proto.constructor === net.Socket,
     "instanceof:", socket instanceof net.Socket,
-  );
+  ].join(" ");
 }
 
 // undici's `util.destroy` shape, verbatim apart from the constructor compared.
@@ -38,20 +38,26 @@ function destroyLikeUndici(stream: any, err: Error) {
   }
 }
 
+// The accept callback and the client's connect callback race, so the
+// server-side result is held and printed once both sides are done.
+let serverSideLine = "server-side socket: never accepted";
 const server = net.createServer((serverSide: any) => {
-  describe("server-side socket:", serverSide);
+  serverSideLine = describe("server-side socket:", serverSide);
   serverSide.on("error", () => {});
   serverSide.on("close", () => {
-    server.close(() => console.log("server closed"));
+    server.close(() => {
+      console.log(serverSideLine);
+      console.log("server closed");
+    });
   });
 });
 
 server.listen(0, "127.0.0.1", () => {
   const port = (server.address() as any).port;
   const client: any = net.connect(port, "127.0.0.1", () => {
-    describe("client socket:", client);
+    console.log(describe("client socket:", client));
     console.log("cjs Socket.prototype:", Object.getPrototypeOf(client) === netCjs.Socket.prototype);
-    client.on("error", (e: Error) => console.log("client error:", e.message));
+    client.on("error", () => {});
     client.on("close", () => console.log("client closed, destroyed:", client.destroyed));
     try {
       destroyLikeUndici(client, new Error("boom"));
@@ -62,5 +68,7 @@ server.listen(0, "127.0.0.1", () => {
   });
 });
 
-// Control: an unconnected socket built with `new net.Socket()`.
-describe("new net.Socket():", new net.Socket());
+// An unconnected socket, asked BEFORE anything has read
+// `net.Socket.prototype`: the prototype object is created on first access,
+// so this is the order that exercises that path.
+console.log(describe("new net.Socket():", new net.Socket()));

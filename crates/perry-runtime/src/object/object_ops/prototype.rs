@@ -197,13 +197,26 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 
 /// `net.Socket.prototype`, read from the same cached bound export that
 /// user code sees as `net.Socket`, so the two are identical.
+///
+/// This is an ordinary `[[Get]]`, not a read of an already-installed dynamic
+/// prop: the prototype object is created on first access, and a
+/// `getPrototypeOf(socket)` can run before user code has ever read
+/// `net.Socket.prototype`.
 fn net_socket_prototype_value() -> f64 {
     let ctor = crate::object::bound_native_callable_export_value("net", "Socket");
-    let ctor = crate::value::JSValue::from_bits(ctor.to_bits());
-    if !ctor.is_pointer() {
+    if !crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    crate::closure::closure_get_dynamic_prop(ctor.as_pointer::<u8>() as usize, "prototype")
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(ctor);
+    let key = b"prototype";
+    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+    crate::proxy::js_reflect_get(
+        ctor.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        ctor.get_nanbox_f64(),
+    )
 }
 
 /// The resolution itself; see [`js_object_get_prototype_of`].
