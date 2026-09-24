@@ -24,8 +24,8 @@
 //! Not run-once: loop bodies and heads, class members (a method runs once
 //! per call), every other function body, and async/generator bodies (their
 //! lowering re-enters the body through a step function). A function whose
-//! body names `callee` (`arguments.callee`) can re-invoke itself and is never
-//! treated as invoked once. Names are compared module-wide without scope
+//! own `arguments` object is referenced can reach itself through
+//! `arguments.callee` and is never treated as invoked once. Names are compared module-wide without scope
 //! resolution, which can only make the answer more conservative.
 //!
 //! The result is keyed by the class node's span. A span seen twice (a
@@ -101,28 +101,37 @@ impl Visit for FnDecls {
 }
 
 fn function_is_plain(function: &ast::Function) -> bool {
-    !function.is_async && !function.is_generator && !names_callee(function)
+    // Visit the parts, not the `Function` node: `ArgumentsRef` stops at
+    // function boundaries, which would skip this function's own body.
+    !function.is_async
+        && !function.is_generator
+        && !names_callee(&function.params)
+        && !function.body.as_ref().is_some_and(names_callee)
 }
 
-fn names_callee<N: VisitWith<CalleeRef>>(node: &N) -> bool {
-    let mut finder = CalleeRef(false);
+/// Whether `node` can reach its own function object through
+/// `arguments.callee`: it names `arguments` outside any nested non-arrow
+/// function (those bind their own). Any such reference counts, since the
+/// object can escape before `.callee` is read.
+fn names_callee<N: VisitWith<ArgumentsRef>>(node: &N) -> bool {
+    let mut finder = ArgumentsRef(false);
     node.visit_with(&mut finder);
     finder.0
 }
 
-struct CalleeRef(bool);
+struct ArgumentsRef(bool);
 
-impl Visit for CalleeRef {
-    fn visit_ident_name(&mut self, name: &ast::IdentName) {
-        if &*name.sym == "callee" {
-            self.0 = true;
-        }
-    }
+impl Visit for ArgumentsRef {
     fn visit_ident(&mut self, ident: &ast::Ident) {
-        if &*ident.sym == "callee" {
+        if &*ident.sym == "arguments" {
             self.0 = true;
         }
     }
+    // Every construct below binds its own `arguments`.
+    fn visit_function(&mut self, _: &ast::Function) {}
+    fn visit_constructor(&mut self, _: &ast::Constructor) {}
+    fn visit_getter_prop(&mut self, _: &ast::GetterProp) {}
+    fn visit_setter_prop(&mut self, _: &ast::SetterProp) {}
 }
 
 struct Walk<'a> {
@@ -340,9 +349,10 @@ mod tests {
                 "(function(){ class A {} })();
                  (() => { class B {} })();
                  (function(){ class C {} }).call(this);
+                 (function(){ const callee = 1; function g(){ arguments; } class E {} })();
                  const x = (function(){ function f(){ class D {} } return f(); })();"
             ),
-            vec!["A", "B", "C", "D"]
+            vec!["A", "B", "C", "D", "E"]
         );
     }
 
@@ -358,6 +368,7 @@ mod tests {
              (function*(){ class F {} })();
              (function r(){ class G {} r; })();
              (function(){ arguments.callee; class H {} })();
+             (function(){ const a = arguments; class M {} })();
              class K { m(){ (function(){ class I {} })(); } }
              const o = { get p(){ class J {} return 1; } };
              function once(){ class L {} } [1].map(once);"
