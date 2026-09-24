@@ -1137,3 +1137,80 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
          `arguments` must observe exactly the argument the call site passed"
     );
 }
+
+/// #11229: a capturing class's `new` site appends its captured values after
+/// the user arguments (`cap_args_appended`). When the call passes fewer
+/// arguments than the constructor declares, the default-fill padding must go
+/// BETWEEN the user args and those captures, and the synthesized
+/// `__perry_cap_*` params never count toward the fill boundary.
+#[test]
+fn fill_defaults_pads_before_appended_class_captures() {
+    let source = r#"
+        function outer() {
+            const K = { tag: "K" };
+            class Doc {
+                constructor(bson, offset = 0, isArray = false, elements) {
+                    this.bson = bson; this.offset = offset; this.isArray = isArray;
+                    this.elements = elements ?? [K.tag];
+                }
+                child(o) { return new Doc(this.bson, o); }
+            }
+            return Doc;
+        }
+    "#;
+    let parsed = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let mut module = crate::lower_module(&parsed, "t", "t.ts").expect("source lowers");
+    crate::monomorph::monomorphize_module(&mut module);
+    let doc = module
+        .classes
+        .iter()
+        .find(|class| class.name == "Doc")
+        .expect("Doc is lowered");
+    let ctor_caps = doc
+        .constructor
+        .as_ref()
+        .expect("Doc has a constructor")
+        .params
+        .iter()
+        .filter(|p| p.name.starts_with(crate::cap_fields::CAP_FIELD_PREFIX))
+        .count();
+    assert!(ctor_caps > 0, "Doc must be a capturing class for this test");
+    let child = doc
+        .methods
+        .iter()
+        .find(|m| m.name == "child")
+        .expect("child method");
+    let mut found = None;
+    fn find_new<'a>(stmts: &'a [Stmt], out: &mut Option<(&'a Vec<Expr>, u32)>) {
+        for stmt in stmts {
+            if let Stmt::Return(Some(Expr::New {
+                class_name,
+                args,
+                cap_args_appended,
+                ..
+            })) = stmt
+            {
+                if class_name == "Doc" {
+                    *out = Some((args, *cap_args_appended));
+                }
+            }
+        }
+    }
+    find_new(&child.body, &mut found);
+    let (args, caps) = found.expect("child returns `new Doc(...)`");
+    let caps = caps as usize;
+    assert_eq!(caps, ctor_caps, "every capture is appended at the new site");
+    assert_eq!(
+        args.len(),
+        4 + caps,
+        "two user args, padded to the four user params, then the captures: {args:?}"
+    );
+    assert!(
+        matches!(args[2], Expr::Undefined) && matches!(args[3], Expr::Undefined),
+        "the padding must fill the omitted USER params: {args:?}"
+    );
+    assert!(
+        args[4..].iter().all(|a| !matches!(a, Expr::Undefined)),
+        "the trailing capture args must be the captured values, not padding: {args:?}"
+    );
+}
