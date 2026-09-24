@@ -89,6 +89,16 @@ fn add_named_imports(module: &mut Module, path: String, names: Vec<String>) {
             // cross-module-safe filter already excluded native-only patterns;
             // `NativeCompiled` is the only kind codegen consults for
             // `import_function_prefixes`.
+            //
+            // `is_deferred_require`: the import exists only to bind the name
+            // for codegen, so it must not be an init edge either. Every
+            // consumer of the flag is init ordering (`init_order.rs`, the
+            // per-module `__init` deps in `run_pipeline.rs`); codegen binds
+            // the name the same way. No edge is lost: the inlined body runs
+            // where the source method would have, on an exact `new C()`
+            // receiver, so C's module has already initialized -- and it
+            // imports this path itself. Source order is Node's order, and a
+            // synthesized edge could only add to it.
             module.imports.push(perry_hir::Import {
                 source: path.clone(),
                 specifiers: names
@@ -105,7 +115,7 @@ fn add_named_imports(module: &mut Module, path: String, names: Vec<String>) {
                 runtime_erased: false,
                 is_dynamic: false,
                 is_dynamic_target: false,
-                is_deferred_require: false,
+                is_deferred_require: true,
                 is_adopted_require: false,
             });
         }

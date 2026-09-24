@@ -1033,6 +1033,8 @@ mod tests {
                 && !i.type_only
                 && !i.is_dynamic
                 && !i.is_dynamic_target
+                // Binds names for codegen only; never an init edge (#11244).
+                && i.is_deferred_require
         }));
 
         let first_specifiers: Vec<(&str, &str)> = module.imports[0]
