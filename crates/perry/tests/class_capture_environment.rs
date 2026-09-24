@@ -29,13 +29,9 @@ fn assert_success(label: &str, output: &Output) {
     );
 }
 
-/// Compile `src` with perry, run it and Node on it; returns
-/// (perry stdout, node stdout, the compiler's capture-storage diagnostics).
-fn run_both(src: &str) -> (String, String, Vec<String>) {
-    run_both_with(src, &[])
-}
-
-/// [`run_both`] with extra `(file name, contents)` sources beside `main.ts`.
+/// Compile `main.ts` (`src`, plus `(file name, contents)` sources beside it)
+/// with perry, run it and Node on it; returns (perry stdout, node stdout, the
+/// compiler's capture-storage diagnostics).
 fn run_both_with(src: &str, extra: &[(&str, &str)]) -> (String, String, Vec<String>) {
     let dir = tempfile::tempdir().expect("tempdir");
     for (name, contents) in extra {
