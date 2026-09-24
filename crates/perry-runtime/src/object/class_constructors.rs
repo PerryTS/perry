@@ -133,12 +133,11 @@ fn capture_owner_for_template(start: f64, class_id: u32) -> Option<f64> {
     None
 }
 
-/// Slot `index` of a class evaluation's own `__perry_ctor_caps` array, when
-/// `class_value` is a class object carrying one that long.
+/// Slot `index` of a class evaluation's own `__perry_ctor_caps` array, when it
+/// carries one that long. `class_value` must already be a verified class object
+/// (`capture_owner_for_template` only answers with one), so this does not
+/// repeat that registry check on the static-method prologue's hot path.
 fn class_object_capture_slot(class_value: f64, index: u32) -> Option<f64> {
-    if !super::class_registry::is_class_object_value(class_value) {
-        return None;
-    }
     let caps_value =
         super::js_object_get_own_field_or_undef(class_value, b"__perry_ctor_caps".as_ptr(), 17);
     let caps = crate::value::JSValue::from_bits(caps_value.to_bits());
