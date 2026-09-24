@@ -27,18 +27,13 @@ unsafe fn check_hidden_fields(mode: u8) {
     for class_id in [0, 11232] {
         object.with_mut_ptr(|obj: *mut crate::ObjectHeader| (*obj).class_id = class_id);
         let mut output = String::new();
-        let ptr = object.get_raw_const_ptr::<u8>();
-        match mode {
+        object.with_const_ptr(|ptr: *const u8| match mode {
             0 => stringify_object_pretty(ptr, &mut output, " ", 0),
-            1 => stringify_object_with_replacer_pretty(
-                ptr,
-                replacer.get_raw_const_ptr(),
-                &mut output,
-                "",
-                0,
-            ),
+            1 => replacer.with_const_ptr(|replacer| {
+                stringify_object_with_replacer_pretty(ptr, replacer, &mut output, "", 0)
+            }),
             _ => stringify_object_with_array_replacer(ptr, &keys, &mut output, "", 0, false),
-        }
+        });
         let expected = if class_id == 0 {
             std::str::from_utf8(input).unwrap()
         } else {
