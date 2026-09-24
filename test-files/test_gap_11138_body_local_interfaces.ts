@@ -52,3 +52,12 @@ forward(makeStack);
 switched(makeStack);
 const numbers: number[] = [];
 console.log("array", numbers.push(9), numbers[0]);
+
+function mergedInterfaceRows() {
+  interface Row { id: number }
+  interface Row { id: number; label: string }
+  interface Row { push(x: number): void }
+  const rows = JSON.parse<Row[]>('[{"id":23,"label":"merged"}]');
+  console.log("merged interface", rows[0].id, rows[0].label);
+}
+mergedInterfaceRows();

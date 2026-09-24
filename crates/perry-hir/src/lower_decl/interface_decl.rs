@@ -34,10 +34,40 @@ pub(crate) fn enter_interface_scope<'a>(
         let name = decl.id.sym.to_string();
         let keys = ctx.interface_source_keys.remove(&name);
         let object = ctx.interface_object_types.remove(&name);
-        saved.shadowed.push((name, keys, object));
+        // Save the enclosing declaration only once. Later declarations with
+        // this name merge into the current scope rather than shadowing it.
+        let previous = if saved.shadowed.iter().any(|(n, _, _)| n == &name) {
+            Some((keys, object))
+        } else {
+            saved.shadowed.push((name.clone(), keys, object));
+            None
+        };
         if let Err(error) = lower_interface_decl(ctx, decl, false) {
             exit_interface_scope(ctx, saved);
             return Err(error);
+        }
+        if let Some((keys, object)) = previous {
+            let mut merged_keys = keys.unwrap_or_default();
+            for key in ctx.interface_source_keys.remove(&name).unwrap_or_default() {
+                if !merged_keys.contains(&key) {
+                    merged_keys.push(key);
+                }
+            }
+            let current = ctx.interface_object_types.remove(&name);
+            let merged_object = match (object, current) {
+                (Some(mut previous), Some(current)) => {
+                    previous.properties.extend(current.properties);
+                    Some(previous)
+                }
+                (previous, current) => previous.or(current),
+            };
+            if let Some(mut object) = merged_object {
+                object.property_order = Some(merged_keys.clone());
+                ctx.interface_object_types.insert(name.clone(), object);
+            }
+            if !merged_keys.is_empty() {
+                ctx.interface_source_keys.insert(name, merged_keys);
+            }
         }
     }
     Ok(saved)

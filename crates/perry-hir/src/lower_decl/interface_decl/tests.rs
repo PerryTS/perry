@@ -114,3 +114,49 @@ fn interface_asserted_expressions_keep_their_own_push() {
         assert!(!format!("{module:?}").contains("ArrayPush"), "{source}");
     }
 }
+
+#[test]
+fn repeated_body_interfaces_merge_json_shapes_and_restore_outer_metadata() {
+    use crate::ir::{Expr, Stmt};
+    use crate::types::Type;
+    let parsed = perry_parser::parse_typescript(
+        r#"{
+            interface Row { id: number }
+            interface Row { id: number; label: string }
+            interface Row { push(x: number): void }
+            JSON.parse<Row[]>("[]");
+        }"#,
+        "interface.ts",
+    )
+    .unwrap();
+    let swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Block(block)) = &parsed.body[0] else {
+        panic!("expected block");
+    };
+    let mut ctx = LoweringContext::new("interface.ts");
+    ctx.interfaces.push(("Row".into(), 999));
+    ctx.interface_source_keys
+        .insert("Row".into(), vec!["outer".into()]);
+    let body = lower_block_stmt(&mut ctx, block).unwrap();
+    let Some(Stmt::Expr(Expr::JsonParseTyped {
+        ty, ordered_keys, ..
+    })) = body.last()
+    else {
+        panic!("expected typed JSON parse: {body:?}");
+    };
+    assert_eq!(
+        ordered_keys.as_deref(),
+        Some(["id".to_string(), "label".to_string()].as_slice())
+    );
+    let Type::Array(element) = ty else {
+        panic!("expected array: {ty:?}");
+    };
+    let Type::Object(object) = element.as_ref() else {
+        panic!("expected object: {element:?}");
+    };
+    assert_eq!(object.properties.len(), 2);
+    assert_eq!(object.properties["id"].ty, Type::Number);
+    assert_eq!(object.properties["label"].ty, Type::String);
+    assert_eq!(ctx.interfaces, vec![("Row".into(), 999)]);
+    assert_eq!(ctx.interface_source_keys["Row"], ["outer"]);
+    assert!(!ctx.interface_object_types.contains_key("Row"));
+}

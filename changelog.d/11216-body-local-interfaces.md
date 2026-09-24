@@ -12,3 +12,7 @@ Add unit coverage for declaration order, generic interfaces, nested functions,
 arrows, function expressions, async/generator functions, methods, blocks,
 conditionals, loops, try blocks, switch cases, and asserted receivers. Keep a
 positive ArrayPush control and a regression fixture for native/Node parity.
+
+Merge repeated interface declarations within the same body scope, retaining
+source-ordered JSON shape fields across property and method-only declarations
+while restoring shadowed outer metadata when the scope ends.
