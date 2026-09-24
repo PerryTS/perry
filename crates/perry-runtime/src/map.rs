@@ -313,7 +313,7 @@ pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
 
 mod store;
 #[cfg(test)]
-pub(crate) use store::test_map_side_allocation;
+pub(crate) use store::{test_from_space_map_finalizations, test_map_side_allocation};
 use store::*;
 pub(crate) use store::{
     drop_map_store_at_thread_exit, finalize_dead_copied_minor_from_space_maps,
@@ -1925,10 +1925,6 @@ pub extern "C" fn js_map_set_string_string(
 ) -> *mut MapHeader {
     map_set_string_returning_receiver(map, key, boxed_heap_string_key(value))
 }
-
-/// Above this many entries `js_map_clear` resets the string/pointer
-/// side-tables unconditionally rather than reading every key to see whether
-/// it has to.
 
 /// Get a value from the map by key
 /// Returns the value, or TAG_UNDEFINED if not found

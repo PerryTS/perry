@@ -149,8 +149,21 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     if old_addr == 0 || new_addr == 0 || old_addr == new_addr {
         return;
     }
-    // The copied header already carries the stable store pointer. The old
-    // header is a forwarding stub and must never finalize the shared store.
+    // The copied header already carries the stable store pointer, so the old
+    // header must give up ownership here. It cannot rely on staying a
+    // forwarding stub: old-generation evacuation (tenured nursery objects
+    // and old-page defrag) releases FORWARDED on the original before the
+    // sweep, which then reclaims it as an ordinary dead Map, and the exit
+    // walks skip only headers that still carry FORWARDED. Either would free
+    // the store the live copy uses. The forwarding word covers payload bytes
+    // 0..8 only; `entries` (8) and `store` (16) are still ours to clear.
+    unsafe {
+        let old = old_addr as *mut MapHeader;
+        // GC_STORE_AUDIT(POINTER_FREE): ownership moved to the copy; the
+        // stale header must hold neither native pointer.
+        (*old).store = ptr::null_mut();
+        (*old).entries = ptr::null_mut();
+    }
     MAP_FOREACH_STACK.with(|stack| {
         for addr in stack.borrow_mut().iter_mut() {
             if *addr == old_addr {
@@ -177,7 +190,21 @@ pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
             }
         }
     });
+    #[cfg(test)]
+    TEST_FROM_SPACE_MAP_FINALIZATIONS.with(|c| c.set(c.get() + count));
     count
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    static TEST_FROM_SPACE_MAP_FINALIZATIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// Dead Maps this thread's copying-minor from-space walk has finalized.
+#[cfg(test)]
+pub(crate) fn test_from_space_map_finalizations() -> usize {
+    TEST_FROM_SPACE_MAP_FINALIZATIONS.with(std::cell::Cell::get)
 }
 
 pub(crate) fn release_current_thread_map_side_allocations() {
