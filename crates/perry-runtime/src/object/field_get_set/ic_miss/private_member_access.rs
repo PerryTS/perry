@@ -571,19 +571,20 @@ mod repeated_evaluation_tests {
                 a.get_nanbox_f64(),
             );
             let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
-            stamp_private_evaluation_brand(
-                object.get_raw_mut_ptr::<ObjectHeader>(),
-                b.get_nanbox_f64(),
-            );
+            object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                stamp_private_evaluation_brand(object, b.get_nanbox_f64())
+            });
             private_lexical_brand_push(b.get_nanbox_f64());
-            let result = crate::object::js_super_method_call_dynamic(
-                CID,
-                b"owner".as_ptr(),
-                5,
-                crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
-                std::ptr::null(),
-                0,
-            );
+            let result = object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                crate::object::js_super_method_call_dynamic(
+                    CID,
+                    b"owner".as_ptr(),
+                    5,
+                    crate::value::js_nanbox_pointer(object as i64),
+                    std::ptr::null(),
+                    0,
+                )
+            });
             private_lexical_brand_pop();
             assert_eq!(
                 result.to_bits(),
@@ -707,33 +708,39 @@ mod repeated_evaluation_tests {
 
             // Generic assignment must consume the guard's owner hint too.
             for value in [44.0, 55.0, 66.0] {
-                let receiver = crate::value::js_nanbox_pointer(
-                    object.get_raw_mut_ptr::<ObjectHeader>() as i64,
-                );
-                js_private_guard(receiver, a.get_nanbox_f64(), CID, b"#v".as_ptr(), 2, 0, 1);
+                // Re-read the object for each call: js_private_guard may
+                // collect, so a receiver bound before it would be stale.
+                object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                    js_private_guard(
+                        crate::value::js_nanbox_pointer(object as i64),
+                        a.get_nanbox_f64(),
+                        CID,
+                        b"#v".as_ptr(),
+                        2,
+                        0,
+                        1,
+                    )
+                });
                 assert_eq!(private_member_access_hints_savepoint(), depth + 1);
-                crate::proxy::js_put_value_set(
-                    receiver,
-                    crate::value::js_nanbox_string(
-                        request.get_raw_mut_ptr::<crate::StringHeader>() as i64,
-                    ),
-                    value,
-                    receiver,
-                    1,
-                );
+                object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                    request.with_mut_ptr::<crate::StringHeader, _>(|request| {
+                        let receiver = crate::value::js_nanbox_pointer(object as i64);
+                        crate::proxy::js_put_value_set(
+                            receiver,
+                            crate::value::js_nanbox_string(request as i64),
+                            value,
+                            receiver,
+                            1,
+                        )
+                    })
+                });
                 assert_eq!(
                     private_member_access_hints_savepoint(),
                     depth,
                     "PutValue must consume a private field write hint"
                 );
                 private_lexical_brand_push(a.get_nanbox_f64());
-                assert_eq!(
-                    private_evaluation_field_get(
-                        object.get_raw_mut_ptr::<ObjectHeader>(),
-                        request.get_raw_mut_ptr::<crate::StringHeader>()
-                    ),
-                    Some(value)
-                );
+                assert_eq!(field_get(), Some(value));
                 private_lexical_brand_pop();
             }
         }
