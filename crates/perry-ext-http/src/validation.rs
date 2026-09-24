@@ -33,7 +33,7 @@ fn is_valid_token(s: &str) -> bool {
 /// `TypeError [ERR_INVALID_URL]`. Mirror that here, before Perry's lenient
 /// `"{proto}://{raw}"` prepend (#769) would otherwise paper over it.
 pub(crate) fn validate_client_url_string(raw: &str) {
-    let invalid = match reqwest::Url::parse(raw) {
+    let invalid = match url::Url::parse(raw) {
         Ok(u) => u.host_str().map(|h| h.is_empty()).unwrap_or(true),
         Err(_) => true,
     };

@@ -3,7 +3,7 @@ name = "perry-ext-http"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Native bindings for Node's `http` / `https` modules — callback-style ClientRequest / IncomingMessage. Uses only `perry-ffi`. Async via spawn_blocking + reqwest."
+description = "Native bindings for Node's `http` / `https` modules — callback-style ClientRequest / IncomingMessage over turnloop, with TLS via perry-tls-session."
 
 [lints]
 workspace = true
@@ -21,17 +21,16 @@ perry-ext-net.workspace = true
 # see that module's header for why `turnloop_http::asynchronous` is not used.
 turnloop-http.workspace = true
 http = "1"
-tokio-rustls.workspace = true
 rustls = { workspace = true, features = ["std", "ring", "tls12"] }
 rustls_webpki = { package = "rustls-webpki", version = "0.103" }
 rustls-pemfile.workspace = true
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }
 tokio = { workspace = true }
-# Zero-copy body chunks: reqwest::Response::chunk() yields a refcounted
-# `Bytes` that slices the receive buffer. Carrying that `Bytes` through the
-# streaming event enum (instead of `.to_vec()`-ing it) drops one heap alloc
-# + memcpy per response chunk. Already in the lockfile via reqwest/hyper, so
-# declaring it pulls nothing new.
+# The client transport (`client_turnloop`): the rustls session that runs
+# `https:` above a turnloop socket, and the URL type requests are parsed into.
+perry-tls-session.workspace = true
+url.workspace = true
+# Response body chunks travel through the streaming event enum as refcounted
+# `Bytes`.
 bytes.workspace = true
 serde_json.workspace = true
 lazy_static.workspace = true

@@ -2,8 +2,8 @@
 //!
 //! Provides the callback-style ClientRequest / IncomingMessage API
 //! that npm packages like twitter-api-v2, rss-parser, web-push use.
-//! Both `http` and `https` flow through the same wrapper — reqwest
-//! handles TLS based on URL scheme.
+//! Both `http` and `https` flow through the same wrapper; the transport is
+//! `client_turnloop`, which runs TLS above the socket for `https:`.
 //!
 //! # Server-side surface (issue #577)
 //!
@@ -16,10 +16,10 @@
 //!
 //! - `js_http_request(opts, cb)` / `js_http_get(...)` synchronously
 //!   register a `ClientRequestHandle` and return its handle id. For
-//!   `.get()` the request is auto-`end()`'d, kicking off an async
-//!   `spawn_blocking + reqwest` send on a tokio blocking-pool thread.
-//! - When the request completes (or errors), the worker thread pushes
-//!   a `PendingHttpEvent` onto `HTTP_PENDING_EVENTS` and calls
+//!   `.get()` the request is auto-`end()`'d, which hands the exchange to
+//!   `client_turnloop` on the agent's event loop.
+//! - As the response arrives (or fails), the loop's completion sink pushes
+//!   `PendingHttpEvent`s onto `HTTP_PENDING_EVENTS` and calls
 //!   `perry_ffi::notify_main_thread()` to wake the main loop.
 //! - `js_http_process_pending()` runs on the main thread (called from
 //!   codegen's event-loop tick); it drains the queue and invokes the
@@ -29,15 +29,6 @@
 //!   `ClientRequestHandle` or `IncomingMessageHandle` live and rewrites
 //!   moved pointers after copied-minor GC so a malloc-triggered sweep
 //!   between scheduling and tick can't free them (issue #35 pattern).
-//!
-//! # Body chunking gap
-//!
-//! `reqwest::Response::chunk()` is async (`Future`), and we run inside
-//! `spawn_blocking` so we can't directly await. We therefore deliver
-//! the response body as a single `'data'` event with the entire body
-//! buffer (matches perry-stdlib's existing copy). True streaming is
-//! a v0.6.0 followup that needs a cooperative `spawn_async` surface
-//! on perry-ffi (today's surface is sync-via-blocking-pool only).
 
 mod agent;
 pub use agent::*;
@@ -56,32 +47,26 @@ mod client_request_surface;
 // stay under the 2000-line lint cap.
 mod tls_client;
 
-// Raw-socket trailer-aware HTTP/1.1 client (`TE: trailers` bypass) +
-// response parser, extracted to keep `lib.rs` under the 2000-line lint cap.
+// `agent.createConnection` / `createSocket` exchanges over a JS-produced
+// socket (#2154), the `Connection: Upgrade` predicate, and the raw response
+// parser those socket paths share.
 mod client_connect_override;
 mod client_upgrade;
 mod plain_client;
-use plain_client::{dispatch_plain_http_request, parse_http_response};
+use plain_client::parse_http_response;
 
-// Raw-socket `Expect: 100-continue` client path (#5080) — flushes the head,
-// observes the interim `100 Continue`, emits `'continue'`, then sends the
-// withheld body. reqwest swallows the interim response, so this bypass is
-// needed to surface it.
+// `Expect: 100-continue` (#5080): arms the head-first exchange and hands the
+// withheld body to it at `end()`.
 mod continue_client;
 
-// Async reqwest dispatch (`dispatch_request` + TLS-client selection),
-// extracted to keep `lib.rs` under the 2000-line lint cap.
-mod client_dispatch;
-use client_dispatch::dispatch_request;
-
-// The turnloop client lane. `try_dispatch` is offered the exchange before
-// `dispatch_request` and declines everything it does not yet cover, which is
-// what keeps `reqwest` reachable; see that module's header for the decline set.
+// The client transport: every exchange runs here, on the agent's turnloop
+// loop, with TLS above the socket for `https:`. See the module header for
+// the shapes it carries.
 //
-// `pub` rather than private for one reason: a lane that silently declined
-// every request would be indistinguishable from a working one at the JS
-// surface — the "gate runs but its subject never did" shape. `try_dispatch`
-// and `available` are reachable so `tests/turnloop_client_exchange.rs` can
+// `pub` rather than private for one reason: a transport that silently did
+// nothing would be indistinguishable from a working one at the JS surface —
+// the "gate runs but its subject never did" shape. The liveness counters and
+// `try_dispatch*` are reachable so `tests/turnloop_client_exchange.rs` can
 // assert the subject was live. No C-ABI symbol is added.
 pub mod client_turnloop;
 
@@ -124,9 +109,9 @@ use bytes::Bytes;
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
-    json_stringify, notify_main_thread, register_aux_event_pump, register_handle,
-    spawn_blocking_with_reactor as spawn_blocking, with_handle_mut, ArrayHeader, GcRootVisitor,
-    Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
+    json_stringify, notify_main_thread, register_aux_event_pump, register_handle, with_handle_mut,
+    ArrayHeader, GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader,
+    RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, Once};
@@ -143,7 +128,7 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 // Pending event queue + GC scanner
 // ------------------------------------------------------------------
 
-/// Events queued by the tokio blocking-pool worker for the main thread.
+/// Events queued by the client transport for the main thread.
 pub(crate) enum PendingHttpEvent {
     /// A ClientRequest acquired its public socket identity. Queued so callers
     /// can attach `req.on('socket', ...)` after `http.get()` returns.
@@ -167,7 +152,7 @@ pub(crate) enum PendingHttpEvent {
         body: Vec<u8>,
         http_version: (u8, u8),
     },
-    /// Streaming delivery (reqwest path): the response head arrived — fire
+    /// Streaming delivery: the response head arrived — fire
     /// the `http.request` callback / `'response'` listeners now; body
     /// chunks follow as [`PendingHttpEvent::ResponseChunk`]s. This is what
     /// lets client code observe headers (and start timers / destroy the
@@ -179,10 +164,8 @@ pub(crate) enum PendingHttpEvent {
         headers: Vec<(String, String)>,
         http_version: (u8, u8),
     },
-    /// One streamed body chunk following a `ResponseHead`. Carried as a
-    /// refcounted `Bytes` (reqwest hands `chunk()` out this way) so the
-    /// streaming path stays zero-copy from the receive buffer to the drain
-    /// handler, which only ever borrows it as `&[u8]`.
+    /// One streamed body chunk following a `ResponseHead`, carried as a
+    /// refcounted `Bytes`; the drain handler only ever borrows it as `&[u8]`.
     ResponseChunk {
         request_handle: Handle,
         chunk: Bytes,
@@ -190,7 +173,7 @@ pub(crate) enum PendingHttpEvent {
     /// The streamed body finished — `'end'` on the message, `'close'` on
     /// the request.
     ResponseEnd { request_handle: Handle },
-    /// #10468 — a `101` fires `'upgrade'` instead of `'response'` (`client_upgrade.rs`).
+    /// #10468 — a `101` fires `'upgrade'` instead of `'response'`.
     Upgrade {
         request_handle: Handle,
         status: u16,
@@ -202,6 +185,15 @@ pub(crate) enum PendingHttpEvent {
     Error {
         request_handle: Handle,
         error_message: String,
+    },
+    /// An `Error` carrying only Node's `.code` — `socket hang up` /
+    /// `ECONNRESET`, a TLS verification failure, a parser refusal. Unlike
+    /// [`PendingHttpEvent::TransportError`] it has no `.syscall`/`.errno`,
+    /// which Node does not put on these.
+    CodedError {
+        request_handle: Handle,
+        message: String,
+        code: String,
     },
     /// A classified transport failure (connect refused, DNS lookup failure,
     /// connection reset, …). Unlike [`PendingHttpEvent::Error`] — which hands
@@ -238,24 +230,17 @@ pub(crate) enum PendingHttpEvent {
     DeferredArmContinue { request_handle: Handle },
 }
 
-/// #5779 follow-up — count of in-flight HTTP/HTTPS CLIENT requests (the detached
-/// reqwest task spawned per `http.request`/`http.get`, from dispatch until the
-/// response fully streams or errors).
-///
-/// `EXT_BLOCKING_TASKS_INFLIGHT` (perry-stdlib's blocking-task gate)
-/// only stays up for the SHORT outer `spawn_blocking` closure that *launches* the
-/// reqwest task and returns; it drops to 0 while the actual fetch is still in
-/// flight. Registering this counter as a keepalive contributor lets the runtime
-/// gate and fast wait-driver honor the request's true lifetime.
+/// #5779 follow-up — count of in-flight HTTP/HTTPS CLIENT requests, from
+/// dispatch until the response fully streams or errors. Registering this
+/// counter as a keepalive contributor lets the runtime gate and fast
+/// wait-driver honor the request's true lifetime.
 static CLIENT_REQUESTS_INFLIGHT: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashSet<Handle>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
-/// RAII in-flight marker. Created right before the reqwest task is spawned and
-/// MOVED INTO the task, so the count tracks the task's full lifetime — including
-/// a task scheduled-but-stranded by a lost worker-unpark (its future, holding the
-/// guard, is never dropped while stranded). Drop wakes the main loop so its
-/// active-handle gate re-evaluates promptly.
+/// RAII in-flight marker, held by an exchange from dispatch until it settles,
+/// so the count tracks the exchange's full lifetime. Drop wakes the main loop
+/// so its active-handle gate re-evaluates promptly.
 pub(crate) struct ClientInflightGuard {
     request_handle: Handle,
 }
@@ -311,67 +296,10 @@ fn proxy_enabled_from_env_value(value: Option<&str>) -> bool {
 /// Whether Node's `--use-env-proxy` / `NODE_USE_ENV_PROXY=1` is active.
 ///
 /// Node's built-in `fetch` and `node:http`/`node:https` ignore the standard
-/// `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars unless this is set. perry
-/// mirrors that opt-in so its bindings are Node-conformant — reqwest would
-/// otherwise honor the proxy env unconditionally, diverging from Node.
+/// `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` env vars unless this is set; the
+/// client transport (`client_turnloop::proxy`) mirrors that opt-in.
 pub(crate) fn node_env_proxy_enabled() -> bool {
     proxy_enabled_from_env_value(std::env::var("NODE_USE_ENV_PROXY").ok().as_deref())
-}
-
-/// Apply the Node-conformant proxy policy to a reqwest client builder: honor
-/// the standard proxy env vars only when `NODE_USE_ENV_PROXY=1`, matching Node.
-///
-/// Also disables reqwest's default redirect-following. Node's
-/// `http.request`/`http.get`/`https.request` NEVER follow redirects — a 3xx is
-/// delivered to the caller verbatim (only `fetch` follows, per its WHATWG
-/// redirect mode). reqwest follows up to 10 hops by default, which is
-/// observably wrong for the Node client and, worse, turned Next.js's
-/// `proxyRequest` (its bundled `http-proxy` runs over this client) into an
-/// infinite loop: a proxied sub-request that 307-redirects back to the entry
-/// path was auto-followed here instead of relayed for a transparent response,
-/// so the router re-resolved the same middleware rewrite forever (a locale
-/// middleware where `/` rewrites to `/en` and `/en` 307s back to `/`).
-pub(crate) fn apply_node_proxy_policy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
-    let builder = builder.redirect(reqwest::redirect::Policy::none());
-    if node_env_proxy_enabled() {
-        builder
-    } else {
-        builder.no_proxy()
-    }
-}
-
-/// Apply the process-wide Node TLS environment after the HTTP proxy/redirect
-/// policy. Explicit per-request TLS options use `TlsOptions::build_client`
-/// instead, but both paths consume the same perry-ffi resolver.
-pub(crate) fn apply_node_client_policy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
-    let mut builder = apply_node_proxy_policy(builder);
-    let environment = perry_ffi::node_tls_client_environment();
-    if environment.accepts_invalid_certificates() {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-    for pem in environment.ca_pems() {
-        match reqwest::Certificate::from_pem_bundle(pem) {
-            Ok(certificates) => {
-                for certificate in certificates {
-                    builder = builder.add_root_certificate(certificate);
-                }
-            }
-            Err(_) => {
-                if let Ok(certificate) = reqwest::Certificate::from_pem(pem) {
-                    builder = builder.add_root_certificate(certificate);
-                }
-            }
-        }
-    }
-    builder
-}
-
-/// A default reqwest client with the Node-conformant client policy applied.
-/// Used as the fallback when a customized builder fails to build.
-pub(crate) fn default_client() -> reqwest::Client {
-    apply_node_client_policy(reqwest::Client::builder())
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 #[cfg(test)]
@@ -392,17 +320,6 @@ mod proxy_policy_tests {
 
 lazy_static! {
     static ref HTTP_PENDING_EVENTS: Mutex<Vec<PendingHttpEvent>> = Mutex::new(Vec::new());
-    /// Shared HTTP client — reuses connection pool, DNS cache, TLS
-    /// session cache. Without this each request allocs a fresh
-    /// reqwest::Client (~250 KB) and the memory never gets reused.
-    pub(crate) static ref HTTP_CLIENT: reqwest::Client = apply_node_client_policy(
-        reqwest::Client::builder()
-            .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_max_idle_per_host(16)
-            .tcp_keepalive(std::time::Duration::from_secs(60)),
-    )
-    .build()
-    .unwrap_or_else(|_| default_client());
 }
 
 static HTTP_GC_REGISTERED: Once = Once::new();
@@ -508,11 +425,9 @@ pub struct ClientRequestHandle {
     /// #4909 — `'close'` fires at most once per request.
     close_emitted: bool,
     /// `options.agent` handle id when the caller supplied an Agent
-    /// (#2154). `0` = use the global `HTTP_CLIENT` (no pooling
-    /// distinction). When set, `dispatch_request` calls
-    /// `agent::client_for_agent` so requests share a per-Agent
-    /// connection pool whose `keepAlive` / `maxFreeSockets` /
-    /// `keepAliveMsecs` come from the Agent's stored options.
+    /// (#2154). `0` = the implicit global agent. When set, the transport
+    /// keeps connections alive per the Agent's stored `keepAlive` /
+    /// `maxFreeSockets` / `keepAliveMsecs` (`client_turnloop::pool`).
     agent_handle: Handle,
     /// The normalized Agent `getName(options)` key captured from the original
     /// options object. HTTPS TLS identity fields are lost if this is
@@ -544,14 +459,13 @@ pub struct ClientRequestHandle {
     /// delivery paths).
     incoming_handle: Handle,
     /// #5080 — the request carries `Expect: 100-continue`, so its head was
-    /// flushed up front by the raw-socket continue path and the body is
-    /// withheld until the server's interim `100 Continue` arrives. `end()`
-    /// hands the (now-known) body over the `continue_body_tx` channel
-    /// instead of dispatching a fresh exchange.
+    /// flushed up front by the continue exchange and the body is withheld
+    /// until the server's interim `100 Continue` arrives. `end()` hands the
+    /// (now-known) body to that exchange instead of dispatching a fresh one.
     expects_continue: bool,
-    /// #5080 — set while the continue exchange task is waiting for the
-    /// deferred body; `end()` sends the buffered body here (once).
-    continue_body_tx: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
+    /// #5080 — set while the continue exchange is waiting for the deferred
+    /// body; the first `end()` clears it and hands the body over (once).
+    continue_body_pending: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -760,7 +674,7 @@ fn make_request_handle(
         preflight_error: None,
         incoming_handle: 0,
         expects_continue: false,
-        continue_body_tx: None,
+        continue_body_pending: false,
     });
     if callback != 0 {
         let wrapper =
@@ -833,6 +747,7 @@ fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
         | PendingHttpEvent::ResponseChunk { request_handle, .. }
         | PendingHttpEvent::ResponseEnd { request_handle }
         | PendingHttpEvent::Error { request_handle, .. }
+        | PendingHttpEvent::CodedError { request_handle, .. }
         | PendingHttpEvent::TransportError { request_handle, .. }
         | PendingHttpEvent::Timeout { request_handle }
         | PendingHttpEvent::Abort { request_handle }
@@ -851,6 +766,7 @@ fn terminal_http_event(event: &PendingHttpEvent) -> bool {
             | PendingHttpEvent::Response { .. }
             | PendingHttpEvent::ResponseEnd { .. }
             | PendingHttpEvent::Error { .. }
+            | PendingHttpEvent::CodedError { .. }
             | PendingHttpEvent::TransportError { .. }
             | PendingHttpEvent::Abort { .. }
     )
@@ -890,13 +806,13 @@ unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
     if !url.starts_with("https://") || socket == 0 {
         return;
     }
-    let parsed_url = reqwest::Url::parse(&url).ok();
+    let parsed_url = url::Url::parse(&url).ok();
     let fallback_servername = parsed_url
         .as_ref()
         .and_then(|url| url.host_str().map(String::from));
     let server_port = parsed_url
         .as_ref()
-        .and_then(reqwest::Url::port_or_known_default)
+        .and_then(url::Url::port_or_known_default)
         .unwrap_or(443);
     let callback_host = tls
         .servername
@@ -1382,24 +1298,23 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
 
     // #5080 — an `Expect: 100-continue` request flushed its head up front;
     // this `end()` just hands the (now-known) body to the in-flight continue
-    // exchange over the oneshot. The first call fires the flush ordering
-    // (write/finish/end callbacks); a later one is an idempotent no-op.
-    let (is_continue, first_end) = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+    // exchange. The first call fires the flush ordering (write/finish/end
+    // callbacks); a later one is an idempotent no-op.
+    let (is_continue, handed_body) = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         if !req.expects_continue {
-            return (false, false);
+            return (false, None);
         }
-        if let Some(tx) = req.continue_body_tx.take() {
-            let body = std::mem::take(&mut req.body);
-            let _ = tx.send(body);
+        if std::mem::take(&mut req.continue_body_pending) {
             req.ended = true;
-            (true, true)
+            (true, Some(std::mem::take(&mut req.body)))
         } else {
-            (true, false)
+            (true, None)
         }
     })
-    .unwrap_or((false, false));
+    .unwrap_or((false, None));
     if is_continue {
-        if first_end {
+        if let Some(body) = handed_body {
+            client_turnloop::continue_body(handle, body);
             push_event(PendingHttpEvent::Flushed {
                 request_handle: handle,
             });
@@ -1482,7 +1397,7 @@ pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
         return;
     }
     // #5080 — `flushHeaders()` is a send boundary; when it arms the continue
-    // path, that exchange owns the head, so don't also dispatch via reqwest.
+    // path, that exchange owns the head, so don't also dispatch a second one.
     continue_client::arm_expect_continue(handle);
     if with_handle_mut::<ClientRequestHandle, _, _>(handle, |r| r.expects_continue).unwrap_or(false)
     {
@@ -1526,7 +1441,7 @@ type RequestSnapshot = (
 
 /// The shared dispatch tail of `end()` / `flushHeaders()`: route through the
 /// agent's `createConnection` / `createSocket` override when present, else
-/// the reqwest path.
+/// the turnloop transport.
 unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
     let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
 
@@ -1567,10 +1482,10 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
     }
 
     // #2154 — if the agent supplied a `createConnection` / `createSocket`
-    // override, invoke it here on the main thread (JS closure calls must not
-    // run on a tokio worker) and run the HTTP exchange over the socket it
-    // produces instead of through reqwest. Falls back to the reqwest path when
-    // there's no override or it didn't yield a usable socket.
+    // override, invoke it here on the main thread (JS closure calls must run
+    // where the heap lives) and run the HTTP exchange over the socket it
+    // produces. Falls through to the transport when there's no override or it
+    // didn't yield a usable socket.
     if agent_handle != 0 {
         if let Some((host, port, path)) = socket_connect_target(&url) {
             // Node's `Agent.prototype.addRequest` calls
@@ -1578,7 +1493,7 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
             // deliver the socket via `cb(err, socket)`. Prefer it over
             // `createConnection` — the cb continuation
             // (`http_create_socket_cb`) resumes the exchange — so we don't
-            // fall through to reqwest after dispatching it.
+            // fall through to the transport after dispatching it.
             if agent::create_socket_override(agent_handle) != 0 {
                 invoke_create_socket(handle, agent_handle, &host, port, &path);
                 return;
@@ -1609,34 +1524,20 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
         }
     }
 
-    // The turnloop lane gets first refusal. It runs here, on the agent thread,
-    // because a submission has to reach the loop this thread owns — not from
-    // inside `spawn_blocking`, where `dispatch_request`'s reqwest future runs.
-    // `true` means it owns the exchange and will deliver exactly one terminal
-    // event; `false` is a named decline (see `client_turnloop`'s header) and
-    // falls through to reqwest unchanged.
-    if client_turnloop::try_dispatch(
-        handle,
-        &method,
-        &url,
-        &headers,
-        &body,
-        timeout_ms,
-        agent_handle,
-    ) {
-        return;
-    }
-
-    dispatch_request(
-        handle,
-        method,
-        url,
+    // The transport. It runs here, on the agent thread, so the submission
+    // reaches the loop this thread owns (or is posted to the thread that owns
+    // it); either way it delivers exactly one terminal event.
+    client_turnloop::dispatch(client_turnloop::Request {
+        request_handle: handle,
+        method: &method,
+        url: &url,
         headers,
         body,
         timeout_ms,
         agent_handle,
-        tls,
-    );
+        tls: &tls,
+        continue_mode: false,
+    });
 }
 
 /// Move a completed request out of its Agent's active pool and resume the
@@ -1700,7 +1601,7 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
 /// `agent.createConnection` override expects in its options object. Returns
 /// `None` if the URL doesn't parse or has no host.
 fn socket_connect_target(url: &str) -> Option<(String, u16, String)> {
-    let parsed = reqwest::Url::parse(url).ok()?;
+    let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_string();
     let port = parsed.port_or_known_default().unwrap_or(80);
     let mut path = parsed.path().to_string();

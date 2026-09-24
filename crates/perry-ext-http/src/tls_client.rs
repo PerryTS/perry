@@ -2,7 +2,7 @@
 //!
 //! Node's https client accepts a family of TLS options on the request
 //! (or agent) options object. Before this module the perry-ext-http
-//! client always used reqwest's default verifier, so connecting to a
+//! client always used the default verifier, so connecting to a
 //! server that presents a self-signed / test-CA certificate failed the
 //! handshake outright (`received fatal alert: UnknownCA`). Node's own
 //! https tests stand up servers with the `test/fixtures/keys` test
@@ -14,12 +14,13 @@
 //! - `checkServerIdentity: fn` — override hostname verification.
 //!
 //! This module parses those options off the request's options object and
-//! folds them into a per-request `reqwest::Client`.
+//! folds them into the rustls `ClientConfig` the client transport's TLS
+//! session runs (`client_turnloop::tls`).
 //!
 //! ## Honored faithfully
 //!
-//! `rejectUnauthorized: false` / `NODE_TLS_REJECT_UNAUTHORIZED=0` map to
-//! reqwest's `danger_accept_invalid_certs(true)`; explicit `ca` entries replace
+//! `rejectUnauthorized: false` / `NODE_TLS_REJECT_UNAUTHORIZED=0` accept any
+//! certificate chain (signatures still verified); explicit `ca` entries replace
 //! the public root set, matching Node/OpenSSL's trust-store semantics.
 //!
 //! ## Compatibility layer
@@ -28,7 +29,7 @@
 //!   rustls handshake. We disable the backend hostname check, then invoke
 //!   the callback on the main thread before dispatch and surface a returned
 //!   `Error` through the request's normal asynchronous error path.
-//! - reqwest's rustls backend requires a SAN match and does **not** fall back
+//! - rustls's webpki verifier requires a SAN match and does **not** fall back
 //!   to the certificate Common Name. A verifier wrapper retains webpki chain
 //!   and signature validation while leaving the final hostname decision to
 //!   the Node-compatible Common Name layer. It also accepts an explicitly
@@ -76,7 +77,7 @@ pub(crate) fn unregister_internal_https_server(port: u16) {
 }
 
 fn internal_https_server_for_url(url: &str) -> Option<InternalHttpsServer> {
-    let url = reqwest::Url::parse(url).ok()?;
+    let url = url::Url::parse(url).ok()?;
     let host = url.host_str()?;
     let is_loopback = host.eq_ignore_ascii_case("localhost")
         || host
@@ -117,27 +118,25 @@ pub(crate) struct TlsOptions {
     /// re-runs that callback when a fresh TLS session is verified; an explicit
     /// per-request callback still runs for every request.
     pub(crate) check_server_identity_from_agent: bool,
-    /// Explicit TLS identity from `options.servername`. Reqwest connects to
-    /// the URL host and cannot substitute this value for rustls' SNI/name
-    /// check. When it is present we therefore keep certificate-chain
-    /// validation enabled but perform the hostname decision at the Node
-    /// compatibility layer.
+    /// Explicit TLS identity from `options.servername`: sent as SNI and used
+    /// for the hostname decision, which the Node compatibility layer makes
+    /// after certificate-chain validation.
     pub(crate) servername: Option<String>,
     /// Remaining HTTPS Agent identity fields. Some are OpenSSL-only and are
-    /// not independently configurable through reqwest/rustls, but they still
+    /// not independently configurable through rustls, but they still
     /// have to partition the TLS session cache exactly like Node's Agent.
     pub(crate) session_identity: Vec<(String, String)>,
-    /// PKCS#12 client identities supplied through `pfx`. They are converted
-    /// to the PEM identity format accepted by reqwest's rustls backend and
-    /// also feed the server-side peer-certificate compatibility facade.
+    /// PKCS#12 client identities supplied through `pfx`. They become the
+    /// rustls client-certificate resolver and also feed the server-side
+    /// peer-certificate compatibility facade.
     pub(crate) client_pfx: Vec<(Vec<u8>, String)>,
     pub(crate) peer_certificate_cn: Option<String>,
 }
 
 impl TlsOptions {
-    /// Whether these options require building a dedicated TLS client
-    /// instead of reusing the pooled default. `NODE_TLS_REJECT_UNAUTHORIZED=0`
-    /// alone counts (it disables verification process-wide).
+    /// Whether these options require a dedicated TLS config instead of the
+    /// shared default. `NODE_TLS_REJECT_UNAUTHORIZED=0` alone counts (it
+    /// disables verification process-wide).
     pub(crate) fn needs_custom_client(&self) -> bool {
         let environment = perry_ffi::node_tls_client_environment();
         self.reject_unauthorized == Some(false)
@@ -159,99 +158,39 @@ impl TlsOptions {
             || perry_ffi::node_tls_client_environment().accepts_invalid_certificates()
     }
 
-    /// Build a per-request `reqwest::Client` honoring these options.
-    /// `pool` is the optional `(keep_alive, max_free_sockets,
-    /// keep_alive_msecs)` Agent pool config to fold in.
-    pub(crate) fn build_client(
-        &self,
-        pool: Option<(bool, f64, f64)>,
-    ) -> Result<reqwest::Client, String> {
-        let mut builder = crate::apply_node_proxy_policy(
-            reqwest::Client::builder().tcp_keepalive(std::time::Duration::from_secs(60)),
-        );
+    /// The rustls client config these options describe.
+    ///
+    /// One verifier stack covers every combination the reqwest transport
+    /// used to split between its builder flags and a preconfigured config:
+    /// an explicit `ca` replaces the public roots and environment CAs
+    /// (`NODE_EXTRA_CA_CERTS`) extend them; `servername` selects the name the
+    /// chain is verified against; a `checkServerIdentity` callback (run on the
+    /// main thread before dispatch) replaces only the hostname decision;
+    /// `rejectUnauthorized: false` accepts any chain; a PKCS#12 identity
+    /// becomes the client certificate. Without any of them this is webpki's
+    /// public roots with hostname verification — plus the Node Common-Name
+    /// fallback for certificates that carry no Subject Alternative Name.
+    pub(crate) fn client_config(&self) -> Result<rustls::ClientConfig, String> {
         let environment = perry_ffi::node_tls_client_environment();
         let has_explicit_ca = !self.ca_pems.is_empty();
-        let ca_pems = if has_explicit_ca {
+        let accept_invalid_certs = self.accept_invalid_certs();
+        // An unverified chain needs no roots; reqwest ignored unparseable CA
+        // material in that case too, so it is not read at all.
+        let ca_pems: &[Vec<u8>] = if accept_invalid_certs && self.client_pfx.is_empty() {
+            &[]
+        } else if has_explicit_ca {
             self.ca_pems.as_slice()
         } else {
             environment.ca_pems()
         };
-        let accept_invalid_certs = self.accept_invalid_certs();
-
-        // Node/OpenSSL accepts a configured self-signed CA certificate as the
-        // endpoint certificate. webpki rejects that shape as
-        // `CaUsedAsEndEntity`, even when the exact DER is in its root store. A
-        // small verifier wrapper preserves normal chain validation, ignores
-        // only the hostname result (our Node-CN compatibility layer owns it),
-        // and accepts that one exact-leaf trust case. An explicit `ca` option
-        // replaces public roots; environment CAs extend them.
-        let custom_tls_config = !self.client_pfx.is_empty()
-            || (!accept_invalid_certs && (!ca_pems.is_empty() || self.servername.is_some()));
-        if custom_tls_config {
-            builder = builder.use_preconfigured_tls(build_node_tls_config(
-                ca_pems,
-                !has_explicit_ca,
-                self.servername.clone(),
-                self.check_server_identity_callback != 0,
-                accept_invalid_certs,
-                self.client_pfx.first(),
-            )?);
-        } else {
-            if accept_invalid_certs {
-                builder = builder.danger_accept_invalid_certs(true);
-            }
-            if self.servername.is_some()
-                || self.check_server_identity_callback != 0
-                || !ca_pems.is_empty()
-            {
-                builder = builder.danger_accept_invalid_hostnames(true);
-            }
-            for pem in ca_pems {
-                // A `ca` entry may be a single cert or a bundle; try the
-                // bundle parser first, then fall back to the single-cert one.
-                match reqwest::Certificate::from_pem_bundle(pem) {
-                    Ok(certs) => {
-                        for cert in certs {
-                            builder = builder.add_root_certificate(cert);
-                        }
-                    }
-                    Err(_) => {
-                        if let Ok(cert) = reqwest::Certificate::from_pem(pem) {
-                            builder = builder.add_root_certificate(cert);
-                        }
-                    }
-                }
-            }
-        }
-
-        if let Some((keep_alive, max_free_sockets, keep_alive_msecs)) = pool {
-            let pool_max_idle = if keep_alive {
-                if !max_free_sockets.is_finite() || max_free_sockets > usize::MAX as f64 {
-                    256
-                } else {
-                    max_free_sockets.max(1.0) as usize
-                }
-            } else {
-                0
-            };
-            let idle_timeout = if keep_alive {
-                let ms = if keep_alive_msecs.is_finite() && keep_alive_msecs > 0.0 {
-                    keep_alive_msecs
-                } else {
-                    1000.0
-                };
-                std::time::Duration::from_millis(ms as u64)
-            } else {
-                std::time::Duration::from_millis(0)
-            };
-            builder = builder
-                .pool_max_idle_per_host(pool_max_idle)
-                .pool_idle_timeout(idle_timeout);
-        }
-
-        builder
-            .build()
-            .map_err(|e| format!("https: build client: {e:?}"))
+        build_node_tls_config(
+            ca_pems,
+            !has_explicit_ca,
+            self.servername.clone().filter(|name| !name.is_empty()),
+            self.check_server_identity_callback != 0,
+            accept_invalid_certs,
+            self.client_pfx.first(),
+        )
     }
 }
 
@@ -1140,8 +1079,8 @@ mod tests {
                 client_pfx: vec![(identity.clone(), "sample".to_string())],
                 ..TlsOptions::default()
             };
-            let built = options.build_client(None);
-            assert!(built.is_ok(), "{built:?}");
+            let built = options.client_config();
+            assert!(built.is_ok(), "{:?}", built.err());
         }
     }
 

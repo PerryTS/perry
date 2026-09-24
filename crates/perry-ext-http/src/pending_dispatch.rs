@@ -97,6 +97,11 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 request_handle,
                 error_message,
             } => client_events::handle_error_event(request_handle, &error_message),
+            PendingHttpEvent::CodedError {
+                request_handle,
+                message,
+                code,
+            } => client_events::handle_coded_error_event(request_handle, &message, &code),
             PendingHttpEvent::TransportError {
                 request_handle,
                 message,

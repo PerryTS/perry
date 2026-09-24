@@ -410,6 +410,8 @@ pub extern "C" fn js_http_client_request_abort(handle: Handle) -> f64 {
             with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
                 req.completed = true;
             });
+            // Close the exchange's socket too, so the peer sees the abort.
+            crate::client_turnloop::cancel(handle);
             push_event(PendingHttpEvent::Abort {
                 request_handle: handle,
             });
@@ -454,6 +456,9 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
             );
         }
     }
+    // Node destroys the socket: the peer sees the close, and nothing more of
+    // the exchange is delivered.
+    crate::client_turnloop::cancel(handle);
     client_events::fire_request_close_once(handle);
     unsafe {
         finish_agent_request(handle, false);
@@ -570,13 +575,13 @@ fn dispatch_property(handle: Handle, property: &str) -> Option<f64> {
                 .unwrap_or_else(undefined_value)
         }
         "protocol" => with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            reqwest::Url::parse(&req.url)
+            url::Url::parse(&req.url)
                 .map(|u| string_value(&format!("{}:", u.scheme())))
                 .unwrap_or_else(|_| string_value(""))
         })
         .unwrap_or_else(undefined_value),
         "host" => with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            let host = reqwest::Url::parse(&req.url)
+            let host = url::Url::parse(&req.url)
                 .ok()
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
                 .unwrap_or_default();
@@ -584,7 +589,7 @@ fn dispatch_property(handle: Handle, property: &str) -> Option<f64> {
         })
         .unwrap_or_else(undefined_value),
         "path" => with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-            let path = reqwest::Url::parse(&req.url)
+            let path = url::Url::parse(&req.url)
                 .map(|u| {
                     let mut path = u.path().to_string();
                     if path.is_empty() {

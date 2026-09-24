@@ -72,7 +72,7 @@ pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHe
 #[no_mangle]
 pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut StringHeader {
     let protocol = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        reqwest::Url::parse(&req.url)
+        url::Url::parse(&req.url)
             .map(|u| format!("{}:", u.scheme()))
             .unwrap_or_default()
     })
@@ -83,7 +83,7 @@ pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut String
 #[no_mangle]
 pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHeader {
     let host = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        reqwest::Url::parse(&req.url)
+        url::Url::parse(&req.url)
             .ok()
             .and_then(|u| u.host_str().map(|s| s.to_string()))
             .unwrap_or_default()
@@ -95,7 +95,7 @@ pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHead
 #[no_mangle]
 pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHeader {
     let path = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        reqwest::Url::parse(&req.url)
+        url::Url::parse(&req.url)
             .map(|u| {
                 let mut path = u.path().to_string();
                 if path.is_empty() {

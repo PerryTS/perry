@@ -1,5 +1,5 @@
 //! Client requests routed over a caller-supplied raw socket instead of
-//! reqwest: both `agent.createConnection`/`agent.createSocket` (#2154) and
+//! the default transport: both `agent.createConnection`/`agent.createSocket` (#2154) and
 //! the request option's own `createConnection` (#10469, honored only when
 //! `agent_handle == 0`) end up here. Split out of `lib.rs` to stay under
 //! the file-size cap; the closure storage/invocation and the `{ host, port,
@@ -15,7 +15,8 @@ use crate::{parse_http_response, push_event, ClientInflightGuard, PendingHttpEve
 
 /// Look up `request_handle`'s own `createConnection` (if any) and, when
 /// set, dispatch over it. `None` means "not set / not usable" — the
-/// caller (only reached when `agent_handle == 0`) falls back to reqwest.
+/// caller (only reached when `agent_handle == 0`) falls back to the default
+/// transport.
 pub(crate) fn dispatch_for_handle(request_handle: Handle, url: &str) -> Option<i64> {
     let cc = perry_ffi::with_handle_mut::<crate::ClientRequestHandle, _, _>(request_handle, |r| {
         r.request_create_connection
@@ -33,7 +34,7 @@ pub(crate) fn dispatch_for_handle(request_handle: Handle, url: &str) -> Option<i
 /// returns (so no inbound byte gets dispatched as a JS `'data'` event
 /// before `dispatch_request_over_socket`'s task takes over — mirrors the
 /// Agent-override path in `dispatch_request_snapshot`). `None` means "not
-/// handled", so the caller falls back to the reqwest path.
+/// handled", so the caller falls back to the default transport.
 pub(crate) fn request_create_connection_socket(
     request_create_connection: i64,
     url: &str,
@@ -91,12 +92,12 @@ fn serialize_http_request(
 
 /// #2154 — run an HTTP exchange over a socket that a `createConnection`
 /// override (Agent-level or, since #10469, request-level) produced
-/// (`socket_id`), instead of through reqwest. Ordinary responses force
+/// (`socket_id`), instead of the default transport. Ordinary responses force
 /// `Connection: close` and read to EOF. A `101` response to an upgrade request
 /// detaches the still-live socket from the raw reader and pushes `Upgrade` with
 /// any bytes following the header block. Other responses are parsed with
 /// [`parse_http_response`] and produce the same `Response` / `Error` events as
-/// the reqwest path.
+/// the default transport.
 ///
 /// The socket I/O goes through perry-ffi's raw-net vtable (published by
 /// perry-ext-net), so this crate needs no link edge to perry-ext-net. If no
@@ -111,7 +112,7 @@ pub(crate) fn dispatch_request_over_socket(
     timeout_ms: Option<u64>,
     socket_id: i64,
 ) {
-    let parsed = match reqwest::Url::parse(&url) {
+    let parsed = match url::Url::parse(&url) {
         Ok(u) => u,
         Err(e) => {
             push_event(PendingHttpEvent::Error {

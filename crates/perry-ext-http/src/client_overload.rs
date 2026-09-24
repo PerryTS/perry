@@ -182,7 +182,7 @@ fn merge_options_onto_url(
     opts: &serde_json::Value,
     default_protocol: &str,
 ) -> String {
-    let parsed = reqwest::Url::parse(base_url).ok();
+    let parsed = url::Url::parse(base_url).ok();
 
     let protocol = opts
         .get("protocol")

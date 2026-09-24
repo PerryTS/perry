@@ -10,11 +10,11 @@
 //!   exact message shape. Closes `test-http-agent-maxtotalsockets.js`.
 //! - **`sockets` / `freeSockets` / `requests` accessors** — expose the
 //!   per-origin active, idle, and queued counts used by maxSockets admission.
-//! - **Per-agent reqwest client** — `options.agent = new Agent({...})`
-//!   now actually routes requests through a per-agent `reqwest::Client`
-//!   whose connection pool honors the agent's `keepAlive` /
-//!   `maxFreeSockets` / `keepAliveMsecs` configuration, instead of
-//!   ignoring the agent and reusing the global `HTTP_CLIENT` every time.
+//! - **Per-agent keep-alive** — `options.agent = new Agent({...})` keeps
+//!   physical connections alive per the agent's `keepAlive` /
+//!   `maxFreeSockets` / `keepAliveMsecs` configuration
+//!   (`client_turnloop::pool`, keyed by agent), instead of ignoring the
+//!   agent.
 //! - **Tunable property setters** — `agent.maxSockets = 4` writes the
 //!   new value (with the same validation as the constructor) instead
 //!   of being silently dropped.
@@ -26,7 +26,7 @@
 //!   `createConnection` or `createSocket` override, the override is invoked
 //!   (on the main thread) to produce a `net.Socket`, and the HTTP/1.1 exchange
 //!   is driven over that socket via the raw-net bridge (`perry_ffi::raw_net`,
-//!   published by perry-ext-net) instead of reqwest. `createConnection`
+//!   published by perry-ext-net) instead of the default transport. `createConnection`
 //!   returns the socket synchronously (see `try_create_connection_socket`
 //!   here); `createSocket(req, options, cb)` follows Node's
 //!   `Agent.prototype.addRequest` contract and delivers the socket via its
@@ -40,19 +40,18 @@
 //! and the well-known-flip build (this crate) expose the same surface.
 
 use crate::ensure_gc_scanner_registered;
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, iter_handles_of_mut, register_handle, ErrorKind,
     GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader,
     StringHeader,
 };
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, Once};
+use std::sync::Once;
 
 mod tls_compat;
 pub(crate) use tls_compat::{
-    client_for_agent_tls, emit_client_keylog, invalidate_tls_sessions_for_server_port,
-    merge_tls_defaults, parsed_pfx_identity, request_key_from_options, resolve_https_agent_handle,
+    emit_client_keylog, invalidate_tls_sessions_for_server_port, merge_tls_defaults,
+    parsed_pfx_identity, request_key_from_options, resolve_https_agent_handle,
     tls_session_for_request,
 };
 use tls_compat::{emit_default_https_agent, sync_default_https_agent};
@@ -93,7 +92,7 @@ fn bind_agent_method_value(handle: Handle, name: &'static [u8]) -> f64 {
 /// `http.Agent` / `https.Agent` instance state.
 ///
 /// Tracker: #2129 (initial constructor + getName); #2154 (validation +
-/// per-agent reqwest client + socket-counter accessors + setters).
+/// per-agent keep-alive + socket-counter accessors + setters).
 pub struct AgentHandle {
     pub protocol: Option<String>,
     pub keep_alive: bool,
@@ -108,12 +107,11 @@ pub struct AgentHandle {
     pub scheduling: String,
     pub timeout_ms: Option<f64>,
     /// Set by `agent.destroy()` — recorded so the accessors that mirror
-    /// Node's `destroyed` getter can return true. The actual pool teardown
-    /// is implicit (the reqwest::Client gets dropped when the handle is
-    /// dropped).
+    /// Node's `destroyed` getter can return true. `destroy()` also closes the
+    /// agent's idle physical connections (`client_turnloop::purge_agent`).
     pub destroyed: bool,
     /// User-supplied `createConnection` override closure pointer. Stored and
-    /// GC-rooted; the request path invokes it before falling back to reqwest.
+    /// GC-rooted; the request path invokes it before the default transport.
     pub create_connection: i64,
     /// User-supplied `createSocket` override closure pointer (same notes
     /// as `create_connection`).
@@ -122,8 +120,8 @@ pub struct AgentHandle {
     /// Incremented at dispatch, decremented when the response or error
     /// pump fires on the main thread.
     pub sockets: HashMap<String, u32>,
-    /// Idle keep-alive connection count per host. reqwest owns the actual
-    /// transport sockets; this mirrors their Agent-visible lifecycle.
+    /// Idle keep-alive connection count per host. The transport owns the
+    /// physical sockets; this mirrors their Agent-visible lifecycle.
     pub free_sockets: HashMap<String, u32>,
     /// Queued request count per host, mirrored by `queued_requests` below.
     pub requests: HashMap<String, u32>,
@@ -132,7 +130,7 @@ pub struct AgentHandle {
     /// when the active response reaches a terminal edge.
     pub queued_requests: HashMap<String, Vec<Handle>>,
     /// Stable public socket handles backing the count mirrors above. The HTTP
-    /// transport remains owned by reqwest; these alloc-only net.Socket handles
+    /// transport owns the physical sockets; these alloc-only net.Socket handles
     /// provide Node's observable Agent/ClientRequest socket identity and
     /// EventEmitter lifecycle.
     pub active_socket_handles: HashMap<String, Vec<Handle>>,
@@ -144,7 +142,7 @@ pub struct AgentHandle {
     pub next_free_socket_generation: u64,
     /// Synthetic public session identity layered over rustls' real cached
     /// sessions. Node exposes opaque session bytes through `TLSSocket`, while
-    /// reqwest intentionally hides them; this mirror preserves the cache and
+    /// the transport keeps them inside rustls; this mirror preserves the cache and
     /// eviction semantics without exposing backend internals.
     pub max_cached_sessions: usize,
     /// Opaque session id and the server port it belongs to. Keeping the port
@@ -194,95 +192,20 @@ impl Default for AgentHandle {
 unsafe impl Send for AgentHandle {}
 unsafe impl Sync for AgentHandle {}
 
-// ------------------------------------------------------------------
-// Per-agent reqwest client cache
-// ------------------------------------------------------------------
-//
-// Keyed by agent handle id (the i64 perry_ffi::register_handle returns).
-// Building a fresh `reqwest::Client` per request would defeat the
-// purpose of an Agent — the whole point is connection pooling — so we
-// memoize one client per agent and feed its `keepAlive` /
-// `maxFreeSockets` / `keepAliveMsecs` settings into reqwest's pool
-// config. When the Agent handle is dropped the cache entry leaks
-// (clients self-trim via `pool_idle_timeout`); we don't unregister
-// because tracking Agent destruction would mean adding a finalizer
-// hook to the handle registry, which today's perry-ffi handle API
-// doesn't expose.
-
-lazy_static! {
-    static ref AGENT_CLIENTS: Mutex<HashMap<Handle, reqwest::Client>> = Mutex::new(HashMap::new());
-}
-
-/// Build (or fetch the cached) `reqwest::Client` for `handle`. Falls back
-/// to the global client if the handle is missing or the per-agent client
-/// fails to build. Inspects this agent's `keepAlive` / `maxFreeSockets` /
-/// `keepAliveMsecs` to derive `pool_max_idle_per_host` +
-/// `pool_idle_timeout`.
-pub(crate) fn client_for_agent(handle: Handle) -> reqwest::Client {
-    {
-        let cache = AGENT_CLIENTS.lock().unwrap();
-        if let Some(c) = cache.get(&handle) {
-            return c.clone();
-        }
-    }
-    let (keep_alive, max_free_sockets, keep_alive_msecs) = get_handle_mut::<AgentHandle>(handle)
-        .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
-        .unwrap_or((false, 256.0, 1000.0));
-
-    let pool_max_idle = if keep_alive {
-        // f64 → usize: clamp Infinity, NaN, negatives to a sane upper.
-        if !max_free_sockets.is_finite() || max_free_sockets > usize::MAX as f64 {
-            256
-        } else {
-            max_free_sockets.max(1.0) as usize
-        }
-    } else {
-        0
-    };
-
-    let idle_timeout = if keep_alive {
-        let ms = if keep_alive_msecs.is_finite() && keep_alive_msecs > 0.0 {
-            keep_alive_msecs
-        } else {
-            1000.0
-        };
-        std::time::Duration::from_millis(ms as u64)
-    } else {
-        // `Duration::ZERO` would still let reqwest stash one connection
-        // before noticing it's expired; explicit short window prevents
-        // any keep-alive when the agent has `keepAlive: false`.
-        std::time::Duration::from_millis(0)
-    };
-
-    let built = crate::apply_node_client_policy(
-        reqwest::Client::builder()
-            .pool_max_idle_per_host(pool_max_idle)
-            .pool_idle_timeout(idle_timeout)
-            .tcp_keepalive(std::time::Duration::from_secs(60)),
-    )
-    .build()
-    .unwrap_or_else(|_| crate::default_client());
-
-    let mut cache = AGENT_CLIENTS.lock().unwrap();
-    cache.entry(handle).or_insert(built).clone()
-}
-
 /// The `(keep_alive, max_free_sockets, keep_alive_msecs)` pool config for
-/// `handle`, or `None` when the handle isn't a live AgentHandle. Used by
-/// the #4906 TLS-customized client path, which builds its own
-/// `reqwest::Client` (bypassing the per-agent cache) but still folds in
-/// the Agent's pool settings.
+/// `handle`, or `None` when the handle isn't a live AgentHandle. Read at each
+/// dispatch by the transport's keep-alive policy (`client_turnloop::pool`).
 pub(crate) fn agent_pool_config(handle: Handle) -> Option<(bool, f64, f64)> {
     get_handle_mut::<AgentHandle>(handle)
         .map(|a| (a.keep_alive, a.max_free_sockets, a.keep_alive_msecs))
 }
 
-/// Drop the cached client for `handle` so the next dispatch rebuilds it
-/// with the new pool config. Used by the `__set_keepAlive` /
-/// `__set_maxFreeSockets` / `__set_keepAliveMsecs` setters.
+/// Close `handle`'s idle physical connections. The reqwest transport did this
+/// by dropping the agent's cached client — on `destroy()`, when an idle
+/// socket facade expired, and when a pool setter changed the config — and
+/// the same edges keep doing it, so connection reuse is unchanged.
 fn invalidate_agent_client(handle: Handle) {
-    let _ = AGENT_CLIENTS.lock().map(|mut c| c.remove(&handle));
-    tls_compat::invalidate_tls_client_cache(handle);
+    crate::client_turnloop::purge_agent(handle);
 }
 
 // ------------------------------------------------------------------
@@ -643,7 +566,7 @@ pub(crate) enum PoolAdmission {
 
 /// Convert a request URL into Node's per-origin Agent key.
 pub(crate) fn request_key(url: &str) -> String {
-    let Ok(parsed) = reqwest::Url::parse(url) else {
+    let Ok(parsed) = url::Url::parse(url) else {
         return "localhost::".to_string();
     };
     let host = parsed.host_str().unwrap_or("localhost");
@@ -839,7 +762,7 @@ fn release_request_inner(
         }
         let key = key.to_string();
         perry_ffi::spawn_async(async move {
-            // reqwest owns the physical pooled connection, so the public
+            // The transport owns the physical pooled connection, so the public
             // net.Socket facade cannot receive its idle read/EOF edge.
             // Conservatively retire an unclaimed facade after the I/O
             // guard window; immediate/next-tick reuse cancels this via the
@@ -1377,9 +1300,9 @@ fn json_value_to_string(v: &serde_json::Value) -> String {
 }
 
 // ------------------------------------------------------------------
-// keepSocketAlive / reuseSocket — chainable no-ops (reqwest owns the
+// keepSocketAlive / reuseSocket — chainable no-ops (the transport owns the
 // keep-alive pool, so there is no per-socket hook to forward to);
-// destroy is real (drops the cached client below).
+// destroy is real (closes the agent's idle connections below).
 // ------------------------------------------------------------------
 
 #[no_mangle]
@@ -1387,7 +1310,7 @@ pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
     unsafe {
         perry_ffi::warn_stub(
             c"http.Agent keepSocketAlive/reuseSocket",
-            c"reqwest owns the keep-alive pool; per-socket hooks are no-ops",
+            c"the client transport owns the keep-alive pool; per-socket hooks are no-ops",
             Some(c"#4917"),
         )
     };
@@ -1395,8 +1318,8 @@ pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
 }
 
 /// `agent.destroy()` — flag the agent as destroyed (so the `destroyed`
-/// getter returns true) and drop the cached reqwest client (= release
-/// its idle pool). Returns the handle for chainability.
+/// getter returns true) and close its idle physical connections. Returns
+/// the handle for chainability.
 #[no_mangle]
 pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
     if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
@@ -1666,10 +1589,10 @@ pub extern "C" fn js_http_agent_create_socket(handle: Handle) -> i64 {
 /// #2154 — if this agent has a `createConnection` override, build the
 /// connection-options object Node passes it (`{ host, port, path }`),
 /// invoke the override **on the calling (main) thread** — JS closure calls
-/// must never run on a tokio worker per the arena-safety rule — and return
+/// must run on the thread that owns the heap per the arena-safety rule — and return
 /// the `net.Socket` handle id it produced. Returns `None` when no override
 /// is set or the return value isn't a usable socket handle, so the caller
-/// falls back to the default reqwest transport.
+/// falls back to the default transport.
 ///
 /// # Safety
 ///
@@ -1972,22 +1895,18 @@ mod tests {
         drop_handle(handle);
     }
 
+    /// Was `client_for_agent_memoizes`: there is no per-agent reqwest client
+    /// to memoize any more. What that cache existed for — requests on one
+    /// agent sharing a pool configured from its options, and a setter taking
+    /// effect — is now the keep-alive policy read at each dispatch.
     #[test]
     fn client_for_agent_memoizes() {
         let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
-        let c1 = client_for_agent(handle);
-        let c2 = client_for_agent(handle);
-        // `reqwest::Client` is cheap-clone (Arc inside); the cache should
-        // be returning the same underlying instance, so cloning the
-        // returned client and dropping shouldn't leave a fresh entry.
-        // We can't compare clients by identity, but we can assert the
-        // cache only has one entry for this handle.
-        let cache = AGENT_CLIENTS.lock().unwrap();
-        assert!(cache.contains_key(&handle));
-        drop(c1);
-        drop(c2);
-        drop(cache);
-        let _ = AGENT_CLIENTS.lock().map(|mut c| c.remove(&handle));
+        assert_eq!(agent_pool_config(handle), Some((false, 256.0, 1000.0)));
+        js_http_agent_set_keep_alive(handle, 1.0);
+        js_http_agent_set_max_free_sockets(handle, 3.0);
+        assert_eq!(agent_pool_config(handle), Some((true, 3.0, 1000.0)));
         drop_handle(handle);
+        assert_eq!(agent_pool_config(handle), None);
     }
 }

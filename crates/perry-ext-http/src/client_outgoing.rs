@@ -174,24 +174,10 @@ pub unsafe extern "C" fn js_http_set_timeout_full(
 /// `ms` milliseconds. The drain dedupes (`timeout_fired`) and suppresses
 /// stale timers (`completed`), so over-arming is harmless — rescheduled
 /// `setTimeout` calls and the per-dispatch transport deadline can all
-/// race the same request safely.
+/// race the same request safely. The timer is a deadline on the agent's
+/// turnloop loop (`client_turnloop::arm_request_timeout`).
 pub(crate) fn arm_client_timeout(request_handle: Handle, ms: u64) {
-    spawn_blocking(move || {
-        // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
-        // workaround dispatch_request needs (see spawn_socket_runner).
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            return;
-        }
-        let handle = tokio::runtime::Handle::current();
-        let jh = handle.spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-            push_event(PendingHttpEvent::Timeout { request_handle });
-        });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
-    });
+    crate::client_turnloop::arm_request_timeout(request_handle, ms);
 }
 
 /// Emit Node's `TimeoutOverflowWarning` for an out-of-range socket timeout.

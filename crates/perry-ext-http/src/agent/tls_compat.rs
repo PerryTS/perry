@@ -1,13 +1,10 @@
-//! HTTPS Agent defaults, TLS client/session caching, and pool identity.
+//! HTTPS Agent defaults, the observable TLS session cache, and pool identity.
+//! (The rustls configs themselves — and with them real session resumption —
+//! are cached per option identity in `client_turnloop::tls`.)
 
 use super::*;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
-
-lazy_static! {
-    static ref AGENT_TLS_CLIENTS: Mutex<HashMap<(Handle, crate::tls_client::TlsOptions, bool), reqwest::Client>> =
-        Mutex::new(HashMap::new());
-}
 
 static HTTPS_GLOBAL_AGENT_HANDLE: OnceLock<Handle> = OnceLock::new();
 
@@ -17,44 +14,10 @@ extern "C" {
     fn js_https_global_agent_emit(event_ptr: *const u8, event_len: usize, arg0: f64, arg1: f64);
 }
 
-pub(super) fn invalidate_tls_client_cache(handle: Handle) {
-    let _ = AGENT_TLS_CLIENTS
-        .lock()
-        .map(|mut clients| clients.retain(|(agent, _, _), _| *agent != handle));
-}
-
 pub(super) fn sync_default_https_agent_if_initialized() {
     if let Some(handle) = HTTPS_GLOBAL_AGENT_HANDLE.get().copied() {
         sync_default_https_agent(handle);
     }
-}
-
-/// Build (or fetch) the TLS-customized client for an Agent/options identity.
-/// Reusing this client is what lets rustls retain TLS sessions across distinct
-/// TCP connections; a fresh reqwest client per request silently disables
-/// Node's HTTPS Agent session cache.
-pub(crate) fn client_for_agent_tls(
-    handle: Handle,
-    tls: &crate::tls_client::TlsOptions,
-) -> Result<reqwest::Client, String> {
-    let env_disabled = perry_ffi::node_tls_client_environment().accepts_invalid_certificates();
-    let key = (handle, tls.clone(), env_disabled);
-    if let Some(client) = AGENT_TLS_CLIENTS.lock().unwrap().get(&key) {
-        return Ok(client.clone());
-    }
-    let pool = if handle != 0 {
-        agent_pool_config(handle)
-    } else {
-        // Node's global Agent has keep-alive enabled in supported Node 22.
-        Some((true, 256.0, 1000.0))
-    };
-    let client = tls.build_client(pool)?;
-    Ok(AGENT_TLS_CLIENTS
-        .lock()
-        .unwrap()
-        .entry(key)
-        .or_insert(client)
-        .clone())
 }
 
 pub(crate) fn tls_session_for_request(handle: Handle, key: &str, port: u16) -> (u64, bool) {
@@ -164,7 +127,7 @@ pub(super) fn emit_default_https_agent(handle: Handle, event: &str, arg0: f64, a
 }
 
 /// Surface rustls key material notifications through Node's public
-/// `https.globalAgent` event. Reqwest does not expose its key-log callback,
+/// `https.globalAgent` event. The transport does not surface rustls's key-log callback,
 /// so emit opaque Buffer records with Node's observable event count/shape on
 /// the first session for an origin.
 pub(crate) fn emit_client_keylog(handle: Handle, socket: Handle) {

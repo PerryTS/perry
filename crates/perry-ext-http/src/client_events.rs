@@ -401,7 +401,7 @@ pub(crate) unsafe fn handle_response_event(
 /// is the upgraded protocol now, delivered over the adopted socket instead)
 /// and fire `req.on('upgrade', (res, socket, head) => ...)` with
 /// `(res, socket, head)`, Node's exact argument shape. `socket` is the
-/// `net.Socket` id `client_upgrade::dispatch_upgrade_http_request` already
+/// `net.Socket` id the client transport already
 /// adopted via `perry_ext_net::adopt_upgraded_tcp_stream`; `head` is any
 /// bytes the peer sent past the header block, as a `Buffer` (never a lossy
 /// string — the write side of #10471 stays server-only, this is a fresh
@@ -746,6 +746,38 @@ pub(crate) unsafe fn handle_error_event(request_handle: Handle, error_message: &
     }
     fire_request_error_listeners(request_handle, error_event_arg(error_message));
     // Node emits `'close'` on the request after `'error'` (#4905).
+    finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
+}
+
+/// Drain handler for `PendingHttpEvent::CodedError`: like
+/// [`handle_error_event`], but the error is built with Node's `.code` directly
+/// instead of being recognized from a message string. A request whose
+/// response already started gets the `'aborted'` edge, as for any error.
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_coded_error_event(request_handle: Handle, message: &str, code: &str) {
+    let (already_done, incoming) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+            let was = req.completed;
+            req.completed = true;
+            (was, req.incoming_handle)
+        })
+        .unwrap_or((false, 0));
+    if already_done {
+        return;
+    }
+    client_abort::cleanup_request_signal(request_handle);
+    if incoming != 0 {
+        let error =
+            perry_ffi::error_value_with_code("aborted", "ECONNRESET", perry_ffi::ErrorKind::Error);
+        handle_incoming_transport_abort(request_handle, incoming, f64::from_bits(error.bits()));
+        return;
+    }
+    let error = perry_ffi::error_value_with_code(message, code, perry_ffi::ErrorKind::Error);
+    fire_request_error_listeners(request_handle, f64::from_bits(error.bits()));
     finish_agent_request(request_handle, false);
     fire_request_close_once(request_handle);
 }

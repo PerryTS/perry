@@ -51,39 +51,15 @@
     },
     {
       "crate": "perry-ext-http",
-      "dep": "reqwest",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`http.request()` / `https.get()` / `https.request()` \u2014 the node:http CLIENT half",
-      "reached_when": "NO LONGER always. `client_turnloop::try_dispatch` is offered every exchange before `dispatch_request` and takes cleartext `http://` requests with no body, no explicit Agent, no per-request timeout, no proxy and none of the three bypass headers; reqwest gets everything it declines. So: `https://`, any request body, an explicit `http.Agent`, `options.timeout`/`req.setTimeout`, `NODE_USE_ENV_PROXY=1`, a URL with credentials, the CONNECT/TRACE/TRACK methods, and `TE: trailers` / `Connection: Upgrade` / `Expect: 100-continue` (which keep their own raw-socket bypasses).",
-      "blocker": "The decline set above, shrinking per lane: TLS (`perry-tls-session` above the same handle, as `perry-ext-ws`'s client does), request-body framing plus `Lifecycle` deadlines armed on `tl::timer_arm`, keep-alive via `turnloop_http::client::Pool`, and the Agent lane. CORRECTION to the older note: `agent.rs` is NOT a duplicate of reqwest's pool and is not the blocker it was described as. It is a real per-origin admission engine (FIFO waiter queue, maxSockets/maxTotalSockets/maxFreeSockets, socket facades) that sits ABOVE the transport and survives the migration nearly intact; the reqwest coupling there is 9 call sites in `client_for_agent`/`client_for_agent_tls`/`agent_pool_config`. Also stale in that note: the three raw `tokio::net::TcpStream` bypasses are `plain_client.rs` (`TE: trailers`), `continue_client.rs` (`Expect: 100-continue`) and `client_upgrade.rs` (`Connection: Upgrade`, #10468) \u2014 NOT the `agent.createConnection` override, which reaches no tokio at all (it runs on perry-ext-net's raw_net vtable in `client_connect_override.rs`). `Http1Connection` hands `Event::Trailers`, `Event::Informational` and `Event::Upgrade` back to the caller, so all three ARE deletable by this migration. `createConnection` is a different problem: it needs an fd-adoption ABI that does not exist yet \u2014 `turnloop::Detached::from_fd` + `Loop::attach` are real, but neither `perry_ffi::turnloop_net` nor `perry-runtime`'s `turnloop_net/abi.rs` exposes them to a binding crate.",
-      "issue": "#10328 (the agent cache never evicts); the transport is unfiled \u2014 P6 named it, P8 confirms it",
-      "plan": "C"
-    },
-    {
-      "crate": "perry-ext-http",
       "dep": "tokio",
       "kind": "normal",
       "optional": false,
       "target": null,
-      "surface": "the node:http/https CLIENT only: every row above, plus the three raw-TcpStream client bypasses. NO LONGER any server: `http.createServer` / `https.createServer` / `http2.createServer` / `createSecureServer` are turnloop-only (plan A closed; `src/server/` contains no `tokio::` code), and NO LONGER `http2.connect`.",
-      "reached_when": "always (the node:http client). The server no longer reaches tokio on any thread: a thread that does not own its agent's loop posts `listen()` to the owner, and a host where Loop::new failed reports ENOTSUP.",
-      "blocker": "the union of the rows above, and NOT group D's own work -- the plan's row D already said so (\u201cits last, once C and E are done\u201d). E is done, D's `h2` half is done, and plan A is done: the hyper HTTP/1.1, HTTPS and HTTP/2 accept loops, the raw-'upgrade' peeler, the tokio-tungstenite attached-WebSocket path and the SCHED_RR fd-inject loop are deleted (SCHED_RR descriptors are adopted onto the loop with `turnloop_net::adopt_stream`), and so is tokio's type vocabulary in the server structs (`ServerResponse::{response_tx, stream_tx, stream_in_flight, connection_close}`, `HttpServer::{shutdown_tx, request_rx, upgrade_rx}`, `Http2StreamHandle::response_tx`, `ShapeBody::Stream`). What is left is `reqwest` + `tokio-rustls` (plan C, the node:http/https CLIENT: ~1,950 lines of `agent.rs` plus three raw `tokio::net::TcpStream` bypasses), so this edge is held open entirely by C.",
+      "surface": "two small node:http CLIENT paths and nothing else: an `agent.createConnection` / `createSocket` (or request-level `createConnection`) exchange, which `client_connect_override.rs` drives from a tokio task polling perry-ext-net's raw vtable with a 1 ms `tokio::time::sleep`; and the keep-alive Agent's socket-facade idle expiry (`agent.rs`, `perry_ffi::spawn_async` + a 40 ms `tokio::time::sleep`). NO LONGER the client transport: every exchange reqwest carried and the three raw-TcpStream bypasses (`TE: trailers`, `Expect: 100-continue`, `Connection: Upgrade`) run on turnloop in `client_turnloop`. NO LONGER any server (plan A closed) and NO LONGER `http2.connect`.",
+      "reached_when": "only when a request's Agent (or the request itself) supplies `createConnection` / `createSocket`, or when a keep-alive Agent returns a socket facade to its free pool",
+      "blocker": "plan A, C and D's `h2` half are done; `reqwest` and `tokio-rustls` left this crate with the client transport. Two separable uses hold the edge open: (1) the `createConnection` exchange loop, which polls because perry-ffi's `raw_net` vtable has no completion push -- driving it from perry-ext-net's socket events (the socket is already on the loop) removes it; (2) the facade idle-expiry sleep, which becomes a `tl::timer_arm` deadline exactly as `client_outgoing::arm_client_timeout` did. After both, the manifest line deletes.",
       "issue": "unfiled \u2014 P8",
       "plan": "D"
-    },
-    {
-      "crate": "perry-ext-http",
-      "dep": "tokio-rustls",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "TLS for the node:https client. NO LONGER `https.createServer()`: the server's TLS is perry-ext-net's turnloop session on every thread (plan A closed).",
-      "reached_when": "the node:https client (reqwest's rustls stack and the raw client bypasses)",
-      "blocker": "the client half of plan C; the server half is gone.",
-      "issue": "unfiled \u2014 P8",
-      "plan": "C"
     },
     {
       "crate": "perry-ext-ioredis",
@@ -159,18 +135,6 @@
     }
   ],
   "lockfile": {
-    "h2": [
-      "0.4.19"
-    ],
-    "hyper": [
-      "1.11.1"
-    ],
-    "hyper-rustls": [
-      "0.27.9"
-    ],
-    "hyper-util": [
-      "0.1.20"
-    ],
     "lettre": [
       "0.11.23"
     ],
@@ -179,9 +143,6 @@
     ],
     "redis": [
       "1.7.0"
-    ],
-    "reqwest": [
-      "0.12.28"
     ],
     "tokio": [
       "1.53.1"
@@ -192,12 +153,6 @@
     "tokio-util": [
       "0.7.18"
     ],
-    "tower": [
-      "0.5.3"
-    ],
-    "tower-http": [
-      "0.6.11"
-    ],
     "tungstenite": [
       "0.30.0"
     ]
@@ -206,7 +161,7 @@
     "perry": 3,
     "perry-container-compose": 14,
     "perry-ext-ads": 5,
-    "perry-ext-http": 43,
+    "perry-ext-http": 7,
     "perry-ext-ioredis": 13,
     "perry-ext-mongodb": 29,
     "perry-ffi": 2,

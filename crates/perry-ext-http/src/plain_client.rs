@@ -1,124 +1,11 @@
-//! Raw-socket HTTP/1.1 client path used when the request asks for response
-//! trailers (`TE: trailers`) — reqwest's body API drops trailer blocks, so
-//! this bypass speaks HTTP/1.1 over a plain TcpStream and parses the
-//! response (chunked decoding + trailer block) itself. The parser is shared
-//! with the #2154 `agent.createConnection` socket path in `lib.rs`.
-
-use std::collections::HashMap;
-
-use perry_ffi::Handle;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-use crate::{push_event, PendingHttpEvent};
-
-fn expects_response_trailers(headers: &HashMap<String, String>) -> bool {
-    headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("te")
-            && value
-                .split(',')
-                .any(|part| part.trim().eq_ignore_ascii_case("trailers"))
-    })
-}
-
-pub(crate) async fn dispatch_plain_http_request(
-    request_handle: Handle,
-    method: &str,
-    url: &str,
-    headers: &HashMap<String, String>,
-    body: &[u8],
-    timeout_ms: Option<u64>,
-) -> Option<Result<(), String>> {
-    if !expects_response_trailers(headers) {
-        return None;
-    }
-    let parsed = match reqwest::Url::parse(url) {
-        Ok(u) if u.scheme() == "http" => u,
-        _ => return None,
-    };
-    let host = match parsed.host_str() {
-        Some(h) => h.to_string(),
-        None => return Some(Err("missing host".to_string())),
-    };
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    let mut path = parsed.path().to_string();
-    if path.is_empty() {
-        path.push('/');
-    }
-    if let Some(q) = parsed.query() {
-        path.push('?');
-        path.push_str(q);
-    }
-
-    let fut = async {
-        let mut stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
-        let host_header = if parsed.port().is_some() {
-            format!("{}:{}", host, port)
-        } else {
-            host.clone()
-        };
-        let mut req = format!("{} {} HTTP/1.1\r\nHost: {}\r\n", method, path, host_header);
-        let mut has_content_length = false;
-        for (k, v) in headers {
-            if k.eq_ignore_ascii_case("content-length") {
-                has_content_length = true;
-            }
-            if k.eq_ignore_ascii_case("connection") {
-                // The raw trailer-aware path reads until EOF after the final
-                // chunk/trailer block. Force close here so an explicit
-                // `Connection: keep-alive` cannot hang until timeout.
-                continue;
-            }
-            req.push_str(k);
-            req.push_str(": ");
-            req.push_str(v);
-            req.push_str("\r\n");
-        }
-        req.push_str("Connection: close\r\n");
-        if !body.is_empty() && !has_content_length {
-            req.push_str(&format!("Content-Length: {}\r\n", body.len()));
-        }
-        req.push_str("\r\n");
-        stream.write_all(req.as_bytes()).await?;
-        if !body.is_empty() {
-            stream.write_all(body).await?;
-        }
-
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).await?;
-        Ok::<Vec<u8>, std::io::Error>(raw)
-    };
-
-    let raw = match timeout_ms {
-        Some(ms) => match tokio::time::timeout(std::time::Duration::from_millis(ms), fut).await {
-            Ok(r) => r,
-            Err(_) => return Some(Err("request timed out".to_string())),
-        },
-        None => match tokio::time::timeout(std::time::Duration::from_secs(30), fut).await {
-            Ok(r) => r,
-            Err(_) => return Some(Err("request timed out".to_string())),
-        },
-    };
-    let raw = match raw {
-        Ok(r) => r,
-        Err(e) => return Some(Err(e.to_string())),
-    };
-
-    match parse_http_response(&raw) {
-        Ok(parsed) => {
-            push_event(PendingHttpEvent::Response {
-                request_handle,
-                status: parsed.status,
-                status_message: parsed.status_message,
-                headers: parsed.headers,
-                trailers: parsed.trailers,
-                body: parsed.body,
-                http_version: parsed.http_version,
-            });
-            Some(Ok(()))
-        }
-        Err(e) => Some(Err(e)),
-    }
-}
+//! The raw HTTP/1.1 response parser shared by the `agent.createConnection`
+//! socket paths (`client_connect_override.rs`, #2154): status line, headers,
+//! decoded body and trailers from the bytes read off a JS-produced socket.
+//!
+//! It used to also carry a `TE: trailers` bypass over a tokio `TcpStream`,
+//! because reqwest's body API dropped trailer blocks. That exchange now runs in
+//! `client_turnloop` (`Mode::Trailers`), whose codec hands trailers back as
+//! `Event::Trailers`.
 
 /// A parsed HTTP/1.1 response message (status line + headers + decoded body
 /// + trailers). Produced by [`parse_http_response`].
@@ -137,10 +24,9 @@ pub(crate) struct ParsedHttpResponse {
 /// Parse a raw HTTP/1.1 response (the bytes read off a socket) into status /
 /// headers / decoded body / trailers. Decodes `Transfer-Encoding: chunked`
 /// (including a trailer block) and honors `Content-Length`; with neither it
-/// treats the remainder as the body (read-until-EOF transports). Shared by
-/// the trailer-aware reqwest-bypass path ([`dispatch_plain_http_request`])
-/// and the #2154 `agent.createConnection` socket path
-/// ([`dispatch_request_over_socket`]).
+/// treats the remainder as the body (read-until-EOF transports). Used by the
+/// #2154 `agent.createConnection` socket path
+/// (`client_connect_override::dispatch_request_over_socket`).
 pub(crate) fn parse_http_response(raw: &[u8]) -> Result<ParsedHttpResponse, String> {
     let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") else {
         return Err("invalid HTTP response".to_string());
