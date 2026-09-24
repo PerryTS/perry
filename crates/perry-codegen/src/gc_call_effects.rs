@@ -139,6 +139,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `gc/layout.rs`: side-table metadata updates only.
         | "js_gc_note_slot_layout"
         | "js_gc_note_slot_layout_aware"
+        // The key-add hit's `mark_object_dynamic_shape_unknown`: header bits
+        // and the typed-layout / slot-mask / feedback side tables only.
+        | "js_gc_key_add_layout_unknown"
         | "js_gc_init_typed_shape_layout"
         | "js_gc_declare_typed_shape_layout"
         // #7834: `layout_forget_object` behind a null check — two thread-local

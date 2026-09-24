@@ -68,6 +68,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.
     module.add_external_global("PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", I32);
+    // The key-add hit's chain-verdict generation and the store census
+    // (expr/put_value_store_ic.rs, expr/store_census.rs).
+    module.add_external_global("PERRY_PROTO_VALIDITY", I64);
+    module.add_external_global("PERRY_VTABLE_GEN", I64);
+    module.add_external_global("PERRY_STORE_CENSUS", I64);
     // #10943: has ANY named property ever been installed on a non-ordinary
     // cell in this process? Zero is the own-override guard's own proof that a
     // proven Map/Set/Date receiver cannot be shadowing its builtin, and the

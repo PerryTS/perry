@@ -207,6 +207,9 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_write_barrier_root_nanbox", VOID, &[I64]);
     module.declare_function("js_write_barrier_root_heap_word", VOID, &[I64]);
     module.declare_function("js_gc_note_slot_layout", VOID, &[I64, I32, I64]);
+    //   js_gc_key_add_layout_unknown(obj_handle: u64) -- the key-add hit's
+    //   layout retirement (`expr/put_value_store_ic.rs`).
+    module.declare_function("js_gc_key_add_layout_unknown", VOID, &[I64]);
     //   js_gc_note_slot_layout_aware(parent, slot_index, value_bits, old_bits)
     module.declare_function("js_gc_note_slot_layout_aware", VOID, &[I64, I32, I64, I64]);
     module.declare_function(

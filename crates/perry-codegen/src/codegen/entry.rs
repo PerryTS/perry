@@ -356,6 +356,9 @@ pub(super) fn compile_module_entry(
                 );
             }
             blk.call_void("js_gc_init", &[]);
+            if crate::expr::store_census::enabled() {
+                blk.call_void("perry_store_census_arm", &[]);
+            }
             if write_barriers_enabled() {
                 blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
             }

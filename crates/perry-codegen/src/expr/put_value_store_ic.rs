@@ -95,7 +95,7 @@
 //! No value is trusted from its static type: the only static skip is LLVM
 //! folding these tests for a constant.
 
-use crate::types::{DOUBLE, I1, I16, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::write_barrier::{
     emit_may_carry_heap_pointer_check, emit_parent_may_need_remembering_check,
@@ -127,6 +127,46 @@ const TYPED_INTACT_I16: &str = "4096";
 /// `STRING_TAG` (0x7FFF). Bits in this range are not raw f64s.
 const BOXED_TAG_FIRST_TOP16: &str = "32761";
 const BOXED_TAG_SPAN: &str = "7";
+
+/// Words of a site's record `@perry_ic_N_packed_set` (`[4 x i64]`): the
+/// existing-key word, the key-add memo's shapes and guard words, and the
+/// runtime's pointer to further key-add memos (never read here). **Must
+/// equal `perry_runtime::proxy::put_value::packed_add::{PACKED_SET_SITE_WORDS,
+/// ADD_SHAPES_WORD, ADD_GUARD_WORD, ADD_SLOT_BITS}`**; pinned by the runtime's
+/// `packed_set_site_layout_matches_codegen`.
+pub(crate) const PACKED_SET_SITE_WORDS: usize = 4;
+pub(crate) const ADD_SHAPES_WORD: usize = 1;
+pub(crate) const ADD_GUARD_WORD: usize = 2;
+pub(crate) const ADD_SLOT_BITS: u32 = 16;
+const ADD_SLOT_MASK: u64 = (1 << ADD_SLOT_BITS) - 1;
+/// Block-name stem of the key-add hit.
+const ADD_STEM: &str = "put.add";
+/// `GC_FLAG_TENURED` (gc_flags byte).
+pub(crate) const ADD_REFUSE_GC_FLAGS: u32 = 0x20;
+/// `_reserved` bits the key-add hit refuses: `OBJ_FLAG_HAS_DESCRIPTORS`
+/// (0x800), `OBJ_FLAG_STABLE_TOMBSTONES` (0x400),
+/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80). Pinned by the runtime's
+/// `packed_add_refuse_bits_match_codegen`.
+pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0C80;
+/// `GC_LAYOUT_SIDE_MASK` (0x8000) | `GC_OBJ_TYPED_LAYOUT_INTACT` (0x1000): a
+/// receiver with either bit has a layout record the new shape no longer
+/// describes, which `js_gc_key_add_layout_unknown` retires before the stamp
+/// (the transition lane's `mark_object_dynamic_shape_unknown`).
+pub(crate) const ADD_LAYOUT_RESERVED: u32 = 0x9000;
+
+/// `ObjectMeta` byte offsets of `flags` and `elements`, and the flags the hit
+/// refuses: `OBJECT_META_FLAG_IS_PROTOTYPE` (1 << 5) and
+/// `OBJECT_META_FLAG_EXOTIC_READ_RECEIVER` (1 << 6). Pinned by the runtime's
+/// `packed_add_meta_layout_matches_codegen`.
+pub(crate) const META_FLAGS_OFFSET: u64 = 24;
+pub(crate) const META_ELEMENTS_OFFSET: u64 = 96;
+pub(crate) const META_REFUSE_FLAGS: u64 = 0x60;
+
+/// The mask over the GcHeader's first 32-bit word (`obj_type | gc_flags << 8
+/// | _reserved << 16`, little-endian) whose zero admits a key-add receiver.
+fn add_header_refuse_mask() -> i32 {
+    ((ADD_REFUSE_RESERVED << 16) | (ADD_REFUSE_GC_FLAGS << 8)) as i32
+}
 
 /// The barrier-census stem. Shared with the census registry
 /// (`barrier_stem_census_tests::VERIFIED_BARRIER_STEMS`).
@@ -164,6 +204,7 @@ pub(crate) fn emit_static_store_ic(
     let strict_i32 = if strict { "1" } else { "0" };
 
     if crate::codegen::full_outline_ic_enabled() {
+        super::store_census::bump(ctx, super::store_census::PIC_MISS);
         let key_handle = emit_key_handle(ctx, &key_handle_global);
         return ctx.block().call(
             DOUBLE,
@@ -186,7 +227,8 @@ pub(crate) fn emit_static_store_ic(
         super::inline_cache_global_name(ctx, packed_site)
     );
     ctx.typed_parse_rodata.push(format!(
-        "@{packed_name} = private global i64 {PACKED_SET_EMPTY}, align 8"
+        "@{packed_name} = private global [{PACKED_SET_SITE_WORDS} x i64] \
+         [i64 {PACKED_SET_EMPTY}, i64 {PACKED_SET_EMPTY}, i64 0, i64 0], align 8"
     ));
     let packed_ref = format!("@{packed_name}");
 
@@ -204,6 +246,8 @@ pub(crate) fn emit_static_store_ic(
     let store_label = ctx.block_label(store_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
+    let add_idx = ctx.new_block(&format!("{ADD_STEM}.check"));
+    let add_label = ctx.block_label(add_idx);
 
     // Receiver: POINTER tag AND payload above the handle band, as ONE unsigned
     // range compare. `t = bits - (POINTER_TAG | 0x100000)` is below
@@ -243,7 +287,7 @@ pub(crate) fn emit_static_store_ic(
     let ways = super::emit_inline_cache_slot(ctx, &cache_name);
     let first_way_idx = ctx.new_block(&format!("{STORE_IC_STEM}.way"));
     let mut way_label = ctx.block_label(first_way_idx);
-    ctx.block().cond_br(&ways.present, &way_label, &miss_label);
+    ctx.block().cond_br(&ways.present, &way_label, &add_label);
     let mut way_idx = first_way_idx;
     for w in 0..PACKED_SET_INLINE_WAYS {
         ctx.current_block = way_idx;
@@ -255,7 +299,7 @@ pub(crate) fn emit_static_store_ic(
             way_idx = ctx.new_block(&format!("{STORE_IC_STEM}.way"));
             ctx.block_label(way_idx)
         } else {
-            miss_label.clone()
+            add_label.clone()
         };
         ctx.block().cond_br(&way_eq, &kind_label, &next_label);
         word_incoming.push((entry, way_label.clone()));
@@ -307,6 +351,7 @@ pub(crate) fn emit_static_store_ic(
     // bookkeeping below is guarded only by live tests of the stored bits and
     // of the receiver's header.
     ctx.block().store(DOUBLE, value_double, &slot_ptr);
+    super::store_census::bump(ctx, super::store_census::PIC_HIT);
     emit_static_store_ic_bookkeeping(
         ctx,
         &handle,
@@ -320,7 +365,20 @@ pub(crate) fn emit_static_store_ic(
     let hit_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
+    ctx.current_block = add_idx;
+    let add_end_label = emit_key_add_hit(
+        ctx,
+        &packed_ref,
+        &handle,
+        &sid,
+        value_double,
+        value_bits,
+        &miss_label,
+        &merge_label,
+    );
+
     ctx.current_block = miss_idx;
+    super::store_census::bump(ctx, super::store_census::PIC_MISS);
     let key_handle = emit_key_handle(ctx, &key_handle_global);
     let miss_value = ctx.block().call(
         DOUBLE,
@@ -342,9 +400,215 @@ pub(crate) fn emit_static_store_ic(
         DOUBLE,
         &[
             (value_double, &hit_end_label),
+            (value_double, &add_end_label),
             (&miss_value, &miss_end_label),
         ],
     )
+}
+
+/// The key-add hit: `k` is not own on the receiver, and the site's add words
+/// (`perry_runtime::proxy::put_value::packed_add`) memo the transition from
+/// the receiver's PRE-shape. Entered after the existing-key word and ways
+/// missed, with the receiver's handle and ShapeId already loaded. Returns the
+/// label of the block that branches to `merge_label` on a hit; every refusal
+/// branches to `miss_label` with nothing written.
+///
+/// ```text
+///   ONE pre-shape compare       sid == low half of word 1
+///   the chain verdict           PROTO_VALIDITY + VTABLE_GEN == word 2 >> 16
+///   per-object facts            GcHeader word: not TENURED, layout state
+///                               UNKNOWN / POINTER_FREE, no numeric proof,
+///                               tombstones or descriptor flag; meta == null;
+///                               the receiver-kind admission
+///   the successor ShapeId       high half of word 1 -> handle + 4
+///   the store and barrier       slot = word 2 & 0xFFFF
+/// ```
+///
+/// Nothing between the caller's re-read of the receiver and the stores can
+/// collect: plain loads, compares, and two stores.
+#[allow(clippy::too_many_arguments)]
+fn emit_key_add_hit(
+    ctx: &mut FnCtx<'_>,
+    packed_ref: &str,
+    handle: &str,
+    sid: &str,
+    value_double: &str,
+    value_bits: &str,
+    miss_label: &str,
+    merge_label: &str,
+) -> String {
+    let gen_idx = ctx.new_block(&format!("{ADD_STEM}.chain"));
+    let layout_idx = ctx.new_block(&format!("{ADD_STEM}.layout"));
+    let forget_idx = ctx.new_block(&format!("{ADD_STEM}.layout.forget"));
+    let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
+    let meta_idx = ctx.new_block(&format!("{ADD_STEM}.meta"));
+    let class_idx = ctx.new_block(&format!("{ADD_STEM}.class"));
+    let classless_idx = ctx.new_block(&format!("{ADD_STEM}.classless"));
+    let store_idx = ctx.new_block(&format!("{ADD_STEM}.hit.store"));
+    let gen_label = ctx.block_label(gen_idx);
+    let obj_label = ctx.block_label(obj_idx);
+    let meta_label = ctx.block_label(meta_idx);
+    let class_label = ctx.block_label(class_idx);
+    let classless_label = ctx.block_label(classless_idx);
+    let store_label = ctx.block_label(store_idx);
+    let layout_label = ctx.block_label(layout_idx);
+    let forget_label = ctx.block_label(forget_idx);
+
+    // The pre-shape compare. A spill-slot memo is published flipped out of
+    // the ShapeId range, so it can never match here.
+    let shapes_ptr = ctx
+        .block()
+        .gep(I64, packed_ref, &[(I64, &ADD_SHAPES_WORD.to_string())]);
+    let shapes = ctx.block().load_atomic_monotonic(I64, &shapes_ptr, 8);
+    let pre = ctx.block().trunc(I64, &shapes, I32);
+    let pre_eq = ctx.block().icmp_eq(I32, sid, &pre);
+    ctx.block().cond_br(&pre_eq, &gen_label, miss_label);
+
+    // The chain verdict's generation: both counters only grow, so their sum
+    // equals the recorded one exactly when each does.
+    ctx.current_block = gen_idx;
+    let guard_ptr = ctx
+        .block()
+        .gep(I64, packed_ref, &[(I64, &ADD_GUARD_WORD.to_string())]);
+    let guard = ctx.block().load_atomic_monotonic(I64, &guard_ptr, 8);
+    let validity = ctx
+        .block()
+        .load_atomic_monotonic(I64, "@PERRY_PROTO_VALIDITY", 8);
+    let vtable_gen = ctx
+        .block()
+        .load_atomic_monotonic(I64, "@PERRY_VTABLE_GEN", 8);
+    let now = ctx.block().add(I64, &validity, &vtable_gen);
+    let recorded = ctx.block().lshr(I64, &guard, &ADD_SLOT_BITS.to_string());
+    let gen_eq = ctx.block().icmp_eq(I64, &now, &recorded);
+    ctx.block().cond_br(&gen_eq, &obj_label, miss_label);
+
+    // The GcHeader's first word: obj_type | gc_flags << 8 | _reserved << 16.
+    ctx.current_block = obj_idx;
+    let hdr_addr = ctx.block().sub(I64, handle, "8");
+    let hdr_ptr = ctx.block().inttoptr(I64, &hdr_addr);
+    let hdr = ctx.block().load(I32, &hdr_ptr);
+    let refused = ctx
+        .block()
+        .and(I32, &hdr, &add_header_refuse_mask().to_string());
+    let hdr_ok = ctx.block().icmp_eq(I32, &refused, "0");
+    ctx.block().cond_br(&hdr_ok, &meta_label, miss_label);
+
+    // Per-object metadata, when there is any (an ES5 `new F` instance
+    // records its prototype there): not a marked prototype (whose structural
+    // change must bump PROTO_VALIDITY), not an exotic read receiver, no
+    // elements store. A spill buffer does not matter: the slot is inline.
+    ctx.current_block = meta_idx;
+    let meta_off =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
+    let meta_addr = ctx.block().add(I64, handle, &meta_off);
+    let meta_ptr = ctx.block().inttoptr(I64, &meta_addr);
+    let meta = ctx.block().load(PTR, &meta_ptr);
+    let no_meta = ctx.block().icmp_eq(PTR, &meta, "null");
+    let meta_chk_idx = ctx.new_block(&format!("{ADD_STEM}.meta.record"));
+    let meta_chk_label = ctx.block_label(meta_chk_idx);
+    ctx.block().cond_br(&no_meta, &class_label, &meta_chk_label);
+
+    ctx.current_block = meta_chk_idx;
+    let flags_ptr = ctx
+        .block()
+        .gep(I8, &meta, &[(I64, &META_FLAGS_OFFSET.to_string())]);
+    let flags = ctx.block().load(I64, &flags_ptr);
+    let refused = ctx.block().and(I64, &flags, &META_REFUSE_FLAGS.to_string());
+    let flags_ok = ctx.block().icmp_eq(I64, &refused, "0");
+    let elements_ptr = ctx
+        .block()
+        .gep(I8, &meta, &[(I64, &META_ELEMENTS_OFFSET.to_string())]);
+    let elements = ctx.block().load(I64, &elements_ptr);
+    let no_elements = ctx.block().icmp_eq(I64, &elements, "0");
+    let meta_ok = ctx.block().and(I1, &flags_ok, &no_elements);
+    ctx.block().cond_br(&meta_ok, &class_label, miss_label);
+
+    // The receiver-kind admission, as the existing-key hit.
+    ctx.current_block = class_idx;
+    let class_ptr = ctx.block().inttoptr(I64, handle);
+    let class_id = ctx.block().load(I32, &class_ptr);
+    let class_biased = ctx.block().add(I32, &class_id, "2");
+    let has_class = ctx.block().icmp_ugt(I32, &class_biased, "2");
+    ctx.block()
+        .cond_br(&has_class, &layout_label, &classless_label);
+
+    ctx.current_block = classless_idx;
+    let reserved_i32 = ctx.block().lshr(I32, &hdr, "16");
+    let reserved = ctx.block().trunc(I32, &reserved_i32, I16);
+    let admit_bits = ctx.block().and(I16, &reserved, CLASSLESS_ADMIT_MASK_I16);
+    let admitted = ctx.block().icmp_eq(I16, &admit_bits, CLASSLESS_ADMIT_I16);
+    let classless = ctx.block().icmp_eq(I32, &class_id, "0");
+    let plain_ok = ctx.block().and(I1, &admitted, &classless);
+    ctx.block().cond_br(&plain_ok, &layout_label, miss_label);
+
+    // A side-mask or typed-layout receiver: its layout record describes the
+    // PRE-shape, so retire it first, exactly as the transition lane does. The
+    // callee edits side tables only and cannot collect.
+    ctx.current_block = layout_idx;
+    let layout_bits = ctx
+        .block()
+        .and(I32, &hdr, &((ADD_LAYOUT_RESERVED << 16) as i32).to_string());
+    let layout_plain = ctx.block().icmp_eq(I32, &layout_bits, "0");
+    ctx.block()
+        .cond_br(&layout_plain, &store_label, &forget_label);
+
+    ctx.current_block = forget_idx;
+    ctx.block()
+        .call_void("js_gc_key_add_layout_unknown", &[(I64, handle)]);
+    ctx.block().br(&store_label);
+
+    // The transition: stamp the successor, then store the value, then the
+    // GC's obligations for the bits stored.
+    ctx.current_block = store_idx;
+    super::store_census::bump(ctx, super::store_census::ADD_HIT);
+    let post_wide = ctx.block().lshr(I64, &shapes, "32");
+    let post = ctx.block().trunc(I64, &post_wide, I32);
+    let sid_addr = ctx.block().add(I64, handle, "4");
+    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
+    // GC_STORE_AUDIT(POINTER_FREE): a ShapeId is a number, never a heap reference.
+    ctx.block().store(I32, &post, &sid_ptr);
+    let slot = ctx.block().and(I64, &guard, &ADD_SLOT_MASK.to_string());
+    // The transition lane's fix-up: a POINTER-tagged null is stored as
+    // `undefined` (`fast_paths.rs`).
+    let raw_bits = ctx.block().bitcast_double_to_i64(value_double);
+    let null_ptr = ctx.block().icmp_eq(
+        I64,
+        &raw_bits,
+        &(crate::nanbox::POINTER_TAG as i64).to_string(),
+    );
+    let fixed_bits = ctx.block().select(
+        I1,
+        &null_ptr,
+        I64,
+        crate::nanbox::TAG_UNDEFINED_I64,
+        &raw_bits,
+    );
+    let fixed = ctx.block().bitcast_i64_to_double(&fixed_bits);
+    let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let fields = ctx.block().add(I64, handle, &header_size);
+    let fields_ptr = ctx.block().inttoptr(I64, &fields);
+    let slot_ptr = ctx.block().gep(DOUBLE, &fields_ptr, &[(I64, &slot)]);
+    // GC_STORE_AUDIT(BARRIERED): the slot write is unconditional; the
+    // bookkeeping below is guarded only by live tests of the stored bits and
+    // of the receiver's header.
+    ctx.block().store(DOUBLE, &fixed, &slot_ptr);
+    // Re-read: the layout call above may have changed the layout bits.
+    let reserved_addr = ctx.block().sub(I64, handle, "6");
+    let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
+    let reserved = ctx.block().load(I16, &reserved_ptr);
+    emit_static_store_ic_bookkeeping(
+        ctx,
+        handle,
+        &slot,
+        &slot_ptr,
+        &reserved,
+        &fixed,
+        value_bits,
+        STORE_IC_STEM,
+    );
+    let end = ctx.block().label.clone();
+    ctx.block().br(merge_label);
+    end
 }
 
 /// The GC's obligations after the unconditional slot store. Leaves the

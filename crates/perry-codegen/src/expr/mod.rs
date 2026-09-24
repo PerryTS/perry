@@ -3082,6 +3082,7 @@ pub(crate) mod put_value_store_ic;
 pub(crate) mod receiver_range;
 mod static_field_meta;
 mod static_method;
+pub(crate) mod store_census;
 mod string_regex_proc;
 mod super_method;
 pub(crate) mod this_super_call;

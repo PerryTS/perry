@@ -41,6 +41,8 @@ pub(crate) use strings_part2::declare_phase_b_strings_part2;
 pub fn declare_phase1(module: &mut LlModule) {
     // GC / runtime bootstrap.
     module.declare_function("js_gc_init", VOID, &[]);
+    // `PERRY_STORE_CENSUS` builds only (`expr/store_census.rs`).
+    module.declare_function("perry_store_census_arm", VOID, &[]);
     module.declare_function("js_typed_feedback_maybe_dump_trace", VOID, &[]);
     // Executable entry metadata: generated `main` seeds the source module path
     // before any module init can observe `process.argv`.
