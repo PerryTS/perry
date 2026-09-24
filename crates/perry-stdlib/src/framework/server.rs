@@ -415,7 +415,7 @@ pub unsafe extern "C" fn js_http_respond(
 // registry hands out shared references: a response cannot move anything out of
 // the request handle it answers.
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock as Lazy;
 
 pub static PENDING_RESPONSES: Lazy<DashMap<u64, ResponseSlot>> = Lazy::new(DashMap::new);
 

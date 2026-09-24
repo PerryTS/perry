@@ -17,9 +17,8 @@ use crate::string::{js_string_from_bytes, StringHeader};
 
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(1);
 
-lazy_static::lazy_static! {
-    static ref PROCESS_REGISTRY: Mutex<HashMap<u64, std::process::Child>> = Mutex::new(HashMap::new());
-}
+static PROCESS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<u64, std::process::Child>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Helper: extract a Rust string from a NaN-boxed f64 string value
 pub(crate) unsafe fn extract_string_from_nanboxed(val: f64) -> Option<String> {

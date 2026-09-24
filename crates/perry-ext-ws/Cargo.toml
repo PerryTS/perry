@@ -38,7 +38,6 @@ perry-tls-session.workspace = true
 # through the same re-export `perry-tls-session` takes them from, so the two
 # cannot disagree about which rustls they mean.
 turnloop-tls.workspace = true
-lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

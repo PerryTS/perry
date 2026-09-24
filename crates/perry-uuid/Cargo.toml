@@ -1,0 +1,20 @@
+[package]
+name = "perry-uuid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "On-demand UUID generation for Perry"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+v4 = ["dep:getrandom"]
+v7 = ["dep:getrandom"]
+
+[dependencies]
+getrandom = { version = "0.4", optional = true }

@@ -114,8 +114,8 @@ pub fn run_verify_check(
     let binary_data = fs::read(binary_path)
         .with_context(|| format!("Failed to read {}", binary_path.display()))?;
 
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&binary_data);
+    use perry_base64::Engine;
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(&binary_data);
 
     // Build config and manifest
     let config_json = serde_json::json!({

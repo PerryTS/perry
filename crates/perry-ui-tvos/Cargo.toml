@@ -20,7 +20,7 @@ perry-ffi.workspace = true
 perry-ui = { path = "../perry-ui" }
 perry-ui-testkit = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false }
-base64.workspace = true
+perry-base64.workspace = true
 block2 = "0.6"
 libc.workspace = true
 objc2 = "0.6"

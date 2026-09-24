@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use base64::{engine::general_purpose, Engine as _};
+use perry_base64::{engine::general_purpose, Engine as _};
 
 fn header_value_string(name: &str, value: &serde_json::Value) -> String {
     if let Some(values) = value.as_array() {

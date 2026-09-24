@@ -24,8 +24,6 @@ use std::ffi::CStr;
 use std::ffi::CString;
 use std::sync::Mutex;
 
-use lazy_static::lazy_static;
-
 use crate::value::JSValue;
 
 /// ABI version — plugins must match this to load
@@ -270,9 +268,8 @@ impl PluginRegistry {
     }
 }
 
-lazy_static! {
-    static ref REGISTRY: Mutex<PluginRegistry> = Mutex::new(PluginRegistry::new());
-}
+static REGISTRY: std::sync::LazyLock<Mutex<PluginRegistry>> =
+    std::sync::LazyLock::new(|| Mutex::new(PluginRegistry::new()));
 
 #[cfg(test)]
 pub(crate) static PLUGIN_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());

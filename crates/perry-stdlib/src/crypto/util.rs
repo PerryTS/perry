@@ -3,7 +3,6 @@ pub(super) use aes::{Aes128, Aes192, Aes256};
 pub(super) use aes_09::{
     Aes128 as Aes128CbcCipher, Aes192 as Aes192CbcCipher, Aes256 as Aes256CbcCipher,
 };
-pub(super) use base64::Engine as _;
 pub(super) use cbc::{
     cipher::{
         block_padding::{NoPadding, Pkcs7},
@@ -24,6 +23,7 @@ pub(super) use p256::pkcs8::{
     EncodePrivateKey as P256EncodePrivateKey, EncodePublicKey as P256EncodePublicKey,
 };
 pub(super) use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
+pub(super) use perry_base64::Engine as _;
 pub(super) use perry_runtime::{
     js_object_alloc, js_object_get_field_by_name, js_object_set_field_by_name,
     js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
@@ -187,21 +187,21 @@ pub(super) const X25519_PUBLIC_PREFIX: &str = "PERRY-X25519-PUBLIC:";
 /// back into a KeyObject (#6302), and both sides must agree byte-for-byte or
 /// the `parse_*_surrogate` readers below reject the result.
 pub(crate) fn ed25519_private_surrogate(key: &ed25519_dalek::SigningKey) -> String {
-    let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
-    let public =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.verifying_key().to_bytes());
+    let secret = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
+    let public = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(key.verifying_key().to_bytes());
     format!("{ED25519_PRIVATE_PREFIX}{secret}.{public}")
 }
 
 pub(crate) fn ed25519_public_surrogate(key: &ed25519_dalek::VerifyingKey) -> String {
-    let public = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
+    let public = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key.to_bytes());
     format!("{ED25519_PUBLIC_PREFIX}{public}")
 }
 
 pub(crate) fn parse_ed25519_private_surrogate(value: &str) -> Option<ed25519_dalek::SigningKey> {
     let rest = value.strip_prefix(ED25519_PRIVATE_PREFIX)?;
     let secret_b64 = rest.split('.').next()?;
-    let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let secret = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(secret_b64.as_bytes())
         .ok()?;
     let secret: [u8; 32] = secret.as_slice().try_into().ok()?;
@@ -213,7 +213,7 @@ pub(crate) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dale
         return Some(private.verifying_key());
     }
     let rest = value.strip_prefix(ED25519_PUBLIC_PREFIX)?;
-    let public = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let public = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(rest.as_bytes())
         .ok()?;
     let public: [u8; 32] = public.as_slice().try_into().ok()?;
@@ -221,18 +221,18 @@ pub(crate) fn parse_ed25519_public_surrogate(value: &str) -> Option<ed25519_dale
 }
 
 pub(crate) fn x25519_private_surrogate(secret: &[u8; 32]) -> String {
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
+    let encoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
     format!("{X25519_PRIVATE_PREFIX}{encoded}")
 }
 
 pub(crate) fn x25519_public_surrogate(public: &[u8; 32]) -> String {
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public);
+    let encoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(public);
     format!("{X25519_PUBLIC_PREFIX}{encoded}")
 }
 
 pub(crate) fn parse_x25519_private_surrogate(value: &str) -> Option<[u8; 32]> {
     let rest = value.strip_prefix(X25519_PRIVATE_PREFIX)?;
-    let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let secret = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(rest.as_bytes())
         .ok()?;
     secret.as_slice().try_into().ok()
@@ -245,7 +245,7 @@ pub(crate) fn parse_x25519_public_surrogate(value: &str) -> Option<[u8; 32]> {
         return Some(public.to_bytes());
     }
     let rest = value.strip_prefix(X25519_PUBLIC_PREFIX)?;
-    let public = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let public = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(rest.as_bytes())
         .ok()?;
     public.as_slice().try_into().ok()
@@ -474,14 +474,14 @@ pub(super) unsafe fn object_field_bytes(obj_bits: u64, name: &[u8]) -> Option<Ve
 }
 
 pub(super) fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .ok()?;
     Some(RsaBigUint::from_bytes_be(&bytes))
 }
 
 pub(super) fn b64u_uint(value: &RsaBigUint) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_bytes_be())
+    perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_bytes_be())
 }
 
 pub(super) unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBigUint> {
@@ -582,12 +582,12 @@ pub(super) unsafe fn ec_p256_public_jwk_object(
     set_object_string_field(
         obj,
         b"x",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[1..33]),
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[1..33]),
     );
     set_object_string_field(
         obj,
         b"y",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[33..65]),
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[33..65]),
     );
     Some(obj)
 }
@@ -601,7 +601,7 @@ pub(super) unsafe fn ec_p256_private_jwk_object(
     set_object_string_field(
         obj,
         b"d",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(d.as_slice()),
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(d.as_slice()),
     );
     Some(obj)
 }
@@ -641,7 +641,7 @@ pub(super) unsafe fn jwk_ec_private_to_pem(jwk_bits: u64) -> Option<String> {
         return None;
     }
     let d = object_field_string(jwk_bits, b"d")?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(d.as_bytes())
         .ok()?;
     let key = P256SecretKey::from_slice(&bytes).ok()?;
@@ -658,10 +658,10 @@ pub(super) unsafe fn jwk_ec_public_to_pem(jwk_bits: u64) -> Option<String> {
     }
     let x = object_field_string(jwk_bits, b"x")?;
     let y = object_field_string(jwk_bits, b"y")?;
-    let x_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let x_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(x.as_bytes())
         .ok()?;
-    let y_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let y_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(y.as_bytes())
         .ok()?;
     if x_bytes.len() != 32 || y_bytes.len() != 32 {

@@ -21,8 +21,8 @@ pub fn remote_build_and_launch(
     use super::super::publish::{
         auto_register_license, create_project_tarball_with_filters, load_config, save_config,
     };
-    use base64::Engine;
-    use indicatif::{ProgressBar, ProgressStyle};
+    use crate::terminal_progress::ProgressBar;
+    use perry_base64::Engine;
     use perry_http_client::ws::Message;
     use perry_http_client::{Form, Request, WebSocket};
     use serde::Deserialize;
@@ -162,7 +162,7 @@ pub fn remote_build_and_launch(
         std::io::stdout().flush().ok();
     }
 
-    let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(&tarball);
+    let tarball_b64 = perry_base64::engine::general_purpose::STANDARD.encode(&tarball);
 
     // `reqwest::Client::new()` had no timeout here and a remote build upload is
     // a whole project tarball, so the budget is generous rather than default.
@@ -243,12 +243,6 @@ pub fn remote_build_and_launch(
 
     let pb = if let OutputFormat::Text = format {
         let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  {spinner:.cyan} [{bar:30.cyan/dim}] {msg}")
-                .unwrap()
-                .progress_chars("━╸─"),
-        );
         pb.set_message("Waiting for build...");
         Some(pb)
     } else {
@@ -439,7 +433,7 @@ pub fn remote_build_and_launch(
                     || b == b'\n'
                     || b == b'\r'
             }) {
-            base64::engine::general_purpose::STANDARD
+            perry_base64::engine::general_purpose::STANDARD
                 .decode(&bytes)
                 .unwrap_or(bytes)
         } else {

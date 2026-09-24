@@ -173,9 +173,8 @@ pub unsafe extern "C" fn js_transform_stream_writable(handle: f64) -> f64 {
         .unwrap_or(f64::from_bits(TAG_UNDEFINED))
 }
 
-lazy_static::lazy_static! {
-    pub(super) static ref TRANSFORM_PAIRS: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
-}
+pub(super) static TRANSFORM_PAIRS: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(super) fn transform_writable_for_readable(readable_id: usize) -> Option<usize> {
     TRANSFORM_STREAMS
@@ -389,23 +388,22 @@ unsafe fn settle_transform_write(readable_id: usize, promise: *mut Promise) {
     }
 }
 
-lazy_static::lazy_static! {
-    /// Transform readable id -> write promises parked on backpressure, released
-    /// when the consumer drains the readable (see `transform_release_writes`).
-    pub(super) static ref TRANSFORM_WRITE_RELEASES: Mutex<HashMap<usize, Vec<usize>>> =
-        Mutex::new(HashMap::new());
-    /// #6607: transform writable id -> count of write jobs queued by
-    /// `transform_write` whose transformer hasn't finished delivering yet
-    /// (async transformers count until their returned promise settles).
-    static ref TRANSFORM_PENDING_WRITES: Mutex<HashMap<usize, usize>> =
-        Mutex::new(HashMap::new());
-    pub(super) static ref TRANSFORM_BACKPRESSURED_JOBS: Mutex<HashMap<usize, Vec<usize>>> =
-        Mutex::new(HashMap::new());
-    /// #6607: transform writable id -> close-request promise (as address)
-    /// deferred until the pending write jobs above drain.
-    pub(super) static ref TRANSFORM_PENDING_CLOSE: Mutex<HashMap<usize, usize>> =
-        Mutex::new(HashMap::new());
-}
+/// Transform readable id -> write promises parked on backpressure, released
+/// when the consumer drains the readable (see `transform_release_writes`).
+pub(super) static TRANSFORM_WRITE_RELEASES: std::sync::LazyLock<Mutex<HashMap<usize, Vec<usize>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// #6607: transform writable id -> count of write jobs queued by
+/// `transform_write` whose transformer hasn't finished delivering yet
+/// (async transformers count until their returned promise settles).
+static TRANSFORM_PENDING_WRITES: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+pub(super) static TRANSFORM_BACKPRESSURED_JOBS: std::sync::LazyLock<
+    Mutex<HashMap<usize, Vec<usize>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// #6607: transform writable id -> close-request promise (as address)
+/// deferred until the pending write jobs above drain.
+pub(super) static TRANSFORM_PENDING_CLOSE: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// #6607: a queued transform write job finished delivering its chunk. When the
 /// last pending job for the writable drains, run any close request that

@@ -96,7 +96,7 @@ pub(super) fn try_send(
     }
     // The id Perry has always reported. Generated here rather than taken from
     // the rendered head so the value JS sees is unchanged by this migration.
-    let message_id = format!("<{}@perry>", uuid::Uuid::new_v4());
+    let message_id = format!("<{}@perry>", perry_uuid::v4());
     let job = MailJob {
         from,
         to,

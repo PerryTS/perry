@@ -237,7 +237,7 @@ fn compute_link_cache_state(
     feed_command_args(&mut hasher, cmd, &mut ctx)?;
     let stats = ctx.stats;
 
-    let link_fingerprint = hex::encode(hasher.finalize());
+    let link_fingerprint = perry_hex::encode(hasher.finalize());
     let manifest_name = format!(
         "{:016x}.json",
         super::super::object_cache::djb2_hash(output_identity.as_bytes())
@@ -727,7 +727,7 @@ fn hash_file_with_size(path: &Path) -> std::io::Result<(String, u64)> {
         size += n as u64;
         hasher.update(&buf[..n]);
     }
-    Ok((hex::encode(hasher.finalize()), size))
+    Ok((perry_hex::encode(hasher.finalize()), size))
 }
 
 fn resolve_program(program: &OsStr, cmd: &Command, cwd: &Path) -> Option<PathBuf> {

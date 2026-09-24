@@ -24,10 +24,12 @@
     ]
   },
   "baseline": {
-    "workspace_members": 67,
+    "workspace_members": 71,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
+      "perry-base64",
+      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -38,6 +40,7 @@
       "perry-container-compose",
       "perry-diagnostics",
       "perry-dispatch",
+      "perry-hex",
       "perry-hir",
       "perry-http-client",
       "perry-parser",
@@ -51,6 +54,8 @@
     "perry_dependency_closure": [
       "perry",
       "perry-api-manifest",
+      "perry-base64",
+      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -60,6 +65,7 @@
       "perry-codegen-wear-tiles",
       "perry-diagnostics",
       "perry-dispatch",
+      "perry-hex",
       "perry-hir",
       "perry-http-client",
       "perry-parser",
@@ -72,7 +78,7 @@
     ],
     "decision_counts": {
       "externalize": 13,
-      "keep": 49,
+      "keep": 53,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -89,6 +95,14 @@
     },
     "perry-audio-miniaudio": {
       "category": "platform-core",
+      "decision": "keep"
+    },
+    "perry-base64": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-cli-support": {
+      "category": "tool",
       "decision": "keep"
     },
     "perry-codegen": {
@@ -251,6 +265,10 @@
       "category": "runtime-core",
       "decision": "keep"
     },
+    "perry-hex": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
     "perry-hir": {
       "category": "compiler-core",
       "decision": "keep"
@@ -360,6 +378,10 @@
       "decision": "merge"
     },
     "perry-updater": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-uuid": {
       "category": "runtime-core",
       "decision": "keep"
     },

@@ -814,7 +814,7 @@ pub unsafe extern "C" fn js_crypto_aes256_encrypt(
         Ok(ct) => ct,
         Err(_) => return std::ptr::null_mut(),
     };
-    let b64 = base64::engine::general_purpose::STANDARD.encode(ciphertext);
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(ciphertext);
 
     js_string_from_bytes(b64.as_ptr(), b64.len() as u32)
 }
@@ -856,7 +856,7 @@ pub unsafe extern "C" fn js_crypto_aes256_decrypt(
     }
 
     // Decode base64 ciphertext
-    let mut ciphertext = match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
+    let mut ciphertext = match perry_base64::engine::general_purpose::STANDARD.decode(&data_b64) {
         Ok(c) => c,
         Err(_) => return std::ptr::null_mut(),
     };
@@ -912,7 +912,7 @@ pub unsafe extern "C" fn js_crypto_pbkdf2(
     let mut output = vec![0u8; key_length];
     pbkdf2::pbkdf2_hmac::<Sha256>(&password, &salt, iterations, &mut output);
 
-    let hex_str = hex::encode(&output);
+    let hex_str = perry_hex::encode(&output);
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
@@ -952,7 +952,7 @@ pub unsafe extern "C" fn js_crypto_scrypt(
         return std::ptr::null_mut();
     }
 
-    let hex_str = hex::encode(&output);
+    let hex_str = perry_hex::encode(&output);
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
@@ -999,7 +999,7 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
         return std::ptr::null_mut();
     }
 
-    let hex_str = hex::encode(&output);
+    let hex_str = perry_hex::encode(&output);
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
@@ -1366,11 +1366,11 @@ mod scrypt_tests {
 
     fn digest(n: u64, r: u32, p: u32, keylen: usize) -> String {
         let password = b"correct horse battery staple";
-        let salt = hex::decode("0123456789abcdef0123456789abcdef").unwrap();
+        let salt = perry_hex::decode("0123456789abcdef0123456789abcdef").unwrap();
         let params = checked_scrypt_params(n, r, p, TEST_MAXMEM).unwrap();
         let mut output = vec![0; keylen];
         scrypt::scrypt(password, &salt, &params, &mut output).unwrap();
-        hex::encode(output)
+        perry_hex::encode(output)
     }
 
     #[test]

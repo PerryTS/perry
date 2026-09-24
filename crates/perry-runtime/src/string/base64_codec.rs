@@ -29,7 +29,7 @@ fn is_base64_alphabet(byte: u8) -> bool {
 /// Output is a raw *const StringHeader (codegen NaN-boxes).
 #[no_mangle]
 pub extern "C" fn js_atob(value: f64) -> *const StringHeader {
-    use base64::Engine as _;
+    use perry_base64::Engine as _;
 
     let mut cleaned = Vec::new();
     for &byte in value_to_string_bytes(value) {
@@ -47,7 +47,7 @@ pub extern "C" fn js_atob(value: f64) -> *const StringHeader {
     if cleaned.len() % 4 == 1 || cleaned.iter().any(|&byte| !is_base64_alphabet(byte)) {
         throw_invalid_character();
     }
-    match base64::engine::general_purpose::STANDARD_NO_PAD.decode(&cleaned) {
+    match perry_base64::engine::general_purpose::STANDARD_NO_PAD.decode(&cleaned) {
         Ok(decoded) => {
             // Spec (`atob`): the result is a "binary string" — each UTF-16
             // code unit equals one decoded byte (0-255), so `charCodeAt(i)`
@@ -71,7 +71,7 @@ pub extern "C" fn js_atob(value: f64) -> *const StringHeader {
 /// btoa(string) — base64-encode a binary string.
 #[no_mangle]
 pub extern "C" fn js_btoa(value: f64) -> *const StringHeader {
-    use base64::Engine as _;
+    use perry_base64::Engine as _;
 
     let input = value_to_string_bytes(value);
     let mut bytes = Vec::with_capacity(input.len());
@@ -87,6 +87,6 @@ pub extern "C" fn js_btoa(value: f64) -> *const StringHeader {
         }
         Err(_) => bytes.extend_from_slice(input),
     }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let encoded = perry_base64::engine::general_purpose::STANDARD.encode(&bytes);
     js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32)
 }

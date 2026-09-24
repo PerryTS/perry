@@ -30,10 +30,10 @@ use crate::fetch::{
 // full trace finds them unreachable (`fetch::lifecycle`), and in Node a Blob
 // stays alive for as long as an object URL names it. The collector locks this
 // table during a full trace, so no site may allocate while holding it.
-lazy_static::lazy_static! {
-    static ref OBJECT_URL_REGISTRY: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
-    static ref NEXT_OBJECT_URL_ID: Mutex<u64> = Mutex::new(1);
-}
+static OBJECT_URL_REGISTRY: std::sync::LazyLock<Mutex<HashMap<String, usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_OBJECT_URL_ID: std::sync::LazyLock<Mutex<u64>> =
+    std::sync::LazyLock::new(|| Mutex::new(1));
 
 /// Blob ids some unrevoked object URL still names (see the table's doc).
 pub(crate) fn object_url_blob_ids() -> std::collections::HashSet<usize> {

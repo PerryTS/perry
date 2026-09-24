@@ -4,11 +4,11 @@ use crate::backend::ContainerBackend;
 use crate::error::{ComposeError, Result};
 use crate::types::{ContainerInfo, ContainerLogs, ContainerSpec};
 use indexmap::IndexMap;
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::LazyLock as Lazy;
 use tokio::sync::Mutex;
 
 // ============ Types ============

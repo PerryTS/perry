@@ -73,7 +73,7 @@ use crate::{
     NativeRegistrationLease, NativeRegistrationRegistry, NativeRegistryDomain,
 };
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock as Lazy;
 
 /// Opaque integer handle to a Rust object. `0` is reserved as
 /// [`INVALID_HANDLE`]; valid handles start at `1`.

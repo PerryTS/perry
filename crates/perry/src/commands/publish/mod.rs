@@ -1,12 +1,12 @@
 //! Publish command - build, sign, package and distribute via perry-ship build server
 
+use crate::terminal_progress::ProgressBar;
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use console::style;
 use dialoguer::{Confirm, Input, Select};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use indicatif::{ProgressBar, ProgressStyle};
 use perry_http_client::ws::Message;
 use perry_http_client::{Form, Request, WebSocket};
 use serde::{Deserialize, Serialize};
@@ -89,7 +89,7 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
     // polluting their shell profile.
     let env_path = project_dir.join(".env");
     if env_path.exists() {
-        let _ = dotenvy::from_path(&env_path);
+        let _ = crate::dotenv::from_path(&env_path);
     }
 
     // Load saved config
@@ -869,10 +869,10 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
     let provisioning_profile_b64 = if let Some(ref path_str) = provisioning_profile_path {
         let path = Path::new(path_str);
         if path.exists() {
-            use base64::Engine;
+            use perry_base64::Engine;
             let data = fs::read(path)
                 .with_context(|| format!("Failed to read provisioning profile: {path_str}"))?;
-            Some(base64::engine::general_purpose::STANDARD.encode(&data))
+            Some(perry_base64::engine::general_purpose::STANDARD.encode(&data))
         } else {
             None
         }
@@ -883,10 +883,10 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
     let android_keystore_b64 = if let Some(ref path_str) = android_keystore_path {
         let path = Path::new(path_str);
         if path.exists() {
-            use base64::Engine;
+            use perry_base64::Engine;
             let data = fs::read(path)
                 .with_context(|| format!("Failed to read Android keystore: {path_str}"))?;
-            Some(base64::engine::general_purpose::STANDARD.encode(&data))
+            Some(perry_base64::engine::general_purpose::STANDARD.encode(&data))
         } else {
             None
         }
@@ -901,11 +901,11 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
         } else if let Some(ref path_str) = apple_certificate_path {
             let path = Path::new(path_str);
             if path.exists() {
-                use base64::Engine;
+                use perry_base64::Engine;
                 let data = fs::read(path)
                     .with_context(|| format!("Failed to read .p12 certificate: {path_str}"))?;
                 (
-                    Some(base64::engine::general_purpose::STANDARD.encode(&data)),
+                    Some(perry_base64::engine::general_purpose::STANDARD.encode(&data)),
                     apple_certificate_password,
                 )
             } else {
@@ -929,10 +929,10 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
             let cert_b64 = if let Some(ref path_str) = notarize_cert_path {
                 let path = Path::new(path_str);
                 if path.exists() {
-                    use base64::Engine;
+                    use perry_base64::Engine;
                     let data = fs::read(path)
                         .with_context(|| format!("Failed to read notarize .p12: {path_str}"))?;
-                    Some(base64::engine::general_purpose::STANDARD.encode(&data))
+                    Some(perry_base64::engine::general_purpose::STANDARD.encode(&data))
                 } else {
                     None
                 }
@@ -970,10 +970,10 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
         let cert_b64 = if let Some(ref path_str) = installer_cert_path {
             let path = Path::new(path_str);
             if path.exists() {
-                use base64::Engine;
+                use perry_base64::Engine;
                 let data = fs::read(path)
                     .with_context(|| format!("Failed to read installer .p12: {path_str}"))?;
-                Some(base64::engine::general_purpose::STANDARD.encode(&data))
+                Some(perry_base64::engine::general_purpose::STANDARD.encode(&data))
             } else {
                 None
             }
@@ -1363,10 +1363,10 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
                     std::path::PathBuf::from(path_str)
                 };
                 if path.exists() {
-                    use base64::Engine;
+                    use perry_base64::Engine;
                     fs::read(&path)
                         .ok()
-                        .map(|data| base64::engine::general_purpose::STANDARD.encode(&data))
+                        .map(|data| perry_base64::engine::general_purpose::STANDARD.encode(&data))
                 } else {
                     None
                 }
@@ -1380,10 +1380,10 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
                     std::path::PathBuf::from(path_str)
                 };
                 if path.exists() {
-                    use base64::Engine;
+                    use perry_base64::Engine;
                     fs::read(&path)
                         .ok()
-                        .map(|data| base64::engine::general_purpose::STANDARD.encode(&data))
+                        .map(|data| perry_base64::engine::general_purpose::STANDARD.encode(&data))
                 } else {
                     None
                 }
@@ -1472,8 +1472,8 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
 
     // Base64-encode tarball for safe transmission (perry hub uses text-based multipart parsing,
     // which corrupts raw binary. Base64 is pure ASCII and round-trips safely.)
-    use base64::Engine;
-    let tarball_b64 = base64::engine::general_purpose::STANDARD.encode(&tarball);
+    use perry_base64::Engine;
+    let tarball_b64 = perry_base64::engine::general_purpose::STANDARD.encode(&tarball);
 
     // `reqwest::Client::new()` had no timeout here and a publish upload is a
     // whole project tarball, so the budget is generous rather than default.
@@ -1592,12 +1592,6 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
 
     let pb = if let OutputFormat::Text = format {
         let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("  {spinner:.cyan} [{bar:30.cyan/dim}] {msg}")
-                .unwrap()
-                .progress_chars("━╸─"),
-        );
         pb.set_message("Waiting for build...");
         Some(pb)
     } else {
@@ -1900,8 +1894,8 @@ fn run_async(args: PublishArgs, format: OutputFormat, _use_color: bool) -> Resul
                                 || b == b'\n'
                                 || b == b'\r'
                         }) {
-                        use base64::Engine;
-                        base64::engine::general_purpose::STANDARD
+                        use perry_base64::Engine;
+                        perry_base64::engine::general_purpose::STANDARD
                             .decode(&bytes)
                             .unwrap_or(bytes)
                     } else {

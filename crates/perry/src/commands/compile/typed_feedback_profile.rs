@@ -35,7 +35,7 @@ pub(super) fn prepare(args: &CompileArgs) -> Result<Option<Session>> {
         std::env::current_exe().context("cannot identify compiler for typed-feedback replay")?;
     let compiler = format!(
         "sha256:{}",
-        hex::encode(Sha256::digest(
+        perry_hex::encode(Sha256::digest(
             std::fs::read(&executable).context("cannot hash compiler for typed-feedback replay")?
         ))
     );
@@ -54,7 +54,7 @@ pub(super) fn compile(
     let hir_hash = perry_hir::stable_hash::hash_module(hir);
     let identity = ModuleIdentity {
         module: hir.name.clone(),
-        source_hash: format!("sha256:{}", hex::encode(Sha256::digest(&source))),
+        source_hash: format!("sha256:{}", perry_hex::encode(Sha256::digest(&source))),
         hir_hash: format!("{hir_hash:016x}"),
         lowering_hash: format!(
             "{:016x}",

@@ -32,10 +32,8 @@ struct ByobPending {
 
 unsafe impl Send for ByobPending {}
 
-lazy_static::lazy_static! {
-    static ref BYOB_PENDING: Mutex<HashMap<usize, VecDeque<ByobPending>>> =
-        Mutex::new(HashMap::new());
-}
+static BYOB_PENDING: std::sync::LazyLock<Mutex<HashMap<usize, VecDeque<ByobPending>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// #6602: eviction hook — drop the (drained) BYOB queue slot of an evicted id.
 pub(super) fn evict_ids(batch: &[usize]) {

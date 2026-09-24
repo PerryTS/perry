@@ -72,19 +72,20 @@ extern "C" {
 
 // WebSocket handle storage
 #[cfg(not(target_os = "ios"))]
-lazy_static::lazy_static! {
-    static ref WS_CONNECTIONS: Mutex<HashMap<usize, WsConnection>> = Mutex::new(HashMap::new());
-    /// Map from client ws_id to parent server handle (for server-connected clients)
-    static ref WS_CLIENT_PARENT_SERVER: Mutex<HashMap<usize, Handle>> = Mutex::new(HashMap::new());
-}
 
-lazy_static::lazy_static! {
-    static ref NEXT_WS_ID: Mutex<usize> = Mutex::new(1);
-    /// Per-client event listeners (for .on('message', cb) etc.)
-    static ref WS_CLIENT_LISTENERS: Mutex<HashMap<usize, WsClientListeners>> = Mutex::new(HashMap::new());
-    /// Pending WebSocket events to be processed on the main thread
-    static ref WS_PENDING_EVENTS: Mutex<Vec<PendingWsEvent>> = Mutex::new(Vec::new());
-}
+static WS_CONNECTIONS: std::sync::LazyLock<Mutex<HashMap<usize, WsConnection>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Map from client ws_id to parent server handle (for server-connected clients)
+static WS_CLIENT_PARENT_SERVER: std::sync::LazyLock<Mutex<HashMap<usize, Handle>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+static NEXT_WS_ID: std::sync::LazyLock<Mutex<usize>> = std::sync::LazyLock::new(|| Mutex::new(1));
+/// Per-client event listeners (for .on('message', cb) etc.)
+static WS_CLIENT_LISTENERS: std::sync::LazyLock<Mutex<HashMap<usize, WsClientListeners>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Pending WebSocket events to be processed on the main thread
+static WS_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<PendingWsEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[cfg(not(target_os = "ios"))]
 thread_local! {
@@ -1776,9 +1777,7 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
 mod tests {
     use super::*;
 
-    lazy_static::lazy_static! {
-        static ref TEST_LOCK: Mutex<()> = Mutex::new(());
-    }
+    static TEST_LOCK: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
 
     fn clear_test_state() {
         WS_CONNECTIONS.lock().unwrap().clear();

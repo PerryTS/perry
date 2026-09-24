@@ -21,12 +21,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
 md-5 = "0.11"
-hex.workspace = true
+perry-hex.workspace = true
 indexmap = { version = "2.2", features = ["serde"] }
 rand = "0.10"
 dialoguer = "0.11"
 console = "0.16"
-once_cell.workspace = true
 which = "8.0"
 
 [dev-dependencies]

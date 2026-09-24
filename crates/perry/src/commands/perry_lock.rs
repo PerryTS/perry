@@ -136,7 +136,7 @@ pub fn sha256_of_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(perry_hex::encode(hasher.finalize()))
 }
 
 pub fn load_or_default(lock_path: &Path) -> Result<PerryLock> {

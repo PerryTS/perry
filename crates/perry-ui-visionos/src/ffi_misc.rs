@@ -146,7 +146,7 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
     extern "C" {
         fn js_string_from_bytes(ptr: *const u8, len: i64) -> *const u8;
     }
-    use base64::Engine as _;
+    use perry_base64::Engine as _;
     unsafe {
         let mut len: usize = 0;
         let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
@@ -154,7 +154,7 @@ pub extern "C" fn perry_system_take_screenshot() -> i64 {
             return js_string_from_bytes(std::ptr::null(), 0) as i64;
         }
         let bytes = std::slice::from_raw_parts(ptr, len);
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let encoded = perry_base64::engine::general_purpose::STANDARD.encode(bytes);
         libc::free(ptr as *mut libc::c_void);
         js_string_from_bytes(encoded.as_ptr(), encoded.len() as i64) as i64
     }

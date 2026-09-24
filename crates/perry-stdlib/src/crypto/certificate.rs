@@ -60,7 +60,7 @@ fn read_der_node(input: &[u8], offset: usize) -> Option<DerNode> {
 
 fn decode_spkac_input(bytes: Vec<u8>) -> Option<Vec<u8>> {
     let text = std::str::from_utf8(&bytes).ok()?.trim();
-    base64::engine::general_purpose::STANDARD
+    perry_base64::engine::general_purpose::STANDARD
         .decode(text.as_bytes())
         .ok()
 }
@@ -139,7 +139,7 @@ fn empty_buffer_value() -> f64 {
 }
 
 fn pem_from_spki_der(spki_der: &[u8]) -> String {
-    let b64 = base64::engine::general_purpose::STANDARD.encode(spki_der);
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(spki_der);
     let mut pem = String::from("-----BEGIN PUBLIC KEY-----\n");
     for chunk in b64.as_bytes().chunks(64) {
         pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));

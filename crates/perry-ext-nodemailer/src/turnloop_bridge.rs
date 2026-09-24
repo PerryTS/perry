@@ -180,7 +180,7 @@ pub(crate) fn try_send(
     let body = message.formatted();
     // The id this surface has always reported. Generated here, not taken from
     // the rendered head, so JS sees the same shape as before.
-    let message_id = format!("<{}@perry>", uuid::Uuid::new_v4());
+    let message_id = format!("<{}@perry>", perry_uuid::v4());
     // SAFETY: each pointer/length borrows a live local across its own call.
     unsafe {
         js_perry_smtp_set_from(draft, from.as_ptr(), from.len());

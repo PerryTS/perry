@@ -196,8 +196,7 @@ fn sanitize_crate_name(s: &str) -> String {
 }
 
 fn current_year() -> String {
-    use chrono::Datelike;
-    chrono::Utc::now().year().to_string()
+    crate::utc::current_year().to_string()
 }
 
 #[cfg(test)]

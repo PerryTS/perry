@@ -977,6 +977,14 @@ jobs:
           done
           cargo clippy "${cargo_args[@]}"
 
+      - name: Lean dependency boundaries and helper compatibility
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_lean_dependencies.py
+          cargo test --locked -p perry-base64 -p perry-hex -p perry-uuid -p perry-cli-support --all-features
+          cargo check --locked -p perry-stdlib --no-default-features
+          cargo check --locked -p perry --no-default-features --features dev-cli
+
       - name: Regenerate API docs
         if: ${{ !cancelled() }}
         run: ./scripts/regen_api_docs.sh

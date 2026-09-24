@@ -29,7 +29,7 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256(
 
     mac.update(&data);
     let result = mac.finalize();
-    let hex_str = hex::encode(result.into_bytes());
+    let hex_str = perry_hex::encode(result.into_bytes());
 
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }

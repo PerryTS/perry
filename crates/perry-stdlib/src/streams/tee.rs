@@ -17,22 +17,24 @@ use perry_runtime::value::JSValue;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 
-lazy_static::lazy_static! {
-    /// Source id -> its two branch ids (so the source's enqueue/close/error
-    /// fan out to both branches).
-    static ref TEE_SOURCE_BRANCHES: Mutex<HashMap<usize, (usize, usize)>> = Mutex::new(HashMap::new());
-    /// Branch id -> its source (so a branch read pulls the source).
-    static ref TEE_BRANCH_SOURCE: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
-    /// Tee sources with a pull job already queued (one job per source at a time).
-    static ref TEE_PULLING: Mutex<HashSet<usize>> = Mutex::new(HashSet::new());
-    /// Tee sources whose pull pipeline has delivered at least once. The
-    /// COLD-START demand pull pays Node's full two-hop pipeline latency
-    /// (`sourceReader.read()` resolution + `.then(fanout)` reaction); once
-    /// the pipeline is warm, mid-stream re-parks resolve on the calibrated
-    /// one-hop cadence (Node's pipelined stages overlap, so only the first
-    /// delivery exposes the latency).
-    static ref TEE_STARTED: Mutex<HashSet<usize>> = Mutex::new(HashSet::new());
-}
+/// Source id -> its two branch ids (so the source's enqueue/close/error
+/// fan out to both branches).
+static TEE_SOURCE_BRANCHES: std::sync::LazyLock<Mutex<HashMap<usize, (usize, usize)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Branch id -> its source (so a branch read pulls the source).
+static TEE_BRANCH_SOURCE: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Tee sources with a pull job already queued (one job per source at a time).
+static TEE_PULLING: std::sync::LazyLock<Mutex<HashSet<usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Tee sources whose pull pipeline has delivered at least once. The
+/// COLD-START demand pull pays Node's full two-hop pipeline latency
+/// (`sourceReader.read()` resolution + `.then(fanout)` reaction); once
+/// the pipeline is warm, mid-stream re-parks resolve on the calibrated
+/// one-hop cadence (Node's pipelined stages overlap, so only the first
+/// delivery exposes the latency).
+static TEE_STARTED: std::sync::LazyLock<Mutex<HashSet<usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Sentinel `reader_handle` stamped on a tee'd source so it can't be read
 /// directly (spec: `tee()` acquires a reader on the source). It is never a real

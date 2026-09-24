@@ -14,10 +14,10 @@ use crate::string::{js_string_from_bytes, StringHeader};
 // Global handle registry for servers and sockets
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 
-lazy_static::lazy_static! {
-    static ref TCP_SERVERS: Mutex<HashMap<u64, TcpListenerWrapper>> = Mutex::new(HashMap::new());
-    static ref TCP_SOCKETS: Mutex<HashMap<u64, TcpStreamWrapper>> = Mutex::new(HashMap::new());
-}
+static TCP_SERVERS: std::sync::LazyLock<Mutex<HashMap<u64, TcpListenerWrapper>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static TCP_SOCKETS: std::sync::LazyLock<Mutex<HashMap<u64, TcpStreamWrapper>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 struct TcpListenerWrapper {
     listener: TcpListener,
@@ -206,7 +206,8 @@ pub extern "C" fn js_net_socket_write(handle: f64, data_ptr: *const BufferHeader
         if let Some(wrapper) = sockets.get_mut(&handle) {
             unsafe {
                 let len = (*data_ptr).length as usize;
-                let data = crate::buffer::buffer_data(data_ptr as *const crate::buffer::BufferHeader);
+                let data =
+                    crate::buffer::buffer_data(data_ptr as *const crate::buffer::BufferHeader);
                 let bytes = std::slice::from_raw_parts(data, len);
 
                 match wrapper.stream.write(bytes) {

@@ -12,7 +12,7 @@ pub unsafe extern "C" fn js_crypto_sha256(data_ptr: *const StringHeader) -> *mut
     let mut hasher = Sha256::new();
     hasher.update(&data);
     let result = hasher.finalize();
-    let hex_str = hex::encode(result);
+    let hex_str = perry_hex::encode(result);
 
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn js_crypto_md5(data_ptr: *const StringHeader) -> *mut St
     let mut hasher = Md5::new();
     hasher.update(&data);
     let result = hasher.finalize();
-    let hex_str = hex::encode(result);
+    let hex_str = perry_hex::encode(result);
 
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }

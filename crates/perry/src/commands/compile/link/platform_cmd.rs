@@ -51,7 +51,7 @@ fn compile_swift_bridge(
     hasher.update(source_contents.as_bytes());
     hasher.update(sysroot.as_bytes());
     hasher.update(triple.as_bytes());
-    let digest = hex::encode(hasher.finalize());
+    let digest = perry_hex::encode(hasher.finalize());
     let bridge_dir = ctx.cache_dir.join("swift-bridges");
     fs::create_dir_all(&bridge_dir)?;
     let source = bridge_dir.join(format!("{source_stem}-{}.swift", &digest[..16]));

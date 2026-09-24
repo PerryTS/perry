@@ -17,8 +17,8 @@ perry-runtime = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 semver.workspace = true
 sha2 = "0.11"
-hex.workspace = true
-base64.workspace = true
+perry-hex.workspace = true
+perry-base64.workspace = true
 ed25519-dalek = "3.0"
 
 [dev-dependencies]

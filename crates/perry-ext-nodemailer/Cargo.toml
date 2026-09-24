@@ -21,7 +21,7 @@ perry-ffi.workspace = true
 # transport is reached through perry-stdlib's `js_perry_smtp_*` C seam, because
 # a staticlib must not carry a second copy of the engine's thread-local tables.
 turnloop-smtp.workspace = true
-uuid = { version = "1.23", features = ["v4"] }
+perry-uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

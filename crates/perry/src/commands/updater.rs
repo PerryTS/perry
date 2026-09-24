@@ -25,9 +25,9 @@
 //! accepting a v1 signature even when an attacker controls the manifest.
 
 use anyhow::{bail, Context, Result};
-use base64::Engine as _;
 use clap::Subcommand;
 use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
+use perry_base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -166,8 +166,8 @@ fn run_keygen(args: KeygenArgs) -> Result<()> {
     let verifying = signing.verifying_key();
 
     let kp = KeypairJson {
-        public_key: base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes()),
-        secret_key: base64::engine::general_purpose::STANDARD.encode(signing.to_bytes()),
+        public_key: perry_base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes()),
+        secret_key: perry_base64::engine::general_purpose::STANDARD.encode(signing.to_bytes()),
     };
     let json = serde_json::to_string_pretty(&kp)?;
 
@@ -223,7 +223,7 @@ fn run_sign(args: SignArgs) -> Result<()> {
         (Some(_), Some(_)) => unreachable!("clap conflicts_with"),
     };
 
-    let secret_bytes = base64::engine::general_purpose::STANDARD
+    let secret_bytes = perry_base64::engine::general_purpose::STANDARD
         .decode(secret_b64.trim())
         .context("secret_key is not valid base64")?;
     if secret_bytes.len() != SECRET_KEY_LENGTH {
@@ -250,9 +250,9 @@ fn run_sign(args: SignArgs) -> Result<()> {
         "schemaVersion": 2,
         "version": args.version,
         "size": size,
-        "sha256": hex::encode(digest),
-        "signature": base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
-        "publicKey": base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()),
+        "sha256": perry_hex::encode(digest),
+        "signature": perry_base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+        "publicKey": perry_base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()),
     });
     println!("{}", serde_json::to_string_pretty(&envelope)?);
     Ok(())
@@ -270,7 +270,8 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
     {
         bail!("artifact URL must be an absolute HTTPS URL without credentials");
     }
-    let bytes = base64::engine::general_purpose::STANDARD.decode(args.secret_key_b64.trim())?;
+    let bytes =
+        perry_base64::engine::general_purpose::STANDARD.decode(args.secret_key_b64.trim())?;
     let seed: [u8; SECRET_KEY_LENGTH] = bytes.try_into().map_err(|v: Vec<u8>| {
         anyhow::anyhow!(
             "secret key must decode to {} bytes (got {})",
@@ -297,7 +298,7 @@ fn run_sign_cli_manifest(args: SignCliManifestArgs) -> Result<()> {
         artifact: perry_updater::cli_manifest::CliUpdateArtifact {
             name,
             url: args.url,
-            sha256: hex::encode(digest),
+            sha256: perry_hex::encode(digest),
             size,
         },
         signature: String::new(),
@@ -312,7 +313,7 @@ fn run_verify(args: VerifyArgs) -> Result<()> {
         bail!("version must be non-empty");
     }
 
-    let sig_bytes = base64::engine::general_purpose::STANDARD
+    let sig_bytes = perry_base64::engine::general_purpose::STANDARD
         .decode(args.signature.trim())
         .context("signature is not valid base64")?;
     if sig_bytes.len() != 64 {
@@ -325,7 +326,7 @@ fn run_verify(args: VerifyArgs) -> Result<()> {
     sig_arr.copy_from_slice(&sig_bytes);
     let signature = ed25519_dalek::Signature::from_bytes(&sig_arr);
 
-    let pk_bytes = base64::engine::general_purpose::STANDARD
+    let pk_bytes = perry_base64::engine::general_purpose::STANDARD
         .decode(args.pubkey.trim())
         .context("pubkey is not valid base64")?;
     if pk_bytes.len() != 32 {
@@ -394,7 +395,7 @@ mod tests {
         let kp_raw = std::fs::read_to_string(&kp_path).unwrap();
         let kp: KeypairJson = serde_json::from_str(&kp_raw).unwrap();
         assert_eq!(
-            base64::engine::general_purpose::STANDARD
+            perry_base64::engine::general_purpose::STANDARD
                 .decode(&kp.secret_key)
                 .unwrap()
                 .len(),
@@ -411,7 +412,7 @@ mod tests {
         f.write_all(b"sign-me").unwrap();
         drop(f);
 
-        let secret_bytes = base64::engine::general_purpose::STANDARD
+        let secret_bytes = perry_base64::engine::general_purpose::STANDARD
             .decode(&kp.secret_key)
             .unwrap();
         let mut seed = [0u8; 32];
@@ -427,7 +428,7 @@ mod tests {
         run_verify(VerifyArgs {
             binary: bin_path.clone(),
             version: "1.2.3".into(),
-            signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+            signature: perry_base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
             pubkey: kp.public_key.clone(),
         })
         .unwrap();
@@ -436,7 +437,7 @@ mod tests {
         let bad = run_verify(VerifyArgs {
             binary: bin_path.clone(),
             version: "9.9.9".into(),
-            signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+            signature: perry_base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
             pubkey: kp.public_key.clone(),
         });
         assert!(bad.is_err());
@@ -459,7 +460,7 @@ mod tests {
             binary: bin_path,
             version: String::new(),
             secret_key: None,
-            secret_key_b64: Some(base64::engine::general_purpose::STANDARD.encode([7u8; 32])),
+            secret_key_b64: Some(perry_base64::engine::general_purpose::STANDARD.encode([7u8; 32])),
         });
         assert!(r.is_err());
         let _ = std::fs::remove_dir_all(&dir);

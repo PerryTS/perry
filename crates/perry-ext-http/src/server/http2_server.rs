@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_buffer, alloc_string, get_handle_mut, register_handle, JsClosure, JsValue, ObjectHeader,
     RawClosureHeader, StringHeader,
@@ -75,9 +74,8 @@ pub(crate) use turnloop_glue::{
     server_has_stream_listener, turnloop_conn_of_session, turnloop_target_of_stream,
 };
 
-lazy_static! {
-    pub(crate) static ref H2_PENDING_EVENTS: Mutex<Vec<Http2PendingEvent>> = Mutex::new(Vec::new());
-}
+pub(crate) static H2_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<Http2PendingEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 thread_local! {
     /// Events drained out of [`H2_PENDING_EVENTS`] but not yet dispatched.

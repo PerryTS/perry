@@ -1,8 +1,8 @@
 //! Authenticated manifest format for the Perry CLI self-updater.
 
 use anyhow::{bail, Context, Result};
-use base64::Engine as _;
 use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
+use perry_base64::Engine as _;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -74,7 +74,7 @@ pub fn sign_cli_manifest(
     manifest: &mut CliUpdateManifest,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<()> {
-    manifest.signature = base64::engine::general_purpose::STANDARD.encode(
+    manifest.signature = perry_base64::engine::general_purpose::STANDARD.encode(
         signing_key
             .sign(&cli_manifest_signing_payload(manifest)?)
             .to_bytes(),
@@ -151,12 +151,12 @@ pub fn decode_sha256(value: &str) -> Result<[u8; 32]> {
     if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("sha256 must be exactly 64 hexadecimal characters");
     }
-    let bytes = hex::decode(value)?;
+    let bytes = perry_hex::decode(value)?;
     Ok(bytes.try_into().expect("hex length checked"))
 }
 
 fn decode_public_key(value: &str) -> Result<VerifyingKey> {
-    let bytes = base64::engine::general_purpose::STANDARD
+    let bytes = perry_base64::engine::general_purpose::STANDARD
         .decode(value.trim())
         .context("trusted public key is not base64")?;
     let raw: [u8; 32] = bytes.try_into().map_err(|v: Vec<u8>| {
@@ -165,7 +165,7 @@ fn decode_public_key(value: &str) -> Result<VerifyingKey> {
     VerifyingKey::from_bytes(&raw).context("trusted public key is invalid")
 }
 fn decode_signature(value: &str) -> Result<Signature> {
-    let bytes = base64::engine::general_purpose::STANDARD
+    let bytes = perry_base64::engine::general_purpose::STANDARD
         .decode(value.trim())
         .context("manifest signature is not base64")?;
     let raw: [u8; 64] = bytes.try_into().map_err(|v: Vec<u8>| {
@@ -181,8 +181,8 @@ mod tests {
 
     fn signed() -> (CliUpdateManifest, String) {
         let signing = SigningKey::from_bytes(&[7; 32]);
-        let public =
-            base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
+        let public = perry_base64::engine::general_purpose::STANDARD
+            .encode(signing.verifying_key().to_bytes());
         let mut m = CliUpdateManifest {
             schema_version: 1,
             key_id: "release-2026".into(),
@@ -191,12 +191,12 @@ mod tests {
             artifact: CliUpdateArtifact {
                 name: "perry-linux-x86_64.tar.gz".into(),
                 url: "https://example.invalid/perry-linux-x86_64.tar.gz".into(),
-                sha256: hex::encode(Sha256::digest(b"artifact")),
+                sha256: perry_hex::encode(Sha256::digest(b"artifact")),
                 size: 8,
             },
             signature: String::new(),
         };
-        m.signature = base64::engine::general_purpose::STANDARD.encode(
+        m.signature = perry_base64::engine::general_purpose::STANDARD.encode(
             signing
                 .sign(&cli_manifest_signing_payload(&m).unwrap())
                 .to_bytes(),

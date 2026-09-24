@@ -2,6 +2,7 @@
 //!
 //! CLI driver for compiling TypeScript to native executables.
 
+mod apple_jwt;
 mod commands;
 mod compat_reports;
 mod install_channel;
@@ -14,6 +15,8 @@ mod telemetry;
 mod test_env_lock;
 mod update_checker;
 mod update_policy;
+
+use perry_cli_support::{dotenv, logger, terminal_progress, utc};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -375,7 +378,7 @@ fn argv_lossy() -> Vec<String> {
 }
 
 fn main_inner() -> Result<()> {
-    env_logger::init();
+    logger::init();
     #[cfg(windows)]
     {
         let raw_args: Vec<String> = argv_lossy();

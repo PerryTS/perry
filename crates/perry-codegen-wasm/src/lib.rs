@@ -9,7 +9,7 @@
 pub mod emit;
 
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use perry_base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use perry_hir::ir::Module;
 
 /// Embedded WASM runtime JavaScript (bridge between WASM and browser APIs)

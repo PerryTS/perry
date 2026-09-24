@@ -64,7 +64,6 @@ pub use host_upgrade::{accept_http_upgrade, drive_http_upgraded, Refusal, HTTP_S
 #[cfg(test)]
 mod test_async_shims;
 
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
     iter_handles_of_mut, notify_main_thread, register_aux_event_pump, register_handle, set_add,
@@ -210,13 +209,14 @@ enum PendingWsEvent {
     Open(usize),
 }
 
-lazy_static! {
-    static ref WS_CONNECTIONS: Mutex<HashMap<usize, WsConnection>> = Mutex::new(HashMap::new());
-    static ref WS_CLIENT_PARENT_SERVER: Mutex<HashMap<usize, Handle>> = Mutex::new(HashMap::new());
-    static ref WS_CLIENT_LISTENERS: Mutex<HashMap<usize, WsClientListeners>> =
-        Mutex::new(HashMap::new());
-    static ref WS_PENDING_EVENTS: Mutex<Vec<PendingWsEvent>> = Mutex::new(Vec::new());
-}
+static WS_CONNECTIONS: std::sync::LazyLock<Mutex<HashMap<usize, WsConnection>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static WS_CLIENT_PARENT_SERVER: std::sync::LazyLock<Mutex<HashMap<usize, Handle>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static WS_CLIENT_LISTENERS: std::sync::LazyLock<Mutex<HashMap<usize, WsClientListeners>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static WS_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<PendingWsEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 static WS_ACTIVE_SERVERS: AtomicI32 = AtomicI32::new(0);
 static WS_RUNTIME_HOOKS_REGISTERED: std::sync::Once = std::sync::Once::new();

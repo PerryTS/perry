@@ -20,6 +20,7 @@ name = "perry"
 path = "src/main.rs"
 
 [dependencies]
+perry-cli-support = { workspace = true, features = ["logger", "progress", "dotenv", "utc"] }
 perry-parser.workspace = true
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
@@ -45,10 +46,8 @@ perry-api-manifest = { workspace = true, features = ["serde"] }
 clap.workspace = true
 anyhow.workspace = true
 log.workspace = true
-env_logger.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-indicatif.workspace = true
 console.workspace = true
 dialoguer.workspace = true
 toml.workspace = true
@@ -65,21 +64,15 @@ url.workspace = true
 dirs.workspace = true
 flate2.workspace = true
 tar.workspace = true
-base64.workspace = true
-# Keep zip's default codec set, but select its backend-neutral flate2 feature.
-# `zip`'s `deflate` feature forces flate2's zlib-rs backend across the whole
-# Cargo build; feature unification then makes node:zlib's default gzip output
-# almost twice as large (#10810).
-zip = { version = "8", default-features = false, features = [
-  "aes-crypto", "bzip2", "deflate64", "deflate-flate2", "deflate-zopfli",
-  "lzma", "ppmd", "time", "zstd", "xz",
-] }
+perry-base64.workspace = true
+# Our release ZIPs, IPAs and generated HAPs use Stored/Deflate. Enable
+# uncommon third-party archive codecs explicitly with extended-zip.
+# Keep deflate-flate2: zip/deflate forces a different node:zlib backend (#10810).
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 tempfile.workspace = true
 libc.workspace = true
 zstd.workspace = true
-jsonwebtoken.workspace = true
 semver.workspace = true
-dotenvy = "0.15"
 rayon = "1.10"
 # `--report-size`: read the final linked binary's own symbol table (ELF/Mach-O/PE
 # via `object`, demangled via `rustc-demangle`) to attribute size by crate.
@@ -108,12 +101,8 @@ fslock = "0.2"
 # for the keygen seed.
 ed25519-dalek = { version = "3.0", features = ["rand_core"], optional = true }
 sha2 = "0.11"
-hex.workspace = true
+perry-hex.workspace = true
 rand = { version = "0.10", optional = true }
-# chrono is already a transitive dep through perry-stdlib; listing it
-# here makes the year accessor available to `perry native init`'s
-# LICENSE template substitution.
-chrono.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
@@ -122,6 +111,8 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 # The default build is the full official CLI — every command and codegen
 # backend. The shipped binary is unchanged from before #5422.
 default = ["full-cli"]
+# Opt-in reader support for archives outside Perry's release/IPA/HAP contract.
+extended-zip = ["zip/aes-crypto", "zip/bzip2", "zip/deflate64", "zip/deflate-zopfli", "zip/lzma", "zip/ppmd", "zip/time", "zip/zstd", "zip/xz"]
 
 full-cli = [
     "dev-cli",
@@ -150,8 +141,9 @@ watch-cli = ["dep:notify"]
 # `perry publish` / `setup` / `audit` keep their modules compiled even when these
 # features are off (their config/audit helpers are used by core code paths); the
 # features gate the *commands* (so they leave `--help` in a slim build).
-publish-cli = []
-mobile-cli = []
+publish-cli = ["apple-api"]
+mobile-cli = ["apple-api"]
+apple-api = ["perry-cli-support/apple-jwt"]
 audit-cli = []
 # These commands are fully standalone, so the feature also drops their module
 # (and, for updater, its signing crates).

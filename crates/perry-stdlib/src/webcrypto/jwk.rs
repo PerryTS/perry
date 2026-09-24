@@ -496,7 +496,7 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
     let key_bytes = bytes_from_jsvalue(key_bits.to_bits());
     if format_lower == "jwk" {
         if mat.kind == KeyKind::Secret {
-            let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
+            let encoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&key_bytes);
             let field_count = if matches!(
                 mat.algo,
                 KeyAlgo::ChaCha20Poly1305 | KeyAlgo::Kmac128 | KeyAlgo::Kmac256 | KeyAlgo::AesOcb
@@ -563,11 +563,11 @@ pub unsafe extern "C" fn js_webcrypto_export_key(format_bits: f64, key_bits: f64
 }
 
 pub(super) fn b64u_uint(n: &RsaBigUint) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(n.to_bytes_be())
+    perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(n.to_bytes_be())
 }
 
 pub(super) fn b64u_decode_uint(s: &str) -> Option<RsaBigUint> {
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s.as_bytes())
         .ok()?;
     Some(RsaBigUint::from_bytes_be(&bytes))
@@ -619,7 +619,7 @@ pub(super) unsafe fn jwk_ec_bytes(
     let coord_len = ec_curve_private_len(curve);
     if kind == KeyKind::Private {
         let d = object_field_string(obj_bits, b"d")?;
-        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        let bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(d.as_bytes())
             .ok()?;
         return if bytes.len() == coord_len {
@@ -630,10 +630,10 @@ pub(super) unsafe fn jwk_ec_bytes(
     }
     let x = object_field_string(obj_bits, b"x")?;
     let y = object_field_string(obj_bits, b"y")?;
-    let x_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let x_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(x.as_bytes())
         .ok()?;
-    let y_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let y_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(y.as_bytes())
         .ok()?;
     if x_bytes.len() != coord_len || y_bytes.len() != coord_len {
@@ -665,7 +665,7 @@ pub(super) unsafe fn jwk_okp_bytes(
     }
     let field = if kind == KeyKind::Private { b"d" } else { b"x" };
     let value = object_field_string(obj_bits, field)?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(value.as_bytes())
         .ok()?;
     let expected_len = match key_algo {
@@ -740,7 +740,7 @@ pub(super) unsafe fn jwk_ml_kem_bytes(
         return None;
     }
     let public_value = object_field_string(obj_bits, b"pub")?;
-    let public_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let public_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(public_value.as_bytes())
         .ok()?;
     if kind == KeyKind::Public {
@@ -748,7 +748,7 @@ pub(super) unsafe fn jwk_ml_kem_bytes(
     }
 
     let private_value = object_field_string(obj_bits, b"priv")?;
-    let seed_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    let seed_bytes = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(private_value.as_bytes())
         .ok()?;
     let (private_der, public_der) = ml_kem_der_pair_from_seed(key_algo, &seed_bytes)?;
@@ -806,7 +806,7 @@ pub(super) unsafe fn jwk_import_key_bytes(
             }
         }
         let k = object_field_string(obj_bits, b"k")?;
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(k.as_bytes());
+        let decoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(k.as_bytes());
         let bytes = if matches!(key_algo, KeyAlgo::Kmac128 | KeyAlgo::Kmac256) {
             decoded.unwrap_or_default()
         } else {
@@ -953,13 +953,13 @@ pub(super) unsafe fn okp_jwk_export_object(
     set_object_string_field(
         obj,
         b"x",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes),
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes),
     );
     if mat.kind == KeyKind::Private {
         set_object_string_field(
             obj,
             b"d",
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes),
+            &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes),
         );
     }
     Some(obj)
@@ -988,13 +988,13 @@ pub(super) unsafe fn ml_kem_jwk_export_object(
     set_object_string_field(
         obj,
         b"pub",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes),
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes),
     );
     if let Some(seed) = private_seed {
         set_object_string_field(
             obj,
             b"priv",
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&seed),
+            &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&seed),
         );
     }
     Some(obj)
@@ -1059,19 +1059,20 @@ pub(super) unsafe fn ec_jwk_export_object(
     set_object_string_field(
         obj,
         b"x",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&public_bytes[1..1 + coord_len]),
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(&public_bytes[1..1 + coord_len]),
     );
     set_object_string_field(
         obj,
         b"y",
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+        &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(&public_bytes[1 + coord_len..1 + 2 * coord_len]),
     );
     if let Some(d) = private_d {
         set_object_string_field(
             obj,
             b"d",
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&d),
+            &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&d),
         );
     }
     Some(obj)

@@ -58,9 +58,8 @@ enum CryptoStreamEvent {
     },
 }
 
-lazy_static::lazy_static! {
-    static ref CRYPTO_STREAM_PENDING_EVENTS: Mutex<Vec<CryptoStreamEvent>> = Mutex::new(Vec::new());
-}
+static CRYPTO_STREAM_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<CryptoStreamEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 thread_local! {
     // The mutable-root scanner registry is thread-local, so this latch must be too.
@@ -185,9 +184,9 @@ fn latin1_string(bytes: &[u8]) -> String {
 
 fn encoded_digest(bytes: &[u8], encoding: &str) -> String {
     match encoding {
-        "hex" => hex::encode(bytes),
-        "base64" => base64::engine::general_purpose::STANDARD.encode(bytes),
-        "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+        "hex" => perry_hex::encode(bytes),
+        "base64" => perry_base64::engine::general_purpose::STANDARD.encode(bytes),
+        "base64url" => perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
         "binary" | "latin1" => latin1_string(bytes),
         _ => String::from_utf8_lossy(bytes).into_owned(),
     }
@@ -499,11 +498,13 @@ pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
                     );
                 }
                 let encoded = match enc.as_str() {
-                    "hex" => hex::encode(&digest),
-                    "base64" => base64::engine::general_purpose::STANDARD.encode(&digest),
-                    "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest),
+                    "hex" => perry_hex::encode(&digest),
+                    "base64" => perry_base64::engine::general_purpose::STANDARD.encode(&digest),
+                    "base64url" => {
+                        perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest)
+                    }
                     "binary" | "latin1" => latin1_string(&digest),
-                    _ => hex::encode(&digest),
+                    _ => perry_hex::encode(&digest),
                 };
                 let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
                 f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))
@@ -755,11 +756,13 @@ pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
                     );
                 }
                 let encoded = match enc.as_str() {
-                    "hex" => hex::encode(&digest),
-                    "base64" => base64::engine::general_purpose::STANDARD.encode(&digest),
-                    "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest),
+                    "hex" => perry_hex::encode(&digest),
+                    "base64" => perry_base64::engine::general_purpose::STANDARD.encode(&digest),
+                    "base64url" => {
+                        perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest)
+                    }
                     "binary" | "latin1" => latin1_string(&digest),
-                    _ => hex::encode(&digest),
+                    _ => perry_hex::encode(&digest),
                 };
                 let s = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
                 f64::from_bits(0x7FFF_0000_0000_0000u64 | ((s as u64) & 0x0000_FFFF_FFFF_FFFF))

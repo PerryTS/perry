@@ -494,6 +494,10 @@ pub(crate) fn auto_optimized_source_fingerprint(
         // RUNTIME_BUILD_INPUTS. Those sources participate in the embedded
         // compiler/runtime build id even when they are not Cargo dependencies
         // of the static runtime wrapper.
+        "perry-base64",
+        "perry-hex",
+        "perry-uuid",
+        "perry-cli-support",
         "perry-dispatch",
         "perry",
         "perry-codegen",

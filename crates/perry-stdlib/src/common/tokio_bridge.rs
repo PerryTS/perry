@@ -14,7 +14,7 @@
 use std::future::Future;
 use std::sync::atomic::Ordering;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock as Lazy;
 use tokio::runtime::Runtime;
 
 use super::async_bridge::{
@@ -64,9 +64,15 @@ where
 /// primary agent drives the legacy tick exactly while any of it exists and
 /// parks in its turnloop loop otherwise. P8 deletes this with tokio.
 extern "C" fn native_work_inflight() -> i32 {
-    let tasks = Lazy::get(&RUNTIME).is_some_and(|rt| rt.metrics().num_alive_tasks() != 0);
+    let tasks =
+        RUNTIME_INITIALIZED.load(Ordering::Acquire) && RUNTIME.metrics().num_alive_tasks() != 0;
     i32::from(tasks || EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire) != 0)
 }
+
+// Stable LazyLock has no non-initializing get on our supported interface.
+// Publish only after construction, so the activity probe never starts Tokio.
+static RUNTIME_INITIALIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Global tokio runtime for all async stdlib operations.
 ///
@@ -79,7 +85,7 @@ extern "C" fn native_work_inflight() -> i32 {
 /// genuinely blocking / CPU-bound work to the blocking-thread pool; its result
 /// is delivered back and ends the next tick.
 pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
-    tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         // #10399: glibc carves a thread's static TLS block out of the same
         // mapping as its stack, so a compiled program's TLS comes off the top
@@ -93,7 +99,9 @@ pub static RUNTIME: Lazy<Runtime> = Lazy::new(|| {
         // reservation costs no RSS. `PERRY_THREAD_STACK_SIZE` overrides it.
         .thread_stack_size(blocking_thread_stack_size())
         .build()
-        .expect("Failed to create tokio current-thread runtime")
+        .expect("Failed to create tokio current-thread runtime");
+    RUNTIME_INITIALIZED.store(true, Ordering::Release);
+    runtime
 });
 
 /// Fired whenever a producer has queued main-thread-visible work (any

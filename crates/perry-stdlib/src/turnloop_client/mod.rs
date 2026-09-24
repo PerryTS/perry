@@ -773,8 +773,8 @@ fn global_dispatcher_proxy() -> Option<(String, Option<String>)> {
 
 /// Split a `Basic` credential back into user and password.
 fn decode_basic(encoded: &str) -> Option<(String, String)> {
-    use base64::Engine;
-    let raw = base64::engine::general_purpose::STANDARD
+    use perry_base64::Engine;
+    let raw = perry_base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
         .ok()?;
     let text = String::from_utf8(raw).ok()?;

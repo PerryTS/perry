@@ -21,11 +21,11 @@ fn service_spec_hash(svc: &ComposeService) -> String {
     let mut h = Md5::new();
     h.update(json.as_bytes());
     let bytes = h.finalize();
-    hex::encode(&bytes[..8])
+    perry_hex::encode(&bytes[..8])
 }
 
-static COMPOSE_ENGINES: once_cell::sync::Lazy<std::sync::Mutex<IndexMap<u64, Arc<ComposeEngine>>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(IndexMap::new()));
+static COMPOSE_ENGINES: std::sync::LazyLock<std::sync::Mutex<IndexMap<u64, Arc<ComposeEngine>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(IndexMap::new()));
 
 static NEXT_STACK_ID: AtomicU64 = AtomicU64::new(1);
 

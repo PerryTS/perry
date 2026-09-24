@@ -7,10 +7,9 @@ struct ClientRequestSurfaceState {
     socket: f64,
 }
 
-lazy_static! {
-    static ref CLIENT_REQUEST_SURFACE: Mutex<HashMap<Handle, ClientRequestSurfaceState>> =
-        Mutex::new(HashMap::new());
-}
+static CLIENT_REQUEST_SURFACE: std::sync::LazyLock<
+    Mutex<HashMap<Handle, ClientRequestSurfaceState>>,
+> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 extern "C" {
     fn js_class_method_bind(

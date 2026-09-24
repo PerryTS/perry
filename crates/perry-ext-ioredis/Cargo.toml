@@ -17,7 +17,6 @@ perry-db-turnloop.workspace = true
 turnloop-redis.workspace = true
 redis = { version = "1.2", features = ["tokio-comp", "connection-manager"] }
 tokio = { workspace = true }
-lazy_static.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

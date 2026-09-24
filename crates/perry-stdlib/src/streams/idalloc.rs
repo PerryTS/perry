@@ -62,15 +62,15 @@ struct IdAlloc {
     pipe_ids: HashSet<usize>,
 }
 
-lazy_static::lazy_static! {
-    static ref IDALLOC: Mutex<IdAlloc> = Mutex::new(IdAlloc {
+static IDALLOC: std::sync::LazyLock<Mutex<IdAlloc>> = std::sync::LazyLock::new(|| {
+    Mutex::new(IdAlloc {
         next: STREAM_HANDLE_ID_START,
         free: VecDeque::new(),
         retired: VecDeque::new(),
         pooled: HashSet::new(),
         pipe_ids: HashSet::new(),
-    });
-}
+    })
+});
 
 /// Quarantine length that triggers eviction of the oldest retired id.
 /// 0 = not yet initialized from `PERRY_STREAM_ID_QUARANTINE`.

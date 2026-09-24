@@ -244,8 +244,8 @@ mod tests {
     use super::*;
 
     fn add_wasm() -> Vec<u8> {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD
+        use perry_base64::Engine;
+        perry_base64::engine::general_purpose::STANDARD
             .decode("AGFzbQEAAAABBwFgAn9/AX8DAgEABwcBA2FkZAAACgkBBwAgACABags=")
             .unwrap()
     }

@@ -1357,7 +1357,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     // headroom as the blocking pool — the program's static TLS block is
     // carved from this same mapping (see `async_bridge::RUNTIME`).
     let spawned = std::thread::Builder::new()
-        .stack_size(crate::common::async_bridge::blocking_thread_stack_size())
+        .stack_size(crate::common::thread_config::blocking_thread_stack_size())
         .spawn(move || {
             perry_runtime::object::class_image::adopt_image(class_image);
             // #10854/#6185: claim this thread's own agent id BEFORE it can allocate

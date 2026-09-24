@@ -4,7 +4,7 @@
 //! logic changes.
 
 use super::*;
-use base64::Engine as _;
+use perry_base64::Engine as _;
 
 fn throw_buffer_type_error_with_code(message: &'static str, code: &'static str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -324,7 +324,7 @@ unsafe fn secret_key_jwk_object(buf_ptr: *mut crate::buffer::BufferHeader) -> f6
         crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader),
         (*buf_ptr).length as usize,
     );
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let encoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let obj = js_object_alloc(0, 2);
     let kty_key = crate::string::js_string_from_bytes(b"kty".as_ptr(), 3);
     let kty_val = crate::string::js_string_from_bytes(b"oct".as_ptr(), 3);

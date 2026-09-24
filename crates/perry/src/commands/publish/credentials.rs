@@ -211,8 +211,8 @@ pub(super) fn auto_export_p12_from_keychain(
     let data = std::fs::read(&temp_path).ok()?;
     let _ = std::fs::remove_file(&temp_path);
 
-    use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    use perry_base64::Engine;
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(&data);
 
     println!("  {} Certificate exported successfully", style("✓").green());
     Some((b64, password))

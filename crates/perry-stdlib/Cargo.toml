@@ -56,7 +56,7 @@ http-server = ["dep:perry-http-server", "dep:http-body-util", "dep:bytes"]
 #
 # #5174: `http-client` decomposes into `web-fetch` (the Web Fetch API).
 # Node HTTP is provided only by perry-ext-http.
-turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http", "dep:base64"]
+turnloop-http-client = ["dep:turnloop-http", "dep:turnloop-tls", "dep:perry-tls-session", "dep:url", "dep:http", "dep:perry-base64"]
 # The global `fetch` runs on the turnloop client engine only (tokio lane G
 # removed its reqwest fallback); `async-runtime` is still needed for the
 # promise bridge it settles through.
@@ -168,7 +168,7 @@ tls-runtime = [
     "dep:rustls",
     "dep:rustls-native-certs",
     "dep:rustls-pemfile",
-    "dep:base64",
+    "dep:perry-base64",
     "dep:x509-cert",
 ]
 
@@ -181,7 +181,7 @@ external-tls-server = [
     "dep:rustls",
     "dep:rustls-native-certs",
     "dep:rustls-pemfile",
-    "dep:base64",
+    "dep:perry-base64",
     "dep:x509-cert",
 ]
 
@@ -205,15 +205,15 @@ database-sqlite = ["dep:rusqlite"]
 # Crypto (sha256, md5, bcrypt, jwt, etc.)
 # Implies `async-bridge` (the tokio-free promise pump) because bcrypt/argon2
 # settle through it from turnloop's blocking pool, and the Hash/Hmac stream
-# events drain through it; `ids` because `crypto.randomUUID()` delegates to
-# the `uuid` crate. It used to imply `async-runtime` for a
+# events drain through it. UUID generation selects perry-uuid v4/v7; `ids`
+# remains an empty compatibility umbrella. It used to imply `async-runtime` for a
 # `tokio::task::spawn_blocking` that turnloop P4 already replaced.
 # `crypto` stays as the umbrella for backwards-compat; `bundled-bcrypt`
 # and `bundled-argon2` (v0.5.537) split out the two password-hashing
 # bindings so the well-known flip (#466 Phase 4 step 2) can route them
 # to perry-ext-bcrypt / perry-ext-argon2 without taking the rest of
 # the crypto surface offline.
-crypto = ["dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
+crypto = ["perry-uuid/v4", "perry-uuid/v7", "dep:sha2", "dep:sha1", "dep:sha3", "dep:shake", "dep:sha3_010", "dep:sha3-utils", "dep:rsa-sha1", "dep:md-5", "dep:perry-hex", "dep:hmac", "dep:aes", "dep:aes_09", "dep:cbc", "dep:ecb", "dep:ctr", "dep:scrypt", "dep:pbkdf2", "dep:perry-base64", "dep:x25519-dalek", "dep:x448", "dep:ed25519-dalek", "dep:ed448-goldilocks", "dep:aes-gcm", "dep:chacha20poly1305", "dep:ghash", "dep:aes-kw", "dep:hkdf", "dep:p256", "dep:p384", "dep:p521", "dep:rsa", "dep:spki", "dep:x509-cert", "dep:ml-kem", "async-bridge", "ids", "bundled-bcrypt", "bundled-argon2", "bundled-ethers"]
 bundled-bcrypt = ["dep:bcrypt", "async-bridge"]
 bundled-argon2 = ["dep:argon2", "async-bridge"]
 # ethers blockchain utilities — pure Rust, no extra deps. Default-on
@@ -253,7 +253,7 @@ email = ["bundled-nodemailer"]
 # `async-bridge`: the surrounding binding still settles its promises
 # through `common::async_bridge`. Neither it nor the transport takes a tokio
 # thread, so since turnloop P8 lane L it no longer implies `async-runtime`.
-bundled-nodemailer = ["async-bridge", "turnloop-smtp-client"]
+bundled-nodemailer = ["perry-uuid/v4", "async-bridge", "turnloop-smtp-client"]
 # turnloop P6: SMTP on turnloop (`src/turnloop_smtp/`). Kept OUT of the
 # `bundled-nodemailer` gate's strip path — it rides in `full` on its own so
 # the `js_smtp_*` entry points survive the well-known flip that strips
@@ -325,7 +325,6 @@ perry-container-compose = { path = "../perry-container-compose", optional = true
 # Always needed
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-once_cell.workspace = true
 # turnloop P6 — the outbound client engines. Optional: a build without
 # `web-fetch` / `turnloop-smtp-client` links neither.
 turnloop-http = { workspace = true, optional = true }
@@ -339,8 +338,6 @@ turnloop-smtp = { workspace = true, optional = true }
 # — a crate the turnloop-http engine already puts in this graph.
 url = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
-lazy_static.workspace = true
-chrono = { workspace = true, features = ["serde"] }
 rand = "0.10"  # Required by lodash (core module)
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 
@@ -385,7 +382,7 @@ sha3_010 = { package = "sha3", version = "0.10", optional = true, default-featur
 sha3-utils = { version = "0.5", optional = true }
 rsa-sha1 = { package = "sha1", version = "0.10", optional = true }
 md-5 = { version = "0.11", optional = true }
-hex = { workspace = true, optional = true }
+perry-hex = { workspace = true, optional = true }
 hmac = { version = "0.13", optional = true }
 bcrypt = { version = "0.19", optional = true }
 p256 = { version = "0.13", optional = true, default-features = false, features = ["pkcs8", "pem", "ecdsa", "ecdh"] }
@@ -405,7 +402,7 @@ ctr = { version = "0.9", optional = true }
 scrypt = { version = "0.11", optional = true }
 pbkdf2 = { version = "0.13", features = ["hmac"], optional = true }
 argon2 = { version = "0.5", optional = true }
-base64 = { workspace = true, optional = true }
+perry-base64 = { workspace = true, optional = true }
 x25519-dalek = { version = "2.0", features = ["static_secrets"], optional = true }
 x448 = { version = "0.14.0-pre.9", features = ["static_secrets"], optional = true }
 ed25519-dalek = { version = "3.0", optional = true }
@@ -446,11 +443,8 @@ scraper = { version = "0.27", optional = true }
 # Validation
 
 # IDs
-# Required unconditionally by crypto/random.rs (crypto.randomUUID /
-# randomUUID({ v7: true })), which has no feature gate of its own —
-# never optional, regardless of the bundled-uuid npm-binding feature
-# (removed; see #10678/#466).
-uuid = { version = "1.23", features = ["v4", "v1", "v3", "v5", "v7"] }
+# Pulled only by crypto or bundled-nodemailer.
+perry-uuid = { workspace = true, optional = true }
 
 # libc — termios for readline's raw-mode toggle (#347 Phase 2). The
 # Unix path uses tcsetattr/cfmakeraw; Windows uses SetConsoleMode via

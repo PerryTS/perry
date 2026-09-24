@@ -3,8 +3,8 @@
 //! Checks for new versions via Perry Hub / GitHub API with a 24h cache.
 //! Runs non-blocking background checks on CLI invocation.
 
+use crate::terminal_progress::{HumanBytes, HumanDuration, ProgressBar};
 use anyhow::{bail, Context, Result};
-use indicatif::{HumanBytes, HumanDuration, ProgressBar, ProgressStyle};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -683,13 +683,11 @@ impl DownloadProgress {
         eprintln!("Downloading {}...", artifact);
         let bar = match total {
             Some(len) => {
-                let bar = ProgressBar::new(len);
-                bar.set_style(download_bar_style(output.color));
+                let bar = ProgressBar::download(Some(len), output.color);
                 bar
             }
             None => {
-                let bar = ProgressBar::new_spinner();
-                bar.set_style(download_spinner_style(output.color));
+                let bar = ProgressBar::download(None, output.color);
                 bar.enable_steady_tick(Duration::from_millis(120));
                 bar
             }
@@ -719,29 +717,6 @@ impl DownloadProgress {
             HumanBytes(downloaded)
         );
     }
-}
-
-fn download_bar_style(color: bool) -> ProgressStyle {
-    let template = if color {
-        "  {spinner:.cyan} [{bar:30.cyan/dim}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})"
-    } else {
-        "  {spinner} [{bar:30}] {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})"
-    };
-    ProgressStyle::default_bar()
-        .template(template)
-        .expect("static download bar template")
-        .progress_chars("━╸─")
-}
-
-fn download_spinner_style(color: bool) -> ProgressStyle {
-    let template = if color {
-        "  {spinner:.cyan} {bytes} downloaded ({bytes_per_sec})"
-    } else {
-        "  {spinner} {bytes} downloaded ({bytes_per_sec})"
-    };
-    ProgressStyle::default_spinner()
-        .template(template)
-        .expect("static download spinner template")
 }
 
 /// A body that ends cleanly but short reads as `Ok(0)` and would otherwise sail
@@ -1625,10 +1600,10 @@ mod tests {
     fn download_styles_are_valid_templates() {
         // `.expect()` inside these would panic on a malformed template; build
         // every variant so a typo cannot reach a user mid-download.
-        let _ = download_bar_style(true);
-        let _ = download_bar_style(false);
-        let _ = download_spinner_style(true);
-        let _ = download_spinner_style(false);
+        let _ = ProgressBar::download(Some(100), true);
+        let _ = ProgressBar::download(Some(100), false);
+        let _ = ProgressBar::download(None, true);
+        let _ = ProgressBar::download(None, false);
     }
 
     #[test]

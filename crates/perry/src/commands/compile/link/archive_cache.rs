@@ -156,7 +156,7 @@ fn derive_prepared_archive_key(
         hash_field(&mut hasher, "archive-index", &index.to_string());
         hash_file(&mut hasher, "well-known", archive)?;
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(perry_hex::encode(hasher.finalize()))
 }
 
 fn load_cached_archives(
@@ -301,7 +301,7 @@ fn hash_file_value(path: &Path) -> std::io::Result<(String, u64)> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok((hex::encode(hasher.finalize()), size))
+    Ok((perry_hex::encode(hasher.finalize()), size))
 }
 
 fn hash_field(hasher: &mut Sha256, name: &str, value: &str) {

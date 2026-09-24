@@ -992,7 +992,7 @@ fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> Stri
             Ok(bytes) => hash_field(
                 &mut hasher,
                 "bunfs-loader-manifest",
-                &hex::encode(Sha256::digest(bytes)),
+                &perry_hex::encode(Sha256::digest(bytes)),
             ),
             Err(error) => hash_field(
                 &mut hasher,
@@ -1057,7 +1057,7 @@ fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> Stri
         }
         Err(e) => hash_field(&mut hasher, "embed-resolve-error", &e.to_string()),
     }
-    hex::encode(hasher.finalize())
+    perry_hex::encode(hasher.finalize())
 }
 
 fn default_output_path(args: &CompileArgs) -> PathBuf {
@@ -1170,7 +1170,7 @@ fn file_fingerprint(path: &Path) -> std::io::Result<FileFingerprint> {
     Ok(FileFingerprint {
         path: path_identity,
         size,
-        sha256: hex::encode(hasher.finalize()),
+        sha256: perry_hex::encode(hasher.finalize()),
     })
 }
 
@@ -1212,6 +1212,6 @@ fn hash_field(hasher: &mut Sha256, name: &str, value: &str) {
 fn short_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    let hex = hex::encode(hasher.finalize());
+    let hex = perry_hex::encode(hasher.finalize());
     hex[..16].to_string()
 }

@@ -116,7 +116,7 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
 
     let mut bytes = vec![0u8; size];
     rand::rng().fill_bytes(&mut bytes);
-    let hex_str = hex::encode(&bytes);
+    let hex_str = perry_hex::encode(&bytes);
 
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
@@ -126,8 +126,7 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut StringHeader {
     validate_random_uuid_options(options_bits);
-    let uuid = uuid::Uuid::new_v4();
-    let uuid_str = uuid.to_string();
+    let uuid_str = perry_uuid::v4();
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
@@ -139,8 +138,7 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 /// accepted for shape parity but does not change the generated value.
 #[no_mangle]
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
-    let uuid = uuid::Uuid::now_v7();
-    let uuid_str = uuid.to_string();
+    let uuid_str = perry_uuid::v7();
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 

@@ -572,13 +572,16 @@ pub(crate) const STREAM_HANDLE_ID_START: usize =
     perry_runtime::value::addr_class::STREAM_ID_BAND_START;
 pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class::STREAM_ID_BAND_END;
 
-lazy_static::lazy_static! {
-    static ref READABLE_STREAMS: Mutex<HashMap<usize, ReadableStreamData>> = Mutex::new(HashMap::new());
-    static ref WRITABLE_STREAMS: Mutex<HashMap<usize, WritableStreamData>> = Mutex::new(HashMap::new());
-    static ref TRANSFORM_STREAMS: Mutex<HashMap<usize, TransformStreamData>> = Mutex::new(HashMap::new());
-    static ref READERS: Mutex<HashMap<usize, ReaderData>> = Mutex::new(HashMap::new());
-    static ref WRITERS: Mutex<HashMap<usize, WriterData>> = Mutex::new(HashMap::new());
-}
+static READABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, ReadableStreamData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static WRITABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, WritableStreamData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static TRANSFORM_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, TransformStreamData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static READERS: std::sync::LazyLock<Mutex<HashMap<usize, ReaderData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static WRITERS: std::sync::LazyLock<Mutex<HashMap<usize, WriterData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // #1545: ONE id allocator shared across all five Web Streams registries.
 // Stream handles are raw numeric f64 values, not POINTER_TAG small handles,

@@ -1,0 +1,16 @@
+[package]
+name = "perry-base64"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Strict base64 codecs for Perry"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dev-dependencies]
+# Compatibility oracle only; never part of a product build.
+base64 = "0.23"

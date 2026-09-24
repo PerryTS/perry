@@ -20,7 +20,7 @@ crate-type = ["rlib", "staticlib"]
 perry-ui-windows = { path = "../perry-ui-windows", default-features = false }
 perry-ffi.workspace = true
 perry-runtime = { path = "../perry-runtime", default-features = false, features = ["stdlib"] }
-base64.workspace = true
+perry-base64.workspace = true
 libc.workspace = true
 windows = { version = "0.62", features = ["Win32_Foundation"] }
 windows-reactor = { path = "../../third_party/windows-winui/windows-reactor" }

@@ -38,7 +38,7 @@ pub(crate) unsafe fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JSValue {
             // the `hex` crate, which lives behind the `crypto` Cargo
             // feature — auto-optimize builds that enable only
             // `database-sqlite` (e.g. mango: better-sqlite3 + mongodb +
-            // fetch, no crypto) would otherwise fail to resolve `hex::`
+            // fetch, no crypto) would otherwise fail to resolve `perry_hex::`
             // and fall back to the prebuilt full stdlib.
             const HEX: &[u8; 16] = b"0123456789abcdef";
             let mut out = Vec::with_capacity(b.len() * 2);

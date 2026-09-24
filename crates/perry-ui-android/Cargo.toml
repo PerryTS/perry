@@ -24,7 +24,7 @@ perry-runtime = { path = "../perry-runtime", default-features = false }
 # surface (`image` crate + perry-ffi only). Force-linked via `extern crate` in
 # lib.rs so libperry_ui_android.a bundles the symbols.
 perry-ext-sharp = { path = "../perry-ext-sharp" }
-base64.workspace = true
+perry-base64.workspace = true
 libc.workspace = true
 jni = "0.22"
 tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }

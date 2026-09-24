@@ -1,36 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dialoguer::Input;
 
 use super::*;
 
 pub fn generate_asc_jwt(key_id: &str, issuer_id: &str, p8_content: &str) -> Result<String> {
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let header = Header {
-        alg: Algorithm::ES256,
-        kid: Some(key_id.to_string()),
-        typ: Some("JWT".to_string()),
-        ..Default::default()
-    };
-
-    let claims = serde_json::json!({
-        "iss": issuer_id,
-        "iat": now,
-        "exp": now + 1200,
-        "aud": "appstoreconnect-v1"
-    });
-
-    let encoding_key = EncodingKey::from_ec_pem(p8_content.as_bytes())
-        .context("Failed to parse .p8 key — ensure it's a valid EC private key")?;
-
-    let token = encode(&header, &claims, &encoding_key).context("Failed to generate JWT")?;
-
-    Ok(token)
+    crate::apple_jwt::generate(key_id, issuer_id, p8_content)
 }
 
 /// Prompt for App Store Connect API credentials

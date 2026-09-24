@@ -1,7 +1,7 @@
 //! ClientRequest metadata and client IncomingMessage FFI surface.
 
 use super::*;
-use base64::Engine as _;
+use perry_base64::Engine as _;
 use std::fmt::Write as _;
 
 /// `IncomingMessage.setEncoding(encoding)` for client responses. The same
@@ -350,8 +350,8 @@ pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
         Some(encoding) => {
             let normalized = encoding.to_ascii_lowercase().replace(['-', '_'], "");
             let s = match normalized.as_str() {
-                "base64" => base64::engine::general_purpose::STANDARD.encode(body),
-                "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(body),
+                "base64" => perry_base64::engine::general_purpose::STANDARD.encode(body),
+                "base64url" => perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(body),
                 "hex" => {
                     let mut encoded = String::with_capacity(body.len() * 2);
                     for byte in body {

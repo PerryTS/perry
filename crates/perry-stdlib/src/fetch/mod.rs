@@ -99,30 +99,34 @@ pub(crate) const FETCH_HANDLE_ID_END: usize =
     perry_runtime::value::addr_class::FETCH_HANDLE_BAND_END;
 
 // Response handle storage
-lazy_static::lazy_static! {
-    static ref FETCH_RESPONSES: Mutex<HashMap<usize, FetchResponse>> = Mutex::new(HashMap::new());
-    /// One shared allocator for the whole Web Fetch handle family —
-    /// Response, Request, Headers, and Blob. Their registries stay separate
-    /// HashMaps, but a unified allocator guarantees an id belongs to exactly one
-    /// of them (no more "Request id 1 == Response id 1"). This is what lets the
-    /// runtime handle-dispatch arms (`dispatch_request_method` /
-    /// `dispatch_response_method` / …) distinguish handle types by
-    /// registry-membership alone for any-typed / computed-key calls, where the
-    /// static type was lost. The counter starts in a high subrange to avoid
-    /// colliding with perry-ffi handles exposed by `node:http`.
-    static ref FREE_FETCH_HANDLE_IDS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
-    static ref NEXT_FETCH_HANDLE_ID: Mutex<usize> = Mutex::new(FETCH_HANDLE_ID_START);
-    static ref STREAM_HANDLES: Mutex<HashMap<usize, StreamState>> = Mutex::new(HashMap::new());
-    static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(1);
 
-    /// Global proxy override installed by `undici.setGlobalDispatcher(new
-    /// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici),
-    /// as `(uri, token)`. `None` = direct connections. The turnloop engine
-    /// reads it per request (`turnloop_client::proxy_for`) and runs the
-    /// CONNECT tunnel itself.
-    static ref GLOBAL_PROXY_URI: std::sync::RwLock<Option<(String, Option<String>)>> =
-        std::sync::RwLock::new(None);
-}
+static FETCH_RESPONSES: std::sync::LazyLock<Mutex<HashMap<usize, FetchResponse>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// One shared allocator for the whole Web Fetch handle family —
+/// Response, Request, Headers, and Blob. Their registries stay separate
+/// HashMaps, but a unified allocator guarantees an id belongs to exactly one
+/// of them (no more "Request id 1 == Response id 1"). This is what lets the
+/// runtime handle-dispatch arms (`dispatch_request_method` /
+/// `dispatch_response_method` / …) distinguish handle types by
+/// registry-membership alone for any-typed / computed-key calls, where the
+/// static type was lost. The counter starts in a high subrange to avoid
+/// colliding with perry-ffi handles exposed by `node:http`.
+static FREE_FETCH_HANDLE_IDS: std::sync::LazyLock<Mutex<Vec<usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+static NEXT_FETCH_HANDLE_ID: std::sync::LazyLock<Mutex<usize>> =
+    std::sync::LazyLock::new(|| Mutex::new(FETCH_HANDLE_ID_START));
+static STREAM_HANDLES: std::sync::LazyLock<Mutex<HashMap<usize, StreamState>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_STREAM_ID: std::sync::LazyLock<Mutex<usize>> =
+    std::sync::LazyLock::new(|| Mutex::new(1));
+
+/// Global proxy override installed by `undici.setGlobalDispatcher(new
+/// ProxyAgent(...))` via `js_fetch_set_global_proxy` (perry-ext-undici),
+/// as `(uri, token)`. `None` = direct connections. The turnloop engine
+/// reads it per request (`turnloop_client::proxy_for`) and runs the
+/// CONNECT tunnel itself.
+static GLOBAL_PROXY_URI: std::sync::LazyLock<std::sync::RwLock<Option<(String, Option<String>)>>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
 
 /// Normalize and validate an undici `ProxyAgent` URI and token, with the
 /// acceptance rules the reqwest client this replaced applied at install time
@@ -1065,11 +1069,12 @@ struct RequestRecord {
     cached_headers_id: Option<usize>,
 }
 
-lazy_static::lazy_static! {
-    static ref HEADERS_REGISTRY: Mutex<HashMap<usize, HeadersRecord>> = Mutex::new(HashMap::new());
-    static ref REQUEST_REGISTRY: Mutex<HashMap<usize, RequestRecord>> = Mutex::new(HashMap::new());
-    pub(crate) static ref BLOB_REGISTRY: Mutex<HashMap<usize, BlobData>> = Mutex::new(HashMap::new());
-}
+static HEADERS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, HeadersRecord>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static REQUEST_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, RequestRecord>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+pub(crate) static BLOB_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, BlobData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone)]
 pub(crate) struct BlobData {

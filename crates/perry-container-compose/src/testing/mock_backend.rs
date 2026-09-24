@@ -130,7 +130,7 @@ impl MockBackend {
         let mut h = Md5::new();
         h.update(json.as_bytes());
         let bytes = h.finalize();
-        let hash = hex::encode(&bytes[..8]);
+        let hash = perry_hex::encode(&bytes[..8]);
         *self.inspect_spec_hash.lock().unwrap() = Some(hash);
     }
 

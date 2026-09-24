@@ -384,8 +384,8 @@ export function runTableCycle(): string {
 "#;
 
 fn write_fixture(root: &std::path::Path) {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
+    use perry_base64::Engine;
+    let bytes = perry_base64::engine::general_purpose::STANDARD
         .decode(ADD_WASM_BASE64)
         .expect("decode add.wasm");
     assert_eq!(bytes.len(), 41);

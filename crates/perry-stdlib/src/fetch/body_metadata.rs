@@ -74,9 +74,8 @@ impl FormDataStore {
     }
 }
 
-lazy_static::lazy_static! {
-    pub(super) static ref FORM_DATA_REGISTRY: Mutex<HashMap<usize, FormDataStore>> = Mutex::new(HashMap::new());
-}
+pub(super) static FORM_DATA_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, FormDataStore>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// #10555: `instanceof FormData` / `Object.prototype.toString.call` /
 /// `x[Symbol.toStringTag]` membership probe, mirroring `dispatch.rs`'s

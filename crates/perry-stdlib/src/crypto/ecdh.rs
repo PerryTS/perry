@@ -265,7 +265,7 @@ pub unsafe fn dispatch_ecdh(handle: i64, method: &str, args: &[f64]) -> f64 {
             let mut bytes = arg_bytes(args, 0);
             if encoding.eq_ignore_ascii_case("hex") {
                 let s = String::from_utf8(bytes).unwrap_or_default();
-                bytes = hex::decode(s).unwrap_or_default();
+                bytes = perry_hex::decode(s).unwrap_or_default();
             }
             match P256SecretKey::from_slice(&bytes) {
                 Ok(key) => {

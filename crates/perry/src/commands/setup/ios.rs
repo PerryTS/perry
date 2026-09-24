@@ -539,14 +539,14 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
         );
 
         // Decode cert and write as PEM
-        use base64::Engine;
-        let cert_der = base64::engine::general_purpose::STANDARD
+        use perry_base64::Engine;
+        let cert_der = perry_base64::engine::general_purpose::STANDARD
             .decode(cert_content_b64)
             .context("Failed to decode certificate from Apple")?;
         let cert_pem_path = perry_dir.join("distribution.cer.pem");
         let cert_pem = format!(
             "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-            base64::engine::general_purpose::STANDARD
+            perry_base64::engine::general_purpose::STANDARD
                 .encode(&cert_der)
                 .as_bytes()
                 .chunks(76)
@@ -708,8 +708,8 @@ pub fn ios_wizard(saved: &mut PerryConfig) -> Result<()> {
     };
 
     // Decode and save the provisioning profile
-    use base64::Engine;
-    let profile_data = base64::engine::general_purpose::STANDARD
+    use perry_base64::Engine;
+    let profile_data = perry_base64::engine::general_purpose::STANDARD
         .decode(&profile_b64)
         .context("Failed to decode provisioning profile")?;
     let profile_filename = format!("{}.mobileprovision", bundle_id.replace('.', "_"));

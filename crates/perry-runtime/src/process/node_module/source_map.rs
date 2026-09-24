@@ -1,6 +1,6 @@
 use super::*;
 use crate::closure::{js_closure_alloc, ClosureHeader};
-use base64::Engine as _;
+use perry_base64::Engine as _;
 use std::cell::{Cell, RefCell};
 
 const SOURCE_MAP_CLASS_ID: u32 = 0xFFFF_04D0;
@@ -756,10 +756,10 @@ pub extern "C" fn js_module_find_source_map(filename: f64) -> f64 {
         .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=')))
         .next()
         .unwrap_or("");
-    let engine = base64::engine::general_purpose::GeneralPurpose::new(
-        &base64::alphabet::STANDARD,
-        base64::engine::general_purpose::GeneralPurposeConfig::new()
-            .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+    let engine = perry_base64::engine::general_purpose::GeneralPurpose::new(
+        &perry_base64::alphabet::STANDARD,
+        perry_base64::engine::general_purpose::GeneralPurposeConfig::new()
+            .with_decode_padding_mode(perry_base64::engine::DecodePaddingMode::Indifferent),
     );
     let Ok(decoded) = engine.decode(encoded) else {
         return module_undefined();

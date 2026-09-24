@@ -1236,7 +1236,10 @@ mod tests {
         let plaintext = b"hello aes-cbc";
         let key128 = key_128();
         let ciphertext = aes_cbc_encrypt(&key128, &iv, plaintext).expect("encrypt AES-128-CBC");
-        assert_eq!(hex::encode(&ciphertext), "81ee3d6835ee08e3faca1be9355b30e1");
+        assert_eq!(
+            perry_hex::encode(&ciphertext),
+            "81ee3d6835ee08e3faca1be9355b30e1"
+        );
         assert_eq!(
             aes_cbc_decrypt(&key128, &iv, &ciphertext).expect("decrypt AES-128-CBC"),
             plaintext
@@ -1269,7 +1272,7 @@ mod tests {
         for (iv_len, expected_hex) in cases {
             let iv = vec![7u8; iv_len];
             let ciphertext = aes_ocb_encrypt(&key, &iv, b"", data, 128).expect("encrypt");
-            assert_eq!(hex::encode(&ciphertext), expected_hex);
+            assert_eq!(perry_hex::encode(&ciphertext), expected_hex);
             let plaintext = aes_ocb_decrypt(&key, &iv, b"", &ciphertext, 128).expect("decrypt");
             assert_eq!(plaintext, data);
         }
@@ -1283,7 +1286,7 @@ mod tests {
 
         let with_aad = aes_ocb_encrypt(&key, &iv, &[1, 2], data, 128).expect("encrypt aad");
         assert_eq!(
-            hex::encode(&with_aad),
+            perry_hex::encode(&with_aad),
             "fd9dbb47148a60eb77f5af17053aeea9ada06ecb00c0d8e018"
         );
         assert_eq!(
@@ -1294,7 +1297,7 @@ mod tests {
 
         let tag96 = aes_ocb_encrypt(&key, &iv, b"", data, 96).expect("encrypt tag96");
         assert_eq!(
-            hex::encode(&tag96),
+            perry_hex::encode(&tag96),
             "3ed65543631f8ae93b3d2efa6871666366ee5295e6"
         );
         assert_eq!(
@@ -1303,7 +1306,10 @@ mod tests {
         );
 
         let tag64 = aes_ocb_encrypt(&key, &iv, b"", data, 64).expect("encrypt tag64");
-        assert_eq!(hex::encode(&tag64), "8994996d8cc184be7f831a45247b2ce8a7");
+        assert_eq!(
+            perry_hex::encode(&tag64),
+            "8994996d8cc184be7f831a45247b2ce8a7"
+        );
         assert_eq!(
             aes_ocb_decrypt(&key, &iv, b"", &tag64, 64).expect("decrypt tag64"),
             data

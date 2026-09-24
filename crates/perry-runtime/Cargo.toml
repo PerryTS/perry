@@ -328,7 +328,7 @@ ohos-napi = []
 wasm-host = []
 # #8523: opt-in Node-API ABI and host-core symbols. The compiler enables this
 # only for an allowlisted native-addon graph, preserving the default size gate.
-node-api-host = ["dep:hex", "dep:sha2"]
+node-api-host = ["dep:perry-hex", "dep:sha2"]
 # #6559: runtime dynamic-code evaluation — `new Function(p1, …, body)` with a
 # RUNTIME-constructed body parses the generated source with perry-parser (SWC)
 # and runs it through a scoped tree-walking interpreter (`src/dyn_eval/`).
@@ -366,10 +366,9 @@ ryu.workspace = true
 # Already present in the workspace lockfile through SWC.
 ryu-js = "1.0.3"
 simdutf8 = "0.1.5"
-base64.workspace = true
+perry-base64.workspace = true
 hostname = { version = "0.4", optional = true }
 dirs = { workspace = true, optional = true }
-lazy_static.workspace = true
 # #6559 `dyn-eval`: reuse the compiler's own SWC-based parser for runtime-
 # generated `new Function` bodies (no second parser). perry-parser depends
 # only on swc + perry-diagnostics — no cycle back into perry-runtime.
@@ -396,7 +395,7 @@ timezone_provider = { version = "0.2.6", default-features = false, features = ["
 
 serde.workspace = true
 serde_json.workspace = true
-hex = { workspace = true, optional = true }
+perry-hex = { workspace = true, optional = true }
 sha2 = { version = "0.11", optional = true }
 # TLS client identity callbacks run from the external net archive, before the
 # stdlib TLS module is necessarily linked. Keep the legacy peer-certificate
@@ -434,9 +433,8 @@ url = { version = "2", optional = true }
 # encode/decode + record types; we drive it synchronously over a blocking
 # std::net::UdpSocket (TCP fallback on truncation), so — unlike hickory-resolver
 # — it pulls NO tokio into the core runtime, matching net.rs's blocking-I/O
-# style. resolv-conf reads the system nameserver list from /etc/resolv.conf.
+# style. dns_config reads only the system nameserver list from /etc/resolv.conf.
 hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
-resolv-conf = "0.7"
 # #4911/#8515: real node:dgram UDP sockets. socket2 creates sockets so reuse
 # and IPv6-only options are applied before bind; std::net::UdpSocket then drives
 # send/recv and the common multicast/broadcast/TTL options. SockRef covers the

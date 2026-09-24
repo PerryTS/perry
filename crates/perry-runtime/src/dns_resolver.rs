@@ -11,6 +11,10 @@
 //! returns plain Rust [`Answer`] values plus a [`DnsError`] that `dns.rs`
 //! maps onto Node's c-ares error codes.
 
+#[cfg(any(unix, test))]
+#[path = "dns_config.rs"]
+mod config;
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, UdpSocket};
 use std::time::Duration;
 
@@ -164,15 +168,9 @@ pub fn system_nameservers() -> Vec<SocketAddr> {
     #[cfg(unix)]
     {
         if let Ok(data) = std::fs::read("/etc/resolv.conf") {
-            if let Ok(cfg) = resolv_conf::Config::parse(&data) {
-                let servers: Vec<SocketAddr> = cfg
-                    .nameservers
-                    .iter()
-                    .map(|scoped| SocketAddr::new(IpAddr::from(scoped), 53))
-                    .collect();
-                if !servers.is_empty() {
-                    return servers;
-                }
+            let servers = config::nameservers(&data);
+            if !servers.is_empty() {
+                return servers;
             }
         }
     }

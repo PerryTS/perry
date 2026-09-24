@@ -7,8 +7,8 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use base64::Engine as _;
 use hkdf::Hkdf;
+use perry_base64::Engine as _;
 use perry_runtime::{js_string_from_bytes, StringHeader};
 use rand::Rng;
 use sha2::Sha256;
@@ -28,12 +28,12 @@ unsafe fn str_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
 /// Decode a hex-encoded StringHeader into raw bytes.
 unsafe fn hex_from_header(ptr: *const StringHeader) -> Option<Vec<u8>> {
     let text = str_from_header(ptr)?;
-    hex::decode(&text).ok()
+    perry_hex::decode(&text).ok()
 }
 
 /// Return a hex string as a StringHeader pointer.
 fn return_hex(bytes: &[u8]) -> *mut StringHeader {
-    let hex_str = hex::encode(bytes);
+    let hex_str = perry_hex::encode(bytes);
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
@@ -56,8 +56,8 @@ pub extern "C" fn js_crypto_x25519_keypair() -> *mut StringHeader {
     let secret = StaticSecret::from(secret_bytes);
     let public = PublicKey::from(&secret);
 
-    let pub_hex = hex::encode(public.as_bytes());
-    let sec_hex = hex::encode(secret_bytes);
+    let pub_hex = perry_hex::encode(public.as_bytes());
+    let sec_hex = perry_hex::encode(secret_bytes);
 
     // Build JSON manually (no serde needed for this simple shape)
     let json = format!(
@@ -149,7 +149,7 @@ pub unsafe extern "C" fn js_crypto_aes256_gcm_encrypt(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&ciphertext);
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(&ciphertext);
     js_string_from_bytes(b64.as_ptr(), b64.len() as u32)
 }
 
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn js_crypto_aes256_gcm_decrypt(
         None => return std::ptr::null_mut(),
     };
 
-    let ciphertext = match base64::engine::general_purpose::STANDARD.decode(&cipher_b64) {
+    let ciphertext = match perry_base64::engine::general_purpose::STANDARD.decode(&cipher_b64) {
         Ok(ct) => ct,
         Err(_) => return std::ptr::null_mut(),
     };

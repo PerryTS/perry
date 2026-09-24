@@ -35,7 +35,6 @@ perry-runtime = { workspace = true, optional = true }
 # perry-stdlib uses dashmap internally for the same purpose; sharing
 # the dep keeps the resulting binaries identical in size.
 dashmap.workspace = true
-once_cell.workspace = true
 
 [dev-dependencies]
 # Keep the existing allocator observations available only in test builds.

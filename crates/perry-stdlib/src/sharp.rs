@@ -328,8 +328,10 @@ pub unsafe extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
                 Ok(_) => {
                     let bytes = buffer.into_inner();
                     // Return as hex string for now (or base64)
-                    let encoded =
-                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+                    let encoded = perry_base64::Engine::encode(
+                        &perry_base64::engine::general_purpose::STANDARD,
+                        &bytes,
+                    );
                     let ptr = js_string_from_bytes(encoded.as_ptr(), encoded.len() as u32);
                     Ok(JSValue::string_ptr(ptr).bits())
                 }

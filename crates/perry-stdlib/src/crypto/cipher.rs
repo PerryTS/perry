@@ -1240,9 +1240,9 @@ mod ecb_tests {
 
     #[test]
     fn aes_128_ecb_matches_the_fips_197_block_vector() {
-        let key = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
-        let mut block = hex::decode("00112233445566778899aabbccddeeff").unwrap();
-        let expected = hex::decode("69c4e0d86a7b0430d8cdb78070b4c55a").unwrap();
+        let key = perry_hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+        let mut block = perry_hex::decode("00112233445566778899aabbccddeeff").unwrap();
+        let expected = perry_hex::decode("69c4e0d86a7b0430d8cdb78070b4c55a").unwrap();
 
         let encrypted = Aes128EcbEnc::new_from_slice(&key)
             .unwrap()
@@ -1258,7 +1258,7 @@ mod ecb_tests {
             .unwrap();
         assert_eq!(
             decrypted,
-            hex::decode("00112233445566778899aabbccddeeff").unwrap()
+            perry_hex::decode("00112233445566778899aabbccddeeff").unwrap()
         );
     }
 

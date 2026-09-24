@@ -22,7 +22,7 @@ fn secret_jwk_bytes(mat: CryptoKeyMaterial, key_bytes: &[u8]) -> Option<Vec<u8>>
     if mat.kind != KeyKind::Secret {
         return None;
     }
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes);
+    let encoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(key_bytes);
     let json = serde_json::json!({
         "kty": "oct",
         "k": encoded,
@@ -41,7 +41,7 @@ fn secret_jwk_key_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let k = obj.get("k")?.as_str()?;
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
+    perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(k.as_bytes())
         .ok()
 }
@@ -663,7 +663,7 @@ mod tests {
         let mac = compute_hmac(HashAlgo::Sha256, key, date).unwrap();
         // Expected k_date from the docs example:
         let expected =
-            hex::decode("0138c7a6cbd60aa727b2f653a522567439dfb9f3e72b21f9b25941a42f04a7cd")
+            perry_hex::decode("0138c7a6cbd60aa727b2f653a522567439dfb9f3e72b21f9b25941a42f04a7cd")
                 .unwrap();
         assert_eq!(mac, expected);
     }
@@ -672,7 +672,7 @@ mod tests {
     fn sha256_test_vector_empty() {
         let digest = compute_digest(HashAlgo::Sha256, b"");
         assert_eq!(
-            hex::encode(&digest),
+            perry_hex::encode(&digest),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
@@ -681,7 +681,7 @@ mod tests {
     fn sha256_test_vector_abc() {
         let digest = compute_digest(HashAlgo::Sha256, b"abc");
         assert_eq!(
-            hex::encode(&digest),
+            perry_hex::encode(&digest),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }

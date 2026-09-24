@@ -27,7 +27,6 @@ mod turnloop_io;
 #[cfg(test)]
 mod test_async_shims;
 
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, build_object_shape, js_object_alloc_with_shape, js_object_set_field, read_string,
     register_handle, spawn_blocking, take_handle, Handle, JsPromise, JsString, JsValue, Promise,
@@ -59,9 +58,8 @@ pub(crate) struct RedisEndpoint {
     pub(crate) transport: turnloop_io::Transport,
 }
 
-lazy_static! {
-    static ref ENDPOINTS: Mutex<HashMap<Handle, RedisEndpoint>> = Mutex::new(HashMap::new());
-}
+static ENDPOINTS: std::sync::LazyLock<Mutex<HashMap<Handle, RedisEndpoint>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub(crate) fn endpoint_for(handle: Handle) -> Option<RedisEndpoint> {
     ENDPOINTS.lock().unwrap().get(&handle).cloned()
@@ -107,11 +105,10 @@ pub(crate) struct RedisClient {
     url: String,
 }
 
-lazy_static! {
-    static ref CONNECTIONS: Mutex<HashMap<Handle, redis::aio::MultiplexedConnection>> =
-        Mutex::new(HashMap::new());
-    static ref URLS: Mutex<HashMap<Handle, String>> = Mutex::new(HashMap::new());
-}
+static CONNECTIONS: std::sync::LazyLock<Mutex<HashMap<Handle, redis::aio::MultiplexedConnection>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static URLS: std::sync::LazyLock<Mutex<HashMap<Handle, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
     let h = JsString::from_raw(ptr as *mut StringHeader);

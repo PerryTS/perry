@@ -220,7 +220,7 @@ fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, S
                 file.size
             ));
         }
-        let actual = hex::encode(Sha256::digest(&bytes));
+        let actual = perry_hex::encode(Sha256::digest(&bytes));
         if actual != file.sha256 {
             return Err(format!(
                 "Node-API sidecar payload {} failed its SHA-256 check",

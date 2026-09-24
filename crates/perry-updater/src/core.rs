@@ -7,7 +7,7 @@
 use perry_runtime::buffer::BufferHeader;
 use perry_runtime::{js_string_from_bytes, StringHeader};
 
-use base64::Engine as _;
+use perry_base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 /// Verify an Ed25519 signature over `payload` in-crate via `ed25519-dalek`
@@ -134,7 +134,7 @@ fn compute_sha256_hex(path: &str) -> Option<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Some(hex::encode(hasher.finalize()))
+    Some(perry_hex::encode(hasher.finalize()))
 }
 
 /// Like `verify_hash`, but returns the actual hex digest of the file (or empty
@@ -197,11 +197,11 @@ pub extern "C" fn perry_updater_verify_signature(
         None => return 0,
     };
 
-    let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(sig_b64.trim()) {
+    let sig_bytes = match perry_base64::engine::general_purpose::STANDARD.decode(sig_b64.trim()) {
         Ok(b) => b,
         Err(_) => return 0,
     };
-    let pk_bytes = match base64::engine::general_purpose::STANDARD.decode(pubkey_b64.trim()) {
+    let pk_bytes = match perry_base64::engine::general_purpose::STANDARD.decode(pubkey_b64.trim()) {
         Ok(b) => b,
         Err(_) => return 0,
     };
@@ -295,11 +295,11 @@ pub extern "C" fn perry_updater_verify_signature_v2(
         return 0;
     }
 
-    let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(sig_b64.trim()) {
+    let sig_bytes = match perry_base64::engine::general_purpose::STANDARD.decode(sig_b64.trim()) {
         Ok(b) => b,
         Err(_) => return 0,
     };
-    let pk_bytes = match base64::engine::general_purpose::STANDARD.decode(pubkey_b64.trim()) {
+    let pk_bytes = match perry_base64::engine::general_purpose::STANDARD.decode(pubkey_b64.trim()) {
         Ok(b) => b,
         Err(_) => return 0,
     };
@@ -514,7 +514,7 @@ mod tests {
 
         let mut hasher = Sha256::new();
         hasher.update(b"hello, perry");
-        let expected = hex::encode(hasher.finalize());
+        let expected = perry_hex::encode(hasher.finalize());
 
         let path_str = file.to_string_lossy().to_string();
         assert_eq!(
@@ -557,8 +557,8 @@ mod tests {
         let digest = h.finalize();
         let sig = signing.sign(&digest);
 
-        let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-        let pk_b64 = base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes());
+        let sig_b64 = perry_base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+        let pk_b64 = perry_base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes());
 
         let path_str = file.to_string_lossy().to_string();
         assert_eq!(
@@ -623,9 +623,9 @@ mod tests {
         v2_payload.extend_from_slice(&digest);
         v2_payload.extend_from_slice(version.as_bytes());
         let v2_sig = signing.sign(&v2_payload);
-        let v2_sig_b64 = base64::engine::general_purpose::STANDARD.encode(v2_sig.to_bytes());
+        let v2_sig_b64 = perry_base64::engine::general_purpose::STANDARD.encode(v2_sig.to_bytes());
 
-        let pk_b64 = base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes());
+        let pk_b64 = perry_base64::engine::general_purpose::STANDARD.encode(verifying.to_bytes());
         let path_str = file.to_string_lossy().to_string();
 
         // (1) Happy path: v2 sig + matching version.
@@ -644,7 +644,7 @@ mod tests {
         // no version bound in) must FAIL v2 verify, even when the
         // version label happens to match.
         let v1_sig = signing.sign(&digest);
-        let v1_sig_b64 = base64::engine::general_purpose::STANDARD.encode(v1_sig.to_bytes());
+        let v1_sig_b64 = perry_base64::engine::general_purpose::STANDARD.encode(v1_sig.to_bytes());
         assert_eq!(
             perry_updater_verify_signature_v2(
                 make_str(&path_str),

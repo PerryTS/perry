@@ -199,7 +199,7 @@ pub fn scan_packages(
     };
 
     ScanReport {
-        scanned_at: chrono::Utc::now().to_rfc3339(),
+        scanned_at: crate::utc::now_rfc3339(),
         package_count: packages.len(),
         findings,
         verdict,

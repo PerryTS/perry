@@ -748,9 +748,9 @@ pub fn create_p12_from_cert_content(
     p12_password: &str,
     display_name: &str,
 ) -> Result<String> {
-    use base64::Engine;
+    use perry_base64::Engine;
 
-    let cert_der = base64::engine::general_purpose::STANDARD
+    let cert_der = perry_base64::engine::general_purpose::STANDARD
         .decode(cert_content_b64)
         .context("Failed to decode certificate from Apple")?;
 
@@ -758,7 +758,7 @@ pub fn create_p12_from_cert_content(
     let cert_pem_path = p12_output_path.with_extension("cer.pem");
     let cert_pem = format!(
         "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-        base64::engine::general_purpose::STANDARD
+        perry_base64::engine::general_purpose::STANDARD
             .encode(&cert_der)
             .as_bytes()
             .chunks(76)

@@ -116,7 +116,7 @@ pub fn build_device_credentials(
     bundle_id: &str,
     ios_toml: Option<&toml::Value>,
 ) -> Result<serde_json::Value> {
-    use base64::Engine;
+    use perry_base64::Engine;
 
     let apple = config.apple.as_ref();
 
@@ -147,7 +147,7 @@ pub fn build_device_credentials(
             let path = Path::new(cert_path);
             if path.exists() {
                 let data = std::fs::read(path).ok();
-                let b64 = data.map(|d| base64::engine::general_purpose::STANDARD.encode(&d));
+                let b64 = data.map(|d| perry_base64::engine::general_purpose::STANDARD.encode(&d));
                 // Password: check env, then use "perry-auto" for ~/.perry/ certs
                 let password = std::env::var("PERRY_APPLE_CERTIFICATE_PASSWORD")
                     .ok()
@@ -231,7 +231,7 @@ pub fn auto_export_p12(identity: Option<&str>) -> (Option<String>, Option<String
         Some(id) => id,
         None => return (None, None),
     };
-    use base64::Engine;
+    use perry_base64::Engine;
 
     let password = "perry-run-auto";
     let tmp_path = std::env::temp_dir().join("perry_run_auto.p12");
@@ -284,7 +284,7 @@ pub fn auto_export_p12(identity: Option<&str>) -> (Option<String>, Option<String
     if status.map(|s| s.success()).unwrap_or(false) {
         if let Ok(data) = std::fs::read(&tmp_path) {
             let _ = std::fs::remove_file(&tmp_path);
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            let b64 = perry_base64::engine::general_purpose::STANDARD.encode(&data);
             return (Some(b64), Some(password.to_string()));
         }
     }
@@ -312,7 +312,7 @@ pub fn is_development_profile(path: &Path) -> bool {
 
 /// Find a development provisioning profile (not distribution) for device builds
 pub fn find_development_provisioning_profile(bundle_id: &str) -> Option<String> {
-    use base64::Engine;
+    use perry_base64::Engine;
 
     let perry_dir = dirs::home_dir()?.join(".perry");
     if !perry_dir.exists() {
@@ -349,7 +349,7 @@ pub fn find_development_provisioning_profile(bundle_id: &str) -> Option<String> 
     for path in &candidates {
         if is_development_profile(path) {
             if let Ok(data) = std::fs::read(path) {
-                return Some(base64::engine::general_purpose::STANDARD.encode(&data));
+                return Some(perry_base64::engine::general_purpose::STANDARD.encode(&data));
             }
         }
     }

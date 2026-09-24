@@ -31,7 +31,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock as Lazy;
 
 #[cfg(feature = "async-runtime")]
 pub(crate) use super::tokio_bridge::spawn_native;
@@ -169,17 +169,7 @@ impl Drop for InflightGuard {
     }
 }
 
-/// #10399: stack reservation for perry-spawned threads — tokio's blocking
-/// pool (`tokio_bridge::RUNTIME`), `worker_threads` Workers, and the plain
-/// threads `perry_ffi_spawn_blocking` falls back to without tokio.
-pub fn blocking_thread_stack_size() -> usize {
-    const DEFAULT: usize = 32 * 1024 * 1024;
-    std::env::var("PERRY_THREAD_STACK_SIZE")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v >= 1024 * 1024)
-        .unwrap_or(DEFAULT)
-}
+pub use super::thread_config::blocking_thread_stack_size;
 
 /// Pending promise resolutions
 /// Format: (promise_ptr, is_success, result_value)

@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::Mutex;
 
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_null_proto_object, alloc_string, get_handle, get_handle_mut, register_handle, ErrorKind,
     GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
@@ -119,11 +118,10 @@ impl ResponseSnapshot {
     }
 }
 
-lazy_static! {
-    static ref PENDING_PROMISES: Mutex<Vec<PendingPromise>> = Mutex::new(Vec::new());
-    static ref REQUEST_IPS: Mutex<HashMap<usize, (usize, String, u16)>> =
-        Mutex::new(HashMap::new());
-}
+static PENDING_PROMISES: std::sync::LazyLock<Mutex<Vec<PendingPromise>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+static REQUEST_IPS: std::sync::LazyLock<Mutex<HashMap<usize, (usize, String, u16)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 struct ClosureCallResult {
     value: f64,

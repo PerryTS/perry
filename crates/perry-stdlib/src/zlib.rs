@@ -689,13 +689,14 @@ enum ZlibEvent {
     ),
 }
 
-lazy_static::lazy_static! {
-    static ref ZLIB_STREAMS: Mutex<HashMap<i64, ZlibStreamState>> = Mutex::new(HashMap::new());
-    static ref ZLIB_LISTENERS: Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> =
-        Mutex::new(HashMap::new());
-    static ref ZLIB_PENDING_EVENTS: Mutex<Vec<ZlibEvent>> = Mutex::new(Vec::new());
-    static ref NEXT_ZLIB_ID: Mutex<i64> = Mutex::new(ZLIB_STREAM_HANDLE_ID_START);
-}
+static ZLIB_STREAMS: std::sync::LazyLock<Mutex<HashMap<i64, ZlibStreamState>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static ZLIB_LISTENERS: std::sync::LazyLock<Mutex<HashMap<i64, HashMap<String, Vec<i64>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static ZLIB_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<ZlibEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+static NEXT_ZLIB_ID: std::sync::LazyLock<Mutex<i64>> =
+    std::sync::LazyLock::new(|| Mutex::new(ZLIB_STREAM_HANDLE_ID_START));
 
 // Band boundaries owned by `perry_runtime::value::addr_class`.
 const ZLIB_STREAM_HANDLE_ID_START: i64 =

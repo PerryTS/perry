@@ -36,12 +36,9 @@
 //!   trusted self-signed CA when that exact certificate is the endpoint leaf,
 //!   matching OpenSSL's behavior without disabling verification globally.
 
-lazy_static::lazy_static! {
-    static ref INTERNAL_HTTPS_SERVERS: std::sync::Mutex<
-        std::collections::HashMap<u16, InternalHttpsServer>,
-    > =
-        std::sync::Mutex::new(std::collections::HashMap::new());
-}
+static INTERNAL_HTTPS_SERVERS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<u16, InternalHttpsServer>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 #[derive(Clone)]
 struct InternalHttpsServer {
@@ -978,12 +975,12 @@ fn numeric_array_to_bytes(arr: &[serde_json::Value]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine;
+    use perry_base64::Engine;
     use serde_json::json;
 
     fn fixture(encoded: &str) -> Vec<u8> {
         let compact: String = encoded.split_whitespace().collect();
-        base64::engine::general_purpose::STANDARD
+        perry_base64::engine::general_purpose::STANDARD
             .decode(compact)
             .expect("checked-in TLS fixture is valid base64")
     }

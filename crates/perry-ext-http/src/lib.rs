@@ -106,7 +106,6 @@ pub use pending_dispatch::js_http_process_pending;
 use root_scanner::scan_http_roots;
 
 use bytes::Bytes;
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
     json_stringify, notify_main_thread, register_aux_event_pump, register_handle, with_handle_mut,
@@ -318,9 +317,8 @@ mod proxy_policy_tests {
     }
 }
 
-lazy_static! {
-    static ref HTTP_PENDING_EVENTS: Mutex<Vec<PendingHttpEvent>> = Mutex::new(Vec::new());
-}
+static HTTP_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<PendingHttpEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 
 static HTTP_GC_REGISTERED: Once = Once::new();
 

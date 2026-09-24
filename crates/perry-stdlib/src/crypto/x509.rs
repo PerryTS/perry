@@ -547,26 +547,11 @@ unsafe fn x509_string_array_f64(items: &[String]) -> f64 {
 }
 
 fn x509_time_millis(time: &x509_cert::time::Time) -> f64 {
-    let dt = time.to_date_time();
-    let Some(date) =
-        chrono::NaiveDate::from_ymd_opt(dt.year() as i32, dt.month() as u32, dt.day() as u32)
-    else {
-        return f64::NAN;
-    };
-    let Some(time) =
-        chrono::NaiveTime::from_hms_opt(dt.hour() as u32, dt.minutes() as u32, dt.seconds() as u32)
-    else {
-        return f64::NAN;
-    };
-    let dt = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-        date.and_time(time),
-        chrono::Utc,
-    );
-    dt.timestamp_millis() as f64
+    time.to_date_time().unix_duration().as_millis() as f64
 }
 
 fn x509_der_to_pem(der: &[u8]) -> String {
-    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(der);
     let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
     for chunk in b64.as_bytes().chunks(64) {
         pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
@@ -577,7 +562,7 @@ fn x509_der_to_pem(der: &[u8]) -> String {
 }
 
 fn x509_public_key_pem(spki_der: &[u8]) -> String {
-    let b64 = base64::engine::general_purpose::STANDARD.encode(spki_der);
+    let b64 = perry_base64::engine::general_purpose::STANDARD.encode(spki_der);
     let mut pem = String::from("-----BEGIN PUBLIC KEY-----\n");
     for chunk in b64.as_bytes().chunks(64) {
         pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
@@ -705,7 +690,7 @@ unsafe fn x509_to_legacy_object(handle: &X509Handle) -> f64 {
         set_object_string_field(
             obj.get_raw_mut_ptr(),
             b"modulus",
-            &hex::encode_upper(public_key.n().to_bytes_be()),
+            &perry_hex::encode_upper(public_key.n().to_bytes_be()),
         );
         set_object_string_field(
             obj.get_raw_mut_ptr(),
@@ -952,7 +937,9 @@ fn decode_x509_pem(bytes: &[u8]) -> Option<Vec<u8>> {
     if body.is_empty() {
         return None;
     }
-    base64::engine::general_purpose::STANDARD.decode(body).ok()
+    perry_base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .ok()
 }
 
 fn complete_der_sequence_len(bytes: &[u8]) -> Option<usize> {
@@ -1217,7 +1204,7 @@ pub(super) const DH_DEFAULT_PRIME_HEX: &str = concat!(
 );
 
 pub(super) fn dh_default_prime() -> Vec<u8> {
-    hex::decode(DH_DEFAULT_PRIME_HEX).unwrap_or_else(|_| vec![0xff; 128])
+    perry_hex::decode(DH_DEFAULT_PRIME_HEX).unwrap_or_else(|_| vec![0xff; 128])
 }
 
 pub(super) fn dh_default_generator() -> Vec<u8> {
@@ -1297,10 +1284,10 @@ pub(super) unsafe fn string_value(bytes: &[u8]) -> f64 {
 
 pub(super) unsafe fn ecdh_output(bytes: &[u8], encoding: Option<&str>) -> f64 {
     if matches!(encoding, Some(enc) if enc.eq_ignore_ascii_case("hex")) {
-        return string_value(hex::encode(bytes).as_bytes());
+        return string_value(perry_hex::encode(bytes).as_bytes());
     }
     if matches!(encoding, Some(enc) if enc.eq_ignore_ascii_case("base64")) {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let encoded = perry_base64::engine::general_purpose::STANDARD.encode(bytes);
         return string_value(encoded.as_bytes());
     }
     nanbox_ptr(alloc_buffer_from_slice(bytes))
@@ -1310,11 +1297,11 @@ pub(super) unsafe fn decode_ecdh_input(ptr: i64, encoding: &str) -> Vec<u8> {
     let bytes = bytes_from_ptr(ptr);
     if encoding.eq_ignore_ascii_case("hex") {
         let s = String::from_utf8(bytes).unwrap_or_default();
-        return hex::decode(s).unwrap_or_default();
+        return perry_hex::decode(s).unwrap_or_default();
     }
     if encoding.eq_ignore_ascii_case("base64") {
         let s = String::from_utf8(bytes).unwrap_or_default();
-        return base64::engine::general_purpose::STANDARD
+        return perry_base64::engine::general_purpose::STANDARD
             .decode(s.as_bytes())
             .unwrap_or_default();
     }
@@ -1329,17 +1316,17 @@ pub(super) unsafe fn decode_hash_update_value(value: f64, encoding: &str) -> Vec
     let bytes = bytes_from_ptr(arg_ptr(value));
     if encoding.eq_ignore_ascii_case("hex") {
         let s = String::from_utf8(bytes).unwrap_or_default();
-        return hex::decode(s).unwrap_or_default();
+        return perry_hex::decode(s).unwrap_or_default();
     }
     if encoding.eq_ignore_ascii_case("base64") {
         let s = String::from_utf8(bytes).unwrap_or_default();
-        return base64::engine::general_purpose::STANDARD
+        return perry_base64::engine::general_purpose::STANDARD
             .decode(s.as_bytes())
             .unwrap_or_default();
     }
     if encoding.eq_ignore_ascii_case("base64url") {
         let s = String::from_utf8(bytes).unwrap_or_default();
-        return base64::engine::general_purpose::URL_SAFE_NO_PAD
+        return perry_base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(s.as_bytes())
             .unwrap_or_default();
     }

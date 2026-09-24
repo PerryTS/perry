@@ -1,0 +1,30 @@
+[package]
+name = "perry-cli-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Opt-in CLI helpers; never a runtime dependency"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+utc = []
+dotenv = []
+logger = ["utc", "dep:log", "dep:perry-perex"]
+progress = ["dep:console"]
+apple-jwt = ["dep:anyhow", "dep:serde_json", "dep:p256", "dep:perry-base64"]
+
+[dependencies]
+log = { workspace = true, optional = true }
+perry-perex = { workspace = true, optional = true }
+console = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pem"], optional = true }
+perry-base64 = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Parser compatibility oracle, excluded from all normal/build graphs.
+dotenvy = "0.15"

@@ -8,13 +8,12 @@ use super::subclass::js_stream_handle_kind;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-lazy_static::lazy_static! {
-    /// #5437: expando properties attached to live stream handles
-    /// (`stream.allReady = promise` in React's renderToReadableStream).
-    /// Keyed by stream id; values are NaN-boxed u64 bits, GC-traced in
-    /// `scan_expando_roots`.
-    static ref STREAM_EXPANDO: Mutex<HashMap<usize, Vec<(String, u64)>>> = Mutex::new(HashMap::new());
-}
+/// #5437: expando properties attached to live stream handles
+/// (`stream.allReady = promise` in React's renderToReadableStream).
+/// Keyed by stream id; values are NaN-boxed u64 bits, GC-traced in
+/// `scan_expando_roots`.
+static STREAM_EXPANDO: std::sync::LazyLock<Mutex<HashMap<usize, Vec<(String, u64)>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// #5437: store an expando property on a live stream handle. Returns 1 when
 /// stored. Any live stream-band handle kind accepts expandos (streams,

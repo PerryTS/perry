@@ -3,6 +3,7 @@
 use perry_runtime::{string::str_bytes_from_jsvalue, value::JSValue, StringHeader};
 
 pub mod handle;
+pub(crate) mod thread_config;
 // The promise bridge — the main-thread settle queue and pump. Tokio-free
 // since turnloop P8 lane L, and gated on `async-bridge` (which
 // `async-runtime` implies). Always-on code that references it must also be

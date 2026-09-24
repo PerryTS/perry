@@ -123,14 +123,17 @@ impl AsyncWrite for Transport {
 
 // ─── Handle storage ──────────────────────────────────────────────────────────
 
-lazy_static::lazy_static! {
-    static ref NET_SOCKETS: Mutex<HashMap<i64, SocketState>> = Mutex::new(HashMap::new());
-    static ref NET_LISTENERS: Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> = Mutex::new(HashMap::new());
-    static ref NET_PENDING_EVENTS: Mutex<Vec<PendingNetEvent>> = Mutex::new(Vec::new());
-    static ref NET_PENDING_READS: Mutex<HashMap<i64, VecDeque<Vec<u8>>>> = Mutex::new(HashMap::new());
-    static ref NET_PENDING_TLS_ABORTS: Mutex<std::collections::HashSet<i64>> = Mutex::new(std::collections::HashSet::new());
-    static ref NEXT_NET_ID: Mutex<i64> = Mutex::new(1);
-}
+static NET_SOCKETS: std::sync::LazyLock<Mutex<HashMap<i64, SocketState>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NET_LISTENERS: std::sync::LazyLock<Mutex<HashMap<i64, HashMap<String, Vec<i64>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NET_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<PendingNetEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+static NET_PENDING_READS: std::sync::LazyLock<Mutex<HashMap<i64, VecDeque<Vec<u8>>>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NET_PENDING_TLS_ABORTS: std::sync::LazyLock<Mutex<std::collections::HashSet<i64>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+static NEXT_NET_ID: std::sync::LazyLock<Mutex<i64>> = std::sync::LazyLock::new(|| Mutex::new(1));
 
 thread_local! {
     // The mutable-root scanner registry is thread-local, so this latch must be too.

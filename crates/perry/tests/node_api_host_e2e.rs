@@ -406,7 +406,7 @@ console.log("node-api-cache", direct.exports === addon)
         .split('/')
         .fold(sidecar.clone(), |path, part| path.join(part));
     let staged_bytes = std::fs::read(&staged_addon).expect("read staged addon");
-    let staged_hash = hex::encode(Sha256::digest(&staged_bytes));
+    let staged_hash = perry_hex::encode(Sha256::digest(&staged_bytes));
     let file_record = manifest["addons"][0]["files"]
         .as_array()
         .unwrap()

@@ -74,7 +74,7 @@ fn portable_path(path: &Path) -> String {
 
 fn payload_key(addon: &NativeAddonModule) -> String {
     let digest = Sha256::digest(addon.logical_id.as_bytes());
-    hex::encode(&digest[..8])
+    perry_hex::encode(&digest[..8])
 }
 
 /// Every package-local file is shipped. Native addons sometimes open data
@@ -104,7 +104,10 @@ pub(super) fn addon_payload_files(addon: &NativeAddonModule) -> Vec<PathBuf> {
 fn hash_file(path: &Path) -> Result<(String, u64)> {
     let bytes =
         fs::read(path).with_context(|| format!("read native addon payload {}", path.display()))?;
-    Ok((hex::encode(Sha256::digest(&bytes)), bytes.len() as u64))
+    Ok((
+        perry_hex::encode(Sha256::digest(&bytes)),
+        bytes.len() as u64,
+    ))
 }
 
 fn target_tuple(target: Option<&str>) -> String {

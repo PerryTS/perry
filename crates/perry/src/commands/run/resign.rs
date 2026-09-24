@@ -635,8 +635,8 @@ pub fn create_dev_profile_via_api(
         .as_str()
         .ok_or_else(|| anyhow!("No profileContent in API response"))?;
 
-    use base64::Engine;
-    let profile_data = base64::engine::general_purpose::STANDARD
+    use perry_base64::Engine;
+    let profile_data = perry_base64::engine::general_purpose::STANDARD
         .decode(profile_b64)
         .context("Failed to decode profile content")?;
 
@@ -658,34 +658,7 @@ pub fn create_dev_profile_via_api(
 
 /// Generate a JWT for App Store Connect API authentication
 pub fn generate_asc_jwt(key_id: &str, issuer_id: &str, p8_key: &str) -> Result<String> {
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
-
-    #[derive(serde::Serialize)]
-    struct Claims {
-        iss: String,
-        iat: u64,
-        exp: u64,
-        aud: String,
-    }
-
-    let claims = Claims {
-        iss: issuer_id.to_string(),
-        iat: now,
-        exp: now + 1200, // 20 minutes
-        aud: "appstoreconnect-v1".to_string(),
-    };
-
-    let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some(key_id.to_string());
-    header.typ = Some("JWT".to_string());
-
-    let key = EncodingKey::from_ec_pem(p8_key.as_bytes()).context("Failed to parse .p8 key")?;
-
-    encode(&header, &claims, &key).context("Failed to generate JWT")
+    crate::apple_jwt::generate(key_id, issuer_id, p8_key)
 }
 
 /// Read CFBundleIdentifier from an .app's Info.plist

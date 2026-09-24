@@ -91,18 +91,18 @@ fn err(text: impl Into<String>) -> ProtocolError {
 
 /// `Sec-WebSocket-Accept` for a given `Sec-WebSocket-Key` (RFC 6455 §4.2.2).
 pub fn accept_key(key: &str) -> String {
-    use base64::Engine as _;
+    use perry_base64::Engine as _;
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(key.as_bytes());
     hasher.update(HANDSHAKE_GUID.as_bytes());
-    base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
+    perry_base64::engine::general_purpose::STANDARD.encode(hasher.finalize())
 }
 
 /// Encode `Sec-WebSocket-Key` from a 16-byte nonce.
 pub fn encode_key(nonce: &[u8; 16]) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(nonce)
+    use perry_base64::Engine as _;
+    perry_base64::engine::general_purpose::STANDARD.encode(nonce)
 }
 
 /// Serialize one client frame. A client frame is always masked (§5.3) and this

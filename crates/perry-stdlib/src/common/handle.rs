@@ -8,11 +8,11 @@
 use std::any::Any;
 
 use dashmap::DashMap;
-use once_cell::sync::Lazy;
 use perry_ffi::{
     NativeLeaseKind, NativeQuarantine, NativeRegistrationIdentity, NativeRegistrationKind,
     NativeRegistrationLease, NativeRegistrationRegistry, NativeRegistryDomain,
 };
+use std::sync::LazyLock as Lazy;
 
 /// Handle type - an opaque integer identifier for a managed object
 pub type Handle = i64;

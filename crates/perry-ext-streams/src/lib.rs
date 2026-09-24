@@ -48,7 +48,6 @@
 //! No optional features — this crate links unconditionally when the
 //! well-known bindings table flips `import 'streams'` to it.
 
-use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_buffer, alloc_string, build_object_shape, gc_register_mutable_root_scanner_named,
     js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field, ArrayHeader,
@@ -176,27 +175,30 @@ unsafe impl Send for WritableStreamData {}
 unsafe impl Send for ReaderData {}
 unsafe impl Send for WriterData {}
 
-lazy_static! {
-    static ref READABLE_STREAMS: Mutex<HashMap<usize, ReadableStreamData>> =
-        Mutex::new(HashMap::new());
-    static ref NEXT_RS_ID: Mutex<usize> = Mutex::new(1);
-    static ref WRITABLE_STREAMS: Mutex<HashMap<usize, WritableStreamData>> =
-        Mutex::new(HashMap::new());
-    static ref NEXT_WS_ID: Mutex<usize> = Mutex::new(1);
-    static ref TRANSFORM_STREAMS: Mutex<HashMap<usize, TransformStreamData>> =
-        Mutex::new(HashMap::new());
-    static ref NEXT_TS_ID: Mutex<usize> = Mutex::new(1);
-    static ref READERS: Mutex<HashMap<usize, ReaderData>> = Mutex::new(HashMap::new());
-    static ref NEXT_READER_ID: Mutex<usize> = Mutex::new(1);
-    static ref WRITERS: Mutex<HashMap<usize, WriterData>> = Mutex::new(HashMap::new());
-    static ref NEXT_WRITER_ID: Mutex<usize> = Mutex::new(1);
-    /// Maps a writable-side handle for a TransformStream to its
-    /// owning TransformStream id. Lookup is what makes
-    /// `pipeTo(transform.writable)` / `writer.write` route through
-    /// the user's `transform(chunk, controller)` callback instead of
-    /// a missing `write_cb`.
-    static ref TRANSFORM_PAIRS: Mutex<HashMap<usize, usize>> = Mutex::new(HashMap::new());
-}
+static READABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, ReadableStreamData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_RS_ID: std::sync::LazyLock<Mutex<usize>> = std::sync::LazyLock::new(|| Mutex::new(1));
+static WRITABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, WritableStreamData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_WS_ID: std::sync::LazyLock<Mutex<usize>> = std::sync::LazyLock::new(|| Mutex::new(1));
+static TRANSFORM_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, TransformStreamData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_TS_ID: std::sync::LazyLock<Mutex<usize>> = std::sync::LazyLock::new(|| Mutex::new(1));
+static READERS: std::sync::LazyLock<Mutex<HashMap<usize, ReaderData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_READER_ID: std::sync::LazyLock<Mutex<usize>> =
+    std::sync::LazyLock::new(|| Mutex::new(1));
+static WRITERS: std::sync::LazyLock<Mutex<HashMap<usize, WriterData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_WRITER_ID: std::sync::LazyLock<Mutex<usize>> =
+    std::sync::LazyLock::new(|| Mutex::new(1));
+/// Maps a writable-side handle for a TransformStream to its
+/// owning TransformStream id. Lookup is what makes
+/// `pipeTo(transform.writable)` / `writer.write` route through
+/// the user's `transform(chunk, controller)` callback instead of
+/// a missing `write_cb`.
+static TRANSFORM_PAIRS: std::sync::LazyLock<Mutex<HashMap<usize, usize>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static GC_REGISTERED: Once = Once::new();
 
