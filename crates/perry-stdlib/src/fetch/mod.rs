@@ -229,17 +229,20 @@ fn forbidden_header_failure(
 
 fn alloc_fetch_handle_id() -> usize {
     let recycled = FREE_FETCH_HANDLE_IDS.lock().unwrap().pop();
-    if let Some(id) = recycled {
-        lifecycle::register(id);
-        return id;
-    }
-    let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
-    let id = *id_guard;
-    if id >= FETCH_HANDLE_ID_END {
-        panic!("Web Fetch handle id range exhausted");
-    }
-    *id_guard += 1;
-    drop(id_guard);
+    let id = match recycled {
+        Some(id) => id,
+        None => {
+            let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
+            let id = *id_guard;
+            if id >= FETCH_HANDLE_ID_END {
+                panic!("Web Fetch handle id range exhausted");
+            }
+            *id_guard += 1;
+            drop(id_guard);
+            lifecycle::note_fresh_band_id(id);
+            id
+        }
+    };
     lifecycle::register(id);
     if perry_runtime::hot_diag::receiver_repr_on() {
         perry_runtime::hot_diag::receiver_repr_note_constructed(
@@ -771,11 +774,14 @@ pub extern "C" fn js_fetch_response_status(handle: f64) -> f64 {
 pub extern "C" fn js_fetch_response_status_text(handle: f64) -> *mut StringHeader {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let response_id = handle_id(handle);
-    let guard = FETCH_RESPONSES.lock().unwrap();
-    match guard.get(&response_id) {
-        Some(resp) => {
-            js_string_from_bytes(resp.status_text.as_ptr(), resp.status_text.len() as u32)
-        }
+    // Copy out and drop the guard before allocating (see `lifecycle`).
+    let status_text = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&response_id)
+        .map(|resp| resp.status_text.clone());
+    match status_text {
+        Some(text) => js_string_from_bytes(text.as_ptr(), text.len() as u32),
         None => std::ptr::null_mut(),
     }
 }

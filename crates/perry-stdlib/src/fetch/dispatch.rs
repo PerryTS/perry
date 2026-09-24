@@ -532,34 +532,30 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
             js_class_method_bind(handle_to_f64(resp_id), name.as_ptr(), name.len())
         });
     }
-    let guard = FETCH_RESPONSES.lock().unwrap();
-    let resp = guard.get(&resp_id)?;
-    let bits = match prop {
-        "status" => return Some(resp.status as f64),
-        "statusText" => {
-            let p = js_string_from_bytes(resp.status_text.as_ptr(), resp.status_text.len() as u32);
-            JSValue::string_ptr(p).bits()
+    // Snapshot under the guard, allocate after dropping it: a collection
+    // triggered by the string allocation locks this registry (`lifecycle`).
+    let text = {
+        let guard = FETCH_RESPONSES.lock().unwrap();
+        let resp = guard.get(&resp_id)?;
+        match prop {
+            "status" => return Some(resp.status as f64),
+            "statusText" => resp.status_text.clone(),
+            "type" => resp.type_name.clone(),
+            "url" => resp.url.clone(),
+            "ok" => {
+                return Some(f64::from_bits(if resp.status >= 200 && resp.status < 300 {
+                    TAG_TRUE
+                } else {
+                    TAG_FALSE
+                }))
+            }
+            "bodyUsed" => return Some(tagged_bool(resp.body_used)),
+            "redirected" => return Some(tagged_bool(resp.redirected)),
+            _ => return None,
         }
-        "type" => {
-            let p = js_string_from_bytes(resp.type_name.as_ptr(), resp.type_name.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "url" => {
-            let p = js_string_from_bytes(resp.url.as_ptr(), resp.url.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "ok" => {
-            return Some(f64::from_bits(if resp.status >= 200 && resp.status < 300 {
-                TAG_TRUE
-            } else {
-                TAG_FALSE
-            }))
-        }
-        "bodyUsed" => return Some(tagged_bool(resp.body_used)),
-        "redirected" => return Some(tagged_bool(resp.redirected)),
-        _ => return None,
     };
-    Some(f64::from_bits(bits))
+    let p = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    Some(f64::from_bits(JSValue::string_ptr(p).bits()))
 }
 
 /// Try to read a property off a Headers handle by registry id.
@@ -819,8 +815,11 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
 #[doc(hidden)]
 pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
     let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(blob_id)]);
-    let guard = BLOB_REGISTRY.lock().unwrap();
-    let blob = guard.get(&blob_id)?;
+    // Membership only; every allocating arm below runs with the guard dropped
+    // (a collection triggered by the allocation locks this registry).
+    if !BLOB_REGISTRY.lock().unwrap().contains_key(&blob_id) {
+        return None;
+    }
     if matches!(prop, "text" | "arrayBuffer" | "bytes" | "slice") {
         extern "C" {
             fn js_class_method_bind(
@@ -840,20 +839,17 @@ pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
             js_class_method_bind(handle_to_f64(blob_id), name.as_ptr(), name.len())
         });
     }
-    let bits = match prop {
-        "size" => return Some(blob.body.len() as f64),
-        "type" => {
-            let p =
-                js_string_from_bytes(blob.content_type.as_ptr(), blob.content_type.len() as u32);
-            JSValue::string_ptr(p).bits()
+    let text = {
+        let guard = BLOB_REGISTRY.lock().unwrap();
+        let blob = guard.get(&blob_id)?;
+        match prop {
+            "size" => return Some(blob.body.len() as f64),
+            "type" => blob.content_type.clone(),
+            "name" => blob.file_name.clone()?,
+            "lastModified" => return blob.last_modified_ms,
+            _ => return None,
         }
-        "name" => {
-            let name = blob.file_name.as_ref()?;
-            let p = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            JSValue::string_ptr(p).bits()
-        }
-        "lastModified" => return blob.last_modified_ms,
-        _ => return None,
     };
-    Some(f64::from_bits(bits))
+    let p = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    Some(f64::from_bits(JSValue::string_ptr(p).bits()))
 }

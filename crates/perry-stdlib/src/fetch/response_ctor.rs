@@ -152,17 +152,27 @@ pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
 pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
+    // Neither the "already consumed" throw nor the stream tee (which can throw
+    // and allocates) may run under the guard: a throw unwinds without running
+    // `Drop`, leaving the registry locked for good, and the collector locks
+    // this registry (`lifecycle`). Decide under the guard, act after it.
+    let state = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|resp| (resp.body_present && resp.body_used, resp.body_stream_id));
+    let Some((consumed, stream_id)) = state else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    if consumed {
+        unsafe { throw_fetch_type_error("Response.clone: Body has already been consumed.") };
+    }
+    let teed =
+        stream_id.map(|stream_id| unsafe { crate::streams::tee_readable_stream_ids(stream_id) });
     let cloned = {
         let mut guard = FETCH_RESPONSES.lock().unwrap();
         guard.get_mut(&id).map(|resp| {
-            if resp.body_present && resp.body_used {
-                unsafe {
-                    throw_fetch_type_error("Response.clone: Body has already been consumed.")
-                };
-            }
-            let cloned_stream_id = resp.body_stream_id.map(|stream_id| {
-                let (original, cloned) =
-                    unsafe { crate::streams::tee_readable_stream_ids(stream_id) };
+            let cloned_stream_id = teed.map(|(original, cloned)| {
                 resp.body_stream_id = Some(original);
                 resp.cached_body_stream_id = Some(original);
                 cloned

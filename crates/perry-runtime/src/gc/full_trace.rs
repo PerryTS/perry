@@ -17,19 +17,18 @@ pub(crate) fn begin_full_trace() {
         assert!(!active.replace(true), "full trace already active");
     });
     crate::proxy::gc_begin_full_trace();
-    FETCH_TRACE.with(|hook| {
-        if let Some(hook) = hook.get() {
-            (hook.phase)(0);
-        }
-    });
+    if let Some(hook) = FETCH_TRACE.with(Cell::get) {
+        FETCH_TRACE_ARMED.with(|armed| armed.set(true));
+        (hook.phase)(0);
+    }
 }
 
 pub(crate) fn finish_full_trace() {
-    FETCH_TRACE.with(|hook| {
-        if let Some(hook) = hook.get() {
+    if FETCH_TRACE_ARMED.with(|armed| armed.replace(false)) {
+        if let Some(hook) = FETCH_TRACE.with(Cell::get) {
             (hook.phase)(1);
         }
-    });
+    }
     crate::proxy::gc_finish_full_trace();
     FULL_TRACE_ACTIVE.with(|active| {
         assert!(active.replace(false), "no full trace active");
@@ -52,24 +51,49 @@ struct FetchTrace {
 }
 crate::perry_thread_local! {
     static FETCH_TRACE: Cell<Option<FetchTrace>> = const { Cell::new(None) };
+    /// True between `begin_full_trace` and its finish/abort when a Fetch
+    /// provider was registered at the start: the one flag the per-value
+    /// tracing paths read.
+    static FETCH_TRACE_ARMED: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Install this thread's Fetch handle trace provider. The stdlib calls it
+/// once per mutator thread, before that thread's first handle exists.
 #[no_mangle]
 pub extern "C" fn perry_ffi_gc_register_fetch_trace(phase: extern "C" fn(u32), observe: Observe) {
     FETCH_TRACE.with(|hook| hook.set(Some(FetchTrace { phase, observe })));
 }
 
+/// Whether a traced word must be offered to [`observe_handle`]: a proxy or a
+/// Fetch handle trace is running on this thread.
 #[inline]
 pub(crate) fn handle_trace_active() -> bool {
-    crate::proxy::gc_full_trace_active()
-        || (full_trace_active() && FETCH_TRACE.with(|hook| hook.get().is_some()))
+    crate::proxy::gc_full_trace_active() || FETCH_TRACE_ARMED.with(Cell::get)
+}
+
+/// Fetch handles are POINTER_TAG-boxed or raw ids inside the fetch band. Pure
+/// arithmetic, so ordinary heap pointers never pay for the thread-local read
+/// and cross-crate indirect call below.
+#[inline(always)]
+fn is_fetch_handle_word(bits: u64) -> bool {
+    let id = match bits >> 48 {
+        0x7FFD => bits & crate::value::POINTER_MASK,
+        0 => bits,
+        _ => return false,
+    };
+    crate::value::addr_class::is_fetch_handle_band(id as usize)
 }
 
 pub(crate) fn observe_handle(bits: u64, valid_ptrs: &super::ValidPointerSet) -> bool {
     if crate::proxy::gc_observe_traced_value(bits, valid_ptrs) {
         return true;
     }
-    if !full_trace_active() {
+    is_fetch_handle_word(bits) && observe_fetch_handle(bits, valid_ptrs)
+}
+
+#[inline(never)]
+fn observe_fetch_handle(bits: u64, valid_ptrs: &super::ValidPointerSet) -> bool {
+    if !FETCH_TRACE_ARMED.with(Cell::get) {
         return false;
     }
     extern "C" fn mark(bits: u64, ctx: *mut c_void) {
@@ -83,11 +107,16 @@ pub(crate) fn observe_handle(bits: u64, valid_ptrs: &super::ValidPointerSet) -> 
 }
 
 pub(crate) fn abort_full_trace() {
-    let _ = FETCH_TRACE.try_with(|hook| {
-        if let Some(hook) = hook.get() {
-            (hook.phase)(2);
-        }
-    });
+    let armed = FETCH_TRACE_ARMED
+        .try_with(|armed| armed.replace(false))
+        .unwrap_or(false);
+    if armed {
+        let _ = FETCH_TRACE.try_with(|hook| {
+            if let Some(hook) = hook.get() {
+                (hook.phase)(2);
+            }
+        });
+    }
     let _ = FULL_TRACE_ACTIVE.try_with(|active| active.set(false));
     crate::proxy::gc_abort_full_trace();
 }

@@ -2,6 +2,33 @@
 //! retain their heap edges because an old JS owner need not be visited.
 //! Registry ids stay ABI-compatible and are recycled only after a full trace
 //! proves them unreachable. Each mutator sweeps only the ids it allocated.
+//!
+//! **Young ids.** A native function can hold a freshly allocated id in a Rust
+//! local, unpublished, across a GC-allocating call (`alloc_blob` followed by
+//! `js_promise_resolve`, say). Rust frames are not precise roots, so an id
+//! must survive the first full trace that begins after its birth: ids born
+//! since the previous trace began are "young", and the Fetch root scanner
+//! visits them as strong roots during full marking (initial root scan and
+//! final remark), which also marks their edges through [`observe`]. Ids born
+//! while a trace runs are never released by that trace. A native frame that
+//! keeps an id unpublished across more than one full trace — a loop calling
+//! back into user JS — must pin it (`pin_handles` or a handle scope).
+//!
+//! **Pacing.** Handle ids carry no GC payload, so registry growth alone never
+//! reaches the heap's own triggers. A full trace is requested when this
+//! mutator's owned-id count reaches `trigger_at`, reset after every trace to
+//! twice the survivors (never below [`MIN_TRIGGER`]), so reclamation work is
+//! amortised against growth rather than paid every N allocations regardless of
+//! heap size. `alloc_fetch_handle_id` additionally asks for traces while the
+//! process-wide band is nearly exhausted.
+//!
+//! **Locking.** A collection runs on the allocating thread and, through this
+//! module and `super::gc`, locks `FETCH_RESPONSES`, `REQUEST_REGISTRY`,
+//! `HEADERS_REGISTRY`, `BLOB_REGISTRY`, `FORM_DATA_REGISTRY`,
+//! `FREE_FETCH_HANDLE_IDS` and the object-URL table. `std::sync::Mutex` is not
+//! reentrant, so no site may hold one of those guards across a GC allocation
+//! or a throw: copy what it needs out, drop the guard, then allocate.
+//! `tests::no_registry_guard_is_held_across_an_allocation` enforces the shape.
 use super::*;
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -16,32 +43,83 @@ extern "C" {
     );
 }
 
+/// Owned-id count below which registry growth never requests a full trace.
+pub(super) const MIN_TRIGGER: usize = 4096;
+/// Fresh ids left in the process-wide band below which allocation keeps
+/// requesting full traces (every [`BAND_RESERVE_STRIDE`] fresh ids).
+const BAND_RESERVE: usize = 65536;
+const BAND_RESERVE_STRIDE: usize = 1024;
+
+struct Epoch {
+    /// Ids born since the most recent full trace began.
+    born: HashSet<usize>,
+    /// Ids born between the previous trace's start and the current one's.
+    young: HashSet<usize>,
+    /// `Some` while a full trace runs: the ids observed reachable so far.
+    live: Option<HashSet<usize>>,
+    /// Owned-id count at which the next full trace is requested.
+    trigger_at: usize,
+    /// This mutator has registered its scanner and trace hook.
+    hooked: bool,
+}
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;
+
 thread_local! {
-    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+    /// Completed full traces on this mutator; lets tests assert that the
+    /// collection they arranged really ran.
+    #[cfg(test)]
+    static FULL_TRACES: Cell<usize> = const { Cell::new(0) };
     static OWNED: RefCell<OwnedHandles> = RefCell::new(OwnedHandles::default());
-    static LIVE: RefCell<Option<HashSet<usize>>> = const { RefCell::new(None) };
+    static EPOCH: RefCell<Epoch> = RefCell::new(Epoch {
+        born: HashSet::new(),
+        young: HashSet::new(),
+        live: None,
+        trigger_at: MIN_TRIGGER,
+        hooked: false,
+    });
 }
 
 pub(super) fn register(id: usize) {
-    ALLOCATIONS.with(|count| {
-        let next = count.get() + 1;
-        count.set(next % 4096);
-        if next == 4096 {
-            unsafe { perry_ffi_gc_request_handle_collection() };
+    if !EPOCH.with(|epoch| std::mem::replace(&mut epoch.borrow_mut().hooked, true)) {
+        // Once per thread: the scanner and the trace hook are per-mutator.
+        gc::ensure_gc_registered();
+        unsafe { perry_ffi_gc_register_fetch_trace(phase, observe) };
+    }
+    let owned = OWNED.with(|owned| {
+        let mut owned = owned.borrow_mut();
+        owned.insert(id);
+        owned.len()
+    });
+    let request = EPOCH.with(|epoch| {
+        let mut epoch = epoch.borrow_mut();
+        epoch.born.insert(id);
+        if owned < epoch.trigger_at {
+            return false;
         }
+        // Re-arm rather than re-request on every allocation; a request that
+        // no full trace answers is repeated MIN_TRIGGER ids later.
+        epoch.trigger_at = owned + MIN_TRIGGER;
+        true
     });
-    gc::ensure_gc_registered();
-    unsafe { perry_ffi_gc_register_fetch_trace(phase, observe) };
-    OWNED.with(|owned| {
-        owned.borrow_mut().insert(id);
-    });
-    // A budgeted full trace can park while the mutator allocates. Treat new
-    // entries as live until the next full, just like black GC allocations.
-    LIVE.with(|live| {
-        if let Some(live) = live.borrow_mut().as_mut() {
-            live.insert(id);
-        }
-    });
+    if request {
+        request_full_trace();
+    }
+}
+
+/// Ask for a full trace at the next safe poll. Never collects synchronously:
+/// callers may hold registry locks.
+pub(super) fn request_full_trace() {
+    unsafe { perry_ffi_gc_request_handle_collection() };
+}
+
+/// Called for every id taken fresh from the band (not from the free list).
+pub(super) fn note_fresh_band_id(id: usize) {
+    if FETCH_HANDLE_ID_END - id <= BAND_RESERVE && id % BAND_RESERVE_STRIDE == 0 {
+        request_full_trace();
+    }
 }
 
 pub(super) fn owns(id: usize) -> bool {
@@ -50,48 +128,114 @@ pub(super) fn owns(id: usize) -> bool {
         .unwrap_or(false)
 }
 
+/// Young and in-trace-born ids, visited as strong roots by the Fetch scanner
+/// during full marking (see the module doc).
+pub(super) fn visit_young_handles<V: gc::FetchRootVisitor>(visitor: &mut V) {
+    // Snapshot first: visiting re-enters `observe`, which borrows EPOCH.
+    let ids: Vec<usize> = EPOCH.with(|epoch| {
+        let epoch = epoch.borrow();
+        epoch
+            .young
+            .iter()
+            .chain(epoch.born.iter())
+            .copied()
+            .collect()
+    });
+    for id in ids {
+        let mut slot = handle_to_f64(id);
+        visitor.visit_nanbox_f64_slot(&mut slot);
+    }
+}
+
 extern "C" fn phase(phase: u32) {
     match phase {
-        0 => LIVE.with(|live| *live.borrow_mut() = Some(HashSet::new())),
-        1 => {
-            let live = LIVE
-                .with(|live| live.borrow_mut().take())
-                .unwrap_or_default();
-            let dead = OWNED.with(|owned| {
-                let mut owned = owned.borrow_mut();
-                let dead: Vec<_> = owned.difference(&live).copied().collect();
-                owned.retain(|id| live.contains(id));
-                dead
-            });
-            release(&dead);
-        }
+        0 => EPOCH.with(|epoch| {
+            let mut epoch = epoch.borrow_mut();
+            epoch.young = std::mem::take(&mut epoch.born);
+            epoch.live = Some(HashSet::new());
+        }),
+        1 => finish_full_trace(),
         _ => {
-            let _ = LIVE.try_with(|live| {
-                live.borrow_mut().take();
+            // Aborted: nothing was proven dead, and young ids stay young.
+            let _ = EPOCH.try_with(|epoch| {
+                let mut epoch = epoch.borrow_mut();
+                epoch.live = None;
+                let young = std::mem::take(&mut epoch.young);
+                epoch.born.extend(young);
             });
         }
     }
 }
 
+fn finish_full_trace() {
+    #[cfg(test)]
+    FULL_TRACES.with(|count| count.set(count.get() + 1));
+    let (live, young, born) = EPOCH.with(|epoch| {
+        let mut epoch = epoch.borrow_mut();
+        let live = epoch.live.take().unwrap_or_default();
+        let young = std::mem::take(&mut epoch.young);
+        (live, young, epoch.born.clone())
+    });
+    // Object URLs are strong roots until revoked. Blobs have no edges, so
+    // excluding them here is equivalent to marking them.
+    let object_urls = crate::fetch_blob::object_url_blob_ids();
+    let (dead, survivors) = OWNED.with(|owned| {
+        let mut owned = owned.borrow_mut();
+        debug_assert!(
+            young
+                .iter()
+                .all(|id| live.contains(id) || !owned.contains(id)),
+            "the Fetch scanner must have observed every young id"
+        );
+        let keep = |id: &usize| {
+            live.contains(id) || young.contains(id) || born.contains(id) || object_urls.contains(id)
+        };
+        let dead: Vec<_> = owned.iter().copied().filter(|id| !keep(id)).collect();
+        owned.retain(|id| keep(id));
+        (dead, owned.len())
+    });
+    EPOCH.with(|epoch| {
+        epoch.borrow_mut().trigger_at = MIN_TRIGGER.max(survivors.saturating_mul(2));
+    });
+    release(&dead);
+}
+
+/// Remove dead records and recycle their ids. Dropping a Headers or FormData
+/// record drops its bound-method cache with it. Allocates nothing on the GC
+/// heap and takes each table's lock on its own.
 fn release(dead: &[usize]) {
     if dead.is_empty() {
         return;
     }
-    let dead_set: HashSet<_> = dead.iter().copied().collect();
-    headers_method_value::HEADERS_METHOD_VALUE_CACHE
-        .lock()
-        .unwrap()
-        .retain(|(owner, _), _| !dead_set.contains(owner));
-    dispatch::FORM_DATA_METHOD_VALUE_CACHE
-        .lock()
-        .unwrap()
-        .retain(|(owner, _), _| !dead_set.contains(owner));
-    for id in dead {
-        FETCH_RESPONSES.lock().unwrap().remove(id);
-        HEADERS_REGISTRY.lock().unwrap().remove(id);
-        REQUEST_REGISTRY.lock().unwrap().remove(id);
-        BLOB_REGISTRY.lock().unwrap().remove(id);
-        body_metadata::remove_form_data(*id);
+    {
+        let mut table = FETCH_RESPONSES.lock().unwrap();
+        for id in dead {
+            table.remove(id);
+        }
+    }
+    {
+        let mut table = HEADERS_REGISTRY.lock().unwrap();
+        for id in dead {
+            table.remove(id);
+        }
+    }
+    {
+        let mut table = REQUEST_REGISTRY.lock().unwrap();
+        for id in dead {
+            table.remove(id);
+        }
+    }
+    {
+        let mut table = BLOB_REGISTRY.lock().unwrap();
+        for id in dead {
+            table.remove(id);
+        }
+    }
+    {
+        let mut table = body_metadata::FORM_DATA_REGISTRY.lock().unwrap();
+        for id in dead {
+            table.remove(id);
+        }
     }
     FREE_FETCH_HANDLE_IDS
         .lock()
@@ -101,7 +245,9 @@ fn release(dead: &[usize]) {
 
 // Thread exit is also an ownership boundary. No JS value can legally refer
 // into another mutator's heap; teardown must not leave its native records or
-// cached pointers in process-global tables. This Drop uses no other TLS.
+// cached pointers in process-global tables. Blobs an unrevoked object URL
+// still names are kept (the URL is process-wide); they are no longer owned by
+// any mutator, so they stay until process exit. This Drop uses no other TLS.
 #[derive(Default)]
 struct OwnedHandles(HashSet<usize>);
 impl std::ops::Deref for OwnedHandles {
@@ -117,7 +263,14 @@ impl std::ops::DerefMut for OwnedHandles {
 }
 impl Drop for OwnedHandles {
     fn drop(&mut self) {
-        release(&self.0.iter().copied().collect::<Vec<_>>());
+        let object_urls = crate::fetch_blob::object_url_blob_ids();
+        let dead: Vec<_> = self
+            .0
+            .iter()
+            .copied()
+            .filter(|id| !object_urls.contains(id))
+            .collect();
+        release(&dead);
     }
 }
 
@@ -133,8 +286,10 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
     if !(FETCH_HANDLE_ID_START..FETCH_HANDLE_ID_END).contains(&id) || !owns(id) {
         return false;
     }
-    let first = LIVE.with(|live| {
-        live.borrow_mut()
+    let first = EPOCH.with(|epoch| {
+        epoch
+            .borrow_mut()
+            .live
             .as_mut()
             .is_some_and(|live| live.insert(id))
     });
@@ -155,31 +310,10 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
             edges.push(handle_to_f64(headers).to_bits());
         }
     }
-    body_metadata::form_data_file_edges(id, &mut edges);
-    const METHODS: &[&str] = &[
-        "append",
-        "delete",
-        "entries",
-        "forEach",
-        "get",
-        "getAll",
-        "getSetCookie",
-        "has",
-        "keys",
-        "set",
-        "values",
-    ];
-    for cache in [
-        &*headers_method_value::HEADERS_METHOD_VALUE_CACHE,
-        &*dispatch::FORM_DATA_METHOD_VALUE_CACHE,
-    ] {
-        let cache = cache.lock().unwrap();
-        for &method in METHODS {
-            if let Some(bits) = cache.get(&(id, method)) {
-                edges.push(*bits);
-            }
-        }
+    if let Some(record) = HEADERS_REGISTRY.lock().unwrap().get(&id) {
+        edges.extend(record.method_values.values().copied());
     }
+    body_metadata::form_data_edges(id, &mut edges);
     for edge in edges {
         mark(edge, ctx);
     }
@@ -203,7 +337,10 @@ pub(super) fn pin_handles(values: &[f64]) -> perry_runtime::gc::RuntimeHandleSco
 mod tests {
     use super::*;
 
-    fn collect() {
+    /// Two full collections: the first ages every id past its young epoch,
+    /// the second decides by reachability alone (see the module doc).
+    pub(super) fn collect() {
+        perry_runtime::gc::js_gc_collect();
         perry_runtime::gc::js_gc_collect();
     }
 
@@ -247,12 +384,8 @@ mod tests {
             assert!(HEADERS_REGISTRY.lock().unwrap().contains_key(&header_id));
             method_root.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
             collect();
+            // The bound-method cache lives in the record and died with it.
             assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&header_id));
-            assert!(!headers_method_value::HEADERS_METHOD_VALUE_CACHE
-                .lock()
-                .unwrap()
-                .keys()
-                .any(|(id, _)| *id == header_id));
         })
         .join()
         .unwrap();
@@ -323,7 +456,7 @@ mod ownership_tests {
                 blob,
                 f64::from_bits(TAG_UNDEFINED),
             );
-            perry_runtime::gc::js_gc_collect();
+            super::tests::collect();
             assert_eq!(js_request_get_signal(request).to_bits(), signal.to_bits());
             assert_eq!(js_request_get_headers(request).to_bits(), headers.to_bits());
             assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&handle_id(blob)));
@@ -331,7 +464,7 @@ mod ownership_tests {
             let _signal_root = scope.root_nanbox_f64(signal);
             request_root.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
             form_root.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
-            perry_runtime::gc::js_gc_collect();
+            super::tests::collect();
             assert!(!REQUEST_REGISTRY.lock().unwrap().contains_key(&request_id));
             assert!(!HEADERS_REGISTRY
                 .lock()
@@ -351,7 +484,7 @@ mod root_shape_tests {
 
     #[test]
     fn heap_container_and_raw_native_slot_keep_handles_alive() {
-        std::thread::spawn(|| unsafe {
+        std::thread::spawn(|| {
             perry_runtime::gc::gc_init();
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
             let boxed = js_headers_new();
@@ -360,7 +493,7 @@ mod root_shape_tests {
             let array = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(1));
             let ptr = perry_runtime::js_array_push_f64(array.get_raw_mut_ptr(), boxed);
             array.set_raw_mut_ptr(ptr);
-            perry_runtime::gc::js_gc_collect();
+            super::tests::collect();
             assert!(HEADERS_REGISTRY
                 .lock()
                 .unwrap()
@@ -371,7 +504,7 @@ mod root_shape_tests {
                 .contains_key(&handle_id(raw)));
             array.set_raw_mut_ptr(std::ptr::null_mut::<perry_runtime::ArrayHeader>());
             raw_root.set_raw_mut_ptr(std::ptr::null_mut::<u8>());
-            perry_runtime::gc::js_gc_collect();
+            super::tests::collect();
             assert!(!HEADERS_REGISTRY
                 .lock()
                 .unwrap()
@@ -400,12 +533,9 @@ mod root_shape_tests {
         })
         .join()
         .unwrap();
+        // Thread exit released the record, and its method cache with it.
         assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&headers));
-        assert!(!headers_method_value::HEADERS_METHOD_VALUE_CACHE
-            .lock()
-            .unwrap()
-            .values()
-            .any(|bits| *bits == method));
+        let _ = method;
     }
 }
 
@@ -440,7 +570,7 @@ fn moving_collection_rewrites_live_method_cache_before_full_reclamation() {
             "the cached closure must actually move"
         );
         owner.set_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
-        perry_runtime::gc::js_gc_collect();
+        tests::collect();
         assert!(!HEADERS_REGISTRY
             .lock()
             .unwrap()

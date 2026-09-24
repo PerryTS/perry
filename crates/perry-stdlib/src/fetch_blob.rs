@@ -25,9 +25,24 @@ use crate::fetch::{
 // `resolveObjectURL(url)` returns the same blob handle (or undefined
 // after revoke).  The registry is process-global; entries live until
 // `revokeObjectURL` clears them.
+//
+// Every id in this table is a strong root: Fetch handle ids are recycled once a
+// full trace finds them unreachable (`fetch::lifecycle`), and in Node a Blob
+// stays alive for as long as an object URL names it. The collector locks this
+// table during a full trace, so no site may allocate while holding it.
 lazy_static::lazy_static! {
     static ref OBJECT_URL_REGISTRY: Mutex<HashMap<String, usize>> = Mutex::new(HashMap::new());
     static ref NEXT_OBJECT_URL_ID: Mutex<u64> = Mutex::new(1);
+}
+
+/// Blob ids some unrevoked object URL still names (see the table's doc).
+pub(crate) fn object_url_blob_ids() -> std::collections::HashSet<usize> {
+    OBJECT_URL_REGISTRY
+        .lock()
+        .unwrap()
+        .values()
+        .copied()
+        .collect()
 }
 
 fn throw_invalid_object_url_blob(value: f64) -> ! {
@@ -320,8 +335,11 @@ pub unsafe extern "C" fn js_buffer_resolve_object_url(url: f64) -> f64 {
         Some(s) => s,
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    match OBJECT_URL_REGISTRY.lock().unwrap().get(&s).copied() {
-        Some(id) => handle_to_f64(id),
-        None => f64::from_bits(TAG_UNDEFINED),
+    let id = OBJECT_URL_REGISTRY.lock().unwrap().get(&s).copied();
+    // The id is rooted until revoke, so it cannot have been recycled; check the
+    // kind anyway rather than hand back whatever handle now owns the number.
+    match id {
+        Some(id) if BLOB_REGISTRY.lock().unwrap().contains_key(&id) => handle_to_f64(id),
+        _ => f64::from_bits(TAG_UNDEFINED),
     }
 }

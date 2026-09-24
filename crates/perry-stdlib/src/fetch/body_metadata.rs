@@ -367,14 +367,14 @@ fn request_content_type(handle: f64) -> String {
 
 fn response_string_field(handle: f64, f: impl FnOnce(&FetchResponse) -> &str) -> *mut StringHeader {
     let id = handle_id(handle);
-    let guard = FETCH_RESPONSES.lock().unwrap();
-    match guard.get(&id) {
-        Some(resp) => {
-            let value = f(resp);
-            js_string_from_bytes(value.as_ptr(), value.len() as u32)
-        }
-        None => js_string_from_bytes("".as_ptr(), 0),
-    }
+    // Copy out and drop the guard before allocating (see `lifecycle`).
+    let value = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|resp| f(resp).to_owned())
+        .unwrap_or_default();
+    js_string_from_bytes(value.as_ptr(), value.len() as u32)
 }
 
 #[no_mangle]
@@ -996,16 +996,15 @@ mod tests {
     }
 }
 
-pub(super) fn remove_form_data(id: usize) {
-    FORM_DATA_REGISTRY.lock().unwrap().remove(&id);
-}
-
-pub(super) fn form_data_file_edges(id: usize, edges: &mut Vec<u64>) {
+/// Heap and handle edges of one FormData record, for `lifecycle`'s full trace:
+/// its File handles and its cached bound-method closures.
+pub(super) fn form_data_edges(id: usize, edges: &mut Vec<u64>) {
     if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get(&id) {
         for (_, value) in &form.entries {
             if let FormDataValue::File(id) = value {
                 edges.push(handle_to_f64(*id).to_bits());
             }
         }
+        edges.extend(form.method_values.values().copied());
     }
 }

@@ -131,10 +131,14 @@ extern "C" fn scan_fetch_roots_ffi(
     visit: FfiMutableRootVisitor,
     ctx: *mut c_void,
 ) {
+    let mut visitor = FfiFetchRootVisitor { visit, ctx };
     if unsafe { perry_ffi_gc_root_visitor_is_full_mark(ctx) } {
+        // Full marking reaches registry edges only through live handles
+        // (`lifecycle::observe`), except for young ids, which are roots.
+        lifecycle::visit_young_handles(&mut visitor);
         return;
     }
-    scan_fetch_roots_with(&mut FfiFetchRootVisitor { visit, ctx });
+    scan_fetch_roots_with(&mut visitor);
 }
 
 #[cfg(test)]
@@ -145,15 +149,16 @@ pub(super) fn scan_fetch_roots(mark: &mut dyn FnMut(f64)) {
 
 /// Visit every heap-value slot the Fetch registries own.
 pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
+    // Each mutator visits only the records it owns (`lifecycle::owns`).
     if let Ok(mut headers) = HEADERS_REGISTRY.lock() {
-        for record in headers.values_mut() {
+        for (_, record) in headers.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
             for bits in record.method_values.values_mut() {
                 visitor.visit_nanbox_u64_slot(bits);
             }
         }
     }
     if let Ok(mut forms) = body_metadata::FORM_DATA_REGISTRY.lock() {
-        for record in forms.values_mut() {
+        for (_, record) in forms.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
             for bits in record.method_values.values_mut() {
                 visitor.visit_nanbox_u64_slot(bits);
             }
