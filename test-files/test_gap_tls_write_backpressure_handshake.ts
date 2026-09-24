@@ -6,6 +6,10 @@
 // it must be encrypted like any other, where Perry sent it in the clear ahead
 // of the ClientHello and the server failed the handshake (`DecodeError`).
 import tls from "node:tls";
+// Imported so the parity harness routes this test through the `perry-ext-net`
+// wrapper, which is what serves `tls.connect` in a real build. Without a `net`
+// import the harness links the bundled stdlib TLS and never reaches this code.
+import net from "node:net";
 
 const CERT = `-----BEGIN CERTIFICATE-----
 MIIDJTCCAg2gAwIBAgIUZF3wbyk6BduDu+lEeegKd2ULMK8wDQYJKoZIhvcNAQEL
@@ -68,6 +72,7 @@ const server = tls.createServer({ key: KEY, cert: CERT }, (s) => {
 
 server.listen(0, "127.0.0.1", () => {
   const port = (server.address() as any).port;
+  console.log("net.isIP", net.isIP("127.0.0.1"));
   const c = tls.connect({ port, host: "127.0.0.1", rejectUnauthorized: false });
   console.log("pre-connect write", c.write(Buffer.alloc(16, 0x61)));
   c.on("connect", () => {
