@@ -1048,8 +1048,10 @@ fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
 /// instance and a subclass prototype reach the SAME object by identity.
 /// Returns `undefined` if the export is not materialized.
 pub(crate) fn async_resource_prototype_value() -> f64 {
-    let func_value =
-        super::super::native_module::bound_native_callable_export_value("async_hooks", "AsyncResource");
+    let func_value = super::super::native_module::bound_native_callable_export_value(
+        "async_hooks",
+        "AsyncResource",
+    );
     super::function_prototype::js_function_prototype_value_for_read(func_value)
 }
 
