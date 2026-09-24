@@ -49,7 +49,7 @@ fn jsvalue_extends_data_view(value: f64) -> bool {
 #[inline]
 fn jsvalue_typed_array_kind(v: f64) -> Option<u8> {
     let addr = jsvalue_addr(v);
-    if crate::buffer::is_uint8array_buffer(addr) {
+    if super::typed_array_proto_thunks::is_typed_array_buffer(addr) {
         Some(crate::typedarray::KIND_UINT8)
     } else {
         crate::typedarray::lookup_typed_array_kind(addr)
@@ -441,4 +441,68 @@ pub extern "C" fn js_util_types_is_set_iterator(value: f64) -> f64 {
         crate::collection_iter_object::is_set_iterator_addr(addr)
             || crate::set::is_registered_set_iterator(addr),
     )
+}
+
+#[cfg(test)]
+mod buffer_view_tests {
+    use super::*;
+
+    fn check_buffer(mark: Option<fn(usize)>, view: bool, typed: bool) {
+        let buffer = crate::buffer::buffer_alloc(4);
+        if let Some(mark) = mark {
+            mark(buffer as usize);
+        }
+        let value = f64::from_bits(JSValue::pointer(buffer.cast()).bits());
+        let expected_view = JSValue::bool(view).bits();
+        let expected_typed = JSValue::bool(typed).bits();
+        assert_eq!(
+            js_util_types_is_array_buffer_view(value).to_bits(),
+            expected_view
+        );
+        assert_eq!(
+            super::super::global_this::array_buffer_is_view_thunk(std::ptr::null(), value)
+                .to_bits(),
+            expected_view,
+        );
+        assert_eq!(
+            js_util_types_is_typed_array(value).to_bits(),
+            expected_typed
+        );
+        assert_eq!(
+            js_util_types_is_uint8_array(value).to_bits(),
+            expected_typed
+        );
+        assert_eq!(
+            js_util_types_is_int8_array(value).to_bits(),
+            crate::value::TAG_FALSE
+        );
+    }
+
+    #[test]
+    fn node_buffer_is_a_uint8_array_view() {
+        check_buffer(None, true, true);
+    }
+
+    #[test]
+    fn buffer_backings_keep_their_distinct_predicate_brands() {
+        check_buffer(Some(crate::buffer::mark_as_uint8array), true, true);
+        check_buffer(Some(crate::buffer::mark_as_data_view), true, false);
+        check_buffer(Some(crate::buffer::mark_as_array_buffer), false, false);
+        check_buffer(
+            Some(crate::buffer::mark_as_shared_array_buffer),
+            false,
+            false,
+        );
+        check_buffer(Some(crate::buffer::mark_as_secret_key), false, false);
+        check_buffer(
+            Some(|addr| crate::buffer::mark_as_crypto_key(addr, 0, 0, 0)),
+            false,
+            false,
+        );
+        check_buffer(
+            Some(|addr| crate::buffer::mark_as_asymmetric_key(addr, 0, 0)),
+            false,
+            false,
+        );
+    }
 }

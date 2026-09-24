@@ -304,7 +304,8 @@ pub(crate) extern "C" fn array_buffer_is_view_thunk(
     };
     let is_view = (addr != 0
         && !crate::buffer::is_any_array_buffer(addr)
-        && (crate::buffer::is_uint8array_buffer(addr) || crate::buffer::is_data_view(addr)))
+        && (super::super::typed_array_proto_thunks::is_typed_array_buffer(addr)
+            || crate::buffer::is_data_view(addr)))
         || jsvalue_extends_data_view(value)
         || jsvalue_extends_typed_array(value)
         || crate::typedarray::lookup_typed_array_kind(addr).is_some();
