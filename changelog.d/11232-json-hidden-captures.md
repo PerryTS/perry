@@ -1,0 +1,1 @@
+Fix `JSON.stringify` with a function replacer, key whitelist, or indentation exposing compiler capture slots on class instances. Apply the same hidden-field filter as plain serialization before reading values or invoking callbacks; preserve ordinary user properties, including reserved-looking keys on plain objects.
