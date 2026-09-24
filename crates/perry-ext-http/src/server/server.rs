@@ -633,17 +633,11 @@ pub(super) unsafe fn listen_http_server(
             }
         }
     }));
-    if !posted {
+    if let Some(code) = posted.error_code() {
         // No loop exists for this agent anywhere (a host where `Loop::new`
-        // failed): report it where Node reports a failed listen.
-        queue_listen_error_parts(
-            server_handle,
-            &host,
-            port,
-            crate::server::turnloop_serve::NO_LOOP_CODE,
-            0,
-            "listen",
-        );
+        // failed), or the owner's postbox refused every retry: report it
+        // where Node reports a failed listen.
+        queue_listen_error_parts(server_handle, &host, port, code, 0, "listen");
         if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
             withdraw_listen_callbacks(s);
         }

@@ -116,11 +116,41 @@ pub(crate) fn enabled() -> bool {
 /// thread either owns its agent's loop or can post to the thread that does.
 pub(crate) const NO_LOOP_CODE: &str = "ENOTSUP";
 
+/// Node's `err.code` for a listen whose post to the loop's owner was refused
+/// transiently every time it was retried (the owner's postbox stayed full).
+/// Distinct from [`NO_LOOP_CODE`]: the loop exists, it was just busy.
+pub(crate) const POST_BUSY_CODE: &str = "EAGAIN";
+
 /// How many times a transiently refused post is retried before the operation
 /// is reported as failed. A refusal is `Again` only while the owner is between
 /// claiming its route and publishing its loop, or while its postbox is full —
-/// both drain within a turn, so a short spin is the whole remedy.
-const POST_ATTEMPTS: usize = 64;
+/// both drain within a turn. The first [`POST_SPIN_ATTEMPTS`] retries only
+/// yield; the rest back off by a millisecond each, so the whole budget spans
+/// roughly a quarter second rather than a few microseconds of spinning.
+const POST_ATTEMPTS: usize = 256;
+const POST_SPIN_ATTEMPTS: usize = 16;
+
+/// What became of a job handed to [`post_to_owner`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Posted {
+    /// The owner will run it.
+    Accepted,
+    /// No loop exists for this agent anywhere: report [`NO_LOOP_CODE`].
+    NoRoute,
+    /// The loop exists but refused every retry: report [`POST_BUSY_CODE`].
+    Busy,
+}
+
+impl Posted {
+    /// The `err.code` a listen reports for a job that did not land.
+    pub(crate) fn error_code(self) -> Option<&'static str> {
+        match self {
+            Posted::Accepted => None,
+            Posted::NoRoute => Some(NO_LOOP_CODE),
+            Posted::Busy => Some(POST_BUSY_CODE),
+        }
+    }
+}
 
 /// One piece of work carried to the thread that owns this agent's loop.
 struct LoopJob(Box<dyn FnOnce() + Send>);
@@ -135,28 +165,43 @@ impl AgentJob for LoopJob {
 /// the same JS heap as the caller (turnloop P10, `perry_ffi::agent_post`).
 ///
 /// This is what replaced the hyper accept loop a thread without its own loop
-/// used to run (perry-ext-net's `turnloop_io::on_loop` is the same route): such a thread is a second thread acting for an agent another
-/// thread already owns, so the owner binds and serves for it. It is also how a
+/// used to run (perry-ext-net's `turnloop_io::on_loop` is the same route):
+/// such a thread is a second thread acting for an agent another thread already
+/// owns, so the owner binds and serves for it. It is also how a
 /// thread that is not a JS thread at all (the SCHED_RR descriptor bridge) gets
 /// a connection onto the loop — which is why this does not ask [`enabled`]
 /// first: the first thread to ask *claims* its agent's route, and a foreign
 /// thread that won that race would own a loop nobody turns.
 ///
-/// Returns `false`, with `op` dropped unrun, only when no loop exists for this
-/// agent anywhere (a host where `Loop::new` failed).
-pub(crate) fn post_to_owner(op: Box<dyn FnOnce() + Send>) -> bool {
-    let mut job = Box::new(LoopJob(op));
-    for _ in 0..POST_ATTEMPTS {
-        match agent_post::post_job(job) {
-            Ok(()) => return true,
-            Err(rejected) if rejected.is_permanent() => return false,
+/// Anything but [`Posted::Accepted`] means `op` was dropped unrun:
+/// [`Posted::NoRoute`] when no loop exists for this agent anywhere (a host
+/// where `Loop::new` failed), [`Posted::Busy`] when the loop exists but every
+/// bounded retry was refused transiently.
+pub(crate) fn post_to_owner(op: Box<dyn FnOnce() + Send>) -> Posted {
+    post_with(Box::new(LoopJob(op)), agent_post::post_job)
+}
+
+/// [`post_to_owner`]'s retry policy over an injectable poster, so the
+/// classification is testable without a loop.
+fn post_with<J>(
+    mut job: Box<J>,
+    mut post: impl FnMut(Box<J>) -> Result<(), agent_post::Rejected<J>>,
+) -> Posted {
+    for attempt in 0..POST_ATTEMPTS {
+        match post(job) {
+            Ok(()) => return Posted::Accepted,
+            Err(rejected) if rejected.is_permanent() => return Posted::NoRoute,
             Err(rejected) => {
                 job = rejected.into_job();
-                std::thread::yield_now();
+                if attempt < POST_SPIN_ATTEMPTS {
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
         }
     }
-    false
+    Posted::Busy
 }
 
 /// Serve a connection some other process accepted — a SCHED_RR cluster
@@ -188,6 +233,9 @@ pub(crate) fn adopt_connection(server_handle: i64, socket: tl::AdoptedSocket) {
             return;
         }
         if tl::adopt_stream(id, SUBSYSTEM, socket).is_err() {
+            // `adopt_stream` consumed and closed the descriptor; the id it
+            // was offered never became a handle, so give it back.
+            perry_ffi::free_handle_id(id);
             return;
         }
         let idle_close_ms = crate::server::server::with_base_server(

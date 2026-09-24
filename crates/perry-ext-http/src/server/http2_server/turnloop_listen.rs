@@ -13,22 +13,35 @@ use super::{Http2SecureServer, Http2SettingsState};
 /// flow-control policy.
 const DEFAULT_MAX_SESSION_MEMORY_MB: usize = 10;
 
+/// What [`try_listen_on_turnloop`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum H2Listen {
+    /// Bound and accepting; the server is listening.
+    Bound,
+    /// The bind failed; the error is queued as the server's `'error'`. Node
+    /// never emits `'listening'` or runs the `listen(cb)` callback for this.
+    Failed,
+    /// This thread has no loop: the caller posts the listen to the owner.
+    NoLoop,
+    /// A `createSecureServer` with no usable TLS material: nothing to install.
+    NoTls,
+}
+
+impl H2Listen {
+    pub(super) fn is_bound(&self) -> bool {
+        matches!(self, H2Listen::Bound)
+    }
+}
+
 /// Bind and accept HTTP/2 on the agent's turnloop loop, when this thread has
-/// one. Returns the listener id and the bound port (id 0 when the bind failed
-/// and was reported), or `None` when there is no listener to make: this
-/// thread has no loop (the caller posts to the owner instead), or a
-/// `createSecureServer` has no usable TLS material to install.
+/// one.
 ///
 /// A cluster worker binds with turnloop 0.1.0-alpha.6's `ReusePort::Share`,
 /// the `SO_REUSEPORT` bind it used to do by hand. `http2.createServer` has no
 /// SCHED_RR descriptor path (only `http.createServer` does).
-pub(super) fn try_listen_on_turnloop(
-    server_handle: i64,
-    host: &str,
-    port: u16,
-) -> Option<(i64, u16, String)> {
+pub(super) fn try_listen_on_turnloop(server_handle: i64, host: &str, port: u16) -> H2Listen {
     if !crate::server::turnloop_h2::enabled() {
-        return None;
+        return H2Listen::NoLoop;
     }
     let reuse_port = crate::server::cluster_bind::is_cluster_worker();
     // `noDelay` is read here, under the same handle borrow as the TLS config
@@ -36,7 +49,9 @@ pub(super) fn try_listen_on_turnloop(
     // time rather than per accepted socket, honouring `server.noDelay()`,
     // which Node defaults to true.
     let (tls, plaintext, settings, allow_http1, no_delay) = {
-        let server = get_handle::<Http2SecureServer>(server_handle)?;
+        let Some(server) = get_handle::<Http2SecureServer>(server_handle) else {
+            return H2Listen::Failed;
+        };
         (
             server.tls_config.clone(),
             server.plaintext,
@@ -47,7 +62,7 @@ pub(super) fn try_listen_on_turnloop(
     };
     if !plaintext && tls.is_none() {
         // `js_node_http2_create_secure_server` already reported why.
-        return None;
+        return H2Listen::NoTls;
     }
     let tls = if plaintext { None } else { tls };
     match crate::server::turnloop_h2::listen(
@@ -62,27 +77,30 @@ pub(super) fn try_listen_on_turnloop(
         reuse_port,
         no_delay,
     ) {
-        Ok((id, bound_port, bound_host)) => {
+        Ok((id, bound_port, _bound_host)) => {
             crate::server::cluster_bind::notify_listening(host, bound_port);
-            let server = get_handle_mut::<Http2SecureServer>(server_handle)?;
+            let Some(server) = get_handle_mut::<Http2SecureServer>(server_handle) else {
+                return H2Listen::Failed;
+            };
             server.base.bound_port = bound_port;
             server.base.bound_host = host.to_string();
             server.base.listening = true;
             server.turnloop_listener = id;
-            Some((id, bound_port, bound_host))
+            H2Listen::Bound
         }
-        Err(err) if err.no_loop => None,
+        Err(err) if err.no_loop => H2Listen::NoLoop,
         Err(err) => {
-            eprintln!(
-                "[node:http2] bind {}:{} failed: {}",
+            // Node emits `'error'` on the server, asynchronously, and never
+            // `'listening'` — the same queue `http.Server.listen` uses.
+            crate::server::server::queue_listen_error_parts(
+                server_handle,
                 host,
                 port,
-                err.message()
+                &err.code,
+                err.errno,
+                &err.syscall,
             );
-            // The failure is reported once and the listen ends here. (The
-            // missing `'error'` event is P5's open defect — see
-            // `docs/turnloop/http2b-report.md`.)
-            Some((0, port, host.to_string()))
+            H2Listen::Failed
         }
     }
 }

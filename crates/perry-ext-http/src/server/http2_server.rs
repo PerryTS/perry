@@ -540,14 +540,29 @@ pub(super) unsafe fn listen_http2_server(
     // A thread acting for an agent another thread owns posts the bind to the
     // owner, exactly as `http.Server.listen` does.
     if crate::server::turnloop_h2::enabled() {
-        if turnloop_listen::try_listen_on_turnloop(server_handle, &host, port).is_some() {
-            if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
-                crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+        match turnloop_listen::try_listen_on_turnloop(server_handle, &host, port) {
+            turnloop_listen::H2Listen::Bound => {
+                if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
+                    crate::server::server::queue_deferred_listening_emit(&mut s.base, callback);
+                }
             }
-        } else {
+            // The bind failed and its `'error'` is queued: no `'listening'`,
+            // and the `listen(cb)` callback never runs (Node).
+            turnloop_listen::H2Listen::Failed => {}
             // A `createSecureServer` whose TLS material did not load: the
             // create call already said why, and the listen refuses.
-            eprintln!("[node:http2] tls config unavailable; refusing to listen");
+            turnloop_listen::H2Listen::NoTls => {
+                eprintln!("[node:http2] tls config unavailable; refusing to listen");
+            }
+            // Only reachable if the loop vanished since `enabled()` said yes.
+            turnloop_listen::H2Listen::NoLoop => crate::server::server::queue_listen_error_parts(
+                server_handle,
+                &host,
+                port,
+                crate::server::turnloop_serve::NO_LOOP_CODE,
+                0,
+                "listen",
+            ),
         }
         return server_handle;
     }
@@ -557,7 +572,7 @@ pub(super) unsafe fn listen_http2_server(
     let job_host = host.clone();
     let posted = crate::server::turnloop_serve::post_to_owner(Box::new(move || {
         let listening = crate::server::turnloop_h2::enabled()
-            && turnloop_listen::try_listen_on_turnloop(server_handle, &job_host, port).is_some();
+            && turnloop_listen::try_listen_on_turnloop(server_handle, &job_host, port).is_bound();
         if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
             if listening {
                 crate::server::server::queue_deferred_listening_emit(&mut s.base, 0);
@@ -566,12 +581,14 @@ pub(super) unsafe fn listen_http2_server(
             }
         }
     }));
-    if !posted {
-        eprintln!(
-            "[node:http2] bind {}:{} failed: {}",
-            host,
+    if let Some(code) = posted.error_code() {
+        crate::server::server::queue_listen_error_parts(
+            server_handle,
+            &host,
             port,
-            crate::server::turnloop_serve::NO_LOOP_CODE
+            code,
+            0,
+            "listen",
         );
         if let Some(s) = get_handle_mut::<Http2SecureServer>(server_handle) {
             crate::server::server::withdraw_listen_callbacks(&mut s.base);

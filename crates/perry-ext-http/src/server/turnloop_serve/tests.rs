@@ -47,3 +47,46 @@ fn a_custom_timeout_and_buffer_add() {
     server.keep_alive_timeout_buffer = 0.0;
     assert_eq!(idle_close_ms(&server), 300);
 }
+
+/// The posting route's outcome must say WHY a job did not land. A permanent
+/// `NoRoute` is "no loop anywhere" (`ENOTSUP`); a loop whose postbox refused
+/// every bounded retry is busy (`EAGAIN`), not absent. Before this split both
+/// read as no-loop, so a listen that met a full postbox reported the wrong
+/// error and a caller could not tell the two apart.
+#[test]
+fn post_outcome_separates_no_route_from_a_busy_owner() {
+    use perry_ffi::agent_post::Rejected;
+
+    let accepted = super::post_with(Box::new(()), |_| Ok(()));
+    assert_eq!(accepted, super::Posted::Accepted);
+    assert_eq!(accepted.error_code(), None);
+
+    let no_route = super::post_with(Box::new(()), |job| Err(Rejected::NoRoute(job)));
+    assert_eq!(no_route, super::Posted::NoRoute);
+    assert_eq!(no_route.error_code(), Some(super::NO_LOOP_CODE));
+
+    let mut tries = 0;
+    let busy = super::post_with(Box::new(()), |job| {
+        tries += 1;
+        Err(Rejected::Again(job))
+    });
+    assert_eq!(busy, super::Posted::Busy);
+    assert_eq!(busy.error_code(), Some(super::POST_BUSY_CODE));
+    assert_eq!(
+        tries,
+        super::POST_ATTEMPTS,
+        "retries must be bounded, and all used"
+    );
+
+    // Transient refusals followed by acceptance are an ordinary success.
+    let mut refusals = 3;
+    let late = super::post_with(Box::new(()), |job| {
+        if refusals > 0 {
+            refusals -= 1;
+            Err(Rejected::Again(job))
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(late, super::Posted::Accepted);
+}

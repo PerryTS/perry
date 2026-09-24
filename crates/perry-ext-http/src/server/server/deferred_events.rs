@@ -250,6 +250,7 @@ fn listen_error_description(code: &str) -> &'static str {
         "EAFNOSUPPORT" => "address family not supported",
         "EMFILE" => "too many open files",
         "ENOTSUP" => "operation not supported on socket",
+        "EAGAIN" => "resource temporarily unavailable",
         _ => "listen failed",
     }
 }

@@ -310,12 +310,14 @@ pub(super) unsafe fn listen_https_server(
             crate::server::server::withdraw_listen_callbacks(&mut s.base);
         }
     }));
-    if !posted {
-        eprintln!(
-            "[node:https] bind {}:{} failed: {}",
-            host,
+    if let Some(code) = posted.error_code() {
+        crate::server::server::queue_listen_error_parts(
+            server_handle,
+            &host,
             port,
-            crate::server::turnloop_serve::NO_LOOP_CODE
+            code,
+            0,
+            "listen",
         );
         if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
             crate::server::server::withdraw_listen_callbacks(&mut s.base);
@@ -346,8 +348,8 @@ fn finish_https_listen(server_handle: i64, callback: i64) {
 }
 
 /// Bind `host:port` on this thread's turnloop loop and start accepting TLS
-/// connections. Returns whether the server is now listening; a failure is
-/// reported on stderr, as the HTTPS path always has.
+/// connections. Returns whether the server is now listening; a bind failure
+/// is queued as the server's `'error'`, as `http.Server.listen` does.
 ///
 /// A cluster worker binds with `ReusePort::Share` (turnloop 0.1.0-alpha.6),
 /// which is what `SO_REUSEPORT` by hand used to do; see
@@ -393,12 +395,16 @@ fn turnloop_https_listen(server_handle: i64, host: &str, port: u16) -> bool {
                 None => false,
             }
         }
+        // Node emits `'error'` on the server (asynchronously) and never
+        // `'listening'`; the HTTP path queues the same error.
         Err(err) => {
-            eprintln!(
-                "[node:https] bind {}:{} failed: {}",
+            crate::server::server::queue_listen_error_parts(
+                server_handle,
                 host,
                 port,
-                err.message()
+                &err.code,
+                err.errno,
+                &err.syscall,
             );
             false
         }
