@@ -14,8 +14,10 @@ crate::perry_thread_local! {
 
     /// Per-`func_ptr` small-LRU cache. Each value holds up to
     /// `MAX_CAPTURED_CLOSURE_SLOTS` (captures-bits, ClosureHeader)
-    /// pairs. Multiple slots serve interleaved repeated capture tuples;
-    /// the small bound limits the capture graphs held alive by this cache.
+    /// pairs. Multiple slots are critical for the parallel-instance
+    /// async-await pattern (e.g. `Promise.all` of N async closures
+    /// each capturing its own boxed `__async_step`), where a single-
+    /// slot cache evicts every cycle and effectively never hits.
     /// `PtrHasher`-keyed for the same reason as the other registries
     /// here — on `promise_all_chains` this is hit on every closure
     /// alloc (150 k/run).
@@ -74,16 +76,20 @@ impl CapturedClosureCache {
 
     fn lookup(&mut self, fingerprint: u64, captures: &[u64]) -> Option<*mut ClosureHeader> {
         let hint_slot = Self::hint_slot(fingerprint);
-        let hints = self.hints.as_ref()?;
-        let hinted = hints.indices_plus_one[hint_slot];
-        if hinted != 0 && hints.fingerprints[hint_slot] == fingerprint {
-            let index = (hinted - 1) as usize;
-            if self
-                .entries
-                .get(index)
-                .is_some_and(|entry| entry.captures.as_slice() == captures)
-            {
-                return Some(self.touch(index));
+        // Hints are only a prefilter. A missing hint array must fall through
+        // to the exact scan below, never read as a miss: a spurious miss
+        // counts toward the adaptive bypass and would disable the literal.
+        if let Some(hints) = self.hints.as_ref() {
+            let hinted = hints.indices_plus_one[hint_slot];
+            if hinted != 0 && hints.fingerprints[hint_slot] == fingerprint {
+                let index = (hinted - 1) as usize;
+                if self
+                    .entries
+                    .get(index)
+                    .is_some_and(|entry| entry.captures.as_slice() == captures)
+                {
+                    return Some(self.touch(index));
+                }
             }
         }
 
@@ -163,6 +169,47 @@ mod captured_closure_cache_tests {
     }
 
     #[test]
+    fn fifty_interleaved_capture_tuples_all_hit_on_the_second_round() {
+        // The per-batch fan-out MAX_CAPTURED_CLOSURE_SLOTS is sized for: 50
+        // activations of one literal, each with its own capture tuple, taking
+        // turns. An LRU smaller than the rotation never hits.
+        let mut cache = CapturedClosureCache::new();
+        let tuple = |i: usize| [i as u64, 0x5eed];
+        for i in 0..50 {
+            let captures = tuple(i);
+            let fingerprint = capture_fingerprint(&captures);
+            assert_eq!(cache.lookup(fingerprint, &captures), None);
+            cache.insert(fingerprint, captures.to_vec(), fake_closure(i));
+        }
+        for i in 0..50 {
+            let captures = tuple(i);
+            let fingerprint = capture_fingerprint(&captures);
+            assert_eq!(
+                cache.lookup(fingerprint, &captures),
+                Some(fake_closure(i)),
+                "tuple {i} was evicted before its second use"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_hint_array_falls_through_to_exact_scan() {
+        // Hints are a prefilter only: a cache whose hint array is absent
+        // must still find its entries, or every lookup would count as a
+        // miss and the adaptive bypass would disable the literal.
+        let mut cache = CapturedClosureCache::new();
+        let captures = [7u64, 11u64];
+        let fingerprint = capture_fingerprint(&captures);
+        cache.insert(fingerprint, captures.to_vec(), fake_closure(3));
+        cache.hints = None;
+        assert_eq!(cache.lookup(fingerprint, &captures), Some(fake_closure(3)));
+        assert!(
+            cache.hints.is_some(),
+            "a scan hit re-populates the hint for the next lookup"
+        );
+    }
+
+    #[test]
     fn bypass_drops_captured_roots_and_storage_but_preserves_returned_closure() {
         struct ClearCaches;
         impl Drop for ClearCaches {
@@ -190,11 +237,15 @@ mod captured_closure_cache_tests {
         SINGLETON_CAPTURED_CLOSURES.with(|s| {
             let s = s.borrow();
             let cache = s.get(&key).unwrap();
-            assert_eq!(cache.entries.len(), 8, "retention must stay bounded");
+            assert_eq!(
+                cache.entries.len(),
+                MAX_CAPTURED_CLOSURE_SLOTS,
+                "retention must stay bounded"
+            );
             assert!(cache.hints.is_some());
         });
         assert!(
-            root_count() >= 16,
+            root_count() >= 2 * MAX_CAPTURED_CLOSURE_SLOTS,
             "the scanner must see the populated cache"
         );
 
@@ -653,9 +704,23 @@ pub(crate) fn test_captured_singleton_closure_cache_entries(
     })
 }
 
-/// Bound the number of capture graphs rooted per closure literal. A small
-/// LRU still serves repeated tuples without retaining a whole request batch.
-const MAX_CAPTURED_CLOSURE_SLOTS: usize = 8;
+/// Maximum number of (captures-tuple, ClosureHeader) entries cached
+/// per-`func_ptr` in `SINGLETON_CAPTURED_CLOSURES`. Sized to absorb the
+/// parallel-instance async-await pattern (e.g. `Promise.all` of N
+/// concurrent unitOfWork calls each capturing their own boxed
+/// `__async_step`) without filling the cache when N is large. The
+/// LRU eviction inside the slot list keeps the most-recently-seen
+/// entries hot. Empirical: capping at 64 keeps memory bounded but
+/// covers the per-batch fan-out shape (50 promises) found in
+/// `benchmarks/app-patterns/kernels/promise_all_chains.ts`. A literal
+/// whose captures never repeat is disabled by the miss streak below, and
+/// disabling it drops the cache together with every root it held.
+///
+/// 2026-09-24: that kernel no longer reaches this cache (0 hits, 0 misses
+/// under `PERRY_MT_PROFILE=1` at 8 and at 64 slots); its async steps are
+/// served by the step-chain reuse instead. 64 is kept as the tuned value
+/// rather than cut on the evidence of a workload that no longer exercises it.
+const MAX_CAPTURED_CLOSURE_SLOTS: usize = 64;
 const _: () = assert!(
     MAX_CAPTURED_CLOSURE_SLOTS <= u8::MAX as usize,
     "hint_indices_plus_one stores an entry index plus one in a u8"
