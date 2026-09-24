@@ -256,11 +256,10 @@ pub(crate) fn is_async_hook_handle(handle: i64) -> bool {
 /// `class_registry::parent_static`. NOT moved into the `0xFFFF_24xx` block:
 /// it is baked into emitted code in three places and renumbering a live class
 /// id is #10824's hazard for no gain.
-pub(crate) const ASYNC_RESOURCE_CLASS_ID: u32 = 0xFFFF_0079;
-/// A fresh id. Deliberately `0x2411`, ABOVE the `0x240B..=0x2410` range the
-/// `perry/tui` family claims in #10915, so the two land in either order
-/// without colliding.
-pub(crate) const ASYNC_HOOK_CLASS_ID: u32 = 0xFFFF_2411;
+pub(crate) const ASYNC_RESOURCE_CLASS_ID: u32 = crate::native_class_ids::ASYNC_RESOURCE_LEGACY;
+/// A fresh id from the `native_class_ids` web-builtin block (`0x2411`, the
+/// next one after the `perry/tui` family's `0x240B..=0x2410`).
+pub(crate) const ASYNC_HOOK_CLASS_ID: u32 = crate::native_class_ids::ASYNC_HOOK;
 
 const ASYNC_STATE_PRESENT: u64 = 1;
 const ASYNC_STATE_KIND_HOOK: u64 = 1 << 1;
