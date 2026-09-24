@@ -7,19 +7,67 @@ fn socket_receiver(handle: i64) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
 }
 
-unsafe fn emit_socket_no_arg(handle: i64, event: &str) {
-    extern "C" {
-        fn js_implicit_this_set(value: f64) -> f64;
+extern "C" {
+    fn js_implicit_this_set(value: f64) -> f64;
+}
+
+/// Node calls every EventEmitter listener with `this` bound to the emitter
+/// (#11227). Only `'connect'`/`'drain'`/`'readable'` did; every other socket
+/// and server event ran its `function` listeners with `this === undefined`,
+/// so undici's `onHttpSocketClose` (`this[kParser]`) threw on `close()`.
+///
+/// Binds the socket/server handle as the implicit receiver for the life of
+/// the guard and restores the caller's on drop — including when a listener
+/// unwinds. The displaced receiver can be a heap object that a collection
+/// inside the listeners moves, so it is held in a transient root and re-read
+/// at the restore (the #9445 shape `js_implicit_this_set`'s docs describe).
+pub(crate) struct ListenerThis {
+    receiver: f64,
+    previous: perry_ffi::TransientRootedNanbox,
+    _scope: perry_ffi::TransientRootScope,
+}
+
+impl ListenerThis {
+    pub(crate) fn bind(handle: i64) -> Self {
+        let scope = perry_ffi::TransientRootScope::enter();
+        let receiver = socket_receiver(handle);
+        let previous = scope.root_nanbox(unsafe { js_implicit_this_set(receiver) });
+        Self {
+            receiver,
+            previous,
+            _scope: scope,
+        }
     }
+
+    /// Re-install before each listener: the previous one may have left a
+    /// different binding behind (a handle id is not a heap address, so the
+    /// receiver itself never moves).
+    pub(crate) fn rebind(&self) {
+        unsafe {
+            js_implicit_this_set(self.receiver);
+        }
+    }
+}
+
+impl Drop for ListenerThis {
+    fn drop(&mut self) {
+        unsafe {
+            js_implicit_this_set(self.previous.get());
+        }
+    }
+}
+
+unsafe fn emit_socket_no_arg(handle: i64, event: &str) {
     let frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, event));
-    let previous_this = js_implicit_this_set(socket_receiver(handle));
+    let this = ListenerThis::bind(handle);
     for index in 0..frame.len() {
         let callback = frame.cb(index);
         if callback != 0 {
+            this.rebind();
             let _ = JsClosure::from_raw(callback as *const RawClosureHeader).call0();
         }
     }
-    js_implicit_this_set(previous_this);
+    drop(this);
     drop(frame);
     lifecycle::drain_once_listeners(handle, event);
 }
@@ -32,13 +80,16 @@ unsafe fn emit_tls_secure_connect(handle: i64) {
     if !JsValue::from_bits(identity_error.to_bits()).is_undefined() {
         let mut frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, "error"));
         frame.set_payload(identity_error.to_bits());
+        let this = ListenerThis::bind(handle);
         for index in 0..frame.len() {
             let callback = frame.cb(index);
             if callback != 0 {
+                this.rebind();
                 let _ = JsClosure::from_raw(callback as *const RawClosureHeader)
                     .call1(f64::from_bits(frame.payload_bits()));
             }
         }
+        drop(this);
         drop(frame);
         lifecycle::drain_once_listeners(handle, "error");
         if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
@@ -120,6 +171,9 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // #8259: park the snapshot so callback N stays rooted (and is
                 // rewritten on evacuation) while callback N-1 runs user JS.
                 emit_socket_no_arg(id, "connect");
+                // Node's `afterConnect` emits `'ready'` right after
+                // `'connect'` (#11227: never emitted before).
+                emit_socket_no_arg(id, "ready");
                 // TLS sockets additionally fire 'secureConnect' once the
                 // handshake completes — the direct-TLS connect path only
                 // signals Connect after the handshake, so this is the right
@@ -168,13 +222,16 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     f64::from_bits(0x7FFD_0000_0000_0000 | (buf as u64 & 0x0000_FFFF_FFFF_FFFF))
                 };
                 frame.set_payload(payload_f64.to_bits());
+                let this = ListenerThis::bind(id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
                             .call1(f64::from_bits(frame.payload_bits()));
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "data");
             }
@@ -190,13 +247,16 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // raw NaN-boxed string and `err.message` was `undefined`.
                 let err_f64 = build_error_object(&msg);
                 frame.set_payload(err_f64.to_bits());
+                let this = ListenerThis::bind(id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
                             .call1(f64::from_bits(frame.payload_bits()));
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "error");
             }
@@ -210,13 +270,16 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     fn js_abort_error_value() -> f64;
                 }
                 frame.set_payload(js_abort_error_value().to_bits());
+                let this = ListenerThis::bind(id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
                             .call1(f64::from_bits(frame.payload_bits()));
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "error");
             }
@@ -232,12 +295,15 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // listener-map / socket-map teardown, so don't remove
                 // anything here.
                 let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "end"));
+                let this = ListenerThis::bind(id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "end");
                 // P1: a turnloop socket has no task to run the post-EOF
@@ -275,12 +341,15 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 }
                 let had_error = f64::from_bits(JsValue::from_bool(false).bits());
                 let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "close"));
+                let this = ListenerThis::bind(id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(had_error);
                     }
                 }
+                drop(this);
                 drop(frame);
                 statics::listeners().lock().unwrap().remove(&id);
                 statics::sockets().lock().unwrap().remove(&id);
@@ -331,12 +400,15 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // #8259: sock_f64 is a handle id (not a heap address), so
                 // only the callbacks need custody.
                 let frame = dispatch_custody::DispatchFrame::park(cbs);
+                let this = ListenerThis::bind(server_id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call1(sock_f64);
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(server_id, "connection");
                 server_state::release_pending_server_data(socket_id);
@@ -362,12 +434,15 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // so this frame is their ONLY root during dispatch — without
                 // it a collection here can free, not just move, them.
                 let frame = dispatch_custody::DispatchFrame::park(cbs);
+                let this = ListenerThis::bind(server_id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                drop(this);
                 drop(frame);
             }
             PendingNetEvent::ServerClose(server_id) => {
@@ -383,12 +458,15 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 // #8259: removed from the table above — custody is the only
                 // root; see the ServerListening arm.
                 let frame = dispatch_custody::DispatchFrame::park(cbs);
+                let this = ListenerThis::bind(server_id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
+                drop(this);
                 drop(frame);
                 // Tear down the server entry so the keepalive gate
                 // (`js_ext_net_has_active_handles`) lets the runtime
@@ -412,13 +490,16 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 let mut frame = dispatch_custody::DispatchFrame::park(cbs);
                 let err_f64 = build_error_object(&msg);
                 frame.set_payload(err_f64.to_bits());
+                let this = ListenerThis::bind(server_id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
                             .call1(f64::from_bits(frame.payload_bits()));
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(server_id, "error");
             }
@@ -432,13 +513,16 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 let mut frame = dispatch_custody::DispatchFrame::park(cbs);
                 let info = server_state::build_drop_object(&info);
                 frame.set_payload(info.to_bits());
+                let this = ListenerThis::bind(server_id);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
                     if cb != 0 {
+                        this.rebind();
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
                             .call1(f64::from_bits(frame.payload_bits()));
                     }
                 }
+                drop(this);
                 drop(frame);
                 lifecycle::drain_once_listeners(server_id, "drop");
             }

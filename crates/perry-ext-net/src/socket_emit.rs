@@ -55,11 +55,14 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
     let arg_bits = args.iter().map(|arg| arg.to_bits()).collect::<Vec<_>>();
     let mut frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, &event));
     frame.set_payloads(&arg_bits);
+    // #11227: `emit()` binds `this` to the socket, like every Node emitter.
+    let this = crate::socket_events::ListenerThis::bind(handle);
     for index in 0..frame.len() {
         let callback = frame.cb(index);
         if callback == 0 {
             continue;
         }
+        this.rebind();
         let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
         match arg_bits.len() {
             0 => {
@@ -83,6 +86,7 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
         }
     }
     let emitted = frame.len() != 0;
+    drop(this);
     drop(frame);
     lifecycle::drain_once_listeners(handle, &event);
     if statics::http_agent_phases()

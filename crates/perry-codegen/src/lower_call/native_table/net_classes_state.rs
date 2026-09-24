@@ -1,6 +1,27 @@
 use super::*;
 
 pub(super) const NET_CLASSES_STATE_ROWS: &[NativeModSig] = &[
+    // #11227 — a typed `net.Server` had no `prependListener` /
+    // `prependOnceListener` row (the Socket rows live in `net_events.rs`,
+    // which is at the file-size cap), so the call registered nothing.
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "prependListener",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_prepend_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_HANDLE_ID,
+    },
+    NativeModSig {
+        module: "net",
+        has_receiver: true,
+        method: "prependOnceListener",
+        class_filter: Some("Server"),
+        runtime: "js_net_server_prepend_once_listener",
+        args: &[NA_STR, NA_PTR],
+        ret: NR_HANDLE_ID,
+    },
     NativeModSig {
         module: "net",
         has_receiver: false,

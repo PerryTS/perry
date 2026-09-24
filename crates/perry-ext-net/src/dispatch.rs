@@ -221,6 +221,10 @@ fn server_method_name(prop: &str) -> Option<&'static [u8]> {
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
         "once" => Some(b"once"),
+        // #11227 — a server is an EventEmitter too; these were missing, so
+        // `server.prependListener(...)` silently registered nothing.
+        "prependListener" => Some(b"prependListener"),
+        "prependOnceListener" => Some(b"prependOnceListener"),
         "off" => Some(b"off"),
         "removeListener" => Some(b"removeListener"),
         "removeAllListeners" => Some(b"removeAllListeners"),
@@ -448,6 +452,22 @@ unsafe fn server_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         }
         "once" if args.len() >= 2 => {
             crate::js_net_server_once(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
+            nanbox_handle(handle)
+        }
+        "prependListener" if args.len() >= 2 => {
+            crate::js_net_server_prepend_listener(
+                handle,
+                unbox_to_i64(args[0]),
+                unbox_to_i64(args[1]),
+            );
+            nanbox_handle(handle)
+        }
+        "prependOnceListener" if args.len() >= 2 => {
+            crate::js_net_server_prepend_once_listener(
+                handle,
+                unbox_to_i64(args[0]),
+                unbox_to_i64(args[1]),
+            );
             nanbox_handle(handle)
         }
         "off" | "removeListener" if args.len() >= 2 => {

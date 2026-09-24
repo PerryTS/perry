@@ -1303,6 +1303,42 @@ pub unsafe extern "C" fn js_net_server_once(handle: i64, event_ptr: i64, cb: i64
     handle
 }
 
+/// `server.prependListener(event, cb)` — front-inserting `on` (#11227).
+///
+/// # Safety
+///
+/// See `js_net_socket_once`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_prepend_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    crate::ensure_gc_scanner_registered();
+    if let Some(event) = read_event(event_ptr) {
+        register_listener(handle, event, cb, false, true);
+    }
+    handle
+}
+
+/// `server.prependOnceListener(event, cb)` — front-inserting `once` (#11227).
+///
+/// # Safety
+///
+/// See `js_net_socket_once`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_prepend_once_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    crate::ensure_gc_scanner_registered();
+    if let Some(event) = read_event(event_ptr) {
+        register_listener(handle, event, cb, true, true);
+    }
+    handle
+}
+
 /// `server.removeListener(event, cb)`.
 ///
 /// # Safety
