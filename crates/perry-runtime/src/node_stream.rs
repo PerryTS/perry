@@ -1878,6 +1878,11 @@ use duplex_method_table::*;
 mod compose_live;
 use compose_live::*;
 
+#[path = "node_stream_state_view.rs"]
+mod state_view;
+pub(crate) use state_view::STREAM_STATE_OWNER_KEY;
+use state_view::*;
+
 #[path = "node_stream_json.rs"]
 mod json_stream;
 pub(crate) use json_stream::*;

@@ -183,6 +183,7 @@ pub(super) fn stream_emit_close_enabled(stream: f64) -> bool {
 
 pub(super) fn mark_stream_closed_and_emit_close(stream: f64) {
     mark_stream_closed(stream);
+    note_close_emitted(stream);
     if stream_emit_close_enabled(stream) {
         let _ = emit_stream_event(stream, string_value(b"close"), &[]);
     }
@@ -256,6 +257,7 @@ pub(super) fn emit_readable_data_unchecked(stream: f64, chunk: f64) {
     let Some(chunk) = super::decode_readable_chunk_for_encoding(stream, chunk) else {
         return;
     };
+    note_data_emitted(stream);
     let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     write_chunk_to_pipe_destinations(stream, chunk);
 }

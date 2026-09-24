@@ -265,6 +265,7 @@ pub(super) fn init_readable_state(stream: f64, opts: f64) {
     set_visible_readable_did_read(stream, false);
     let encoding = opt_string_value(opts, b"encoding").unwrap_or(f64::from_bits(TAG_NULL));
     set_visible_readable_encoding(stream, encoding);
+    install_readable_state_view(stream);
 }
 
 /// Initialize the writable side: direction flag and visible stream flags.
@@ -319,6 +320,7 @@ pub(super) fn init_writable_state(stream: f64, opts: f64) {
     set_visible_writable(stream, true);
     set_visible_writable_ended(stream, false);
     set_visible_writable_finished(stream, false);
+    install_writable_state_view(stream);
 }
 
 pub(super) fn init_duplex_state(stream: f64, opts: f64) {
