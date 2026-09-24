@@ -15,6 +15,7 @@ mod construction;
 mod from_space;
 pub(crate) use construction::ConstructionBatch;
 mod inline;
+mod map_allocations;
 mod page_meta;
 /// #7742: whole-block in-place promotion of a (near-)fully-live young
 /// generation, in place of object-by-object evacuation.
@@ -25,6 +26,7 @@ mod quarantine;
 mod reset;
 mod stats;
 mod walk;
+pub(crate) use map_allocations::walk_map_allocations;
 
 #[cfg(test)]
 mod tests;

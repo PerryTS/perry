@@ -467,10 +467,10 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             external_byte_policy: GcExternalBytePolicy::SideAllocation,
             large_object_policy: GcLargeObjectPolicy::NotApplicable,
             pointer_free: false,
-            move_hook_kind: GcMoveHookKind::MapSideTables,
+            move_hook_kind: GcMoveHookKind::MapForeachStack,
             // #6084: object/bigint keys are indexed by pointer bits/content,
             // so an evacuation that rewrites this Map's entry slots must
-            // rebuild MAP_PTR_INDEX (mirrors "set" below).
+            // refresh the owned pointer-key index (mirrors "set" below).
             rewrite_hook_kind: GcRewriteHookKind::MapIndex,
             finalize_hook_kind: GcFinalizeHookKind::MapSideAllocation,
         },

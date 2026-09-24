@@ -724,15 +724,6 @@
     },
     {
       "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_COMPACTION_LOG",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-Map compaction log for the epoch-based for-of/iterator cursor rebase: keyed by MapHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> \u2014 raw entry indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by map_header_moved_for_gc, which re-keys the entry when a header moves; js_map_alloc drops any stale entry for a reused address; prune_dead_map_compaction_log_owners is registered in gc/dead_owner.rs (table MAP_COMPACTION_LOG) so a dead Map's history is dropped.",
-      "reason": "Per-Map compaction log for the epoch-based for-of/iterator cursor rebase: keyed by MapHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> \u2014 raw entry indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by map_header_moved_for_gc, which re-keys the entry when a header moves; js_map_alloc drops any stale entry for a reused address; prune_dead_map_compaction_log_owners is registered in gc/dead_owner.rs (table MAP_COMPACTION_LOG) so a dead Map's history is dropped."
-    },
-    {
-      "file": "crates/perry-runtime/src/map.rs",
       "name": "MAP_FOREACH_STACK",
       "count": 1,
       "classification": "not_a_gc_pointer",
@@ -3494,18 +3485,6 @@
     {
       "file": "crates/perry-runtime/src/json_tape.rs",
       "name": "TAPE_SCRATCH"
-    },
-    {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_PTR_INDEX"
-    },
-    {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_STRING_INDEX"
     },
     {
       "file": "crates/perry-runtime/src/map.rs",

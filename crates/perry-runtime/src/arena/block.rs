@@ -533,6 +533,13 @@ impl Drop for Arena {
             if block.data.is_null() {
                 continue;
             }
+            super::map_allocations::walk_block_maps(block, &mut |header| unsafe {
+                if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
+                    crate::map::drop_map_store_at_thread_exit(
+                        header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE).cast(),
+                    );
+                }
+            });
             let layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
             unsafe {
                 // #4665: in test builds keep freed blocks mapped (no munmap) so

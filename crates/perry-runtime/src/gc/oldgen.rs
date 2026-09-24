@@ -533,7 +533,7 @@ pub(super) fn sweep() -> u64 {
 
 /// #7539: is the lazy JSON array at `addr` provably dead at sweep entry?
 ///
-/// Same rule `map.rs` applies to a registered Map: unmarked ∧ not pinned ∧ not
+/// Same rule `set.rs` applies to a registered Set: unmarked ∧ not pinned ∧ not
 /// forwarded, and — for a MINOR trace, which never traces the old generation —
 /// additionally not tenured and physically in the nursery.
 unsafe fn registered_lazy_array_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
@@ -1135,7 +1135,7 @@ fn legacy_sweep_with_age_bump_and_old_reclaim_targets(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SweepCycleSubphase {
-    /// #6010: budget-chunked finalization of dead registered Maps/Sets whose
+    /// #6010: budget-chunked finalization of dead registered Sets whose
     /// external side buffers no ordinary sweep path frees (dead in the ACTIVE
     /// nursery allocation block, or reclaimed by bulk block resets that skip
     /// per-object hooks). The dead lists are collected once at sweep entry
@@ -1153,7 +1153,6 @@ enum SweepCycleSubphase {
 
 pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
-    dead_maps: Vec<usize>,
     dead_sets: Vec<usize>,
     dead_regexps: Vec<usize>,
     dead_buffers: Vec<usize>,
@@ -1177,7 +1176,6 @@ impl IncrementalSweepState {
     ) -> Self {
         Self {
             subphase: SweepCycleSubphase::Malloc,
-            dead_maps: Vec::new(),
             dead_sets: Vec::new(),
             dead_regexps: Vec::new(),
             dead_buffers: Vec::new(),
@@ -1197,7 +1195,7 @@ impl IncrementalSweepState {
         }
     }
 
-    /// #6010: collect the dead registered Maps/Sets NOW (marks are fresh at
+    /// #6010: collect the dead registered Sets NOW (marks are fresh at
     /// sweep entry) and finalize their external buffers budget-chunked as the
     /// first sweep subphase. See `SweepCycleSubphase::CollectionSideBuffers`.
     /// 2026-07-09 audit: buffers and typed arrays joined the same pattern —
@@ -1216,7 +1214,6 @@ impl IncrementalSweepState {
             full_trace,
             synchronous_full_trace,
         );
-        self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
         self.dead_regexps = crate::regex::collect_dead_registered_regexps_post_trace(full_trace);
         self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
@@ -1229,8 +1226,7 @@ impl IncrementalSweepState {
         self.dead_lazy_arrays = crate::json_tape_store::collect_owners(&|addr| unsafe {
             registered_lazy_array_is_dead_post_trace(addr, full_trace)
         });
-        if !self.dead_maps.is_empty()
-            || !self.dead_sets.is_empty()
+        if !self.dead_sets.is_empty()
             || !self.dead_regexps.is_empty()
             || !self.dead_buffers.is_empty()
             || !self.dead_typed_arrays.is_empty()
@@ -1254,9 +1250,7 @@ impl IncrementalSweepState {
             SweepCycleSubphase::CollectionSideBuffers => {
                 let mut spent = 0usize;
                 while spent < budget {
-                    if let Some(addr) = self.dead_maps.pop() {
-                        crate::map::finalize_collected_dead_map(addr);
-                    } else if let Some(addr) = self.dead_sets.pop() {
+                    if let Some(addr) = self.dead_sets.pop() {
                         crate::set::finalize_collected_dead_set(addr);
                     } else if let Some(addr) = self.dead_regexps.pop() {
                         crate::regex::finalize_collected_dead_regexp(addr);
@@ -1272,8 +1266,7 @@ impl IncrementalSweepState {
                     }
                     spent += 1;
                 }
-                if self.dead_maps.is_empty()
-                    && self.dead_sets.is_empty()
+                if self.dead_sets.is_empty()
                     && self.dead_regexps.is_empty()
                     && self.dead_buffers.is_empty()
                     && self.dead_typed_arrays.is_empty()

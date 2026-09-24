@@ -332,7 +332,7 @@ pub(crate) enum GcMoveHookKind {
     None,
     ObjectOverflowFields,
     ClosureDynamicProps,
-    MapSideTables,
+    MapForeachStack,
     SetSideTables,
     /// Rekey a movable exotic cell's address-keyed expando side table after a
     /// move. Used by `GC_TYPE_PROMISE`, whose `status`/`value` expandos
@@ -358,8 +358,8 @@ pub(crate) enum GcMoveHookKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteHookKind {
     None,
-    /// Rebuild the Map pointer-key lookup index (`map::MAP_PTR_INDEX`) after
-    /// a GC pass rewrote this Map's entry slots: object/bigint keys are
+    /// Refresh the owned Map pointer-key index after a GC pass changed key
+    /// bits in this Map's entries: object/bigint keys are
     /// indexed by their pointer bits (identity) or pointee content (bigints),
     /// both of which go stale when the referenced allocation is evacuated.
     MapIndex,
@@ -570,7 +570,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::NotApplicable,
         false,
-        GcMoveHookKind::MapSideTables,
+        GcMoveHookKind::MapForeachStack,
         GcRewriteHookKind::MapIndex,
         GcFinalizeHookKind::MapSideAllocation,
     )),
@@ -921,7 +921,7 @@ pub(crate) fn gc_type_after_payload_move(obj_type: u8, old_user: usize, new_user
             crate::closure::closure_dynamic_props_owner_moved(old_user, new_user);
             crate::closure::closure_box_captures_owner_moved(old_user, new_user);
         }
-        GcMoveHookKind::MapSideTables => {
+        GcMoveHookKind::MapForeachStack => {
             crate::map::map_header_moved_for_gc(old_user, new_user);
         }
         GcMoveHookKind::SetSideTables => {
@@ -975,7 +975,7 @@ pub(crate) fn gc_type_clear_dead_payload_side_tables(obj_type: u8, user_ptr: usi
             crate::regex::regex_header_clear_dead_for_gc(user_ptr);
         }
         GcMoveHookKind::None
-        | GcMoveHookKind::MapSideTables
+        | GcMoveHookKind::MapForeachStack
         | GcMoveHookKind::SetSideTables
         | GcMoveHookKind::ExoticExpandoOwner => {}
     }

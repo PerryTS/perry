@@ -417,7 +417,7 @@ pub(crate) fn type_needs_per_object_sweep(obj_type: u8, object_side_tables_live:
         | GcMoveHookKind::RegExpSideTables
         | GcMoveHookKind::LazyArrayTape => true,
         GcMoveHookKind::None
-        | GcMoveHookKind::MapSideTables
+        | GcMoveHookKind::MapForeachStack
         | GcMoveHookKind::SetSideTables
         | GcMoveHookKind::ExoticExpandoOwner => false,
     }
