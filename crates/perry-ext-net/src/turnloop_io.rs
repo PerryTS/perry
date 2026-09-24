@@ -134,6 +134,42 @@ struct Aux {
     held_tls_end: Option<u64>,
 }
 
+/// Sockets whose close has been submitted to the driver and whose `'close'`
+/// has not been pushed yet (#11227). Node emits `'close'` after `destroy()`
+/// on a `process.nextTick`, which runs whatever else the loop holds; here the
+/// driver answers later, and a destroyed socket no longer counted as active,
+/// so a program with nothing else pending exited in between and the
+/// `'close'` never fired. undici's `Client.close()` awaits exactly that
+/// event, so it never settled.
+fn closing() -> &'static Mutex<std::collections::HashSet<i64>> {
+    static CLOSING: OnceLock<Mutex<std::collections::HashSet<i64>>> = OnceLock::new();
+    CLOSING.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Whether a submitted socket close still owes its `'close'` event; the
+/// keepalive gate (`server_state::has_active_handles`) waits for it.
+pub(crate) fn close_in_flight() -> bool {
+    !closing()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_empty()
+}
+
+fn note_close_submitted(id: i64) {
+    closing()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id);
+}
+
+fn submit_socket_close(id: i64) -> bool {
+    let submitted = tl::close(id).is_ok();
+    if submitted {
+        note_close_submitted(id);
+    }
+    submitted
+}
+
 fn aux() -> &'static Mutex<std::collections::HashMap<i64, Aux>> {
     static AUX: OnceLock<Mutex<std::collections::HashMap<i64, Aux>>> = OnceLock::new();
     AUX.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
@@ -435,7 +471,13 @@ pub(crate) fn command(
                 }
             }
         }
-        SocketCommand::Destroy => tl::close(id).map_err(|e| e.message()),
+        SocketCommand::Destroy => {
+            let submitted = tl::close(id).map_err(|e| e.message());
+            if submitted.is_ok() {
+                note_close_submitted(id);
+            }
+            submitted
+        }
         // The accepted socket's `'connection'` callback has returned, so its
         // listeners exist: release an EOF that arrived before them.
         SocketCommand::ServerConnectionReady => {
@@ -504,7 +546,7 @@ pub(crate) fn submission_failed(id: i64, completion: u64, message: String) {
 /// `socket.destroy()` on a turnloop socket. The `'close'` event is pushed when
 /// the driver reports the handle really gone, never before.
 pub(crate) fn destroy(id: i64) {
-    if tl::close(id).is_ok() {
+    if submit_socket_close(id) {
         // The driver will deliver `Closed`, and that is what emits `'close'`.
         return;
     }
@@ -516,6 +558,10 @@ pub(crate) fn destroy(id: i64) {
 
 /// Push `'close'` and retire the socket, at most once per socket.
 fn emit_close_once(id: i64) {
+    closing()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
     if with_aux(id, |a| std::mem::replace(&mut a.closed_emitted, true)) {
         return;
     }

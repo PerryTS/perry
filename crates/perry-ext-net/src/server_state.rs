@@ -390,6 +390,11 @@ pub(crate) fn has_active_handles() -> bool {
     if !statics::pending_events().lock().unwrap().is_empty() {
         return true;
     }
+    // #11227: a destroyed socket still owes its `'close'` (Node emits it on
+    // nextTick, whatever the socket's ref state).
+    if crate::turnloop_io::close_in_flight() {
+        return true;
+    }
     if statics::sockets().lock().unwrap().values().any(|socket| {
         socket.refed && !socket.destroyed && (socket.is_open || !socket.awaiting_connect)
     }) {
