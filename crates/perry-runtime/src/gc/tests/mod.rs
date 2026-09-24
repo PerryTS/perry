@@ -82,6 +82,7 @@ mod shape_keys_descriptor_edge;
 mod smoke;
 mod start_bitmap;
 mod step_bounds;
+mod string_char_array_roots;
 pub(super) mod support;
 mod survival_diag;
 mod sweep_described_runs;
