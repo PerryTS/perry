@@ -6,8 +6,13 @@ use crate::object::{
 };
 use crate::value::JSValue;
 
-/// Mark a stream as disturbed (it has been read from / resumed). Backs
-/// `Readable.isDisturbed(s)` (#1534).
+/// Record that a consumer received a chunk — Node's
+/// `_readableState.dataEmitted`, which `readableDidRead` returns and
+/// `stream.isDisturbed()` reads (#1534). Only consumer-side delivery sets it:
+/// a `'data'` emission or a `read()` that returns data. Producer-side `push()`
+/// / `unshift()` and a bare `resume()` / `pipe()` / iterator attach do not
+/// (#11212): undici's `body.text()` rejects a body it only pushed into as
+/// "unusable" when this lies.
 pub(super) fn mark_disturbed(stream: f64) {
     set_hidden_value(stream, hidden_disturbed_key(), f64::from_bits(TAG_TRUE));
     set_visible_readable_did_read(stream, true);
@@ -257,7 +262,7 @@ pub(super) fn emit_readable_data_unchecked(stream: f64, chunk: f64) {
     let Some(chunk) = super::decode_readable_chunk_for_encoding(stream, chunk) else {
         return;
     };
-    note_data_emitted(stream);
+    mark_disturbed(stream);
     let _ = emit_stream_event(stream, string_value(b"data"), &[chunk]);
     write_chunk_to_pipe_destinations(stream, chunk);
 }
@@ -350,7 +355,6 @@ pub(super) fn pause_readable_stream_after_unpipe(stream: f64) -> f64 {
 pub(super) fn resume_readable_stream(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-        mark_disturbed(stream);
         flush_pending_readable_chunks(stream);
         schedule_readable_from_drain(stream);
         if stream_hidden_ended(stream)
@@ -368,7 +372,6 @@ pub(super) fn resume_readable_stream_from_pipe(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() && !stream_destroyed(stream) {
         let was_paused = readable_is_paused(stream);
         set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-        mark_disturbed(stream);
         if was_paused {
             let _ = emit_stream_event(stream, string_value(b"resume"), &[]);
         }
@@ -890,9 +893,6 @@ pub(super) fn drain_readable_from_events(stream: f64) {
     if let Some(chunks) = readable_hidden_chunks(stream) {
         let mut values = Vec::new();
         push_chunk_values(chunks, &mut values, 0);
-        if !values.is_empty() {
-            mark_disturbed(stream);
-        }
         let mut emit_destroyed_tail = false;
         for chunk in values {
             if !readable_is_flowing(stream) {

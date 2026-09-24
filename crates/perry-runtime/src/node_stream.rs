@@ -591,7 +591,6 @@ fn append_readable_output_chunk(stream: f64, chunk: f64) -> f64 {
     if added > 0.0 {
         push_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
-        mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) && !should_defer_initial_data_emit(stream) {
             consume_readable_buffered_front_on_live_emit(stream, chunk);
@@ -815,7 +814,6 @@ fn unshift_chunk(stream: f64, chunk: f64) -> f64 {
     if added > 0.0 {
         unshift_readable_buffered_chunk(stream, chunk);
         mark_readable_live_push(stream);
-        mark_disturbed(stream);
         schedule_readable_event(stream);
         if readable_is_flowing(stream) {
             consume_readable_buffered_front_on_live_emit(stream, chunk);
@@ -1417,7 +1415,6 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
         return;
     }
     if has_truthy_hidden(stream, hidden_readable_flag_key()) {
-        mark_disturbed(stream);
         if readable_is_flowing(stream) {
             emit_readable_data(stream, chunk);
         } else {
@@ -1718,7 +1715,6 @@ pub extern "C" fn js_node_stream_method_allow_half_open(stream_handle: i64) -> f
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_read(stream_handle: i64, n: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    mark_disturbed(stream);
     read_stream_with_size_arg(stream, n)
 }
 

@@ -54,11 +54,21 @@ fn readable_lifecycle_flags_reflect_ended_state() {
         TAG_FALSE
     );
 
+    // #11212: an empty `read()` and a producer-side `push()` do not count as
+    // a read; a `read()` that returns data does.
+    let _ = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
+    let _ = js_node_stream_method_push(handle, string_value(b"chunk"));
+    assert_eq!(
+        js_node_stream_method_readable_did_read(handle).to_bits(),
+        TAG_FALSE
+    );
+    assert_eq!(js_node_stream_is_disturbed(stream).to_bits(), TAG_FALSE);
     let _ = js_node_stream_method_read(handle, f64::from_bits(TAG_UNDEFINED));
     assert_eq!(
         js_node_stream_method_readable_did_read(handle).to_bits(),
         TAG_TRUE
     );
+    assert_eq!(js_node_stream_is_disturbed(stream).to_bits(), TAG_TRUE);
     assert_eq!(
         js_object_get_field_by_name_f64(obj, hidden_key(b"readableDidRead")).to_bits(),
         TAG_TRUE
@@ -241,7 +251,7 @@ fn readable_state_view_reads_live_stream_state() {
     // sets (the JS-level setter path is covered by
     // test-files/test_gap_stream_readable_state.ts).
     assert_eq!(read(b"dataEmitted").to_bits(), TAG_FALSE);
-    note_data_emitted(stream);
+    mark_disturbed(stream);
     assert_eq!(read(b"dataEmitted").to_bits(), TAG_TRUE);
 
     let mut json = String::new();

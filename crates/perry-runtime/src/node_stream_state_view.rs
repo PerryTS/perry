@@ -16,8 +16,10 @@
 //! `destroy()`. This mirrors Node's own layout, where almost all of these
 //! fields are accessors on `ReadableState.prototype` over a bit field.
 //!
-//! Setters: `dataEmitted` writes through to the stream (it is a plain flag
-//! the runtime also sets when it emits `'data'`). Every other field accepts
+//! Setters: `dataEmitted` writes through to the stream. It is the same flag
+//! that backs `readableDidRead` and `stream.isDisturbed()` (Node's
+//! `readableDidRead` getter returns `_readableState.dataEmitted`), set when a
+//! chunk reaches a consumer. Every other field accepts
 //! and ignores a write, so a library poking at state (common in stream
 //! helpers) can neither throw in strict mode nor desynchronize the stream.
 //!
@@ -34,7 +36,6 @@ use std::cell::{Cell, RefCell};
 /// the stream JSON hook serializes a view as Node's state shape instead of
 /// following it.
 pub(super) const STREAM_STATE_OWNER_KEY: &[u8] = b"__perry_stream_state_owner";
-const STREAM_DATA_EMITTED_KEY: &[u8] = b"__perryStreamDataEmitted";
 const STREAM_CLOSE_EMITTED_KEY: &[u8] = b"__perryStreamCloseEmitted";
 
 const READABLE_KIND: usize = 0;
@@ -203,10 +204,8 @@ fn common_field(stream: f64, field: &str) -> f64 {
         "errorEmitted" => bool_bits(readable_hidden_error(stream).is_some()),
         "emitClose" => bool_bits(stream_emit_close_enabled(stream)),
         "autoDestroy" => bool_bits(stream_auto_destroy_enabled(stream)),
-        "dataEmitted" => bool_bits(has_truthy_hidden(
-            stream,
-            hidden_key(STREAM_DATA_EMITTED_KEY),
-        )),
+        // One flag with `readableDidRead` / `isDisturbed()`, as in Node.
+        "dataEmitted" => bool_bits(has_truthy_hidden(stream, hidden_disturbed_key())),
         "encoding" => readable_encoding_value(stream),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
@@ -257,9 +256,10 @@ extern "C" fn stream_state_set(closure: *const ClosureHeader, value: f64) -> f64
         if let Some(stream) = view_owner() {
             let scope = crate::gc::RuntimeHandleScope::new();
             let stream = scope.root_nanbox_f64(stream);
-            let flag = bool_bits(crate::value::js_is_truthy(value) != 0);
-            let key = hidden_key(STREAM_DATA_EMITTED_KEY);
-            set_hidden_value(stream.get_nanbox_f64(), key, flag);
+            let emitted = crate::value::js_is_truthy(value) != 0;
+            let key = hidden_disturbed_key();
+            set_hidden_value(stream.get_nanbox_f64(), key, bool_bits(emitted));
+            set_visible_readable_did_read(stream.get_nanbox_f64(), emitted);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -357,14 +357,6 @@ pub(super) fn install_readable_state_view(stream: f64) {
 
 pub(super) fn install_writable_state_view(stream: f64) {
     install_state_view(stream, WRITABLE_KIND, b"_writableState");
-}
-
-/// Node sets `state.dataEmitted = true` whenever a `'data'` event goes out.
-pub(super) fn note_data_emitted(stream: f64) {
-    let key = hidden_key(STREAM_DATA_EMITTED_KEY);
-    if !has_truthy_hidden(stream, key) {
-        set_hidden_value(stream, hidden_key(STREAM_DATA_EMITTED_KEY), bool_bits(true));
-    }
 }
 
 /// Node sets `closeEmitted` right before `'close'` would be emitted, whether

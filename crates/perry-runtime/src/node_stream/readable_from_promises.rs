@@ -87,7 +87,6 @@ fn settle_readable_from_promise_fulfilled(stream: f64, chunk: f64, value: f64) {
         return;
     }
     consume_readable_buffered_front(stream, chunk);
-    mark_disturbed(stream);
     if readable_is_flowing(stream) {
         emit_readable_data_unchecked(stream, value);
         schedule_readable_from_drain(stream);

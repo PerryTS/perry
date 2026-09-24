@@ -301,7 +301,6 @@ pub(crate) extern "C" fn duplex_pair_write_callback(
     }
     let peer = js_closure_get_capture_f64(closure, 0);
     if get_hidden_value(peer, hidden_readable_flag_key()).is_some() && !stream_destroyed(peer) {
-        mark_disturbed(peer);
         if readable_is_flowing(peer) {
             emit_readable_data(peer, chunk);
         } else {

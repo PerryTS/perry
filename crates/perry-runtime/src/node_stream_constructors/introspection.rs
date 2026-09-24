@@ -22,8 +22,10 @@ use crate::value::JSValue;
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_is_disturbed(stream: f64) -> f64 {
+    // Node: `readableDidRead || readableAborted` (#11212).
     if get_hidden_value(stream, hidden_disturbed_key())
         .is_some_and(|v| crate::value::js_is_truthy(v) != 0)
+        || readable_aborted_value(stream).to_bits() == TAG_TRUE
     {
         f64::from_bits(TAG_TRUE)
     } else {

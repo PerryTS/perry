@@ -487,7 +487,8 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
         READABLE_ITERATOR_ERROR_CB_KEY,
     );
 
-    mark_disturbed(stream);
+    // Attaching the iterator does not disturb the stream (#11212): the chunks
+    // it later hands out do, through the `'data'` / `read()` paths.
 
     // Already-terminal-before-attach: no future event will reach our listeners,
     // so seed the terminal state directly.
