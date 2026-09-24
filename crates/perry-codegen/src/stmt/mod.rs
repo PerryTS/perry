@@ -695,10 +695,6 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
     // compiler-private control cells. That list runs once per frame, and a
     // plain-async step closure holds its cells without a counted capture edge,
     // so it never releases a "previous iteration" cell.
-    let activation_frame = ids.iter().any(|id| {
-        ctx.compiler_private_async_i32_control_locals.contains(id)
-            || ctx.compiler_private_async_i1_control_locals.contains(id)
-    });
     for id in ids {
         // #7521: a module-level binding promoted to `@perry_global_<mod>__<id>`
         // ALREADY has the shared, forward-visible, GC-rooted cell a prealloc box
@@ -744,26 +740,22 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
         } else {
             crate::nanbox::TAG_UNDEFINED_I64.to_string()
         };
-        use boxed_frame_release as frame_release;
-        let (alloc_fn, alloc_arg, release_fn, cell_note) = if is_i32_control {
+        let (alloc_fn, alloc_arg, cell_note) = if is_i32_control {
             (
                 "js_i32_box_alloc",
                 (crate::types::I32, "0"),
-                frame_release::I32_BOX_SCOPE_RELEASE,
                 "primitive_i32_control_cell",
             )
         } else if is_i1_control {
             (
                 "js_bool_box_alloc",
                 (crate::types::I32, "0"),
-                frame_release::BOOL_BOX_SCOPE_RELEASE,
                 "primitive_i1_control_cell",
             )
         } else {
             (
                 "js_box_alloc_bits",
                 (crate::types::I64, seed_bits.as_str()),
-                frame_release::JS_BOX_SCOPE_RELEASE,
                 "jsvalue_box_cell",
             )
         };
@@ -790,12 +782,8 @@ fn emit_preallocate_boxes(ctx: &mut FnCtx<'_>, ids: &[u32], tdz: bool) -> Result
                 .entry_allocas_push_store(crate::types::I64, &undef_bits, &slot);
             slot
         };
-        if !activation_frame {
-            frame_release::release_previous_iteration_cell(ctx, &slot, release_fn);
-        }
         let box_ptr = ctx.block().call(crate::types::I64, alloc_fn, &[alloc_arg]);
         ctx.block().store(crate::types::I64, &box_ptr, &slot);
-        frame_release::release_at_frame_exit(ctx, &slot, release_fn);
         record_boxed_slot_js_value_bits(ctx, *id, &box_ptr, "preallocate_boxes.box_ptr_slot");
         if cell_note != "jsvalue_box_cell" {
             let lowered = LoweredValue::js_value_bits(&box_ptr);

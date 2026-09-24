@@ -427,12 +427,7 @@ pub(super) fn compile_method(
         }
         (this_slot, map)
     };
-    super::arguments::release_boxed_param_slots_at_exit(
-        lf,
-        &method.params,
-        &method_boxed_vars,
-        &locals,
-    );
+    super::arguments::box_rooted_parameter_slots(lf, &method.params, &method_boxed_vars, &locals);
 
     let mut local_types: HashMap<u32, perry_hir::types::Type> = module_global_types
         .iter()

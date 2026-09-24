@@ -233,19 +233,8 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_closure_set_box_capture_ptr"
         | "js_closure_get_capture_ptr"
         | "js_closure_set_capture_ptr"
-        // Variable-box accessors and allocators (#8132), `box.rs`. Boxes are
-        // `std::alloc::alloc` allocations OUTSIDE the GC heap — allocating
-        // one arms no Perry GC trigger (the malloc-count trigger counts
-        // `MALLOC_STATE` GC objects, not raw Rust allocations), and the
-        // registry insert is a TLS set. `gc_root_dominance_check.py`'s
-        // IMMOVABLE_SOURCES "box" probes pin exactly this: std::alloc, no
-        // arena allocation, no dealloc — if boxes ever become GC objects the
-        // lint fails and these entries must be demoted with it. The setters
-        // are a registry membership check, the raw cell write, and (for the
-        // JSValue box) `runtime_write_barrier_root_nanbox`, admitted above.
-        // The i32/bool getters are registry check + raw read; they have no
-        // TDZ path.
-        //
+        // GC box stores and primitive loads do not collect. Allocation now
+        // enters the moving arena and must remain a collection point.
         // `js_box_get_bits` is deliberately ABSENT: its TDZ arm calls
         // `js_throw_reference_error_tdz`, which allocates the ReferenceError
         // (string + error object) before unwinding — a genuine route into
@@ -253,24 +242,19 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // NONCOLLECTING currently lists it anyway; this table does not
         // inherit that entry, it only requires containment in the safe
         // direction.
-        | "js_box_alloc_bits"
-        | "js_i32_box_alloc"
-        | "js_bool_box_alloc"
+        | "js_box_capture_cell_ptr"
         | "js_box_set_bits"
         | "js_box_set_bits_trusted_no_barrier"
         | "js_i32_box_set"
         | "js_bool_box_set"
         | "js_i32_box_get"
         | "js_bool_box_get"
-        // The #7933 release entry points: registry remove + raw cell clear +
-        // TLS free-pool push. No GC-heap allocation, no user code, no
-        // collection trigger — the same audit as the accessors above.
+        // Legacy async releases complete a generation token's lifecycle.
+        // They neither allocate GC objects nor invoke user code.
         | "js_box_release"
         | "js_i32_box_release"
         | "js_bool_box_release"
-        // #10464 scope-exit release: a registry probe, a capture-count
-        // lookup, then either the same publish (registry remove, cache evict,
-        // raw clear, TLS free-list push) or a TLS pending-map insert.
+        // ABI compatibility no-ops; cells now die by GC reachability.
         | "js_box_scope_release"
         | "js_i32_box_scope_release"
         | "js_bool_box_scope_release" => GcCallEffect::CannotCollect,
@@ -631,7 +615,6 @@ mod tests {
             "js_box_release",
             "js_i32_box_release",
             "js_bool_box_release",
-            "js_box_alloc_bits",
             "js_closure_get_capture_bits",
         ] {
             assert!(
@@ -838,9 +821,6 @@ mod tests {
             "js_closure_set_box_capture_ptr",
             "js_closure_get_capture_ptr",
             "js_closure_set_capture_ptr",
-            "js_box_alloc_bits",
-            "js_i32_box_alloc",
-            "js_bool_box_alloc",
             "js_box_set_bits",
             "js_box_set_bits_trusted_no_barrier",
             "js_i32_box_set",

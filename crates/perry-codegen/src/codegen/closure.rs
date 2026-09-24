@@ -639,7 +639,6 @@ pub(super) fn compile_closure(
         }
         map
     };
-    super::arguments::release_boxed_param_slots_at_exit(lf, params, &closure_boxed_vars, &locals);
 
     // Start with the closure's own params as local_types, then
     // merge in the module-wide map so captured-from-outer ids have
@@ -916,10 +915,10 @@ pub(super) fn compile_closure(
     // verified the public closure identity and its compiler-installed raw-box
     // capture mask. Capture slots never change. Load each box pointer once,
     // before user code or a safepoint can relocate the closure, and retain the
-    // non-moving box pointer for the invocation. This removes the repeated
+    // rooted box pointer for the invocation. This removes the repeated
     // checked closure-capture helper from hot callback bodies without caching
     // the mutable VALUE stored inside the box.
-    let trusted_box_capture_ptrs = if trusted_box_captures {
+    let mut trusted_box_capture_ptrs = if trusted_box_captures {
         let mut trusted = HashMap::new();
         let mut boxed_captures: Vec<_> = closure_captures
             .iter()
@@ -954,7 +953,7 @@ pub(super) fn compile_closure(
         // The PUBLIC body's variant of the cache above (#9016 follow-up). The
         // dispatcher has validated nothing here, so each cached pointer is
         // resolved through `js_box_capture_cell_ptr`, which answers the box's
-        // own (never-moving) cell for a registered pointer and a shared
+        // own cell for a validated pointer and a shared
         // immutable `undefined` cell otherwise — per-read behaviour is then
         // identical to `js_box_get_bits` in both cases. Admission is
         // deliberately narrow:
@@ -970,7 +969,7 @@ pub(super) fn compile_closure(
         //
         // The cell CONTENTS are still loaded per use, so a write through any
         // other closure sharing the box stays visible; only the pointer — and
-        // the per-read registry probe `is_registered_box_ptr`, 1.45% of the
+        // the per-read allocation/type probe `is_registered_box_ptr`, formerly 1.45% of the
         // wolf-ecs entity cycle — is hoisted to entry.
         let mut cached = HashMap::new();
         let mut boxed_captures: Vec<_> = closure_captures
@@ -1009,6 +1008,26 @@ pub(super) fn compile_closure(
     } else {
         HashMap::new()
     };
+
+    // Every cached cell is now movable. Give it a precise root and derive
+    // cached SSA values from a root load so the reload pass repairs uses
+    // below collecting calls on both native and shadow-stack backends.
+    for capture in trusted_box_capture_ptrs.values_mut() {
+        if let Some(index) = lf.reserve_shadow_slot() {
+            let slot = lf.alloca_entry(I64);
+            let blk = lf.block_mut(0).expect("closure entry");
+            let bits = blk.ptrtoint(&capture.ptr, I64);
+            blk.store(I64, &bits, &slot);
+            blk.call_void(
+                "js_shadow_slot_bind",
+                &[(I32, &index.to_string()), (PTR, &slot)],
+            );
+            capture.bits = blk.load(I64, &slot);
+            capture.ptr = blk.inttoptr(I64, &capture.bits);
+        }
+    }
+
+    super::arguments::box_rooted_parameter_slots(lf, params, &closure_boxed_vars, &locals);
 
     let mut ctx = FnCtx {
         func: lf,

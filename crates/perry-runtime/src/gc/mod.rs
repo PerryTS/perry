@@ -1181,10 +1181,6 @@ pub fn gc_init() {
     reg_scanner!(crate::node_submodules::scan_node_submodule_singleton_roots_mut,);
     #[cfg(feature = "mod-node-test")]
     reg_scanner!(crate::node_submodules::test::runner::scan_node_test_runner_roots_mut,);
-    // Box-capture root scanner (mutable closure captures, esp. the
-    // generator state-machine's `__iter` and `__step` boxes that hold
-    // the iter object + step closure across awaits).
-    reg_scanner!(crate::r#box::scan_box_roots_mut);
     // Iter-result scratch slot — the async-step fast path stows the
     // generator's most recent yield value here; it stays live until
     // the step driver reads it back.
@@ -1412,7 +1408,6 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // turnloop P0: destroy this thread's agent loop and print the
     // `PERRY_LOOP_STATS=1` line on the same all-exits funnel.
     crate::event_pump::shutdown_wait_driver();
-    crate::r#box::report_box_stats_at_exit();
     crate::arena::alloc_sample::report("exit");
     diag_sites::report_charges("exit");
     diag_sites::report_primitive_dispatch("exit");

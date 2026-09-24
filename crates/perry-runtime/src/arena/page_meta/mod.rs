@@ -988,14 +988,19 @@ fn classify_heap_space_in_range_uncached(
     Some((range.space, range.base, range.object_starts))
 }
 
-/// Record a newly initialized Map header in its owning block's exact-start
-/// bitmap. Map is the only arena type whose tag can be fabricated by an
-/// 8-aligned interior pointer and whose rewrite descriptor follows an external
-/// payload pointer. Keeping all other allocations off this path avoids a
-/// metadata read-modify-write on every bump allocation.
+/// Record headers whose public pointer validators require an exact allocation
+/// start. Maps follow an external payload; box accessors must reject foreign
+/// and interior pointers without consulting a per-cell registry. Other types
+/// avoid this metadata write on their bump-allocation path.
 #[inline(always)]
 pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
-    if obj_type != crate::gc::GC_TYPE_MAP {
+    if !matches!(
+        obj_type,
+        crate::gc::GC_TYPE_MAP
+            | crate::gc::GC_TYPE_BOX
+            | crate::gc::GC_TYPE_I32_BOX
+            | crate::gc::GC_TYPE_BOOL_BOX
+    ) {
         return;
     }
     let Some((_space, range_base, bitmap)) = classify_heap_space_in_range(header_addr) else {

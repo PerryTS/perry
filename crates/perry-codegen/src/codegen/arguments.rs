@@ -42,19 +42,17 @@ pub(crate) fn store_param_slot(
     let slot = blk.alloca(if boxed_param { I64 } else { DOUBLE });
     if boxed_param {
         let arg_bits = blk.bitcast_double_to_i64(arg_name);
-        let box_ptr = blk.call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
-        blk.store(I64, &box_ptr, &slot);
+        blk.store(I64, &arg_bits, &slot);
     } else {
         blk.store(DOUBLE, arg_name, &slot);
     }
     slot
 }
 
-/// #10464: a boxed parameter's cell is minted by this frame's entry block
-/// (`store_param_slot`), so the frame releases it before every `ret`.
-/// `materialize_arguments_object` withdraws a slot it maps into a sloppy-mode
-/// `arguments` object, which holds the raw cell without a counted edge.
-pub(crate) fn release_boxed_param_slots_at_exit(
+/// After every incoming parameter has a root slot, replace boxed parameters'
+/// value words with freshly allocated GC cells. An allocation can collect, so
+/// boxing during the initial spill loop would lose the later arguments.
+pub(crate) fn box_rooted_parameter_slots(
     lf: &mut crate::function::LlFunction,
     params: &[Param],
     boxed_vars: &HashSet<u32>,
@@ -65,17 +63,13 @@ pub(crate) fn release_boxed_param_slots_at_exit(
             continue;
         }
         if let Some(slot) = slots.get(&p.id) {
-            lf.add_pre_return_box_release(slot, "js_box_scope_release");
+            // All incoming arguments are rooted before the first allocation.
+            let blk = lf.block_mut(0).expect("parameter entry");
+            let bits = blk.load(I64, slot);
+            let cell = blk.call(I64, "js_box_alloc_bits", &[(I64, &bits)]);
+            blk.store(I64, &cell, slot);
         }
     }
-}
-
-/// The parameter ids a synthesized `arguments` object aliases.
-pub(crate) fn mapped_parameter_ids(params: &[Param]) -> HashSet<u32> {
-    mapped_arguments_params(params)
-        .into_iter()
-        .map(|(_, id)| id)
-        .collect()
 }
 
 pub(crate) fn materialize_arguments_object(
@@ -139,7 +133,6 @@ pub(crate) fn materialize_arguments_object(
     for (arg_index, param_id) in mapped_arguments_params(params) {
         if let Some(param_slot) = ctx.locals.get(&param_id).cloned() {
             // #10464: the object aliases the cell for its own lifetime.
-            ctx.func.forget_pre_return_box_release(&param_slot);
             let box_ptr = ctx.block().load(I64, &param_slot);
             ctx.block().call_void(
                 "js_arguments_object_map_index",

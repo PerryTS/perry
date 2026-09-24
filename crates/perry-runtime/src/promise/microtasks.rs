@@ -411,9 +411,7 @@ fn finish_gc_and_box_boundary() {
     // they do not wait for this global pump boundary.
     if MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
         && TASK_QUEUE.with(|q| q.borrow().is_empty())
-    {
-        crate::r#box::flush_released_boxes();
-    }
+    {}
 }
 
 /// The microtask trap's protected region (#9305): the recovery for a

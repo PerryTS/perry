@@ -118,7 +118,7 @@ fn arguments_shared_keys_survive_moving_gc_without_a_live_arguments_owner() {
 
 #[test]
 fn arguments_values_callee_and_mapping_survive_moving_gc() {
-    let _guard = CopyingNurseryTestGuard::new(1);
+    let _guard = CopyingNurseryTestGuard::new(2);
     register_scanners();
     let child = js_object_alloc(0, 1);
     js_object_set_field(child, 0, JSValue::number(42.0));
@@ -129,6 +129,7 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     let mapped = crate::r#box::js_box_alloc(8.0);
     js_arguments_object_map_index(args, 2, mapped);
     js_shadow_slot_set(0, ptr_bits(args as usize));
+    js_shadow_slot_set(1, ptr_bits(mapped as usize));
 
     gc_collect_minor();
 
@@ -152,9 +153,34 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     assert!(unsafe { crate::string::js_string_key_matches(moved_text, key("arguments payload")) });
     assert_eq!(get(moved, "2").bits(), 8.0f64.to_bits());
     js_object_set_field_by_name(moved, key("2"), 9.0);
-    assert_eq!(crate::r#box::js_box_get(mapped), 9.0);
+    let moved_mapped = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::r#box::Box;
+    assert_ne!(moved_mapped, mapped);
+    assert_eq!(crate::r#box::js_box_get(moved_mapped), 9.0);
     assert_eq!(get(moved, "length").bits(), 3.0f64.to_bits());
     assert!(!get_property_attrs(moved as usize, "length")
         .unwrap()
         .enumerable());
+}
+
+#[test]
+fn unreachable_arguments_and_mapped_cell_cycle_is_reclaimed() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    register_scanners();
+    let args = arguments(&[0.0], f64::from_bits(crate::value::TAG_UNDEFINED), false);
+    let cell = crate::r#box::js_box_alloc_bits(ptr_bits(args as usize) as i64);
+    js_arguments_object_map_index(args, 0, cell);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    gc_collect_minor();
+    let moved_args = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let moved_cell = test_arguments_mapped_box(moved_args, 0).unwrap();
+    assert_ne!(moved_cell, cell as usize);
+    assert_eq!(
+        crate::r#box::js_box_get_bits(moved_cell as *mut _) as u64,
+        ptr_bits(moved_args)
+    );
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    gc_collect_inner();
+    let live = build_valid_pointer_set();
+    assert!(!live.contains(&moved_args));
+    assert!(!live.contains(&moved_cell));
 }

@@ -374,12 +374,11 @@ mod tests {
             rewritten
                 .matches("@llvm.experimental.gc.statepoint")
                 .count(),
-            // one declare line + two wrapped call sites
-            3,
-            "only the two unaudited js_map_alloc calls may be statepoints:\n{rewritten}"
+            // declaration + two map allocations + one GC box allocation
+            4,
+            "map and box allocations must be statepoints:\n{rewritten}"
         );
         for direct in [
-            "call i64 @js_box_alloc_bits(",
             "call void @js_box_set_bits(",
             "call i64 @js_closure_get_capture_bits(",
             "call void @js_closure_set_capture_bits(",

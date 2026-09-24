@@ -1145,6 +1145,11 @@ pub fn collect_pointer_typed_locals(
         &non_pointer_locals,
         &flat_row_alias_ids,
     );
+    // A mutable binding's source value may be numeric, but its storage is
+    // now a movable GC box. Keep a root for every compiler-boxed local.
+    for id in crate::boxed_vars::collect_boxed_vars(stmts) {
+        assign_slot(&mut out, &mut next_slot, id);
+    }
     // The frame-sizing invariant every caller relies on: they pass
     // `map.len()` to `enable_shadow_frame`, so the count MUST equal the
     // number of indices handed out. If this ever breaks again, slots at or

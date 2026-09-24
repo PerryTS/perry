@@ -1,22 +1,4 @@
-//! #8132: a boxed local's slot must not be lowered as a GC root.
-//!
-//! A boxed local's alloca holds a `js_box_alloc_bits` result (or the
-//! TAG_UNDEFINED sentinel) — never a GC-heap value. Boxes are `std::alloc`
-//! allocations outside the GC heap: no collector phase moves them, box.rs
-//! never frees them, and the JSValue inside is traced through the registered
-//! `scan_box_roots_mut` scanner. Rooting the slot therefore protects nothing —
-//! and under the RS4GC lowering it costs a relocation of the box pointer at
-//! every statepoint it stays live across. On #8132's bundled webpack module
-//! factory, ~300 preallocated boxes were live across ~90% of one function's
-//! 5.5k statepoints: roughly a third of its 1.43M `gc.relocate`s protected
-//! pointers the collector can never move.
-//!
-//! The fixture pairs the boxed local with an unboxed twin of the same shape
-//! (`let plain = []`), so the assertions discriminate in both directions:
-//! if the bind gate in `emit_shadow_slot_bind_for_local` is reverted, the box
-//! pointer gets `inttoptr`-retyped into `addrspace(1)` and the negative
-//! assertion fails; if binds were skipped wholesale, the twin's
-//! `alloca ptr addrspace(1)` disappears and the premise assertion fails.
+//! Mutable-cell slots are precise roots now that cells move with the GC.
 
 use crate::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
@@ -180,7 +162,7 @@ fn define_containing<'a>(ir: &'a str, needle: &str) -> &'a str {
 }
 
 #[test]
-fn a_boxed_locals_slot_is_not_a_native_gc_root() {
+fn a_boxed_locals_slot_is_a_native_gc_root() {
     let _native = crate::codegen::helpers::NativeRootsPin::native();
     let ir = String::from_utf8(compile_module(&module_with_boxed_local(), ir_opts()).unwrap())
         .expect("LLVM IR should be UTF-8");
@@ -207,16 +189,8 @@ fn a_boxed_locals_slot_is_not_a_native_gc_root() {
         "the unboxed twin must still lower a precise root:\n{f}"
     );
 
-    // The point: the box pointer is stored as a plain i64 and is never
-    // retyped into the GC address space, so RS4GC has nothing to relocate.
     assert!(
-        f.contains(&format!("store i64 {box_reg},")),
-        "box pointer must be stored to its plain i64 slot:\n{f}"
-    );
-    assert!(
-        !f.contains(&format!("inttoptr i64 {box_reg} to ptr addrspace(1)")),
-        "#8132: a boxed local's slot must not be lowered as an addrspace(1) \
-         GC root — the box never moves and its contents are traced through \
-         the box-registry scanner:\n{f}"
+        f.contains(&format!("inttoptr i64 {box_reg} to ptr addrspace(1)")),
+        "GC box allocation must be stored in a relocatable root:\n{f}"
     );
 }

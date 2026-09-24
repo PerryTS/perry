@@ -8,7 +8,7 @@ use super::*;
 
 #[derive(Default)]
 struct ArgumentsMeta {
-    mapped: HashMap<u32, usize>,
+    mapped: HashMap<u32, std::boxed::Box<usize>>,
     restricted_callee: bool,
 }
 
@@ -57,25 +57,44 @@ pub fn scan_arguments_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     let mut moved = Vec::new();
     ARGUMENTS_OBJECTS.with(|m| {
         let mut map = m.borrow_mut();
-        for (&owner, meta) in map.iter_mut() {
+        for &owner in map.keys() {
             let mut new_owner = owner;
             if visitor.visit_metadata_usize_slot(&mut new_owner) {
                 moved.push((owner, new_owner));
-            }
-            // 2026-07-09 GC audit wave 2: the mapped-arguments capture BOXES
-            // are real heap references (`js_arguments_object_map_index`
-            // stores raw `Box` pointers) and were never visited — a moving
-            // GC could sweep or relocate a box out from under the next
-            // `arguments[i]` read/write. Visit them STRONGLY so they stay
-            // live and get rewritten to their post-move addresses.
-            for box_ptr in meta.mapped.values_mut() {
-                visitor.visit_usize_slot(box_ptr);
             }
         }
         for (old_owner, new_owner) in moved.drain(..) {
             if let Some(meta) = map.remove(&old_owner) {
                 map.insert(new_owner, meta);
             }
+        }
+    });
+}
+
+/// Live arguments objects trace their mapped cells as ordinary child edges.
+/// Boxed slots stay at stable addresses if the index map grows between GC slices.
+pub(crate) fn visit_arguments_cell_slots(owner: usize, mut visit: impl FnMut(*mut u64)) {
+    if arguments_registry_never_used() {
+        return;
+    }
+    ARGUMENTS_OBJECTS.with(|all| {
+        if let Some(meta) = all.borrow_mut().get_mut(&owner) {
+            for cell in meta.mapped.values_mut() {
+                visit((&mut **cell) as *mut usize as *mut u64);
+            }
+        }
+    });
+}
+
+/// Relocate metadata before the copying collector visits the new owner's edges.
+pub(crate) fn arguments_owner_moved(old: usize, new: usize) {
+    if arguments_registry_never_used() {
+        return;
+    }
+    ARGUMENTS_OBJECTS.with(|all| {
+        let mut all = all.borrow_mut();
+        if let Some(meta) = all.remove(&old) {
+            all.insert(new, meta);
         }
     });
 }
@@ -110,7 +129,7 @@ pub(crate) fn test_arguments_mapped_box(addr: usize, index: u32) -> Option<usize
     ARGUMENTS_OBJECTS.with(|m| {
         m.borrow()
             .get(&addr)
-            .and_then(|meta| meta.mapped.get(&index).copied())
+            .and_then(|meta| meta.mapped.get(&index).map(|cell| **cell))
     })
 }
 
@@ -327,7 +346,16 @@ pub extern "C" fn js_arguments_object_map_index(
     }
     ARGUMENTS_OBJECTS.with(|m| {
         if let Some(meta) = m.borrow_mut().get_mut(&(obj as usize)) {
-            meta.mapped.insert(index, box_ptr as usize);
+            let cell = meta
+                .mapped
+                .entry(index)
+                .or_insert_with(|| std::boxed::Box::new(0));
+            **cell = box_ptr as usize;
+            crate::gc::runtime_write_barrier_slot(
+                obj as usize,
+                (&mut **cell) as *mut usize as usize,
+                box_ptr as u64,
+            );
         }
     });
 }
@@ -435,7 +463,7 @@ pub(crate) unsafe fn arguments_object_get_field(
         let meta = map.get(&(obj as usize))?;
         let mapped_box = super::canonical_array_index(&name).and_then(|idx| {
             if super::own_key_present(obj as *mut ObjectHeader, key) {
-                meta.mapped.get(&idx).copied()
+                meta.mapped.get(&idx).map(|cell| **cell)
             } else {
                 None
             }
@@ -480,7 +508,7 @@ pub(crate) unsafe fn arguments_object_set_field(
         let meta = map.get(&(obj as usize))?;
         let mapped_box = super::canonical_array_index(&name).and_then(|idx| {
             if super::own_key_present(obj, key) {
-                meta.mapped.get(&idx).copied()
+                meta.mapped.get(&idx).map(|cell| **cell)
             } else {
                 None
             }
@@ -575,7 +603,7 @@ pub(crate) unsafe fn arguments_object_after_define(
         let Some(meta) = map.get_mut(&(obj as usize)) else {
             return;
         };
-        let Some(box_ptr) = meta.mapped.get(&index).copied() else {
+        let Some(box_ptr) = meta.mapped.get(&index).map(|cell| **cell) else {
             return;
         };
         if let Some(value) = value {
@@ -628,7 +656,7 @@ pub(crate) unsafe fn arguments_object_descriptor(
             .with(|m| {
                 m.borrow()
                     .get(&(obj as usize))
-                    .and_then(|meta| meta.mapped.get(&index).copied())
+                    .and_then(|meta| meta.mapped.get(&index).map(|cell| **cell))
             })
             .map(|box_ptr| crate::r#box::js_box_get(box_ptr as *mut crate::r#box::Box))
             .unwrap_or_else(|| f64::from_bits(read_ordinary_own_value(obj, key).bits()))

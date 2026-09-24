@@ -181,11 +181,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else if let Some(slot) = ctx.locals.get(cap_id).cloned() {
                         // Enclosing function owns the box: slot holds
                         // the raw box pointer as i64.
-                        if uncounted_box_capture(cap_id) {
-                            // #10464: the activation, not this frame, owns
-                            // the cell's lifetime from here on.
-                            ctx.func.forget_pre_return_box_release(&slot);
-                        }
                         let box_ptr = ctx.block().load(I64, &slot);
                         captured_value_bits.push(box_ptr);
                     } else if let Some(global_name) = ctx.module_globals.get(cap_id).cloned() {

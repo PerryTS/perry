@@ -515,10 +515,8 @@ fn test_dead_arguments_object_entry_pruned_on_full_gc() {
     );
 }
 
-/// The mapped-arguments capture boxes are raw (non-GC) allocations whose
-/// pointers now get a strong (validated) visit; the entry itself must be
-/// rekeyed when the owning object moves in a copied minor, with the box
-/// pointer intact and readable.
+/// Mapped cells are traced children of their arguments object. Relocating
+/// the owner must rekey its metadata before tracing and rewriting its cells.
 #[test]
 fn test_arguments_entry_rekeys_and_mapped_box_survives_copied_minor() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -547,13 +545,15 @@ fn test_arguments_entry_rekeys_and_mapped_box_survives_copied_minor() {
         !crate::object::test_arguments_object_registered(addr),
         "the stale pre-move key must be gone"
     );
-    assert_eq!(
-        crate::object::test_arguments_mapped_box(moved, 0),
-        Some(boxed as usize),
-        "mapped box pointer must survive the move (boxes are non-GC \
-         allocations; the strong visit is a validated no-op for them)"
+    let moved_box = crate::object::test_arguments_mapped_box(moved, 0).unwrap();
+    assert_ne!(
+        moved_box, boxed as usize,
+        "mapped GC cell must actually move"
     );
-    assert_eq!(crate::r#box::js_box_get(boxed), 42.0);
+    assert_eq!(
+        crate::r#box::js_box_get(moved_box as *mut crate::r#box::Box),
+        42.0
+    );
 }
 
 #[test]

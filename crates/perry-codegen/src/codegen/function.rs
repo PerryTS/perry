@@ -863,7 +863,7 @@ pub(super) fn compile_function(
         }
         map
     };
-    super::arguments::release_boxed_param_slots_at_exit(lf, &f.params, &boxed_vars, &locals);
+    super::arguments::box_rooted_parameter_slots(lf, &f.params, &boxed_vars, &locals);
 
     // Param types feed local_types so type-aware dispatch (e.g. string
     // concat detection on a `: string` parameter) works inside the body.
@@ -1062,7 +1062,9 @@ pub(super) fn compile_function(
     // statement lowering.  `enable_shadow_frame` deliberately retains the
     // original upper-bound size, so the remaining preassigned slot indices
     // stay valid even when filtering leaves holes.
-    shadow_slot_map.retain(|id, _| !native_facts.number_by_construction_locals().contains(id));
+    shadow_slot_map.retain(|id, _| {
+        boxed_vars.contains(id) || !native_facts.number_by_construction_locals().contains(id)
+    });
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(&f.body, &shadow_slot_map);
 

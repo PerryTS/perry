@@ -122,7 +122,7 @@ pub(in crate::codegen) fn compile_static_method(
         }
         (this_slot, map)
     };
-    crate::codegen::arguments::release_boxed_param_slots_at_exit(
+    crate::codegen::arguments::box_rooted_parameter_slots(
         lf,
         &f.params,
         &static_boxed_vars,
