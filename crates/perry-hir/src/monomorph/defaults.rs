@@ -52,10 +52,16 @@ pub(crate) fn fill_default_arguments(module: &mut Module) {
             // bogus element throws (marked's `new q` / hono's verb-method
             // setup). Only the leading fixed params (which DO get default-fill
             // checks prepended to the ctor body) are eligible for padding.
+            //
+            // #11229: the synthesized `__perry_cap_*` params a capturing
+            // class's constructor carries are not user parameters either --
+            // the `new` site appends their values itself (`cap_args_appended`)
+            // -- so they never count toward the fill boundary.
             let defaults: Vec<Option<Expr>> = ctor
                 .params
                 .iter()
                 .take_while(|p| !p.is_rest)
+                .filter(|p| !p.name.starts_with(crate::cap_fields::CAP_FIELD_PREFIX))
                 .map(|p| p.default.clone())
                 .collect();
             ctors.insert(class.name.clone(), defaults);
@@ -190,7 +196,10 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
 fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
     match expr {
         Expr::New {
-            class_name, args, ..
+            class_name,
+            args,
+            cap_args_appended,
+            ..
         } => {
             // First, recurse into the arguments
             for arg in args.iter_mut() {
@@ -200,16 +209,28 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             // Check if we need to fill in defaults
             if let Some(defaults) = cx.ctors.get(class_name) {
                 let param_count = defaults.len();
-                let arg_count = args.len();
+                // #11229: the trailing `cap_args_appended` args are the
+                // capturing class's captured values, which the constructor
+                // receives in its synthesized `__perry_cap_*` params AFTER
+                // every user param. Padding goes between the user args and
+                // them. Appending it after them instead left the captures in
+                // the omitted user params (`new Doc(bson, off)` against
+                // `constructor(bson, offset = 0, isArray = false, elements)`
+                // bound a captured module object to `isArray`) and handed the
+                // padding to the capture slots.
+                let caps = (*cap_args_appended as usize).min(args.len());
+                let user_arg_count = args.len() - caps;
 
-                if arg_count < param_count {
+                if user_arg_count < param_count {
                     // Fill missing constructor slots with `undefined`.
                     // Constructor bodies already prepend default-param
                     // checks, so default expressions must run in the
                     // constructor boundary rather than at the `new` site.
-                    for _ in arg_count..param_count {
-                        args.push(Expr::Undefined);
-                    }
+                    let padding = param_count - user_arg_count;
+                    args.splice(
+                        user_arg_count..user_arg_count,
+                        std::iter::repeat_n(Expr::Undefined, padding),
+                    );
                 }
             }
         }
