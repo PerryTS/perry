@@ -4484,3 +4484,6 @@ pub(crate) fn box_capture_entry_cells_enabled() -> bool {
         )
     })
 }
+
+#[cfg(test)]
+mod virtual_getter_tests;

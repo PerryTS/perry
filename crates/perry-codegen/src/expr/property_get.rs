@@ -1258,10 +1258,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return lower_generic_property_get(ctx, object, property, *byte_offset);
                 }
             }
-            // Getter dispatch: if the receiver is a known class and
-            // the property is registered as a getter, call the
-            // synthesized __get_<property> method instead of doing a
-            // raw field load.
+            // Class metadata nominates specialized property paths below.
+            // Public accessors still require live receiver/prototype lookup.
             let proven_receiver_class = receiver_class_name(ctx, object);
             if let Some(class_name) = proven_receiver_class
                 .clone()
@@ -1400,9 +1398,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // must perform ordinary own-property lookup instead.
                     && !property.starts_with('#')
                 {
-                    if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
-                        let recv_box = lower_expr(ctx, object)?;
-                        return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
+                    if ctx.methods.contains_key(&getter_key) {
+                        // The enclosing class is not an exact runtime receiver
+                        // proof: `this` may be a subclass overriding this getter.
+                        // Even exact instances can gain an own property or have
+                        // their prototype accessor replaced/deleted. Resolve the
+                        // live property instead of calling the template getter.
+                        return lower_generic_property_get(ctx, object, property, *byte_offset);
                     }
                 }
                 // #1642: bound-method reference for Web Streams instance methods
