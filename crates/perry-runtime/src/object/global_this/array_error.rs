@@ -24,6 +24,9 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
     // The generic value-call bridge treats a proxy invocation as a bare
     // call. Preserve the explicit receiver of Function.prototype.call.
     if crate::proxy::js_proxy_is_proxy(target) == 1 {
+        if !crate::proxy::is_callable_function(target) {
+            crate::closure::throw_not_callable();
+        }
         return crate::proxy::js_proxy_apply(target, this_arg, rest);
     }
     let args = global_this_rest_array_values(rest);
@@ -522,6 +525,42 @@ pub(crate) unsafe fn generic_array_like_to_vec(args_array: f64) -> Vec<f64> {
     crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&handles)
 }
 
+/// Codegen entry for a statically known proxy's `call` / `apply` invocation.
+#[no_mangle]
+pub unsafe extern "C" fn js_function_apply_proxy(
+    target: f64,
+    receiver: f64,
+    args_array: f64,
+) -> f64 {
+    function_apply_proxy(target, receiver, args_array)
+}
+
+// Generated code is the only caller of this exported bridge; retain it in
+// the reduced-runtime bitcode build as well as ordinary static archives.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_FUNCTION_APPLY_PROXY: unsafe extern "C" fn(f64, f64, f64) -> f64 =
+    js_function_apply_proxy;
+
+/// Shared by builtin method-value invocation and direct `.apply` dispatch.
+pub(crate) unsafe fn function_apply_proxy(target: f64, receiver: f64, args_array: f64) -> f64 {
+    if !crate::proxy::is_callable_function(target) {
+        crate::closure::throw_not_callable();
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let receiver = scope.root_nanbox_f64(receiver);
+    // Validate and snapshot CreateListFromArrayLike before invoking the trap.
+    // The proxy bridge roots the values and builds a fresh Array, including
+    // for nullish (empty) argument lists.
+    let args = function_apply_args(args_array);
+    crate::proxy::call_proxy_value_with_this(
+        target.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+        &args,
+    )
+}
+
 pub(crate) extern "C" fn function_prototype_apply_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this_arg: f64,
@@ -530,22 +569,7 @@ pub(crate) extern "C" fn function_prototype_apply_thunk(
     unsafe {
         let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
         if crate::proxy::js_proxy_is_proxy(target) == 1 {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let target = scope.root_nanbox_f64(target);
-            let receiver = scope.root_nanbox_f64(this_arg);
-            // Function.prototype.apply accepts nullish argument lists as an
-            // empty list, unlike Reflect.apply.
-            let args = JSValue::from_bits(args_array.to_bits());
-            let args_array = if args.is_null() || args.is_undefined() {
-                crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64)
-            } else {
-                args_array
-            };
-            return crate::proxy::js_proxy_apply(
-                target.get_nanbox_f64(),
-                receiver.get_nanbox_f64(),
-                args_array,
-            );
+            return function_apply_proxy(target, this_arg, args_array);
         }
         let args = function_apply_args(args_array);
         let this_arg = crate::closure::coerce_call_this(target, this_arg);

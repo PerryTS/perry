@@ -556,15 +556,17 @@ pub(super) unsafe fn dispatch_common(
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
-                let mut arr = crate::array::js_array_alloc(0);
-                if args_len > 1 && !args_ptr.is_null() {
-                    for i in 1..args_len {
-                        arr = crate::array::js_array_push_f64(arr, *args_ptr.add(i));
-                    }
+                if !crate::proxy::is_callable_function(object) {
+                    crate::closure::throw_not_callable();
                 }
-                let arr_box =
-                    f64::from_bits(0x7FFD_0000_0000_0000 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF));
-                return Some(crate::proxy::js_proxy_apply(object, this_arg, arr_box));
+                let args = if args_len > 1 && !args_ptr.is_null() {
+                    std::slice::from_raw_parts(args_ptr.add(1), args_len - 1)
+                } else {
+                    &[]
+                };
+                return Some(crate::proxy::call_proxy_value_with_this(
+                    object, this_arg, args,
+                ));
             }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
@@ -648,15 +650,9 @@ pub(super) unsafe fn dispatch_common(
                 } else {
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 };
-                // Pass a real (possibly empty) array as the argArray — a
-                // null/undefined argsArray means "no arguments".
-                let args_box = if JSValue::from_bits(supplied.to_bits()).is_pointer() {
-                    supplied
-                } else {
-                    let arr = crate::array::js_array_alloc(0);
-                    f64::from_bits(0x7FFD_0000_0000_0000 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
-                };
-                return Some(crate::proxy::js_proxy_apply(object, this_arg, args_box));
+                return Some(super::super::global_this::function_apply_proxy(
+                    object, this_arg, supplied,
+                ));
             }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {

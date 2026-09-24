@@ -36,3 +36,43 @@ fn function_method_reads_share_the_prototype_function() {
         }
     }
 }
+
+extern "C" fn detached_function_fixture(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    42.0
+}
+
+#[test]
+fn detached_function_has_no_inherited_function_methods() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(detached_function_fixture as *const () as *const u8, 0)
+                as i64,
+        ));
+        let ptr = (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+        crate::object::js_object_set_prototype_of(
+            function.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(function.get_nanbox_f64()).to_bits(),
+            crate::value::TAG_NULL
+        );
+        for name in ["call", "apply", "bind"] {
+            let actual = crate::closure::closure_get_dynamic_prop(ptr, name);
+            assert_eq!(actual.to_bits(), crate::value::TAG_UNDEFINED, "{name}");
+            let actual = crate::closure::reify_function_method_value(
+                function.get_nanbox_f64(),
+                name.as_bytes(),
+            );
+            assert_eq!(
+                actual.to_bits(),
+                crate::value::TAG_UNDEFINED,
+                "reified {name}"
+            );
+        }
+        crate::closure::closure_set_dynamic_prop(ptr, "call", 123.0);
+        assert_eq!(crate::closure::closure_get_dynamic_prop(ptr, "call"), 123.0);
+    }
+}

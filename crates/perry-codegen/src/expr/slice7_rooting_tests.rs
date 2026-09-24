@@ -535,3 +535,24 @@ fn call_count(ir: &str, callee: &str) -> usize {
         .filter(|l| l.contains(&needle))
         .count()
 }
+
+#[test]
+fn proxy_function_apply_uses_argument_validation_bridge() {
+    let ir = compile_body(
+        "proxy_function_apply",
+        vec![Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::ProxyGet {
+                proxy: Box::new(allocating("p")),
+                key: Box::new(Expr::String("apply".to_string())),
+            }),
+            args: vec![allocating("receiver"), allocating("array_like")],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })],
+    );
+    require_call_line(&ir, "js_function_apply_proxy");
+    assert!(
+        !ir.contains("call double @js_proxy_apply("),
+        "Function.prototype.apply must validate and convert its argument list"
+    );
+}

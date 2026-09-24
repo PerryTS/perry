@@ -956,6 +956,14 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             }
         }
     }
+    // #11175: resolve these inherited values from the actual prototype,
+    // including explicit null/custom chains. Do this before the legacy walk
+    // so an inherited getter returning undefined is not invoked twice.
+    if matches!(prop, "call" | "apply" | "bind") {
+        let method = crate::object::reified_function_method_name(prop).unwrap();
+        let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+        return unsafe { crate::closure::reify_function_method_value(receiver, method) };
+    }
     // Function length is an own intrinsic property.
     if prop == "length" && !closure_is_key_deleted(ptr, "length") {
         let value = crate::value::js_nanbox_pointer(ptr as i64);
@@ -1069,13 +1077,6 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             }
         }
         break;
-    }
-    // #11175: value reads (including Reflect.get) share the real inherited
-    // Function.prototype methods, rather than a receiver-bound wrapper.
-    if matches!(prop, "call" | "apply" | "bind") {
-        let method = crate::object::reified_function_method_name(prop).unwrap();
-        let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-        return unsafe { crate::closure::reify_function_method_value(receiver, method) };
     }
     // Every function's [[Prototype]] is %Function.prototype% — an expando
     // installed there (`Function.prototype.property = 12`), or a property

@@ -560,6 +560,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_proxy_has", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_delete", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_apply", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_function_apply_proxy", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_proxy_construct", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_construct", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_reflect_get", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);

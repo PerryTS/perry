@@ -241,7 +241,7 @@ pub(crate) fn try_lower_proxy_fn_call_apply(
         };
         Ok(ctx.block().call(
             DOUBLE,
-            "js_proxy_apply",
+            "js_function_apply_proxy",
             &[(DOUBLE, &p), (DOUBLE, &this_arg), (DOUBLE, &arr_box)],
         ))
     })?;

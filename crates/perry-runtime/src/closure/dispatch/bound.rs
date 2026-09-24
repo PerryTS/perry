@@ -780,7 +780,12 @@ pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static
     if matches!(method, b"call" | b"apply" | b"bind") {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_nanbox_f64(receiver);
-        let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Function"));
+        let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+            receiver.get_nanbox_f64(),
+        ));
+        if proto.get_nanbox_u64() == crate::value::TAG_NULL {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
         let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
         let key = crate::value::js_nanbox_string(key as i64);
         // Reflect.get preserves the original function as `this` if the

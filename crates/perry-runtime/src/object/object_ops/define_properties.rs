@@ -454,7 +454,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     }
 
     // #36 / #321: when the target is a closure (a plain function value) and the
-    // proto is an object, record the (closure → proto) link in the closure
+    // proto is an object or null, record the (closure → proto) link in the closure
     // static-prototype side-table. effect's `Context.Tag(id)` returns a
     // function `TagClass` whose `_op`/`[TagTypeId]`/`[EffectTypeId]` live on a
     // `TagProto` object wired in via `Object.setPrototypeOf(TagClass,
@@ -462,11 +462,11 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     // the closure (and on a subclass that `extends TagClass`) walk to the
     // proto's own properties, so the Tag is recognized as a valid Effect.
     if (obj_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
-        && (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+        && ((proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
+            || proto_bits == crate::value::TAG_NULL)
     {
         let obj_ptr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
-        let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as usize;
-        if obj_ptr != 0 && proto_ptr != 0 && crate::closure::is_closure_ptr(obj_ptr) {
+        if obj_ptr != 0 && crate::closure::is_closure_ptr(obj_ptr) {
             crate::closure::closure_set_static_prototype(obj_ptr, proto_bits);
             return obj_value;
         }
