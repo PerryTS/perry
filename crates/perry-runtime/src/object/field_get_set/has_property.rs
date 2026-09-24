@@ -1188,6 +1188,26 @@ unsafe fn ordinary_has_property(
                 return true;
             }
         }
+        // #11112: ClassBody accessors are virtual own properties of the
+        // declared/evaluated prototype, not entries in its physical key array.
+        // Inspect each actual chain node, so a replaced prototype cannot
+        // resurrect members from the receiver's original class. The own-only
+        // accessor lookup respects deletion and never invokes a getter.
+        if !cur_is_array {
+            if let Some(name) = key_name {
+                if let Some(class_id) =
+                    super::super::class_registry::class_id_for_decl_prototype_object(cur as usize)
+                {
+                    if super::super::class_registry::class_declared_accessor_ptrs(
+                        class_id, false, name,
+                    )
+                    .is_some()
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
         // Advance to the recorded `[[Prototype]]`.
         let cur_addr = cur as usize;
         match super::super::prototype_chain::object_static_prototype(cur_addr) {
@@ -1462,4 +1482,100 @@ pub(crate) unsafe fn wide_key_index_lookup(
 pub(crate) fn wide_key_index_note_hit(keys_id: usize, key_bytes: &[u8], index: u32) {
     let h = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
     crate::object::shapes::shape_note_hit(keys_id as *const crate::array::ArrayHeader, h, index);
+}
+
+#[cfg(test)]
+mod evaluation_accessor_tests {
+    use super::*;
+    use crate::object::class_registry;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn getter(_this: f64) -> f64 {
+        CALLS.fetch_add(1, Ordering::Relaxed);
+        42.0
+    }
+    extern "C" fn setter(_this: f64, _value: f64) -> f64 {
+        CALLS.fetch_add(1, Ordering::Relaxed);
+        0.0
+    }
+
+    #[test]
+    fn evaluated_class_accessors_are_present_on_the_actual_prototype_chain() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CLASS_ID: u32 = 0x1111_2001;
+        unsafe {
+            CALLS.store(0, Ordering::Relaxed);
+            class_registry::js_register_class_id(CLASS_ID);
+            class_registry::js_register_class_getter(
+                CLASS_ID as i64,
+                b"getOnly".as_ptr(),
+                7,
+                getter as *const () as i64,
+            );
+            class_registry::js_register_class_setter(
+                CLASS_ID as i64,
+                b"setOnly".as_ptr(),
+                7,
+                setter as *const () as i64,
+            );
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let class = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CLASS_ID, 0));
+            class.with_mut_ptr::<ObjectHeader, _>(|p| {
+                class_registry::js_object_mark_class(p as i64)
+            });
+            let proto_value = class
+                .with_mut_ptr::<ObjectHeader, _>(|p| super::super::class_object_prototype_value(p));
+            let proto = scope.root_nanbox_f64(f64::from_bits(proto_value.bits()));
+            let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CLASS_ID, 0));
+            instance.with_mut_ptr::<ObjectHeader, _>(|p| {
+                crate::object::prototype_chain::object_link_class_evaluation_prototype(
+                    p as usize,
+                    proto.get_nanbox_f64().to_bits(),
+                );
+            });
+            let get =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"getOnly".as_ptr(), 7));
+            let set =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"setOnly".as_ptr(), 7));
+            let has = |value: f64, key: &crate::gc::RuntimeHandle| {
+                let key_value = key.with_const_ptr::<crate::StringHeader, _>(|p| {
+                    crate::value::js_nanbox_string(p as i64)
+                });
+                crate::value::js_is_truthy(js_in_operator(value, key_value)) != 0
+            };
+            let instance_value = || {
+                instance
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64))
+            };
+            assert!(
+                has(instance_value(), &get),
+                "capturing class getter must be present"
+            );
+            assert!(
+                has(instance_value(), &set),
+                "setter-only accessor must be present"
+            );
+            assert!(has(proto.get_nanbox_f64(), &get));
+            assert_eq!(
+                CALLS.load(Ordering::Relaxed),
+                0,
+                "presence must not invoke accessors"
+            );
+            class_registry::class_mark_key_deleted(CLASS_ID, "getOnly");
+            assert!(
+                !has(instance_value(), &get),
+                "deleted accessor must stay absent"
+            );
+            class_registry::class_unmark_key_deleted(CLASS_ID, "getOnly");
+            crate::object::js_object_set_prototype_of(
+                instance_value(),
+                f64::from_bits(0x7FFC_0000_0000_0002),
+            );
+            assert!(
+                !has(instance_value(), &get),
+                "replacement prototype is authoritative"
+            );
+        }
+    }
 }
