@@ -417,6 +417,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             } else {
                 ctx.lookup_local(&class_name)
             };
+            // #11160: class-expression metadata survives its block. Match the
+            // identifier-read precedence: a visible function wins over that
+            // metadata, unless a nearer local/class or class self-name wins.
+            // Snapshot before lowering arguments, just like the local above.
+            let callee_func_at_entry = if !force_global_intrinsic
+                && !is_current_class_self
+                && !class_shadows_callee_local
+                && callee_local_at_entry.is_none()
+            {
+                ctx.lookup_func(&class_name)
+            } else {
+                None
+            };
             // #6233: a user-declared binding — `class Symbol extends Base {}`,
             // a local/param, a `function` declaration, or an imported binding —
             // lexically shadows the same-named global for every reference in
@@ -1502,6 +1515,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 })
                 .transpose()?
                 .unwrap_or_default();
+            if let Some(func_id) = callee_func_at_entry {
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(Expr::FuncRef(func_id)),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
+            }
             // Extract explicit type arguments if present (e.g., new Box<number>(42))
             let type_args = new_expr
                 .type_args
@@ -1602,26 +1622,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }) {
                     return Ok(Expr::NewDynamic {
                         callee: Box::new(Expr::LocalGet(local_id)),
-                        args,
-                        byte_offset: new_byte_offset,
-                    });
-                }
-                // ES5 function constructors: `function Foo(){ this.x = … }`
-                // used as `new Foo()`. A top-level `function` declaration is
-                // tracked as a func (not a local, not a class), so neither the
-                // local branch above nor the `lookup_class` path fires — it
-                // would otherwise fall through to `Expr::New { class_name }`,
-                // whose codegen finds no class named `Foo` and produces an
-                // empty placeholder object that never runs the constructor
-                // body (so `this.x = …` writes are lost and `new Foo().x` is
-                // `undefined`). Route through `NewDynamic { FuncRef }` instead,
-                // which reaches `js_new_function_construct`: it allocates the
-                // instance, binds `this` for the duration of the call, runs the
-                // body, and returns the populated object — the same helper the
-                // local-binding path above relies on.
-                if let Some(func_id) = ctx.lookup_func(&class_name) {
-                    return Ok(Expr::NewDynamic {
-                        callee: Box::new(Expr::FuncRef(func_id)),
                         args,
                         byte_offset: new_byte_offset,
                     });
