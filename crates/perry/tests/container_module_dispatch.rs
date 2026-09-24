@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     const svc = JSON.parse(await ps(stack));
     console.log("ps", svc.length);
     const cl = JSON.parse(await composeLogs(stack, { service: "web", tail: 2 }));
-    console.log("compose logs", cl.stdout.trim());
+    console.log("compose logs", cl.stdout.includes("[web]"), cl.stdout.includes("stub-log-line"));
     await down(stack, { volumes: true });
     console.log("done");
 }
@@ -86,7 +86,7 @@ exec stub-exec-out
 removeIfExists true
 inspectGraph {\"api\":\"pending\"} true
 ps 1
-compose logs stub-log-line
+compose logs true true
 done
 ";
 
