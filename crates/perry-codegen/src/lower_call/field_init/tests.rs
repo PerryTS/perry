@@ -673,3 +673,71 @@ fn captures_this_arrow_field_preserves_the_predeclared_class_shape() {
         "the ordinary arrow field must not dynamically reshape its receiver:\n{ir}"
     );
 }
+
+/// Type arguments do not create a new JavaScript private-name environment.
+/// Assert the actual installation calls, not just the origin metadata: the
+/// specialized method guards still name the original declaration's class id.
+#[test]
+fn specialized_classes_install_the_declaring_private_brand() {
+    let mut private_field = field("#value");
+    private_field.is_private = true;
+    private_field.init = Some(Expr::Number(1.0));
+    let mut generic = class(vec![private_field], None);
+    generic.id = 11183;
+    generic.name = "Box".into();
+    let mut private_method = func(Vec::new(), vec![Stmt::Return(Some(Expr::Number(2.0)))]);
+    private_method.id = 11184;
+    private_method.name = "#method".into();
+    generic.methods.push(private_method);
+    let specialized = perry_hir::monomorph::specialize_class(&generic, &[Type::Number], 11185);
+    let nested = perry_hir::monomorph::specialize_class(&specialized, &[Type::String], 11186);
+    let mut unrelated = generic.clone();
+    unrelated.id = 11187;
+    unrelated.name = "Other".into();
+    unrelated.methods[0].id = 11188;
+
+    let mut module = Module::new("specialized_private.ts");
+    module.classes = vec![
+        generic.clone(),
+        specialized.clone(),
+        nested,
+        unrelated.clone(),
+    ];
+    module.init_kind = ModuleInitKind::Eager;
+    for target in &module.classes {
+        module.init.push(Stmt::Expr(Expr::New {
+            class_name: target.name.clone(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }));
+    }
+    let options = crate::CompileOptions {
+        emit_ir_only: true,
+        is_entry_module: true,
+        output_type: "executable".into(),
+        ..Default::default()
+    };
+    let ir = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+    for helper in ["js_private_brand_add", "js_private_field_add"] {
+        let calls: Vec<_> = ir
+            .lines()
+            .filter(|line| line.contains(&format!("call double @{helper}(")))
+            .collect();
+        assert!(
+            calls.len() >= 4,
+            "all four new sites must install {helper}: {calls:?}"
+        );
+        let generic_id = format!(", i32 {}", generic.id);
+        let unrelated_id = format!(", i32 {}", unrelated.id);
+        assert!(calls.iter().any(|call| call.contains(&generic_id)));
+        assert!(calls.iter().any(|call| call.contains(&unrelated_id)));
+        for call in calls {
+            assert!(
+                call.contains(&generic_id) || call.contains(&unrelated_id),
+                "specialization must use its declaration's brand: {call}"
+            );
+        }
+    }
+}

@@ -13,6 +13,26 @@ use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+/// Monomorphization changes the instance layout, not the lexical private-name
+/// environment. Its guards and private storage keys still name the original
+/// declaration (#11183). Follow only specialization edges: a subclass's own
+/// private names must remain distinct from those of its base class.
+fn private_element_class_id(ctx: &FnCtx<'_>, class_name: &str) -> u32 {
+    let mut declaring_name = class_name;
+    // A valid origin chain is acyclic and cannot be longer than the class map.
+    for _ in 0..ctx.classes.len() {
+        let Some(origin) = ctx
+            .classes
+            .get(declaring_name)
+            .and_then(|class| class.specialized_from.as_deref())
+        else {
+            break;
+        };
+        declaring_name = origin;
+    }
+    ctx.class_ids.get(declaring_name).copied().unwrap_or(0)
+}
+
 /// A runtime parent can create arbitrary properties before derived fields run.
 /// Retire the allocator's public-field placeholders before entering that parent,
 /// so DefineField later creates them in source order. Deletion revokes the old
@@ -946,6 +966,7 @@ pub(crate) fn apply_field_initializers_recursive(
         // Temporarily swap class_stack so `this.field` in the init
         // resolves against the correct class.
         ctx.class_stack.push(class_name_in_chain.clone());
+        let private_class_id = private_element_class_id(ctx, &class_name_in_chain).to_string();
         // Private methods/accessors are installed before fields and share a
         // single per-class brand. Private fields are added individually below
         // so their initializer ordering and duplicate check remain observable.
@@ -956,16 +977,10 @@ pub(crate) fn apply_field_initializers_recursive(
                 .cloned()
                 .map(|slot| ctx.block().load(DOUBLE, &slot))
                 .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-            let class_id = ctx
-                .class_ids
-                .get(&class_name_in_chain)
-                .copied()
-                .unwrap_or(0)
-                .to_string();
             ctx.block().call(
                 DOUBLE,
                 "js_private_brand_add",
-                &[(DOUBLE, &this_val), (I32, &class_id)],
+                &[(DOUBLE, &this_val), (I32, &private_class_id)],
             );
         }
         for (prop, init_expr, is_private) in init_pairs {
@@ -1004,18 +1019,12 @@ pub(crate) fn apply_field_initializers_recursive(
                 let key_idx = ctx.strings.intern(&prop);
                 let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let key = ctx.block().load(DOUBLE, &key_global);
-                let class_id = ctx
-                    .class_ids
-                    .get(&class_name_in_chain)
-                    .copied()
-                    .unwrap_or(0)
-                    .to_string();
                 ctx.block().call(
                     DOUBLE,
                     "js_private_field_add",
                     &[
                         (DOUBLE, &this_val),
-                        (I32, &class_id),
+                        (I32, &private_class_id),
                         (DOUBLE, &key),
                         (DOUBLE, &value),
                     ],
