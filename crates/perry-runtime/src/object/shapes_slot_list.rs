@@ -673,6 +673,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         generation,
         current.object_kind,
         hole_count,
+        current.proto_id,
     ));
     // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
     // the one that minted a fresh (old_carrier=false) descriptor for an
@@ -894,6 +895,7 @@ pub(crate) unsafe fn publish_object_shape_delete_transition(
             generation,
             current.object_kind,
             hole_count,
+            current.proto_id,
         );
     }
     if id == 0 {
@@ -1021,6 +1023,7 @@ fn mint_detached_delete_successor(
     semantic_generation: u64,
     object_kind: super::ShapeObjectKind,
     hole_count: u32,
+    proto_id: u64,
 ) -> u32 {
     let Ok(id) = super::alloc_shape_id() else {
         return 0;
@@ -1032,7 +1035,8 @@ fn mint_detached_delete_successor(
         semantic_generation,
         object_kind,
         hole_count,
-    );
+    )
+    .with_proto_id(proto_id);
     // `ShapeRecord::new` sets the flag by default, because its usual caller
     // inserts into `by_facts` on the next line. This record is never inserted
     // there, and the flag is what both stable-tombstone updaters read to
@@ -1074,6 +1078,7 @@ pub(super) fn install_external_shape_id(
     keys: *const super::ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
+    proto_id: u64,
 ) -> bool {
     if !super::is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
         return false;
@@ -1086,19 +1091,21 @@ pub(super) fn install_external_shape_id(
         0,
         super::ShapeObjectKind::Ordinary,
         0,
-    );
+    )
+    .with_proto_id(proto_id);
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
     if let Some(existing) = table.slab().record_ptr(id) {
         // SAFETY: live slab record, single-threaded agent.
-        let matches = unsafe { &*existing }.facts_match(
+        let matches = unsafe { &*existing }.facts_match_proto(
             keys,
             logical_key_count,
             live_inline_slot_count,
             0,
             super::ShapeObjectKind::Ordinary,
             0,
+            proto_id,
         );
         if matches {
             // SAFETY: same record and agent discipline as above.

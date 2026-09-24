@@ -137,9 +137,13 @@ unsafe fn stamp_reserved_floor_shape(
         .as_ref()
         .map(|d| d.object_kind)
         .unwrap_or(shapes::ShapeObjectKind::Ordinary);
+    let proto_id = match lineage.as_ref() {
+        Some(d) => d.proto_id,
+        None => shapes::object_proto_id(obj),
+    };
     crate::array::clear_array_subclass_named_prefix_token(obj);
     let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_holes(
-        keys, floor, live, generation, kind, floor,
+        keys, floor, live, generation, kind, floor, proto_id,
     ));
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     shapes::debug_assert_object_shape_parity_for_keys(

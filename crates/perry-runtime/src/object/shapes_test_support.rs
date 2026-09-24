@@ -249,5 +249,6 @@ pub(crate) fn test_install_external_shape_id(
         keys,
         logical_key_count,
         live_inline_slot_count,
+        crate::object::shapes::PROTO_ID_DEFAULT,
     )
 }

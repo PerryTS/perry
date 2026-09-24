@@ -642,10 +642,12 @@ pub(super) fn emit_string_pool(
                 ],
             )
         } else {
+            // The class id rides along: a birth shape names the prototype
+            // its class implies ([[Prototype]] is a shape fact).
             blk.call(
                 I32,
-                "js_object_shape_id_for_keys",
-                &[(I64, &arr), (I32, &fc_str)],
+                "js_object_shape_id_for_class_keys",
+                &[(I64, &arr), (I32, &fc_str), (I32, &cid_str)],
             )
         };
         let shape_global = format!(

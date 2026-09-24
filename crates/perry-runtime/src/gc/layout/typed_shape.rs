@@ -183,6 +183,7 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
             shape_id,
             keys as usize as *const crate::array::ArrayHeader,
             slot_count,
+            class_id,
         ) {
             eprintln!("Perry internal error: typed ShapeId structural mismatch");
             std::process::abort();
@@ -193,6 +194,7 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
     let shape_id = crate::object::shapes::mint_registered_typed_shape_id(
         keys as usize as *const crate::array::ArrayHeader,
         slot_count,
+        class_id,
     );
     registered.ids_by_layout.insert(key, shape_id);
     registered.layouts_by_id.insert(shape_id, descriptor);
@@ -244,7 +246,7 @@ fn publish_to_imported_slots(
         .or_insert(shape_id);
     if let Some(slots) = registered.pending_imported.remove(&(class_id, slot_count)) {
         for slot in slots {
-            unsafe { rewrite_imported_shape_slot(slot, slot_count, shape_id) };
+            unsafe { rewrite_imported_shape_slot(slot, class_id, slot_count, shape_id) };
         }
     }
 }
@@ -252,13 +254,19 @@ fn publish_to_imported_slots(
 /// # Safety
 /// `slot` must hold the addresses codegen registered: a live `u64` keys global,
 /// a `u32` ShapeId global and a null or `<2 x i64>` header image global.
-unsafe fn rewrite_imported_shape_slot(slot: ImportedShapeSlot, slot_count: u32, shape_id: u32) {
+unsafe fn rewrite_imported_shape_slot(
+    slot: ImportedShapeSlot,
+    class_id: u32,
+    slot_count: u32,
+    shape_id: u32,
+) {
     let keys = std::ptr::read(slot.keys_slot as *const u64);
     if keys == 0
         || !crate::object::shapes::install_registered_typed_shape_id(
             shape_id,
             keys as usize as *const crate::array::ArrayHeader,
             slot_count,
+            class_id,
         )
     {
         return;
@@ -322,7 +330,9 @@ pub extern "C" fn js_register_imported_class_shape_slot(
         .get(&(class_id, slot_count))
         .copied()
     {
-        Some(shape_id) => unsafe { rewrite_imported_shape_slot(slot, slot_count, shape_id) },
+        Some(shape_id) => unsafe {
+            rewrite_imported_shape_slot(slot, class_id, slot_count, shape_id)
+        },
         None => registered
             .pending_imported
             .entry((class_id, slot_count))

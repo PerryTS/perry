@@ -38,7 +38,7 @@ const OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys";
 /// Rung 2's outlined entry has an explicit ShapeId argument.
 const STAMPED_OUTLINED_CALL: &str = "call i64 @js_object_alloc_class_inline_keys_stamped(";
 /// One mint per class at module init, never per allocation.
-const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_keys(";
+const SHAPE_MINT_CALL: &str = "call i32 @js_object_shape_id_for_class_keys(";
 /// The immutable id is hoisted to the function-entry setup like keys_array.
 const SHAPE_GLOBAL_LOAD: &str = "load i32, ptr @perry_class_shape_id_";
 /// #8122: the inline allocator's 16-byte header prefix — packed GcHeader word

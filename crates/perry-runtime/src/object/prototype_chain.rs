@@ -545,27 +545,26 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
                 &(*meta).prototype as *const u64 as usize,
                 proto_bits,
             );
+            #[cfg(feature = "shape-mint-diag")]
             if prototype_diverged {
-                #[cfg(feature = "shape-mint-diag")]
                 crate::object::shape_mint_census::note_proto_divergence(
                     crate::object::shapes::object_shape_stamp(obj),
                     proto_bits,
                 );
-                // A prototype without a serial (not a meta-capable object) keeps
-                // the unique-generation transition: correct, just unmerged.
-                match prototype_serial {
-                    Some(serial) => {
-                        crate::object::shapes::transition_object_shape_semantics_for_prototype(
-                            obj,
-                            serial,
-                            link_kind as u8,
-                        );
-                    }
-                    None => {
-                        crate::object::shapes::transition_object_shape_semantics(obj);
-                    }
-                }
             }
+            // The [[Prototype]] is a SHAPE fact, for every link kind: the
+            // receiver moves to the shape naming its new prototype. A class-
+            // default link is not exempt — `F.prototype = other` followed by
+            // `new F()` otherwise leaves old and new instances on one shape
+            // over two chains. Same predecessor + same prototype reaches the
+            // same shape, so construction shares shapes as before. A
+            // prototype with no serial (a function, array or typed array)
+            // gets an identity of its own.
+            let proto_id = match prototype_serial {
+                Some(_) => crate::object::shapes::object_proto_id(obj),
+                None => crate::object::shapes::fresh_unique_proto_id(),
+            };
+            crate::object::shapes::transition_object_shape_prototype(obj, proto_id);
             return;
         }
     }

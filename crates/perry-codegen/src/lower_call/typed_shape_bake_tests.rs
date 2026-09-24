@@ -578,7 +578,7 @@ fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
     let ir =
         String::from_utf8(compile_module(&module, opts).unwrap()).expect("LLVM IR should be UTF-8");
     assert!(
-        ir.contains("call i32 @js_object_shape_id_for_keys("),
+        ir.contains("call i32 @js_object_shape_id_for_class_keys("),
         "the consumer must share the producer's canonical structural ShapeId:\n{ir}"
     );
     assert!(

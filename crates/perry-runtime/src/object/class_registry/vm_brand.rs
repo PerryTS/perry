@@ -22,7 +22,12 @@ pub(crate) fn brand_vm_script_instance(value: f64) -> f64 {
         if unsafe { crate::value::addr_class::try_read_gc_header(object as usize) }
             .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
         {
-            unsafe { (*object).class_id = class_id };
+            unsafe {
+                (*object).class_id = class_id;
+                // The class id is part of what the shape's prototype
+                // identity is read from.
+                crate::object::shapes::restamp_object_proto_id(object);
+            }
         }
     }
     result

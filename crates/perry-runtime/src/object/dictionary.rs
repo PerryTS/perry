@@ -470,6 +470,12 @@ pub(crate) fn next_generation() -> u64 {
 /// re-resolved through a handle before the single `parent_class_id` store.
 unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_count: u32) -> u32 {
     let scope = crate::gc::RuntimeHandleScope::new();
+    // Read before the mint: the prototype identity is a fact of the receiver
+    // the dictionary shape must keep naming.
+    let proto_id = match shapes::object_shape_descriptor(obj) {
+        Some(d) => d.proto_id,
+        None => shapes::object_proto_id(obj),
+    };
     let handle = scope.root_raw_mut_ptr(obj);
     // The mint is the allocating half; the receiver is never nameable across
     // it (#7341), so there is no pre-call address left to stamp.
@@ -481,6 +487,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
             next_generation(),
             shapes::ShapeObjectKind::Ordinary,
             0,
+            proto_id,
         ))
     });
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);

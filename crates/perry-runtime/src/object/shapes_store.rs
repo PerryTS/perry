@@ -55,6 +55,11 @@ pub(crate) struct ShapeRecord {
     /// keyless shape).
     pub(super) keys: u64,
     pub(super) semantic_generation: u64,
+    /// The receiver's [[Prototype]] identity (`shapes::object_proto_id`). An
+    /// identity fact like every other field here: two objects share a ShapeId
+    /// only if they share their prototype, so anything a site learns about a
+    /// ShapeId's inherited behaviour is keyed by the shape itself.
+    pub(super) proto_id: u64,
     pub(super) logical_key_count: u32,
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
@@ -71,13 +76,14 @@ pub(crate) struct ShapeRecord {
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b11 << RECORD_KIND_SHIFT;
 
-const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 32);
+const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 40);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
 
 impl ShapeRecord {
     const EMPTY: ShapeRecord = ShapeRecord {
         keys: 0,
         semantic_generation: 0,
+        proto_id: 0,
         logical_key_count: 0,
         live_inline_slot_count: 0,
         hole_count: 0,
@@ -143,11 +149,45 @@ impl ShapeRecord {
         ShapeRecord {
             keys,
             semantic_generation,
+            proto_id: 0,
             logical_key_count,
             live_inline_slot_count,
             hole_count,
             flags_and_kind: u32::from(flags) | kind_bits,
         }
+    }
+
+    /// The same record for a receiver whose [[Prototype]] identity is
+    /// `proto_id` (see [`ShapeRecord::proto_id`]).
+    #[inline]
+    pub(super) fn with_proto_id(mut self, proto_id: u64) -> ShapeRecord {
+        self.proto_id = proto_id;
+        self
+    }
+
+    /// [`ShapeRecord::facts_match`] including the prototype identity — the
+    /// test every production interning path uses.
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    pub(super) fn facts_match_proto(
+        &self,
+        keys: u64,
+        logical_key_count: u32,
+        live_inline_slot_count: u32,
+        semantic_generation: u64,
+        object_kind: ShapeObjectKind,
+        hole_count: u32,
+        proto_id: u64,
+    ) -> bool {
+        self.proto_id == proto_id
+            && self.facts_match(
+                keys,
+                logical_key_count,
+                live_inline_slot_count,
+                semantic_generation,
+                object_kind,
+                hole_count,
+            )
     }
 
     /// Exact-facts identity test (#8067): keys edge, both counts, generation,
@@ -178,13 +218,14 @@ impl ShapeRecord {
     /// re-indexes it.
     #[inline]
     pub(super) fn facts_key_with_keys(&self, keys: u64) -> u64 {
-        facts_key(
+        facts_key_proto(
             keys,
             self.logical_key_count,
             self.live_inline_slot_count,
             self.semantic_generation,
             self.object_kind(),
             self.hole_count,
+            self.proto_id,
         )
     }
 
@@ -201,6 +242,7 @@ impl ShapeRecord {
             logical_key_count: self.logical_key_count,
             live_inline_slot_count: self.live_inline_slot_count,
             semantic_generation: self.semantic_generation,
+            proto_id: self.proto_id,
             object_kind: self.object_kind(),
             hole_count: self.hole_count,
         }
@@ -213,6 +255,8 @@ impl ShapeRecord {
 /// old `ShapeFacts` map could not use it); a 64-bit collision between two
 /// live shapes is resolved by the per-hit `facts_match` on the record, so a
 /// collision only costs a second record read, never a wrong answer.
+/// [`facts_key`] for a record at the DEFAULT prototype identity (0).
+#[cfg(test)]
 #[inline]
 pub(super) fn facts_key(
     keys: u64,
@@ -221,6 +265,28 @@ pub(super) fn facts_key(
     semantic_generation: u64,
     object_kind: ShapeObjectKind,
     hole_count: u32,
+) -> u64 {
+    facts_key_proto(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        hole_count,
+        0,
+    )
+}
+
+/// The seven identity facts, the prototype identity included.
+#[inline]
+pub(super) fn facts_key_proto(
+    keys: u64,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+    proto_id: u64,
 ) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -235,6 +301,7 @@ pub(super) fn facts_key(
     // full enum on every hit, so that was never a wrong answer — but it is a
     // silent hash-quality loss, and the two kinds differ in every consumer.
     h = fold(h, object_kind.code());
+    h = fold(h, proto_id);
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
     h ^ (h >> 32)
@@ -978,9 +1045,12 @@ mod tests {
     /// because it lives in bytes that were already padding, so a future field
     /// that grows the record silently takes that away. Fail here rather than
     /// discovering it as RSS.
+    ///
+    /// 32 -> 40 bytes is deliberate: [[Prototype]] is a shape fact
+    /// (`proto_id`), and a 64-bit prototype identity does not fit the padding.
     #[test]
     fn the_record_geometry_is_free_and_facts_key_is_o1() {
-        assert_eq!(std::mem::size_of::<ShapeRecord>(), 32, "record grew");
+        assert_eq!(std::mem::size_of::<ShapeRecord>(), 40, "record grew");
         assert_eq!(std::mem::align_of::<ShapeRecord>(), 8, "record realigned");
 
         // `facts_key` folds the keys ADDRESS; it must never dereference it.

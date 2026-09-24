@@ -445,6 +445,7 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     );
     unsafe {
         (*obj).class_id = CLASS_ID_WEAKREF;
+        crate::object::shapes::restamp_object_proto_id(obj);
     }
     weak_holder_register(obj);
     obj
@@ -507,6 +508,7 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     );
     unsafe {
         (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
+        crate::object::shapes::restamp_object_proto_id(obj);
     }
     // #6182: the FinalizationRegistry itself is the registered holder (not its
     // per-`register()` records). The copied-minor weak pass dispatches on
@@ -550,6 +552,7 @@ fn js_finreg_record_new(target: f64, held: f64, token: f64) -> *mut ObjectHeader
     );
     unsafe {
         (*record).class_id = CLASS_ID_FINALIZATION_RECORD;
+        crate::object::shapes::restamp_object_proto_id(record);
     }
     record
 }
@@ -1350,6 +1353,7 @@ fn weak_entry_new(key: f64, value: f64) -> *mut ObjectHeader {
     );
     unsafe {
         (*entry).class_id = CLASS_ID_WEAK_ENTRY;
+        crate::object::shapes::restamp_object_proto_id(entry);
     }
     weak_holder_register(entry);
     entry
@@ -1418,6 +1422,7 @@ fn weak_collection_new(shape: u32, class: u32) -> *mut ObjectHeader {
     js_object_set_field(obj, 0, JSValue::array_ptr(entries));
     unsafe {
         (*obj).class_id = class;
+        crate::object::shapes::restamp_object_proto_id(obj);
     }
     obj
 }

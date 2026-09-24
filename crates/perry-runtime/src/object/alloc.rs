@@ -392,9 +392,10 @@ pub(crate) fn alloc_class_instance_with_keys(
     let (ptr, birth_slots, _, keys) =
         object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys, 0);
     unsafe {
-        let id = crate::object::shapes::shape_id_for_keys_ensure(
+        let id = crate::object::shapes::shape_id_for_class_keys_ensure(
             keys.arr() as *const ArrayHeader,
             keys.count(),
+            class_id,
         );
         crate::object::shapes::birth_stamp_object_shape(ptr, id, birth_slots);
     }

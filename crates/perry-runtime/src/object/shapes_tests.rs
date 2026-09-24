@@ -86,7 +86,7 @@ mod c3c_tests {
         let packed = b"birth_a\0birth_b";
         let keys =
             crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
-        let shape_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
+        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID);
         assert!(
             is_shape_id(shape_id),
             "module init must mint a real ShapeId"
@@ -117,7 +117,7 @@ mod c3c_tests {
         let packed = b"direct_a\0direct_b";
         let keys =
             crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
-        let shape_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
+        let shape_id = js_object_shape_id_for_class_keys(keys as usize as u64, 2, CID);
         let payload = std::mem::size_of::<crate::object::ObjectHeader>()
             + crate::object::INLINE_SLOT_FLOOR * std::mem::size_of::<crate::value::JSValue>();
         let obj = crate::arena::arena_alloc_gc(payload, 8, crate::gc::GC_TYPE_OBJECT)
@@ -538,6 +538,7 @@ mod descriptor_tests_8067 {
             keys as *const ArrayHeader,
             1,
             1,
+            PROTO_ID_DEFAULT,
         ));
 
         assert_eq!(
@@ -652,6 +653,7 @@ mod descriptor_tests_8067 {
                 worker_keys as *const ArrayHeader,
                 2,
                 2,
+                PROTO_ID_DEFAULT,
             ));
             assert_eq!(
                 shape_descriptor_by_id(module_id).unwrap().keys,
@@ -1208,84 +1210,60 @@ mod issue_10595_tests {
     }
 }
 
-/// #10868 lever (iv): the prototype-divergence generation.
+/// [[Prototype]] is a shape fact: the prototype identity is part of the facts
+/// exact-facts interning keys on.
 #[cfg(test)]
-mod prototype_generation_tests {
+mod prototype_identity_tests {
     use super::*;
 
-    const PREV: u32 = 0x8000_1234;
-    const USER: u8 = 3; // PrototypeLinkKind::UserOverride
-
-    /// THE UNSOUND CASE. Two receivers with the same predecessor that diverge
-    /// to two DIFFERENT prototypes must get different generations, or they get
-    /// the same ShapeId and a shape-keyed inherited-read cache serves one
-    /// receiver's holder for the other — a silent wrong value. This is the
-    /// case the prototype's ShapeId would have got wrong (distinct prototypes
-    /// can share a shape), and the one a broken serial would get wrong.
-    #[test]
-    fn different_prototypes_get_different_generations() {
-        let p = test_deterministic_prototype_generation(PREV, 1, USER).unwrap();
-        let q = test_deterministic_prototype_generation(PREV, 2, USER).unwrap();
-        assert_ne!(p, q, "two distinct prototypes collapsed to one generation");
-        // Across a spread of serials, not just the first two.
-        let mut seen = std::collections::HashSet::new();
-        for serial in 1..=4096u64 {
-            let g = test_deterministic_prototype_generation(PREV, serial, USER).unwrap();
-            assert!(
-                seen.insert(g),
-                "serial {serial} collided with an earlier serial"
-            );
-        }
+    fn mint(proto_id: u64) -> u32 {
+        publish_shape_result(shape_descriptor_ensure_with_holes(
+            std::ptr::null(),
+            0,
+            3,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            proto_id,
+        ))
     }
 
-    /// The other half, per §17: a check that cannot FIRE is not a check. Two
-    /// receivers diverging the SAME way from the SAME predecessor must land on
-    /// the SAME generation, or lever (iv) merges nothing and the 48,197 mints
-    /// it exists to remove are still minted.
+    /// THE UNSOUND CASE. Two receivers with identical layouts and DIFFERENT
+    /// prototypes must not share a ShapeId, or anything keyed on the shape
+    /// (an inherited read, a store's chain verdict) serves one receiver's
+    /// chain for the other.
     #[test]
-    fn the_same_divergence_from_the_same_predecessor_merges() {
-        let a = test_deterministic_prototype_generation(PREV, 7, USER);
-        let b = test_deterministic_prototype_generation(PREV, 7, USER);
-        assert!(a.is_some());
-        assert_eq!(a, b);
+    fn different_prototypes_never_share_a_shape() {
+        let a = mint(7);
+        let b = mint(8);
+        assert_ne!(a, b);
+        assert_ne!(mint(PROTO_ID_DEFAULT), a);
+        assert_ne!(mint(PROTO_ID_NULL), mint(PROTO_ID_DEFAULT));
+        assert_eq!(shape_proto_id(a), Some(7));
+        assert_eq!(shape_proto_id(b), Some(8));
     }
 
-    /// Different predecessors, and different link kinds (which set different
-    /// meta flags on the receiver), stay distinct.
+    /// The same layout over the same prototype is one shape, so receivers
+    /// built the same way keep sharing shapes (and everything keyed on them).
     #[test]
-    fn predecessor_and_link_kind_both_separate() {
-        let base = test_deterministic_prototype_generation(PREV, 7, USER).unwrap();
-        let other_prev = test_deterministic_prototype_generation(PREV + 1, 7, USER).unwrap();
-        let other_kind = test_deterministic_prototype_generation(PREV, 7, 2).unwrap();
-        assert_ne!(base, other_prev);
-        assert_ne!(base, other_kind);
+    fn the_same_prototype_shares_the_shape() {
+        assert_eq!(mint(42), mint(42));
     }
 
-    /// Every deterministic generation sets bit 63, so it can never alias a
-    /// counter-allocated one; and a missing predecessor or serial declines to
-    /// the always-correct unique-generation path.
+    /// Class-implied identities are disjoint from recorded-prototype serials
+    /// and from each other, and a class with no vtable is the default.
     #[test]
-    fn bit_63_and_the_declines() {
-        let g = test_deterministic_prototype_generation(PREV, 7, USER).unwrap();
-        assert_ne!(g & (1 << 63), 0);
-        assert_eq!(test_deterministic_prototype_generation(0, 7, USER), None);
-        assert_eq!(test_deterministic_prototype_generation(PREV, 0, USER), None);
-    }
-
-    /// The null prototype has its own serial, distinct from every assigned
-    /// one, so `setPrototypeOf(o, null)` and `setPrototypeOf(o, P)` never merge.
-    #[test]
-    fn a_null_prototype_is_its_own_identity() {
-        let null = test_deterministic_prototype_generation(
-            PREV,
-            crate::object::proto_validity::NULL_PROTOTYPE_SERIAL,
-            USER,
-        )
-        .unwrap();
-        for serial in 1..=64u64 {
-            let g = test_deterministic_prototype_generation(PREV, serial, USER).unwrap();
-            assert_ne!(g, null);
-        }
+    fn class_implied_identities_are_disjoint() {
+        let c1 = class_proto_id(12);
+        let c2 = class_proto_id(13);
+        assert_ne!(c1, c2);
+        assert!(c1 >= PROTO_ID_CLASS && c1 < PROTO_ID_MIXED);
+        assert_eq!(class_proto_id(0), PROTO_ID_DEFAULT);
+        let u1 = fresh_unique_proto_id();
+        let u2 = fresh_unique_proto_id();
+        assert_ne!(u1, u2);
+        assert_ne!(u1, PROTO_ID_NULL);
+        assert!(u1 >= PROTO_ID_UNIQUE);
     }
 }
 

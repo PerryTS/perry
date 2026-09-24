@@ -43,6 +43,7 @@ pub extern "C" fn js_finalize_namespace(value: f64) -> f64 {
     }
     unsafe {
         (*obj).class_id = MODULE_NAMESPACE_CLASS_ID;
+        crate::object::shapes::restamp_object_proto_id(obj);
     }
     crate::object::js_object_prevent_extensions(value)
 }
