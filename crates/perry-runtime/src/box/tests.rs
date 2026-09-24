@@ -116,3 +116,23 @@ fn primitive_control_boxes_round_trip_and_reject_foreign_pointers() {
     js_i32_box_set(ordinary_box.cast::<I32Box>(), 99);
     assert_eq!(js_box_get(ordinary_box), 1.0);
 }
+
+/// Pending-await thunks carry a raw malloc-token pointer so the moving GC
+/// cannot invalidate it. Reusing that token must not make an old thunk
+/// name a new activation; the captured generation is the discriminator.
+#[test]
+fn recycled_activation_token_rejects_a_stale_generation() {
+    let first = new_async_box_activation();
+    let first_id = async_box_activation_id(first);
+    assert_eq!(find_async_box_activation(first, first_id), first);
+    finish_async_box_activation(first);
+    assert!(find_async_box_activation(first, first_id).is_null());
+
+    let second = new_async_box_activation();
+    let second_id = async_box_activation_id(second);
+    assert_eq!(second, first, "the test must exercise token recycling");
+    assert_ne!(second_id, first_id);
+    assert!(find_async_box_activation(second, first_id).is_null());
+    assert_eq!(find_async_box_activation(second, second_id), second);
+    finish_async_box_activation(second);
+}
