@@ -1705,9 +1705,25 @@ pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
             if crate::closure::is_closure_ptr(raw) {
                 return call_this;
             }
+            // #11201: an ordinary class-id-0 object (`Object.create(...)`,
+            // `setPrototypeOf(Object.create(null), C.prototype)`) is a receiver
+            // too; rejecting it leaked the owner marker as `this`. Reached only
+            // after the class-instance test fails, so that path is unchanged.
+            if is_class_id_zero_ordinary_object(raw) {
+                return call_this;
+            }
         }
     }
     captured
+}
+
+/// A `GC_TYPE_OBJECT` heap object whose class id is 0. Never allocates.
+fn is_class_id_zero_ordinary_object(addr: usize) -> bool {
+    // SAFETY: `try_read_gc_header` rejects the handle band and implausible
+    // addresses before it reads anything.
+    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+        && crate::object::js_object_get_class_id(addr as *const ObjectHeader) == 0
 }
 
 /// The `class_id` of `instance`, when `instance` really is a class instance.

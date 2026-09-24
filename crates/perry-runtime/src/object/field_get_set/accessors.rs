@@ -456,6 +456,16 @@ pub(crate) unsafe fn class_getter_this(obj: *const ObjectHeader) -> f64 {
         .unwrap_or_else(|| f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits()))
 }
 
+/// Run the class vtable getter `getter_ptr` found while resolving a property
+/// of `obj`, with `this` from [`class_getter_this`] and the body isolated from
+/// the enclosing inherited-property resolution (#11201).
+pub(crate) unsafe fn call_class_getter(getter_ptr: usize, obj: *const ObjectHeader) -> f64 {
+    let this_f64 = class_getter_this(obj);
+    let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
+    let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
+    f(this_f64)
+}
+
 pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSValue {
     let closure = (get_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
     if closure.is_null() {
@@ -506,7 +516,10 @@ pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSV
     let prev_h = scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
     let closure = (call_h.get_nanbox_u64() & crate::value::POINTER_MASK)
         as *const crate::closure::ClosureHeader;
-    let result_f64 = crate::closure::js_closure_call0(closure);
+    let result_f64 = {
+        let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
+        crate::closure::js_closure_call0(closure)
+    };
     super::super::js_implicit_this_set(prev_h.get_nanbox_f64());
     JSValue::from_bits(result_f64.to_bits())
 }

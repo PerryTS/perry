@@ -88,6 +88,8 @@ pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_tar
 pub(crate) mod canonical_keys;
 mod census;
 pub(crate) use census::object_tables_census;
+#[cfg(test)]
+mod bound_method_receiver_tests;
 mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;

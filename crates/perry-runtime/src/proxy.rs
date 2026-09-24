@@ -2240,6 +2240,12 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                 }
             };
         }
+        // #11201: a class prototype (or class instance) on a class-id-0
+        // receiver's chain keeps its accessors in the class vtable, which
+        // `own_set_descriptor` does not model. See `class_link_accessor_set`.
+        if let Some(done) = class_link_accessor_set(current, key, value, receiver) {
+            return done;
+        }
         // #6828/#10482: `%Object.prototype%.__proto__` is a legacy accessor
         // whose setter performs `SetPrototypeOf(Receiver, value)`.
         // `object/global_this/proto_methods.rs` now materializes it as a
@@ -2328,6 +2334,34 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         current = proto;
     }
     false
+}
+
+/// #11201: `[[Set]]` reaching a class-backed link — a declared or
+/// per-evaluation class prototype, or a class instance used as a prototype
+/// (`Object.create(new C())`) — on the chain of a receiver with class id 0.
+/// The link's accessors live in the class vtable, not in the descriptor tables
+/// `own_set_descriptor` reads, so without this the walk ran past an inherited
+/// `set x` and created an own data property instead of calling it.
+///
+/// A receiver WITH a class id never takes this arm: its write reaches
+/// `js_object_set_field_by_name`, whose vtable walk is keyed by that id. An
+/// own property of the link has already been answered by `own_set_descriptor`.
+/// `Some(true)`: the setter ran; `Some(false)`: getter-only, the write is
+/// rejected; `None`: no accessor for `key`, continue the walk.
+fn class_link_accessor_set(current: f64, key: f64, value: f64, receiver: f64) -> Option<bool> {
+    let link = extract_pointer(current.to_bits()) as *const crate::ObjectHeader;
+    let recv = extract_pointer(receiver.to_bits()) as *const crate::ObjectHeader;
+    if link.is_null() || crate::object::js_object_get_class_id(recv) != 0 {
+        return None;
+    }
+    let class_id = crate::object::js_object_get_class_id(link);
+    if class_id == 0
+        || class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || crate::object::is_class_object_ptr(link.cast())
+    {
+        return None;
+    }
+    class_super_accessor_set(class_id, key, value, receiver)
 }
 
 fn class_super_accessor_set(

@@ -88,6 +88,10 @@ crate::perry_thread_local! {
 }
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
 
+/// Stack entry separating an accessor body (user code) from the resolution
+/// that invoked it. Never a NaN-boxed pointer, so the root scanner skips it.
+const USER_CODE_BOUNDARY: u64 = crate::value::TAG_UNDEFINED;
+
 struct PrototypeResolutionGuard {
     depth_before: usize,
 }
@@ -97,7 +101,15 @@ impl PrototypeResolutionGuard {
         let owner_bits = crate::value::js_nanbox_pointer(owner as i64).to_bits();
         PROTOTYPE_RESOLUTION_STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
-            if stack.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || stack.contains(&owner_bits) {
+            // Only the owners of the CURRENT resolution count: a getter body
+            // re-reading an inherited property of its own receiver is a new
+            // `[[Get]]`, not a cycle (#11201).
+            let segment_start = stack
+                .iter()
+                .rposition(|&bits| bits == USER_CODE_BOUNDARY)
+                .map_or(0, |i| i + 1);
+            let segment = &stack[segment_start..];
+            if segment.len() >= MAX_PROTOTYPE_RESOLUTION_DEPTH || segment.contains(&owner_bits) {
                 return None;
             }
             let depth_before = stack.len();
@@ -119,6 +131,44 @@ impl Drop for PrototypeResolutionGuard {
                 stack.truncate(self.depth_before);
             }
         });
+    }
+}
+
+/// Held across an accessor body invoked during inherited-property resolution.
+/// Without it the body's own reads saw the outer resolution's owners and
+/// treated them as a prototype cycle: `Object.create(new C())` with
+/// `get g() { return this.x }` read `x` as `undefined` (#11201). Free when no
+/// resolution is in progress. An exception that unwinds past it is covered by
+/// the resolution-stack savepoint, which truncates the boundary away.
+pub(crate) struct UserCodeResolutionBoundary {
+    depth_before: Option<usize>,
+}
+
+impl UserCodeResolutionBoundary {
+    #[inline]
+    pub(crate) fn enter() -> Self {
+        let depth_before = PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            let depth = stack.len();
+            (depth != 0).then(|| {
+                stack.push(USER_CODE_BOUNDARY);
+                depth
+            })
+        });
+        Self { depth_before }
+    }
+}
+
+impl Drop for UserCodeResolutionBoundary {
+    fn drop(&mut self) {
+        if let Some(depth) = self.depth_before {
+            PROTOTYPE_RESOLUTION_STACK.with(|stack| {
+                let mut stack = stack.borrow_mut();
+                if stack.len() > depth {
+                    stack.truncate(depth);
+                }
+            });
+        }
     }
 }
 
