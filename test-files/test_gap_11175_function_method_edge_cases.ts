@@ -70,3 +70,25 @@ catch (e) { reflectiveRejected = e instanceof TypeError; }
 console.log('reflective-call', reflectiveRejected, trapCalls);
 events.length = 0;
 console.log('reflective-apply', Reflect.apply(apply, proxy, [receiver, arrayLike]), events.join(','));
+
+const indexedReads: string[] = [];
+const wrappedArgs = new Proxy([3, 4], {
+  get(target, key, receiver) {
+    indexedReads.push(String(key));
+    return key === '0' ? 30 : Reflect.get(target, key, receiver);
+  }
+});
+console.log('proxy-argument-array', apply.call(proxy, receiver, wrappedArgs), indexedReads.join(','));
+indexedReads.length = 0;
+console.log('reflective-proxy-array', Reflect.apply(apply, proxy, [receiver, wrappedArgs]), indexedReads.join(','));
+indexedReads.length = 0;
+console.log('direct-proxy-array', proxy.apply(receiver, wrappedArgs), indexedReads.join(','));
+indexedReads.length = 0;
+console.log('ordinary-proxy-array', apply.call(add, receiver, wrappedArgs), indexedReads.join(','));
+console.log('nested-proxy-array', apply.call(add, receiver, new Proxy(new Proxy([3, 4], {}), {})));
+const revokedArgs = Proxy.revocable([3, 4], {});
+revokedArgs.revoke();
+let revokedRejected = false;
+try { apply.call(proxy, receiver, revokedArgs.proxy); }
+catch (e) { revokedRejected = e instanceof TypeError; }
+console.log('revoked-proxy-array', revokedRejected);

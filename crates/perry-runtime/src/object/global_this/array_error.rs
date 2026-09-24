@@ -411,6 +411,13 @@ unsafe fn function_apply_args(args_array: f64) -> Vec<f64> {
     if value.is_undefined() || value.is_null() {
         return Vec::new();
     }
+    // IsArray follows a Proxy's target, but the Proxy value is not an
+    // ArrayHeader. CreateListFromArrayLike must observe its length/index get
+    // traps (and revoked-proxy errors) through ordinary property access.
+    if crate::proxy::js_proxy_is_proxy(args_array) == 1 {
+        return generic_array_like_to_vec(args_array);
+    }
+
     // An arguments OBJECT is array-like but fails the IsArray check below —
     // unpack it via its registry (`fn.apply(this, arguments)`).
     if value.is_pointer() {
@@ -974,3 +981,6 @@ pub(crate) extern "C" fn array_prototype_concat_thunk(
     let args = global_this_rest_array_values(rest);
     crate::array::js_arraylike_concat(this, args.as_ptr(), args.len() as i32)
 }
+
+#[cfg(test)]
+mod apply_args_tests;

@@ -693,7 +693,11 @@ pub(super) unsafe fn dispatch_common(
                 if arr_raw == 0 && !args_arr_jsval.is_undefined() && !args_arr_jsval.is_null() {
                     throw_type_error_message(b"CreateListFromArrayLike called on non-object");
                 }
-                let buf: Vec<f64> = if arr_raw != 0 {
+                // IsArray follows proxy targets; their handles must never be
+                // interpreted as ArrayHeader pointers, even for wrapped arrays.
+                let buf: Vec<f64> = if crate::proxy::js_proxy_is_proxy(args_arr_val) == 1 {
+                    generic_array_like_to_vec(args_arr_val)
+                } else if arr_raw != 0 {
                     if let Some(values) = crate::object::arguments_object_to_vec(
                         arr_raw as *const crate::object::ObjectHeader,
                     ) {
