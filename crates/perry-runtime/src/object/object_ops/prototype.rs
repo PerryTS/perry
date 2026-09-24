@@ -195,6 +195,17 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     proto
 }
 
+/// `net.Socket.prototype`, read from the same cached bound export that
+/// user code sees as `net.Socket`, so the two are identical.
+fn net_socket_prototype_value() -> f64 {
+    let ctor = crate::object::bound_native_callable_export_value("net", "Socket");
+    let ctor = crate::value::JSValue::from_bits(ctor.to_bits());
+    if !ctor.is_pointer() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::closure::closure_get_dynamic_prop(ctor.as_pointer::<u8>() as usize, "prototype")
+}
+
 /// The resolution itself; see [`js_object_get_prototype_of`].
 fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
@@ -291,6 +302,22 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     if proto.to_bits() != crate::value::TAG_UNDEFINED {
                         return proto;
                     }
+                }
+            }
+            // A live `net.Socket` is a registry handle too. `instanceof
+            // net.Socket` already recognises it through the provider's probe
+            // (bundled or external net), but this path answered `null`, so
+            // `Object.getPrototypeOf(socket).constructor` threw. undici's
+            // `util.destroy(socket, err)` does exactly that on every socket
+            // error path, which masked the real error with
+            // "Cannot read properties of null (reading 'constructor')".
+            let is_net_socket = super::super::class_registry::net_socket_handle_probe()
+                .map(|probe| unsafe { probe(raw_addr as i64) })
+                .unwrap_or(false);
+            if is_net_socket {
+                let proto = net_socket_prototype_value();
+                if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+                    return proto;
                 }
             }
             if let Some(dispatch) = super::super::class_registry::handle_prototype_dispatch() {
