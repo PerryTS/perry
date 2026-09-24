@@ -1296,14 +1296,13 @@ mod dynamic_super_new_target_tests {
             let previous = scope.root_nanbox_f64(crate::object::js_new_target_set(f64::from_bits(
                 crate::value::TAG_UNDEFINED,
             )));
-            let result = js_fetch_or_value_super(
-                crate::value::js_nanbox_pointer(
-                    parent.get_raw_const_ptr::<crate::ClosureHeader>() as i64
-                ),
-                crate::value::js_nanbox_pointer(instance.get_raw_const_ptr::<ObjectHeader>() as i64),
-                std::ptr::null(),
-                0,
-            );
+            let parent_value = parent.with_const_ptr(|parent: *const crate::ClosureHeader| {
+                crate::value::js_nanbox_pointer(parent as i64)
+            });
+            let instance_value = instance.with_const_ptr(|instance: *const ObjectHeader| {
+                crate::value::js_nanbox_pointer(instance as i64)
+            });
+            let result = js_fetch_or_value_super(parent_value, instance_value, std::ptr::null(), 0);
             let restored = crate::object::js_new_target_set(previous.get_nanbox_f64());
             assert_eq!(restored.to_bits(), crate::value::TAG_UNDEFINED);
             assert_eq!(
@@ -1324,14 +1323,13 @@ mod dynamic_super_new_target_tests {
             ));
             let explicit = crate::object::class_constructor_ref_value(61_148);
             let previous = scope.root_nanbox_f64(crate::object::js_new_target_set(explicit));
-            let result = js_fetch_or_value_super(
-                crate::value::js_nanbox_pointer(
-                    parent.get_raw_const_ptr::<crate::ClosureHeader>() as i64
-                ),
-                crate::value::js_nanbox_pointer(instance.get_raw_const_ptr::<ObjectHeader>() as i64),
-                std::ptr::null(),
-                0,
-            );
+            let parent_value = parent.with_const_ptr(|parent: *const crate::ClosureHeader| {
+                crate::value::js_nanbox_pointer(parent as i64)
+            });
+            let instance_value = instance.with_const_ptr(|instance: *const ObjectHeader| {
+                crate::value::js_nanbox_pointer(instance as i64)
+            });
+            let result = js_fetch_or_value_super(parent_value, instance_value, std::ptr::null(), 0);
             let restored = crate::object::js_new_target_set(previous.get_nanbox_f64());
             assert_eq!(restored.to_bits(), explicit.to_bits());
             assert_eq!(result.to_bits(), explicit.to_bits());
