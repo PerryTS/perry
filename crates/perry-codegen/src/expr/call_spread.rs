@@ -285,25 +285,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 object, property, ..
             } = callee.as_ref()
             {
-                // #7191: `ExternFuncRef` is not one shape. It covers an
-                // imported FUNCTION (`import { fn }` — a method-apply dispatch
-                // on it would be wrong, which is why this skip exists) and an
-                // imported VALUE (`import { arr }; arr.map(...args)` — where
-                // method-apply is exactly right). Skipping both meant a spread
-                // method call on any imported receiver never dispatched the
-                // receiver's method: `arr.slice(...[1,3])` returned the whole
-                // array and `nums.includes(...[20])` returned false, because
-                // the spread list arrived as a single array in the builtin's
-                // first slot. `ctx.imported_vars` is the existing discriminator
-                // — "names of imports that are exported variables, not
-                // functions" — so consult it rather than declining the family.
+                // #7191: imported values need method dispatch, while imported
+                // namespace/function exports normally use the value path below.
+                // #11175: call/apply/bind are shared, unbound prototype methods.
+                // Their spread calls must retain the function receiver, including
+                // an imported function. The old value
+                // fallback only worked while these properties were bound wrappers.
+                let function_method = matches!(property.as_str(), "call" | "apply" | "bind");
                 let mut skip = matches!(
                     object.as_ref(),
                     Expr::GlobalGet(_) | Expr::NativeModuleRef(_)
-                ) || matches!(
-                    object.as_ref(),
-                    Expr::ExternFuncRef { name, .. } if !ctx.imported_vars.contains(name.as_str())
-                );
+                ) || (!function_method
+                    && matches!(object.as_ref(), Expr::ExternFuncRef { name, .. }
+                            if !ctx.imported_vars.contains(name.as_str())));
                 // `recv.prop(...args)` where `prop` is an instance ACCESSOR
                 // (`get prop()`) is NOT a method call: it must READ the accessor
                 // (running the getter, which yields a function) and CALL that
@@ -336,17 +330,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         return Ok(result);
                     }
                     let recv_box = lower_expr(ctx, object)?;
-                    // Build a single JS array containing every arg in order.
-                    //
-                    // ★ `recv_box` is ALSO held across this loop and is NOT
-                    // rooted here. That is a second, distinct window — an
-                    // operand rather than the accumulator — and it is #7640's
-                    // population, not this one. It is left alone deliberately
-                    // rather than half-fixed: rooting it needs the receiver and
-                    // the array in ONE `RootedGroup` scope so the release
-                    // post-dominates the dispatch, which is a different change
-                    // with a different acceptance test.
-                    return bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                    // Argument bundling allocates. Keep the receiver in a
+                    // mutable root and reload it below those allocations.
+                    let mut receiver_group = crate::rooting::open_rooted_group(1);
+                    let receiver_root = receiver_group.adopt(ctx, object, &recv_box, true);
+                    let result = bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                        let recv_box = receiver_group.reread(ctx, receiver_root)?;
                         let key_idx = ctx.strings.intern(property);
                         let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
                         // Pure: `ptrtoint` + `or`, no collection point between
@@ -359,6 +348,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(DOUBLE, &recv_box), (I64, &method_id), (I64, acc)],
                         ))
                     });
+                    receiver_group.release(ctx);
+                    return result;
                 }
             }
 
