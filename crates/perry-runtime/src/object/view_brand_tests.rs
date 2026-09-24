@@ -182,5 +182,8 @@ fn uint8_view_shortcut_agrees_with_the_full_brand() {
             "{label}"
         );
     }
-    assert!(!buffer::is_uint8_view_buffer(0x10_0000));
+    // A live heap object that was never registered as a buffer.
+    let plain = crate::object::js_object_alloc(0, 0) as usize;
+    assert!(!buffer::is_uint8_view_buffer(plain));
+    assert_eq!(buffer::buffer_brand(plain), None);
 }
