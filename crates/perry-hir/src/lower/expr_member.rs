@@ -1066,7 +1066,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             ctx.inferred_class_bindings
                 .class_key_for(local, source_name)
                 != Some(source_name)
-        });
+        }) || ctx.resolve_class_self_binding(source_name).is_some();
         let obj_name = ctx.resolve_class_name(source_name);
         if !local_shadows_class && ctx.lookup_class(&obj_name).is_some() {
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {

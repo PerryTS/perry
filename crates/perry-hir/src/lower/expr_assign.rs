@@ -693,7 +693,9 @@ fn lower_assignment_target(
                 // colliding body-local `class X`'s static write targets the
                 // renamed registrant, not the first same-named one.
                 let resolved_class = ctx.resolve_class_name(&obj_name);
-                if ctx.lookup_class(&resolved_class).is_some() {
+                if ctx.lookup_class(&resolved_class).is_some()
+                    && ctx.static_field_access_targets_template(&obj_name, &resolved_class)
+                {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&resolved_class, &field_name) {

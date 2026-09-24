@@ -71,18 +71,8 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     // compiler-private local so its own members use this evaluation and a
     // nested class can capture an outer class expression's binding. Search
     // innermost-first to preserve ordinary lexical shadowing.
-    if let Some((_, binding_depth, binding_id)) = ctx
-        .class_expr_self_bindings
-        .iter()
-        .rev()
-        .find(|(binding_name, _, _)| binding_name == &name)
-    {
-        let shadowed_by_nearer_local = ctx
-            .local_decl_scope_depth(&name)
-            .is_some_and(|local_depth| local_depth > *binding_depth);
-        if !shadowed_by_nearer_local {
-            return Ok(Expr::LocalGet(*binding_id));
-        }
+    if let Some(binding_id) = ctx.resolve_class_self_binding(&name) {
+        return Ok(Expr::LocalGet(binding_id));
     }
     if ctx.current_class_inner_name.as_deref() == Some(name.as_str()) && !nearer_local {
         if let Some(current) = ctx.current_class.clone() {

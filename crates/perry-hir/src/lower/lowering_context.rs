@@ -399,6 +399,10 @@ pub struct LoweringContext {
     /// back to the declaration arm so it can become the `ClassExprFresh`
     /// evaluation owner.
     pub(crate) class_decl_self_binding: Option<LocalId>,
+    /// #11157: template names of class DECLARATIONS that lowered to a
+    /// per-evaluation `ClassExprFresh` binding. A static write through such a
+    /// class's name must reach the evaluated object, not the template.
+    pub(crate) per_evaluation_class_decls: HashSet<String>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
     /// Lexical stack of private-name scopes — one entry per enclosing class

@@ -24,7 +24,9 @@ pub(crate) fn lower_expr_assignment(
                 // colliding body-local `class X`'s static write targets the
                 // renamed registrant, not the first same-named one.
                 let obj_name = ctx.resolve_class_name(obj_ident.sym.as_ref());
-                if ctx.lookup_class(&obj_name).is_some() {
+                if ctx.lookup_class(&obj_name).is_some()
+                    && ctx.static_field_access_targets_template(obj_ident.sym.as_ref(), &obj_name)
+                {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&obj_name, &field_name) {

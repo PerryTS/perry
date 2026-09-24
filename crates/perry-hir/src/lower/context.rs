@@ -545,6 +545,35 @@ impl LoweringContext {
             .unwrap_or(false)
     }
 
+    /// The compiler-private self-binding local `name` resolves to while a
+    /// per-evaluation class body is lowered (innermost first), unless a nearer
+    /// local shadows it.
+    pub(crate) fn resolve_class_self_binding(&self, name: &str) -> Option<LocalId> {
+        let (_, binding_depth, binding_id) = self
+            .class_expr_self_bindings
+            .iter()
+            .rev()
+            .find(|(binding_name, _, _)| binding_name == name)?;
+        let shadowed_by_nearer_local = self
+            .local_decl_scope_depth(name)
+            .is_some_and(|local_depth| local_depth > *binding_depth);
+        (!shadowed_by_nearer_local).then_some(*binding_id)
+    }
+
+    /// #11157: may `<ident>.<static>` be lowered to a template-keyed
+    /// `StaticFieldSet` / `StaticFieldGet`? Not when `ident` is a per-evaluation class's
+    /// self-binding, and not for a class declaration lowered per evaluation at
+    /// all: that class's statics are own properties of each evaluated class
+    /// object, which is what every read of the binding sees.
+    pub(crate) fn static_field_access_targets_template(
+        &self,
+        ident: &str,
+        resolved_class: &str,
+    ) -> bool {
+        self.resolve_class_self_binding(ident).is_none()
+            && !self.per_evaluation_class_decls.contains(resolved_class)
+    }
+
     pub(crate) fn has_static_method(&self, class_name: &str, method_name: &str) -> bool {
         self.class_statics_index
             .get(class_name)

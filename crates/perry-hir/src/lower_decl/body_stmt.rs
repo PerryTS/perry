@@ -462,6 +462,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     &computed_statics,
                 );
                 let template_name = class.name.clone();
+                if fresh_binding {
+                    ctx.per_evaluation_class_decls.insert(template_name.clone());
+                }
                 ctx.pending_classes.push(class);
                 // #6465/#5893/#9502 (see `fresh_binding` above): bind the
                 // declared name to a per-evaluation heap class object carrying
