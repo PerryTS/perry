@@ -1382,7 +1382,12 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
     }
     let name = crate::string::header_str_checked(key)?;
     let val = crate::closure::closure_get_dynamic_prop(obj, name);
-    if val.to_bits() != crate::value::TAG_UNDEFINED {
+    // Function methods were already resolved, including a getter or own
+    // slot returning undefined. Do not repeat that read or synthesize a
+    // fallback method over an explicit undefined value (#11175).
+    if val.to_bits() != crate::value::TAG_UNDEFINED
+        || (matches!(name, "call" | "apply" | "bind") && crate::closure::is_closure_ptr(obj))
+    {
         return Some(val);
     }
     // #4533/#3716: reading an inherited Function/Object prototype method as a

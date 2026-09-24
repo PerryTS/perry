@@ -21,6 +21,11 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
     rest: f64,
 ) -> f64 {
     let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    // The generic value-call bridge treats a proxy invocation as a bare
+    // call. Preserve the explicit receiver of Function.prototype.call.
+    if crate::proxy::js_proxy_is_proxy(target) == 1 {
+        return crate::proxy::js_proxy_apply(target, this_arg, rest);
+    }
     let args = global_this_rest_array_values(rest);
     let (args_ptr, args_len) = if args.is_empty() {
         (std::ptr::null::<f64>(), 0)
@@ -524,6 +529,24 @@ pub(crate) extern "C" fn function_prototype_apply_thunk(
 ) -> f64 {
     unsafe {
         let target = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+        if crate::proxy::js_proxy_is_proxy(target) == 1 {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let target = scope.root_nanbox_f64(target);
+            let receiver = scope.root_nanbox_f64(this_arg);
+            // Function.prototype.apply accepts nullish argument lists as an
+            // empty list, unlike Reflect.apply.
+            let args = JSValue::from_bits(args_array.to_bits());
+            let args_array = if args.is_null() || args.is_undefined() {
+                crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64)
+            } else {
+                args_array
+            };
+            return crate::proxy::js_proxy_apply(
+                target.get_nanbox_f64(),
+                receiver.get_nanbox_f64(),
+                args_array,
+            );
+        }
         let args = function_apply_args(args_array);
         let this_arg = crate::closure::coerce_call_this(target, this_arg);
         // Rebind a concise/object-literal method's baked `this` slot to the

@@ -772,19 +772,25 @@ pub unsafe extern "C" fn js_function_bind(
 static KEEP_JS_FUNCTION_BIND: unsafe extern "C" fn(f64, *const f64, usize) -> f64 =
     js_function_bind;
 
-/// Reify a `Function.prototype.{bind,call,apply}` (or any function method)
-/// *read off a closure as a value* into a callable BOUND_METHOD closure. When
-/// invoked it routes through `js_native_call_method(receiver, method, …)`, so
-/// `f.bind`, `f.call`, `f.apply` behave as real functions instead of reading
-/// back `undefined`.
-///
-/// Fixes the "uncurry-this" idiom `Function.prototype.call.bind(method)`
-/// (#3716): reading `.bind` off the reified `Function.prototype.call` value
-/// previously returned `undefined`, so the bound function was never created.
-/// `receiver` must be a NaN-boxed closure pointer; `method` is a `'static`
-/// byte slice (`b"bind"` / `b"call"` / `b"apply"`) whose pointer the
-/// BOUND_METHOD captures verbatim.
+/// Read inherited function methods as ordinary, unbound property values.
+/// `call`, `apply`, and `bind` must retain their Function.prototype identity
+/// and accept a receiver supplied by the eventual call (#11175). Other
+/// legacy function-method fallbacks still use a bound native-method wrapper.
 pub(crate) unsafe fn reify_function_method_value(receiver: f64, method: &'static [u8]) -> f64 {
+    if matches!(method, b"call" | b"apply" | b"bind") {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(receiver);
+        let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Function"));
+        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+        let key = crate::value::js_nanbox_string(key as i64);
+        // Reflect.get preserves the original function as `this` if the
+        // inherited slot has been replaced with an accessor.
+        return crate::proxy::js_reflect_get(
+            proto.get_nanbox_f64(),
+            key,
+            receiver.get_nanbox_f64(),
+        );
+    }
     let closure = js_closure_alloc(BOUND_METHOD_FUNC_PTR, 3);
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -890,3 +896,6 @@ mod rebind_predicate_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod function_method_value_tests;

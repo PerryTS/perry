@@ -1070,6 +1070,13 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
         }
         break;
     }
+    // #11175: value reads (including Reflect.get) share the real inherited
+    // Function.prototype methods, rather than a receiver-bound wrapper.
+    if matches!(prop, "call" | "apply" | "bind") {
+        let method = crate::object::reified_function_method_name(prop).unwrap();
+        let receiver = crate::value::js_nanbox_pointer(ptr as i64);
+        return unsafe { crate::closure::reify_function_method_value(receiver, method) };
+    }
     // Every function's [[Prototype]] is %Function.prototype% — an expando
     // installed there (`Function.prototype.property = 12`), or a property
     // installed via `Object.defineProperty(Function.prototype, k, {...})`,
@@ -1111,13 +1118,9 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
 
 /// Resolve the real, mutable `%Function.prototype%` object pointer for a
 /// closure-receiver fallback (GET or SET), or `None` if `prop` doesn't
-/// qualify — a synthesized own slot, a reified method name (`apply`, `call`,
-/// `bind`, …: serving those generic thunks to closure reads/writes hijacks
-/// the dedicated dispatch arms, e.g. `p.call(...)`'s undefined-read fallback
-/// to method-dispatch-by-name routes the proxy APPLY trap — `fn.apply`-style
-/// VALUE reads through a proxy are reified receiver-correctly by
-/// `js_proxy_get` instead), an array-index-shaped key, or resolving would
-/// recurse back into `Function.prototype` itself. Shared by
+/// qualify — a synthesized own slot, a method handled by dedicated dispatch
+/// (the Function.prototype methods are resolved separately above), an
+/// array-index-shaped key, or Function.prototype itself. Shared by
 /// [`closure_get_dynamic_prop`]'s expando/defineProperty walk and the
 /// closure SET path in `object::field_set_by_name`, so
 /// `Object.defineProperty(Function.prototype, k, {get,set})` round-trips
