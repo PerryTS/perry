@@ -484,7 +484,7 @@ pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
         .lock()
         .unwrap()
         .get(&id)
-        .map(HeadersStore::set_cookie_values)
+        .map(|record| record.set_cookie_values())
         .unwrap_or_default();
     // #8163: see `js_headers_keys`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();

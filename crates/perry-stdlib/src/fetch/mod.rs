@@ -348,7 +348,13 @@ fn response_headers_handle(resp_id: usize) -> f64 {
 fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
     response
         .cached_headers_id
-        .and_then(|id| HEADERS_REGISTRY.lock().unwrap().get(&id).cloned())
+        .and_then(|id| {
+            HEADERS_REGISTRY
+                .lock()
+                .unwrap()
+                .get(&id)
+                .map(|record| record.store.clone())
+        })
         .unwrap_or_else(|| response.headers.clone())
 }
 
@@ -357,7 +363,13 @@ fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
 fn request_headers_snapshot(request: &RequestRecord) -> HeadersStore {
     request
         .cached_headers_id
-        .and_then(|id| HEADERS_REGISTRY.lock().unwrap().get(&id).cloned())
+        .and_then(|id| {
+            HEADERS_REGISTRY
+                .lock()
+                .unwrap()
+                .get(&id)
+                .map(|record| record.store.clone())
+        })
         .unwrap_or_else(|| request.headers.clone())
 }
 
@@ -1001,7 +1013,7 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
 mod headers_store;
-use headers_store::HeadersStore;
+use headers_store::{HeadersRecord, HeadersStore};
 #[derive(Clone)]
 struct RequestRecord {
     url: String,
@@ -1030,7 +1042,7 @@ struct RequestRecord {
 }
 
 lazy_static::lazy_static! {
-    static ref HEADERS_REGISTRY: Mutex<HashMap<usize, HeadersStore>> = Mutex::new(HashMap::new());
+    static ref HEADERS_REGISTRY: Mutex<HashMap<usize, HeadersRecord>> = Mutex::new(HashMap::new());
     static ref REQUEST_REGISTRY: Mutex<HashMap<usize, RequestRecord>> = Mutex::new(HashMap::new());
     pub(crate) static ref BLOB_REGISTRY: Mutex<HashMap<usize, BlobData>> = Mutex::new(HashMap::new());
 }
@@ -1064,7 +1076,10 @@ pub(crate) fn alloc_blob(data: BlobData) -> usize {
 
 fn alloc_headers(store: HeadersStore) -> usize {
     let id = alloc_fetch_handle_id();
-    HEADERS_REGISTRY.lock().unwrap().insert(id, store);
+    HEADERS_REGISTRY
+        .lock()
+        .unwrap()
+        .insert(id, HeadersRecord::from(store));
     id
 }
 

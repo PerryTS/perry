@@ -123,7 +123,7 @@ pub unsafe extern "C" fn js_response_static_json(
             .lock()
             .unwrap()
             .get(&headers_id)
-            .cloned()
+            .map(|record| record.store.clone())
             .unwrap_or_default()
     } else {
         HeadersStore::default()

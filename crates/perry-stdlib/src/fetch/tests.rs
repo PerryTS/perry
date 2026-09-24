@@ -638,9 +638,13 @@ fn copied_headers_bind_methods_to_the_new_handle() {
         .unwrap()
         .get(&source)
         .unwrap()
+        .store
         .clone();
-    assert!(copy.method_values.is_empty());
     let target = alloc_headers(copy);
+    // Only the header list is copyable; the new record's cache starts empty.
+    assert!(HEADERS_REGISTRY.lock().unwrap()[&target]
+        .method_values
+        .is_empty());
     let copied = headers_bound_method_value(target, "get");
     assert_ne!(original.to_bits(), copied.to_bits());
     let closure = perry_runtime::value::js_nanbox_get_pointer(copied)

@@ -6,20 +6,46 @@
 //! visibility is widened from private-to-`mod.rs` to `pub(super)` because the
 //! items now live one module down.
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct HeadersStore {
     /// (lowercase_name, value) entries — insertion order preserved
     pub(super) entries: Vec<(String, String)>,
-    /// Bound closures belong to this handle, never to a copied header list.
+}
+
+/// A `HEADERS_REGISTRY` entry: the header list plus the handle's bound-method
+/// closures (`headers.get` / `.entries` / …).
+///
+/// The closures are GC heap values, and the Fetch root scanner only visits
+/// them inside the registry. `HeadersStore` is also embedded, unscanned, in
+/// `FetchResponse::headers` and `RequestRecord::headers`, so the cache lives
+/// in this registry-only wrapper instead: no copy, `mem::take` or move of a
+/// `HeadersStore` can carry live closure bits into an unscanned slot. The type
+/// is deliberately not `Clone`; copying a record means copying its `store`.
+#[derive(Default)]
+pub(super) struct HeadersRecord {
+    pub(super) store: HeadersStore,
     pub(super) method_values: std::collections::HashMap<&'static str, u64>,
 }
 
-impl Clone for HeadersStore {
-    fn clone(&self) -> Self {
+impl From<HeadersStore> for HeadersRecord {
+    fn from(store: HeadersStore) -> Self {
         Self {
-            entries: self.entries.clone(),
+            store,
             method_values: Default::default(),
         }
+    }
+}
+
+impl std::ops::Deref for HeadersRecord {
+    type Target = HeadersStore;
+    fn deref(&self) -> &HeadersStore {
+        &self.store
+    }
+}
+
+impl std::ops::DerefMut for HeadersRecord {
+    fn deref_mut(&mut self) -> &mut HeadersStore {
+        &mut self.store
     }
 }
 

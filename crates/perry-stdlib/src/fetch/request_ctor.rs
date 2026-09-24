@@ -93,7 +93,7 @@ pub unsafe extern "C" fn js_request_new(
             .lock()
             .unwrap()
             .get(&headers_id_in)
-            .cloned()
+            .map(|record| record.store.clone())
             .unwrap_or_default()
     } else {
         HeadersStore::default()

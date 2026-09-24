@@ -100,7 +100,13 @@ pub unsafe extern "C" fn js_response_new(
     let (status_u16, status_text) = response_init(status, status_text_ptr, body_present);
     let headers_id = handle_id(headers_handle);
     let registered = (headers_id != 0)
-        .then(|| HEADERS_REGISTRY.lock().unwrap().get(&headers_id).cloned())
+        .then(|| {
+            HEADERS_REGISTRY
+                .lock()
+                .unwrap()
+                .get(&headers_id)
+                .map(|record| record.store.clone())
+        })
         .flatten();
     // Non-literal Response init objects can deliver a plain HeadersInit value
     // here. Preserve those records instead of treating them as missing handles.
