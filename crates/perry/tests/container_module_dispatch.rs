@@ -14,7 +14,6 @@
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 use std::process::Command;
 
 /// Records its argv (one line per invocation) and prints canned `--format
