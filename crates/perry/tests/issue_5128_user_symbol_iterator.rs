@@ -12,6 +12,8 @@
 //! Fix (three parts):
 //!  - HIR: also register a synthetic non-generator `@@iterator` class method
 //!    that forwards to the lifted generator (`return __perry_iter_X(this)`).
+//!    (#11170 later dropped the lift: the generator itself is now registered
+//!    under the computed `Symbol.iterator` key, which keeps its receiver.)
 //!  - Runtime: `js_object_get_symbol_property` maps the well-known
 //!    `Symbol.iterator` / `Symbol.asyncIterator` to the `@@iterator` /
 //!    `@@asyncIterator` class method and returns a bound method.
