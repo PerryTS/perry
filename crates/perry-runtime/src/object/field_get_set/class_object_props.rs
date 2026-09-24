@@ -404,17 +404,15 @@ mod evaluation_owner_tests {
                 );
             });
             assert_eq!(class_evaluation_prototype_class_id(ptr()), Some(CID));
-            crate::object::js_object_delete_field(
-                ptr() as *mut ObjectHeader,
-                key.get_raw_const_ptr(),
-            );
+            key.with_const_ptr(|key: *const crate::StringHeader| {
+                crate::object::js_object_delete_field(ptr() as *mut ObjectHeader, key);
+            });
             assert_eq!(class_evaluation_prototype_class_id(ptr()), Some(CID));
             let owner =
                 crate::object::private_evaluation_brand_value(prototype.get_nanbox_f64()).unwrap();
-            assert_eq!(
-                crate::value::js_nanbox_get_pointer(owner),
-                class.get_raw_const_ptr::<ObjectHeader>() as i64
-            );
+            class.with_const_ptr(|class: *const ObjectHeader| {
+                assert_eq!(crate::value::js_nanbox_get_pointer(owner), class as i64);
+            });
         }
     }
 }
