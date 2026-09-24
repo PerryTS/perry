@@ -198,9 +198,9 @@ pub fn transform_generators(module: &mut Module) {
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
             m.body = b;
         }
-        // Computed-key members (#3557) are instance methods installed on the
-        // prototype, so generator computed methods get the same class-context
-        // capture treatment as ordinary methods.
+        // Computed generators follow the same receiver rules as named methods.
+        // Only instance methods may carry an enclosing instance-class proof;
+        // a static receiver is a class reference, not an instance (#11184).
         for member in &mut class.computed_members {
             let m = &mut member.function;
             if m.is_generator {
@@ -209,16 +209,20 @@ pub fn transform_generators(module: &mut Module) {
                 if m.is_async {
                     record_async_generator_func(m.id);
                 }
-                transform_generator_function_with_extra_captures(
-                    m,
-                    &mut next_local_id,
-                    &mut next_func_id,
-                    &[],
-                    &[],
-                    true,
-                    false,
-                    Some(class.name.clone()),
-                );
+                if member.is_static {
+                    transform_generator_function(m, &mut next_local_id, &mut next_func_id);
+                } else {
+                    transform_generator_function_with_extra_captures(
+                        m,
+                        &mut next_local_id,
+                        &mut next_func_id,
+                        &[],
+                        &[],
+                        true,
+                        false,
+                        Some(class.name.clone()),
+                    );
+                }
             }
             let mut b = std::mem::take(&mut m.body);
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);

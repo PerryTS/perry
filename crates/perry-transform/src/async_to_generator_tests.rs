@@ -956,3 +956,89 @@ fn async_closure_in_computed_member_body_is_collected() {
         "computed-member-body async closure FuncId must be collected"
     );
 }
+
+#[test]
+fn computed_generator_receivers_match_named_methods() {
+    use crate::generator::transform_generators;
+
+    fn check_closures(expr: &Expr, expected_class: Option<&str>) -> usize {
+        if let Expr::Closure {
+            captures_this,
+            enclosing_class,
+            ..
+        } = expr
+        {
+            assert!(*captures_this, "generator must retain its call receiver");
+            assert_eq!(enclosing_class.as_deref(), expected_class);
+            return 1;
+        }
+        let mut count = 0;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            count += check_closures(child, expected_class);
+        });
+        count
+    }
+
+    for is_async in [false, true] {
+        let mut module = Module::new("computed_generator_receivers");
+        let mut class = empty_class("Receiver");
+        for (id, is_static, computed) in [
+            (100, false, false),
+            (200, true, false),
+            (300, false, true),
+            (400, true, true),
+        ] {
+            let mut function = empty_fn(
+                id,
+                vec![Stmt::Expr(Expr::Yield {
+                    value: Some(Box::new(Expr::This)),
+                    delegate: false,
+                })],
+            );
+            function.is_generator = true;
+            function.is_async = is_async;
+            if computed {
+                class.computed_members.push(ClassComputedMember {
+                    key_expr: Expr::Integer(id as i64),
+                    function,
+                    is_static,
+                    kind: ClassComputedMemberKind::Method,
+                    source_order: 0,
+                });
+            } else if is_static {
+                class.static_methods.push(function);
+            } else {
+                class.methods.push(function);
+            }
+        }
+        module.classes.push(class);
+        transform_async_to_generator(&mut module);
+        transform_generators(&mut module);
+        let class = &module.classes[0];
+        for (function, expected_class) in [
+            (&class.methods[0], Some("Receiver")),
+            (&class.static_methods[0], None),
+            (&class.computed_members[0].function, Some("Receiver")),
+            (&class.computed_members[1].function, None),
+        ] {
+            assert_eq!(
+                module.async_generator_funcs.contains(&function.id),
+                is_async
+            );
+            let mut count = 0;
+            for stmt in &function.body {
+                if let Stmt::Let {
+                    init: Some(expr), ..
+                }
+                | Stmt::Return(Some(expr)) = stmt
+                {
+                    count += check_closures(expr, expected_class);
+                }
+            }
+            assert!(
+                count >= 3,
+                "must inspect next/return/throw generator closures"
+            );
+        }
+    }
+}
