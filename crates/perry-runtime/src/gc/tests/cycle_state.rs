@@ -1659,15 +1659,19 @@ fn full_cycle_object_create_after_root_scan_preserves_prototype_via_owner() {
         "full cycle should keep root barriers active after root scan"
     );
 
-    // The owner is created after the root scan and the prototype is held
-    // ONLY by its meta record: the meta-slot store's barrier must shade it.
+    // The owner is created after the root scan, and afterwards the prototype
+    // is held only through the owner's meta record. Object.create roots the
+    // prototype in a runtime handle before allocating, and that root store's
+    // barrier shades it during the cycle, so this also passes with the
+    // meta-slot barrier removed (sabotage-checked). What it pins is the
+    // end-to-end Object.create path under an incremental full cycle.
     let created = crate::object::js_object_create(f64::from_bits(ptr_bits(child as usize)));
     js_shadow_slot_set(0, created.to_bits());
     run_cycle_in_single_unit_steps(&mut state);
 
     assert!(
         malloc_user_ptr_tracked(child as *mut u8),
-        "an Object.create prototype stored after root scan must survive via its owner's barrier"
+        "an Object.create prototype linked after root scan must survive the cycle"
     );
     let created = f64::from_bits(js_shadow_slot_get(0));
     assert_eq!(
