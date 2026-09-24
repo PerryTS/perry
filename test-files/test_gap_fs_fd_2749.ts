@@ -42,11 +42,12 @@ function syncCode(label: string, fn: () => void): void {
 // What this test is actually about is the error surface (`err.code` /
 // `err.syscall`) of each fd mutator, not libuv's scheduling. So buffer the
 // three results and flush them in a fixed order once all three have landed.
-// Every assertion is preserved; only the print order is pinned.
+// Also await that group before starting the promise cases: pinning only the
+// callback order still let the two groups interleave (#11103).
 const CB_ORDER = ["ftruncate closed cb", "futimes closed cb", "fchown closed cb"];
 const cbLines = new Map<string, string>();
 
-function cbCode(label: string, err: any): void {
+function cbCode(label: string, err: any, done: () => void): void {
   cbLines.set(label, err ? label + ": " + err.code + " " + err.syscall : label + ": OK");
   if (cbLines.size < CB_ORDER.length) {
     return;
@@ -54,6 +55,7 @@ function cbCode(label: string, err: any): void {
   for (const key of CB_ORDER) {
     console.log(cbLines.get(key));
   }
+  done();
 }
 
 async function asyncCode(label: string, fn: () => Promise<unknown>): Promise<void> {
@@ -73,17 +75,20 @@ syncCode("fchown closed sync", () => fs.fchownSync(fd, 0, 0));
 // keep `fsp` referenced so the namespace import is exercised
 console.log("fsp.readFile typeof=" + typeof fsp.readFile);
 
-// --- callback forms ---
-fs.ftruncate(fd, 1, (err: any) => cbCode("ftruncate closed cb", err));
-fs.futimes(fd, 1, 2, (err: any) => cbCode("futimes closed cb", err));
-fs.fchown(fd, 0, 0, (err: any) => cbCode("fchown closed cb", err));
-
 // --- promisified (await) forms ---
 const ftruncateP = promisify(fs.ftruncate);
 const futimesP = promisify(fs.futimes);
 const fchownP = promisify(fs.fchown);
 
 async function main(): Promise<void> {
+  // Keep the three operations concurrent, but wait for every callback before
+  // emitting promise results or removing the fixture directory.
+  await new Promise<void>((resolve) => {
+    fs.ftruncate(fd, 1, (err: any) => cbCode("ftruncate closed cb", err, resolve));
+    fs.futimes(fd, 1, 2, (err: any) => cbCode("futimes closed cb", err, resolve));
+    fs.fchown(fd, 0, 0, (err: any) => cbCode("fchown closed cb", err, resolve));
+  });
+
   await asyncCode("ftruncate closed promise", () => ftruncateP(fd, 1));
   await asyncCode("futimes closed promise", () => futimesP(fd, 1, 2));
   await asyncCode("fchown closed promise", () => fchownP(fd, 0, 0));
