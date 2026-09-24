@@ -757,6 +757,47 @@ mod tests {
         assert_eq!(result.to_bits(), 0.0f64.to_bits());
     }
 
+    /// #11046: a `crypto` receiver the compiler cannot prove is `node:crypto`
+    /// (undici's `let crypto; crypto = require('node:crypto')`) reaches the
+    /// inventory helpers only through this dispatcher. Each must answer an
+    /// array, never `undefined`, and `getCipherInfo` must answer the same
+    /// object/`undefined` split as the direct helper.
+    #[test]
+    fn crypto_native_dispatch_answers_inventories() {
+        for method in ["getHashes", "getCiphers", "getCurves"] {
+            let result = unsafe {
+                js_crypto_native_dispatch(method.as_ptr(), method.len(), std::ptr::null(), 0)
+            };
+            let value = perry_runtime::JSValue::from_bits(result.to_bits());
+            assert!(
+                value.is_pointer(),
+                "{method} must answer an array, got {result:?}"
+            );
+            let arr = perry_runtime::js_nanbox_get_pointer(result)
+                as *const perry_runtime::array::ArrayHeader;
+            assert!(
+                unsafe { (*arr).length } > 0,
+                "{method} must answer a non-empty inventory"
+            );
+        }
+        let method = b"getCipherInfo";
+        let known = [js_str("aes-256-cbc"), undefined()];
+        let result = unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), known.as_ptr(), known.len())
+        };
+        assert!(perry_runtime::JSValue::from_bits(result.to_bits()).is_pointer());
+        let unknown = [js_str("no-such-cipher"), undefined()];
+        let result = unsafe {
+            js_crypto_native_dispatch(
+                method.as_ptr(),
+                method.len(),
+                unknown.as_ptr(),
+                unknown.len(),
+            )
+        };
+        assert_eq!(result.to_bits(), undefined().to_bits());
+    }
+
     #[test]
     fn random_fill_sync_native_uint8_view_preserves_metadata() {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(96);
