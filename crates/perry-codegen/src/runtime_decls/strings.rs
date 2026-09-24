@@ -477,6 +477,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32],
     );
+    module.declare_function("js_private_lexical_brand_capture", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_private_lexical_brand_push", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_private_lexical_brand_pop", DOUBLE, &[]);
     module.declare_function("js_private_brand_add", DOUBLE, &[DOUBLE, I32]);
     module.declare_function(
         "js_private_field_add",

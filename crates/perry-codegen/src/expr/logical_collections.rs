@@ -469,6 +469,26 @@ fn guarded_map_number_key_delete(ctx: &mut FnCtx<'_>, map_handle: &str, key_box:
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
+        Expr::PrivateLexicalBrand(value) => {
+            let value = lower_expr(ctx, value)?;
+            let is_static = if ctx.in_static_member { "1" } else { "0" };
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_private_lexical_brand_capture",
+                &[(DOUBLE, &value), (I32, is_static)],
+            ))
+        }
+        Expr::PrivateLexicalBrandPush(value) => {
+            let value = lower_expr(ctx, value)?;
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_private_lexical_brand_push", &[(DOUBLE, &value)]))
+        }
+        Expr::PrivateLexicalBrandPop => {
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_private_lexical_brand_pop", &[]))
+        }
         Expr::Logical { op, left, right } => lower_logical(ctx, *op, left, right),
 
         // -------- arr.filter(callback) --------

@@ -622,6 +622,9 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::InstanceOf { .. }
         | Expr::In { .. }
         | Expr::PrivateBrandCheck { .. } => Type::Boolean,
+        Expr::PrivateLexicalBrand(_)
+        | Expr::PrivateLexicalBrandPush(_)
+        | Expr::PrivateLexicalBrandPop => Type::Any,
         Expr::PrivateGuard { object, .. } => infer_expr_type(object, env),
         Expr::Logical { op, left, right } => infer_logical_type(*op, left, right, env),
         Expr::Conditional {

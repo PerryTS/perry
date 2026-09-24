@@ -142,7 +142,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::WebAssemblyCallExport { .. }
         | Expr::JsonStringifyFull(..)
         | Expr::MapNew => super::math_simple::lower(ctx, expr),
-        Expr::Logical { .. }
+        Expr::PrivateLexicalBrand(_)
+        | Expr::PrivateLexicalBrandPush(_)
+        | Expr::PrivateLexicalBrandPop
+        | Expr::Logical { .. }
         | Expr::ArrayFilter { .. }
         | Expr::FetchWithOptions { .. }
         | Expr::ArraySome { .. }

@@ -275,6 +275,12 @@ pub enum Expr {
         property: Box<Expr>,
         object: Box<Expr>,
     },
+    /// Snapshot the private-name environment before a generator suspends.
+    PrivateLexicalBrand(Box<Expr>),
+    /// Restore a captured private-name environment around a continuation.
+    PrivateLexicalBrandPush(Box<Expr>),
+    PrivateLexicalBrandPop,
+
     /// Private-name brand check: `#field in obj`.
     ///
     /// This is intentionally separate from `In { property: "#field", ... }`

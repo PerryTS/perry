@@ -1361,7 +1361,7 @@ pub extern "C" fn js_class_method_bind(
                                 }
                             }
                         }
-                        let canonical = private_evaluation_brand_value(instance)
+                        let canonical = method_receiver_private_brand(instance)
                             .map(|brand| class_evaluation_method_value_for_name(owner, name, brand))
                             .unwrap_or_else(|| class_prototype_method_value_for_name(owner, name));
                         if canonical.to_bits() != crate::value::TAG_UNDEFINED {

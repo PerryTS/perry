@@ -8,6 +8,7 @@ use super::*;
 mod abrupt;
 mod async_step;
 mod call_this;
+mod private_brand;
 mod resume;
 mod yield_await;
 
@@ -273,6 +274,8 @@ pub fn transform_generator_function_with_extra_captures(
     // Generator bodies run later inside synthesized step closures, so direct
     // `this` reads need the receiver from the original generator call.
     let captures_this = captures_this || generator_body_uses_call_this(&func.body);
+    let private_brand_id =
+        private_brand::uses_private_names(&mut func.body).then(|| alloc_local(next_local_id));
 
     // Remember whether this was an async generator (`async function*`).
     // Async generators are still lowered via the same state-machine
@@ -633,6 +636,15 @@ pub fn transform_generator_function_with_extra_captures(
 
     // Build the new function body
     let mut new_body: Vec<Stmt> = Vec::new();
+    if let Some(id) = private_brand_id {
+        new_body.push(Stmt::Let {
+            id,
+            name: "__gen_private_brand".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::PrivateLexicalBrand(Box::new(Expr::This))),
+        });
+    }
 
     // Hoist variable declarations from the original body — collected
     // here (before the prealloc emit) so the prealloc set is complete.
@@ -800,6 +812,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // Build captures: state, done, sent, params, hoisted vars, extra locals
     let mut captures = vec![state_id, done_id, sent_id, executing_id];
+    captures.extend(private_brand_id);
     let mut mutable_captures = vec![state_id, done_id, sent_id, executing_id];
     // #4438 B2-finally: the pending-completion record is read/written across the
     // next/throw/return closures, so capture it by reference like the other
@@ -1382,6 +1395,9 @@ pub fn transform_generator_function_with_extra_captures(
         new_body.push(Stmt::Return(Some(linked)));
     }
 
+    if let Some(id) = private_brand_id {
+        private_brand::restore_in_continuations(&mut new_body, id, next_local_id);
+    }
     func.body = new_body;
     func.is_generator = false;
 }

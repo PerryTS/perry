@@ -462,3 +462,45 @@ mod instance_ancestor_evaluation_brand_tests {
         }
     }
 }
+
+// Generator continuations execute after method dispatch has popped its lexical
+// brand. Capture that environment at creation, with the receiver fallback used
+// by directly compiled method calls. The existing stack scanner and exception
+// savepoints root and unwind restored environments.
+#[no_mangle]
+pub extern "C" fn js_private_lexical_brand_capture(receiver: f64, is_static: i32) -> f64 {
+    // Static dispatch keeps its lexical owner separately from explicit this.
+    // Prefer it only for static members: an instance generator created from a
+    // static method must retain the instance method's own lexical environment.
+    if is_static != 0 {
+        if let Some(owner) = super::super::static_private_owner_current() {
+            return owner;
+        }
+    }
+    PRIVATE_LEXICAL_BRAND_STACK.with(|stack| stack.borrow().last().copied())
+        .map(f64::from_bits)
+        .or_else(|| private_evaluation_brand_value(receiver))
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+#[no_mangle]
+pub extern "C" fn js_private_lexical_brand_push(brand: f64) -> f64 {
+    private_lexical_brand_push(brand);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[no_mangle]
+pub extern "C" fn js_private_lexical_brand_pop() -> f64 {
+    private_lexical_brand_pop();
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_PRIVATE_LEXICAL_CAPTURE: extern "C" fn(f64, i32) -> f64 = js_private_lexical_brand_capture;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_PRIVATE_LEXICAL_PUSH: extern "C" fn(f64) -> f64 = js_private_lexical_brand_push;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_PRIVATE_LEXICAL_POP: extern "C" fn() -> f64 = js_private_lexical_brand_pop;

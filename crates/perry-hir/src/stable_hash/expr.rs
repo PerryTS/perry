@@ -87,6 +87,9 @@ impl SH for Expr {
             Expr::New { class_name, args, type_args, .. } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
             Expr::NewDynamic { callee, args, .. } => { tag(h, 43); callee.as_ref().hash(h); args.hash(h); }
             Expr::NewDynamicSpread { callee, args, .. } => { tag(h, 12507); callee.as_ref().hash(h); args.hash(h); }
+            Expr::PrivateLexicalBrand(value) => { tag(h, 12403); value.hash(h); }
+            Expr::PrivateLexicalBrandPush(value) => { tag(h, 12404); value.hash(h); }
+            Expr::PrivateLexicalBrandPop => { tag(h, 12405); }
             Expr::NewTarget => { tag(h, 12301); }
             Expr::ClassRef(s) => { tag(h, 44); s.hash(h); }
             Expr::EnumMember { enum_name, member_name, } => { tag(h, 45); enum_name.hash(h); member_name.hash(h); }

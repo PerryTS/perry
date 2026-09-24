@@ -1,0 +1,3 @@
+Preserve the lexical class-evaluation brand of generators using private names (#11185). Capture the environment when the generator is created and restore it during each next/return/throw continuation, including async generator steps. Restore the caller's environment on normal returns and exceptions so interleaved generators and nested method calls remain isolated. Symbol iterator method values read from a per-evaluation prototype now retain that evaluation's owner instead of the shared class template.
+
+Add native regressions for ordinary, symbol-keyed, static and async generator methods, private `in` checks, cross-evaluation calls, interleaving, and cleanup handlers. Add transform coverage requiring the captured environment on every continuation.

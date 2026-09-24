@@ -672,6 +672,10 @@ where
             f(property);
             f(object);
         }
+        Expr::PrivateLexicalBrandPop => {}
+        Expr::PrivateLexicalBrand(object) | Expr::PrivateLexicalBrandPush(object) => {
+            f(object);
+        }
         Expr::PrivateBrandCheck { object, .. } => {
             f(object);
         }
