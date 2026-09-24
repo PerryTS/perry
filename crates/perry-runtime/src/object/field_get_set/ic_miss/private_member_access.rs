@@ -647,70 +647,62 @@ mod repeated_evaluation_tests {
                 request.as_ptr(),
                 request.len() as u32,
             ));
+            // Every call below receives the handles' CURRENT pointers via
+            // with_mut_ptr: js_private_field_add / js_private_guard are
+            // self-rooting runtime entry points, and
+            // private_evaluation_field_{get,set} root their receiver before
+            // they allocate, so no pointer is held across a collection here.
+            let field_get = || {
+                object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                    request.with_mut_ptr::<crate::StringHeader, _>(|request| {
+                        private_evaluation_field_get(object, request)
+                    })
+                })
+            };
             for (brand, value) in [(a.get_nanbox_f64(), 11.0), (b.get_nanbox_f64(), 22.0)] {
                 private_lexical_brand_push(brand);
-                js_private_field_add(
-                    crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
-                    CID,
-                    crate::value::js_nanbox_string(
-                        field.get_raw_mut_ptr::<crate::StringHeader>() as i64
-                    ),
-                    value,
-                );
+                object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                    field.with_mut_ptr::<crate::StringHeader, _>(|field| {
+                        js_private_field_add(
+                            crate::value::js_nanbox_pointer(object as i64),
+                            CID,
+                            crate::value::js_nanbox_string(field as i64),
+                            value,
+                        )
+                    })
+                });
                 private_lexical_brand_pop();
             }
             private_lexical_brand_push(a.get_nanbox_f64());
-            assert_eq!(
-                private_evaluation_field_get(
-                    object.get_raw_mut_ptr::<ObjectHeader>(),
-                    request.get_raw_mut_ptr::<crate::StringHeader>()
-                ),
-                Some(11.0)
-            );
-            assert!(private_evaluation_field_set(
-                object.get_raw_mut_ptr::<ObjectHeader>(),
-                request.get_raw_mut_ptr::<crate::StringHeader>(),
-                33.0
-            ));
+            assert_eq!(field_get(), Some(11.0));
+            assert!(object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                request.with_mut_ptr::<crate::StringHeader, _>(|request| {
+                    private_evaluation_field_set(object, request, 33.0)
+                })
+            }));
             private_lexical_brand_pop();
             private_lexical_brand_push(b.get_nanbox_f64());
-            assert_eq!(
-                private_evaluation_field_get(
-                    object.get_raw_mut_ptr::<ObjectHeader>(),
-                    request.get_raw_mut_ptr::<crate::StringHeader>()
-                ),
-                Some(22.0)
-            );
+            assert_eq!(field_get(), Some(22.0));
             private_lexical_brand_pop();
             private_lexical_brand_push(a.get_nanbox_f64());
-            assert_eq!(
-                private_evaluation_field_get(
-                    object.get_raw_mut_ptr::<ObjectHeader>(),
-                    request.get_raw_mut_ptr::<crate::StringHeader>()
-                ),
-                Some(33.0)
-            );
+            assert_eq!(field_get(), Some(33.0));
             private_lexical_brand_pop();
             // A direct static call has no lexical stack entry. Its guard's
             // owner must survive until the field read, rather than selecting
             // the receiver's most-derived evaluation again.
             let depth = private_member_access_hints_savepoint();
-            js_private_guard(
-                crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
-                a.get_nanbox_f64(),
-                CID,
-                b"#v".as_ptr(),
-                2,
-                0,
-                0,
-            );
-            assert_eq!(
-                private_evaluation_field_get(
-                    object.get_raw_mut_ptr::<ObjectHeader>(),
-                    request.get_raw_mut_ptr::<crate::StringHeader>()
-                ),
-                Some(33.0)
-            );
+            object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                js_private_guard(
+                    crate::value::js_nanbox_pointer(object as i64),
+                    a.get_nanbox_f64(),
+                    CID,
+                    b"#v".as_ptr(),
+                    2,
+                    0,
+                    0,
+                )
+            });
+            assert_eq!(field_get(), Some(33.0));
             assert_eq!(private_member_access_hints_savepoint(), depth);
 
             // Generic assignment must consume the guard's owner hint too.
