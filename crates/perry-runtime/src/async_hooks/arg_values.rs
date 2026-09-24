@@ -48,14 +48,15 @@ fn value_is_array(value: f64) -> bool {
     if !jv.is_pointer() {
         return false;
     }
-    let ptr = jv.as_pointer::<u8>();
-    if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return false;
-    }
-    unsafe {
-        let gc_header = &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-        gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
-    }
+    // The TRACKED reader: `value` is arbitrary user input, and a POINTER-tagged
+    // value can still name a header-less native allocation (the held subclass
+    // `__perryAsyncResourceBacking` field). It proves the allocator owns the
+    // address before reading the header in front of it, where the hand-rolled
+    // `< GC_HEADER_SIZE + 0x1000` floor this replaced rejected neither handle
+    // bands nor foreign allocations.
+    let addr = jv.as_pointer::<u8>() as usize;
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
+        .is_some_and(|header| unsafe { header.as_ref() }.obj_type == crate::gc::GC_TYPE_ARRAY)
 }
 
 pub(super) fn is_callable_value(value: f64) -> bool {
