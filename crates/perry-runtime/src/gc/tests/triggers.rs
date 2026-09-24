@@ -242,9 +242,12 @@ fn old_reclaim_backoff_widens_band_on_futile_fulls() {
     use super::super::policy::{
         test_clear_old_reclaim_pre_in_use_bytes, test_old_reclaim_backoff_shift,
         test_old_reclaim_pre_in_use_bytes, test_price_old_reclaim_full,
-        test_set_old_reclaim_backoff_shift, test_set_pacing_arena_in_use,
+        test_set_old_reclaim_backoff_shift, test_set_old_reclaim_last_post_in_use,
+        test_set_pacing_arena_in_use,
     };
     let previous = test_set_old_reclaim_backoff_shift(0);
+    // A steady live set: the previous full left exactly what these leave.
+    let previous_post = test_set_old_reclaim_last_post_in_use(99 * 1024 * 1024);
     let baseline = 8 * 1024 * 1024;
     let band0 = gc_old_reclaim_growth_band_bytes(baseline);
 
@@ -321,6 +324,46 @@ fn old_reclaim_backoff_widens_band_on_futile_fulls() {
     assert_eq!(test_old_reclaim_pre_in_use_bytes(), 0);
 
     test_set_pacing_arena_in_use(prev_seam);
+    test_set_old_reclaim_last_post_in_use(previous_post);
+    test_set_old_reclaim_backoff_shift(previous);
+}
+
+/// #10960: a full that frees little because the live set is still GROWING is
+/// not the futile-full shape, and must not widen the band. On `gc_reclaim.ts
+/// 64 6` the first full ran at 33.5 MB while 64 MiB of live strings were still
+/// being built; widening on it pushed the next full out to 135 MB and raised
+/// peak RSS a median 29%. The proportional band already follows a rising
+/// baseline, so the backoff widening on top of it double-counts the growth.
+#[test]
+fn old_reclaim_backoff_ignores_a_growing_live_set() {
+    use super::super::policy::{
+        test_old_reclaim_backoff_shift, test_price_old_reclaim_full,
+        test_set_old_reclaim_backoff_shift, test_set_old_reclaim_last_post_in_use,
+    };
+    const MB: usize = 1024 * 1024;
+    let previous = test_set_old_reclaim_backoff_shift(0);
+
+    // First full of the process: nothing was live before it, all of the
+    // 33.5 MB it keeps is new. Unproductive, but growth - no widening.
+    let previous_post = test_set_old_reclaim_last_post_in_use(0);
+    test_price_old_reclaim_full(34 * MB, 34 * MB);
+    assert_eq!(test_old_reclaim_backoff_shift(), 0);
+
+    // Live set still climbing (34 -> 67 MB): still no widening.
+    test_price_old_reclaim_full(68 * MB, 67 * MB);
+    assert_eq!(test_old_reclaim_backoff_shift(), 0);
+
+    // Growth also does not RESET a widening a futile run earned.
+    test_set_old_reclaim_backoff_shift(1);
+    test_price_old_reclaim_full(100 * MB, 99 * MB);
+    assert_eq!(test_old_reclaim_backoff_shift(), 1);
+
+    // Live set now flat at 99 MB and the full freed ~1%: that IS futile.
+    test_set_old_reclaim_backoff_shift(0);
+    test_price_old_reclaim_full(100 * MB, 99 * MB);
+    assert_eq!(test_old_reclaim_backoff_shift(), 1);
+
+    test_set_old_reclaim_last_post_in_use(previous_post);
     test_set_old_reclaim_backoff_shift(previous);
 }
 

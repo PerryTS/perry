@@ -1314,6 +1314,11 @@ crate::perry_thread_local! {
     /// preceding old-reclaim fulls were unproductive. Reset to 0 by the first
     /// productive one. Capped at `OLD_RECLAIM_BACKOFF_SHIFT_MAX`.
     pub(super) static GC_OLD_RECLAIM_BACKOFF_SHIFT: Cell<u32> = const { Cell::new(0) };
+    /// #10960: live bytes the PREVIOUS priced full left behind, so
+    /// `update_old_reclaim_backoff` can tell a futile full (it re-traced the
+    /// same live set) from one that found the live set GROWING. Zero before
+    /// the first full, which reads as "everything this full found is new".
+    pub(super) static GC_OLD_RECLAIM_LAST_POST_IN_USE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Survival-adaptive arm of major-GC pacing: `true` once a copying minor
     /// has measured a young-survival ratio at or above
     /// `MAJOR_PACING_RETAINING_SURVIVAL_PERMILLE`, cleared by any minor that
@@ -1980,10 +1985,25 @@ const OLD_RECLAIM_BACKOFF_SHIFT_MAX: u32 = 1;
 
 /// Price what the just-finished old-reclaim full actually reclaimed.
 ///
-/// Mirrors `update_major_pacing_backoff` exactly, against its own cell: the
-/// two triggers pace different things and must not share a homeostat, but
-/// they agree on what "productive" means.
+/// Mirrors `update_major_pacing_backoff` on what "productive" means, against
+/// its own cell: the two triggers pace different things and must not share a
+/// homeostat.
+///
+/// #10960: an unproductive full widens the band ONLY when the live set did
+/// not grow since the previous full. The backoff exists for the futile-full
+/// shape - repeated traces of the same live set that free nothing - and a
+/// full that reclaimed little because the program was still BUILDING its live
+/// set is not that shape: the proportional band already follows the baseline
+/// up, so widening on top of it double-counts the growth. Measured on
+/// `gc_reclaim.ts 64 6` (64 MiB live, replaced continuously): the first full
+/// runs at 33.5 MB while the heap is still ramping and frees nothing, the old
+/// rule doubled the band to 64 MiB, and the next full slid out to
+/// `old_in_use=135 MB` with `arena_total=281 MB` - a +29% peak-RSS excursion
+/// (median 150 -> 193 MB, 15/15 interleaved pairs) that steady state never
+/// needed. A growing live set leaves the shift where it is: it is evidence
+/// neither that fulls are futile nor that they have become productive.
 fn update_old_reclaim_backoff(post_in_use: usize) {
+    let prev_post = GC_OLD_RECLAIM_LAST_POST_IN_USE_BYTES.with(|bytes| bytes.replace(post_in_use));
     let pre_in_use = GC_OLD_RECLAIM_PRE_IN_USE_BYTES.with(|bytes| bytes.get());
     if pre_in_use == 0 {
         return;
@@ -1992,10 +2012,14 @@ fn update_old_reclaim_backoff(post_in_use: usize) {
     let reclaimed = pre_in_use.saturating_sub(post_in_use);
     let productive =
         reclaimed.saturating_mul(100) / pre_in_use >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
+    // Same yardstick as `productive`: at least that share of what this full
+    // traced is live data the previous full never saw.
+    let grew = post_in_use.saturating_sub(prev_post).saturating_mul(100) / pre_in_use
+        >= MAJOR_PACING_PRODUCTIVE_YIELD_PCT;
     GC_OLD_RECLAIM_BACKOFF_SHIFT.with(|shift| {
         if productive {
             shift.set(0);
-        } else {
+        } else if !grew {
             shift.set(
                 shift
                     .get()
@@ -2004,6 +2028,11 @@ fn update_old_reclaim_backoff(post_in_use: usize) {
             );
         }
     });
+}
+
+#[cfg(test)]
+pub(super) fn test_set_old_reclaim_last_post_in_use(bytes: usize) -> usize {
+    GC_OLD_RECLAIM_LAST_POST_IN_USE_BYTES.with(|c| c.replace(bytes))
 }
 
 #[cfg(test)]
