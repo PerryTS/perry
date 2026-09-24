@@ -1069,8 +1069,8 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
     value_bits: u64,
     valid_ptrs: &ValidPointerSet,
 ) -> bool {
-    if crate::proxy::gc_full_trace_active()
-        && crate::proxy::gc_observe_traced_value(value_bits, valid_ptrs)
+    if crate::gc::full_trace::handle_trace_active()
+        && crate::gc::full_trace::observe_handle(value_bits, valid_ptrs)
     {
         return false;
     }

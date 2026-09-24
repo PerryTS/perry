@@ -7,10 +7,12 @@
 //! `mod.rs` to keep that file under the 2,000-line lint gate. The child module
 //! sees `mod.rs`'s private items via `use super::*`.
 //!
-//! The cache is a GC root (#8163). Its values are NaN-boxed closure pointers
+//! The cache holds GC edges (#8163). Its values are NaN-boxed closure pointers
 //! owned by the Headers record outside the GC heap, so it is invisible to every
 //! heap-side instrument; `super::gc` registers the scanner that marks them and
-//! rewrites the slots when the closure moves. Every read that misses here
+//! rewrites the slots when the closure moves. Full marking follows these
+//! edges only from live handles (`lifecycle`), allowing cache cycles to die.
+//! Every read that misses here
 //! allocates, so registration happens before the first insert.
 
 use super::*;
@@ -38,6 +40,7 @@ extern "C" {
 }
 
 pub(crate) fn headers_bound_method_value(headers_id: usize, method_name: &'static str) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
     if let Some(bits) = HEADERS_REGISTRY
         .lock()
         .unwrap()

@@ -29,6 +29,7 @@ pub extern "C" fn js_headers_new() -> f64 {
 /// store. Records, iterables, and Proxies still take the full constructor path.
 #[no_mangle]
 pub extern "C" fn js_headers_from_value(init: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[init]);
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let init = scope.root_nanbox_f64(init);
     let current = init.get_nanbox_f64();
@@ -61,6 +62,7 @@ pub unsafe extern "C" fn js_headers_method_value(
     method_name_ptr: *const u8,
     method_name_len: usize,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     if !HEADERS_REGISTRY.lock().unwrap().contains_key(&id) || method_name_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -375,6 +377,7 @@ fn append_header_entries(target_id: usize, entries: Vec<(String, String)>) {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_init_from_value(handle: f64, init: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle, init]);
     let init_value = JSValue::from_bits(init.to_bits());
     if init_value.is_undefined() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -428,6 +431,7 @@ pub unsafe extern "C" fn js_headers_set(
     key_ptr: *const StringHeader,
     value_ptr: *const StringHeader,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let key = string_from_header(key_ptr).unwrap_or_default();
     let value = string_from_header(value_ptr).unwrap_or_default();
@@ -445,6 +449,7 @@ pub unsafe extern "C" fn js_headers_append(
     key_ptr: *const StringHeader,
     value_ptr: *const StringHeader,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let key = string_from_header(key_ptr).unwrap_or_default();
     let value = string_from_header(value_ptr).unwrap_or_default();
@@ -459,6 +464,7 @@ pub unsafe extern "C" fn js_headers_get(
     handle: f64,
     key_ptr: *const StringHeader,
 ) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let key = match string_from_header(key_ptr) {
         Some(k) => k,
@@ -479,6 +485,7 @@ pub unsafe extern "C" fn js_headers_get(
 /// `headers.getSetCookie()` — returns all preserved Set-Cookie values.
 #[no_mangle]
 pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let values = HEADERS_REGISTRY
         .lock()
@@ -511,6 +518,7 @@ pub extern "C" fn js_headers_get_set_cookie(handle: f64) -> f64 {
 /// `ERR_INVALID_ARG_TYPE`.
 #[no_mangle]
 pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let guard = HEADERS_REGISTRY.lock().unwrap();
     let Some(store) = guard.get(&id) else {
@@ -559,6 +567,7 @@ pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut String
 /// falls back to `{}`.
 #[no_mangle]
 pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let guard = HEADERS_REGISTRY.lock().unwrap();
     let Some(store) = guard.get(&id) else {
@@ -588,6 +597,7 @@ pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader
 
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeader) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let key = match string_from_header(key_ptr) {
         Some(k) => k,
@@ -603,6 +613,7 @@ pub unsafe extern "C" fn js_headers_has(handle: f64, key_ptr: *const StringHeade
 
 #[no_mangle]
 pub unsafe extern "C" fn js_headers_delete(handle: f64, key_ptr: *const StringHeader) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let key = string_from_header(key_ptr).unwrap_or_default();
     if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get_mut(&id) {
@@ -627,6 +638,7 @@ fn snapshot_sorted(handle: f64) -> Vec<(String, String)> {
 
 #[no_mangle]
 pub extern "C" fn js_headers_for_each(handle: f64, callback: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle, callback]);
     let entries = snapshot_sorted(handle);
     // Extract closure pointer from NaN-boxed callback
     let cb_bits = callback.to_bits();
@@ -669,6 +681,7 @@ fn nanbox_array_pointer(arr: *mut perry_runtime::ArrayHeader) -> f64 {
 /// (refs #576).
 #[no_mangle]
 pub extern "C" fn js_headers_keys(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let entries = snapshot_sorted(handle);
     // #8163: `arr` must survive the per-entry string allocations below.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
@@ -688,6 +701,7 @@ pub extern "C" fn js_headers_keys(handle: f64) -> f64 {
 /// `headers.values()` — sorted-by-key array of header values. See `js_headers_keys`.
 #[no_mangle]
 pub extern "C" fn js_headers_values(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let entries = snapshot_sorted(handle);
     // #8163: see `js_headers_keys`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
@@ -709,6 +723,7 @@ pub extern "C" fn js_headers_values(handle: f64) -> f64 {
 /// route here (the latter via the `Symbol.iterator` alias, see #576).
 #[no_mangle]
 pub extern "C" fn js_headers_entries(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let entries = snapshot_sorted(handle);
     // #8163: `arr`, `k_ptr` and `pair` are all raw heap addresses held across
     // later allocations in this same loop. See `js_headers_for_each`.

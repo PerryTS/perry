@@ -417,17 +417,20 @@ unsafe fn subclass_this_object_ptr(this_box: f64) -> Option<*mut ObjectHeader> {
 /// Stash the id of a freshly-created native Web-Fetch handle (`handle_box` is
 /// the NaN-boxed pointer-tagged value the Request/Response thunk returns) on a
 /// subclass instance's `this` under `__perry_fetch_handle__`. Stored as a
-/// plain numeric f64 — `fetch_subclass_handle_id` reads it back.
+/// pointer-tagged value so the collector traces its registry ownership.
 unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
-    if let Some(obj) = subclass_this_object_ptr(this_box) {
+    if subclass_this_object_ptr(this_box).is_some() {
         crate::object::field_get_set::FETCH_SUBCLASS_EVER
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        let id = crate::value::js_nanbox_get_pointer(handle_box);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let owner = scope.root_nanbox_f64(this_box);
+        let _handle = scope.root_nanbox_f64(handle_box);
         let key = crate::string::js_string_from_bytes(
             FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
             FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
         );
-        crate::object::js_object_set_field_by_name(obj, key, id as f64);
+        let obj = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut ObjectHeader;
+        crate::object::js_object_set_field_by_name(obj, key, handle_box);
     }
 }
 

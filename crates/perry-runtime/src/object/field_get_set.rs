@@ -82,6 +82,10 @@ pub(crate) unsafe fn fetch_subclass_handle_id(obj: usize) -> Option<i64> {
     if v.is_undefined() {
         return None;
     }
+    if v.is_pointer() {
+        let id = crate::value::js_nanbox_get_pointer(f64::from_bits(v.bits()));
+        return crate::value::addr_class::is_fetch_handle_band(id as usize).then_some(id);
+    }
     let id = f64::from_bits(v.bits());
     if id.is_finite() && id > 0.0 && id.fract() == 0.0 {
         Some(id as i64)

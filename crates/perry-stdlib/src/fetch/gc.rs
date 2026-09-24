@@ -1,32 +1,18 @@
-//! Provider-safe GC registration for the Web Fetch registries' heap values.
+//! GC scanning for Fetch's heap edges (signals and cached bound methods).
 //!
-//! The Fetch handle registries are process-global `lazy_static!` tables keyed
-//! by small handle ids, and three of them hold *heap values*, not just Rust
-//! data:
+//! Minors retain and rewrite these edges because old JS owners need not be
+//! visited. Full marking instead reaches them through `lifecycle`'s handle
+//! trace, so an unreachable handle/cache cycle does not become a permanent
+//! root. Relocation passes still rewrite surviving slots. Each thread scans
+//! only the handles it owns; another mutator's heap must never be visited.
 //!
-//! * `HeadersStore::method_values` — the bound-method closure behind
+//! * `HeadersRecord::method_values` — the bound-method closure behind
 //!   `headers.get` / `headers.entries` / … (one per `(handle, method)`),
 //! * `FormDataStore::method_values` — the same for `FormData`,
 //! * `RequestRecord::signal` — the `AbortSignal` object behind `request.signal`.
 //!
-//! Until #8163 nothing marked or rewrote those slots. `js_write_barrier_root_nanbox`
-//! at the store site is only the incremental-marking shade — it does not
-//! register a root — so under a moving collector the cached closure either
-//! died (nothing else referenced it once the caller dropped the bound copy) or
-//! moved, and the next `headers.get` read handed the pre-move address to
-//! `typeof`. That is precisely the shape the production Next App Route fixture
-//! hit under forced evacuation: `(await headers()).get(...)` twice per request
-//! with collections between, and the second read faulting on a retired
-//! from-space closure. `PERRY_GC_VERIFY_EVACUATION` cannot see it (no scanner
-//! to verify), `PERRY_GC_PROTECT_FROMSPACE_HOLDERS` cannot see it (the holder is
-//! a Rust `HashMap` outside the GC heap), and `scripts/gc_runtime_root_holders.py`
-//! could not see it either — its declaration regex did not match
-//! `lazy_static!`'s `static ref` (fixed alongside this module).
-//!
-//! Registration goes through the stable C ABI, exactly like `streams::gc`, so a
-//! separately packaged stdlib provider installs its scanner into the
-//! process-wide runtime image rather than into any runtime glue that happens to
-//! be linked into the stdlib image.
+//! Registration uses the stable C ABI so external stdlib providers participate
+//! in the process-wide collector.
 //!
 //! **Locking contract (load-bearing).** The scanner runs *during* a collection
 //! on the mutator thread and takes each table's mutex, so **no site may hold one
@@ -65,6 +51,7 @@ type FfiNamedMutableRootScanner =
     extern "C" fn(scanner_id: usize, visit: FfiMutableRootVisitor, ctx: *mut c_void);
 
 extern "C" {
+    fn perry_ffi_gc_root_visitor_is_full_mark(ctx: *mut c_void) -> bool;
     fn perry_ffi_gc_register_mutable_root_scanner_named(
         source_ptr: *const u8,
         source_len: usize,
@@ -144,6 +131,9 @@ extern "C" fn scan_fetch_roots_ffi(
     visit: FfiMutableRootVisitor,
     ctx: *mut c_void,
 ) {
+    if unsafe { perry_ffi_gc_root_visitor_is_full_mark(ctx) } {
+        return;
+    }
     scan_fetch_roots_with(&mut FfiFetchRootVisitor { visit, ctx });
 }
 
@@ -170,7 +160,7 @@ pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
         }
     }
     if let Ok(mut requests) = REQUEST_REGISTRY.lock() {
-        for request in requests.values_mut() {
+        for (_, request) in requests.iter_mut().filter(|(id, _)| lifecycle::owns(**id)) {
             visitor.visit_nanbox_f64_slot(&mut request.signal);
         }
     }

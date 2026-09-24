@@ -30,6 +30,7 @@ mod dirty_page_cache;
 mod env_knob_parse;
 mod error_side_tables;
 mod evacuation;
+mod fetch_handle_trace;
 mod forwarded_stub_membership;
 mod forwarding_target_validation;
 mod forwarding_verification;

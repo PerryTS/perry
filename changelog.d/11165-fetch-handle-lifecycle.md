@@ -1,0 +1,5 @@
+Fix unbounded Web Fetch registry retention and allocation-count exhaustion in long-running services. Full GC now traces Request, Response, Headers, Blob/File, and FormData handle ownership, removes unreachable records and bound-method caches, and recycles their shared IDs. Signals, cached Headers, FormData files, detached bound methods, and subclass wrappers remain live when reachable. Minor collections continue to retain and relocate registry heap edges.
+
+Native handle allocation requests a full collection at a safe poll every 4,096 allocations, including workloads that create no GC heap objects. Native calls root transient receivers, and each mutator reclaims only its own handles, including on thread exit. The finite handle band still bounds simultaneously live handles.
+
+Regression coverage includes allocation beyond the entire handle band, owner/child and method-cache cycles, raw native roots, heap containers, minor collections, incremental root publication, thread isolation/teardown, and a compiled TypeScript workload retaining Fetch values across 700,000 temporary Headers allocations.

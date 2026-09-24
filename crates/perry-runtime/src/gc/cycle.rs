@@ -1845,7 +1845,7 @@ impl Drop for GcCycleState {
         // raw valid-ptrs pointer dangle past the cycle that owns the set.
         if self.phase != GcCyclePhase::Complete {
             if self.minor.is_none() {
-                crate::proxy::gc_abort_full_trace();
+                super::full_trace::abort_full_trace();
             }
             incremental_mark_barrier_disable();
             super::barrier::GC_BIRTH_EXTRA_FLAGS.with(|cell| cell.set(0));

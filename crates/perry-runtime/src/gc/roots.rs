@@ -660,6 +660,11 @@ pub(crate) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
     // Validate against the known-heap-pointer set to avoid false positives from return addresses
     // and plain integers. Valid heap pointers are in the lower 48-bit address space and
     // won't have NaN-boxing tags in upper bits (already rejected above).
+    if super::full_trace::handle_trace_active()
+        && super::full_trace::observe_handle(word, valid_ptrs)
+    {
+        return false;
+    }
     let raw_ptr_u64 = word;
     if !(0x1000..=0x0000_FFFF_FFFF_FFFF).contains(&raw_ptr_u64) {
         return false; // Too small (null/invalid) or has upper bits set (NaN tag or non-address)
@@ -845,9 +850,9 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     #[inline]
     pub(super) fn record_source_scan_bits(&mut self, bits: u64) {
-        if crate::proxy::gc_full_trace_active() {
+        if super::full_trace::handle_trace_active() {
             if let RuntimeRootVisitMode::Mark { valid_ptrs } = &self.mode {
-                crate::proxy::gc_observe_traced_value(bits, valid_ptrs);
+                super::full_trace::observe_handle(bits, valid_ptrs);
             }
         }
         if let Some(stats) = self.root_source_stats {

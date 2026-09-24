@@ -30,6 +30,7 @@ pub fn response_bytes_clone(resp_id: usize) -> Option<Vec<u8>> {
 /// after the one chunk is delivered.
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let bytes = blob_bytes_clone(id).unwrap_or_default();
     // Streams are still a Phase 2 subsystem — keep their handle in the legacy
@@ -83,6 +84,7 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
 /// dispatch; `null` when the response has no body. (#1650)
 #[no_mangle]
 pub unsafe extern "C" fn js_response_body(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     response_body_stream(handle_id(handle))
 }
 
@@ -100,6 +102,7 @@ pub unsafe extern "C" fn js_response_static_json(
     init_status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[value, init_status, headers_handle]);
     // Stringify via runtime (type_hint 1 = object)
     extern "C" {
         fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader;
@@ -146,6 +149,7 @@ pub unsafe extern "C" fn js_response_static_redirect(
     url_ptr: *const StringHeader,
     status: f64,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[status]);
     let url = string_from_header(url_ptr).unwrap_or_default();
     let status_u16 = redirect_status_from_value(status);
     if !is_redirect_status(status_u16) {

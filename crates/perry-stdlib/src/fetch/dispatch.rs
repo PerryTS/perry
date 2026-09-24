@@ -38,6 +38,7 @@ pub extern "C" fn js_response_body_init_reset() -> f64 {
 /// (`c.json`/`c.text`) are unaffected.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
+    let _fetch_roots = lifecycle::pin_handles(&[value]);
     set_pending_fetch_body_content_type(
         JSValue::from_bits(value.to_bits())
             .is_any_string()
@@ -252,6 +253,7 @@ pub(crate) unsafe fn fetch_request_body_bytes(body_ptr: *const StringHeader) -> 
 }
 
 fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(form_id)]);
     if let Some(bits) = super::body_metadata::FORM_DATA_REGISTRY
         .lock()
         .unwrap()
@@ -335,6 +337,7 @@ pub extern "C" fn js_fetch_handle_kind(id: usize) -> u8 {
 /// property reads on a Response handle whose id collides with a Request id.
 #[doc(hidden)]
 pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(req_id)]);
     // `request.headers` — lazily allocate a Headers registry entry backed by
     // the request's stored header map and cache the id so repeat reads return
     // the same handle (`req.headers === req.headers`). Mirrors the Response
@@ -440,6 +443,7 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
 /// Response/Headers/Blob id and the registry-membership gate is unambiguous.
 #[doc(hidden)]
 pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(req_id)]);
     {
         let guard = REQUEST_REGISTRY.lock().unwrap();
         guard.get(&req_id)?;
@@ -481,6 +485,7 @@ pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Op
 /// Returns `None` if the id isn't a known Response or the property is unknown.
 #[doc(hidden)]
 pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(resp_id)]);
     // `response.headers` — use the same backing handle as the typed accessor.
     // This preserves both object identity and mutations (notably
     // `NextResponse.cookies`' Set-Cookie writes) across module boundaries.
@@ -563,6 +568,7 @@ pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
 /// while call sites still route through `HANDLE_METHOD_DISPATCH`.
 #[doc(hidden)]
 pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
     {
         let guard = HEADERS_REGISTRY.lock().unwrap();
         guard.get(&headers_id)?;
@@ -591,6 +597,7 @@ pub fn dispatch_headers_property(headers_id: usize, prop: &str) -> Option<f64> {
 /// feature checks such as `typeof form.append === "function"` work.
 #[doc(hidden)]
 pub fn dispatch_form_data_property(form_id: usize, prop: &str) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(form_id)]);
     if !form_data_contains_handle(form_id) {
         return None;
     }
@@ -618,6 +625,7 @@ pub fn dispatch_form_data_property(form_id: usize, prop: &str) -> Option<f64> {
 /// claiming membership alone would shadow legitimate calls on other handles.
 #[doc(hidden)]
 pub fn dispatch_response_method(resp_id: usize, method: &str, _args: &[f64]) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(resp_id)]);
     {
         let guard = FETCH_RESPONSES.lock().unwrap();
         guard.get(&resp_id)?;
@@ -659,6 +667,7 @@ pub fn dispatch_response_method(resp_id: usize, method: &str, _args: &[f64]) -> 
 /// unknown ids or methods.
 #[doc(hidden)]
 pub fn dispatch_form_data_method(form_id: usize, method: &str, args: &[f64]) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(form_id)]);
     if !form_data_contains_handle(form_id) {
         return None;
     }
@@ -719,6 +728,7 @@ pub fn dispatch_form_data_method(form_id: usize, method: &str, args: &[f64]) -> 
 /// ids or methods.
 #[doc(hidden)]
 pub fn dispatch_blob_method(blob_id: usize, method: &str, args: &[f64]) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(blob_id)]);
     {
         let guard = BLOB_REGISTRY.lock().unwrap();
         guard.get(&blob_id)?;
@@ -752,6 +762,7 @@ pub fn dispatch_blob_method(blob_id: usize, method: &str, args: &[f64]) -> Optio
 /// unknown ids or methods.
 #[doc(hidden)]
 pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(headers_id)]);
     {
         let guard = HEADERS_REGISTRY.lock().unwrap();
         guard.get(&headers_id)?;
@@ -807,6 +818,7 @@ pub fn dispatch_headers_method(headers_id: usize, method: &str, args: &[f64]) ->
 /// Returns `None` if the id isn't a known Blob or the property is unknown.
 #[doc(hidden)]
 pub fn dispatch_blob_property(blob_id: usize, prop: &str) -> Option<f64> {
+    let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(blob_id)]);
     let guard = BLOB_REGISTRY.lock().unwrap();
     let blob = guard.get(&blob_id)?;
     if matches!(prop, "text" | "arrayBuffer" | "bytes" | "slice") {

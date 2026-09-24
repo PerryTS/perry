@@ -29,6 +29,7 @@ pub unsafe extern "C" fn js_request_new(
     duplex_ptr: *const StringHeader,
     signal: f64,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[headers_handle, keepalive, signal]);
     let url = string_from_header(url_ptr).unwrap_or_default();
     let raw_method = string_from_header(method_ptr).unwrap_or_else(|| "GET".to_string());
     // Forbidden methods are rejected case-insensitively; the error message
@@ -154,6 +155,7 @@ pub unsafe extern "C" fn js_request_new(
 /// NaN-boxed `JSValue`. Called only from codegen-emitted FFI.
 #[no_mangle]
 pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, init: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[init]);
     let raw = perry_runtime::value::js_nanbox_get_pointer(init);
     // Non-object init (undefined / number / small handle): behave like
     // `new Request(url)` with no init — every field keeps its default.

@@ -66,6 +66,7 @@ pub use bun_server_bridge::*;
 // the two bound-method caches and `RequestRecord::signal`. Same
 // child-module/`use super::*` contract as `headers`.
 mod gc;
+mod lifecycle;
 
 // Web Fetch `Request` constructors (`js_request_new` /
 // `js_request_new_from_init`) — split out to keep this file under the
@@ -100,15 +101,16 @@ pub(crate) const FETCH_HANDLE_ID_END: usize =
 // Response handle storage
 lazy_static::lazy_static! {
     static ref FETCH_RESPONSES: Mutex<HashMap<usize, FetchResponse>> = Mutex::new(HashMap::new());
-    /// #1698: ONE shared id counter for the whole Web Fetch handle family —
+    /// One shared allocator for the whole Web Fetch handle family —
     /// Response, Request, Headers, and Blob. Their registries stay separate
-    /// HashMaps, but a unified counter guarantees an id belongs to exactly one
+    /// HashMaps, but a unified allocator guarantees an id belongs to exactly one
     /// of them (no more "Request id 1 == Response id 1"). This is what lets the
     /// runtime handle-dispatch arms (`dispatch_request_method` /
     /// `dispatch_response_method` / …) distinguish handle types by
     /// registry-membership alone for any-typed / computed-key calls, where the
     /// static type was lost. The counter starts in a high subrange to avoid
     /// colliding with perry-ffi handles exposed by `node:http`.
+    static ref FREE_FETCH_HANDLE_IDS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
     static ref NEXT_FETCH_HANDLE_ID: Mutex<usize> = Mutex::new(FETCH_HANDLE_ID_START);
     static ref STREAM_HANDLES: Mutex<HashMap<usize, StreamState>> = Mutex::new(HashMap::new());
     static ref NEXT_STREAM_ID: Mutex<usize> = Mutex::new(1);
@@ -226,12 +228,19 @@ fn forbidden_header_failure(
 }
 
 fn alloc_fetch_handle_id() -> usize {
+    let recycled = FREE_FETCH_HANDLE_IDS.lock().unwrap().pop();
+    if let Some(id) = recycled {
+        lifecycle::register(id);
+        return id;
+    }
     let mut id_guard = NEXT_FETCH_HANDLE_ID.lock().unwrap();
     let id = *id_guard;
     if id >= FETCH_HANDLE_ID_END {
         panic!("Web Fetch handle id range exhausted");
     }
     *id_guard += 1;
+    drop(id_guard);
+    lifecycle::register(id);
     if perry_runtime::hot_diag::receiver_repr_on() {
         perry_runtime::hot_diag::receiver_repr_note_constructed(
             perry_runtime::hot_diag::ReceiverReprFamily::Fetch,
@@ -747,6 +756,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
 /// response.status -> number
 #[no_mangle]
 pub extern "C" fn js_fetch_response_status(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let response_id = handle_id(handle);
     let guard = FETCH_RESPONSES.lock().unwrap();
     match guard.get(&response_id) {
@@ -759,6 +769,7 @@ pub extern "C" fn js_fetch_response_status(handle: f64) -> f64 {
 /// response.statusText -> string
 #[no_mangle]
 pub extern "C" fn js_fetch_response_status_text(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let response_id = handle_id(handle);
     let guard = FETCH_RESPONSES.lock().unwrap();
     match guard.get(&response_id) {
@@ -773,6 +784,7 @@ pub extern "C" fn js_fetch_response_status_text(handle: f64) -> *mut StringHeade
 /// response.ok -> boolean
 #[no_mangle]
 pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let response_id = handle_id(handle);
     let guard = FETCH_RESPONSES.lock().unwrap();
     match guard.get(&response_id) {
@@ -790,6 +802,7 @@ pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
 /// response.bodyUsed -> boolean
 #[no_mangle]
 pub extern "C" fn js_response_body_used(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let response_id = handle_id(handle);
     let guard = FETCH_RESPONSES.lock().unwrap();
     tagged_bool(
@@ -833,6 +846,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
 /// `Expr::Await` for the rationale).
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_response_body(handle) {
         Ok(body) => body,
@@ -869,6 +883,7 @@ unsafe fn parse_json_body(body: &[u8]) -> Result<JSValue, f64> {
 /// response.json() -> Promise<object>
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_json(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_response_body(handle) {
         Ok(body) => body,
@@ -970,6 +985,7 @@ pub unsafe extern "C" fn js_fetch_stream_start(
 
 #[no_mangle]
 pub extern "C" fn js_fetch_stream_poll(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle as usize;
     let mut g = STREAM_HANDLES.lock().unwrap();
     if let Some(s) = g.get_mut(&id) {
@@ -983,6 +999,7 @@ pub extern "C" fn js_fetch_stream_poll(handle: f64) -> *mut StringHeader {
 
 #[no_mangle]
 pub extern "C" fn js_fetch_stream_status(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle as usize;
     let g = STREAM_HANDLES.lock().unwrap();
     if let Some(s) = g.get(&id) {
@@ -994,6 +1011,7 @@ pub extern "C" fn js_fetch_stream_status(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_fetch_stream_close(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle as usize;
     let mut g = STREAM_HANDLES.lock().unwrap();
     if g.remove(&id).is_some() {
@@ -1097,6 +1115,7 @@ fn alloc_headers(store: HeadersStore) -> usize {
 /// doesn't hang. See `js_fetch_response_text` for rationale.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_response_body(handle) {
         Ok(body) => body,
@@ -1135,6 +1154,7 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_run
 /// `.slice()` / `.size` / `.type` to the FFIs below.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let id = handle_id(handle);
     let content_type = {
@@ -1175,6 +1195,7 @@ pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Pr
 /// blob.size — body byte length as f64.
 #[no_mangle]
 pub extern "C" fn js_blob_size(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     BLOB_REGISTRY
         .lock()
@@ -1187,6 +1208,7 @@ pub extern "C" fn js_blob_size(handle: f64) -> f64 {
 /// blob.type — content_type as `*mut StringHeader` (codegen NaN-boxes with STRING_TAG).
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let ct = BLOB_REGISTRY
         .lock()
@@ -1204,6 +1226,7 @@ pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
 /// property dispatch in `value.rs`. Resolved synchronously.
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(handle) as i64)
     });
@@ -1238,6 +1261,7 @@ unsafe fn blob_array_buffer_impl(handle: f64) -> *mut perry_runtime::Promise {
 /// hits the `is_registered_buffer` path from #227).
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(handle) as i64)
     });
@@ -1250,6 +1274,7 @@ pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promi
 /// characters; lossy_utf8 produces U+FFFD identically).
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_text(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
         perry_runtime::value::js_nanbox_pointer(blob_text_impl(handle) as i64)
     });
@@ -1284,6 +1309,7 @@ pub unsafe extern "C" fn js_blob_slice(
     end: f64,
     type_ptr: *const StringHeader,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle, start, end]);
     let id = handle_id(handle);
     let body: Vec<u8> = {
         let guard = BLOB_REGISTRY.lock().unwrap();
@@ -1361,6 +1387,7 @@ fn request_headers_handle(req_id: usize) -> f64 {
 /// broke every Hono adapter on the first request (#1649).
 #[no_mangle]
 pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     if REQUEST_REGISTRY.lock().unwrap().get(&id).is_none() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -1370,6 +1397,7 @@ pub extern "C" fn js_request_get_headers(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     // #8163: snapshot under the guard, allocate after it is dropped. The Fetch
     // root scanner takes this same lock during a collection on this thread, so
@@ -1392,6 +1420,7 @@ pub extern "C" fn js_request_get_url(handle: f64) -> *mut StringHeader {
 /// or passes a string straight through.
 #[no_mangle]
 pub extern "C" fn js_request_input_to_url(value: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[value]);
     let id = handle_id(value);
     // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
     let url = REQUEST_REGISTRY
@@ -1407,6 +1436,7 @@ pub extern "C" fn js_request_input_to_url(value: f64) -> *mut StringHeader {
 
 #[no_mangle]
 pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
     let method = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
@@ -1419,6 +1449,7 @@ pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
 /// req.body — returns a string body or null. NaN-boxed return.
 #[no_mangle]
 pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
     let body = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
@@ -1435,6 +1466,7 @@ pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
 /// request.bodyUsed -> boolean
 #[no_mangle]
 pub extern "C" fn js_request_body_used(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let guard = REQUEST_REGISTRY.lock().unwrap();
     tagged_bool(guard.get(&id).map(|req| req.body_used).unwrap_or(false))
@@ -1443,6 +1475,7 @@ pub extern "C" fn js_request_body_used(handle: f64) -> f64 {
 /// request.clone() — duplicates the request unless its body was consumed.
 #[no_mangle]
 pub extern "C" fn js_request_clone(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     // #8163: the `unusable` throw MUST NOT happen under the guard. It allocates
     // an Error (a collection point, and the scanner takes this same lock) and
@@ -1512,6 +1545,7 @@ fn consume_request_body(handle: f64) -> Result<Vec<u8>, &'static str> {
 /// (#1688)
 #[no_mangle]
 pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     match consume_request_body(handle) {
         Ok(body) => {
@@ -1535,6 +1569,7 @@ pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Pro
 /// `js_fetch_response_json`. (#1688)
 #[no_mangle]
 pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_request_body(handle) {
         Ok(b) => b,
@@ -1563,6 +1598,7 @@ pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Pro
 /// BufferHeader over the body bytes, mirroring `js_response_array_buffer`. (#1688)
 #[no_mangle]
 pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_request_body(handle) {
         Ok(b) => b,

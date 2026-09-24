@@ -379,16 +379,19 @@ fn response_string_field(handle: f64, f: impl FnOnce(&FetchResponse) -> &str) ->
 
 #[no_mangle]
 pub extern "C" fn js_fetch_response_type(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     response_string_field(handle, |resp| &resp.type_name)
 }
 
 #[no_mangle]
 pub extern "C" fn js_fetch_response_url(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     response_string_field(handle, |resp| &resp.url)
 }
 
 #[no_mangle]
 pub extern "C" fn js_fetch_response_redirected(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let guard = FETCH_RESPONSES.lock().unwrap();
     tagged_bool(guard.get(&id).map(|resp| resp.redirected).unwrap_or(false))
@@ -433,6 +436,7 @@ unsafe fn resolve_bytes_promise(promise: *mut perry_runtime::Promise, body: Vec<
 
 #[no_mangle]
 pub unsafe extern "C" fn js_response_bytes(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new();
     match consume_response_body(handle) {
         Ok(body) => resolve_bytes_promise(promise, body),
@@ -449,6 +453,7 @@ pub unsafe extern "C" fn js_response_bytes(handle: f64) -> *mut perry_runtime::P
 
 #[no_mangle]
 pub unsafe extern "C" fn js_response_form_data(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new();
     let content_type = response_content_type(handle);
     match consume_response_body(handle) {
@@ -487,51 +492,61 @@ fn request_string_field(handle: f64, f: impl FnOnce(&RequestRecord) -> &str) -> 
 
 #[no_mangle]
 pub extern "C" fn js_request_get_destination(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.destination)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_referrer(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.referrer)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_referrer_policy(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.referrer_policy)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_mode(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.mode)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_credentials(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.credentials)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_cache(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.cache)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_redirect(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.redirect)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_integrity(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.integrity)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_duplex(handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     request_string_field(handle, |req| &req.duplex)
 }
 
 #[no_mangle]
 pub extern "C" fn js_request_get_keepalive(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let guard = REQUEST_REGISTRY.lock().unwrap();
     tagged_bool(guard.get(&id).map(|req| req.keepalive).unwrap_or(false))
@@ -539,6 +554,7 @@ pub extern "C" fn js_request_get_keepalive(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_request_get_signal(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let guard = REQUEST_REGISTRY.lock().unwrap();
     guard
@@ -549,6 +565,7 @@ pub extern "C" fn js_request_get_signal(handle: f64) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_request_blob(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new();
     let content_type = request_content_type(handle);
     match consume_request_body(handle) {
@@ -569,6 +586,7 @@ pub unsafe extern "C" fn js_request_blob(handle: f64) -> *mut perry_runtime::Pro
 
 #[no_mangle]
 pub unsafe extern "C" fn js_request_bytes(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new();
     match consume_request_body(handle) {
         Ok(body) => resolve_bytes_promise(promise, body),
@@ -585,6 +603,7 @@ pub unsafe extern "C" fn js_request_bytes(handle: f64) -> *mut perry_runtime::Pr
 
 #[no_mangle]
 pub unsafe extern "C" fn js_request_form_data(handle: f64) -> *mut perry_runtime::Promise {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new();
     let content_type = request_content_type(handle);
     match consume_request_body(handle) {
@@ -618,6 +637,7 @@ pub unsafe extern "C" fn js_form_data_append(
     value: f64,
     filename: f64,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle, name, value, filename]);
     let id = handle_id(handle);
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let name = scope.root_nanbox_f64(name);
@@ -638,6 +658,7 @@ pub unsafe extern "C" fn js_form_data_set(
     value: f64,
     filename: f64,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle, name, value, filename]);
     let id = handle_id(handle);
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let name = scope.root_nanbox_f64(name);
@@ -653,6 +674,7 @@ pub unsafe extern "C" fn js_form_data_set(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_form_data_delete(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let name = string_from_header(name_ptr).unwrap_or_default();
     if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get_mut(&id) {
@@ -663,6 +685,7 @@ pub unsafe extern "C" fn js_form_data_delete(handle: f64, name_ptr: *const Strin
 
 #[no_mangle]
 pub unsafe extern "C" fn js_form_data_has(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let Some(name) = string_from_header(name_ptr) else {
         return f64::from_bits(TAG_FALSE);
@@ -678,6 +701,7 @@ pub unsafe extern "C" fn js_form_data_has(handle: f64, name_ptr: *const StringHe
 
 #[no_mangle]
 pub unsafe extern "C" fn js_form_data_get(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let Some(name) = string_from_header(name_ptr) else {
         return f64::from_bits(TAG_NULL);
@@ -700,6 +724,7 @@ fn nanbox_array_pointer(arr: *mut perry_runtime::ArrayHeader) -> f64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_form_data_get_all(handle: f64, name_ptr: *const StringHeader) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let name = string_from_header(name_ptr).unwrap_or_default();
     let values = FORM_DATA_REGISTRY
@@ -713,6 +738,7 @@ pub unsafe extern "C" fn js_form_data_get_all(handle: f64, name_ptr: *const Stri
 
 #[no_mangle]
 pub extern "C" fn js_form_data_entries(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let entries = FORM_DATA_REGISTRY
         .lock()
@@ -751,6 +777,7 @@ pub extern "C" fn js_form_data_entries(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_form_data_keys(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let values = FORM_DATA_REGISTRY
         .lock()
@@ -763,6 +790,7 @@ pub extern "C" fn js_form_data_keys(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_form_data_values(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let values = FORM_DATA_REGISTRY
         .lock()
@@ -775,6 +803,7 @@ pub extern "C" fn js_form_data_values(handle: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_form_data_for_each(handle: f64, callback: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle, callback]);
     let id = handle_id(handle);
     let entries = FORM_DATA_REGISTRY
         .lock()
@@ -790,6 +819,13 @@ pub extern "C" fn js_form_data_for_each(handle: f64, callback: f64) -> f64 {
     // across an allocation and across user JS. See `js_headers_for_each`.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let cb_handle = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(cb_ptr));
+    // A callback can delete entries and collect. Keep every File in this
+    // native snapshot alive until its turn, even after the form drops it.
+    for (_, value) in &entries {
+        if let FormDataValue::File(id) = value {
+            let _ = scope.root_nanbox_f64(handle_to_f64(*id));
+        }
+    }
     for (name, value) in entries {
         let inner = perry_runtime::gc::RuntimeHandleScope::new();
         let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -957,5 +993,19 @@ mod tests {
             &parsed.entries[0],
             (name, FormDataValue::Text(value)) if name == "caption" && value == "hello"
         ));
+    }
+}
+
+pub(super) fn remove_form_data(id: usize) {
+    FORM_DATA_REGISTRY.lock().unwrap().remove(&id);
+}
+
+pub(super) fn form_data_file_edges(id: usize, edges: &mut Vec<u64>) {
+    if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get(&id) {
+        for (_, value) in &form.entries {
+            if let FormDataValue::File(id) = value {
+                edges.push(handle_to_f64(*id).to_bits());
+            }
+        }
     }
 }

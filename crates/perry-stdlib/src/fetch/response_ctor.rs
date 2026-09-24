@@ -89,6 +89,7 @@ pub unsafe extern "C" fn js_response_new(
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
 ) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[status, headers_handle]);
     let body_stream_id = take_pending_fetch_body_stream_id();
     // Consume before validation so a throwing constructor cannot leak body
     // metadata into the next Response construction on this thread.
@@ -141,6 +142,7 @@ pub unsafe extern "C" fn js_response_new(
 /// from the response's stored header HashMap if one doesn't exist yet.
 #[no_mangle]
 pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     response_headers_handle(id)
 }
@@ -148,6 +150,7 @@ pub extern "C" fn js_response_get_headers(handle: f64) -> f64 {
 /// response.clone() — duplicates the response (deep copy of body + headers)
 #[no_mangle]
 pub extern "C" fn js_response_clone(handle: f64) -> f64 {
+    let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let id = handle_id(handle);
     let cloned = {
         let mut guard = FETCH_RESPONSES.lock().unwrap();

@@ -77,6 +77,7 @@ pub unsafe extern "C" fn js_bun_http_request_from_json(snapshot_ptr: *const Stri
 /// mutations made through `response.headers` are included.
 #[no_mangle]
 pub extern "C" fn js_bun_http_response_snapshot_json(response_handle: f64) -> *mut StringHeader {
+    let _fetch_roots = lifecycle::pin_handles(&[response_handle]);
     let response_id = handle_id(response_handle);
     if !FETCH_RESPONSES.lock().unwrap().contains_key(&response_id) {
         return std::ptr::null_mut();

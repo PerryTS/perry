@@ -1243,8 +1243,8 @@ pub(crate) fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> b
         return false;
     }
 
-    if crate::proxy::gc_full_trace_active()
-        && crate::proxy::gc_observe_traced_value(value_bits, valid_ptrs)
+    if super::full_trace::handle_trace_active()
+        && super::full_trace::observe_handle(value_bits, valid_ptrs)
     {
         return false;
     }
@@ -1285,6 +1285,11 @@ pub(crate) fn try_mark_value(value_bits: u64, valid_ptrs: &ValidPointerSet) -> b
 
 #[inline]
 pub(super) fn try_mark_raw_root_addr(addr: usize, valid_ptrs: &ValidPointerSet) -> bool {
+    if super::full_trace::handle_trace_active()
+        && super::full_trace::observe_handle(addr as u64, valid_ptrs)
+    {
+        return false;
+    }
     if addr == 0 || !valid_ptrs.contains(&addr) {
         return false;
     }
@@ -1314,9 +1319,9 @@ pub(super) unsafe fn mark_field_into_worklist(
     worklist: &mut Vec<*mut GcHeader>,
     proxy_trace_active: bool,
 ) -> bool {
-    // `proxy_trace_active` is `crate::proxy::gc_full_trace_active()`, read by
+    // `proxy_trace_active` is `super::full_trace::handle_trace_active()`, read by
     // the caller once for the whole object being traced (#10182).
-    if proxy_trace_active && crate::proxy::gc_observe_traced_value(val_bits, valid_ptrs) {
+    if proxy_trace_active && super::full_trace::observe_handle(val_bits, valid_ptrs) {
         return false;
     }
     let tag = val_bits & TAG_MASK;
@@ -1798,7 +1803,7 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
     // the trace skips (its class cannot change while it is traced). Range
     // descriptors are walked here directly rather than through a per-slot
     // dynamic callback.
-    let proxy_trace_active = crate::proxy::gc_full_trace_active();
+    let proxy_trace_active = super::full_trace::handle_trace_active();
     #[cfg(not(test))]
     let weak_holder = crate::weakref::is_weak_holder_header(header);
     #[cfg(test)]
@@ -1819,7 +1824,7 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
             GcMutableSlotDescriptor::PointerFreeRange(range) => {
                 if proxy_trace_active {
                     for i in 0..range.slot_count() {
-                        crate::proxy::gc_observe_traced_value(*range.slot(i), valid_ptrs);
+                        super::full_trace::observe_handle(*range.slot(i), valid_ptrs);
                     }
                 }
             }
