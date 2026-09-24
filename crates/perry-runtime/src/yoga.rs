@@ -503,25 +503,17 @@ pub extern "C" fn js_yoga_calculate_layout(
 ) -> f64 {
     let root_id = id as u32;
 
-    // Phase 1: build a fresh taffy tree from the registry, collecting the
-    // (taffy NodeId -> measure callback) map for leaves. Done under the lock,
-    // but we release it before computing so measure callbacks (which re-enter
-    // JS and may call yoga functions) don't deadlock.
+    // Phase 1: build a fresh taffy tree from the registry, tagging each leaf
+    // with its yoga handle as the taffy node context. Measure callbacks are
+    // deliberately NOT collected here: the registry is the only place the
+    // collector rewrites them, so the measure closure resolves each one from the
+    // handle at measure time. Done under the lock, but we release it before
+    // computing so measure callbacks (which re-enter JS and may call yoga
+    // functions) don't deadlock.
     let mut taffy: TaffyTree<u32> = TaffyTree::new();
     let mut handle_to_taffy: HashMap<u32, NodeId> = HashMap::new();
-    // Keyed by yoga handle (the taffy node context), so the measure closure
-    // can resolve the callback straight from the context without the map.
-    let mut measure_cbs: HashMap<u32, f64> = HashMap::new();
 
-    let built = with_nodes(|m| {
-        build_taffy(
-            m,
-            &mut taffy,
-            &mut handle_to_taffy,
-            &mut measure_cbs,
-            root_id,
-        )
-    });
+    let built = with_nodes(|m| build_taffy(m, &mut taffy, &mut handle_to_taffy, root_id));
     let root_taffy = match built {
         Some(id) => id,
         None => return f64::from_bits(TAG_UNDEFINED),
@@ -544,7 +536,26 @@ pub extern "C" fn js_yoga_calculate_layout(
         root_taffy,
         avail,
         |known_dims, available_space, _node_id, node_context, _style| {
-            let cb = node_context.and_then(|yid| measure_cbs.get(&*yid).copied());
+            // Re-read the callback from the registry on EVERY call rather than
+            // from a snapshot taken in phase 1. `yoga_root_scanner` visits
+            // `node.measure` with `visit_nanbox_f64_slot(&mut ...)`, so an
+            // evacuating cycle rewrites the registry's copy in place; a
+            // snapshot in a plain `HashMap<u32, f64>` is visited by nothing and
+            // rewritten by nothing. One measure callback that allocated enough
+            // to trigger a copying minor therefore left every later callback in
+            // the same layout pass pointing into from-space.
+            //
+            // The borrow ends before `measure_leaf` runs, which matters:
+            // `measure_leaf` re-enters JS, and that JS may call yoga functions
+            // that borrow the registry again (`with_nodes` uses `borrow_mut`).
+            let cb = node_context.and_then(|yid| {
+                let handle = *yid;
+                with_nodes(|m| {
+                    m.get(&handle)
+                        .map(|n| n.measure)
+                        .filter(|mv| (mv.to_bits() & !POINTER_MASK) == POINTER_TAG)
+                })
+            });
             measure_leaf(known_dims, available_space, cb)
         },
     );
@@ -561,27 +572,22 @@ fn build_taffy(
     m: &HashMap<u32, YogaNode>,
     taffy: &mut TaffyTree<u32>,
     map: &mut HashMap<u32, NodeId>,
-    measure_cbs: &mut HashMap<u32, f64>,
     handle: u32,
 ) -> Option<NodeId> {
     let node = m.get(&handle)?;
     let style = node.style.clone();
-    let has_measure = (node.measure.to_bits() & !POINTER_MASK) == POINTER_TAG;
 
     if node.children.is_empty() {
-        // Leaf — attach the yoga handle as context so the measure closure
-        // can find this node's callback.
+        // Leaf — attach the yoga handle as context so the measure closure can
+        // resolve this node's callback from the registry at measure time.
         let tid = taffy.new_leaf_with_context(style, handle).ok()?;
         map.insert(handle, tid);
-        if has_measure {
-            measure_cbs.insert(handle, node.measure);
-        }
         Some(tid)
     } else {
         let child_ids: Vec<NodeId> = node
             .children
             .iter()
-            .filter_map(|c| build_taffy(m, taffy, map, measure_cbs, *c))
+            .filter_map(|c| build_taffy(m, taffy, map, *c))
             .collect();
         let tid = taffy.new_with_children(style, &child_ids).ok()?;
         map.insert(handle, tid);
@@ -619,9 +625,18 @@ fn measure_leaf(
             height: known_dims.height.unwrap_or(0.0),
         };
     }
-    let obj = (bits & POINTER_MASK) as *const crate::object::ObjectHeader;
-    let rw = read_obj_number(obj, b"width");
-    let rh = read_obj_number(obj, b"height");
+
+    // Both reads below MINT A KEY STRING, and that allocation can run a copying
+    // minor which moves this very result object. Holding the raw
+    // `*const ObjectHeader` across it is the #9539 shape: the `width` read
+    // moves the object and the `height` read dereferences from-space. Park the
+    // value in a temp root and re-derive the pointer inside each read — an
+    // evacuating cycle rewrites the slot in place, so the slot is the only
+    // address that stays correct.
+    let root = crate::gc::js_gc_temp_root_push(bits);
+    let rw = read_obj_number(root, b"width");
+    let rh = read_obj_number(root, b"height");
+    crate::gc::js_gc_temp_root_truncate(root);
     Size {
         width: rw.unwrap_or_else(|| known_dims.width.unwrap_or(0.0)),
         height: rh.unwrap_or_else(|| known_dims.height.unwrap_or(0.0)),
@@ -639,11 +654,21 @@ fn measure_axis(known: Option<f32>, avail: AvailableSpace) -> (f64, f64) {
     }
 }
 
-fn read_obj_number(obj: *const crate::object::ObjectHeader, name: &[u8]) -> Option<f32> {
+/// Read one number field off the measure result held in temp-root slot `root`.
+///
+/// Takes the ROOT SLOT, not a pointer: minting the key below may collect, and
+/// the caller's pointer would be stale from that moment on.
+fn read_obj_number(root: u32, name: &[u8]) -> Option<f32> {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     if key.is_null() {
         return None;
     }
+    // Re-derive the receiver AFTER the allocation above.
+    let bits = crate::gc::js_gc_temp_root_get(root);
+    if (bits & !POINTER_MASK) != POINTER_TAG {
+        return None;
+    }
+    let obj = (bits & POINTER_MASK) as *const crate::object::ObjectHeader;
     let v = crate::object::js_object_get_field_by_name_f64(obj, key);
     if v.is_finite() {
         Some(v as f32)
