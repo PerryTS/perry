@@ -1211,6 +1211,7 @@ pub fn gc_init() {
     // them if a copying collection moves their backing allocations.
     reg_scanner!(crate::object::scan_native_callable_export_roots_mut);
     reg_scanner!(crate::object::scan_class_capture_value_roots_mut);
+    reg_scanner!(crate::object::scan_class_env_roots_mut);
     reg_scanner!(crate::node_vm::scan_vm_roots_mut);
     // #6559: the dyn-eval interpreter's rooted value stack (environments,
     // temporaries, arguments of in-flight interpreted frames). Mark +

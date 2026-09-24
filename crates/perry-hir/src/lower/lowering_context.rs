@@ -1031,6 +1031,13 @@ pub struct LoweringContext {
     /// Classes whose captures live in the class environment
     /// (`Expr::ClassEnvGet`/`ClassEnvSet`) rather than on instances.
     pub(crate) class_env_classes: HashSet<String>,
+    /// The subset of `class_env_classes` whose environment read is guarded
+    /// by the receiver's evaluation (`ClassEnvGet::guarded`).
+    pub(crate) class_env_guarded: HashSet<String>,
+    /// Set by `lower_class_expr` for a class expression lowered inside a
+    /// function body (it evaluates to a fresh class object per evaluation);
+    /// consumed by the next `lower_class_from_ast`.
+    pub(crate) pending_fresh_class_expr: bool,
     /// #6604/#6654: capturing class EXPRESSIONS lowered while the CURRENT
     /// function body is being lowered —
     /// `(per_evaluation_owner_local, captured_outer_ids)`,

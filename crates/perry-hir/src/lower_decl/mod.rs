@@ -37,7 +37,9 @@ pub(crate) use block::{
 };
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
-pub(crate) use class_captures::{append_new_args_stmt, synthesize_class_captures};
+pub(crate) use class_captures::{
+    append_new_args_stmt, synthesize_class_captures, CaptureDefinition,
+};
 pub(crate) use class_computed::fresh_class_static_init_order;
 pub(crate) use class_computed::{
     class_computed_member_registration_expr, prepare_ordered_class_computed_names,

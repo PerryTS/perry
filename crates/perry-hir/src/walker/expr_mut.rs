@@ -606,6 +606,14 @@ where
         Expr::ClassEnvSet { value, .. } => {
             f(value);
         }
+        Expr::ClassEnvStamp {
+            instance,
+            evaluation,
+            ..
+        } => {
+            f(instance);
+            f(evaluation);
+        }
         Expr::ClassCaptureValue { fallback, .. } => {
             if let Some(fb) = fallback {
                 f(fb);

@@ -228,6 +228,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Lower after the allocating array operations so a movable class
             // object is reloaded from its compiler-private rooted local.
             let owner = lower_expr(ctx, class_value)?;
+            if let Some(env_class) = env_class {
+                super::class_env::publish_guarded(
+                    ctx,
+                    env_class,
+                    "js_class_env_refresh",
+                    &owner,
+                    &caps_box,
+                );
+            }
             let key_idx = ctx.strings.intern("__perry_ctor_caps");
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let key_box = ctx.block().load(DOUBLE, &key_handle_global);
@@ -675,6 +684,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.call_void(
                         "js_object_set_field_by_name",
                         &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
+                    );
+                    // A guarded class environment learns this evaluation; the
+                    // first one publishes its captures into the slots.
+                    let obj = group.reread_emitted(ctx, rooted);
+                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                    super::class_env::publish_guarded(
+                        ctx,
+                        template,
+                        "js_class_env_evaluate",
+                        &obj_box,
+                        &caps_box,
                     );
                 }
                 // Static fields and blocks execute only after every computed

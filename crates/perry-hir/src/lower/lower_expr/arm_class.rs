@@ -138,7 +138,12 @@ pub(crate) fn lower_class_expr(
     } else {
         None
     };
+    // Inside a function body a capturing class expression lowers to a fresh
+    // class object per evaluation (`ClassExprFresh` below), which is what the
+    // guarded class environment keys evaluations by.
+    ctx.pending_fresh_class_expr = !at_module_top;
     let class_result = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false);
+    ctx.pending_fresh_class_expr = false;
     if let Some(self_id) = self_binding {
         let (_, _, popped_id) = ctx
             .class_expr_self_bindings

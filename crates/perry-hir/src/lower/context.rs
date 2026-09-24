@@ -483,6 +483,11 @@ impl LoweringContext {
         self.class_env_classes.insert(class_name);
     }
 
+    /// Whether `class_name`'s environment reads are guarded by evaluation.
+    pub(crate) fn is_class_env_guarded(&self, class_name: &str) -> bool {
+        self.class_env_guarded.contains(class_name)
+    }
+
     /// Whether `class_name` keeps its captures in the class environment.
     pub(crate) fn is_class_env(&self, class_name: &str) -> bool {
         self.class_env_classes.contains(class_name)

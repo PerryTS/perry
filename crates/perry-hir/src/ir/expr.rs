@@ -499,6 +499,12 @@ pub enum Expr {
     ClassEnvGet {
         class_name: String,
         index: u32,
+        /// The class definition may be evaluated more than once (a CommonJS
+        /// module body the runtime can re-run), so the read is GUARDED: while
+        /// the class has had one evaluation the slot is read directly; after a
+        /// second one the runtime resolves the receiver's own evaluation and
+        /// reads that evaluation's capture array unless it is the owner.
+        guarded: bool,
     },
 
     /// Write slot `index` of a class's capture environment (see
@@ -509,6 +515,25 @@ pub enum Expr {
         class_name: String,
         index: u32,
         value: Box<Expr>,
+        /// See `ClassEnvGet::guarded`.
+        guarded: bool,
+        /// The constructor's entry publish of its capture params (as opposed
+        /// to a member's write of a captured binding). A guarded publish only
+        /// runs while the class has had a single evaluation: afterwards the
+        /// params may belong to a later evaluation, whose own capture array
+        /// already holds them.
+        publish: bool,
+    },
+
+    /// Construct `instance` (an `Expr::New` of a guarded class-environment
+    /// class, see `ClassEnvGet::guarded`) and, once the class has had more
+    /// than one evaluation, record `evaluation` (the class value the `new`
+    /// site's binding holds) as the instance's evaluation. An unrecorded
+    /// instance belongs to the class's first evaluation.
+    ClassEnvStamp {
+        class_name: String,
+        instance: Box<Expr>,
+        evaluation: Box<Expr>,
     },
 
     /// Read slot `index` of a class's decl-site capture snapshot

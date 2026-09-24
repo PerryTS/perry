@@ -302,7 +302,7 @@ pub(crate) use has_property::{
 pub use has_property::{js_in_operator, js_object_has_property};
 pub use has_property_ic::js_in_operator_presence_ic;
 pub(crate) use ic_miss::{
-    bind_primitive_proto_method_static, cannot_be_private_member_name,
+    bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
     current_private_lexical_brand_value, is_array_method_value_name,
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
     private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,

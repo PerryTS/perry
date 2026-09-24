@@ -430,6 +430,9 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             } else {
                 None
             };
+            // The binding a static construct resolved through (its value is the
+            // class evaluation; see `Expr::ClassEnvStamp` below).
+            let mut class_binding: Option<LocalId> = None;
             // #6233: a user-declared binding — `class Symbol extends Base {}`,
             // a local/param, a `function` declaration, or an imported binding —
             // lexically shadows the same-named global for every reference in
@@ -1583,7 +1586,10 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     .inferred_class_bindings
                     .class_key_for(local_id, &class_name)
                 {
-                    Some(key) => class_name = key.to_string(),
+                    Some(key) => {
+                        class_name = key.to_string();
+                        class_binding = Some(local_id);
+                    }
                     None => {
                         return Ok(Expr::NewDynamic {
                             callee: Box::new(Expr::LocalGet(local_id)),
@@ -1798,13 +1804,27 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             for cid in class_captures {
                 args.push(Expr::LocalGet(cid));
             }
-            Ok(Expr::New {
+            let construct = Expr::New {
                 class_name,
                 args,
                 type_args,
                 byte_offset: new_byte_offset,
                 cap_args_appended,
-            })
+            };
+            // A guarded class-environment class is constructed statically
+            // through its binding; the binding holds this evaluation's class
+            // value, which is recorded on the instance once the class has had
+            // more than one evaluation (see `Expr::ClassEnvStamp`).
+            match class_binding {
+                Some(binding) if ctx.is_class_env_guarded(&lookup_name) => {
+                    Ok(Expr::ClassEnvStamp {
+                        class_name: lookup_name,
+                        instance: Box::new(construct),
+                        evaluation: Box::new(Expr::LocalGet(binding)),
+                    })
+                }
+                _ => Ok(construct),
+            }
         }
         // Non-identifier callee (e.g., new (condition ? A : B)() or new someVar()).
         _ => lower_new_non_ident(ctx, new_expr, callee_expr, new_byte_offset),

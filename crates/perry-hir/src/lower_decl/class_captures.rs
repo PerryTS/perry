@@ -141,6 +141,33 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
     }
 }
 
+/// How many times a capturing class's definition can be evaluated, which
+/// decides where its captured environment lives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaptureDefinition {
+    /// At most once (`lower::run_once`): one environment, read directly.
+    RunOnce,
+    /// A class expression inside a function body. Each evaluation is a fresh
+    /// class object carrying its own capture array, so the environment is
+    /// read directly while the class has had one evaluation and per receiver
+    /// evaluation after that (`ClassEnvGet::guarded`).
+    FreshExpression,
+    /// Anything else: captures are snapshotted on every instance.
+    Repeatable,
+}
+
+impl CaptureDefinition {
+    pub(crate) fn classify(run_once: bool, fresh_class_expr: bool) -> Self {
+        if run_once {
+            Self::RunOnce
+        } else if fresh_class_expr {
+            Self::FreshExpression
+        } else {
+            Self::Repeatable
+        }
+    }
+}
+
 pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,
     name: &str,
@@ -161,10 +188,8 @@ pub fn synthesize_class_captures(
     // module-level global. One slot, overwritten by every evaluation of the
     // enclosing factory.
     static_accessor_fn_ids: &[crate::types::FuncId],
-    // The class definition is evaluated at most once (`lower::run_once`), so
-    // its captured environment is unique: members read and write it in the
-    // class environment instead of per-instance `__perry_cap_*` fields.
-    run_once: bool,
+    // How often the definition can evaluate (see `CaptureDefinition`).
+    definition: CaptureDefinition,
 ) {
     let cap_salt = ctx.cap_salt();
     let module_level_ids = ctx.module_level_ids.clone();
@@ -263,9 +288,13 @@ pub fn synthesize_class_captures(
     // One environment per class definition. Only a definition evaluated at
     // most once has a single environment every instance, static and
     // extracted method can share; the rest keep the per-instance snapshot.
-    let env_mode = run_once && class_env_enabled();
+    let env_mode = definition != CaptureDefinition::Repeatable && class_env_enabled();
+    let guarded = env_mode && definition == CaptureDefinition::FreshExpression;
     if env_mode {
         ctx.register_class_env(name.to_string());
+    }
+    if guarded {
+        ctx.class_env_guarded.insert(name.to_string());
     }
     if class_capture_diag() {
         eprintln!(
@@ -273,12 +302,17 @@ pub fn synthesize_class_captures(
             ctx.source_file_path,
             name,
             captures_vec.len(),
-            if env_mode { "env" } else { "instance" }
+            match (env_mode, guarded) {
+                (true, false) => "env",
+                (true, true) => "env-guarded",
+                _ => "instance",
+            }
         );
     }
     let env_get = |index: usize| Expr::ClassEnvGet {
         class_name: name.to_string(),
         index: index as u32,
+        guarded,
     };
 
     // Walk the parent chain to find which `__perry_cap_<id>` fields
@@ -380,6 +414,7 @@ pub fn synthesize_class_captures(
                     crate::analysis::CaptureWriteTarget::Env {
                         class_name: name.to_string(),
                         index: index as u32,
+                        guarded,
                     }
                 } else {
                     crate::analysis::CaptureWriteTarget::Field(crate::cap_fields::cap_field_name(
@@ -792,6 +827,8 @@ pub fn synthesize_class_captures(
                 class_name: name.to_string(),
                 index: index as u32,
                 value: Box::new(Expr::LocalGet(fresh_param_id)),
+                guarded,
+                publish: true,
             }
         } else {
             Expr::PropertySet {

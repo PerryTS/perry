@@ -1658,6 +1658,13 @@ fn current_private_lexical_brand(declaring_class_id: u32) -> Option<u64> {
     })
 }
 
+/// The class-definition evaluation `value` belongs to for members of
+/// `declaring_class_id`: a class object of that template is its own, and an
+/// instance's is its recorded brand's ancestor for that template.
+pub(crate) fn class_evaluation_of(value: f64, declaring_class_id: u32) -> Option<f64> {
+    private_evaluation_brand(value, declaring_class_id).map(f64::from_bits)
+}
+
 pub(crate) fn current_private_lexical_brand_value(declaring_class_id: u32) -> Option<f64> {
     current_private_lexical_brand(declaring_class_id).map(f64::from_bits)
 }

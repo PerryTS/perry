@@ -54,7 +54,13 @@ pub(crate) fn emit_class_capture_writeback(
     // The cap args occupy the last cap_params.len() slots of new_args.
     let cap_args_start = new_args.len().saturating_sub(cap_params.len());
     // Capture param order is environment slot order.
-    let env_slots = crate::expr::class_env::class_env_slot_count(class);
+    let (env_slots, guarded) = crate::expr::class_env::class_env_layout(class);
+    // A guarded environment may hold another evaluation's values; a member-
+    // or ctor-side write of a capture is a shared cell anyway (#5951), so the
+    // outer binding already sees it.
+    if guarded {
+        return;
+    }
 
     for (cap_idx, param) in cap_params.iter().enumerate() {
         let Some(name_outer_id) = perry_hir::cap_fields::cap_field_outer_id(&param.name) else {

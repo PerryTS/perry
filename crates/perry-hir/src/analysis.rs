@@ -669,7 +669,11 @@ pub enum CaptureWriteTarget {
     /// The per-instance `this.<field>` snapshot (`__perry_cap_*`).
     Field(String),
     /// Slot `index` of the class environment (`Expr::ClassEnvSet`).
-    Env { class_name: String, index: u32 },
+    Env {
+        class_name: String,
+        index: u32,
+        guarded: bool,
+    },
 }
 
 pub fn remap_local_ids_in_stmts_with_field_propagation(
@@ -813,10 +817,16 @@ fn remap_with_propagation(
                 property,
                 value,
             },
-            CaptureWriteTarget::Env { class_name, index } => Expr::ClassEnvSet {
+            CaptureWriteTarget::Env {
+                class_name,
+                index,
+                guarded,
+            } => Expr::ClassEnvSet {
                 class_name,
                 index,
                 value,
+                guarded,
+                publish: false,
             },
         };
         *expr = Expr::Sequence(vec![original, propagate]);

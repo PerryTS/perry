@@ -77,6 +77,7 @@ mod async_generator_queue;
 mod bigint_dispatch;
 mod buffer_dispatch;
 mod class_constructors;
+mod class_env;
 mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
@@ -251,6 +252,7 @@ pub(crate) use async_generator_queue::is_async_generator_instance_value;
 pub(crate) use bigint_dispatch::*;
 pub use buffer_dispatch::*;
 pub use class_constructors::*;
+pub use class_env::*;
 pub use class_gc_roots::scan_class_inheritance_roots_mut;
 #[cfg(test)]
 pub(crate) use class_gc_roots::{

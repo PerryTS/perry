@@ -1368,6 +1368,8 @@ pub(super) fn register_module_globals_as_gc_roots(
         ctx.block()
             .call_void("js_gc_register_global_root", &[(I64, &addr)]);
     }
+    // Guarded class environments: hand the runtime their state and slots.
+    crate::expr::class_env::register_class_envs(ctx);
 }
 
 /// Issue #100: emit the IR that populates this module's

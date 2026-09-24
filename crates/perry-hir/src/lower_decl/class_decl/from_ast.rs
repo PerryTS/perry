@@ -13,6 +13,8 @@ pub(crate) fn lower_class_from_ast(
     name: &str,
     is_exported: bool,
 ) -> Result<Class> {
+    // Consume the flag before any nested class in this body is lowered.
+    let fresh_class_expr = std::mem::take(&mut ctx.pending_fresh_class_expr);
     validate_legacy_decorator_surface(class, name)?;
     validate_class_element_early_errors(class, name)?;
     let class_id = match ctx.lookup_class(name) {
@@ -707,7 +709,10 @@ pub(crate) fn lower_class_from_ast(
         &mut constructor,
         &mut static_methods,
         &static_accessor_fn_ids,
-        ctx.class_definition_runs_once(class.span),
+        crate::lower_decl::CaptureDefinition::classify(
+            ctx.class_definition_runs_once(class.span),
+            fresh_class_expr,
+        ),
     );
 
     Ok(Class {

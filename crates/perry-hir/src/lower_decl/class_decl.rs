@@ -1269,7 +1269,10 @@ pub fn lower_class_decl(
         &mut constructor,
         &mut static_methods,
         &static_accessor_fn_ids,
-        ctx.class_definition_runs_once(class_decl.class.span),
+        crate::lower_decl::CaptureDefinition::classify(
+            ctx.class_definition_runs_once(class_decl.class.span),
+            false,
+        ),
     );
 
     // Phase 4.1: register each method's and getter's return type so

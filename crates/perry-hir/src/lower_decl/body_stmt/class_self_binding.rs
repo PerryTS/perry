@@ -56,7 +56,8 @@ pub(super) fn decl_self_binding_owner(
         .lookup_class_captures(class_name)
         .map(<[_]>::to_vec)
         .unwrap_or_default();
-    ctx.body_class_expr_captures.push((self_id, ids));
+    let env_class = ctx.is_class_env(class_name).then(|| class_name.to_string());
+    ctx.body_class_expr_captures.push((self_id, ids, env_class));
     Some(self_id)
 }
 

@@ -198,6 +198,8 @@ impl LoweringContext {
             class_captures: Vec::new(),
             run_once_class_spans: HashSet::new(),
             class_env_classes: HashSet::new(),
+            class_env_guarded: HashSet::new(),
+            pending_fresh_class_expr: false,
             body_class_expr_captures: Vec::new(),
             let_class_aliases: Vec::new(),
             global_this_aliases: HashSet::new(),

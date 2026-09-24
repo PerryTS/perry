@@ -32,7 +32,15 @@ fn assert_success(label: &str, output: &Output) {
 /// Compile `src` with perry, run it and Node on it; returns
 /// (perry stdout, node stdout, the compiler's capture-storage diagnostics).
 fn run_both(src: &str) -> (String, String, Vec<String>) {
+    run_both_with(src, &[])
+}
+
+/// [`run_both`] with extra `(file name, contents)` sources beside `main.ts`.
+fn run_both_with(src: &str, extra: &[(&str, &str)]) -> (String, String, Vec<String>) {
     let dir = tempfile::tempdir().expect("tempdir");
+    for (name, contents) in extra {
+        std::fs::write(dir.path().join(name), contents).expect("write extra source");
+    }
     let entry = dir.path().join("main.ts");
     std::fs::write(&entry, src).expect("write fixture");
     let bin = dir.path().join("main_bin");
@@ -83,7 +91,11 @@ fn storage_of<'a>(diag: &'a [String], class: &str) -> &'a str {
 }
 
 fn check(src: &str, expected: &str, storage: &[(&str, &str)]) {
-    let (perry, node, diag) = run_both(src);
+    check_with(src, &[], expected, storage)
+}
+
+fn check_with(src: &str, extra: &[(&str, &str)], expected: &str, storage: &[(&str, &str)]) {
+    let (perry, node, diag) = run_both_with(src, extra);
     assert_eq!(node, expected, "Node disagrees with the expected text");
     assert_eq!(perry, expected, "perry disagrees with Node");
     for (class, want) in storage {
@@ -256,7 +268,7 @@ fn a_class_expression_captures_per_evaluation() {
          for (const v of [1, 2, 3]) perCall.push(new (factory('x' + v))());
          console.log(a.t(), b.t(), s.t(), perCall.map((o) => o.t()).join(','));",
         "a b suba x1,x2,x3\n",
-        &[("Base", "instance")],
+        &[("Base", "env-guarded")],
     );
 }
 
@@ -290,5 +302,54 @@ fn reflection_sees_only_declared_fields() {
          })();",
         "pos,end,kind {\"pos\":0,\"end\":5,\"kind\":1} pos,end,kind pos,end,kind {\"pos\":0,\"end\":5,\"kind\":1} n1\n",
         &[("Node2", "env")],
+    );
+}
+
+#[test]
+fn a_statically_constructed_class_expression_keeps_its_evaluation() {
+    // `new C()` through the binding is a static construct; once `mk` has run
+    // twice the second instance must be recorded as the second evaluation's.
+    check(
+        "function mk(v) { const C = class { get() { return v; } }; return new C(); }
+         const one = mk(1), two = mk(2), three = mk(3);
+         console.log(one.get(), two.get(), three.get());",
+        "1 2 3\n",
+        &[("C", "env-guarded")],
+    );
+}
+
+const REEVAL_MODULE: &str = "globalThis.__evals = (globalThis.__evals || 0) + 1;
+const tag = 'e' + globalThis.__evals;
+var Box = class {
+  get() { return tag; }
+  static tagOf() { return tag; }
+};
+module.exports = { make: () => new Box(), Box: Box };
+";
+
+const REEVAL_DRIVER: &str = "const first = require('./m.js');
+const a = first.make();
+const a2 = new first.Box();
+const key = Object.keys(require.cache).find((k) => k.endsWith('/m.js'));
+delete require.cache[key];
+const second = require('module').createRequire(__filename)(key);
+const b = second.make();
+const b2 = new second.Box();
+const c = first.make();
+module.exports = [first.Box === second.Box, a.get(), a2.get(), b.get(), b2.get(), c.get(),
+  first.Box.tagOf(), second.Box.tagOf(), first.Box.prototype.get.call(b)].join(' ');
+";
+
+#[test]
+fn a_re_evaluated_module_body_keeps_old_instances_on_their_evaluation() {
+    // Deleting the cache entry and requiring again re-runs the CommonJS module
+    // body (perry-runtime's module_require re-require of a loaded module), so
+    // `Box` has two evaluations: instances, statics and the first
+    // evaluation's extracted method must each see their own `tag`.
+    check_with(
+        "console.log(require('./driver.js'));",
+        &[("m.js", REEVAL_MODULE), ("driver.js", REEVAL_DRIVER)],
+        "false e1 e1 e2 e2 e1 e1 e2 e1\n",
+        &[("Box", "env-guarded")],
     );
 }

@@ -37,6 +37,12 @@ pub fn class_env_slot_key(index: u32) -> String {
     format!("\u{1}perry_env{index}")
 }
 
+/// Codegen's `static_field_globals` key for a guarded class environment's
+/// state global (`Expr::ClassEnvGet::guarded`).
+pub fn class_env_state_key() -> String {
+    "\u{1}perry_env_state".to_string()
+}
+
 /// Parse the outer local id from a cap field/param name. Accepts both the
 /// salted `__perry_cap_<id>m<salt>` form and the legacy `__perry_cap_<id>`
 /// (still produced by pre-salt HIR in caches/tests).

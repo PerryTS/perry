@@ -1528,6 +1528,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_tdz_suppress_end", VOID, &[]);
     // Static-method prologue read of one decl-site capture snapshot slot.
     module.declare_function("js_class_capture_value", DOUBLE, &[I32, I32]);
+    // Guarded class capture environments (`perry-runtime` object/class_env).
+    module.declare_function("js_class_env_register_state", VOID, &[I32, PTR]);
+    module.declare_function("js_class_env_register_slot", VOID, &[I32, I32, PTR]);
+    module.declare_function("js_class_env_evaluate", VOID, &[I32, DOUBLE, DOUBLE]);
+    module.declare_function("js_class_env_refresh", VOID, &[I32, DOUBLE, DOUBLE]);
+    module.declare_function("js_class_env_get", DOUBLE, &[DOUBLE, I32, I32]);
+    module.declare_function("js_class_env_set", VOID, &[DOUBLE, I32, I32, DOUBLE]);
+    module.declare_function("js_class_env_stamp", DOUBLE, &[DOUBLE, I32, DOUBLE]);
     module.declare_function(
         "js_class_capture_value_for_receiver",
         DOUBLE,

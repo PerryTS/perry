@@ -627,7 +627,23 @@ pub(crate) fn emit_module_globals(
     // evaluation (`RegisterClassCaptures` / `ClassExprFresh`) and the
     // constructor fill it.
     for c in &hir.classes {
-        for index in 0..crate::expr::class_env::class_env_slot_count(c) {
+        let (slots, guarded) = crate::expr::class_env::class_env_layout(c);
+        if guarded {
+            // 0.0 = one evaluation so far; the runtime writes 1.0 on a second.
+            let name = format!(
+                "perry_classenv_{}__{}__state",
+                module_prefix,
+                sanitize_member(&c.name),
+            );
+            if external_globals_emitted.insert(name.clone()) {
+                llmod.add_module_state_global(&name, DOUBLE, "0.0");
+            }
+            static_field_globals.insert(
+                (c.name.clone(), perry_hir::cap_fields::class_env_state_key()),
+                name,
+            );
+        }
+        for index in 0..slots {
             let name = format!(
                 "perry_classenv_{}__{}__{}",
                 module_prefix,
