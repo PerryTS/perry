@@ -72,10 +72,9 @@ pub(crate) const PACKED_SPILL_FLIP: i64 = 0xC000_0000;
 /// are worth running; `0` (fresh) and a negative megamorphic countdown
 /// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
 pub(crate) const PIC_WAY_STATE: usize = 3;
-/// Optional Array-subclass class-declared named-prefix token. A nonzero value
-/// proves the cached slot survives exact numeric-tail ShapeId transitions.
-/// Mirrors runtime `PicCache` word 2.
-pub(crate) const PIC_NAMED_PREFIX_TOKEN: usize = 2;
+// Word 2 is unused: it held the Array-subclass named-prefix token, site state
+// not derived from one shape, retired by S6. A site holds `(ShapeId, slot)`
+// pairs only.
 
 /// Materialise the pooled property-key `StringHeader*` in the CURRENT block.
 ///
@@ -96,6 +95,21 @@ fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
     let key_box = blk.load(DOUBLE, key_handle_global);
     let key_bits = blk.bitcast_double_to_i64(&key_box);
     blk.and(I64, &key_bits, POINTER_MASK_I64)
+}
+
+/// The receiver's handle (its 48-bit payload), materialised in the CURRENT
+/// block: re-derived from the fused receiver test's biased value for every key
+/// but `.length`, or the entry-block mask for `.length`. Only ever called on
+/// an edge the receiver test's pointer branch dominates.
+fn recv_handle(
+    ctx: &mut FnCtx<'_>,
+    fused_recv: Option<&crate::expr::receiver_range::FusedReceiver>,
+    entry_handle: &str,
+) -> String {
+    match fused_recv {
+        Some(f) => crate::expr::receiver_range::emit_handle(ctx.block(), &f.biased),
+        None => entry_handle.to_string(),
+    }
 }
 
 fn overridden_cache_name(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<String> {
@@ -147,21 +161,26 @@ pub(crate) fn lower_generic_property_get(
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-    // The receiver handle. For every key but `.length` the tag test below is
-    // the EXACT `POINTER_TAG` test, and then the handle is `bits ^ POINTER_TAG`
-    // rather than `bits & POINTER_MASK`: the two are the same value on the
-    // pointer path (the xor clears exactly the sixteen tag bits the test just
-    // proved equal to the tag) and the xor is the value the tag test is
-    // computed FROM, so the unmask costs nothing on top of it — where the
-    // `and` form was a `mov $0x30, %al; bzhi` pair after the compare, on
-    // every read. Every use of the handle is dominated by the tag test's true
-    // edge, which is what makes the xor a valid unmask. `.length` keeps the
-    // mask: its test admits STRING-tagged receivers too, and for those the
-    // xor would leave the tag's low bits set.
-    let obj_handle = if property == "length" {
-        blk.and(I64, &obj_bits, POINTER_MASK_I64)
-    } else {
-        blk.xor(I64, &obj_bits, crate::nanbox::POINTER_TAG_I64)
+    // The receiver test and the handle. For every key but `.length` the tag
+    // test and the small-handle test are ONE unsigned range compare
+    // (`crate::expr::receiver_range`): `t = bits - (POINTER_TAG | 0x10_0000)`,
+    // `t <u 2^48 - 0x10_0000` is exactly "POINTER tag and a payload above the
+    // native-handle band". The two separate tests cost six instructions on
+    // every hit (`xor`, `mov`, `shr $48`, `jne`, `cmp $0xfffff`, `jbe`). The
+    // handle is `t + 0x10_0000`, which equals `bits ^ POINTER_TAG` on the
+    // pointer edge; the two hot loads below address from `t` directly, so the
+    // `+ 0x10_0000` folds into their displacements, and every COLD consumer
+    // re-derives the handle in its own block (`recv_handle`). Materialised
+    // once up front, the handle is live into five cold blocks, so LLVM keeps
+    // it in the entry block and every HIT pays its `lea` (measured on
+    // `realsite`). `.length` keeps the mask and its own test: that test admits
+    // STRING-tagged receivers too (the heap-string arm below), which no single
+    // range over POINTER can; its handle is the entry-block mask.
+    let fused_recv = (property != "length")
+        .then(|| crate::expr::receiver_range::emit_fused_receiver_test(blk, &obj_bits));
+    let entry_handle = match fused_recv.as_ref() {
+        None => blk.and(I64, &obj_bits, POINTER_MASK_I64),
+        Some(_) => String::new(),
     };
     // The key handle is materialised per consumer (see `emit_key_handle`), all
     // of which are cold. The one exception is the typed-feedback OBSERVE call,
@@ -209,8 +228,8 @@ pub(crate) fn lower_generic_property_get(
 
     // # Inline hit, two exits (T1); the hit is tag test -> shape compare -> load
     //
-    // What stays inline below is exactly the hit: the receiver-tag test, the
-    // small-handle test, the compact MRU word compared against the receiver's
+    // What stays inline below is exactly the hit: the receiver test (one
+    // fused range compare for every key but `.length`), the compact MRU word compared against the receiver's
     // ShapeId, the raw slot load, and the bounded polymorphic ways. EVERY
     // other arm this tower used to expand — the SSO receiver, the INT32 class
     // ref, the nullish throw, the non-object receiver, the overflow load, the
@@ -299,11 +318,13 @@ pub(crate) fn lower_generic_property_get(
         let obj_tag_masked = ctx.block().and(I64, &obj_tag, "65533"); // 0xFFFD
         ctx.block().icmp_eq(I64, &obj_tag_masked, "32765") // 0x7FFD
     } else {
-        // `(bits ^ POINTER_TAG) >> 48 == 0` is `bits >> 48 == 0x7FFD`, spelled
-        // on the value the pointer path then uses as its handle (see
-        // `obj_handle` above), so the unmask is folded into the test.
-        let xor_tag = ctx.block().lshr(I64, &obj_handle, "48");
-        ctx.block().icmp_eq(I64, &xor_tag, "0")
+        // The fused range test (see `fused_recv` above): POINTER tag AND a
+        // payload above the native-handle band, in one compare.
+        fused_recv
+            .as_ref()
+            .expect("every key but `.length` takes the fused receiver test")
+            .is_object_pointer
+            .clone()
     };
 
     // `.length` on a receiver whose static type is not a proven string.
@@ -334,7 +355,7 @@ pub(crate) fn lower_generic_property_get(
 
     // A compact per-site word holds the exact ShapeId and slot for the last
     // cacheable receiver. The lazily allocated full cache retains bounded
-    // polymorphic ways and the Array-subclass named-prefix proof. Both are
+    // polymorphic ways. Both are
     // materialised before the first branch now: the single slow exit takes
     // them as arguments, and every failing guard reaches it.
     let cache_name = overridden_cache_name(ctx, object, property)
@@ -413,6 +434,22 @@ pub(crate) fn lower_generic_property_get(
         ctx.current_block = nonptr_idx;
         (sso_val, sso_end_label)
     });
+    // A small native-registry handle fails the fused test too, but it is a
+    // POINTER-tagged value and belongs to the OBJECT exit (the slow entry's
+    // small-handle dispatch), exactly where the separate small-handle test
+    // used to send it. The split costs nothing on the hit path: it runs only
+    // after the receiver test has already failed.
+    if fused_recv.is_some() {
+        let nonptr_idx = ctx.new_block("pget.recv_nonptr");
+        let nonptr_label = ctx.block_label(nonptr_idx);
+        let tag = ctx.block().lshr(I64, &obj_bits, "48");
+        let pointer_tagged = ctx
+            .block()
+            .icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_TOP16_I64);
+        ctx.block()
+            .cond_br(&pointer_tagged, &cold_label, &nonptr_label);
+        ctx.current_block = nonptr_idx;
+    }
     // The non-pointer exit: SSO / INT32 class ref / nullish throw / everything
     // else, in that order, behind one call that needs no cache.
     let nonptr_key_handle = emit_key_handle(ctx, &key_handle_global);
@@ -429,13 +466,24 @@ pub(crate) fn lower_generic_property_get(
     ctx.block().br(&merge_label);
 
     ctx.current_block = pic_idx;
+    if fused_recv.is_some() {
+        crate::expr::receiver_range::emit_route_note(
+            ctx.block(),
+            crate::expr::receiver_range::Route::Generic,
+        );
+    }
     let observed_key = key_handle_observed.clone().unwrap_or_default();
+    let observed_handle = if crate::expr::typed_feedback_emission_enabled() {
+        recv_handle(ctx, fused_recv.as_ref(), &entry_handle)
+    } else {
+        String::new()
+    };
     crate::expr::emit_typed_feedback_record_call(
         ctx.block(),
         "js_typed_feedback_observe_property_get",
         &[
             (I64, &feedback_site_id),
-            (I64, &obj_handle),
+            (I64, &observed_handle),
             (I64, &observed_key),
         ],
     );
@@ -485,7 +533,13 @@ pub(crate) fn lower_generic_property_get(
     //
     // Threshold matches `js_native_call_method`'s small-handle
     // detection (raw_ptr < 0x100000).
-    let is_real_ptr = ctx.block().icmp_ugt(I64, &obj_handle, "1048575"); // 0x100000
+    //
+    // Under the fused receiver test (every key but `.length`) this fact is
+    // already proven on every edge into `pget.recv_ok`, so no second branch
+    // is emitted for it.
+    let is_real_ptr = fused_recv
+        .is_none()
+        .then(|| ctx.block().icmp_ugt(I64, &entry_handle, "1048575")); // 0x100000
 
     // #7883: the guard chain BRANCHES OUT to the slow exit on the first
     // failing predicate instead of AND-ing eight of them into one flat `hit`.
@@ -559,11 +613,15 @@ pub(crate) fn lower_generic_property_get(
         let kind_label = ctx.block_label(kind_idx);
         let collection_idx = ctx.new_block("pget.collection_size");
         let collection_label = ctx.block_label(collection_idx);
-        ctx.block().cond_br(&is_real_ptr, &kind_label, &cold_label);
+        match is_real_ptr.as_ref() {
+            Some(real) => ctx.block().cond_br(real, &kind_label, &cold_label),
+            None => ctx.block().br(&kind_label),
+        }
         ctx.current_block = kind_idx;
         // `GcHeader` starts with `obj_type: u8`, at offset 0 of the header on
         // every target, so this is one byte load whatever the byte order.
-        let gc_type_addr = ctx.block().sub(I64, &obj_handle, "8");
+        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let gc_type_addr = ctx.block().sub(I64, &handle, "8");
         let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
         let gc_type = ctx.block().load(I8, &gc_type_ptr);
         let is_map = ctx.block().icmp_eq(I8, &gc_type, "8"); // GC_TYPE_MAP
@@ -574,7 +632,10 @@ pub(crate) fn lower_generic_property_get(
         collection_idx
     });
     if collection_size_idx.is_none() {
-        ctx.block().cond_br(&is_real_ptr, &tok_label, &cold_label);
+        match is_real_ptr.as_ref() {
+            Some(real) => ctx.block().cond_br(real, &tok_label, &cold_label),
+            None => ctx.block().br(&tok_label),
+        }
     }
     ctx.current_block = tok_idx;
 
@@ -585,8 +646,14 @@ pub(crate) fn lower_generic_property_get(
     // The receiver token is derived solely from its authoritative ShapeId.
     // Invalid/unstamped payloads miss closed.
     // #8113: the ShapeId word moved from header offset 8 to 4.
-    let pcid_addr = ctx.block().add(I64, &obj_handle, "4");
-    let pcid_ptr = ctx.block().inttoptr(I64, &pcid_addr);
+    let pcid_ptr = match fused_recv.as_ref() {
+        // `handle + 4`, addressed from the biased value (`receiver_range`).
+        Some(f) => crate::expr::receiver_range::emit_field_ptr(ctx.block(), &f.biased, 4),
+        None => {
+            let pcid_addr = ctx.block().add(I64, &entry_handle, "4");
+            ctx.block().inttoptr(I64, &pcid_addr)
+        }
+    };
     // The hot ShapeId load has exactly ONE use: the compare. The two cold
     // consumers of the same word — the spill compare in `pic.token.miss` and
     // the way token in `pic.ways` — read it AGAIN there, through an atomic
@@ -680,6 +747,12 @@ pub(crate) fn lower_generic_property_get(
     // token hit permanently proves that the cached slot remains live and
     // makes the raw load below safe without a compatibility-header bound.
     ctx.current_block = hit_idx;
+    if fused_recv.is_some() {
+        crate::expr::receiver_range::emit_route_note(
+            ctx.block(),
+            crate::expr::receiver_range::Route::GenericMruHit,
+        );
+    }
     // A matched compact word is now, by construction, an INLINE slot: a
     // spill-located key publishes its ShapeId flipped by `PACKED_SPILL_FLIP`
     // and is recognised in `pic.token.miss` instead. The overflow-bit test
@@ -691,8 +764,16 @@ pub(crate) fn lower_generic_property_get(
     // padded ILP32 since #8047. Derive it from the target triple.
     let obj_header_size =
         crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let base = ctx.block().add(I64, &obj_handle, &obj_header_size);
-    let base_ptr = ctx.block().inttoptr(I64, &base);
+    let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let base_ptr = match fused_recv.as_ref() {
+        Some(f) => {
+            crate::expr::receiver_range::emit_field_ptr(ctx.block(), &f.biased, header_bytes)
+        }
+        None => {
+            let base = ctx.block().add(I64, &entry_handle, &obj_header_size);
+            ctx.block().inttoptr(I64, &base)
+        }
+    };
     // A typed GEP rather than `shl 3` + `add`: the slot is the LAST use of the
     // packed word here, so with an explicit `shl` InstCombine folds
     // `(packed >> 32) << 3` into `(packed >> 29) & 0x5fffffff8` and isel pays a
@@ -864,8 +945,15 @@ pub(crate) fn lower_generic_property_get(
     ctx.block().cond_br(&way_any, &way_load_label, &call_label);
 
     ctx.current_block = way_load_idx;
+    if fused_recv.is_some() {
+        crate::expr::receiver_range::emit_route_note(
+            ctx.block(),
+            crate::expr::receiver_range::Route::GenericWayHit,
+        );
+    }
     let way_offset = ctx.block().shl(I64, &way_slot, "3");
-    let way_base = ctx.block().add(I64, &obj_handle, &obj_header_size);
+    let way_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+    let way_base = ctx.block().add(I64, &way_handle, &obj_header_size);
     let way_field_addr = ctx.block().add(I64, &way_base, &way_offset);
     let way_field_ptr = ctx.block().inttoptr(I64, &way_field_addr);
     let val_way = ctx.block().load(DOUBLE, &way_field_ptr);
@@ -934,7 +1022,8 @@ pub(crate) fn lower_generic_property_get(
         ctx.current_block = idx;
         crate::expr::emit_versioned_loop_callback_deopt(ctx);
         let inh_key_handle = emit_key_handle(ctx, &key_handle_global);
-        let recv_ptr = ctx.block().inttoptr(I64, &obj_handle);
+        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let recv_ptr = ctx.block().inttoptr(I64, &handle);
         let key_ptr = ctx.block().inttoptr(I64, &inh_key_handle);
         let val_inherited = ctx.block().call(
             DOUBLE,
@@ -956,11 +1045,12 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = call_idx;
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
+    let miss_handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
     let val_miss = ctx.block().call(
         DOUBLE,
         "js_object_get_field_ic_slow",
         &[
-            (I64, &obj_handle),
+            (I64, &miss_handle),
             (I64, &miss_key_handle),
             (PTR, &cache_slot_ref),
             (PTR, &packed_ref),
@@ -974,7 +1064,8 @@ pub(crate) fn lower_generic_property_get(
     // `js_map_size` / `js_set_size` would reclassify the same receiver again.
     let collection_size_arm = collection_size_idx.map(|collection_idx| {
         ctx.current_block = collection_idx;
-        let size_i32 = ctx.block().safe_load_i32_from_ptr(&obj_handle);
+        let handle = recv_handle(ctx, fused_recv.as_ref(), &entry_handle);
+        let size_i32 = ctx.block().safe_load_i32_from_ptr(&handle);
         let size = ctx.block().uitofp(I32, &size_i32, DOUBLE);
         let collection_end_label = ctx.block().label.clone();
         ctx.block().br(&merge_label);
@@ -987,7 +1078,7 @@ pub(crate) fn lower_generic_property_get(
     // keeps a sub-page handle off the load.
     let strlen_heap_arm = strlen_heap_idx.map(|heap_idx| {
         ctx.current_block = heap_idx;
-        let len_i32 = ctx.block().safe_load_i32_from_ptr(&obj_handle);
+        let len_i32 = ctx.block().safe_load_i32_from_ptr(&entry_handle);
         let heap_len = ctx.block().uitofp(I32, &len_i32, DOUBLE);
         let heap_end_label = ctx.block().label.clone();
         ctx.block().br(&merge_label);

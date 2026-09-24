@@ -169,7 +169,10 @@ unsafe fn armable_own_key_shape(obj: f64, key: f64) -> Option<u32> {
         return None;
     }
     let shape = super::super::shapes::object_shape_stamp(obj_ptr);
-    if shape == 0 {
+    // Only an ORDINARY-band id may arm a site: a dictionary receiver keeps its
+    // id across appends and in-place deletes, so "shape S has own key K" is not
+    // a fact of S for it (`shapes::DICTIONARY_SHAPE_ID_BASE`).
+    if !super::super::shapes::is_site_matchable_shape_id(shape) {
         return None;
     }
     let keys_view = crate::object::object_keys(obj_ptr);
@@ -262,5 +265,49 @@ mod tests {
             "an unarmed word must be unmatchable by any zero-extended +4 word, got {word0:#x}"
         );
         assert_ne!(word0, 0, "0 is what an unstamped `{{}}` carries at +4");
+    }
+
+    /// S6: `"k" in d` on a DICTIONARY receiver must not arm the site. Its
+    /// ShapeId describes no keys and survives appends and in-place deletes,
+    /// so "shape S has own key K" is not a fact of S. The positive half is
+    /// the control: the same key on the receiver BEFORE the latch arms.
+    /// Must-fail control: make `shapes::is_site_matchable_shape_id` accept the
+    /// dictionary band and the second assertion fails (the site arms with the
+    /// dictionary id, which the emitted guard would then match).
+    #[test]
+    fn a_dictionary_receiver_never_arms_a_presence_site() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            for i in 0..6 {
+                let name = format!("dict_in_{i}");
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::object::js_object_set_field_by_name(obj, key, i as f64);
+            }
+            let key = crate::string::js_string_from_bytes(b"dict_in_3".as_ptr(), 9);
+            let obj_box = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+            let key_box = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+
+            let mut ordinary_slot: *mut InPresenceCache = std::ptr::null_mut();
+            let answer = js_in_operator_presence_ic(obj_box, key_box, &mut ordinary_slot);
+            assert_eq!(answer.to_bits(), 0x7FFC_0000_0000_0004, "premise: true");
+            assert_eq!(
+                (*ordinary_slot).shape,
+                u64::from(super::super::super::shapes::object_shape_stamp(obj)),
+                "control: an ordinary receiver arms the site"
+            );
+
+            assert!(crate::object::dictionary::latch_object_to_dictionary(obj));
+            let mut slot: *mut InPresenceCache = std::ptr::null_mut();
+            let answer = js_in_operator_presence_ic(obj_box, key_box, &mut slot);
+            assert_eq!(answer.to_bits(), 0x7FFC_0000_0000_0004, "still true");
+            assert!(!slot.is_null(), "premise: the attempt resolved the cache");
+            assert_eq!(
+                (*slot).shape,
+                IN_PRESENCE_UNARMED,
+                "a dictionary receiver's id must never arm a site"
+            );
+        }
     }
 }

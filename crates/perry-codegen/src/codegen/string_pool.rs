@@ -656,18 +656,6 @@ pub(super) fn emit_string_pool(
         );
         blk.store(I32, &shape_id, &shape_global);
 
-        // Seed the guard expectation with the same ShapeId and hand the
-        // runtime its address, so `disable_class_field_inline_guard` can poison
-        // it. Registration happens AFTER the seed, and the runtime poisons on
-        // the spot if the latch already flipped — so a module initialised late
-        // cannot reopen a fast path the process has closed.
-        let guard_global = format!(
-            "@{}",
-            crate::typed_shape::guard_shape_global_name_from_keys_global(global_name)
-        );
-        blk.store(I32, &shape_id, &guard_global);
-        blk.call_void("js_register_class_guard_shape", &[(PTR, &guard_global)]);
-
         // #8122: compose the class's inline-`new` header image —
         // `[packed GcHeader word | class_id | ShapeId << 32]` — beside the
         // ShapeId it consumes, ONCE. Every inline allocation of this class
@@ -724,7 +712,6 @@ pub(super) fn emit_string_pool(
                     (PTR, &global_ref),
                     (PTR, &shape_global),
                     (PTR, &image_ref),
-                    (PTR, &guard_global),
                 ],
             );
         }

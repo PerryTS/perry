@@ -123,10 +123,8 @@ pub(super) fn try_emit_cached_field_index_return(
     let index_i32 = ctx.block().load(I32, &index_slot);
 
     let object_header_idx = ctx.new_block("cached_field_index.object_header");
-    let exact_or_prefix_idx = ctx.new_block("cached_field_index.exact_or_prefix");
+    let descriptor_free_idx = ctx.new_block("cached_field_index.descriptor_free");
     let exact_token_idx = ctx.new_block("cached_field_index.exact_token");
-    let prefix_meta_idx = ctx.new_block("cached_field_index.prefix_meta");
-    let prefix_token_idx = ctx.new_block("cached_field_index.prefix_token");
     let field_load_idx = ctx.new_block("cached_field_index.field_load");
     let array_header_idx = ctx.new_block("cached_field_index.array_header");
     let array_load_idx = ctx.new_block("cached_field_index.array_load");
@@ -134,10 +132,8 @@ pub(super) fn try_emit_cached_field_index_return(
     let return_idx = ctx.new_block("cached_field_index.return");
     let normal_idx = ctx.new_block("cached_field_index.normal");
     let object_header_label = ctx.block_label(object_header_idx);
-    let exact_or_prefix_label = ctx.block_label(exact_or_prefix_idx);
+    let descriptor_free_label = ctx.block_label(descriptor_free_idx);
     let exact_token_label = ctx.block_label(exact_token_idx);
-    let prefix_meta_label = ctx.block_label(prefix_meta_idx);
-    let prefix_token_label = ctx.block_label(prefix_token_idx);
     let field_load_label = ctx.block_label(field_load_idx);
     let array_header_label = ctx.block_label(array_header_idx);
     let array_load_label = ctx.block_label(array_load_idx);
@@ -149,16 +145,19 @@ pub(super) fn try_emit_cached_field_index_return(
     let object_raw = {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(&base_box);
-        let raw = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-        let tag = blk.and(I64, &bits, &tag_mask);
-        let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
-        let above_handles = blk.icmp_ugt(I64, &raw, "1048575");
-        let eligible = blk.and(I1, &is_pointer, &above_handles);
-        blk.cond_br(&eligible, &object_header_label, &normal_label);
+        // POINTER tag and above the native-handle band, in ONE unsigned range
+        // compare (`crate::expr::receiver_range`).
+        let recv = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
+        let raw = crate::expr::receiver_range::emit_handle(blk, &recv.biased);
+        blk.cond_br(&recv.is_object_pointer, &object_header_label, &normal_label);
         raw
     };
 
     ctx.current_block = object_header_idx;
+    crate::expr::receiver_range::emit_route_note(
+        ctx.block(),
+        crate::expr::receiver_range::Route::CachedFieldIndex,
+    );
     let gc_type_addr = ctx.block().sub(I64, &object_raw, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
     let gc_type = ctx.block().load(I8, &gc_type_ptr);
@@ -170,7 +169,7 @@ pub(super) fn try_emit_cached_field_index_return(
     let not_forwarded = ctx.block().icmp_eq(I8, &forwarded_bits, "0");
     // #9708: the shared cache sits behind a pointer slot that the generic
     // property-get miss handler fills on the first prime. Every cache read
-    // below (`exact_token`, `prefix_meta`, `field_load`) is dominated by this
+    // below (`exact_token`, `field_load`) is dominated by this
     // edge, so the non-null test joins the header predicate; a site whose
     // cache is still unallocated simply takes the normal lowering.
     let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
@@ -178,20 +177,22 @@ pub(super) fn try_emit_cached_field_index_return(
     let object_ok = ctx.block().and(I1, &is_object, &not_forwarded);
     let object_ok = ctx.block().and(I1, &object_ok, &ic_slot.present);
     ctx.block()
-        .cond_br(&object_ok, &exact_or_prefix_label, &normal_label);
+        .cond_br(&object_ok, &descriptor_free_label, &normal_label);
 
-    ctx.current_block = exact_or_prefix_idx;
+    ctx.current_block = descriptor_free_idx;
     let reserved_addr = ctx.block().sub(I64, &object_raw, "6");
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
     let descriptor_bits = ctx.block().and(I16, &reserved, "2048");
     let no_descriptors = ctx.block().icmp_eq(I16, &descriptor_bits, "0");
     ctx.block()
-        .cond_br(&no_descriptors, &exact_token_label, &prefix_meta_label);
+        .cond_br(&no_descriptors, &exact_token_label, &normal_label);
 
-    // Descriptor-bearing instances (including Array subclasses with an own
-    // `length`) cannot use an exact ShapeId property slot. Send them straight
-    // to the data-only named-prefix proof instead of loading a dead shape.
+    // Descriptor-bearing instances take the original statements. They used to
+    // be served through the Array-subclass named-prefix token in cache word 2,
+    // site state not derived from one shape, which S6 retired: the only thing
+    // this path may trust is the `(ShapeId, slot)` pair the site was primed
+    // with.
     ctx.current_block = exact_token_idx;
     let shape_addr = ctx.block().add(I64, &object_raw, "4");
     let shape_ptr = ctx.block().inttoptr(I64, &shape_addr);
@@ -204,45 +205,7 @@ pub(super) fn try_emit_cached_field_index_return(
     let token_matches = ctx.block().icmp_eq(I64, &live_token, &cached_token);
     let exact = ctx.block().and(I1, &shape_nonzero, &token_matches);
     ctx.block()
-        .cond_br(&exact, &field_load_label, &prefix_meta_label);
-
-    ctx.current_block = prefix_meta_idx;
-    // The same cache word the generic property-get tower's named-prefix proof
-    // uses, and the same one the runtime publishes it in.
-    let prefix_word =
-        crate::expr::property_get::generic_dispatch::PIC_NAMED_PREFIX_TOKEN.to_string();
-    let cached_prefix_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, &prefix_word)]);
-    let cached_prefix = ctx.block().load(I64, &cached_prefix_ptr);
-    let prefix_armed = ctx.block().icmp_ne(I64, &cached_prefix, "0");
-    let pointer_bytes = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        4
-    } else {
-        8
-    };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - pointer_bytes)
-        .to_string();
-    let meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
-    let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
-    let meta_ty = if pointer_bytes == 4 { I32 } else { I64 };
-    let meta_raw = ctx.block().load(meta_ty, &meta_slot);
-    let meta = if pointer_bytes == 4 {
-        ctx.block().zext(I32, &meta_raw, I64)
-    } else {
-        meta_raw
-    };
-    let meta_nonzero = ctx.block().icmp_ne(I64, &meta, "0");
-    let can_check_prefix = ctx.block().and(I1, &prefix_armed, &meta_nonzero);
-    ctx.block()
-        .cond_br(&can_check_prefix, &prefix_token_label, &normal_label);
-
-    ctx.current_block = prefix_token_idx;
-    let meta_ptr = ctx.block().inttoptr(I64, &meta);
-    let object_prefix_ptr = ctx.block().gep(I64, &meta_ptr, &[(I64, "6")]);
-    let object_prefix = ctx.block().load(I64, &object_prefix_ptr);
-    let prefix_matches = ctx.block().icmp_eq(I64, &object_prefix, &cached_prefix);
-    ctx.block()
-        .cond_br(&prefix_matches, &field_load_label, &normal_label);
+        .cond_br(&exact, &field_load_label, &normal_label);
 
     ctx.current_block = field_load_idx;
     let cached_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);

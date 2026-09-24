@@ -270,14 +270,14 @@ fn point_class() -> Class {
 }
 
 /// `probe(p: Point) { return p.x }` (a raw-f64 field) — the class-field READ
-/// guard loads the poisonable expectation, the (class id, ShapeId) word and
+/// guard loads the class's own ShapeId global, the (class id, ShapeId) word and
 /// the `_reserved` half-word for the intact bit, and NOTHING else: the GcHeader word the write guard still tests (kind,
 /// forwarded, descriptor and tombstone flags) is carried by the ShapeId on a
 /// read (`emit_class_field_read_precheck`).
 ///
-/// The expectation carries the authority the retired
-/// `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch had, so it must be read
-/// VOLATILE and the latch must stay gone.
+/// Neither the retired `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch nor
+/// the poisonable `@perry_class_guard_shape_*` twin that replaced it may come
+/// back: the expectation is the class ShapeId itself (S6).
 #[test]
 fn class_field_read_guard_loads_identity_expectation_and_intact_bit_only() {
     let mut m = module(
@@ -306,10 +306,10 @@ fn class_field_read_guard_loads_identity_expectation_and_intact_bit_only() {
          authority moved onto the expectation this guard already loads:\n{ir}"
     );
     assert!(
-        deref.contains("load volatile i32, ptr @perry_class_guard_shape_"),
-        "the expectation must be read VOLATILE per access: the runtime poisons \
-         it mid-execution and a cached copy would reopen a closed fast \
-         path:\n{deref}"
+        deref.contains("load volatile i32, ptr @perry_class_shape_id_")
+            && !ir.contains("perry_class_guard_shape_"),
+        "the expectation must be the class's own ShapeId global, never a \
+         poisonable twin:\n{deref}"
     );
     assert!(
         loads.iter().any(|l| l.contains("load i64"))

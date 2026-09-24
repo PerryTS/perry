@@ -781,7 +781,8 @@ fn write_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
 
 #[inline(always)]
 fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
-    if token == 0 || key_bits == 0 {
+    // Never for a dictionary shape (`shapes::DICTIONARY_SHAPE_ID_BASE`).
+    if !crate::object::shapes::is_site_matchable_token(token) || key_bits == 0 {
         return;
     }
     WRITE_STUB.with(|t| {

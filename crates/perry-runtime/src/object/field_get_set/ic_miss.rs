@@ -219,7 +219,7 @@ pub const PIC_CACHE_WORDS: usize = 12;
 /// |---|---|
 /// | 0 | `tok0` — most-recently-used ShapeId token |
 /// | 1 | `slot0` — its resolved field slot |
-/// | 2 | optional Array-subclass class-declared named-prefix token |
+/// | 2 | unused — was the Array-subclass named-prefix token, retired by S6 (site state must derive from one shape) |
 /// | 3,4 / 5,6 / 7,8 / 9,10 | `(tok, slot)` ways |
 /// | 11 | round-robin victim index for the ways |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
@@ -438,8 +438,10 @@ fn pic_latch_megamorphic(c: &mut PicCache) {
 /// per-site global, or a stack array of that type).
 pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) {
     // A token hit must prove a nonzero ShapeId, including in polymorphic ways.
-    // Keyless/unstamped receivers require the full prototype lookup.
-    if token == crate::object::shapes::PIC_ID_TOKEN_BIT as i64 {
+    // Keyless/unstamped receivers require the full prototype lookup. And only
+    // an ORDINARY-band id may be written: a dictionary shape's id can never be
+    // held by a site (`shapes::DICTIONARY_SHAPE_ID_BASE`).
+    if !crate::object::shapes::is_site_matchable_token(token as u64) {
         return;
     }
     let c = &mut *cache;
@@ -1161,12 +1163,7 @@ pub(super) fn get_field_ic_miss_impl(
                                     let token = (stamp as u64
                                         | crate::object::shapes::PIC_ID_TOKEN_BIT)
                                         as i64;
-                                    // Word 2 (named-prefix identity) stays 0:
-                                    // the prefix paths compute inline
-                                    // addresses and must never fire from an
-                                    // overflow-primed entry.
                                     let cache = pic_slot_resolve(cache_slot);
-                                    (*cache)[2] = 0;
                                     packed_get::prime_get(
                                         cache,
                                         token,
@@ -1205,24 +1202,27 @@ pub(super) fn get_field_ic_miss_impl(
                     // shape id — no second probe.
                     let stamp = crate::object::shapes::object_shape_stamp(obj);
                     let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
-                    // Word 2 carries an optional class-declared named-prefix
-                    // identity for object-backed Array subclasses. Their
-                    // numeric tail changes ShapeId on every push/pop while
-                    // declared fields keep the same slots. The proof builder
-                    // is gated by an existing ObjectMeta pointer so ordinary
-                    // objects retain the old miss cost; it validates the
-                    // complete prefix before publishing a nonzero token.
-                    let named_prefix_token = if !(*obj).meta.is_null() {
-                        crate::array::array_subclass_named_prefix_token_for_slot(obj, i) as i64
-                    } else {
-                        0
-                    };
-                    if has_own_descriptors && named_prefix_token == 0 {
+                    // A descriptor-bearing receiver primes only when the key is
+                    // proved a plain data slot. The one proof that exists is
+                    // the object-backed Array subclass's named-prefix proof
+                    // (every declared key accessor-free on THIS receiver; its
+                    // unrelated `length` descriptor must not make `arch.sset`
+                    // permanently generic). It is a PRIME-TIME proof only: the
+                    // site stores nothing but `(ShapeId, slot)`, and a ShapeId
+                    // implies its descriptor semantics (every descriptor event
+                    // mints a new generation, #10824/#10287), so the pair is a
+                    // fact about this one shape for as long as the id lives.
+                    // The proof builder is gated by an existing ObjectMeta
+                    // pointer so ordinary objects retain the old miss cost. It
+                    // runs whenever it ran before (it also publishes the token
+                    // on the object's meta, which `element_shape` consumes).
+                    let named_prefix_proved = !(*obj).meta.is_null()
+                        && crate::array::array_subclass_named_prefix_token_for_slot(obj, i) != 0;
+                    if has_own_descriptors && !named_prefix_proved {
                         miss_reason = R::OwnDescriptorFallthrough;
                         break;
                     }
                     let cache = pic_slot_resolve(cache_slot);
-                    (*cache)[2] = named_prefix_token;
                     packed_get::prime_get(cache, token, i as i64, packed);
                     if diag {
                         ic_diag_note(cache_slot, key, R::OwnInlinePrimed);
@@ -2150,7 +2150,9 @@ mod poly_pic_tests {
     use crate::proxy::IC_SLOT_OVERFLOW_BIT;
 
     fn id_tok(n: u64) -> i64 {
-        (n | PIC_ID_TOKEN_BIT) as i64
+        // A real ORDINARY-band ShapeId: `pic_prime_get` admits nothing else
+        // (a dictionary-band or out-of-range id never enters a site, S6).
+        ((u64::from(crate::object::shapes::SHAPE_ID_BASE) + n) | PIC_ID_TOKEN_BIT) as i64
     }
 
     /// A slot word for a field past the inline region, exactly as the miss
@@ -2446,7 +2448,7 @@ mod poly_pic_tests {
     fn a_wider_than_capacity_rotation_latches_then_re_arms() {
         let mut c: PicCache = [0; PIC_CACHE_WORDS];
         let shapes: Vec<i64> = (0..(PIC_WAYS as i64 + 3))
-            .map(|i| 0x5000_0000_0000 + i * 8)
+            .map(|i| id_tok(0x500 + i as u64))
             .collect();
         unsafe {
             for _ in 0..40 {
@@ -2513,7 +2515,7 @@ mod poly_pic_tests {
         unsafe {
             for _ in 0..200 {
                 for i in 0..(PIC_WAYS as i64 + 1) {
-                    pic_prime_get(&mut c, 0x6000_0000_0000 + i * 8, i);
+                    pic_prime_get(&mut c, id_tok(0x600 + i as u64), i);
                 }
             }
         }
@@ -2537,7 +2539,7 @@ mod poly_pic_tests {
     fn a_rare_extra_shape_does_not_latch_a_site_that_fits() {
         let mut c: PicCache = [0; PIC_CACHE_WORDS];
         let hot: Vec<i64> = (0..(PIC_WAYS as i64 + 1))
-            .map(|i| 0x7000_0000_0000 + i * 8)
+            .map(|i| id_tok(0x700 + i as u64))
             .collect();
         unsafe {
             for round in 0..400 {
@@ -2591,7 +2593,9 @@ mod poly_pic_tests {
                 continue;
             }
             let slot = c[PIC_WAY_BASE + w * 2 + 1];
-            let expected = (tok as u64 & !PIC_ID_TOKEN_BIT) - 200;
+            let expected = (tok as u64 & !PIC_ID_TOKEN_BIT)
+                - u64::from(crate::object::shapes::SHAPE_ID_BASE)
+                - 200;
             assert_eq!(
                 slot, expected as i64,
                 "way {w} pairs token {tok:#x} with the wrong slot"

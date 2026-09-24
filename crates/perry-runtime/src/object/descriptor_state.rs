@@ -296,14 +296,12 @@ pub static PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED: AtomicU8 = AtomicU8::new(0);
 /// Disable the codegen-inlined class-field fast path process-wide (see
 /// [`PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`]). Idempotent.
 ///
-/// Sets the latch AND poisons every registered guard-expectation slot. The two
-/// are one decision with two carriers: sites that still read the latch keep
-/// working unchanged, while `emit_class_field_inline_precheck` — the per-access
-/// guard on every static-key read — gets the same authority for free out of the
-/// expectation it already loads. Poison first, so no thread can observe a set
-/// latch beside a live expectation.
+/// The per-access class-field read and write guards no longer consult this
+/// decision at all (S6): they compare the receiver's ShapeId against the
+/// class's own ShapeId global, and nothing may tell a shape compare not to
+/// trust the shape. The latch still gates the whole-loop and proven-receiver
+/// forms that read it directly.
 pub(crate) fn disable_class_field_inline_guard() {
-    super::class_guard_shape::poison_class_guard_shapes();
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(1, Ordering::Relaxed);
 }
 
@@ -315,11 +313,6 @@ pub(crate) fn class_field_inline_guard_enabled() -> bool {
 #[cfg(test)]
 pub(crate) fn test_reset_class_field_inline_guard() {
     PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED.store(0, Ordering::Relaxed);
-    // Unpoison every registered expectation back to the ShapeId it was seeded
-    // with. Production never does this — the disable decision is monotonic —
-    // but a test that flips the latch must not leave later tests guarding
-    // against `CLASS_GUARD_SHAPE_POISON`.
-    super::class_guard_shape::restore_class_guard_shapes_for_test();
     // Also clear the C5a per-key vetting sets (production-monotonic, so
     // without this a key name reused across tests in one process would
     // inherit an earlier test's declared-field / installed-key state and

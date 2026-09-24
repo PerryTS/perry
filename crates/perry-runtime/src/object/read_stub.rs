@@ -90,7 +90,9 @@ fn read_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
 
 #[inline(always)]
 fn read_stub_insert(token: u64, key_bits: u64, slot: u32) {
-    if token == 0 || key_bits == 0 {
+    // A stub entry answers for a shape like a site word does: never for a
+    // dictionary shape (`shapes::DICTIONARY_SHAPE_ID_BASE`).
+    if !crate::object::shapes::is_site_matchable_token(token) || key_bits == 0 {
         return;
     }
     READ_STUB.with(|t| {
@@ -246,6 +248,19 @@ unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> 
         return None;
     }
     Some(f64::from_bits(val.bits()))
+}
+
+/// Test-only raw table access for guards that live outside this module (the
+/// packed-get dictionary test). Production inserts stay private and go
+/// through [`read_stub_prime`]'s shared receiver guard (#10768).
+#[cfg(test)]
+pub(crate) fn read_stub_insert_raw_for_test(token: u64, key_bits: u64, slot: u32) {
+    read_stub_insert(token, key_bits, slot)
+}
+
+#[cfg(test)]
+pub(crate) fn read_stub_probe_raw_for_test(token: u64, key_bits: u64) -> Option<u32> {
+    read_stub_probe(token, key_bits)
 }
 
 #[cfg(test)]

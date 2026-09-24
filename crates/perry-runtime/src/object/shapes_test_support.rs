@@ -194,7 +194,9 @@ pub(crate) fn test_shape_index_len(keys_id: usize) -> u32 {
 #[cfg(test)]
 pub(crate) fn test_unused_external_shape_id() -> u32 {
     let table = &crate::state::state().shapes;
-    let mut id = super::SHAPE_ID_END - 1;
+    // The top of the ORDINARY band: an external (typed) id is an ordinary
+    // shape, which sites may hold; the dictionary band above it is not.
+    let mut id = super::DICTIONARY_SHAPE_ID_BASE - 1;
     while table.slab().record_ptr(id).is_some() {
         id -= 1;
     }

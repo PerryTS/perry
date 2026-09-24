@@ -1202,15 +1202,16 @@ detail = "raw numeric object field fixture stdout checksum"
 # exit"): this check used to look for `js_typed_feedback_class_field_get_guard`
 # in the OPTIMIZED IR. That symbol is now emitted NOWHERE as a call -- the
 # one-exit tower replaced the old guard call + three miss-arm call sites with a
-# volatile load of the per-class `@perry_class_guard_shape_*` latch plus a
+# volatile load of the per-class `@perry_class_shape_id_*` expectation plus a
 # single `js_class_field_get_ic` miss exit. (A bare substring over the
 # unoptimized IR would still have "passed" on the leftover `declare` line
 # alone, which is why fc54e1b181's own codegen tests assert CALL forms.)
 #
 # The property this check names -- "reads are guarded before raw slot loads" --
 # still holds, so the check is re-pointed at the structure that now carries it
-# rather than deleted: the `class_field_inline.deref.N` block loads the guard
-# latch, compares it against the receiver's shape word, and branches INTO
+# rather than deleted: the `class_field_inline.deref.N` block loads the class
+# ShapeId (S6 retired the poisonable `@perry_class_guard_shape_*` twin),
+# compares it against the receiver's shape word, and branches INTO
 # `class_field_get.fast.N`. Scoped to the checksum function and read from
 # `llvm_before`, matching its sibling `raw_numeric_field_get_scoped_raw_load`,
 # which asserts the raw load on the other side of that branch.
@@ -1218,7 +1219,7 @@ detail = "raw numeric object field fixture stdout checksum"
 name = "raw_numeric_field_get_guard"
 section = "llvm_before"
 function_contains = "rawNumericObjectFieldsChecksum"
-regex = '''class_field_inline\.deref\.\d+:(?:(?!\n\n)[\s\S])*?load volatile i32, ptr @perry_class_guard_shape_(?:(?!\n\n)[\s\S])*?br i1 %\w+, label %class_field_get\.fast\.\d+,'''
+regex = '''class_field_inline\.deref\.\d+:(?:(?!\n\n)[\s\S])*?load volatile i32, ptr @perry_class_shape_id_(?:(?!\n\n)[\s\S])*?br i1 %\w+, label %class_field_get\.fast\.\d+,'''
 detail = "class numeric field reads are guarded before raw slot loads"
 
 [[workloads.raw_numeric_object_fields.ir_checks]]

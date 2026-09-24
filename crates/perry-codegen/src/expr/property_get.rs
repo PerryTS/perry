@@ -1763,17 +1763,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             blk.and(I64, &key_bits, POINTER_MASK_I64)
                         };
                         // Loaded HERE, not through the function-entry cache
-                        // `load_class_shape_id` keeps: since the inline
-                        // precheck moved to the poisonable
-                        // `@perry_class_guard_shape_*` expectation, the
-                        // truthful ShapeId is a cold-arm-only operand, and an
-                        // entry-block load of it is two instructions the fast
-                        // path pays and never reads.
+                        // `load_class_shape_id` keeps: an entry-block load
+                        // would be two instructions the fast path pays and
+                        // never reads. VOLATILE, like the precheck's own load
+                        // of the same global: a plain load here lets LLVM
+                        // forward the precheck's value into this cold block,
+                        // which keeps a copy of it alive across the hit path's
+                        // `shl` (+1 `mov` per read, measured on `cls`).
                         let ic_shape_id = {
                             let global = crate::typed_shape::shape_id_global_name_from_keys_global(
                                 &keys_global_name,
                             );
-                            ctx.block().load(I32, &format!("@{global}"))
+                            ctx.block().load_volatile(I32, &format!("@{global}"))
                         };
                         let val_ic = ctx.block().call(
                             DOUBLE,

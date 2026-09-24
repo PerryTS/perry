@@ -14,7 +14,7 @@
 //! soundness arguments. The emitted sequence is:
 //!
 //! ```text
-//! [R1] guard   tag test + unmask + ONE ShapeId compare      ─┐ the only two
+//! [R1] guard   fused receiver test + ONE ShapeId compare    ─┐ the only two
 //! [R2] load    every key's slot, from one atomic region word │ bail edges,
 //!              (a slice may then verify, then use)          ─┘ before any effect
 //! ```
@@ -41,7 +41,6 @@
 use std::cell::Cell;
 
 use crate::expr::FnCtx;
-use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Keys one word can address. Must equal
@@ -53,8 +52,6 @@ const SLOT_BITS: u32 = 6;
 const EMPTY_WORD: &str = "4294967295";
 /// Primes attempted per region before it stops trying (process lifetime).
 const PRIME_ATTEMPTS: &str = "8";
-/// A small-handle band sits under the pointer tag; its ids are not addresses.
-const SMALL_HANDLE_MAX: &str = "1048575";
 
 thread_local! {
     /// Non-zero while a generic copy is being lowered. The generic copy lowers
@@ -133,11 +130,13 @@ pub(crate) fn state_globals(ctx: &mut FnCtx<'_>) -> Sites {
     Sites { word_g, tries_g }
 }
 
-/// What R1 proved and what R2 needs: the unmasked receiver pointer (held in a
-/// register for the whole region — reads 2..n re-pay none of the tag test),
-/// the loaded word, and the receiver's own ShapeId for the prime path.
+/// What R1 proved and what R2 needs: the receiver's BIASED value (the fused
+/// receiver test's `bits - (POINTER_TAG | 0x10_0000)`, held in a register for
+/// the whole region — reads 2..n re-pay none of the receiver test, and every
+/// slot address is a displacement off it), the loaded word, and the receiver's
+/// own ShapeId for the prime path.
 pub(crate) struct Entry {
-    pub(crate) handle: String,
+    pub(crate) biased: String,
     pub(crate) word: String,
     pub(crate) sid: String,
 }
@@ -153,44 +152,44 @@ pub(crate) fn emit_r1(
     miss_l: &str,
     generic_l: &str,
 ) -> Entry {
-    let handle_idx = ctx.new_block("region.handle");
     let r1_idx = ctx.new_block("region.r1");
-    let handle_l = ctx.block_label(handle_idx);
     let r1_l = ctx.block_label(r1_idx);
 
-    // R1, part 1: the receiver is a heap object pointer.
+    // R1, part 1: the receiver is a heap object pointer — POINTER tag and a
+    // payload above the native-handle band — in ONE unsigned range compare
+    // (`crate::expr::receiver_range`). Both failures already left for the
+    // same block (`generic_l`), so fusing them changes no edge.
     let bits = ctx.block().bitcast_double_to_i64(recv);
-    let top = ctx.block().lshr(I64, &bits, "48");
-    let is_ptr = ctx.block().icmp_eq(I64, &top, "32765"); // 0x7FFD, the pointer tag
-    ctx.block().cond_br(&is_ptr, &handle_l, generic_l);
-
-    ctx.current_block = handle_idx;
-    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    let real = ctx.block().icmp_ugt(I64, &handle, SMALL_HANDLE_MAX);
-    ctx.block().cond_br(&real, &r1_l, generic_l);
+    let recv_test = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    ctx.block()
+        .cond_br(&recv_test.is_object_pointer, &r1_l, generic_l);
+    let biased = recv_test.biased;
 
     // R1, part 2: ONE shape compare against the learned region word. By
     // #10828's rule 3 only a GC_TYPE_OBJECT carrying that shape can match, so
     // this compare is the whole receiver classification.
     ctx.current_block = r1_idx;
+    crate::expr::receiver_range::emit_route_note(
+        ctx.block(),
+        crate::expr::receiver_range::Route::Region,
+    );
     let word = ctx.block().load_atomic_monotonic(I64, &sites.word_g, 8);
     let expected = ctx.block().trunc(I64, &word, I32);
-    let sid_addr = ctx.block().add(I64, &handle, "4");
-    let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);
+    let sid_ptr = crate::expr::receiver_range::emit_field_ptr(ctx.block(), &biased, 4);
     let sid = ctx.block().load(I32, &sid_ptr);
     let hit = ctx.block().icmp_eq(I32, &sid, &expected);
     ctx.block().cond_br(&hit, hit_l, miss_l);
 
-    Entry { handle, word, sid }
+    Entry { biased, word, sid }
 }
 
 /// R2: every key's slot, addressed from the same unmasked pointer and the same
 /// word. Uniform addressing is what lets LLVM turn the run into one
 /// `vgatherqpd` (§L7.6.1).
 pub(crate) fn emit_slot_loads(ctx: &mut FnCtx<'_>, entry: &Entry, keys: usize) -> Vec<String> {
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let fields = ctx.block().add(I64, &entry.handle, &header);
-    let fields_ptr = ctx.block().inttoptr(I64, &fields);
+    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let fields_ptr =
+        crate::expr::receiver_range::emit_field_ptr(ctx.block(), &entry.biased, header);
     let mut values = Vec::with_capacity(keys);
     for i in 0..keys {
         let shift = (32 + SLOT_BITS * i as u32).to_string();

@@ -7,6 +7,10 @@ use super::*;
 
 /// Continuation of `declare_phase_b_strings` (see strings.rs).
 pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
+    // Receiver-route admission census (`expr/receiver_range.rs`): emitted only
+    // by a `PERRY_RECV_ROUTE_COUNT=1` build; declared unconditionally so the
+    // declaration set does not depend on a diagnostic knob.
+    module.declare_function("js_recv_route_note", VOID, &[I32]);
     // RegExp exec
     module.declare_function("js_regexp_exec", I64, &[I64, I64]);
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);

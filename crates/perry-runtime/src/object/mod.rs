@@ -242,7 +242,6 @@ mod websocket_global;
 mod with_env;
 // Issue #1103 follow-up: behavior-preserving split of the residual top-level
 // helpers that lived directly in `object/mod.rs`.
-mod class_guard_shape;
 mod class_meta_registry;
 pub(crate) mod descriptor_state;
 mod this_binding;
@@ -311,7 +310,6 @@ pub use with_env::*;
 // Re-exports for the residual-helper split (issue #1103 follow-up). Explicit
 // named re-exports keep existing `crate::object::X` / bare-name call sites in
 // the object submodules resolving unchanged.
-pub use class_guard_shape::{js_register_class_guard_shape, CLASS_GUARD_SHAPE_POISON};
 pub(crate) use class_meta_registry::{
     builtin_error_prototype_name, class_generic_origin, extends_builtin_error, fetch_parent_kind,
     lookup_has_instance_hook, lookup_to_string_tag_hook, register_fetch_parent_kind,

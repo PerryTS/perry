@@ -37,8 +37,11 @@ pub(super) unsafe fn prime_get(
         return;
     }
     let stamp = token as u32;
-    if !(crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END).contains(&stamp)
-        || token as u64 != (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT)
+    // Only an ORDINARY-band ShapeId may enter a site word: a dictionary
+    // shape's id is outside the matchable band by construction
+    // (`shapes::DICTIONARY_SHAPE_ID_BASE`), so no emitted compare can equal a
+    // dictionary receiver's word.
+    if !crate::object::shapes::is_site_matchable_token(token as u64)
         || !(0..=0x7fff_ffff).contains(&slot)
     {
         return;
@@ -86,7 +89,7 @@ mod tests {
         );
         for stamp in [
             crate::object::shapes::SHAPE_ID_BASE,
-            crate::object::shapes::SHAPE_ID_END - 1,
+            crate::object::shapes::DICTIONARY_SHAPE_ID_BASE - 1,
         ] {
             for slot in [0, 1, 1 << 30, 0x7fff_ffff] {
                 unsafe {
@@ -134,6 +137,81 @@ mod tests {
                 }
                 assert_eq!(packed.load(Ordering::Relaxed), before);
             }
+        }
+    }
+
+    /// **S6: a dictionary receiver can never hit a site entry.** A dictionary
+    /// shape describes no keys and its receiver keeps the id across in-place
+    /// appends and deletes, so a `(ShapeId, slot)` memo of it would be a fact
+    /// about no shape at all. The guarantee is a SHAPE fact: dictionary shapes
+    /// mint in their own id band, and every site-word writer admits only the
+    /// ordinary band — so no compare the emitted code makes (the compact word,
+    /// the ways, the global read stub) can equal the receiver's word.
+    ///
+    /// Must-fail controls (both run by hand, both RED): make
+    /// `shapes::is_site_matchable_shape_id` accept the whole ShapeId range, or
+    /// make `alloc_shape_id_for_generation` mint dictionaries in the ordinary
+    /// band — the compact word then holds the receiver's id and the simulated
+    /// hit below matches it.
+    #[test]
+    fn a_dictionary_receiver_can_never_hit_a_site_entry() {
+        use crate::object::shapes;
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            for i in 0..6 {
+                let name = format!("dict_site_{i}");
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::object::js_object_set_field_by_name(obj, key, i as f64);
+            }
+            let ordinary_id = shapes::object_shape_stamp(obj);
+            assert!(
+                shapes::is_site_matchable_shape_id(ordinary_id),
+                "test premise: an ordinary receiver's id IS matchable"
+            );
+            assert!(
+                crate::object::dictionary::latch_object_to_dictionary(obj),
+                "test premise: the receiver latches"
+            );
+            let id = shapes::object_shape_stamp(obj);
+            assert!(
+                shapes::is_shape_id(id),
+                "every reader still sees a ShapeId: {id:#x}"
+            );
+            assert!(
+                shapes::is_dictionary_shape_id(id) && !shapes::is_site_matchable_shape_id(id),
+                "a dictionary shape must be minted in the unmatchable band: {id:#x}"
+            );
+
+            // Every writer is offered exactly what a prime would hand it: the
+            // receiver's own token and a slot the key really occupies.
+            let token = (shapes::PIC_ID_TOKEN_BIT | id as u64) as i64;
+            let empty = crate::object::field_get_set::ic_miss::PACKED_GET_EMPTY;
+            let packed = AtomicU64::new(empty);
+            let mut cache = [0i64; super::super::PIC_CACHE_WORDS];
+            prime_get(&mut cache, token, 1, &packed);
+            let word = packed.load(Ordering::Relaxed);
+            // The emitted hit: `+4` word == the compact word's low half.
+            assert_ne!(
+                word as u32,
+                (*obj).parent_class_id,
+                "the compact word must never hold a dictionary receiver's id"
+            );
+            assert_eq!(word, empty, "nothing may be published for it");
+            // The emitted way compare: the receiver's token against each word.
+            assert!(
+                !cache.contains(&token),
+                "no cache word may hold a dictionary token: {cache:x?}"
+            );
+
+            let key_bits = 0x6b_7965_6b; // any nonzero content bits
+            crate::object::read_stub::read_stub_insert_raw_for_test(token as u64, key_bits, 1);
+            assert_eq!(
+                crate::object::read_stub::read_stub_probe_raw_for_test(token as u64, key_bits),
+                None,
+                "the global read stub must never answer for a dictionary shape"
+            );
         }
     }
 }

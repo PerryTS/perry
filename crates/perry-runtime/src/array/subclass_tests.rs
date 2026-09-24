@@ -680,7 +680,14 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
     let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
     crate::object::js_object_get_field_ic_miss(obj, mask_key, &mut cache_slot);
-    let token = cache[2] as u64;
+    // S6: the proof lives on the OBJECT only; the site holds just the
+    // `(ShapeId, slot)` pair it primed, never the class-wide token.
+    assert_eq!(cache[2], 0, "the site must not hold the named-prefix token");
+    assert_ne!(
+        cache[0], 0,
+        "the descriptor-bearing receiver still primes the site"
+    );
+    let token = unsafe { (*(*obj).meta).array_subclass_named_prefix_token };
     assert_ne!(token, 0);
     assert!(unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id) });
     assert!(
@@ -690,7 +697,7 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
     assert_eq!(
         unsafe { array_subclass_named_prefix_token_for_slot(obj, 1) },
         token,
-        "the IC miss must publish the same owner-side token it caches"
+        "the IC miss must publish the owner-side token"
     );
 
     let mut index_ic: super::ArrayLikePicCache = [0; super::ARRAYLIKE_PIC_WORDS];
@@ -865,10 +872,17 @@ fn empty_array_subclass_named_prefix_token_survives_warm_tail_cycle() {
     let via_ic = crate::object::js_object_get_field_ic_miss(obj, change_key, &mut cache_slot);
     let via_ladder = crate::object::js_object_get_field_by_name_f64(obj, change_key);
     assert_eq!(via_ic.to_bits(), via_ladder.to_bits());
-    let token = cache[2] as u64;
+    // S6: the site holds the `(ShapeId, slot)` pair; the proof stays on the
+    // object.
+    assert_eq!(cache[2], 0, "the site must not hold the named-prefix token");
+    assert_ne!(
+        cache[0], 0,
+        "an empty subclass must arm the declared-field PIC"
+    );
+    let token = unsafe { (*(*obj).meta).array_subclass_named_prefix_token };
     assert_ne!(
         token, 0,
-        "an empty subclass must arm the declared-prefix PIC"
+        "an empty subclass must carry the declared-prefix proof"
     );
     assert_eq!(
         unsafe { array_subclass_named_prefix_token_for_slot(obj, 2) },

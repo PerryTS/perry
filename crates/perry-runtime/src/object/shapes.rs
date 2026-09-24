@@ -529,6 +529,36 @@ pub(crate) const SHAPE_ID_BASE: u32 = 0x8000_0000;
 /// unreachable in practice).
 pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
 
+/// # The dictionary band: ShapeIds no site can ever hold
+///
+/// The top quarter of the ShapeId range, `[DICTIONARY_SHAPE_ID_BASE,
+/// SHAPE_ID_END)`, holds dictionary-mode shapes and nothing else, and ordinary
+/// shapes are minted strictly below it. Membership is a fact of the id's
+/// VALUE, fixed when the shape is minted from its generation namespace
+/// ([`crate::object::dictionary::DICTIONARY_GENERATION_TAG`]) — not a check any
+/// site makes.
+///
+/// Why a band: a dictionary shape describes no keys (`keys = NULL`), and its
+/// receiver KEEPS the id across layout changes — an in-place append or
+/// tombstone publishes nothing (`object/dictionary.rs`). A per-site memo
+/// `(ShapeId, slot)` is sound only because a ShapeId names ONE immutable key
+/// list forever; a dictionary id names none. So every site word is written
+/// with an id from the [`is_site_matchable_shape_id`] band, which excludes this
+/// one — the same way a spill entry's word is flipped out of the id range by
+/// `PACKED_SPILL_FLIP` — and no emitted compare (the compact word, the ways,
+/// a region word, a presence or store cache) can equal a dictionary receiver's
+/// `+4` word. Everything that reads a shape from an object (`is_shape_id`,
+/// the descriptor table, the collector) still sees an ordinary ShapeId.
+///
+/// A quarter of the range (2^28 ids) is a floor, not an estimate: a
+/// dictionary draws one id at its latch and one per compacting delete or
+/// inline-bound change, O(1) per object, against the ordinary band's one per
+/// shape birth.
+pub(crate) const DICTIONARY_SHAPE_ID_BASE: u32 = 0xB000_0000;
+
+const _: () = assert!(SHAPE_ID_BASE < DICTIONARY_SHAPE_ID_BASE);
+const _: () = assert!(DICTIONARY_SHAPE_ID_BASE < SHAPE_ID_END);
+
 /// #6759 C3c: PROCESS-GLOBAL allocator (supersedes the per-thread counter
 /// C3a landed with). Global uniqueness matters because the worker
 /// serializer replays `parent_class_id` verbatim: a deep-copied object's
@@ -538,11 +568,41 @@ pub(crate) const SHAPE_ID_END: u32 = 0xC000_0000;
 static SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(SHAPE_ID_BASE);
 
+/// The dictionary band's own monotonic counter (see
+/// [`DICTIONARY_SHAPE_ID_BASE`]); never reused, parks at `SHAPE_ID_END`.
+static DICTIONARY_SHAPE_ID_NEXT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(DICTIONARY_SHAPE_ID_BASE);
+
 static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[inline]
 pub(crate) fn is_shape_id(v: u32) -> bool {
     (SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
+}
+
+/// May a per-site cache word hold this id? True exactly for an ORDINARY-band
+/// ShapeId: never for a dictionary shape ([`DICTIONARY_SHAPE_ID_BASE`]), never
+/// for a class id, never for 0. Every site-word writer publishes only ids this
+/// accepts, so an emitted compare can never equal a dictionary receiver's word.
+#[inline]
+pub(crate) fn is_site_matchable_shape_id(v: u32) -> bool {
+    (SHAPE_ID_BASE..DICTIONARY_SHAPE_ID_BASE).contains(&v)
+}
+
+/// [`is_site_matchable_shape_id`] for a per-site PIC TOKEN
+/// (`PIC_ID_TOKEN_BIT | ShapeId`): the exact token form over a matchable id.
+#[inline]
+pub(crate) fn is_site_matchable_token(token: u64) -> bool {
+    token == (PIC_ID_TOKEN_BIT | u64::from(token as u32))
+        && is_site_matchable_shape_id(token as u32)
+}
+
+/// Is this a dictionary-mode ShapeId? A fact of the value alone. (The
+/// production writers ask the complement, [`is_site_matchable_shape_id`].)
+#[cfg(test)]
+#[inline]
+pub(crate) fn is_dictionary_shape_id(v: u32) -> bool {
+    (DICTIONARY_SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
 }
 
 /// #6804: classify a WIDENED shape token (`object_shape()`'s usize). Ids
@@ -569,14 +629,19 @@ pub(crate) enum ShapeDescriptorError {
     InvalidFacts,
 }
 
-fn alloc_shape_id_from(next: &std::sync::atomic::AtomicU32) -> Result<u32, ShapeIdExhausted> {
+fn alloc_shape_id_from(
+    next: &std::sync::atomic::AtomicU32,
+    end: u32,
+) -> Result<u32, ShapeIdExhausted> {
     use std::sync::atomic::Ordering;
     loop {
         let id = next.load(Ordering::Relaxed);
-        if id >= SHAPE_ID_END {
+        if id >= end {
             // Park at the exclusive end. In particular, never fetch_add at
-            // END: wrapping to zero could eventually alias a live ShapeId.
-            next.store(SHAPE_ID_END, Ordering::Relaxed);
+            // END: wrapping to zero could eventually alias a live ShapeId, and
+            // running past the ordinary band's end would mint into the
+            // dictionary band.
+            next.store(end, Ordering::Relaxed);
             return Err(ShapeIdExhausted);
         }
         if next
@@ -588,8 +653,28 @@ fn alloc_shape_id_from(next: &std::sync::atomic::AtomicU32) -> Result<u32, Shape
     }
 }
 
+/// An ORDINARY-band ShapeId: every mint except a dictionary shape's.
 fn alloc_shape_id() -> Result<u32, ShapeIdExhausted> {
-    alloc_shape_id_from(&SHAPE_ID_NEXT)
+    alloc_shape_id_from(&SHAPE_ID_NEXT, DICTIONARY_SHAPE_ID_BASE)
+}
+
+/// A dictionary-band ShapeId ([`DICTIONARY_SHAPE_ID_BASE`]).
+fn alloc_dictionary_shape_id() -> Result<u32, ShapeIdExhausted> {
+    alloc_shape_id_from(&DICTIONARY_SHAPE_ID_NEXT, SHAPE_ID_END)
+}
+
+/// The band a new shape's id is drawn from is decided by its generation
+/// namespace: a dictionary generation (bit 62 set, bit 63 clear —
+/// `dictionary::next_generation`) mints in the dictionary band, everything
+/// else in the ordinary band.
+fn alloc_shape_id_for_generation(semantic_generation: u64) -> Result<u32, ShapeIdExhausted> {
+    const DETERMINISTIC_BIT: u64 = 1 << 63;
+    let tag = crate::object::dictionary::DICTIONARY_GENERATION_TAG;
+    if semantic_generation & (DETERMINISTIC_BIT | tag) == tag {
+        alloc_dictionary_shape_id()
+    } else {
+        alloc_shape_id()
+    }
 }
 
 /// The next ShapeId this process would hand out.
@@ -706,7 +791,8 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
             }
         }
     }
-    let id = alloc_shape_id().map_err(|_| ShapeDescriptorError::IdExhausted)?;
+    let id = alloc_shape_id_for_generation(semantic_generation)
+        .map_err(|_| ShapeDescriptorError::IdExhausted)?;
     #[cfg(feature = "shape-mint-diag")]
     if census_on {
         // Every descriptor already indexed under this keys ADDRESS, copied out
@@ -1211,7 +1297,9 @@ pub extern "C" fn js_region_guard_pack(
     k3: u64,
     k4: u64,
 ) -> u64 {
-    if !is_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+    // A region word is a site word: only an ORDINARY-band id may enter it
+    // (see `DICTIONARY_SHAPE_ID_BASE`).
+    if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
         return REGION_GUARD_WORD_EMPTY;
     }
     let keys = [k0, k1, k2, k3, k4];

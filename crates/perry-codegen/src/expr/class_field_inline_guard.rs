@@ -41,8 +41,6 @@ use super::FnCtx;
 
 // Mirror of the runtime constants the inline check reproduces. Kept as literal
 // decimals because the emitted IR is textual.
-const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD — NaN-box tag for heap pointers
-const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — handles are <= this; objects are above
 const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
@@ -155,7 +153,7 @@ pub(crate) fn class_field_subclass_arms(
         seen_ids.push(sub_id);
         arms.push(ClassFieldSubclassArm {
             class_id: sub_id,
-            shape_id_global: crate::typed_shape::guard_shape_global_name_from_keys_global(
+            shape_id_global: crate::typed_shape::shape_id_global_name_from_keys_global(
                 &keys_global,
             ),
         });
@@ -282,10 +280,9 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         let blk = ctx.block();
         let flag = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
         let flag_ok = blk.icmp_eq(I8, &flag, "0");
-        let tag = blk.lshr(I64, obj_bits, "48");
-        let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
-        let above_band = blk.icmp_ugt(I64, obj_handle, HANDLE_BAND_TOP);
-        let ptr_safe = blk.and(I1, &is_ptr, &above_band);
+        // POINTER tag and above the handle band: the fused receiver test.
+        let ptr_safe =
+            crate::expr::receiver_range::emit_fused_receiver_test(blk, obj_bits).is_object_pointer;
         let can_inline = blk.and(I1, &ptr_safe, &flag_ok);
         blk.cond_br(&can_inline, &deref_label, slow_label);
     }
@@ -479,8 +476,8 @@ pub(crate) fn emit_class_field_inline_precheck(
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
 ) -> String {
-    let guard_shape_global =
-        crate::typed_shape::guard_shape_global_name_from_keys_global(keys_global_name);
+    let class_shape_global =
+        crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
@@ -501,16 +498,21 @@ pub(crate) fn emit_class_field_inline_precheck(
     // relaxed-atomic read the guard itself performs.
     {
         let blk = ctx.block();
-        let tag = blk.lshr(I64, obj_bits, "48");
-        let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
-        let above_band = blk.icmp_ugt(I64, obj_handle, HANDLE_BAND_TOP);
-        let ptr_safe = blk.and(I1, &is_ptr, &above_band);
+        // POINTER tag and above the handle band, in ONE unsigned range compare
+        // (`crate::expr::receiver_range`); both halves already failed to the
+        // guard call.
+        let ptr_safe =
+            crate::expr::receiver_range::emit_fused_receiver_test(blk, obj_bits).is_object_pointer;
         blk.cond_br(&ptr_safe, &deref_label, &guardcall_label);
     }
 
     ctx.current_block = deref_idx;
     {
         let blk = ctx.block();
+        crate::expr::receiver_range::emit_route_note(
+            blk,
+            crate::expr::receiver_range::Route::ClassWrite,
+        );
         let obj_ptr = blk.inttoptr(I64, obj_handle);
 
         // Two loads and two compares, not five of each. The GcHeader's first
@@ -553,13 +555,13 @@ pub(crate) fn emit_class_field_inline_precheck(
         // ObjectHeader word 0 is class_id @0 and the authoritative ShapeId @4
         // (#8113): one 64-bit compare against `(shape << 32) | class_id`.
         let identity = blk.load(I64, &obj_ptr);
-        // The displaced latch's authority lives here now: this expectation is
-        // what `disable_class_field_inline_guard` poisons, so the compare the
-        // guard already had to make now also answers "is the inline path still
-        // open?". VOLATILE for exactly the reason the latch load was — the
-        // runtime flips it mid-execution and a cached expectation would take a
-        // fast path the process has closed.
-        let live_shape = blk.load_volatile(I32, &format!("@{guard_shape_global}"));
+        // The expectation is the class's OWN ShapeId global — the id every
+        // instance is stamped with at birth — and nothing else: no site or
+        // process switch can tell this compare not to trust the shape (S6).
+        // Read volatile because the runtime may rewrite the global once, when
+        // an imported class's defining module publishes its typed ShapeId
+        // (`gc/layout/typed_shape.rs`); a stale copy could only miss.
+        let live_shape = blk.load_volatile(I32, &format!("@{class_shape_global}"));
         let declared = expected_class_identity(blk, expected_class_id, &live_shape);
         let mut shape_ok = blk.icmp_eq(I64, &identity, &declared);
         // The declared class's own (class id, ShapeId) pair, OR any subclass
@@ -591,25 +593,8 @@ pub(crate) fn emit_class_field_inline_precheck(
     guardcall_label
 }
 
-/// The receiver test of the class-field READ guard, as ONE unsigned range
-/// check: `bits - (POINTER_TAG | 0x10_0000) < 2^48 - 0x10_0000`.
-///
-/// Subtracting the constant maps exactly the POINTER-tagged values whose
-/// 48-bit payload is above the handle band (`> HANDLE_BAND_TOP`) onto
-/// `[0, 2^48 - 0x10_0000)` and every other bit pattern (other tags, a POINTER
-/// tag with a small native-registry handle, plain doubles) above it, so the
-/// one compare is the conjunction the flat predicate used to spell as two
-/// compares, two `setcc`s and a `test`. The same subtraction yields the
-/// handle (`t + 0x10_0000`), which isel folds into the displacements of the
-/// loads that follow instead of re-masking the NaN-box.
-const READ_RECEIVER_BIAS: u64 = crate::nanbox::POINTER_TAG | (HANDLE_BAND_TOP_U64 + 1);
-const READ_RECEIVER_SPAN: u64 = (1u64 << 48) - (HANDLE_BAND_TOP_U64 + 1);
-const HANDLE_BAND_TOP_U64: u64 = 0x0F_FFFF;
-const _: () = assert!(READ_RECEIVER_BIAS == 0x7FFD_0000_0010_0000);
-const _: () = assert!(READ_RECEIVER_SPAN == 0x0000_FFFF_FFF0_0000);
-
 /// Emit the class-field READ guard: receiver range check, ONE ShapeId compare
-/// against the poisonable per-class expectation, and — for a raw-f64 site
+/// against the class's own ShapeId global, and — for a raw-f64 site
 /// only — the class id and the per-object typed-layout intact bit.
 ///
 /// Hit path on x86-64 (`class P { a; getA() { return this.a } }`): a boxed
@@ -633,8 +618,7 @@ const _: () = assert!(READ_RECEIVER_SPAN == 0x0000_FFFF_FFF0_0000);
 ///
 /// * **`obj_type == GC_TYPE_OBJECT`** — rule 3 (#10828): no POINTER-tagged
 ///   non-object cell holds a value in the ShapeId range at payload `+4`. The
-///   expectation is a ShapeId or the poison `u32::MAX`, and no `+4` word of
-///   any kind equals either, so a match proves an ordinary object.
+///   expectation is the class's ShapeId, so a match proves an ordinary object.
 /// * **not `GC_FLAG_FORWARDED`** — `set_forwarding_address` (`gc/types.rs`)
 ///   overwrites payload `+0..8` with the new address, so a forwarded cell's
 ///   `+4` word is the high half of a heap address, `<= 0xFFFF` under
@@ -661,8 +645,22 @@ const _: () = assert!(READ_RECEIVER_SPAN == 0x0000_FFFF_FFF0_0000);
 /// ## What it does NOT prove (the checks this guard keeps)
 ///
 /// * **The receiver range check** — nothing may be dereferenced before it.
-/// * **The poison** — `disable_class_field_inline_guard` writes `u32::MAX`
-///   into the expectation; the compare against it is the latch.
+///
+/// ## What it no longer consults (S6)
+///
+/// The expectation used to be a poisonable twin of the class ShapeId,
+/// `@perry_class_guard_shape_*`, which `disable_class_field_inline_guard`
+/// overwrote with `u32::MAX` — a process switch saying "do not trust the
+/// shape". Its triggers were a prototype-level accessor on a declared field
+/// name, typed-feedback tracing, `PERRY_VERIFY_TYPED_INTACT` and the
+/// `PERRY_DISABLE_CLASS_FIELD_INLINE` knob. None of them changes the answer
+/// this read gives: a class instance carries every declared field as an OWN
+/// data property from birth (the canonical keys array), and an own data
+/// property shadows any prototype accessor (scenario 3 of
+/// `test-files/test_gap_5654_class_field_inline_descriptor.ts`; the generic
+/// IC, which never had a switch, gives the same answer for the same ShapeId
+/// and slot). The other three are diagnostics that only decided whether the
+/// guard CALL observed the access.
 /// * **raw-f64 sites: the class id.** A class whose layout has no pointer
 ///   slot mints its ShapeId from the key list alone
 ///   (`js_object_shape_id_for_keys`, `codegen/string_pool.rs`), so an object
@@ -696,29 +694,37 @@ pub(crate) fn emit_class_field_read_precheck(
     subclass_arms: &[ClassFieldSubclassArm],
     keys_global_name: &str,
 ) -> (String, String) {
-    let guard_shape_global =
-        crate::typed_shape::guard_shape_global_name_from_keys_global(keys_global_name);
+    let class_shape_global =
+        crate::typed_shape::shape_id_global_name_from_keys_global(keys_global_name);
     let deref_idx = ctx.new_block("class_field_inline.deref");
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
     let guardcall_label = ctx.block_label(guardcall_idx);
 
+    // The receiver test, as ONE unsigned range check
+    // (`crate::expr::receiver_range`): POINTER tag and a payload above the
+    // native-handle band. The same subtraction yields the handle
+    // (`biased + 0x10_0000`), which isel folds into the displacements of the
+    // loads that follow instead of re-masking the NaN-box.
     let obj_handle = {
         let blk = ctx.block();
-        let biased = blk.sub(I64, obj_bits, &(READ_RECEIVER_BIAS as i64).to_string());
-        let in_range = blk.icmp_ult(I64, &biased, &(READ_RECEIVER_SPAN as i64).to_string());
-        let handle = blk.add(I64, &biased, &(HANDLE_BAND_TOP_U64 + 1).to_string());
-        blk.cond_br(&in_range, &deref_label, &guardcall_label);
+        let recv = crate::expr::receiver_range::emit_fused_receiver_test(blk, obj_bits);
+        let handle = crate::expr::receiver_range::emit_handle(blk, &recv.biased);
+        blk.cond_br(&recv.is_object_pointer, &deref_label, &guardcall_label);
         handle
     };
 
     ctx.current_block = deref_idx;
     {
         let blk = ctx.block();
+        crate::expr::receiver_range::emit_route_note(
+            blk,
+            crate::expr::receiver_range::Route::ClassRead,
+        );
         let obj_ptr = blk.inttoptr(I64, &obj_handle);
-        // The expectation is read VOLATILE: the runtime poisons it
-        // mid-execution, and a cached copy would keep a closed fast path open.
-        let live_shape = blk.load_volatile(I32, &format!("@{guard_shape_global}"));
+        // The expectation is the class's own ShapeId global (see the write
+        // guard above for why it is read volatile).
+        let live_shape = blk.load_volatile(I32, &format!("@{class_shape_global}"));
         let mut ok = if require_raw_f64 {
             // ObjectHeader word 0 is class_id @0 and the ShapeId @4 (#8113):
             // one 64-bit compare against `(shape << 32) | class_id`.
@@ -779,57 +785,4 @@ fn expected_class_identity(
     let shape_bits = blk.zext(I32, shape_id, I64);
     let shape_high = blk.shl(I64, &shape_bits, "32");
     blk.or(I64, &shape_high, &class_bits)
-}
-
-#[cfg(test)]
-mod read_receiver_range_tests {
-    use super::{HANDLE_BAND_TOP_U64, READ_RECEIVER_BIAS, READ_RECEIVER_SPAN};
-
-    /// The predicate the flat form spelled out: POINTER tag AND a payload
-    /// above the native-registry handle band.
-    fn flat(bits: u64) -> bool {
-        (bits >> 48) == 0x7FFD && (bits & 0x0000_FFFF_FFFF_FFFF) > HANDLE_BAND_TOP_U64
-    }
-
-    /// The emitted form: one biased unsigned compare.
-    fn biased(bits: u64) -> bool {
-        bits.wrapping_sub(READ_RECEIVER_BIAS) < READ_RECEIVER_SPAN
-    }
-
-    /// The range check is EXACTLY the flat predicate, including at every
-    /// boundary: each neighbouring tag, the handle band's top and the first
-    /// address above it, the top of the 48-bit payload, and plain doubles.
-    /// A one-off in either constant flips at least one of these.
-    #[test]
-    fn biased_range_check_equals_tag_and_handle_predicate() {
-        let payloads = [
-            0u64,
-            1,
-            HANDLE_BAND_TOP_U64 - 1,
-            HANDLE_BAND_TOP_U64,
-            HANDLE_BAND_TOP_U64 + 1,
-            HANDLE_BAND_TOP_U64 + 2,
-            0x7F12_3456_7890,
-            0x0000_FFFF_FFFF_FFFE,
-            0x0000_FFFF_FFFF_FFFF,
-        ];
-        for tag in [
-            0u64, 0x3FF0, 0x7FF8, 0x7FF9, 0x7FFA, 0x7FFC, 0x7FFD, 0x7FFE, 0x7FFF, 0xFFFF,
-        ] {
-            for payload in payloads {
-                let bits = (tag << 48) | payload;
-                assert_eq!(
-                    biased(bits),
-                    flat(bits),
-                    "tag {tag:#x} payload {payload:#x}: biased check disagrees"
-                );
-            }
-        }
-        // The handle the fast path addresses through is the payload.
-        let bits = (0x7FFDu64 << 48) | 0x7F12_3456_7890;
-        assert_eq!(
-            bits.wrapping_sub(READ_RECEIVER_BIAS) + HANDLE_BAND_TOP_U64 + 1,
-            0x7F12_3456_7890
-        );
-    }
 }

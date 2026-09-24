@@ -334,8 +334,9 @@ fn boxed_class_field_read_guard_is_one_shape_compare() {
         "boxed read guard must load the ShapeId word and the expectation, nothing else:\n{deref}"
     );
     assert!(
-        deref.contains("load volatile i32, ptr @perry_class_guard_shape_"),
-        "the expectation must be read VOLATILE (the runtime poisons it):\n{deref}"
+        deref.contains("load volatile i32, ptr @perry_class_shape_id_")
+            && !ir.contains("perry_class_guard_shape_"),
+        "the expectation must be the class's own ShapeId global:\n{deref}"
     );
     assert!(
         deref_loads
@@ -354,9 +355,15 @@ fn boxed_class_field_read_guard_is_one_shape_compare() {
     // tag+handle predicate.
     assert!(
         ir.contains("sub i64 ")
-            && ir.contains(", 9222527611925692416")
+            && ir.contains(&format!(
+                ", {}",
+                crate::expr::receiver_range::RECEIVER_BIAS_LITERAL
+            ))
             && ir.contains("icmp ult i64 ")
-            && ir.contains(", 281474975662080"),
+            && ir.contains(&format!(
+                ", {}",
+                crate::expr::receiver_range::RECEIVER_SPAN_LITERAL
+            )),
         "receiver test is not the biased range check:\n{ir}"
     );
     // The header word mask of the old guard (0xFF | 0x80 << 8 | 3072 << 16)
@@ -451,7 +458,7 @@ fn uncovered_subclass_routes_the_read_to_the_generic_ic() {
         .unwrap_or_else(|| panic!("one armed subclass must keep the class route:\n{covered}"));
     assert_eq!(
         covered_deref
-            .matches("load volatile i32, ptr @perry_class_guard_shape_")
+            .matches("load volatile i32, ptr @perry_class_shape_id_")
             .count(),
         2,
         "the declared class and its one subclass arm:\n{covered_deref}"

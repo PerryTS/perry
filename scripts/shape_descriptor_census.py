@@ -771,15 +771,11 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 # the ShapeId in the high 32 bits. All three halves are
                 # required, so dropping the ShapeId from the compare fails.
                 #
-                # The expectation is the POISONABLE `@perry_class_guard_shape_*`
-                # twin, not `@perry_class_shape_id_*`, and it is read VOLATILE
-                # per access. That is load-bearing, not incidental: this compare
-                # now carries the authority the
-                # `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch used to, so a
-                # lowering that hoisted the load, or read the ShapeId global
-                # instead, would take a fast path the runtime has already closed
-                # — and would still pass a shape-only assertion. Both halves are
-                # required here for that reason.
+                # The expectation is the class's own `@perry_class_shape_id_*`
+                # global, read VOLATILE per access (the runtime rewrites it once
+                # when an imported class's typed id is published). S6 retired
+                # the poisonable `@perry_class_guard_shape_*` twin: nothing may
+                # tell this compare not to trust the shape.
                 require_code(
                     body,
                     r"load\s*\(\s*I64\s*,\s*&obj_ptr\s*\)",
@@ -792,8 +788,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 )
                 require_code(
                     body,
-                    r"load_volatile\s*\(\s*I32\s*,\s*&format!\(\s*\"@\{guard_shape_global\}\"",
-                    f"{name} reads the poisonable expectation VOLATILE, per access",
+                    r"load_volatile\s*\(\s*I32\s*,\s*&format!\(\s*\"@\{class_shape_global\}\"",
+                    f"{name} reads the class ShapeId expectation VOLATILE, per access",
                 )
                 require_code(
                     function_body(raw_class_guard, "expected_class_identity"),
@@ -808,11 +804,18 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             )
 
     generic_body = function_body(raw_generic_pic, "lower_generic_property_get")
-    if re.search(r"add\s*\(\s*I64\s*,\s*&obj_handle\s*,\s*\"(?:8|16)\"", generic_body):
+    if re.search(r"add\s*\(\s*I64\s*,\s*&(?:obj_handle|entry_handle)\s*,\s*\"(?:8|16)\"", generic_body):
         raise CensusError("generic read PIC emits a removed ObjectHeader fact")
+    # Both receiver-test forms (S4): `.length` adds 4 to its masked handle; every
+    # other key addresses `handle + 4` off the fused test's biased value.
     require_code(
         generic_body,
-        r"add\s*\(\s*I64\s*,\s*&obj_handle\s*,\s*\"4\"\s*\)",
+        r"add\s*\(\s*I64\s*,\s*&entry_handle\s*,\s*\"4\"\s*\)",
+        "generic read PIC (`.length`) reads the authoritative ShapeId at header offset 4",
+    )
+    require_code(
+        generic_body,
+        r"emit_field_ptr\s*\(\s*ctx\.block\(\)\s*,\s*&f\.biased\s*,\s*4\s*\)",
         "generic read PIC reads the authoritative ShapeId at header offset 4",
     )
     # #10833 changed the ENCODING, not the invariant. The unprimed compact word
@@ -880,7 +883,9 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             raise CensusError("generic read PIC compact identity guard disconnected: " + fragment)
     prime = function_body(ic_miss, "pic_prime_get")
     if not re.match(
-        r"\s*if\s+token\s*==\s*crate::object::shapes::PIC_ID_TOKEN_BIT\s+as\s+i64"
+        # S6: the first test admits only an ordinary-band ShapeId token, which
+        # rejects the zero-ShapeId token (and a dictionary shape's) with it.
+        r"\s*if\s+!crate::object::shapes::is_site_matchable_token\(token\s+as\s+u64\)"
         r"\s*\{\s*return;\s*\}",
         prime,
     ):
@@ -890,10 +895,24 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "compact PIC ShapeId range excludes zero",
     )
     packed_prime = re.sub(r"\s+", "", function_body(packed_get, "prime_get"))
+    # S6: `is_site_matchable_token` is the exact token form over an
+    # ORDINARY-band ShapeId (never 0, never a dictionary shape's id).
     range_guard = (
-        "if!(crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END)"
-        ".contains(&stamp)||tokenasu64!=(stampasu64|crate::object::shapes::PIC_ID_TOKEN_BIT)"
+        "if!crate::object::shapes::is_site_matchable_token(tokenasu64)"
         "||!(0..=0x7fff_ffff).contains(&slot){return;}"
+    )
+    require_code(
+        shapes,
+        r"fn\s+is_site_matchable_shape_id\(v:\s*u32\)\s*->\s*bool\s*\{\s*"
+        r"\(SHAPE_ID_BASE\.\.DICTIONARY_SHAPE_ID_BASE\)\.contains\(&v\)",
+        "a site may hold only an ordinary-band ShapeId (never a dictionary shape's)",
+    )
+    require_code(
+        shapes,
+        r"fn\s+is_site_matchable_token\(token:\s*u64\)\s*->\s*bool\s*\{\s*"
+        r"token\s*==\s*\(PIC_ID_TOKEN_BIT\s*\|\s*u64::from\(token\s+as\s+u32\)\)\s*"
+        r"&&\s*is_site_matchable_shape_id\(token\s+as\s+u32\)",
+        "the site token predicate is the exact token form over a matchable id",
     )
     if range_guard not in packed_prime or packed_prime.find("(*packed).store") < packed_prime.index(range_guard):
         raise CensusError("compact read PIC publication lost its valid ShapeId/slot proof")
@@ -1028,15 +1047,21 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     for path, before, after, label in (
         (
             "crates/perry-runtime/src/object/field_get_set/ic_miss.rs",
-            "if token == crate::object::shapes::PIC_ID_TOKEN_BIT as i64",
-            "if token != crate::object::shapes::PIC_ID_TOKEN_BIT as i64",
+            "if !crate::object::shapes::is_site_matchable_token(token as u64) {",
+            "if crate::object::shapes::is_site_matchable_token(token as u64) {",
             "full-cache writer admits a zero ShapeId",
         ),
         (
             packed_path,
-            "if !(crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END)",
-            "if (crate::object::shapes::SHAPE_ID_BASE..crate::object::shapes::SHAPE_ID_END)",
+            "if !crate::object::shapes::is_site_matchable_token(token as u64)",
+            "if crate::object::shapes::is_site_matchable_token(token as u64)",
             "compact-cache writer inverts its valid ShapeId range",
+        ),
+        (
+            "crates/perry-runtime/src/object/shapes.rs",
+            "(SHAPE_ID_BASE..DICTIONARY_SHAPE_ID_BASE).contains(&v)",
+            "(SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)",
+            "site writers admit the dictionary ShapeId band",
         ),
         (
             "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs",
@@ -1194,8 +1219,8 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     legacy_ir = dict(sources)
     path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
     legacy_body, substitutions = re.subn(
-        r'add\(I64, &obj_handle, "4"\)',
-        'add(I64, &obj_handle, "16")',
+        r'add\(I64, &entry_handle, "4"\)',
+        'add(I64, &entry_handle, "16")',
         legacy_ir[path],
         count=1,
     )

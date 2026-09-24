@@ -355,9 +355,7 @@ fn fs_promises_native_module_value_uses_submodule_singleton() {
 /// be the pre-#9708 shape coming back, with its 96 B of zero-fill per site.
 #[test]
 fn pic_cache_layout_matches_runtime() {
-    use crate::expr::property_get::generic_dispatch::{
-        PIC_CACHE_WORDS, PIC_NAMED_PREFIX_TOKEN, PIC_WAYS, PIC_WAY_BASE,
-    };
+    use crate::expr::property_get::generic_dispatch::{PIC_CACHE_WORDS, PIC_WAYS, PIC_WAY_BASE};
     assert_eq!(
         PIC_CACHE_WORDS, 12,
         "perry-runtime's PIC_CACHE_WORDS is 12; update both sides together"
@@ -366,10 +364,6 @@ fn pic_cache_layout_matches_runtime() {
         PIC_WAY_BASE + PIC_WAYS * 2,
         PIC_CACHE_WORDS,
         "the ways must fill the emitted global exactly"
-    );
-    assert_eq!(
-        PIC_NAMED_PREFIX_TOKEN, 2,
-        "runtime PicCache word 2 carries the Array-subclass named-prefix token"
     );
     let ir = emit(false, None);
     let ic_defs: Vec<&str> = ir
@@ -901,8 +895,8 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
         at = pred_label.clone();
     }
     assert!(
-        conds.len() >= 3,
-        "expected at least three guard branches between the PIC entry and the \
+        conds.len() >= 2,
+        "expected at least two guard branches between the PIC entry and the \
          inline slot load, found {}: {conds:?}\n{func}",
         conds.len()
     );
@@ -1003,14 +997,15 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     // the kind byte (#10828 closed rule 3 — a `+4` word equal to a live
     // ShapeId proves `GC_TYPE_OBJECT`) nor the descriptor flag (#10824 closed
     // rule 1 — every descriptor change transitions the ShapeId). The chain is
-    // therefore EXACTLY three branches: the receiver-tag test, the
-    // small-handle test and the ShapeId compare. Each retired predicate is
-    // asserted absent from the WHOLE function, not merely off the chain, or
-    // it could be tested somewhere the walk does not see.
+    // therefore EXACTLY two branches: the fused receiver test (tag and
+    // small-handle band in ONE unsigned range compare, `receiver_range`) and
+    // the ShapeId compare. Each retired predicate is asserted absent from the
+    // WHOLE function, not merely off the chain, or it could be tested
+    // somewhere the walk does not see.
     assert_eq!(
         conds.len(),
-        3,
-        "the guard chain must be exactly tag test, small-handle test and \
+        2,
+        "the guard chain must be exactly the fused receiver test and the \
          ShapeId compare, found {conds:?}\n{func}"
     );
     assert!(
@@ -1034,14 +1029,17 @@ fn generic_property_get_slot_load_is_reached_only_through_every_guard() {
     }
 
     for (needle, what) in [
-        // The exact POINTER test is `(bits ^ POINTER_TAG) >> 48 == 0`, on the
-        // value the pointer path then uses as its handle; the tag constant is
-        // the xor's operand.
+        // The fused receiver test: `bits - (POINTER_TAG | 0x10_0000)`
+        // compared unsigned below `2^48 - 0x10_0000` — the tag test and the
+        // small-handle test in one compare.
         (
-            crate::nanbox::POINTER_TAG_I64,
-            "the POINTER receiver-tag test",
+            crate::expr::receiver_range::RECEIVER_BIAS_LITERAL,
+            "the fused receiver test's bias (POINTER_TAG | 0x10_0000)",
         ),
-        ("1048575", "the small-handle (native registry id) test"),
+        (
+            crate::expr::receiver_range::RECEIVER_SPAN_LITERAL,
+            "the fused receiver test's span (2^48 - 0x10_0000)",
+        ),
         ("@perry_ic_", "the per-site cached shape-token compare"),
     ] {
         assert!(
@@ -1194,12 +1192,13 @@ fn generic_non_length_read_keeps_the_whole_tower() {
             "only `.length` may grow an inline string arm, found `{gone}`:\n{ir}"
         );
     }
-    // The receiver-tag test is the one test that decides whether the receiver
+    // The receiver test is the one test that decides whether the receiver
     // may be dereferenced at all, and for every key but `.length` it is the
-    // EXACT POINTER test, spelled `(bits ^ POINTER_TAG) >> 48 == 0` on the
-    // value that becomes the handle. Its false edge must be the NON-POINTER
-    // exit — a distinct block with a distinct callee, which is what stops
-    // SimplifyCFG folding this guard into the next one.
+    // fused range compare (`receiver_range`): POINTER tag AND a payload above
+    // the native-handle band, spelled `bits - (POINTER_TAG | 0x10_0000) <u
+    // 2^48 - 0x10_0000`. Its false edge must be the NON-POINTER exit — a
+    // distinct block with a distinct callee, which is what stops SimplifyCFG
+    // folding this guard into the next one.
     let branch = ir
         .lines()
         .find(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %pget.recv_other"))
@@ -1215,13 +1214,32 @@ fn generic_non_length_read_keeps_the_whole_tower() {
         .find(|l| l.trim().starts_with(&format!("{cond} = ")))
         .unwrap_or_else(|| panic!("expected the receiver-tag test defining {cond}:\n{ir}"));
     assert!(
-        tag_test.contains("icmp eq i64 ") && tag_test.trim_end().ends_with(", 0"),
-        "the exact POINTER test compares the xor-ed tag half-word to zero:\n{tag_test}"
+        tag_test.contains("icmp ult i64 ")
+            && tag_test.trim_end().ends_with(&format!(
+                ", {}",
+                crate::expr::receiver_range::RECEIVER_SPAN_LITERAL
+            )),
+        "the receiver test is ONE unsigned range compare of the biased value:\n{tag_test}"
     );
     assert!(
-        ir.contains("xor i64 %") && ir.contains(crate::nanbox::POINTER_TAG_I64),
-        "the handle must be `bits ^ POINTER_TAG`, the value the tag test is \
-         computed from:\n{ir}"
+        ir.contains("sub i64 %")
+            && ir.contains(&format!(
+                ", {}",
+                crate::expr::receiver_range::RECEIVER_BIAS_LITERAL
+            )),
+        "the biased value must be `bits - (POINTER_TAG | 0x10_0000)`:\n{ir}"
+    );
+    // A small native handle fails the fused test too. It must still reach the
+    // OBJECT exit (its registry dispatch lives in the slow entry), split off in
+    // the cold non-pointer block and never on the hit path.
+    let split = ir
+        .lines()
+        .find(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %pget.recv_nonptr"))
+        .unwrap_or_else(|| panic!("the non-pointer exit must split small handles off:\n{ir}"));
+    assert!(
+        split.contains("label %pic.miss.call"),
+        "a POINTER-tagged receiver that fails the fused test (a small handle) \
+         must go to the object exit:\n{split}"
     );
     assert!(
         branch.contains("label %pget.recv_other") && !branch.contains("label %pic.miss.call"),
@@ -1401,9 +1419,10 @@ fn compact_get_mru_is_atomic_and_full_cache_remains_lazy() {
 ///
 /// Two and not one: a single shared exit let SimplifyCFG fold the receiver-tag
 /// test and the small-handle test into one flat predicate, costing +4.00
-/// instructions on every HIT (measured). The separate non-pointer callee is
-/// what keeps that guard chain branchy, so the count below is 2 — and a change
-/// that makes it 1 is a hit-path regression, not a size win.
+/// instructions on every HIT (measured, before those two tests became the one
+/// fused compare). The separate non-pointer callee still keeps the `.length`
+/// tower's chain branchy, so the count below is 2 — and a change that makes it
+/// 1 is a hit-path regression, not a size win.
 /// A SPILL-located key must still be RECOGNISED — just not on the hit path.
 ///
 /// Taking the overflow-bit test off the hit path is only sound if the entry it
@@ -1492,6 +1511,9 @@ fn the_generic_tower_is_two_calls_and_a_bounded_number_of_blocks() {
         "pget.recv_ok",
         // the non-pointer exit, off the tag test's false edge
         "pget.recv_other",
+        // its split (cold): a POINTER-tagged small handle fails the fused
+        // receiver test too and goes on to the object exit from here
+        "pget.recv_nonptr",
         // `pic.recv_hdr` is GONE: it existed to load the GC header word, and
         // the ShapeId compare in `pic.token` now proves the kind (#10828) and
         // the descriptor state (#10824) that word was loaded for.

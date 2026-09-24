@@ -19,7 +19,7 @@
 //! descriptor-bearing or tombstoned object, a different shape, an unprimed
 //! site — takes the same `js_in_operator` semantics through the priming entry.
 
-use crate::nanbox::{POINTER_MASK_I64, POINTER_TAG_TOP16_I64, TAG_TRUE_I64};
+use crate::nanbox::TAG_TRUE_I64;
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::FnCtx;
@@ -68,15 +68,20 @@ pub(crate) fn lower_in_presence_ic(ctx: &mut FnCtx<'_>, obj_box: &str, key_box: 
     // all take the miss, where `js_in_operator`'s own classification decides
     // between an answer and the TypeError ECMA-262 13.10.1 step 5 requires.
     let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
-    let obj_raw = ctx.block().and(I64, &obj_bits, POINTER_MASK_I64);
-    let obj_tag = ctx.block().lshr(I64, &obj_bits, "48");
-    let is_pointer = ctx.block().icmp_eq(I64, &obj_tag, POINTER_TAG_TOP16_I64);
-    let above_handles = ctx.block().icmp_ugt(I64, &obj_raw, "1048575");
-    let eligible = ctx.block().and(I1, &is_pointer, &above_handles);
-    let eligible = ctx.block().and(I1, &eligible, &ic_slot.present);
+    // POINTER tag and above the native-handle band, in ONE unsigned range
+    // compare (`crate::expr::receiver_range`).
+    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    let obj_raw = crate::expr::receiver_range::emit_handle(ctx.block(), &recv.biased);
+    let eligible = ctx
+        .block()
+        .and(I1, &recv.is_object_pointer, &ic_slot.present);
     ctx.block().cond_br(&eligible, &guard_label, &miss_label);
 
     ctx.current_block = guard_idx;
+    crate::expr::receiver_range::emit_route_note(
+        ctx.block(),
+        crate::expr::receiver_range::Route::InPresence,
+    );
     let gc_type_addr = ctx.block().sub(I64, &obj_raw, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
     let gc_type = ctx.block().load(I8, &gc_type_ptr);

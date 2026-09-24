@@ -100,11 +100,6 @@
 use crate::object::{ObjectHeader, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Cache word 2: the optional Array-subclass class-declared named-prefix
-/// token. Mirrors `PIC_NAMED_PREFIX_TOKEN` in
-/// `perry-codegen/src/expr/property_get/generic_dispatch.rs`.
-const PIC_NAMED_PREFIX_TOKEN: usize = 2;
-
 /// The exit for a receiver that is NOT a heap pointer: the emitted site's
 /// `(tag & 0xFFFD) == 0x7FFD` test just failed.
 ///
@@ -272,40 +267,16 @@ pub extern "C" fn js_object_get_field_ic_slow(
                         }
                     }
                 }
-                // --- 3. the Array-subclass named-prefix proof --------------
-                // An object-backed Array subclass mints a new exact ShapeId on
-                // every numeric push/pop, but its class-declared named prefix
-                // does not move. The runtime proves the complete prefix once
-                // and publishes one token in cache word 2 and in ObjectMeta;
-                // any structural or descriptor transition clears the owner's.
-                //
-                // The conjunction is ordered by what it costs to ASK, not by
-                // which half the emitted tower read first: `meta` is one load
-                // from the header line this function has already touched
-                // (`obj - 8` and `obj + 4`), while the cache word is two
-                // dependent loads through the site's slot. An object with no
-                // metadata record cannot carry the token, so testing it first
-                // retires the overwhelmingly common non-subclass receiver in
-                // two instructions instead of eight — worth 6 on every miss,
-                // and the same conjunction either way.
-                let meta = (*obj).meta;
-                if !meta.is_null() {
-                    let cache = crate::object::pic_slot_peek(cache_slot);
-                    if !cache.is_null()
-                        && (*cache)[PIC_NAMED_PREFIX_TOKEN] != 0
-                        && (*meta).array_subclass_named_prefix_token
-                            == (*cache)[PIC_NAMED_PREFIX_TOKEN] as u64
-                    {
-                        // Word 1 is an INLINE slot whenever word 2 is armed: an
-                        // overflow prime writes word 2 = 0 precisely so this
-                        // address arithmetic can never see one.
-                        let slot = (*cache)[1] as usize;
-                        let field = (obj as *const u8)
-                            .add(std::mem::size_of::<ObjectHeader>() + slot * 8)
-                            as *const f64;
-                        return *field;
-                    }
-                }
+                // (There is no third arm. An object-backed Array subclass used
+                // to be served here by a class-wide "named-prefix" token held
+                // in cache word 2 and matched against the receiver's
+                // ObjectMeta, across ShapeIds the site had never been primed
+                // on. That token was site state not derived from one shape, and
+                // S6 removed it: a site now holds only `(ShapeId, slot)` pairs,
+                // and an Array-subclass receiver whose ShapeId the site has not
+                // seen takes the miss handler below like any other receiver.
+                // The token survives on the OBJECT as a prime-time proof only —
+                // see `get_field_ic_miss_impl`.)
             }
         }
     }
@@ -506,20 +477,22 @@ mod tests {
         );
     }
 
-    /// The named-prefix arm: an armed cache word 2 that matches the receiver's
-    /// ObjectMeta token serves the cached slot WITHOUT consulting the exact
-    /// ShapeId — that is the whole point of the proof, since an object-backed
-    /// Array subclass re-shapes on every numeric write.
-    ///
-    /// Driven directly against the two words the emitted ladder read, so it
-    /// pins this entry's contract with codegen rather than the subclass
-    /// machinery that publishes the token.
+    /// S6: cache word 2 is not site state any more. A word 2 that matches the
+    /// receiver's ObjectMeta named-prefix token used to serve cache word 1's
+    /// slot WITHOUT the receiver's ShapeId matching anything the site holds.
+    /// Now only a `(ShapeId, slot)` pair can serve a read, so this plants a
+    /// matching token beside a WRONG slot and requires the receiver's own
+    /// value: under the old arm the read returns the wrong slot's value.
     #[test]
-    fn an_armed_named_prefix_serves_the_cached_slot() {
+    fn a_matching_named_prefix_token_does_not_serve_a_read() {
         let _lock = crate::gc::global_side_table_test_lock();
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 8));
+        let first = scope.root_string_ptr(key_of(b"ic_slow_prefix_first"));
         let key = scope.root_string_ptr(key_of(b"ic_slow_prefix"));
+        obj.with_mut_ptr(|o| {
+            first.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 99.0))
+        });
         obj.with_mut_ptr(|o| {
             key.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 11.0))
         });
@@ -538,36 +511,26 @@ mod tests {
         unsafe { (*meta).array_subclass_named_prefix_token = TOKEN };
 
         let mut cache: PicCache = [0; PIC_CACHE_WORDS];
-        cache[PIC_NAMED_PREFIX_TOKEN] = TOKEN as i64;
-        cache[1] = 0; // the field's inline slot
-                      // Word 0 stays 0 and `packed` stays 0, so the exact-ShapeId
-                      // arm cannot serve this read: only the prefix proof can.
+        // Word 2 as the retired arm read it, matching the receiver's token,
+        // beside the WRONG slot: slot 0 holds `ic_slow_prefix_first` (99).
+        // Word 0 stays 0 and `packed` stays 0, so no `(ShapeId, slot)` pair
+        // names this receiver.
+        cache[2] = TOKEN as i64;
+        cache[1] = 0;
         let mut slot: PicCacheSlot = &mut cache;
         let packed = AtomicU64::new(0);
         let v = obj.with_mut_ptr(|o: *mut ObjectHeader| {
             key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))
         });
-        assert_eq!(v, 11.0);
         assert_eq!(
-            packed.load(Ordering::Relaxed),
-            0,
-            "a prefix hit answers from the cache and must not prime"
+            v, 11.0,
+            "the receiver's own value, not slot 0's (99): word 2 must not serve"
         );
-
-        // A token that no longer matches the receiver's must fall through to
-        // the ordinary lookup (which still answers, and primes).
-        // Through `slot`, the raw-pointer alias the IC reads: assigning to
-        // `cache` here is a write the `unused_assignments` lint cannot see
-        // through, and `-D warnings` makes that an error.
-        unsafe { (*slot)[PIC_NAMED_PREFIX_TOKEN] = (TOKEN + 1) as i64 };
-        let v = obj.with_mut_ptr(|o: *mut ObjectHeader| {
-            key.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))
-        });
-        assert_eq!(v, 11.0);
         assert_ne!(
             packed.load(Ordering::Relaxed),
             0,
-            "a stale prefix token must reach the priming miss handler"
+            "the read reached the priming miss handler, which primed the \
+             receiver's own (ShapeId, slot)"
         );
     }
 
@@ -590,8 +553,7 @@ mod tests {
         });
         let absent = scope.root_string_ptr(key_of(b"ic_slow_absent"));
         let packed = AtomicU64::new(0);
-        // A never-published slot: `pic_slot_peek` must answer null and the
-        // prefix arm must skip rather than read word 2 out of nothing.
+        // A never-published slot: nothing may read a cache word out of it.
         let mut slot: PicCacheSlot = std::ptr::null_mut();
         let v = obj.with_mut_ptr(|o: *mut ObjectHeader| {
             absent.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))

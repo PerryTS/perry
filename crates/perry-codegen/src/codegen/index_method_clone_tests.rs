@@ -834,7 +834,8 @@ fn u31_transition_clone_returns_a_proved_cached_array_hit_without_second_get() {
 
     assert!(
         clone.contains("cached_field_index.object_header")
-            && clone.contains("cached_field_index.prefix_token")
+            && clone.contains("cached_field_index.exact_token")
+            && !clone.contains("cached_field_index.prefix_token")
             && clone.contains("cached_field_index.array_header")
             && clone.contains("cached_field_index.array_load")
             && clone.contains("cached_field_index.return")

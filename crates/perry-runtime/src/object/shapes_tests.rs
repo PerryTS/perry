@@ -508,9 +508,18 @@ mod descriptor_tests_8067 {
     #[test]
     fn exhaustion_parks_without_reuse_or_alias() {
         let next = std::sync::atomic::AtomicU32::new(SHAPE_ID_END - 1);
-        assert_eq!(alloc_shape_id_from(&next), Ok(SHAPE_ID_END - 1));
-        assert_eq!(alloc_shape_id_from(&next), Err(ShapeIdExhausted));
-        assert_eq!(alloc_shape_id_from(&next), Err(ShapeIdExhausted));
+        assert_eq!(
+            alloc_shape_id_from(&next, SHAPE_ID_END),
+            Ok(SHAPE_ID_END - 1)
+        );
+        assert_eq!(
+            alloc_shape_id_from(&next, SHAPE_ID_END),
+            Err(ShapeIdExhausted)
+        );
+        assert_eq!(
+            alloc_shape_id_from(&next, SHAPE_ID_END),
+            Err(ShapeIdExhausted)
+        );
         assert_eq!(
             next.load(std::sync::atomic::Ordering::Relaxed),
             SHAPE_ID_END,

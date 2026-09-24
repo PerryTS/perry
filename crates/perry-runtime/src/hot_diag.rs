@@ -1473,3 +1473,51 @@ fn buffer_dump() {
         write_sink(sink, &out);
     }
 }
+
+/// Receiver-route admission census names, indexed by the route number the
+/// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
+const RECV_ROUTE_NAMES: [&str; 8] = [
+    "generic",
+    "generic_mru_hit",
+    "generic_way_hit",
+    "region",
+    "class_read",
+    "class_write",
+    "in_presence",
+    "cached_field_index",
+];
+
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 8] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
+
+/// Receiver-route admission census (S4 of the parity read plan): one call per
+/// execution of an inline property route that passed its receiver test.
+///
+/// Emitted ONLY by a build compiled with `PERRY_RECV_ROUTE_COUNT=1` — a
+/// COMPILE-time knob, so a product build contains no call and pays nothing.
+/// Reported once, on stderr, at exit, as one `PERRY_RECV_ROUTES` line.
+#[no_mangle]
+pub extern "C" fn js_recv_route_note(route: u32) {
+    RECV_ROUTES_REPORT.call_once(|| unsafe {
+        libc::atexit(recv_route_report);
+    });
+    if let Some(counter) = RECV_ROUTES.get(route as usize) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+extern "C" fn recv_route_report() {
+    let mut line = String::from("PERRY_RECV_ROUTES");
+    for (name, counter) in RECV_ROUTE_NAMES.iter().zip(RECV_ROUTES.iter()) {
+        line.push_str(&format!(" {name}={}", counter.load(Ordering::Relaxed)));
+    }
+    eprintln!("{line}");
+}
+
+/// Keepalive anchor — `js_recv_route_note` is called only from generated code
+/// of a census build, so the auto-optimize whole-program build would otherwise
+/// dead-strip it.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_RECV_ROUTE_NOTE: extern "C" fn(u32) = js_recv_route_note;
