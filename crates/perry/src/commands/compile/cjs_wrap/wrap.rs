@@ -471,7 +471,12 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // Resolve the require entry while the original call-site context
             // is still known. Keep relative imports spelled as written so
             // their existing cycle/deferred-module handling remains intact.
-            let resolved_require_spec = if import_spec == spec
+            // These registered facade entry points stay native even under an
+            // explicit compilePackages opt-in. Resolving them to watcher.node
+            // creates a compiled-module import whose body is intentionally absent.
+            let watcher_facade = perry_hir::is_native_module(spec)
+                && (spec == "@parcel/watcher" || spec.starts_with("@parcel/watcher-"));
+            let resolved_require_spec = if !watcher_facade && import_spec == spec
                 && !spec.starts_with("./")
                 && !spec.starts_with("../")
                 && !std::path::Path::new(spec).is_absolute()

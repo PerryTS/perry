@@ -10,7 +10,7 @@
 //! emitting a broken binary.
 
 use anyhow::Result;
-use object::Object;
+mod imports;
 use std::fs;
 use std::path::PathBuf;
 
@@ -136,10 +136,10 @@ fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
             path.display()
         )
     })?;
-    for import in file.imports().map_err(|error| {
+    for name in imports::imported_symbol_names(&file).map_err(|error| {
         anyhow::anyhow!("cannot inspect imports for `{}`: {error}", path.display())
     })? {
-        let symbol = String::from_utf8_lossy(import.name());
+        let symbol = String::from_utf8_lossy(name);
         if forbidden_node_import(&symbol) {
             anyhow::bail!(
                 "approved addon `{}` imports unsupported symbol `{}`. Perry's Node-API host supports `napi_*` / `node_api_*`, not direct libuv, V8, NAN, or Node C++ APIs.",
@@ -432,3 +432,6 @@ pub(super) fn refuse_compile_package_native_addon(
         package_name
     );
 }
+
+#[cfg(test)]
+mod binary_tests;

@@ -8,6 +8,9 @@
 
 #![cfg(any(unix, windows))]
 
+#[path = "../src/commands/compile/collect_modules/native_addon/imports.rs"]
+mod addon_imports;
+
 use object::Object;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -308,6 +311,8 @@ console.log("node-api-cache", direct.exports === addon)
         "host omitted Node-API exports required by its inventory: {missing:?}"
     );
 
+    // Match the host's CommonJS setup so the budget measures the Node-API
+    // host, not the unrelated cost of introducing CommonJS into a plain script.
     let control_entry = root.join("control.ts");
     std::fs::write(
         &control_entry,
@@ -316,6 +321,7 @@ console.log("node-api-answer", addon.answer)
 console.log("node-api-add", addon.add(19, 23))
 const direct = { exports: addon }
 console.log("node-api-cache", direct.exports === addon)
+module.exports = addon
 "#,
     )
     .expect("write no-addon size control");
@@ -361,12 +367,9 @@ console.log("node-api-cache", direct.exports === addon)
         r#"{"name":"perry-node-api-e2e","private":true}"#,
     )
     .expect("remove unused native-addon policy for zero-byte control");
-    let unconfigured_control = root.join(if cfg!(windows) {
-        "control-unconfigured.exe"
-    } else {
-        "control-unconfigured"
-    });
-    let unconfigured_compile = compile_app(root, &control_entry, &unconfigured_control);
+    // Reuse the output name: Mach-O ad-hoc signing embeds the executable's
+    // basename, so changing it alone can change the binary length.
+    let unconfigured_compile = compile_app(root, &control_entry, &control_executable);
     assert!(
         unconfigured_compile.status.success(),
         "unconfigured no-addon control compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -375,7 +378,7 @@ console.log("node-api-cache", direct.exports === addon)
     );
     assert_eq!(
         control_bytes.len(),
-        std::fs::metadata(&unconfigured_control)
+        std::fs::metadata(&control_executable)
             .expect("stat unconfigured no-addon control")
             .len() as usize,
         "an unused perry.nativeAddons policy must have a zero-byte executable delta"
@@ -417,10 +420,14 @@ console.log("node-api-cache", direct.exports === addon)
     assert_eq!(file_record["size"], staged_bytes.len() as u64);
 
     let addon = object::File::parse(&*staged_bytes).expect("parse staged addon");
-    let imports = addon.imports().expect("read staged addon imports");
+    let imports = addon_imports::imported_symbol_names(&addon).expect("read staged addon imports");
     let imported_names = imports
         .iter()
-        .map(|import| String::from_utf8_lossy(import.name()).to_string())
+        .map(|name| {
+            String::from_utf8_lossy(name)
+                .trim_start_matches('_')
+                .to_string()
+        })
         .collect::<BTreeSet<_>>();
     for required in [
         "napi_create_int32",
@@ -436,7 +443,7 @@ console.log("node-api-cache", direct.exports === addon)
         assert!(exported.contains(required), "host must export `{required}`");
     }
     #[cfg(windows)]
-    for import in &imports {
+    for import in addon.imports().expect("read PE import libraries") {
         if String::from_utf8_lossy(import.name()).starts_with("napi_") {
             assert_eq!(
                 String::from_utf8_lossy(import.library()).to_ascii_lowercase(),
@@ -941,7 +948,12 @@ fn parcel_watcher_facade_matches_real_watcher_snapshot_stream() {
     }
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let root = dir.path();
+    // Native watcher events use canonical paths (macOS aliases /var to /private/var).
+    let canonical_root = dir
+        .path()
+        .canonicalize()
+        .expect("canonical watcher project");
+    let root = canonical_root.as_path();
     std::fs::write(
         root.join("package.json"),
         r#"{"name":"perry-parcel-watcher-e2e","private":true}"#,
@@ -1004,12 +1016,12 @@ fs.mkdirSync(root, {{ recursive: true }})
 fs.writeFileSync(path.join(root, "existing.txt"), "one")
 fs.writeFileSync(path.join(root, "renamed-before.txt"), "rename")
 fs.writeFileSync(path.join(root, "deleted.txt"), "delete")
-watcher.writeSnapshot(root, snapshot, {{}}).then(() => {{
+watcher.writeSnapshot(root, snapshot, {{ backend: "brute-force" }}).then(() => {{
   fs.writeFileSync(path.join(root, "existing.txt"), "a longer updated value")
   fs.writeFileSync(path.join(root, "created.txt"), "created")
   fs.renameSync(path.join(root, "renamed-before.txt"), path.join(root, "renamed-after.txt"))
   fs.unlinkSync(path.join(root, "deleted.txt"))
-  return watcher.getEventsSince(root, snapshot, {{}})
+  return watcher.getEventsSince(root, snapshot, {{ backend: "brute-force" }})
 }}).then((events) => {{
   const normalized = events.map((event) => ({{
     type: event.type,
@@ -1034,6 +1046,22 @@ watcher.writeSnapshot(root, snapshot, {{}}).then(() => {{
             command
         },
         "real @parcel/watcher snapshot stream under Node",
+    );
+
+    // FSEvents can lag behind immediate writes on macOS. The brute-force
+    // backend compares snapshots synchronously, matching the facade contract.
+    // Require a live oracle: equal empty streams must never pass this gate.
+    let expected = serde_json::json!([
+        {"type": "create", "path": "created.txt"},
+        {"type": "delete", "path": "deleted.txt"},
+        {"type": "update", "path": "existing.txt"},
+        {"type": "create", "path": "renamed-after.txt"},
+        {"type": "delete", "path": "renamed-before.txt"}
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&node.stdout).expect("watcher oracle events"),
+        expected,
+        "real watcher must observe all five fixture changes"
     );
 
     let perry_entry = root.join("watcher-perry.js");

@@ -20,9 +20,8 @@ use super::{is_android_target, CompilationContext, ObjectCache};
 /// var in the compile driver, so passing the flag also takes this skip
 /// path on Linux/macOS.
 ///
-/// When `ctx.needs_plugins` is true the build uses `strip -x` to
-/// retain exported symbols — `dlopen`'d plugins resolve
-/// `hone_host_api_*` from the main executable's symbol table.
+/// Plugin hosts and macOS Node-API hosts use `strip -x` to retain the exported
+/// symbols their dynamically loaded libraries resolve from the executable.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn strip_final_binary(
     ctx: &CompilationContext,
@@ -59,7 +58,10 @@ pub(super) fn strip_final_binary(
     {
         return;
     }
-    if ctx.needs_plugins {
+    // Apple strip removes executable exports unless asked to preserve them.
+    // ELF strip already retains dynamic exports; keeping all ELF globals
+    // would add an unrelated static symbol table to the host-size budget.
+    if ctx.needs_plugins || (cfg!(target_os = "macos") && !ctx.native_addons.is_empty()) {
         let _ = std::process::Command::new("strip")
             .arg("-x")
             .arg(exe_path)
