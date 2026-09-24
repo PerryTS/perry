@@ -1096,6 +1096,11 @@ fn on_end(engine: &mut Engine, conn_id: i64) {
             REDIRECTS.fetch_add(1, Ordering::Relaxed);
             if let Some(req) = engine.requests.get_mut(&req_id) {
                 req.redirected = true;
+                if !req.cross_origin_redirect {
+                    req.cross_origin_redirect = url::Url::parse(&req.spec.url)
+                        .map(|first| first.origin() != req.request.url.origin())
+                        .unwrap_or(false);
+                }
                 req.conn = None;
                 req.retried = false;
                 // Re-resolve the route for the NEW url. `HTTP_PROXY` and
@@ -1127,6 +1132,7 @@ fn on_end(engine: &mut Engine, conn_id: i64) {
                     body: if req.streaming { Vec::new() } else { body },
                     final_url: req.request.url.as_str().to_string(),
                     redirected: req.redirected,
+                    cross_origin_redirect: req.cross_origin_redirect,
                 })
             });
             if let Some(response) = response {

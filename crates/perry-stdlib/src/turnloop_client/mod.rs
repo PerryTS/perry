@@ -234,6 +234,14 @@ pub(crate) struct ResponseOut {
     pub(crate) body: Vec<u8>,
     pub(crate) final_url: String,
     pub(crate) redirected: bool,
+    /// True once any followed redirect hop landed on an origin other than the
+    /// one `submit` was called with. `fetch`'s `store()` reports such a
+    /// response as `type: "cors"`: undici taints the response the first time
+    /// a hop's URL is not same-origin with the request's first URL and never
+    /// un-taints it, so an A -> B -> A chain is still `"cors"` (measured
+    /// against Node 26.5.1). A direct cross-origin request with no redirect
+    /// stays `"basic"` — there is no page origin server-side.
+    pub(crate) cross_origin_redirect: bool,
 }
 
 pub(crate) enum Outcome {
@@ -336,6 +344,9 @@ struct Req {
     decoded: Vec<u8>,
     /// True once a redirect has been followed, for `response.redirected`.
     redirected: bool,
+    /// True once a followed redirect reached a different origin than
+    /// `spec.url`'s. Sticky, for `ResponseOut::cross_origin_redirect`.
+    cross_origin_redirect: bool,
     /// True once the final head has been streamed to a streaming sink.
     streaming: bool,
     /// Set when the request has been retried once after an idle-connection
@@ -641,6 +652,7 @@ fn start_here(spec: RequestSpec, sink: Sink, prepared: Prepared) -> Result<(), D
                 decoder: None,
                 decoded: Vec::new(),
                 redirected: false,
+                cross_origin_redirect: false,
                 streaming: false,
                 retried: false,
                 delivered: false,

@@ -268,6 +268,14 @@ fn store(response: ResponseOut) -> usize {
     for (name, value) in response.headers {
         headers.append(&name, &value);
     }
+    // `"cors"` exactly when a followed redirect hop left the request's first
+    // origin (see `ResponseOut::cross_origin_redirect`); `"basic"` otherwise.
+    let type_name = if response.cross_origin_redirect {
+        "cors"
+    } else {
+        "basic"
+    }
+    .to_string();
     let id = alloc_fetch_handle_id();
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
@@ -278,7 +286,7 @@ fn store(response: ResponseOut) -> usize {
             body: response.body,
             body_present: true,
             body_used: false,
-            type_name: "basic".to_string(),
+            type_name,
             url: response.final_url,
             redirected: response.redirected,
             cached_headers_id: None,
@@ -290,5 +298,21 @@ fn store(response: ResponseOut) -> usize {
 }
 
 fn failure_for(error: ClientError) -> FetchFailure {
-    FetchFailure::from_client(error.code, error.message, error.syscall)
+    // The engine's two redirect refusals carry a `code` Node's own rejection
+    // does not: measured against Node 26.5.1, `redirect: 'error'` hitting a
+    // 3xx rejects with `cause = Error("unexpected redirect")` (no `.code`),
+    // and exceeding the redirect limit rejects with
+    // `cause = Error("redirect count exceeded")` (also no `.code`) — unlike a
+    // real transport failure (`ENOTFOUND`, …), whose cause does carry one.
+    // turnloop-http's text already matches the second message; the first
+    // needs remapping from "redirect mode is error" to Node's wording.
+    match (error.code, error.message.as_str()) {
+        ("UND_ERR_REQ_RETRY", "redirect mode is error") => {
+            FetchFailure::refused("unexpected redirect", None)
+        }
+        ("UND_ERR_REDIRECT", "redirect count exceeded") => {
+            FetchFailure::refused("redirect count exceeded", None)
+        }
+        _ => FetchFailure::from_client(error.code, error.message, error.syscall),
+    }
 }
