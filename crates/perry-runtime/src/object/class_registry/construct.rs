@@ -1686,6 +1686,10 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);
         return construct_registered_class_ref(target_cid, instance_cid, nt, args_ptr, args_len);
     }
+    // #11229: a per-evaluation class object with a distinct newTarget.
+    if is_class_object_value(func_value) {
+        return construct_class_object_with_new_target(func_value, args_ptr, args_len, nt);
+    }
     // `Reflect.construct(Int8Array, [len], newTarget)` — a typed-array
     // constructor invoked with a distinct newTarget. Build the typed array the
     // normal way, then honor `GetPrototypeFromConstructor(newTarget)`: when

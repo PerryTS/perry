@@ -43,6 +43,16 @@ pub(crate) fn is_constructor_function(value: f64) -> bool {
                 .is_some_and(|e| e.constructable)
         });
     }
+    // #11229: a per-evaluation class object (a class that captures its
+    // enclosing scope -- every such class in a CommonJS module, and any class
+    // returned from a factory) is a heap object, not a closure, so the
+    // callable check below rejected it and `Reflect.construct(C, args)` threw
+    // `is not a constructor` while `new C(...args)` worked. It is always a
+    // constructor, and `js_new_function_construct_with_new_target` already
+    // replays its constructor with its own captures.
+    if crate::object::is_class_object_value(value) {
+        return true;
+    }
     if !is_callable_function(value) {
         return false;
     }

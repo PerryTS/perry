@@ -65,3 +65,35 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     }
     instance.with_mut_ptr::<ObjectHeader, _>(|i| crate::value::js_nanbox_pointer(i as i64))
 }
+
+/// #11229: `Reflect.construct(C, args, newTarget)` where `C` is a
+/// per-evaluation class object (a capturing class) and `newTarget` is a
+/// different constructor. Construct `C` the normal way -- that replays its
+/// constructor with its own captures -- then honor
+/// `GetPrototypeFromConstructor(newTarget)`, as the Date arm does. Falling
+/// through to the generic tail instead ran the class as a plain function
+/// against a bare object, so the result was not `instanceof newTarget`.
+unsafe fn construct_class_object_with_new_target(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    new_target: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let nt = scope.root_nanbox_f64(new_target);
+    let func = scope.root_nanbox_f64(func_value);
+    let proto = new_target_custom_object_prototype(nt.get_nanbox_f64())
+        .map(|bits| scope.root_heap_word_u64(bits));
+    let result = js_new_function_construct(func.get_nanbox_f64(), args_ptr, args_len);
+    if let Some(proto) = proto {
+        let jv = crate::value::JSValue::from_bits(result.to_bits());
+        if jv.is_pointer() {
+            let addr = (jv.bits() & crate::value::POINTER_MASK) as usize;
+            super::super::prototype_chain::object_set_static_prototype(
+                addr,
+                proto.get_heap_word_u64(),
+            );
+        }
+    }
+    result
+}
