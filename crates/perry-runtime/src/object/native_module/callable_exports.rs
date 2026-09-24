@@ -1,5 +1,6 @@
 use super::callable_export_arity_table::native_callable_export_arity;
 use super::*;
+mod buffer_species;
 mod builtin_closure_metadata;
 mod module_cjs;
 pub(crate) use builtin_closure_metadata::*;
@@ -1048,7 +1049,10 @@ pub(crate) fn buffer_constructor_value() -> f64 {
             crate::value::js_nanbox_pointer(closure as i64)
         });
         slot.set(value.to_bits());
-        value
+        // #11193: `Buffer[Symbol.species]` (FastBuffer). After the slot is
+        // set, so a re-entrant read of `Buffer` during the install sees it.
+        buffer_species::install_buffer_species(value);
+        f64::from_bits(slot.get())
     })
 }
 
