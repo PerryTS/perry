@@ -163,7 +163,11 @@ fn map_store_survives_tenured_evacuation_sweeps_and_exit_walk() {
         full_collection();
         full_collection();
         let moved = ptr_from_slot(0);
-        assert_eq!(dealloc_delta(before), (0, 0), "a later sweep freed the live store");
+        assert_eq!(
+            dealloc_delta(before),
+            (0, 0),
+            "a later sweep freed the live store"
+        );
         assert!(is_registered_map(moved as usize));
         assert_eq!(js_map_get(moved, 42.0), 99.0);
         js_map_set(moved, 43.0, 100.0);
@@ -242,7 +246,11 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
 
         full_collection();
         let moved = ptr_from_slot(0);
-        assert_eq!(dealloc_delta(before), (0, 0), "a later sweep freed the live store");
+        assert_eq!(
+            dealloc_delta(before),
+            (0, 0),
+            "a later sweep freed the live store"
+        );
         assert_eq!(js_map_get(moved, 42.0), 99.0);
 
         release_current_thread_map_side_allocations();

@@ -312,14 +312,14 @@ pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
 }
 
 mod store;
-#[cfg(test)]
-pub(crate) use store::{test_from_space_map_finalizations, test_map_side_allocation};
 use store::*;
 pub(crate) use store::{
     drop_map_store_at_thread_exit, finalize_dead_copied_minor_from_space_maps,
     finalize_map_side_allocation_for_gc, map_header_moved_for_gc, map_stores_never_allocated,
     release_current_thread_map_side_allocations,
 };
+#[cfg(test)]
+pub(crate) use store::{test_from_space_map_finalizations, test_map_side_allocation};
 
 #[cfg(test)]
 thread_local! {
