@@ -75,6 +75,7 @@ fn a_lexical_fetch_result_is_not_registered_as_a_native_response() {
     );
 }
 
+mod class_decl_self_binding;
 mod instanceof_rhs;
 mod literal_shape;
 

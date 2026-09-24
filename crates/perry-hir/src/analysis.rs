@@ -957,6 +957,17 @@ pub fn remap_local_ids_in_expr(expr: &mut Expr, map: &std::collections::HashMap<
             }
             // `value` descended via walker.
         }
+        // #11142: the class self-binding local is a raw id, not a child
+        // expression. Remap it with the captures that read it.
+        Expr::ClassExprFresh {
+            evaluation_owner: Some(owner),
+            ..
+        } => {
+            if let Some(&new_id) = map.get(owner) {
+                *owner = new_id;
+            }
+            // Statics, keys and captured args descended via walker.
+        }
         Expr::Closure {
             body,
             captures,

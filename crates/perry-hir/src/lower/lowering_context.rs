@@ -403,6 +403,10 @@ pub struct LoweringContext {
     /// per-evaluation `ClassExprFresh` binding. A static write through such a
     /// class's name must reach the evaluated object, not the template.
     pub(crate) per_evaluation_class_decls: HashSet<String>,
+    /// #11142: the active `class_expr_self_bindings` entries that belong to
+    /// per-evaluation class DECLARATIONS. `new C()` and `x instanceof C` in
+    /// such a body construct and test against the evaluation too.
+    pub(crate) class_decl_self_binding_ids: Vec<LocalId>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
     /// Lexical stack of private-name scopes — one entry per enclosing class

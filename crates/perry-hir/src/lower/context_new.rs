@@ -94,6 +94,7 @@ impl LoweringContext {
             class_decl_self_binding_wanted: false,
             class_decl_self_binding: None,
             per_evaluation_class_decls: HashSet::new(),
+            class_decl_self_binding_ids: Vec::new(),
             current_class_member_is_static: false,
             private_scopes: Vec::new(),
             object_super_home_stack: Vec::new(),

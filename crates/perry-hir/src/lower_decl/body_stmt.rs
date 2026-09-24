@@ -23,7 +23,7 @@ mod for_await;
 pub(crate) mod gen_capture_scan;
 mod nested_fn_decl;
 
-use class_self_binding::{decl_self_binding_owner, lower_body_class_decl};
+use class_self_binding::{decl_self_binding_init, decl_self_binding_owner, lower_body_class_decl};
 
 use gen_capture_scan::nested_generator_references_outer_locals;
 
@@ -366,11 +366,19 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     .lookup_class_captures(&class.name)
                     .map(|ids| ids.iter().map(|id| Expr::LocalGet(*id)).collect())
                     .unwrap_or_default();
+                // #11142: a self-binding capture holds the evaluated class
+                // object, so snapshot the captures only once it exists.
+                let mut deferred_capture_snapshot = None;
                 if !captured_exprs.is_empty() {
-                    result.push(Stmt::Expr(Expr::RegisterClassCaptures {
+                    let snapshot = Stmt::Expr(Expr::RegisterClassCaptures {
                         class_name: class.name.clone(),
                         captures: captured_exprs.clone(),
-                    }));
+                    });
+                    if decl_self_binding.is_some() {
+                        deferred_capture_snapshot = Some(snapshot);
+                    } else {
+                        result.push(snapshot);
+                    }
                 }
                 // Captures (#6465), private brands (#5893), computed names,
                 // and dynamic heritage (#9502) belong to each evaluation.
@@ -486,18 +494,22 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         id: class_local,
                         name: binding_name,
                         ty: Type::Any,
-                        init: Some(Expr::ClassExprFresh {
-                            template: template_name,
+                        init: Some(decl_self_binding_init(
                             evaluation_owner,
-                            named_statics,
-                            computed_keys,
-                            computed_statics,
-                            static_init_order,
-                            captured_args: captured_exprs,
-                        }),
+                            Expr::ClassExprFresh {
+                                template: template_name,
+                                evaluation_owner,
+                                named_statics,
+                                computed_keys,
+                                computed_statics,
+                                static_init_order,
+                                captured_args: captured_exprs,
+                            },
+                        )),
                         mutable: false,
                     });
                 }
+                result.extend(deferred_capture_snapshot);
                 // #5251 follow-up — a function-nested `class X { … }` whose
                 // name collides with an OUTER same-named local must SHADOW
                 // that local within this scope, exactly as a nested

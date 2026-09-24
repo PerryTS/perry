@@ -156,7 +156,10 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                 // `module.exports = F`, decimal.js's `Decimal`) folded to
                 // class_id 0 and `x instanceof F` was always false. Codegen
                 // keeps the static class-id check for imported classes.
+                // #11142: a per-evaluation class declaration's own name
+                // inside its body is that evaluation's class object.
                 if ctx.lookup_local(name).is_some()
+                    || crate::lower_decl::fresh_class_decl_self_binding(ctx, name).is_some()
                     || ctx.lookup_func(name).is_some()
                     || ctx.lookup_native_module(name).is_some()
                     || ctx.lookup_imported_func(name).is_some()

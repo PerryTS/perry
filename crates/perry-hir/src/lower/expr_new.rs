@@ -279,6 +279,19 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     match callee_expr {
         ast::Expr::Ident(ident) => {
             let source_class_name = ident.sym.as_str();
+            // #11142: inside a per-evaluation class declaration, `new C()`
+            // constructs this evaluation, as `new C()` outside the body does.
+            if !force_global_intrinsic {
+                if let Some(self_id) =
+                    crate::lower_decl::fresh_class_decl_self_binding(ctx, source_class_name)
+                {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::LocalGet(self_id)),
+                        args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                        byte_offset: new_byte_offset,
+                    });
+                }
+            }
             // Hidden dynamic-function constructors reached through
             // `<function literal>.constructor` are pre-classified by
             // `fn_ctor_env`. Their call form already const-folds; construction

@@ -49,6 +49,7 @@ fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
 
 mod class_heritage;
 mod decl_self_binding;
+pub(crate) use decl_self_binding::fresh_class_decl_self_binding;
 mod from_ast;
 mod member_helpers;
 mod member_registration;

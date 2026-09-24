@@ -48,6 +48,7 @@ pub(super) fn push_decl_self_binding(
     );
     ctx.class_expr_self_bindings
         .push((source_name.to_string(), ctx.scope_depth, id));
+    ctx.class_decl_self_binding_ids.push(id);
     id
 }
 
@@ -59,6 +60,13 @@ pub(super) fn pop_decl_self_binding(ctx: &mut LoweringContext, id: LocalId) {
     {
         ctx.class_expr_self_bindings.truncate(pos);
     }
+    if let Some(pos) = ctx
+        .class_decl_self_binding_ids
+        .iter()
+        .rposition(|binding| *binding == id)
+    {
+        ctx.class_decl_self_binding_ids.truncate(pos);
+    }
     ctx.class_decl_self_binding = Some(id);
 }
 
@@ -68,4 +76,16 @@ pub(super) fn pop_decl_self_binding(ctx: &mut LoweringContext, id: LocalId) {
 /// every `this`-capturing arrow it rewrites.
 pub(super) fn substitute_static_this_with_self(expr: &mut Expr, self_id: LocalId) {
     crate::analysis::substitute_lexical_this_in_expr(expr, &Expr::LocalGet(self_id));
+}
+
+/// #11142: the self-binding local that `name` reads inside the body of a
+/// per-evaluation class DECLARATION, when that is the nearest binding of
+/// `name`. `new C()` constructs this evaluation and `x instanceof C` tests
+/// against it, instead of using the shared template. A named class
+/// expression's own binding is left alone (`None`): routing its `new` through
+/// the local would mark the binding used and move an otherwise shared-template
+/// class expression onto the fresh path.
+pub(crate) fn fresh_class_decl_self_binding(ctx: &LoweringContext, name: &str) -> Option<LocalId> {
+    ctx.resolve_class_self_binding(name)
+        .filter(|id| ctx.class_decl_self_binding_ids.contains(id))
 }

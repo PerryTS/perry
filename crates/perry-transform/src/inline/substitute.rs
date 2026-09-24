@@ -60,6 +60,19 @@ fn substitute_locals_inner(
             }
             // `value` descended via walker.
         }
+        // #11142: the class self-binding local that codegen writes the fresh
+        // class object into. It is a raw id, not a child expression, so an
+        // inlined factory otherwise left it naming the callee's local while
+        // the captures reading it were renamed.
+        Expr::ClassExprFresh {
+            evaluation_owner: Some(owner),
+            ..
+        } => {
+            if let Some(Expr::LocalGet(new_id)) = param_map.get(owner) {
+                *owner = *new_id;
+            }
+            // Statics, keys and captured args descended via walker.
+        }
         // Closure: substitute in body AND remap captures lists. Without
         // remapping captures, an inlined function whose body contains a
         // closure ends up with the closure's captures list referencing the

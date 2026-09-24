@@ -42,7 +42,9 @@ pub(crate) use class_computed::fresh_class_static_init_order;
 pub(crate) use class_computed::{
     class_computed_member_registration_expr, prepare_ordered_class_computed_names,
 };
-pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
+pub(crate) use class_decl::{
+    fresh_class_decl_self_binding, lower_class_decl, lower_class_from_ast,
+};
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
     lower_getter_method, lower_getter_method_with_name, lower_setter_method,

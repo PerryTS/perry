@@ -59,3 +59,19 @@ pub(super) fn decl_self_binding_owner(
     ctx.body_class_expr_captures.push((self_id, ids));
     Some(self_id)
 }
+
+/// #11142: the declaration's binding initializer. With an evaluation owner it
+/// is `(owner = <fresh>, owner)`, the shape `lower_class_expr` uses for a named
+/// class expression. Codegen's early `evaluation_owner` store alone is
+/// invisible to HIR passes: the async/generator transform moves the owner into
+/// a boxed state-machine local, so the direct slot store missed it and every
+/// in-body read of the class name inside an `async function` saw `undefined`.
+pub(super) fn decl_self_binding_init(evaluation_owner: Option<LocalId>, fresh: Expr) -> Expr {
+    match evaluation_owner {
+        Some(owner) => Expr::Sequence(vec![
+            Expr::LocalSet(owner, Box::new(fresh)),
+            Expr::LocalGet(owner),
+        ]),
+        None => fresh,
+    }
+}
