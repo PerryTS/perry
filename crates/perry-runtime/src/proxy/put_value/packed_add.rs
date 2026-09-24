@@ -110,8 +110,12 @@ pub struct AddWay {
 
 /// Further memos per site. Filled in order, never evicted (so a site with
 /// more stable pre-shapes than ways settles instead of cycling); a site that
-/// overflows them re-primes its primary words.
-pub const ADD_WAYS: usize = 8;
+/// overflows them re-primes its primary words. 48, not 8: Zod 3's `ZodType`
+/// constructor adds its keys to one pre-shape per subclass (36 of them), and
+/// with 8 ways 15,069 of its 78,250 executed key-adds per 200 parses re-ran
+/// the full `[[Set]]` and re-primed. A linear scan of 48 words is a small
+/// fraction of that walk, and only a polymorphic site allocates them.
+pub const ADD_WAYS: usize = 48;
 type AddWays = [AddWay; ADD_WAYS];
 
 impl PackedSetSite {
