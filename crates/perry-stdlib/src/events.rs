@@ -312,7 +312,9 @@ pub struct EventEmitterHandle {
     /// Constructor-level `{ captureRejections: true }` flag. When enabled,
     /// rejected promises returned from listeners are routed to `"error"`.
     capture_rejections: bool,
-    /// Backing AsyncResource handle for EventEmitterAsyncResource instances.
+    /// The AsyncResource for EventEmitterAsyncResource instances: the public
+    /// handle OBJECT `js_async_resource_new` returns (#10926), a movable GC
+    /// object, so `scan_events_roots_mut` visits this slot.
     async_resource_handle: i64,
     pub(crate) domain_handle: Option<Handle>,
 }
@@ -363,6 +365,13 @@ fn scan_events_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
                     visitor.visit_i64_slot(&mut l.raw_wrapper);
                 }
             }
+        }
+        // #10926: an ordinary, movable object since AsyncResource stopped
+        // being a header-less `Box`. The emitter is its only holder on the
+        // native side, so without this a collection frees or moves it and the
+        // next `emit` resolves a dangling address.
+        if emitter.async_resource_handle != 0 {
+            visitor.visit_i64_slot(&mut emitter.async_resource_handle);
         }
         for pending in emitter.pending_once_promises.values_mut() {
             for p in pending.iter_mut() {

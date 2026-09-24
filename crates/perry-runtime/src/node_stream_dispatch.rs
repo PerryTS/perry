@@ -292,7 +292,13 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsy
             });
             if value.to_bits() >> 48 == 0x7FFD {
                 let resource = (value.to_bits() & crate::value::POINTER_MASK) as i64;
-                if crate::async_hooks::is_async_resource_handle(resource) {
+                // #10926: the hidden field holds what `js_async_resource_new`
+                // returned -- the public handle OBJECT, not the native backing
+                // -- so brand it by resolving, not by backing-registry
+                // membership. `resource` stays the public object: the
+                // `asyncResource` getter hands it to JS, and every
+                // `js_async_resource_*` entry point resolves it.
+                if crate::async_hooks::resolve_async_resource_handle(resource).is_some() {
                     return Some(EventEmitterAsyncResourceBacking::RuntimeResource(resource));
                 }
             }

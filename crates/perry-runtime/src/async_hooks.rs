@@ -1261,9 +1261,13 @@ pub extern "C" fn js_async_resource_subclass_init(
 /// public emitter. Node exposes this as `emitter.asyncResource.eventEmitter`.
 /// Both sides are stable native handles, so the link does not need GC rooting.
 pub fn set_async_resource_event_emitter(handle: i64, event_emitter: i64) {
-    if handle == 0 || !ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle) {
+    // #10926: callers hold what `js_async_resource_new` returned, which is the
+    // handle OBJECT now, not the backing. Resolve it like every other entry
+    // point; an exact-membership check here silently dropped the link, so
+    // `eear.asyncResource.eventEmitter` answered `undefined`.
+    let Some(handle) = resolve_async_resource_handle(handle) else {
         return;
-    }
+    };
     unsafe { (*(handle as *mut AsyncResourceHandle)).event_emitter = event_emitter };
 }
 
