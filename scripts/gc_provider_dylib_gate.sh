@@ -77,7 +77,7 @@ runtime_manifest_backup="$scratch/perry-runtime.Cargo.toml"
 cp "$runtime_manifest" "$runtime_manifest_backup"
 perl -0pi -e 's/crate-type = \["rlib"\]/crate-type = ["dylib"]/ or die "runtime crate-type marker missing\n"' "$runtime_manifest"
 
-runtime_features="full,regex-engine,temporal,url-engine,string-normalize,intl-segmenter,intl-namespace,global-math,global-json,global-reflect,global-atomics,global-url,global-text,global-websocket,global-webcrypto,global-webfetch,proc-ipc,intl-locale,intl-datetime,diagnostics,mod-dgram,mod-http2-constants,mod-node-test,dyn-eval,keepalive-anchors,stdlib"
+runtime_features="full,regex-engine,temporal,url-engine,string-normalize,intl-segmenter,intl-namespace,global-math,global-json,global-reflect,global-atomics,global-url,global-text,global-websocket,global-webcrypto,global-webfetch,proc-ipc,intl-locale,intl-datetime,diagnostics,mod-dgram,mod-http2-constants,mod-node-test,dyn-eval,keepalive-anchors,gc-instruments,stdlib"
 if [[ "$host_os" == Darwin ]]; then
   CARGO_TARGET_DIR="$provider_target_dir" cargo rustc \
     --manifest-path "$provider_source/Cargo.toml" \
