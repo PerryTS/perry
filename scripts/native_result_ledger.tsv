@@ -99,6 +99,8 @@ js_net_block_list_rules	NR_GCPTR	crates/perry-ext-net/src/classes.rs	*mut ArrayH
 js_net_server_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_server_noop_self	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_server_once	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
+js_net_server_prepend_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
+js_net_server_prepend_once_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_server_raw_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_server_remove_all_listeners	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_server_remove_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64

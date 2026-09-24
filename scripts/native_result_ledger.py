@@ -98,8 +98,17 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # `disconnect`), and `connect` was NR_PROMISE and never counted. 309 -> 292
 # rows and 274 -> 258 providers; each figure is what the script reports on
 # the resolved tree, not arithmetic.
-EXPECTED_ROWS = 292
-EXPECTED_PROVIDERS = 258
+#
+# +2 rows / +2 providers (#11251): a typed `net.Server` gained
+# `prependListener` / `prependOnceListener` rows in
+# native_table/net_classes_state.rs, backed by
+# `js_net_server_prepend_listener` and `js_net_server_prepend_once_listener`.
+# Like `js_net_server_once`, each returns its `handle: i64` argument
+# unchanged (a registry id, not a heap address), so both are NR_HANDLE_ID.
+# 292 -> 294 rows and 258 -> 260 providers; each figure is what the script
+# reports on the resolved tree, not arithmetic.
+EXPECTED_ROWS = 294
+EXPECTED_PROVIDERS = 260
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
