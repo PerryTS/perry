@@ -66,7 +66,72 @@ fn cjs_bare_require_uses_package_require_export_condition() {
         "a package outside compilePackages must retain its bare specifier:\n{wrapped_unapproved}"
     );
     assert!(
-        !wrapped_unapproved.contains("node_modules/dual-entry/index.js"),
+        !wrapped_unapproved.lines().filter(|line| line.starts_with("import ")).any(|line| line.contains("node_modules/dual-entry/index.js")),
         "require-condition resolution must not pull an unapproved package into native compilation:\n{wrapped_unapproved}"
     );
+}
+
+#[test]
+fn require_resolve_static_files_return_canonical_filenames() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("folder")).unwrap();
+    fs::write(dir.path().join("m.js"), "module.exports = 42;").unwrap();
+    fs::write(dir.path().join("folder/index.js"), "module.exports = 7;").unwrap();
+    for (specifier, filename) in [
+        ("./m.js", "m.js"),
+        ("./m", "m.js"),
+        ("./folder", "folder/index.js"),
+    ] {
+        let source = format!("const value = require({specifier:?}); module.exports = require.resolve({specifier:?});");
+        let wrapped =
+            wrap_commonjs_for_target(&source, &dir.path().join("main.cjs"), None, false, None);
+        let expected = dir.path().join(filename).canonicalize().unwrap();
+        let case = format!(
+            "if (specifier === {}) return {};",
+            serde_json::to_string(specifier).unwrap(),
+            serde_json::to_string(&expected.to_string_lossy()).unwrap()
+        );
+        assert!(
+            wrapped.contains(&case),
+            "expected resolved filename case {case}:\n{wrapped}"
+        );
+    }
+}
+
+#[test]
+fn require_resolve_missing_optional_file_has_no_success_case() {
+    let dir = tempfile::tempdir().unwrap();
+    let wrapped = wrap_commonjs_for_target(
+        "try { require('./missing.js'); } catch (_) {}",
+        &dir.path().join("main.cjs"),
+        None,
+        false,
+        None,
+    );
+    assert!(
+        !wrapped.contains("if (specifier === \"./missing.js\") return \"./missing.js\";"),
+        "an unresolved optional file must reach MODULE_NOT_FOUND:\n{wrapped}"
+    );
+}
+
+#[test]
+fn require_resolve_builtin_identity_beats_installed_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("node_modules/fs");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("index.js"), "module.exports = {}; ").unwrap();
+    let wrapped = wrap_commonjs_for_target(
+        "require('fs'); require('node:fs');",
+        &dir.path().join("main.cjs"),
+        None,
+        false,
+        None,
+    );
+    for specifier in ["fs", "node:fs"] {
+        let encoded = serde_json::to_string(specifier).unwrap();
+        assert!(
+            wrapped.contains(&format!("if (specifier === {encoded}) return {encoded};")),
+            "builtin must keep its identity:\n{wrapped}"
+        );
+    }
 }

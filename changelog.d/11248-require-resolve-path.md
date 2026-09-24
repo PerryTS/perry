@@ -1,0 +1,3 @@
+Return canonical resolved filenames from CommonJS `require.resolve` for statically required JavaScript files, extensionless requests, and directories. Preserve builtin and hosted-addon identities, and let missing optional files raise `MODULE_NOT_FOUND` instead of returning their unresolved specifier.
+
+Resolve runtime relative requests from the requesting module’s directory using the existing file resolver, including canonical symlink handling. This also fixes relative files queried only through `require.resolve`, without creating extra per-module resolver objects or executing the resolved module.

@@ -736,15 +736,29 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
 
     let require_resolve_cases = require_specs
         .iter()
-        .map(|spec| {
-            let resolved = resolved_native_addon(source_path, spec)
-                .map(|(_, logical_id)| logical_id)
-                .unwrap_or_else(|| spec.clone());
-            format!(
+        .filter_map(|spec| {
+            // A loaded file's identity is its resolved filename, not the
+            // original require spelling. Keep builtin and hosted-addon IDs,
+            // but never claim that a missing optional file resolved.
+            let resolved = if builtin_requires.contains(spec) {
+                Some(spec.clone())
+            } else {
+                resolved_native_addon(source_path, spec)
+                    .map(|(_, logical_id)| logical_id)
+                    .or_else(|| {
+                        source_path.parent().and_then(|module_dir| {
+                            super::super::collect_modules::static_require_transform::resolve_static_require(
+                                module_dir, spec, None,
+                            )
+                        }).map(|path| path.to_string_lossy().into_owned())
+                    })
+                    .or_else(|| perry_hir::is_native_module(spec).then(|| spec.clone()))
+            }?;
+            Some(format!(
                 "        if (specifier === {}) return {};",
                 serde_json::to_string(spec).expect("specifier is JSON encodable"),
                 serde_json::to_string(&resolved).expect("resolved specifier is JSON encodable")
-            )
+            ))
         })
         .collect::<Vec<_>>()
         .join("\n");

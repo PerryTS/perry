@@ -18,6 +18,8 @@ mod import_meta_resolve;
 
 #[cfg(test)]
 mod dynamic_import_tests;
+#[cfg(test)]
+mod resolve_path_tests;
 
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -1314,7 +1316,7 @@ pub(crate) fn test_remove_path_module_root(key: &str) {
     MODULE_PATH_REGISTRY.with(|r| r.remove_for_test(key));
 }
 
-/// Node-style `require.resolve` fallback for package-subpath specifiers that
+/// Node-style `require.resolve` fallback for relative files and package subpaths that
 /// were never statically required (e.g. Next's require-hook probing
 /// `resolve('styled-jsx/package.json')`, unguarded before Next 16.2). Walks
 /// `node_modules` directories upward from `from_dir`, trying the exact file,
@@ -1324,6 +1326,14 @@ pub(crate) fn test_remove_path_module_root(key: &str) {
 pub extern "C" fn js_require_resolve_node_modules(from_dir: f64, specifier: f64) -> f64 {
     let from = value_to_string(from_dir, "from");
     let spec = value_to_string(specifier, "specifier");
+    if spec == "." || spec == ".." || spec.starts_with("./") || spec.starts_with("../") {
+        // Resolve from this CJS module, not the process cwd or the shared
+        // createRequire instance. Reuse extension/directory lookup and realpath
+        // handling so a resolve-only request has the same file identity.
+        return resolve_file(&std::path::Path::new(&from).join(&spec))
+            .map(|path| string_value(&path.to_string_lossy()))
+            .unwrap_or_else(undefined);
+    }
     if spec.is_empty() || spec.starts_with('.') {
         return f64::from_bits(TAG_UNDEFINED);
     }
