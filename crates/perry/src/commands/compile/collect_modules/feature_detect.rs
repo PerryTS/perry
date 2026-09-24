@@ -176,6 +176,23 @@ pub(super) fn detect_optional_feature_usage(
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
 
+    // #11125: these global constructors call stdlib stream FFIs without an
+    // import or a NativeMethodCall. Discover them before entry codegen emits
+    // dispatcher initialization; link-time symbol discovery is too late.
+    // Include value-form constructors and uses nested in class/function bodies.
+    if [
+        "CompressionStream",
+        "DecompressionStream",
+        "TextEncoderStream",
+        "TextDecoderStream",
+    ]
+    .iter()
+    .any(|name| hir_debug.contains(name))
+    {
+        ctx.needs_stdlib = true;
+        ctx.native_module_imports.insert("stream/web".to_string());
+    }
+
     // Detect fetch() usage — js_fetch_with_options lives in perry-stdlib
     if hir_module.uses_fetch {
         ctx.needs_stdlib = true;
@@ -772,6 +789,42 @@ mod tests {
             crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
         super::detect_optional_feature_usage(&mut ctx, &hir);
         ctx
+    }
+
+    #[test]
+    fn web_transform_constructors_enable_dispatch_before_codegen() {
+        for constructor in [
+            "CompressionStream",
+            "DecompressionStream",
+            "TextEncoderStream",
+            "TextDecoderStream",
+        ] {
+            let args =
+                if constructor.contains("Compression") || constructor.contains("Decompression") {
+                    "\"gzip\""
+                } else {
+                    ""
+                };
+            for source in [
+                format!("const stream = new {constructor}({args});"),
+                format!("function make() {{ return new {constructor}({args}); }}"),
+                format!("class C {{ make() {{ return new {constructor}({args}); }} }}"),
+                format!("const Factory = {constructor}; const stream = new Factory({args});"),
+            ] {
+                let ctx = detect_for_source(&source);
+                assert!(
+                    ctx.needs_stdlib,
+                    "dispatcher initialization missing: {source}"
+                );
+                assert!(
+                    ctx.native_module_imports.contains("stream/web"),
+                    "stream feature missing: {source}"
+                );
+            }
+        }
+        let control = detect_for_source("class C { make() { return {}; } }");
+        assert!(!control.needs_stdlib);
+        assert!(!control.native_module_imports.contains("stream/web"));
     }
 
     /// #11121: `@redis/client`'s `static parseURL` is the only URL use in its
