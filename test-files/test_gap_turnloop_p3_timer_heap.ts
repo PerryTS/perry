@@ -1,7 +1,7 @@
 // turnloop P3 — the agent timer heap: one expiry-ordered structure, and the
 // ref/unref liveness that decides whether the loop waits for it.
 //
-// Measured against the pinned oracle (Node 26.5.1), five runs each.
+// Compared against the pinned oracle in .node-version.
 //
 //   1. **Cross-class deadline ordering.** An interval is not a separate class
 //      for ordering: `setInterval(i, 3)` fires between `setTimeout(t1, 1)` and
@@ -23,18 +23,26 @@ const log: string[] = [];
 
 function crossClassOrder(next: () => void): void {
   const fired: string[] = [];
-  const interval = setInterval(() => fired.push("i"), 3);
-  setTimeout(() => fired.push("t5"), 5);
-  setTimeout(() => fired.push("t1"), 1);
+  function record(label: string): void {
+    fired.push(label);
+    if (fired.length === 3) {
+      log.push("cross-class order: " + fired.join(","));
+      next();
+    }
+  }
+  // Register in increasing delay order: a pause between registrations can
+  // only widen the deadline gaps, never reverse them (#11148). Observe just
+  // the first interval tick, so a pause cannot add ticks to the report.
+  setTimeout(() => record("t1"), 1);
+  const interval = setInterval(() => {
+    clearInterval(interval);
+    record("i");
+  }, 3);
+  setTimeout(() => record("t5"), 5);
   const start = Date.now();
   while (Date.now() - start < 30) {
     /* every deadline above is overdue when the loop next turns */
   }
-  setTimeout(() => {
-    clearInterval(interval);
-    log.push("cross-class order: " + fired.join(","));
-    next();
-  }, 0);
 }
 
 function intervalDoesNotCatchUp(next: () => void): void {
@@ -63,28 +71,38 @@ function intervalDoesNotCatchUp(next: () => void): void {
 function unrefLiveness(next: () => void): void {
   // An unref'd interval does not keep the loop alive by itself, but it still
   // ticks while something else does — here the 40 ms timeout below. Count the
-  // ticks rather than printing each, so the count is the assertion.
+  // ticks rather than printing each, and assert that at least one ran.
   let idleTicks = 0;
   const idle = setInterval(() => idleTicks++, 5);
   idle.unref();
   log.push("unref'd interval hasRef: " + idle.hasRef());
 
   // An unref'd timeout DOES fire when the loop is still alive at its deadline.
-  const quiet = setTimeout(() => log.push("unref'd timeout fired"), 10);
+  let quietFired = false;
+  const quiet = setTimeout(() => {
+    quietFired = true;
+  }, 10);
   quiet.unref();
   log.push("unref'd timeout hasRef: " + quiet.hasRef());
   quiet.ref();
   log.push("after ref() hasRef: " + quiet.hasRef());
   quiet.unref();
 
-  // A refresh'd handle re-arms with its original delay and is ref'd again.
-  const refreshed = setTimeout(() => log.push("refreshed fired"), 5);
+  // A refresh'd handle re-arms with its original delay, preserving unref.
+  let refreshedFired = false;
+  const refreshed = setTimeout(() => {
+    refreshedFired = true;
+  }, 5);
   refreshed.unref();
   refreshed.refresh();
   log.push("after refresh() hasRef: " + refreshed.hasRef());
 
   setTimeout(() => {
     clearInterval(idle);
+    // This arm tests liveness, not relative order: a scheduling pause while
+    // registering quiet/refreshed can legitimately swap their deadlines.
+    log.push("refreshed fired: " + refreshedFired);
+    log.push("unref'd timeout fired: " + quietFired);
     log.push("unref'd interval ticked while the loop was alive: " + (idleTicks > 0));
     next();
   }, 40);
