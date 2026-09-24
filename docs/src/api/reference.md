@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2817 entries across 115 modules.
+Total: 2803 entries across 114 modules.
 
 ## Modules
 
@@ -56,7 +56,6 @@ Total: 2817 entries across 115 modules.
 - [`iovalkey`](#iovalkey)
 - [`lodash`](#lodash)
 - [`module`](#module)
-- [`mongodb`](#mongodb)
 - [`net`](#net)
 - [`node-fetch`](#node-fetch)
 - [`node-pty`](#node-pty)
@@ -1891,25 +1890,6 @@ Total: 2817 entries across 115 modules.
 - `constants`
 - `default`
 - `globalPaths`
-
-## `mongodb`
-
-### Methods
-
-- `close` — instance
-- `collection` — instance
-- `connect` — module
-- `connect` — instance
-- `countDocuments` — instance
-- `db` — instance
-- `deleteMany` — instance
-- `deleteOne` — instance
-- `find` — instance
-- `findOne` — instance
-- `insertMany` — instance
-- `insertOne` — instance
-- `updateMany` — instance
-- `updateOne` — instance
 
 ## `net`
 
