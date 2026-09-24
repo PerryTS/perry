@@ -79,3 +79,55 @@ fn typed_nested_array_field_keeps_array_map_specialization() {
         "a statically typed Array field should retain the dense fast path: {hir}"
     );
 }
+
+/// #11187: a call result whose static type is `any` is not an Array, so
+/// `.sort(obj)` / `.flat()` / `.toSpliced()` / `.map(f)` on it must reach
+/// the receiver's own method through dynamic dispatch (mongodb's
+/// `collection.find({}).sort({ a: 1 })`).
+#[test]
+fn any_call_result_receiver_does_not_fold_to_array_methods() {
+    let hir = format!(
+        "{:?}",
+        lower(
+            r#"
+            function run(holder: any, flag: boolean, other: any) {
+                holder.find().sort({ a: 1 });
+                holder.find().flat();
+                holder.find().toSpliced(0, 1);
+                (flag ? holder : other).map((x: any) => x);
+            }
+            "#,
+        )
+    );
+
+    for folded in ["ArraySort", "ArrayFlat", "ArrayToSpliced", "ArrayMap"] {
+        assert!(
+            !hir.contains(folded),
+            "an unproven receiver was folded to {folded}: {hir}"
+        );
+    }
+}
+
+/// #11187 control: receivers proven to be Arrays keep the dense folds.
+#[test]
+fn proven_array_call_results_keep_array_folds() {
+    let hir = format!(
+        "{:?}",
+        lower(
+            r#"
+            function nums(): number[] { return [3, 1, 2]; }
+            function run(s: string) {
+                nums().sort((a, b) => a - b);
+                nums().map((n) => [n]).flat();
+                nums().toSpliced(0, 1);
+                s.split(",").sort((a, b) => (a < b ? -1 : 1));
+                [1, 2].map((n) => n).sort((a, b) => a - b);
+            }
+            "#,
+        )
+    );
+
+    assert_eq!(hir.matches("ArraySort").count(), 3, "{hir}");
+    assert!(hir.contains("ArrayFlat"), "{hir}");
+    assert!(hir.contains("ArrayToSpliced"), "{hir}");
+}

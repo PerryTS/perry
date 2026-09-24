@@ -325,6 +325,40 @@ fn chain_roots_at_array(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     }
 }
 
+/// #11187: may the dense `Expr::Array<Method>` fold below claim this
+/// receiver?
+///
+/// A bare identifier keeps its existing, type-driven classification (the
+/// `recv_is_class` Ident arm and the `local_array_methods.rs` pass own it):
+/// only an *untyped* (`None` / `any` / `unknown`) local is unproven. Every
+/// other receiver shape — a call result, `await`, a conditional, a property,
+/// `this`, `new` — must be positively proven to be an Array, either by its
+/// inferred static type or by rooting at an Array producer.
+///
+/// Before this, a call-result receiver was classified by *method name* alone:
+/// the overlapping callback names (`map`, `find`, …) required a proven root,
+/// but `sort`, `flat` and `toSpliced` folded unconditionally, so mongodb's
+/// `collection.find({}).sort({ a: 1 })` (`FindCursor.prototype.sort`) became
+/// `Array.prototype.sort` and threw "The comparison function must be either a
+/// function or undefined". Declining is always sound: the generic tail's
+/// dynamic dispatch selects by the receiver's runtime shape, so a real Array
+/// still reaches the dense helper.
+fn receiver_is_proven_array(ctx: &LoweringContext, obj: &ast::Expr) -> bool {
+    if let ast::Expr::Ident(ident) = unwrap_transparent_expr(obj) {
+        return !matches!(
+            ctx.lookup_local_type(ident.sym.as_ref()),
+            None | Some(Type::Any) | Some(Type::Unknown)
+        );
+    }
+    let ty = crate::lower_types::infer_type_from_expr(obj, ctx);
+    matches!(ty, Type::Array(_) | Type::Tuple(_))
+        || matches!(
+            &ty,
+            Type::Generic { base, .. } if base == "Array" || base == "ReadonlyArray"
+        )
+        || chain_roots_at_array(ctx, obj)
+}
+
 /// `CallExpr` form of [`chain_roots_at_array`] (the inner-call arm hands us a
 /// `&CallExpr`, not an `&Expr`).
 fn call_roots_at_array(ctx: &LoweringContext, call: &ast::CallExpr) -> bool {
@@ -723,6 +757,33 @@ pub(super) fn try_array_only_methods(
                                 && !chain_roots_at_array(ctx, &member.obj)
                         };
                 if nested_callback_receiver_is_ambiguous {
+                    return Ok(Err(args));
+                }
+                // #11187: the arms below that fold with no receiver evidence of
+                // their own — the callback iterators, `sort`, `flat`,
+                // `toSpliced` — require a proven Array receiver. (`slice`,
+                // `join`, `indexOf`, `includes`, `push`, `with`, `entries`/
+                // `keys`/`values`, `reduceRight`, `toReversed` and `toSorted`
+                // already check their own proof.) See
+                // [`receiver_is_proven_array`].
+                if matches!(
+                    method_name,
+                    "map"
+                        | "filter"
+                        | "forEach"
+                        | "find"
+                        | "findIndex"
+                        | "findLast"
+                        | "findLastIndex"
+                        | "some"
+                        | "every"
+                        | "reduce"
+                        | "sort"
+                        | "flat"
+                        | "toSpliced"
+                ) && !recv_is_class
+                    && !receiver_is_proven_array(ctx, &member.obj)
+                {
                     return Ok(Err(args));
                 }
                 // `entries` / `keys` / `values` are not Array-only names.
