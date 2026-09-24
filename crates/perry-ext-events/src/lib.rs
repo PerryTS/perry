@@ -301,6 +301,8 @@ pub struct EventEmitterHandle {
     max_listeners: f64,
     capture_rejections: bool,
     domain_handle: Option<Handle>,
+    /// The public AsyncResource handle OBJECT (#10926): movable, so the GC
+    /// scanner visits this slot.
     async_resource_handle: i64,
 }
 
@@ -540,6 +542,13 @@ fn scan_events_roots(visitor: &mut EventsRootVisitor) {
                     visitor.visit_i64_slot(&mut l.raw_wrapper);
                 }
             }
+        }
+        // #10926: `js_async_resource_new` returns an ordinary, movable handle
+        // object now (it used to be a never-freed `Box`), and this slot is its
+        // only native-side holder -- the same visit the in-tree
+        // `perry-stdlib` events scanner makes.
+        if is_heap_pointer_candidate(emitter.async_resource_handle) {
+            visitor.visit_i64_slot(&mut emitter.async_resource_handle);
         }
         for pending in emitter.pending_once_promises.values_mut() {
             for p in pending.iter_mut() {
