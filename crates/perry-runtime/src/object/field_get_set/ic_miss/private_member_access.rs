@@ -529,6 +529,70 @@ mod repeated_evaluation_tests {
         crate::value::js_nanbox_pointer(class as i64)
     }
 
+    extern "C" fn super_owner_probe(_this: f64) -> f64 {
+        current_private_lexical_brand_value(62_537).unwrap_or(0.0)
+    }
+
+    extern "C" fn root_owner_probe(_this: f64) -> f64 {
+        0.0
+    }
+
+    #[test]
+    fn repeated_evaluation_super_uses_pinned_parent_owner() {
+        unsafe {
+            const CID: u32 = 62_537;
+            const ROOT: u32 = 62_538;
+            crate::object::js_register_class_parent(CID, ROOT);
+            for (cid, method) in [
+                (CID, super_owner_probe as *const u8),
+                (ROOT, root_owner_probe as *const u8),
+            ] {
+                crate::object::js_register_class_method(
+                    cid as i64,
+                    b"owner".as_ptr(),
+                    5,
+                    method as i64,
+                    0,
+                    0,
+                    0,
+                );
+            }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let a = scope.root_nanbox_f64(class_object(CID));
+            let b = scope.root_nanbox_f64(class_object(CID));
+            let parent_key =
+                super::super::super::class_registry::parent_static::CLASS_OBJECT_PARENT_KEY;
+            let key =
+                crate::string::js_string_from_bytes(parent_key.as_ptr(), parent_key.len() as u32);
+            js_object_set_field_by_name(
+                JSValue::from_bits(b.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>()
+                    as *mut ObjectHeader,
+                key,
+                a.get_nanbox_f64(),
+            );
+            let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            stamp_private_evaluation_brand(
+                object.get_raw_mut_ptr::<ObjectHeader>(),
+                b.get_nanbox_f64(),
+            );
+            private_lexical_brand_push(b.get_nanbox_f64());
+            let result = crate::object::js_super_method_call_dynamic(
+                CID,
+                b"owner".as_ptr(),
+                5,
+                crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
+                std::ptr::null(),
+                0,
+            );
+            private_lexical_brand_pop();
+            assert_eq!(
+                result.to_bits(),
+                a.get_nanbox_f64().to_bits(),
+                "super must use its exact pinned parent evaluation"
+            );
+        }
+    }
+
     #[test]
     fn repeated_evaluations_use_distinct_private_field_markers() {
         unsafe {
@@ -554,7 +618,14 @@ mod repeated_evaluation_tests {
             let scope = crate::gc::RuntimeHandleScope::new();
             let a = scope.root_nanbox_f64(class_object(CID));
             let b = scope.root_nanbox_f64(class_object(CID));
-            let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            let layout = format!("#<perry:private-value:{CID}:#v>\0");
+            let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc_class_with_keys(
+                CID,
+                0,
+                1,
+                layout.as_ptr(),
+                layout.len() as u32,
+            ));
             let parent_key =
                 super::super::super::class_registry::parent_static::CLASS_OBJECT_PARENT_KEY;
             let parent_key =
@@ -641,6 +712,38 @@ mod repeated_evaluation_tests {
                 Some(33.0)
             );
             assert_eq!(private_member_access_hints_savepoint(), depth);
+
+            // Generic assignment must consume the guard's owner hint too.
+            for value in [44.0, 55.0, 66.0] {
+                let receiver = crate::value::js_nanbox_pointer(
+                    object.get_raw_mut_ptr::<ObjectHeader>() as i64,
+                );
+                js_private_guard(receiver, a.get_nanbox_f64(), CID, b"#v".as_ptr(), 2, 0, 1);
+                assert_eq!(private_member_access_hints_savepoint(), depth + 1);
+                crate::proxy::js_put_value_set(
+                    receiver,
+                    crate::value::js_nanbox_string(
+                        request.get_raw_mut_ptr::<crate::StringHeader>() as i64,
+                    ),
+                    value,
+                    receiver,
+                    1,
+                );
+                assert_eq!(
+                    private_member_access_hints_savepoint(),
+                    depth,
+                    "PutValue must consume a private field write hint"
+                );
+                private_lexical_brand_push(a.get_nanbox_f64());
+                assert_eq!(
+                    private_evaluation_field_get(
+                        object.get_raw_mut_ptr::<ObjectHeader>(),
+                        request.get_raw_mut_ptr::<crate::StringHeader>()
+                    ),
+                    Some(value)
+                );
+                private_lexical_brand_pop();
+            }
         }
     }
 

@@ -156,6 +156,17 @@ pub extern "C" fn js_put_value_set(
     {
         let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
         let key_ptr = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        // A template private-field slot is not the storage for a fresh
+        // evaluation. Consume the guard hint and select its lexical storage
+        // before the ordinary overwrite can claim that template slot.
+        if !crate::object::field_get_set::cannot_be_private_member_name(key_ptr) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value_root = scope.root_nanbox_f64(value);
+            if crate::object::field_get_set::private_member_set_by_name(obj, key_ptr, value) {
+                return value_root.get_nanbox_f64();
+            }
+            // The private helper rejects ordinary keys before any allocation.
+        }
         if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
             return value;
         }

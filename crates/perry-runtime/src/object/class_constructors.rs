@@ -825,7 +825,23 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         Ok(s) => s,
         Err(_) => return undef,
     };
-    let parent_cid = match crate::object::get_parent_class_id(child_class_id) {
+    // Repeated evaluations can share a template id, so the template parent
+    // table cannot represent their heritage edge. Resolve the method's own
+    // evaluation first, then read its pinned parent.
+    let lexical_owner = super::field_get_set::current_private_lexical_brand_value(child_class_id)
+        .or_else(|| {
+            super::field_get_set::private_evaluation_brand_value(this_value)
+                .and_then(|owner| pinned_class_object_for_ancestor(owner, child_class_id))
+        });
+    let parent_owner = lexical_owner.and_then(|owner| {
+        let object = crate::value::JSValue::from_bits(owner.to_bits()).as_pointer::<ObjectHeader>();
+        super::class_registry::class_object_pinned_parent(object)
+    });
+    let parent_cid = parent_owner
+        .map(super::class_registry::parent_static::dynamic_value_class_id)
+        .filter(|cid| *cid != 0)
+        .or_else(|| crate::object::get_parent_class_id(child_class_id));
+    let parent_cid = match parent_cid {
         Some(p) if p != 0 => p,
         // #6316: `class Bus extends EventEmitter` has NO registered parent —
         // the native base is not a perry class, so nothing was ever wired into
@@ -834,11 +850,15 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         // displaced is the correct target.
         _ => return call_displaced_native_base_method(this_value, name, args_ptr, args_len, undef),
     };
+    let _parent_brand =
+        super::field_get_set::PrivateHintBrandScope::new(parent_owner.map(f64::to_bits));
     // Static-context super call (`super.m()` inside a `static` method): the
     // receiver is the class constructor (a ClassRef), so resolve the PARENT's
     // STATIC method (not an instance/prototype method) and invoke it with
     // `this` bound to the current class. Refs class/super/in-static-methods.
-    if super::class_ref_id(this_value).is_some() {
+    if super::class_ref_id(this_value).is_some()
+        || super::class_registry::is_class_object_value(this_value)
+    {
         if let Some((func_ptr, param_count, has_rest)) =
             super::class_registry::lookup_static_method_in_chain(parent_cid, name)
         {
@@ -887,7 +907,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     let resolved = super::class_registry::lookup_class_method_in_chain(parent_cid, name);
     if let Some((func_ptr, param_count, has_synth, has_rest)) = resolved {
         let this_raw = (this_value.to_bits() & crate::value::POINTER_MASK) as i64;
-        return call_vtable_method(
+        return super::class_registry::call_vtable_method_with_private_brand(
             func_ptr,
             this_raw,
             args_ptr,
@@ -895,6 +915,9 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
             param_count,
             has_synth,
             has_rest,
+            parent_owner
+                .or_else(|| super::field_get_set::private_evaluation_brand_value(this_value))
+                .unwrap_or(undef),
         );
     }
     // The parent may be a function-style class whose method lives in the
