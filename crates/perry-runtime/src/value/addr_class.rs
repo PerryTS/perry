@@ -18,7 +18,7 @@
 //! |------------------------|------------------------------------------------------------------|
 //! | `0`                    | null / INVALID_HANDLE                                            |
 //! | `[1, 0x40000)`         | perry-stdlib `common/handle.rs` registry (net.Socket, node:http, |
-//! |                        | crypto, fastify, ioredis, UI widgets, timers, …)                 |
+//! |                        | crypto, fastify, UI widgets, timers, …)                          |
 //! | `[0x40000, 0xE0000)`   | Web Fetch family (Request/Response/Headers/Blob), perry-stdlib   |
 //! |                        | `fetch/mod.rs` `FETCH_HANDLE_ID_{START,END}` (#3973/#3974/#4004) |
 //! | `[0xE0000, 0xF0000)`   | zlib streams, perry-stdlib `zlib.rs` (#1843)                     |

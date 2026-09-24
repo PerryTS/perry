@@ -951,7 +951,7 @@ pub(super) fn get_field_ic_miss_impl(
             }
         }
     }
-    // Issue #340: small-handle receivers (axios, fastify, ioredis,
+    // Issue #340: small-handle receivers (axios, fastify,
     // ...) are passed here from the codegen IC miss path with the
     // lower-48 of the NaN-box stripped — `obj as usize` is the
     // raw handle id (1, 2, 3, ...). Route to HANDLE_PROPERTY_DISPATCH

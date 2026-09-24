@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 
 /// Function pointer type for dispatching method calls on handle-based objects.
 /// Handle-based objects use small integer IDs (1, 2, 3...) instead of real heap pointers.
-/// This is registered by perry-stdlib to dispatch to Fastify, ioredis, etc.
+/// This is registered by perry-stdlib to dispatch to Fastify, etc.
 pub type HandleMethodDispatchFn = unsafe extern "C" fn(
     handle: i64,
     method_name_ptr: *const u8,

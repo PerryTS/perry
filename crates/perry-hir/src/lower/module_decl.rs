@@ -687,7 +687,6 @@ pub(crate) fn lower_module_decl(
                                             "WebSocket" | "WebSocketServer" => {
                                                 Some("ws".to_string())
                                             }
-                                            "Redis" => Some("ioredis".to_string()),
                                             _ => None,
                                         }
                                     };
@@ -750,7 +749,6 @@ pub(crate) fn lower_module_decl(
                                                 "WebSocket" | "WebSocketServer" => {
                                                     Some("ws".to_string())
                                                 }
-                                                "Redis" => Some("ioredis".to_string()),
                                                 _ => None,
                                             }
                                         };
@@ -1466,7 +1464,7 @@ pub(crate) fn lower_module_decl(
                             // existence (`module_has_public_named_export` reads
                             // the generated API manifest, which is exhaustive
                             // only for core modules). Other Perry-native npm
-                            // packages (ws, ioredis, mysql2, ...) still need the
+                            // packages (ws, mysql2, ...) still need the
                             // same synthetic-import treatment below — #11044:
                             // ethers' `ws.ts` does `export { WebSocket } from
                             // "ws"`, and without this a facade re-export of a

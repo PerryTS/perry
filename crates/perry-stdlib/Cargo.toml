@@ -191,7 +191,7 @@ external-tls-server = [
 # copies are GONE. They were the pre-#466 in-stdlib implementations, kept as
 # the fallback the well-known flip declined to. Every `extern "C"` symbol they
 # defined is also defined — and strictly extended — by perry-ext-pg /
-# perry-ext-mysql2 / perry-ext-ioredis / perry-ext-mongodb, which is the only
+# perry-ext-mysql2 / perry-ext-ioredis (since removed) / perry-ext-mongodb, which is the only
 # path the flip has routed those imports down since v0.5.565-568. Keeping them
 # cost perry-stdlib a `sqlx` + `redis` + `mongodb` manifest edge, and 76 of the
 # 502 packages in this crate's own dependency closure (502 -> 426), for code no

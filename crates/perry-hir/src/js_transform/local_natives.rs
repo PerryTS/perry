@@ -664,7 +664,6 @@ pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static
         ("mongodb", "collection") => Some("Collection"),
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
         ("pg", "connect") => Some("PoolClient"),
-        ("ioredis", "duplicate") => Some("Redis"),
         _ => None,
     }
 }
@@ -1380,7 +1379,6 @@ pub fn detect_native_instance_creation_with_context(
                     Some((module.clone(), "PoolConnection".to_string()))
                 }
                 ("pg", "Pool", "connect") => Some((module.clone(), "PoolClient".to_string())),
-                ("ioredis", "Redis", "duplicate") => Some((module.clone(), "Redis".to_string())),
                 ("better-sqlite3", "Database", "prepare") => {
                     Some((module.clone(), "Statement".to_string()))
                 }
@@ -1416,9 +1414,6 @@ pub fn detect_native_instance_creation_with_context(
                             }
                             ("pg", "Pool", "connect") => {
                                 Some((module.clone(), "PoolClient".to_string()))
-                            }
-                            ("ioredis", "Redis", "duplicate") => {
-                                Some((module.clone(), "Redis".to_string()))
                             }
                             ("better-sqlite3", "Database", "prepare") => {
                                 Some((module.clone(), "Statement".to_string()))

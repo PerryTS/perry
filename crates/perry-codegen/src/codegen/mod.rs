@@ -2714,7 +2714,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // Per-module local-name → import-source map. Walks `hir.imports`
         // and records every named/default import binding's source spec.
         // `lower_builtin_new` consults this to gate ambiguously-named
-        // built-in arms (Client / Pool / Database / Redis / MongoClient /
+        // built-in arms (Client / Pool / Database / MongoClient /
         // Decimal) on the import source — `import Client from
         // "better-sqlite3"` should not dispatch through pg's Client arm.
         // See issue #602.

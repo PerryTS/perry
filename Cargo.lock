@@ -225,21 +225,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
-name = "arc-swap"
-version = "1.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
-name = "arcstr"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03918c3dbd7701a85c6b9887732e2921175f26c350b4563841d0958c21d57e6d"
-
-[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,15 +480,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7178fe5f7d460b13895ebb9dcb28a3a6216d2df2574a0806cb51b555d297f38"
 dependencies = [
  "arrayvec",
-]
-
-[[package]]
-name = "backon"
-version = "1.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
-dependencies = [
- "fastrand",
 ]
 
 [[package]]
@@ -1084,11 +1060,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
- "futures-core",
  "memchr",
- "pin-project-lite",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -2315,7 +2287,6 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-macro",
- "futures-sink",
  "futures-task",
  "memchr",
  "pin-project-lite",
@@ -4571,16 +4542,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "num-bigint"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
 name = "num-bigint-dig"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4639,7 +4600,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint 0.4.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -5494,18 +5455,6 @@ dependencies = [
  "url",
  "webpki-roots 1.0.9",
  "x509-cert",
-]
-
-[[package]]
-name = "perry-ext-ioredis"
-version = "0.5.1654"
-dependencies = [
- "perry-db-turnloop",
- "perry-ffi",
- "perry-runtime",
- "redis",
- "tokio",
- "turnloop-redis",
 ]
 
 [[package]]
@@ -6760,34 +6709,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redis"
-version = "1.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
-dependencies = [
- "arc-swap",
- "arcstr",
- "async-lock",
- "backon",
- "bytes",
- "cfg-if",
- "combine",
- "futures-channel",
- "futures-util",
- "itoa",
- "num-bigint 0.5.1",
- "percent-encoding",
- "pin-project-lite",
- "ryu",
- "sha1_smol",
- "socket2",
- "tokio",
- "tokio-util",
- "url",
- "xxhash-rust",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7368,12 +7289,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sha1_smol"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
-
-[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7805,7 +7720,7 @@ dependencies = [
  "bytes-str",
  "either",
  "from_variant",
- "num-bigint 0.4.6",
+ "num-bigint",
  "once_cell",
  "rustc-hash 2.1.2",
  "serde",
@@ -7852,7 +7767,7 @@ checksum = "724195600825cbdd2a899d5473d2ce1f24ae418bff1231f160ecf38a3bc81f46"
 dependencies = [
  "bitflags 2.12.1",
  "is-macro",
- "num-bigint 0.4.6",
+ "num-bigint",
  "once_cell",
  "phf 0.11.3",
  "rustc-hash 2.1.2",
@@ -7872,7 +7787,7 @@ dependencies = [
  "ascii",
  "compact_str",
  "memchr",
- "num-bigint 0.4.6",
+ "num-bigint",
  "once_cell",
  "regex",
  "rustc-hash 2.1.2",
@@ -7921,7 +7836,7 @@ checksum = "e63984b544fe1d8f66e9ce616e57429bb878572fcf1504851ef9d9f4f5260e2b"
 dependencies = [
  "bitflags 2.12.1",
  "either",
- "num-bigint 0.4.6",
+ "num-bigint",
  "phf 0.11.3",
  "rustc-hash 2.1.2",
  "seq-macro",
@@ -7941,7 +7856,7 @@ checksum = "e1d0c36843109fff178bbedc439b4190daa865d78e553134243a4df220329fdd"
 dependencies = [
  "bitflags 2.12.1",
  "either",
- "num-bigint 0.4.6",
+ "num-bigint",
  "phf 0.11.3",
  "rustc-hash 2.1.2",
  "seq-macro",
@@ -8068,7 +7983,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a69d63f7f704a2ec937edef90a3eba1f64602eceb60c8deb260c01131f680e8b"
 dependencies = [
  "new_debug_unreachable",
- "num-bigint 0.4.6",
+ "num-bigint",
  "swc_atoms",
  "swc_common",
  "swc_ecma_ast",
@@ -8728,12 +8643,6 @@ dependencies = [
  "stringprep",
  "turnloop-wasi-random",
 ]
-
-[[package]]
-name = "turnloop-redis"
-version = "0.1.0-alpha.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "146dcb82b9607638de22202aab70778b12ae28c0f702e4edbd390a89772b29ea"
 
 [[package]]
 name = "turnloop-smtp"

@@ -1,30 +1,10 @@
 //! Database / data-store / crypto / OS stdlib FFI declarations
-//! (extracted from stdlib_ffi.rs): redis, mongodb, sqlite, OS, crypto, nanoid.
+//! (extracted from stdlib_ffi.rs): mongodb, sqlite, OS, crypto, nanoid.
 
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_data_stores(module: &mut LlModule) {
-    // ========== Redis / ioredis ==========
-    module.declare_function("js_ioredis_connect", I64, &[I64]);
-    module.declare_function("js_ioredis_decr", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_del", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_disconnect", VOID, &[I64]);
-    module.declare_function("js_ioredis_exists", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_expire", I64, &[I64, I64, DOUBLE]);
-    module.declare_function("js_ioredis_get", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_hdel", I64, &[I64, I64, I64]);
-    module.declare_function("js_ioredis_hget", I64, &[I64, I64, I64]);
-    module.declare_function("js_ioredis_hgetall", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_hlen", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_hset", I64, &[I64, I64, I64, I64]);
-    module.declare_function("js_ioredis_incr", I64, &[I64, I64]);
-    module.declare_function("js_ioredis_new", I64, &[I64]);
-    module.declare_function("js_ioredis_ping", I64, &[I64]);
-    module.declare_function("js_ioredis_quit", I64, &[I64]);
-    module.declare_function("js_ioredis_set", I64, &[I64, I64, I64]);
-    module.declare_function("js_ioredis_setex", I64, &[I64, I64, DOUBLE, I64]);
-
     // ========== MongoDB ==========
     module.declare_function("js_mongodb_client_close", I64, &[I64]);
     module.declare_function("js_mongodb_client_connect", I64, &[I64]);

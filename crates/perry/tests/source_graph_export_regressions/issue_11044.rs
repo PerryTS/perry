@@ -3,8 +3,8 @@ use super::{compile_and_run, write};
 // #11044: the node-builtin re-export fix (#10432/#10802/#10867) only
 // special-cased `perry_api_manifest::is_node_core_module` sources. A local
 // facade module re-exporting a named binding from a Perry-native NPM
-// package that is NOT a node core builtin -- `ws`, same shape as `ioredis`,
-// `mysql2`, ... -- fell through to the generic `Export::ReExport` arm, which
+// package that is NOT a node core builtin -- `ws`, same shape as `mysql2`,
+// ... -- fell through to the generic `Export::ReExport` arm, which
 // has no compiled source module to follow either. Codegen then expected a
 // local function body for the forwarded name that was never emitted, and
 // referencing it as a value inside a closure (constructing it dynamically)

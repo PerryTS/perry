@@ -88,7 +88,6 @@ pub(crate) fn register_native_from_new_and_calls(
                             Some("__disposable__".to_string())
                         }
                         "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                        "Redis" => Some("ioredis".to_string()),
                         _ => None,
                     }
                 };
@@ -195,7 +194,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                 "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                 "AsyncResource" => Some("async_hooks".to_string()),
                                 "WebSocket" | "WebSocketServer" => Some("ws".to_string()),
-                                "Redis" => Some("ioredis".to_string()),
                                 _ => None,
                             }
                         };

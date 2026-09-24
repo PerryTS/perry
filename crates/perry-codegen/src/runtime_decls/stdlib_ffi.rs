@@ -34,7 +34,7 @@ use web::declare_web;
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // node:vm/repl/worker_threads + HTTP/HTTPS/HTTP2 client, server, agents.
     declare_net_http(module);
-    // PostgreSQL, Redis/ioredis, MongoDB, SQLite, OS, Crypto, Nanoid.
+    // PostgreSQL, MongoDB, SQLite, OS, Crypto, Nanoid.
     declare_data_stores(module);
     // bcrypt/argon2, perry/ads, perry/thread, JWT, sharp, cron,
     // async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer,

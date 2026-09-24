@@ -221,11 +221,10 @@ pub use tls::*;
 
 // === Databases ===
 // The bundled `pg` / `mysql2` / `ioredis` / `mongodb` modules were deleted in
-// turnloop P8 group H. `import 'pg'` / `'mysql2'` / `'ioredis'` / `'redis'` /
-// `'iovalkey'` / `'mongodb'` are served exclusively by the perry-ext-*
-// wrappers through the well-known flip, which is the only path they have taken
-// since v0.5.565-568; each wrapper defines a strict superset of the symbols the
-// bundled copy did. Only sqlite remains in-stdlib.
+// turnloop P8 group H. `import 'mongodb'` is served exclusively by the
+// perry-ext-mongodb wrapper through the well-known flip; `pg`, `mysql2`,
+// `ioredis`, `redis` and `iovalkey` compile the real npm package from source.
+// Only sqlite remains in-stdlib.
 // Both in-tree database wrappers that lived here are gone: the `pg`
 // module + `bundled-pg` feature (#10677) and the `mysql2` module +
 // `bundled-mysql2` feature (#10680), the pre-#466 native

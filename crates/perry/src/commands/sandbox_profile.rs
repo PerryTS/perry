@@ -61,8 +61,6 @@ pub fn build_macos_profile(ctx: &CompilationContext) -> String {
         || imports_module(ctx, "dns")
         || imports_module(ctx, "ws")
         || imports_module(ctx, "node-fetch")
-        || imports_module(ctx, "redis")
-        || imports_module(ctx, "ioredis")
         || imports_module(ctx, "undici")
         || ctx.uses_fetch;
     let needs_fs_write = imports_module(ctx, "fs")

@@ -520,7 +520,6 @@ pub(super) fn try_static_method_and_instance(
                             Some("PoolConnection")
                         }
                         ("pg", "connect") => Some("PoolClient"),
-                        ("ioredis", "duplicate") => Some("Redis"),
                         // dayjs manipulation methods return a NEW date
                         // handle — lets `d.add(7, 'day').format(...)`
                         // dispatch against the result. "App" matches the

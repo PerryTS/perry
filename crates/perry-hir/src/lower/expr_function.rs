@@ -310,7 +310,6 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
-                "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
                 "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 // Web Fetch API: Request / Response / Headers passed as

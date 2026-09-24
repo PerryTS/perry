@@ -131,47 +131,6 @@ repo = "https://github.com/ethers-io/ethers.js"
 ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
 ported-at = "6.17.0"
 date = "2026-07-30"
-[bindings.ioredis]
-crate = "perry-ext-ioredis"
-lib = "perry_ext_ioredis"
-tracking = "#466"
-
-[bindings.ioredis.upstream]
-version = "5.11.1"
-sha256 = "56b4e71ea1c54d22161a83c5d941f22c9ea53f23ecfbf332e33b7a1157b0f22b"
-repo = "https://github.com/luin/ioredis"
-ref = "fb224a7609b6d25959e06e31fdab2460d1f75691"
-ported-at = "5.11.1"
-date = "2026-07-30"
-
-# iovalkey is the Valkey project's fork of ioredis (valkey-io/iovalkey) — same
-# RESP client API, separately published and versioned. It shares the ioredis
-# wrapper crate (same `js_ioredis_*` surface) but is a distinct npm package, so
-# it carries its own provenance pin, exactly like the `redis` row below.
-[bindings.iovalkey]
-crate = "perry-ext-ioredis"
-lib = "perry_ext_ioredis"
-tracking = "#466"
-
-[bindings.iovalkey.upstream]
-version = "0.4.0"
-sha256 = "466e118e5a069cec6625fb66cb4a2af7e7019581d038f8d99de6b3d4c2a487f2"
-repo = "https://github.com/valkey-io/iovalkey"
-ref = "96aa5a84b8e72da784445066c2765a555976d3eb"
-ported-at = "0.4.0"
-date = "2026-07-30"
-[bindings.redis]
-crate = "perry-ext-ioredis"
-lib = "perry_ext_ioredis"
-tracking = "#466"
-
-[bindings.redis.upstream]
-version = "6.1.0"
-sha256 = "44bf885feeaf6ac356acfb315227999dfaa58aa7c5da226493c25bf7926fd2e5"
-repo = "https://github.com/redis/node-redis"
-ref = "d400bc9c1e7b17013c53015f098274a25aa70640"
-ported-at = "6.1.0"
-date = "2026-07-30"
 [bindings.nodemailer]
 crate = "perry-ext-nodemailer"
 lib = "perry_ext_nodemailer"

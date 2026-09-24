@@ -89,8 +89,17 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # providers; each figure is what the script reports on the resolved
 # tree, not arithmetic (#10739 -- these are CHAINED ABSOLUTES, so the
 # base moved when #11068 landed and the delta had to be re-derived).
-EXPECTED_ROWS = 309
-EXPECTED_PROVIDERS = 274
+#
+# -17 rows / -16 providers (native ioredis binding removal): deleting
+# `perry-ext-ioredis` dropped every `module: "ioredis"` row from
+# native_table/databases.rs. 16 distinct js_ioredis_* providers were
+# classified here (15 NR_GCPTR command promises + NR_HANDLE_ID
+# `js_ioredis_new`); `js_ioredis_quit` backed two rows (`quit` and
+# `disconnect`), and `connect` was NR_PROMISE and never counted. 309 -> 292
+# rows and 274 -> 258 providers; each figure is what the script reports on
+# the resolved tree, not arithmetic.
+EXPECTED_ROWS = 292
+EXPECTED_PROVIDERS = 258
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

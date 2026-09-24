@@ -37,7 +37,6 @@ for compatibility guarantees.
 - **pg** — PostgreSQL client
 - **bun:sqlite** / **node:sqlite** / **better-sqlite3** — SQLite, backed by Perry's native engine
 - **mongodb** — MongoDB client
-- **ioredis** / **redis** — Redis client
 
 ### Cryptography
 - **bcrypt** — Password hashing

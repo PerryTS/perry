@@ -14,35 +14,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     //  drift guarded by perry-codegen's manifest_consistency test)
     // ===========================================================
     method_sig(
-        "ioredis",
-        "createClient",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("ioredis", "set", true, None),
-    method("ioredis", "setex", true, None),
-    method("ioredis", "get", true, None),
-    method("ioredis", "del", true, None),
-    method("ioredis", "exists", true, None),
-    method("ioredis", "incr", true, None),
-    method("ioredis", "decr", true, None),
-    method("ioredis", "expire", true, None),
-    method("ioredis", "ping", true, None),
-    method("ioredis", "hget", true, None),
-    method("ioredis", "hset", true, None),
-    method("ioredis", "hdel", true, None),
-    method("ioredis", "hlen", true, None),
-    method("ioredis", "hgetall", true, None),
-    method("ioredis", "quit", true, None),
-    // v0.5.707 closes-#605: NATIVE_MODULE_TABLE added connect/disconnect rows
-    // when normalizing the `redis` npm package alias to ioredis dispatch.
-    // Manifest must mirror or `every_dispatch_entry_has_manifest_counterpart`
-    // fails the workspace test build.
-    method("ioredis", "connect", true, None),
-    method("ioredis", "disconnect", true, None),
-    method_sig(
         "mongodb",
         "connect",
         false,

@@ -490,7 +490,7 @@
 
     // Generic native module dispatch (with receiver): fastify instance
     // methods (app.get, app.listen, conn.query, etc.), mysql2, ws, pg,
-    // ioredis, mongodb, better-sqlite3, etc.
+    // mongodb, better-sqlite3, etc.
     if let Some(sig) = native_module_lookup(module, true, method, class_name) {
         let recv_val = lower_expr(ctx, recv)?;
         let blk = ctx.block();

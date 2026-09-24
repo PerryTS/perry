@@ -115,39 +115,3 @@ fn x509_zero_argument_method_call_uses_invoking_dispatch() {
         "the zero-argument property-read fallback returns a bound method closure:\n{ir}"
     );
 }
-
-#[test]
-fn ioredis_extended_commands_emit_their_runtime_calls() {
-    let string = || Expr::String("value".to_string());
-    let cases = [
-        (
-            "setex",
-            "js_ioredis_setex",
-            vec![string(), Expr::Number(30.0), string()],
-        ),
-        ("ping", "js_ioredis_ping", vec![]),
-        ("hget", "js_ioredis_hget", vec![string(), string()]),
-        (
-            "hset",
-            "js_ioredis_hset",
-            vec![string(), string(), string()],
-        ),
-        ("hdel", "js_ioredis_hdel", vec![string(), string()]),
-        ("hlen", "js_ioredis_hlen", vec![string()]),
-        ("hgetall", "js_ioredis_hgetall", vec![string()]),
-    ];
-
-    for (method, runtime, args) in cases {
-        let module_ir =
-            compile_native_instance_call("ioredis", None, Some(Expr::Number(1.0)), method, args);
-        let ir = build_function_ir(&module_ir);
-        assert!(
-            ir.contains(&format!("call i64 @{runtime}(")),
-            "ioredis.{method} must emit {runtime}:\n{ir}"
-        );
-        assert!(
-            !ir.contains("call double @js_native_call_method("),
-            "ioredis.{method} must not fall through to dynamic dispatch:\n{ir}"
-        );
-    }
-}

@@ -177,7 +177,6 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
                 "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
-                "Redis" => Some(("ioredis", "Redis")),
                 "EventEmitter" => Some(("events", "EventEmitter")),
                 "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
                 // Web Fetch API: Request / Response / Headers as function
@@ -278,7 +277,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
                 ));
             }
         } else {
-            // Bare type name check (e.g., `Redis` instead of `ioredis.Redis`).
+            // Bare type name check (e.g., `Pool` instead of `mysql2.Pool`).
             // Delegates to the shared table in `lower/misc.rs` rather than a
             // local copy: this list had drifted behind the parameter paths and
             // the local-`const`/factory paths (which already knew Socket and the

@@ -3,7 +3,7 @@
 //! Tier 2.2 follow-up (v0.5.339) — extracts the 399-LOC dispatcher
 //! that handles `new` calls against built-in classes (Date, Map, Set,
 //! Buffer, fetch Headers / Request / Response, mongodb MongoClient,
-//! redis Redis client, fastify App, ws WebSocketServer, pg Client /
+//! fastify App, ws WebSocketServer, pg Client /
 //! Pool, perry/plugin Decimal, AsyncLocalStorage, AbortController,
 //! Command, …). Each match arm emits a runtime call to the
 //! corresponding `js_<lib>_<class>_new(...)` C symbol.
@@ -100,7 +100,7 @@ pub(super) fn lower_builtin_new<'a>(
     group: &mut RootedGroup<'a>,
 ) -> Result<Option<String>> {
     // Issue #602: ambiguously-named built-in constructors (Client / Pool /
-    // Database / Redis / MongoClient / Decimal) collide with bindings from
+    // Database / MongoClient / Decimal) collide with bindings from
     // unrelated packages — `import Client from "better-sqlite3"` would
     // otherwise dispatch through pg's Client arm and emit an undefined
     // `js_pg_client_new` reference at link time. None of these names is a
@@ -119,7 +119,6 @@ pub(super) fn lower_builtin_new<'a>(
     let required_sources: Option<&[&str]> = match class_name {
         "Database" => Some(&["better-sqlite3"]),
         "DatabaseSync" | "Session" | "StatementSync" => Some(&["sqlite", "node:sqlite"]),
-        "Redis" => Some(&["ioredis", "redis", "iovalkey"]),
         "MongoClient" => Some(&["mongodb"]),
         "Transpiler" => Some(&["bun"]),
         _ => None,
@@ -762,26 +761,6 @@ pub(super) fn lower_builtin_new<'a>(
             };
             let blk = ctx.block();
             let handle = blk.call(I64, "js_mongodb_client_new", &[(I64, &uri_ptr)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
-        }
-        // ioredis Redis — `new Redis()` or `new Redis(opts)`. The runtime's
-        // `js_ioredis_new` reads connection settings from REDIS_HOST /
-        // REDIS_PORT / REDIS_PASSWORD / REDIS_TLS env vars and ignores its
-        // config arg; connection is lazy (the handle is registered immediately
-        // and the actual TCP/TLS connect runs on the first `.get`/`.set`/etc.).
-        // Pre-fix `new Redis()` fell into the empty-placeholder branch and
-        // every chained method (set/get/del/exists/incr/decr/expire/quit)
-        // dispatched against junk. The instance methods are wired in
-        // NATIVE_MODULE_TABLE for module: "ioredis"; this branch makes the
-        // ctor produce a real RedisClient handle so the dispatch lands on it.
-        "Redis" => {
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
-            }
-            let blk = ctx.block();
-            // The runtime sig takes one i64 (currently *const c_void, ignored).
-            // Pass 0 — semantically "use env-var defaults".
-            let handle = blk.call(I64, "js_ioredis_new", &[(I64, "0")]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // async_hooks.AsyncLocalStorage — `new AsyncLocalStorage()` produces a

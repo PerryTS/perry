@@ -72,22 +72,6 @@ js_http_set_timeout_full	NR_HANDLE_ID	crates/perry-ext-http/src/client_outgoing.
 js_https_agent_new	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	Handle
 js_https_get_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
 js_https_request_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
-js_ioredis_decr	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_del	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_exists	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_expire	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_get	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_hdel	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_hget	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_hgetall	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_hlen	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_hset	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_incr	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_new	NR_HANDLE_ID	crates/perry-ext-ioredis/src/lib.rs	Handle
-js_ioredis_ping	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_quit	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_set	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
-js_ioredis_setex	NR_GCPTR	crates/perry-ext-ioredis/src/lib.rs	*mut Promise
 js_lodash_chunk	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_compact	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_drop	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader

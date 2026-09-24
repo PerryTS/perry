@@ -502,29 +502,25 @@ fn undici_needs_shared_tokio() {
 }
 
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
-/// The codegen prefix net routes `js_ioredis_*` / `js_undici_*` to these
+/// The codegen prefix net routes `js_undici_*` to these
 /// binding keys; each must exist in the shipped `well_known_bindings.toml`
 /// and map to its `perry-ext-*` crate, or the driver's routing loop would
 /// silently drop the flip.
 #[test]
 fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
-    for (key, krate) in [
-        ("ioredis", "perry-ext-ioredis"),
-        ("undici", "perry-ext-undici"),
-    ] {
+    for (key, krate) in [("undici", "perry-ext-undici")] {
         let binding = super::super::well_known::lookup_well_known(key)
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
         assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
     }
 }
 
-/// The auto-build selection split: ioredis/undici carry their own tokio and
+/// The auto-build selection split: undici carries its own tokio and
 /// must ride the shared auto-optimize invocation, while node-forge is CPU-only
 /// (routes async through perry-stdlib's spawn_blocking shim) and is auto-built
 /// by the isolated leaf-build path in the driver's CPU-only branch.
 #[test]
 fn ext_binding_build_routing_split() {
-    assert!(binding_needs_shared_tokio("ioredis"));
     assert!(binding_needs_shared_tokio("undici"));
 }
 

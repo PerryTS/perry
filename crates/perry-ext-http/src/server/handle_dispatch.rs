@@ -4,7 +4,7 @@
 //! When the static class of the receiver is unknown, codegen emits
 //! `js_typed_feedback_native_call_method` which forwards to perry-runtime's
 //! `js_native_call_method`. That dispatcher walks several handle registries
-//! (Buffer, TypedArray, Fastify, ioredis, zlib, …) but had no arm for the
+//! (Buffer, TypedArray, Fastify, zlib, …) but had no arm for the
 //! HTTP-server handles registered by `js_node_http_create_server`. The
 //! call therefore returned undefined-or-NaN even though the
 //! `("http", "HttpServer", "listen"|"close"|"on"|…)` rows in

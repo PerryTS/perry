@@ -533,7 +533,6 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     class("net", "Server"),
     class("net", "BlockList"),
     class("net", "SocketAddress"),
-    class("ioredis", "Redis"),
     class("url", "URL"),
     class("url", "URLSearchParams"),
     class("url", "URLPattern"),

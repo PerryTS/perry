@@ -24,7 +24,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 71,
+    "workspace_members": 70,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -77,7 +77,7 @@
       "perry-updater"
     ],
     "decision_counts": {
-      "externalize": 13,
+      "externalize": 12,
       "keep": 53,
       "merge": 1,
       "remove": 1,
@@ -200,11 +200,6 @@
       "category": "binding",
       "decision": "keep",
       "migration": "core-runtime"
-    },
-    "perry-ext-ioredis": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-mongodb": {
       "category": "binding",

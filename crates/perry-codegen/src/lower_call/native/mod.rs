@@ -153,7 +153,7 @@ pub(crate) fn lower_native_method_call(
     }
 
     // Generic native module dispatch (receiver-less): fastify, mysql2,
-    // ws, pg, ioredis, mongodb, better-sqlite3, etc. These were in the
+    // ws, pg, mongodb, better-sqlite3, etc. These were in the
     // old Cranelift codegen's dispatch table but lost in the v0.5.0
     // LLVM cutover.
     if object.is_none() {

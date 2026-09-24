@@ -106,7 +106,6 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-events` | `events` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
-| `perry-ext-ioredis` | `ioredis`<br>`iovalkey`<br>`redis` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-mongodb` | `mongodb` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-net` | `net` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-nodemailer` | `nodemailer` | Source package | Compile the upstream package source | Bundled; migration pending |

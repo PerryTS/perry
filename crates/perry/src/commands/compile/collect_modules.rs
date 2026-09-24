@@ -190,7 +190,7 @@ fn collect_module_one(
         // that places the package inside the project root, as in #209 "file:./vendor/bloom/")
         // must still be compiled natively, not handed to the JS runtime.
         // Guard with !is_in_node_modules so this branch never fires for the standard
-        // node_modules/ioredis, node_modules/ethers etc. paths that already have their
+        // node_modules/ethers, node_modules/ws etc. paths that already have their
         // own handling (is_perry_native above).
         || (!is_in_node_modules && is_in_perry_native_package(&canonical));
     // #668 / node-core (#800): a *user* `.js`/`.cjs`/`.mjs` file (entry or a
@@ -223,7 +223,7 @@ fn collect_module_one(
             });
         }
 
-        // Perry native extension packages (ioredis, ethers, mysql2, ws, dotenv) are handled
+        // Perry native extension packages (ethers, mysql2, ws, dotenv) are handled
         // entirely by Perry's built-in stdlib — they must NOT be loaded into V8.
         if is_perry_native {
             return Ok(ModuleDiscovery {
@@ -1596,7 +1596,7 @@ fn collect_module_one(
                     pending.push(source_path);
                 }
                 ModuleKind::Interpreted => {
-                    // Perry native extension packages (ioredis, ethers, ws, mysql2, dotenv)
+                    // Perry native extension packages (ethers, ws, mysql2, dotenv)
                     // are handled entirely by Perry's built-in stdlib at codegen time.
                     // They must NOT be loaded into V8 — skip them entirely.
                     if is_in_perry_native_package(&resolved_path) {

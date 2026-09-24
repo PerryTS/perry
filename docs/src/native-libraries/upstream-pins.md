@@ -8,17 +8,17 @@ socket-registry fleet applies to its vendored upstream references, adapted for
 npm dists.
 
 ```toml
-[bindings.ioredis]
-crate = "perry-ext-ioredis"
-lib = "perry_ext_ioredis"
+[bindings.mongodb]
+crate = "perry-ext-mongodb"
+lib = "perry_ext_mongodb"
 tracking = "#466"
 
-[bindings.ioredis.upstream]
-version   = "5.11.1"          # pinned npm release (immutable dist)
-sha256    = "56b4e71e…"       # sha256 of the registry tarball at pin time
-repo      = "https://github.com/luin/ioredis"
-ref       = "fb224a76…"       # publisher's gitHead for the release, when known
-ported-at = "5.11.1"          # release the wrapper was last REVIEWED against
+[bindings.mongodb.upstream]
+version   = "7.5.0"           # pinned npm release (immutable dist)
+sha256    = "4d93c312…"       # sha256 of the registry tarball at pin time
+repo      = "https://github.com/mongodb/node-mongodb-native"
+ref       = "c4368315…"       # publisher's gitHead for the release, when known
+ported-at = "7.5.0"           # release the wrapper was last REVIEWED against
 date      = "2026-07-30"
 ```
 
@@ -43,14 +43,14 @@ Three kinds of row carry no pin:
 - **Perry-owned packages** (`@perryts/*`, `perry/*`).
 
 Note that a distinct npm package served by a shared wrapper crate is **not** an
-alias — `redis` and `iovalkey` both use `perry-ext-ioredis` but are separately
-published and versioned, so each carries its own pin.
+alias — separately published and versioned packages each carry their own pin,
+even when they share a wrapper crate.
 
 ## Tooling — `scripts/binding_pins.mjs`
 
 ```sh
 # Provision or bump one pin to a specific version (default: latest stable)
-node scripts/binding_pins.mjs --set ioredis 5.11.1
+node scripts/binding_pins.mjs --set mongodb 7.5.0
 
 # Provision every currently-unpinned binding at its latest stable
 node scripts/binding_pins.mjs --backfill
@@ -65,7 +65,7 @@ node scripts/binding_pins.mjs --check --refresh --soak-days 7
 
 # Materialize the upstream repo at the pinned ref into gitignored upstream/<name>
 # for port review (diff the old pin against a candidate new tag)
-node scripts/binding_pins.mjs --materialize ioredis
+node scripts/binding_pins.mjs --materialize mongodb
 ```
 
 Never hand-edit `version` / `sha256` / `ref` — the tarball hash can't be

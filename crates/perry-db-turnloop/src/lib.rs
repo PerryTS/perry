@@ -142,7 +142,9 @@ pub mod subsystem {
     pub const PG: u8 = 9;
     /// `perry-ext-mysql2`.
     pub const MYSQL: u8 = 10;
-    /// `perry-ext-ioredis`.
+    /// Formerly `perry-ext-ioredis` (removed: npm `redis`/`ioredis`/`iovalkey`
+    /// now compile from source over `net`). Kept reserved so the database
+    /// band never renumbers and a stale archive cannot collide.
     pub const REDIS: u8 = 11;
     /// `perry-ext-mongodb`.
     pub const MONGODB: u8 = 12;

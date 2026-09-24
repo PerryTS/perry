@@ -691,19 +691,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     //     export `Widget(config)` produces a WidgetDecl in HIR; see
     //     try_lower_widget_decl in perry-hir/src/lower.rs. ---
     method("perry/widget", "Widget", false, None),
-    // --- redis — alias for ioredis (well-known table routes both to
-    //     perry-ext-ioredis). The Redis class instance methods come
-    //     from the ioredis class entries. ---
-    class("redis", "Redis"),
-    method("redis", "createClient", false, None),
-    // --- iovalkey — the Valkey fork of ioredis (valkey-io/iovalkey),
-    //     served by the same perry-ext-ioredis surface. Dispatch
-    //     normalizes `iovalkey` → `ioredis` (see native_module_dispatch.rs),
-    //     so there are no iovalkey rows in NATIVE_MODULE_TABLE; these
-    //     entries exist so the module clears the #513 strict-mode gate
-    //     (module_has_any_entries) and mirror the `redis` alias above. ---
-    class("iovalkey", "Redis"),
-    method("iovalkey", "createClient", false, None),
     // --- fetch — well-known alias for perry-ext-fetch. Same surface
     //     as node-fetch (the more common alias above). ---
     method("fetch", "default", false, None),

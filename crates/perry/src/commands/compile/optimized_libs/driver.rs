@@ -67,24 +67,25 @@ pub(crate) fn build_optimized_libs(
         );
         std::process::exit(1);
     }
-    // turnloop P8 group H: perry-stdlib's bundled ioredis / mongodb copies were
+    // turnloop P8 group H: perry-stdlib's bundled mongodb copy was
     // deleted, so with the flip disabled there is nothing left to define
-    // `js_ioredis_*` / `js_mongodb_*` and the link would fail with a wall of
+    // `js_mongodb_*` and the link would fail with a wall of
     // undefined symbols. Say so up front instead.
     //
-    // pg / mysql2 / fastify are NOT listed: main's npm-binding strip removed
-    // their well-known rows entirely, so those imports compile the real npm
-    // package from source and never reach a wrapper either way.
+    // pg / mysql2 / fastify / ioredis / redis / iovalkey are NOT listed:
+    // main's npm-binding strip removed their well-known rows entirely, so
+    // those imports compile the real npm package from source and never reach
+    // a wrapper either way.
     if let Some(module) = iteration_set
         .iter()
         .map(|m| m.strip_prefix("node:").unwrap_or(m))
-        .find(|m| matches!(*m, "ioredis" | "redis" | "iovalkey" | "mongodb"))
+        .find(|m| *m == "mongodb")
         .filter(|_| !use_well_known)
     {
         eprintln!(
             "error: `import '{module}'` requires an external perry-ext-* wrapper, but the \
              well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). perry-stdlib's bundled \
-             ioredis / mongodb copies were removed; unset PERRY_DISABLE_WELL_KNOWN so the \
+             mongodb copy was removed; unset PERRY_DISABLE_WELL_KNOWN so the \
              import routes to its wrapper crate."
         );
         std::process::exit(1);
@@ -268,10 +269,7 @@ pub(crate) fn build_optimized_libs(
                 if !crate_dir.is_dir() {
                     // turnloop P8 group H removed the bundled db copies, so
                     // the fall-back below has nothing to fall back to.
-                    if matches!(
-                        module_normalized,
-                        "ioredis" | "redis" | "iovalkey" | "mongodb"
-                    ) {
+                    if module_normalized == "mongodb" {
                         eprintln!(
                             "error: `import '{}'` requires the external {} wrapper, but its \
                              source crate was not found at `{}`. perry-stdlib's bundled copy was \
@@ -377,7 +375,7 @@ pub(crate) fn build_optimized_libs(
             {
                 features.insert("async-runtime");
             }
-            // turnloop P8 group H: the bundled pg / mysql2 / ioredis / mongodb
+            // turnloop P8 group H: the bundled pg / mysql2 / mongodb
             // modules were deleted, so `module_to_features` names no feature
             // for them and the check above cannot see them. The wrappers still
             // settle every promise through perry-stdlib's `perry_ffi_*` shim,
@@ -385,7 +383,7 @@ pub(crate) fn build_optimized_libs(
             // name, the same way `undici` / `nodemailer` / `fastify` do below.
             if matches!(
                 module_normalized,
-                "pg" | "mysql2" | "mysql2/promise" | "ioredis" | "redis" | "iovalkey" | "mongodb"
+                "pg" | "mysql2" | "mysql2/promise" | "mongodb"
             ) {
                 features.insert("async-runtime");
             }

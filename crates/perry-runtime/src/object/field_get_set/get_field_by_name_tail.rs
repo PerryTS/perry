@@ -39,7 +39,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 return value;
             }
             // Issue #340: small-handle receivers (raw < 0x100000) come
-            // from native modules (axios, fastify, ioredis, ...) that
+            // from native modules (axios, fastify, ...) that
             // store objects in registries and expose integer ids. The
             // handle property dispatcher (registered by stdlib via
             // `js_register_handle_property_dispatch`) routes the

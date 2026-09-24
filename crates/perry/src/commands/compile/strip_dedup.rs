@@ -1607,7 +1607,7 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
 /// protects more members as the dependency graph within a single archive
 /// grows, since more of them turn out to be referenced by a sibling that
 /// itself can't be removed. Fully eliminates duplicates for simpler
-/// well-known libraries (e.g. `ioredis`, `net`, `ws`) whose bundled
+/// well-known libraries (e.g. `net`, `ws`) whose bundled
 /// dependency graphs are smaller.
 ///
 /// `replacement_is_link_reachable` records a final-link property, not an

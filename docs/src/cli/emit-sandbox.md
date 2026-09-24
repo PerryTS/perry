@@ -42,7 +42,7 @@ Priority order, last wins (mirrors `--fast-math` / `--lockdown`):
 | Build signal                          | Effect on profile                           |
 |---------------------------------------|---------------------------------------------|
 | `import "child_process"`              | Allow `process-fork` + `process-exec`       |
-| Anything in `http` / `https` / `net` / `tls` / `dns` / `ws` / `axios` / `node-fetch` / `redis` / `ioredis` | Allow `network*` |
+| Anything in `http` / `https` / `net` / `tls` / `dns` / `ws` / `axios` / `node-fetch` | Allow `network*` |
 | `fetch(...)` reachable                | Same as above                               |
 | `import "fs"`                         | Allow `file-write*` under `/tmp`, `/private/tmp`, `/private/var/folders` |
 | `perry-jsruntime` linked              | Allow `dynamic-code-generation` (QuickJS JIT) |

@@ -63,10 +63,10 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "tls" => &["tls"],
 
         // ── Databases ─────────────────────────────────────────────────
-        // pg / mysql2 / ioredis / mongodb need no perry-stdlib feature: the
+        // pg / mysql2 / mongodb need no perry-stdlib feature: the
         // bundled copies were deleted in turnloop P8 group H, so these imports
         // are served entirely by perry-ext-pg / perry-ext-mysql2 /
-        // perry-ext-ioredis / perry-ext-mongodb via the well-known flip — the
+        // perry-ext-mongodb via the well-known flip — the
         // same shape `fastify` and `node:http` already have above. Their
         // `async-runtime` requirement (the `perry_ffi_*` shim each wrapper
         // settles its promises through) is re-asserted in
@@ -89,9 +89,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // repo (`bun add @perryts/iroh`) since v0.5.557 — same model
         // as tursodb above.
         "iroh" => &[],
-        // Redis is detected via the ioredis class name in collect_modules.
-        // Served by perry-ext-ioredis only (see the note above).
-        "ioredis" | "redis" | "iovalkey" => &[],
         // Served by perry-ext-mongodb only (see the note above).
         "mongodb" => &[],
 
@@ -293,20 +290,11 @@ mod tests {
     #[test]
     fn bundled_database_copies_map_to_no_stdlib_features() {
         // turnloop P8 group H deleted perry-stdlib's bundled pg / mysql2 /
-        // ioredis / mongodb modules. Naming a feature here would ask cargo
+        // mongodb modules. Naming a feature here would ask cargo
         // for a gate that no longer exists; the wrappers own these imports
         // outright, and their `async-runtime` need is re-asserted by the
         // flip loop in optimized_libs/driver.rs.
-        for module in [
-            "pg",
-            "mysql2",
-            "mysql2/promise",
-            "ioredis",
-            "redis",
-            "iovalkey",
-            "mongodb",
-            "node:mongodb",
-        ] {
+        for module in ["pg", "mysql2", "mysql2/promise", "mongodb", "node:mongodb"] {
             assert_eq!(
                 module_to_features(module),
                 &[] as &[&str],

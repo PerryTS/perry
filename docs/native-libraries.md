@@ -21,7 +21,6 @@ implementations, organized by category:
 | `pg` | [sqlx](https://crates.io/crates/sqlx) | PostgreSQL client with connection pooling |
 | `mongodb` | [mongodb](https://crates.io/crates/mongodb) | MongoDB driver with full CRUD support |
 | `better-sqlite3` | [rusqlite](https://crates.io/crates/rusqlite) | Synchronous SQLite3 with prepared statements |
-| `ioredis` | [redis](https://crates.io/crates/redis) | Redis client with all common operations |
 
 ### Security & Authentication
 | npm Package | Rust Backend | Description |
@@ -116,7 +115,6 @@ Click any library name to jump to its documentation:
 | cheerio | HTML Parsing | [docs](#cheerio) |
 | crypto | Security | [docs](#crypto) |
 | dotenv | Config | [docs](#dotenv) |
-| ioredis | Database | [docs](#ioredis) |
 | jsonwebtoken | Security | [docs](#jsonwebtoken) |
 | lodash | Utilities | [docs](#lodash) |
 | moment | Date/Time | [docs](#moment) |
@@ -316,79 +314,6 @@ const hash2 = await bcrypt.hash('myPassword', salt);
 - `saltRounds` (cost factor) typically ranges from 10-12 for production
 - Higher values = more secure but slower
 - Hashes are 60 characters in the standard bcrypt format
-
----
-
-## ioredis
-
-**npm package:** [ioredis](https://www.npmjs.com/package/ioredis)
-**Rust backend:** [redis](https://crates.io/crates/redis) v0.25
-
-### Supported API
-
-```typescript
-import Redis from 'ioredis';
-
-// Connect to Redis
-const redis = new Redis();                    // localhost:6379
-const redis2 = new Redis(6380);               // localhost:6380
-const redis3 = new Redis(6379, '192.168.1.1'); // custom host
-const redis4 = new Redis({
-  host: 'localhost',
-  port: 6379,
-  password: 'secret',
-  db: 0
-});
-
-// String operations
-await redis.set('key', 'value');
-await redis.set('key', 'value', 'EX', 60);    // with expiry (60 seconds)
-const value = await redis.get('key');
-
-// Delete keys
-await redis.del('key');
-await redis.del('key1', 'key2', 'key3');
-
-// Check existence
-const exists = await redis.exists('key');
-
-// Expiration
-await redis.expire('key', 60);                // seconds
-await redis.ttl('key');                       // get remaining TTL
-
-// Increment/Decrement
-await redis.incr('counter');
-await redis.incrby('counter', 5);
-await redis.decr('counter');
-await redis.decrby('counter', 5);
-
-// Hash operations
-await redis.hset('user:1', 'name', 'Alice');
-await redis.hget('user:1', 'name');
-await redis.hgetall('user:1');
-await redis.hdel('user:1', 'name');
-
-// List operations
-await redis.lpush('list', 'value');
-await redis.rpush('list', 'value');
-await redis.lpop('list');
-await redis.rpop('list');
-await redis.lrange('list', 0, -1);
-
-// Set operations
-await redis.sadd('set', 'member');
-await redis.srem('set', 'member');
-await redis.smembers('set');
-await redis.sismember('set', 'member');
-
-// Disconnect
-await redis.quit();
-```
-
-### Notes
-- Async/Promise-based API only
-- Cluster mode not yet supported
-- Pub/Sub not yet supported
 
 ---
 

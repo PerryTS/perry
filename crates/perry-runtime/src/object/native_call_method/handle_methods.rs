@@ -22,7 +22,7 @@ unsafe fn dispatch_handle_proto_method(
 ) -> Option<f64> {
     // Only do the (locked) side-table walk when a prototype was actually
     // recorded for this handle — the overwhelmingly common case (fastify /
-    // axios / ioredis handles with no user setPrototypeOf) skips it cheaply.
+    // axios handles with no user setPrototypeOf) skips it cheaply.
     crate::object::prototype_chain::object_static_prototype(handle_id)?;
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let resolved = crate::object::prototype_chain::resolve_inherited_field(
@@ -69,7 +69,7 @@ pub(super) unsafe fn dispatch_handle(
     let _ = (root_scope, object_handle, &refreshed_args, raw_bits, jsval);
     let _ = (method_name_ptr, method_name_len);
     // Check if this is a handle-based object (small integer, not a real heap pointer)
-    // Handles are used by Fastify, ioredis, and other native modules that store
+    // Handles are used by Fastify and other native modules that store
     // objects in a registry and use integer IDs to reference them.
     if jsval.is_pointer() {
         let raw_ptr = jsval.as_pointer::<u8>() as usize;

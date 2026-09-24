@@ -30,7 +30,6 @@ members = [
     "crates/perry-ext-sharp",
     "crates/perry-ext-ethers",
     "crates/perry-ext-nodemailer",
-    "crates/perry-ext-ioredis",
 
     "crates/perry-ext-undici",
     "crates/perry-ext-mongodb",
@@ -216,8 +215,6 @@ codegen-units = 1
 # and safe to drop duplicates from — an assumption this mismatch violated.
 [profile.release.package.perry-ext-http]
 codegen-units = 1
-[profile.release.package.perry-ext-ioredis]
-codegen-units = 1
 [profile.release.package.perry-ext-net]
 codegen-units = 1
 [profile.release.package.perry-ext-undici]
@@ -312,8 +309,6 @@ codegen-units = 1
 # — see its comment for why matching `codegen-units` across every crate in
 # the "shared tokio" (#507) cargo invocation is required.
 [profile.dist.package.perry-ext-http]
-codegen-units = 1
-[profile.dist.package.perry-ext-ioredis]
 codegen-units = 1
 [profile.dist.package.perry-ext-net]
 codegen-units = 1
@@ -455,7 +450,7 @@ turnloop-websocket = { version = "0.1.0-alpha.8", default-features = false }
 # (docs/turnloop/p6-report.md).
 turnloop-smtp = { version = "0.1.0-alpha.8", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
-# cores that replace sqlx, the `redis` crate and the `mongodb` driver on the
+# cores that replace sqlx and the `mongodb` driver on the
 # paths Perry's bindings own. Default features only, for the same reason as the
 # two above — with the `turnloop` feature off these crates depend on neither
 # `turnloop-io` nor `turnloop-tls`, so they are pure protocol state machines and
@@ -463,7 +458,6 @@ turnloop-smtp = { version = "0.1.0-alpha.8", default-features = false }
 # it is the release that gave MySQL and MongoDB one deflate state per
 # connection, each compressed message framed as its own zlib stream; alpha.3
 # re-created the state per message and is a wire-level regression to adopt.
-turnloop-redis = { version = "0.1.0-alpha.8", default-features = false }
 turnloop-mongodb = { version = "0.1.0-alpha.8", default-features = false }
 tempfile = "3"
 itoa = "1.0"
@@ -578,7 +572,6 @@ perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
-perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
 
 perry-ext-undici = { path = "crates/perry-ext-undici" }
 perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }

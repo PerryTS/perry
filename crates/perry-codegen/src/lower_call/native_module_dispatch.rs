@@ -27,19 +27,9 @@ pub fn native_module_lookup(
     method: &str,
     class_name: Option<&str>,
 ) -> Option<&'static NativeModSig> {
-    // Issue #605: `redis` (the npm `redis` package) and `ioredis` route
-    // to the same perry-ext-ioredis staticlib via well-known bindings,
-    // but the dispatch table only has `module: "ioredis"` rows. Without
-    // normalization, `import { createClient } from "redis"` falls
-    // through every lookup arm and the user's `client.connect()`
-    // dispatches against `undefined`. Mirror the well-known aliasing
-    // here so call-site lookups find the right runtime fns regardless
-    // of which alias the user imported from.
+    // Mirror the well-known aliasing here so call-site lookups find the
+    // right runtime fns regardless of which alias the user imported from.
     let normalized = match module {
-        // `redis` and `iovalkey` (the Valkey fork of ioredis) share the
-        // perry-ext-ioredis staticlib and its `js_ioredis_*` dispatch rows;
-        // normalize both to `ioredis` so call-site lookups resolve.
-        "redis" | "iovalkey" => "ioredis",
         "sys" => "util",
         // #6563: @lydell/node-pty is an API-identical fork of node-pty
         // (opencode imports the fork, kimi-code the original); both route to

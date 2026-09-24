@@ -106,7 +106,7 @@ pub struct Module {
     /// This tracks variables like `export const pool = new Pool(...)` from pg
     pub exported_native_instances: Vec<(String, String, String)>,
     /// Exported functions that return native module instances: (func_name, module_name, class_name)
-    /// e.g., `export function getRedis(): Promise<Redis>` -> ("getRedis", "ioredis", "Redis")
+    /// e.g., `export function getPool(): Pool` -> ("getPool", "mysql2/promise", "Pool")
     pub exported_func_return_native_instances: Vec<(String, String, String)>,
     /// Exported object literals: export_name
     /// This tracks variables like `export const config = { ... }`

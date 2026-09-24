@@ -639,27 +639,6 @@ pub(super) fn detect_optional_feature_usage(
             ctx.native_module_imports.insert("readline".to_string());
         }
     }
-
-    // Detect ioredis usage (detected by class name, not import path)
-    let mut found_ioredis = false;
-    for (_, module_name, _) in &hir_module.exported_native_instances {
-        if module_name == "ioredis" {
-            found_ioredis = true;
-            break;
-        }
-    }
-    if !found_ioredis {
-        for (_, module_name, _) in &hir_module.exported_func_return_native_instances {
-            if module_name == "ioredis" {
-                found_ioredis = true;
-                break;
-            }
-        }
-    }
-    if found_ioredis {
-        ctx.needs_stdlib = true;
-        ctx.native_module_imports.insert("ioredis".to_string());
-    }
 }
 
 #[cfg(test)]
