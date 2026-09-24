@@ -60,21 +60,96 @@ pub extern "C" fn js_class_capture_value_for_receiver(
     // Function.prototype.call/apply. Dispatch restores that evaluated class
     // either as the private lexical brand (method-value dispatch) or as the
     // static private owner (ordinary static dispatch); prefer it when present.
-    let receiver = super::field_get_set::current_private_lexical_brand_value(class_id)
-        .or_else(super::static_private_owner_current)
-        .unwrap_or(receiver);
-    if super::class_registry::is_class_object_value(receiver) {
-        let caps_value =
-            super::js_object_get_own_field_or_undef(receiver, b"__perry_ctor_caps".as_ptr(), 17);
-        let caps = crate::value::JSValue::from_bits(caps_value.to_bits());
-        if caps.is_pointer() {
-            let array = caps.as_pointer::<crate::array::ArrayHeader>();
-            if !array.is_null() && index < crate::array::js_array_length(array) {
-                return crate::array::js_array_get_f64(array, index);
-            }
+    //
+    // #11200 / #10911: the candidate is not necessarily an evaluation of
+    // `class_id` itself. An INHERITED static reached through a subclass
+    // (`Sub.make()` running `Base.make`) is dispatched with the SUBCLASS as
+    // receiver and owner, and the subclass's own `__perry_ctor_caps` is laid
+    // out for the subclass's capture list -- reading `index` from it returned
+    // an unrelated binding (mongodb's `CursorResponse.make` saw an object
+    // where `isErrorResponse` belonged). And a top-level `class A extends
+    // f()` is a ClassRef with no caps at all, so its inherited capturing
+    // statics fell through to the template snapshot, which a class
+    // EXPRESSION never registers (`undefined`). Only an evaluation of the
+    // declaring template owns these slots: walk each candidate's heritage to
+    // it, and when none is reachable use the declaration snapshot -- never
+    // another class's array.
+    let candidates = [
+        super::field_get_set::current_private_lexical_brand_value(class_id),
+        super::static_private_owner_current(),
+        Some(receiver),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        if let Some(owner) = capture_owner_for_template(candidate, class_id) {
+            return class_object_capture_slot(owner, index)
+                .unwrap_or_else(|| js_class_capture_value(class_id, index));
         }
     }
     js_class_capture_value(class_id, index)
+}
+
+/// The class evaluation of template `class_id` that `start` (a class object or
+/// a declaration ClassRef) is, or inherits from. Each hop prefers the
+/// per-evaluation pinned parent and falls back to the template-keyed dynamic
+/// heritage, the same order `instanceof`'s `class_chain_reaches_dynamic` walks.
+/// A ClassRef of `class_id` itself answers `None`: a declaration's captures
+/// live in its decl-site snapshot, not on an object.
+fn capture_owner_for_template(start: f64, class_id: u32) -> Option<f64> {
+    let mut current = start;
+    for _ in 0..64 {
+        let cid = if super::class_registry::is_class_object_value(current) {
+            let object =
+                crate::value::JSValue::from_bits(current.to_bits()).as_pointer::<ObjectHeader>();
+            if object.is_null() {
+                return None;
+            }
+            let cid = super::js_object_get_class_id(object);
+            if cid == class_id {
+                return Some(current);
+            }
+            if let Some(parent) = super::class_registry::class_object_pinned_parent(object) {
+                current = parent;
+                continue;
+            }
+            cid
+        } else if super::class_prototype_ref_id(current).is_some() {
+            return None;
+        } else {
+            let cid = super::class_ref_id(current)?;
+            if cid == class_id {
+                return None;
+            }
+            cid
+        };
+        if cid == 0 {
+            return None;
+        }
+        let parent = super::class_registry::parent_static::template_dynamic_parent_value(cid);
+        if parent.to_bits() == current.to_bits() {
+            return None;
+        }
+        current = parent;
+    }
+    None
+}
+
+/// Slot `index` of a class evaluation's own `__perry_ctor_caps` array, when
+/// `class_value` is a class object carrying one that long.
+fn class_object_capture_slot(class_value: f64, index: u32) -> Option<f64> {
+    if !super::class_registry::is_class_object_value(class_value) {
+        return None;
+    }
+    let caps_value =
+        super::js_object_get_own_field_or_undef(class_value, b"__perry_ctor_caps".as_ptr(), 17);
+    let caps = crate::value::JSValue::from_bits(caps_value.to_bits());
+    if !caps.is_pointer() {
+        return None;
+    }
+    let array = caps.as_pointer::<crate::array::ArrayHeader>();
+    if array.is_null() || index >= crate::array::js_array_length(array) {
+        return None;
+    }
+    Some(crate::array::js_array_get_f64(array, index))
 }
 
 /// #1787: per-template constructor function pointers, keyed by the
