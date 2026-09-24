@@ -209,3 +209,68 @@ fn stream_dynamic_instanceof_follows_node_stream_inheritance() {
         TAG_TRUE
     );
 }
+
+/// #11197: `_readableState` / `_writableState` are live views over the
+/// stream's own hidden state, not snapshots.
+#[test]
+fn readable_state_view_reads_live_stream_state() {
+    let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
+    test_install_manual_read(stream);
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let view = js_object_get_field_by_name_f64(obj, hidden_key(b"_readableState"));
+    let view_obj = raw_ptr_from_value(view) as *const ObjectHeader;
+    assert!(!view_obj.is_null());
+    // Same view on every read.
+    assert_eq!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"_readableState")).to_bits(),
+        view.to_bits()
+    );
+    let read = |name: &[u8]| js_object_get_field_by_name_f64(view_obj, hidden_key(name));
+    assert_eq!(read(b"highWaterMark"), 65536.0);
+    assert_eq!(read(b"length"), 0.0);
+    assert_eq!(read(b"ended").to_bits(), TAG_FALSE);
+    assert_eq!(read(b"flowing").to_bits(), TAG_NULL);
+
+    push_chunk(stream, string_value(b"abc"));
+    assert_eq!(read(b"length"), 3.0);
+    push_chunk(stream, f64::from_bits(TAG_NULL));
+    assert_eq!(read(b"ended").to_bits(), TAG_TRUE);
+    assert_eq!(read(b"endEmitted").to_bits(), TAG_FALSE);
+
+    // `dataEmitted` follows the stream's own flag, which emitting `'data'`
+    // sets (the JS-level setter path is covered by
+    // test-files/test_gap_stream_readable_state.ts).
+    assert_eq!(read(b"dataEmitted").to_bits(), TAG_FALSE);
+    note_data_emitted(stream);
+    assert_eq!(read(b"dataEmitted").to_bits(), TAG_TRUE);
+
+    let mut json = String::new();
+    unsafe {
+        assert!(try_stringify_node_stream_json(
+            view_obj as *const u8,
+            &mut json
+        ));
+    }
+    assert_eq!(
+        json,
+        r#"{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":3,"pipes":[],"awaitDrainWriters":null}"#
+    );
+}
+
+#[test]
+fn writable_state_view_reads_live_stream_state() {
+    let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
+    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
+    let view = js_object_get_field_by_name_f64(obj, hidden_key(b"_writableState"));
+    let view_obj = raw_ptr_from_value(view) as *const ObjectHeader;
+    assert!(!view_obj.is_null());
+    let read = |name: &[u8]| js_object_get_field_by_name_f64(view_obj, hidden_key(name));
+    assert_eq!(read(b"highWaterMark"), 65536.0);
+    assert_eq!(read(b"ended").to_bits(), TAG_FALSE);
+    mark_writable_ended(stream);
+    assert_eq!(read(b"ended").to_bits(), TAG_TRUE);
+    assert!(
+        js_object_get_field_by_name_f64(obj, hidden_key(b"_readableState")).to_bits()
+            == TAG_UNDEFINED
+    );
+}
