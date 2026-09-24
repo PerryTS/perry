@@ -1897,7 +1897,7 @@ pub(crate) unsafe fn store_object_field_slot_layout_deferred(
 }
 
 #[inline]
-pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
+pub(crate) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
     if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return;
     }

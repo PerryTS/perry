@@ -145,6 +145,14 @@ pub extern "C" fn js_put_value_set_packed_miss(
     cache_slot: *mut PackedSetWaysSlot,
     packed: *const AtomicU64,
 ) -> f64 {
+    let site = packed as *const super::packed_add::PackedSetSite;
+    // The site's key-add memo, for what the emitted add hit refuses per
+    // object or never takes (a spill slot). Nothing else has run yet.
+    unsafe {
+        if let Some(stored) = super::packed_add::packed_add_try(site, target, value) {
+            return stored;
+        }
+    }
     // The ways the emitted code does not compare. Nothing here allocates or
     // runs user code, so `target` and `value` are still the caller's values
     // when the full walk below needs them.
@@ -193,6 +201,8 @@ pub extern "C" fn js_put_value_set_packed_miss(
             return stored;
         }
     }
+    // The receiver's ShapeId before the store: the pre-shape a key-add memo
+    // is keyed on. Allocation-free.
     let pre_shape = unsafe { crate::object::chain_store::pre_store_shape(target) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
@@ -231,6 +241,7 @@ pub extern "C" fn js_put_value_set_packed_miss(
             target_handle.get_nanbox_f64(),
             chain_key,
         );
+        super::packed_add::packed_add_prime(site, target_handle.get_nanbox_f64(), key, pre_shape);
     }
     result
 }

@@ -46,10 +46,11 @@ fn header(value: f64) -> *mut crate::gc::GcHeader {
 
 /// One store through the miss entry with a fresh site; returns the word.
 fn store_fresh(target: f64, key: *const crate::StringHeader, value: f64) -> (f64, u64) {
-    let packed = AtomicU64::new(PACKED_SET_EMPTY);
+    let packed_site = PackedSetSite::empty();
+    let packed = &packed_site.set;
     let mut cache: PackedSetWays = packed_set_cache_empty();
     let mut cache_slot: PackedSetWaysSlot = &mut cache;
-    let stored = js_put_value_set_packed_miss(target, key, value, 0, &mut cache_slot, &packed);
+    let stored = js_put_value_set_packed_miss(target, key, value, 0, &mut cache_slot, packed);
     (stored, packed.load(Ordering::Relaxed))
 }
 
@@ -266,11 +267,12 @@ fn a_second_shape_is_kept_in_the_ways_without_moving_the_word() {
     let first = parsed(SRC);
     let second = parsed(br#"{"n":2,"z":0}"#);
     assert_ne!(stamp(first), stamp(second));
-    let packed = AtomicU64::new(PACKED_SET_EMPTY);
+    let packed_site = PackedSetSite::empty();
+    let packed = &packed_site.set;
     let mut cache: PackedSetWays = packed_set_cache_empty();
     let mut cache_slot: PackedSetWaysSlot = &mut cache;
-    js_put_value_set_packed_miss(first, key, 1.0, 0, &mut cache_slot, &packed);
-    js_put_value_set_packed_miss(second, key, 2.0, 0, &mut cache_slot, &packed);
+    js_put_value_set_packed_miss(first, key, 1.0, 0, &mut cache_slot, packed);
+    js_put_value_set_packed_miss(second, key, 2.0, 0, &mut cache_slot, packed);
     assert_eq!(
         packed.load(Ordering::Relaxed) as u32,
         stamp(second),
@@ -308,9 +310,10 @@ fn a_second_shape_is_kept_in_the_ways_without_moving_the_word() {
 fn a_fresh_way_cache_is_born_empty_not_zero() {
     let key = interned(b"n");
     let target = parsed(SRC);
-    let packed = AtomicU64::new(PACKED_SET_EMPTY);
+    let packed_site = PackedSetSite::empty();
+    let packed = &packed_site.set;
     let mut slot: PackedSetWaysSlot = std::ptr::null_mut();
-    js_put_value_set_packed_miss(target, key, 1.0, 0, &mut slot, &packed);
+    js_put_value_set_packed_miss(target, key, 1.0, 0, &mut slot, packed);
     assert!(!slot.is_null(), "the first prime allocates the way cache");
     let ways = unsafe { &*slot };
     assert_eq!(ways[0] as u32, stamp(target));

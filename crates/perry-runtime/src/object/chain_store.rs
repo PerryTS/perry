@@ -366,6 +366,16 @@ pub(crate) unsafe fn chain_store_proven(
         && entry.vtable_gen == crate::object::class_registry::vtable_generation()
 }
 
+/// `proto_validity + VTABLE_GEN`: the two words a chain verdict depends on,
+/// as one number. Both only grow, so the sum is unchanged exactly when both
+/// are. The key-add memo (`proxy::put_value::packed_add`) records it, and its
+/// emitted hit recomputes it from `PERRY_PROTO_VALIDITY` and `PERRY_VTABLE_GEN`.
+#[inline]
+pub(crate) fn verdict_generation() -> u64 {
+    crate::object::proto_validity::proto_validity()
+        .wrapping_add(crate::object::class_registry::vtable_generation())
+}
+
 /// Count a store the lane served.
 #[inline]
 pub(crate) fn note_chain_store_hit() {
@@ -664,7 +674,7 @@ pub(crate) unsafe fn chain_store_after_miss(
 ///
 /// # Safety
 /// `receiver` is a live ordinary object the caller holds rooted.
-unsafe fn mark_chain_hops(scope: &crate::gc::RuntimeHandleScope, receiver: f64) -> bool {
+pub(crate) unsafe fn mark_chain_hops(scope: &crate::gc::RuntimeHandleScope, receiver: f64) -> bool {
     let mut hop = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(receiver));
     for _ in 0..64 {
         let bits = hop.get_nanbox_f64().to_bits();

@@ -353,8 +353,12 @@ pub extern "C" fn js_put_value_set(
     value_handle.get_nanbox_f64()
 }
 
+#[path = "put_value/packed_add.rs"]
+mod packed_add;
 #[path = "put_value/packed_set.rs"]
 mod packed_set;
+pub(crate) use packed_add::note_packed_add_carriers;
+pub use packed_add::PackedSetSite;
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 

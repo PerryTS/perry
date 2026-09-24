@@ -63,6 +63,8 @@ pub(crate) fn recompute_after_full_trace() {
     // Array-subclass cache. Permanent external owners use a different bit.
     array_tail_transition::recompute_cache_carriers_after_full_trace();
     crate::json::note_parse_shape_cache_carriers();
+    // Static-key store sites that memo a key-add (`proxy::put_value::packed_add`).
+    crate::proxy::note_packed_add_carriers();
 
     with_transition_cache(|table| unsafe {
         for entry in (*table).iter() {

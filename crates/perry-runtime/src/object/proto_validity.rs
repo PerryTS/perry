@@ -105,6 +105,9 @@ per_test_global! {
     /// Monotonic counter standing for "nothing structural has changed on any
     /// object somebody inherits from, and no semantic property event has
     /// happened". Starts at 1 so a zeroed cache entry never matches.
+    /// Read by emitted code (the key-add hit, `perry-codegen`'s
+    /// `put_value_store_ic.rs`) as `@PERRY_PROTO_VALIDITY`.
+    #[export_name = "PERRY_PROTO_VALIDITY"]
     static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
 }
 

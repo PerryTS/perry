@@ -33,11 +33,12 @@ pub(crate) use has_delete::reflect_ordinary_delete_property_key;
 pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 mod put_value;
+pub(crate) use put_value::note_packed_add_carriers;
 pub use put_value::{js_proxy_set, js_put_value_set};
 pub(crate) use put_value::{
     js_put_value_set_ic_miss, proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT,
 };
-pub use put_value::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
+pub use put_value::{js_put_value_set_packed_miss, PackedSetSite, PACKED_SET_EMPTY};
 pub(crate) use put_value::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
 mod json;
