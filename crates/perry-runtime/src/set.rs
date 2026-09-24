@@ -11,9 +11,14 @@ use std::cell::RefCell;
 use std::ptr;
 
 mod index;
-pub(crate) use index::{prune_dead_identity_owners, scan_identity_roots_mut};
+pub(crate) use index::{
+    prune_dead_identity_owners, prune_dead_identity_owners_young, scan_identity_roots_mut,
+};
 #[cfg(test)]
-pub(crate) use index::{test_identity_count, test_snapshot as test_index_snapshot};
+pub(crate) use index::{
+    test_identity_count, test_identity_halves, test_identity_prune_visits,
+    test_snapshot as test_index_snapshot,
+};
 
 crate::perry_thread_local! {
     static SET_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());

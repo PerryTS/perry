@@ -2738,6 +2738,11 @@
       "why": "Test-only scalar count of key hashes, used to prove evacuation performs no Set rehashing."
     },
     {
+      "file": "crates/perry-runtime/src/set/index.rs",
+      "name": "TEST_PRUNE_VISITS",
+      "why": "Test-only scalar count of identity entries the dead-key prunes examined, used to prove a minor skips old keys."
+    },
+    {
       "file": "crates/perry-runtime/src/abi_trampoline.rs",
       "name": "SEEN_FROM_CALLEE"
     },
