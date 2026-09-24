@@ -1,0 +1,5 @@
+- **A failed `listen()` on `https.createServer` / `http2.createServer` / `http2.createSecureServer` now emits `'error'` and never `'listening'`**, as `http.createServer` already did and as Node does (follow-up to #11144).
+  - Before: an `EADDRINUSE` on HTTP/2 ran the `listen(cb)` callback and emitted `'listening'` while `server.listening === false`, and on HTTPS it only printed to stderr.
+  - Covered by `test-files/test_gap_listen_eaddrinuse.ts`.
+- A listen posted to the loop's owner now reports `EAGAIN` (not `ENOTSUP`) when the owner's postbox refused every bounded retry. `ENOTSUP` means only "no loop exists for this agent". Retries back off by 1 ms after 16 yields, up to 256 attempts.
+- A SCHED_RR descriptor that cannot be adopted gives its reserved handle id back.
