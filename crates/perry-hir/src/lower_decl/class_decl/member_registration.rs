@@ -40,88 +40,42 @@ pub(super) fn lower_noncomputed_class_member_registration(
     })
 }
 
-/// Lower a generator `*[Symbol.iterator]()` class method (already lowered into
-/// `func`, named `@@iterator`) into the runtime `@@iterator` vtable entry.
+/// Register a generator `*[Symbol.iterator]()` instance method (already
+/// lowered into `func`) and return the function to install under the computed
+/// `Symbol.iterator` key.
 ///
-/// The body is lifted to a top-level `__perry_iter_<class>` generator with
-/// `this` as an explicit first parameter — the generator transform (which only
-/// visits `module.functions`) then rewrites it to the `{next, return, throw}`
-/// closure triple, and the syntactic `for…of` fast path dispatches to it
-/// directly via `iterator_func_for_class`.
+/// The generator is installed AS the method, exactly like any other
+/// computed-key generator method (`*[K]()`), so its body keeps the ordinary
+/// method receiver: `this`, `#private` brand guards, arrows that capture
+/// `this`, and nested private-method calls all resolve against the instance.
+/// `js_register_class_computed_method` aliases the well-known symbol onto the
+/// `@@iterator` vtable slot, which every runtime-dispatched consumer (spread
+/// `[...x]`, destructuring, `Array.from`, `x[Symbol.iterator]()`, `for…of`
+/// through `GetIterator`) resolves (#5128, #9788).
 ///
-/// But every *runtime*-dispatched iterator consumer (spread `[...x]`,
-/// `Math.max(...x)`, destructuring, `x[Symbol.iterator]()`, `Array.from`)
-/// resolves `@@iterator` through the class registry instead. So this also
-/// returns a synthetic NON-generator `@@iterator` wrapper method that forwards
-/// to the lifted generator (`return __perry_iter_X(this)`) for the caller to
-/// append to the instance vtable. Without it the class carries no `@@iterator`
-/// for those consumers to find and they throw "value is not iterable" (#5128).
-/// (The runtime maps the well-known `Symbol.iterator` to this `@@iterator`
-/// method name in `js_object_get_symbol_property`.)
+/// This used to lift the body into a top-level `__perry_iter_<class>`
+/// generator with `this` rewritten to an explicit first parameter by
+/// `replace_this_in_stmts`, plus a forwarding `@@iterator` wrapper. That
+/// rewrite is a hand-written walker that misses most expression shapes: it
+/// never reached a `PrivateGuard` / `PrivateBrandCheck` receiver (so
+/// `this.#head` threw "Cannot access private member from an object whose
+/// class did not declare it" — @redis/client's linked lists, #11170), and it
+/// skipped arrow bodies, template literals and several statement kinds, so
+/// their `this` read `undefined`. Nothing calls the lifted function directly
+/// any more (the `for…of` fast path goes through `GetIterator` since #9788),
+/// so the lift bought nothing.
+///
+/// `iterator_func_for_class` still records the class so the syntactic
+/// `for (… of new C())` detection keeps taking the iterator-protocol loop.
 ///
 /// Shared by `lower_class_decl` and `lower_class_from_ast` so class
 /// declarations and class expressions behave identically.
-pub(super) fn synthesize_symbol_iterator_wrapper(
+pub(super) fn register_symbol_iterator_generator(
     ctx: &mut LoweringContext,
     class_name: &str,
-    func: &mut Function,
+    func: Function,
 ) -> Function {
-    let this_id = ctx.fresh_local();
-    let mut new_params = Vec::with_capacity(func.params.len() + 1);
-    new_params.push(Param {
-        id: this_id,
-        name: "this".to_string(),
-        ty: Type::Named(class_name.to_string()),
-        default: None,
-        decorators: Vec::new(),
-        is_rest: false,
-        arguments_object: None,
-    });
-    new_params.append(&mut func.params);
-
-    let mut body = std::mem::take(&mut func.body);
-    crate::analysis::replace_this_in_stmts(&mut body, this_id);
-
-    let top_fn_id = ctx.fresh_func();
-    let top_fn = Function {
-        id: top_fn_id,
-        name: format!("__perry_iter_{}", class_name),
-        type_params: Vec::new(),
-        params: new_params,
-        return_type: Type::Any,
-        body,
-        is_async: false,
-        is_generator: true,
-        is_strict: true,
-        was_plain_async: false,
-        was_unrolled: false,
-        is_exported: false,
-        captures: Vec::new(),
-        decorators: Vec::new(),
-    };
-    ctx.pending_functions.push(top_fn);
     ctx.iterator_func_for_class
-        .insert(class_name.to_string(), top_fn_id);
-
-    Function {
-        id: ctx.fresh_func(),
-        name: "@@iterator".to_string(),
-        type_params: Vec::new(),
-        params: Vec::new(),
-        return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Call {
-            callee: Box::new(Expr::FuncRef(top_fn_id)),
-            args: vec![Expr::This],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))],
-        is_async: false,
-        is_generator: false,
-        is_strict: true,
-        was_plain_async: false,
-        was_unrolled: false,
-        is_exported: false,
-        captures: Vec::new(),
-        decorators: Vec::new(),
-    }
+        .insert(class_name.to_string(), func.id);
+    func
 }

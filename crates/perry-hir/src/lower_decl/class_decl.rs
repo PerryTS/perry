@@ -771,7 +771,7 @@ pub fn lower_class_decl(
                         );
                     }
                     ast::MethodKind::Method => {
-                        let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
+                        let func = with_static_member_context(ctx, method.is_static, |ctx| {
                             lower_class_method(ctx, method)
                         })?;
                         // Issue #212 fixed the broader class-method-captures-
@@ -784,22 +784,22 @@ pub fn lower_class_decl(
                         // removed in v0.5.319. See the v0.5.317 entry for the
                         // history and `test_issue_154_using_dispose.ts` for the
                         // regression test.
-                        // `*[Symbol.iterator]()` — lift to a top-level generator
-                        // and register a synthetic `@@iterator` wrapper so both
-                        // the `for…of` fast path and runtime-dispatched iterator
-                        // consumers work (#5128). See the helper for details.
+                        // `*[Symbol.iterator]()` — install the generator itself
+                        // under the computed `Symbol.iterator` key, keeping the
+                        // ordinary method receiver (#5128, #11170). See the
+                        // helper for details.
                         if prop_name == "@@iterator" && func.is_generator && !method.is_static {
-                            let wrapper = synthesize_symbol_iterator_wrapper(ctx, &name, &mut func);
+                            let function = register_symbol_iterator_generator(ctx, &name, func);
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
                             // The computed-symbol registration installs the
-                            // runtime dispatch alias too. Registering the wrapper
-                            // as a string method also exposed an own "@@iterator"
+                            // runtime dispatch alias too. Registering the method
+                            // under a string name also exposed an own "@@iterator"
                             // property that the source never declared (#9788).
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
-                                function: wrapper,
+                                function,
                                 is_static: false,
                                 kind: ClassComputedMemberKind::Method,
                                 source_order: member_index,

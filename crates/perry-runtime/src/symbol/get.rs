@@ -1041,8 +1041,15 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                     // `[Symbol.toPrimitive]() {}`) is lowered to a synthetic
                     // `@@name` vtable member and keeps resolving through the
                     // name-based #1838 tail below, preserving the existing
-                    // behavior for every well-known symbol.
-                    if !crate::symbol::is_well_known_symbol(sym_key) {
+                    // behavior for every well-known symbol that HAS one.
+                    // A well-known symbol with no synthetic slot
+                    // (`[Symbol.hasInstance]() {}` on an instance,
+                    // `[Symbol.split]() {}`, …) lives only in this table, so
+                    // skipping it made `obj[Symbol.hasInstance]` undefined and
+                    // the call return undefined (#11170).
+                    if !crate::symbol::is_well_known_symbol(sym_key)
+                        || !well_known_symbol_has_instance_method_slot(sym_key)
+                    {
                         if let Some((func_ptr, param_count, has_rest)) =
                             crate::object::lookup_class_symbol_method_in_chain(
                                 class_id, sym_key, false,
@@ -1515,6 +1522,34 @@ unsafe fn well_known_symbol_method_key(sym_f64: f64) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Does a computed INSTANCE method keyed by this well-known symbol also get a
+/// synthetic vtable slot that the name-based resolvers read? Keep in sync with
+/// the alias list in `js_register_class_computed_method` (and the static
+/// lowering's renames): `iterator`, `asyncIterator`, `toPrimitive`, `dispose`,
+/// `asyncDispose`. Every other well-known symbol's instance method is
+/// reachable ONLY through `CLASS_SYMBOL_METHODS` (#11170).
+fn well_known_symbol_has_instance_method_slot(sym_key: usize) -> bool {
+    [
+        "iterator",
+        "asyncIterator",
+        "toPrimitive",
+        "dispose",
+        "asyncDispose",
+    ]
+    .iter()
+    .any(|wk| {
+        let s = well_known_symbol(wk);
+        // SAFETY: `s` is a live well-known symbol from the process-lifetime
+        // cache; `sym_key_from_f64` only decodes its NaN-boxed pointer.
+        !s.is_null()
+            && unsafe {
+                sym_key_from_f64(f64::from_bits(
+                    crate::value::JSValue::pointer(s as *const u8).bits(),
+                ))
+            } == sym_key
+    })
 }
 
 /// #1838: does `class_id` or any ancestor define a vtable method named `name`?
