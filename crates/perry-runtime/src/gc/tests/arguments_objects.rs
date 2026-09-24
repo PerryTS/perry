@@ -184,3 +184,71 @@ fn unreachable_arguments_and_mapped_cell_cycle_is_reclaimed() {
     assert!(!live.contains(&moved_args));
     assert!(!live.contains(&moved_cell));
 }
+
+/// Review of #11179, finding 5: the mapped slot is a malloc'd `Box<usize>`
+/// outside the owner's body, so an OLD arguments object storing a YOUNG
+/// parameter cell needs the external-slot barrier. With the inline barrier the
+/// dirty-slot scan filtered the out-of-body slot away, the minor never copied
+/// the cell, and the metadata kept its from-space address.
+///
+/// The owner is old because it survived enough minors to be promoted — an
+/// `arguments` object captured by a long-lived closure. (It can also be born
+/// tenured: past the 128 KiB pointer-bearing large-object threshold, i.e.
+/// `f.apply(null, Array(20000))` on a sloppy function that maps `arguments`.)
+#[test]
+fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = super::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_scanners();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut args = arguments(&[0.5; 8], undefined, false);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    for _ in 0..16 {
+        if matches!(
+            crate::arena::classify_heap_generation(args as usize),
+            crate::arena::HeapGeneration::Old
+        ) {
+            break;
+        }
+        gc_collect_minor();
+        args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    }
+    assert!(
+        matches!(
+            crate::arena::classify_heap_generation(args as usize),
+            crate::arena::HeapGeneration::Old
+        ),
+        "fixture must start with an OLD owner, or the barrier kind is never exercised"
+    );
+    let cell = crate::r#box::js_box_alloc(8.0);
+    assert!(
+        !matches!(
+            crate::arena::classify_heap_generation(cell as usize),
+            crate::arena::HeapGeneration::Old
+        ),
+        "fixture must start with a YOUNG cell"
+    );
+    js_arguments_object_map_index(args, 7, cell);
+    // Only the owner is rooted (slot 0, above): the cell is reachable solely
+    // through the mapped slot, exactly as a parameter cell whose frame has
+    // returned.
+
+    let trace = super::support::collect_minor_trace(GcTriggerKind::Direct);
+    super::support::assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    assert_eq!(owner, args, "an old owner does not move in a minor");
+    let moved_cell = test_arguments_mapped_box(owner as usize, 7).unwrap();
+    assert_ne!(
+        moved_cell, cell as usize,
+        "the minor must copy the young cell and rewrite the out-of-body mapped slot"
+    );
+    assert!(build_valid_pointer_set().contains(&moved_cell));
+    assert_eq!(get(owner, "7").bits(), 8.0f64.to_bits());
+    js_object_set_field_by_name(owner, key("7"), 9.0);
+    assert_eq!(
+        crate::r#box::js_box_get(moved_cell as *mut crate::r#box::Box),
+        9.0
+    );
+    assert_eq!(get(owner, "7").bits(), 9.0f64.to_bits());
+}

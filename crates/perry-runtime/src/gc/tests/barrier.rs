@@ -10,6 +10,15 @@ unsafe fn alloc_old_test_map(
         8,
         GC_TYPE_MAP,
     ) as *mut crate::map::MapHeader;
+    // An old-arena slot is recycled memory: zero the whole header so the
+    // private `store` / `meta` words are null rather than a previous
+    // occupant's bytes (a stale `store` pointer is dereferenced by the Map
+    // rewrite hook during the next copying minor).
+    std::ptr::write_bytes(
+        map as *mut u8,
+        0,
+        std::mem::size_of::<crate::map::MapHeader>(),
+    );
     let layout = std::alloc::Layout::from_size_align((capacity as usize * 16).max(8), 8)
         .expect("valid map entries layout");
     let entries = std::alloc::alloc_zeroed(layout) as *mut u64;

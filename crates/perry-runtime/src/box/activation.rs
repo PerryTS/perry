@@ -30,7 +30,7 @@ pub(crate) fn new_async_box_activation() -> *mut AsyncBoxActivation {
         next.set(following);
         id
     });
-    let ptr = ASYNC_BOX_ACTIVATION_FREE_HEAD.with(|head| {
+    ASYNC_BOX_ACTIVATION_FREE_HEAD.with(|head| {
         let ptr = head.get();
         if ptr.is_null() {
             std::boxed::Box::into_raw(std::boxed::Box::new(AsyncBoxActivation {
@@ -49,8 +49,7 @@ pub(crate) fn new_async_box_activation() -> *mut AsyncBoxActivation {
             }
             ptr
         }
-    });
-    ptr
+    })
 }
 
 #[inline]

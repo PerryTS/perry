@@ -903,14 +903,19 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             let scope = crate::gc::RuntimeHandleScope::new();
             let rooted = scope.root_raw_mut_ptr(closure);
             for (i, cap) in captures.iter().enumerate() {
+                // Deserializing a capture allocates (and may move the
+                // closure); the store itself does not, so re-read the rooted
+                // address in argument position.
                 let bits = deserialize_nanbox_on_current_thread(cap);
-                crate::closure::js_closure_set_capture_f64(
-                    rooted.get_raw_mut_ptr(),
-                    i as u32,
-                    f64::from_bits(bits),
-                );
+                rooted.with_mut_ptr(|closure| {
+                    crate::closure::js_closure_set_capture_f64(
+                        closure,
+                        i as u32,
+                        f64::from_bits(bits),
+                    )
+                });
             }
-            JSValue::pointer(rooted.get_raw_mut_ptr::<u8>()).bits()
+            rooted.with_mut_ptr(|closure: *mut u8| JSValue::pointer(closure).bits())
         }
 
         SerializedValue::BoxedCapture(inner) => {

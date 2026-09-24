@@ -1146,8 +1146,17 @@ pub fn collect_pointer_typed_locals(
         &flat_row_alias_ids,
     );
     // A mutable binding's source value may be numeric, but its storage is
-    // now a movable GC box. Keep a root for every compiler-boxed local.
-    for id in crate::boxed_vars::collect_boxed_vars(stmts) {
+    // now a movable GC box. Keep a root for every compiler-boxed local —
+    // including the parameters a sloppy-mode `arguments` object aliases:
+    // `add_arguments_mapped_boxes` boxes those in the frame, but the body
+    // walk (`collect_boxed_vars`) does not see them, so a number-typed mapped
+    // parameter would otherwise hold its cell in an unrooted alloca. Sorted
+    // so slot numbering (and therefore the emitted IR) is deterministic.
+    let mut boxed_ids = crate::boxed_vars::collect_boxed_vars(stmts);
+    crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut boxed_ids);
+    let mut boxed_ids: Vec<u32> = boxed_ids.into_iter().collect();
+    boxed_ids.sort_unstable();
+    for id in boxed_ids {
         assign_slot(&mut out, &mut next_slot, id);
     }
     // The frame-sizing invariant every caller relies on: they pass
@@ -1285,6 +1294,58 @@ mod tests {
              nothing to protect; got slots for {:?}",
             slots.keys().collect::<Vec<_>>()
         );
+    }
+
+    /// #11179 roots every boxed local, including number-valued ones the
+    /// non-pointer proof drops from the body walk. Those ids come out of a
+    /// `HashSet`, whose iteration order differs between instances, so slot
+    /// numbering (and the emitted IR, and the object cache key) must not
+    /// depend on it.
+    #[test]
+    fn boxed_number_locals_get_deterministic_slots() {
+        let ids: Vec<u32> = (100..116).collect();
+        let mut body: Vec<Stmt> = ids
+            .iter()
+            .map(|&id| Stmt::Let {
+                id,
+                name: format!("n{id}"),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            })
+            .collect();
+        body.push(Stmt::Expr(Expr::Closure {
+            func_id: 7,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: ids
+                .iter()
+                .map(|&id| Stmt::Expr(Expr::LocalSet(id, Box::new(Expr::Number(1.0)))))
+                .collect(),
+            captures: ids.clone(),
+            mutable_captures: ids.clone(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+        }));
+        let first = collect_pointer_typed_locals(&[], &body, &HashSet::new());
+        for &id in &ids {
+            assert!(
+                first.contains_key(&id),
+                "boxed local {id} holds a movable cell and needs a root"
+            );
+        }
+        for _ in 0..16 {
+            assert_eq!(
+                collect_pointer_typed_locals(&[], &body, &HashSet::new()),
+                first,
+                "boxed-local slot numbering must not follow HashSet order"
+            );
+        }
     }
 
     fn return_array_of_type(depth: usize, leaf: Type) -> Type {

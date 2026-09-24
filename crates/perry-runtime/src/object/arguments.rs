@@ -344,20 +344,33 @@ pub extern "C" fn js_arguments_object_map_index(
     if obj.is_null() || box_ptr.is_null() {
         return;
     }
-    ARGUMENTS_OBJECTS.with(|m| {
-        if let Some(meta) = m.borrow_mut().get_mut(&(obj as usize)) {
+    // The mapped slot is a malloc'd `Box<usize>`, stable across map growth
+    // but OUTSIDE the owner's body. Two consequences:
+    //
+    // * The barrier must be the EXTERNAL-slot kind. The inline kind remembers
+    //   the page the slot address sits on (or the owner's parent span), and
+    //   the dirty-slot scan filters every slot by `dirty_pages_contains_addr`,
+    //   so an out-of-body slot of an old owner was never revisited: a young
+    //   cell stored here was not copied by the next minor and the metadata
+    //   kept its from-space address (`arguments[i]` then read a dead cell).
+    //   The external kind dirties the owner so the minor re-traces it,
+    //   reaching this slot through `visit_arguments_cell_slots`.
+    // * The barrier runs AFTER the `ARGUMENTS_OBJECTS` borrow is released: a
+    //   barrier that shades or drains marking work can trace this owner, and
+    //   tracing borrows the same table.
+    let slot_addr = ARGUMENTS_OBJECTS.with(|m| {
+        m.borrow_mut().get_mut(&(obj as usize)).map(|meta| {
             let cell = meta
                 .mapped
                 .entry(index)
                 .or_insert_with(|| std::boxed::Box::new(0));
             **cell = box_ptr as usize;
-            crate::gc::runtime_write_barrier_slot(
-                obj as usize,
-                (&mut **cell) as *mut usize as usize,
-                box_ptr as u64,
-            );
-        }
+            (&mut **cell) as *mut usize as usize
+        })
     });
+    if let Some(slot_addr) = slot_addr {
+        crate::gc::runtime_write_barrier_external_slot(obj as usize, slot_addr, box_ptr as u64);
+    }
 }
 
 pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
