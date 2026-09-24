@@ -200,3 +200,26 @@ fn registry_ids_wrap_without_reusing_a_registered_id() {
     drop(held_pin);
     prune_dead_function_owners(&|_| true);
 }
+
+#[test]
+fn registry_node_cache_never_crosses_parent_asts_at_a_reused_address() {
+    // Deterministic form of the address-reuse hazard: two different parent
+    // ASTs whose nested function nodes land at the SAME address (the second
+    // parse reusing the first's freed allocation) must not share an entry.
+    let parent = || InterpFn {
+        params: Vec::new(),
+        body: InterpBody::Block(Vec::new()),
+        hoisted_vars: Vec::new(),
+        strict: false,
+    };
+    let first_parent = register_fn(parent());
+    let second_parent = register_fn(parent());
+    const REUSED_ADDR: usize = 0x1000;
+    let first = node_fn_id(first_parent, REUSED_ADDR, parent);
+    let second = node_fn_id(second_parent, REUSED_ADDR, parent);
+    assert_ne!(first, second, "a node key must include its parent AST");
+    assert_eq!(node_fn_id(first_parent, REUSED_ADDR, parent), first);
+    prune_dead_function_owners(&|_| true);
+    assert!(lookup_fn(first).is_none() && lookup_fn(second).is_none());
+    assert_eq!(node_cache_len(), 0);
+}
