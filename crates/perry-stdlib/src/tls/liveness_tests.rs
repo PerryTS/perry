@@ -8,6 +8,14 @@
 
 use super::*;
 
+/// One non-blocking turn plus dispatch. A bounded park would return at once
+/// forever: pushing a TLS event notifies the main thread, and only
+/// `js_wait_for_event` consumes that notification.
+fn turn() {
+    perry_runtime::event_pump::js_loop_turn_bounded(0);
+    std::thread::sleep(std::time::Duration::from_millis(1));
+}
+
 fn drain_until_removed(handle: i64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while servers().lock().unwrap().contains_key(&handle) {
@@ -15,7 +23,7 @@ fn drain_until_removed(handle: i64) {
             std::time::Instant::now() < deadline,
             "listener never retired"
         );
-        perry_runtime::event_pump::js_loop_turn_bounded(1);
+        turn();
         // SAFETY: this test thread is the pump; no user closures are installed.
         unsafe {
             js_tls_process_pending();
@@ -38,7 +46,7 @@ fn tls_keepalive_count_balances_listen_close_bind_error_and_early_close() {
         let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while servers().lock().unwrap().get(&server).unwrap().bound_port == 0 {
             assert!(std::time::Instant::now() < bound, "listener never bound");
-            perry_runtime::event_pump::js_loop_turn_bounded(1);
+            turn();
         }
         js_tls_server_close(server, undefined);
         drain_until_removed(server);
@@ -54,7 +62,9 @@ fn tls_keepalive_count_balances_listen_close_bind_error_and_early_close() {
             undefined,
             undefined,
         );
-        assert_eq!(liveness::count_for_test(), baseline + 1);
+        // turnloop binds synchronously, so the failure has already released
+        // the listener's keep-alive; the tokio task bound on a later tick.
+        assert_eq!(liveness::count_for_test(), baseline);
         let errored = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !pending_events()
             .lock()
@@ -66,7 +76,7 @@ fn tls_keepalive_count_balances_listen_close_bind_error_and_early_close() {
                 std::time::Instant::now() < errored,
                 "bind error never surfaced"
             );
-            perry_runtime::event_pump::js_loop_turn_bounded(1);
+            turn();
         }
         drain_until_removed(failing);
         assert_eq!(liveness::count_for_test(), baseline, "bind error leaked");

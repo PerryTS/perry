@@ -80,7 +80,11 @@ fn drive_until(
             Instant::now() < deadline,
             "timed out; events so far: {seen:?}"
         );
-        perry_runtime::event_pump::js_loop_turn_bounded(5);
+        // A non-blocking turn: a bounded park returns at once after any TLS
+        // event (it notifies the main thread, and only `js_wait_for_event`
+        // consumes that), so it would spin without turning.
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+        std::thread::sleep(Duration::from_millis(1));
         let batch = snapshot_events();
         // SAFETY: this test thread is the pump; no user closures are installed.
         unsafe {
