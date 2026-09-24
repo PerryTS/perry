@@ -14,7 +14,9 @@ and override knobs.
 
 ## Running a container
 
-`run()` creates and starts a container in one shot, returning a handle:
+`run()` creates and starts a container in one shot, resolving with a
+`ContainerHandle` — `{ id, name? }`, where `id` is the id the backend
+printed and `name` echoes `spec.name` when one was given:
 
 ```typescript
 {{#include ../../examples/stdlib/container/snippets.ts:run-simple}}
@@ -69,20 +71,19 @@ is "drop everything, add back what you need":
 
 | Function | Signature | Notes |
 |---|---|---|
-| `list(all?)` | `(all: boolean) → Promise<ContainerInfo[]>` | `all=true` includes stopped containers. |
-| `inspect(id)` | `(id: string) → Promise<ContainerInfo>` | Throws if the container doesn't exist. |
-| `logs(id, opts?)` | `(id, { tail?: number }) → Promise<ContainerLogs>` | Returns a registry handle to a `{ stdout, stderr }` pair. |
-| `exec(id, cmd, opts?)` | `(id, cmd[], { env?, workdir? })` | Runs a command in the container. Returns a `ContainerLogs` handle. |
+| `list(all?)` | `(all?: boolean) → Promise<string>` | JSON-encoded `ContainerInfo[]`. `all=true` includes stopped containers. |
+| `inspect(id)` | `(id: string) → Promise<string>` | JSON-encoded `ContainerInfo`. Rejects if the container doesn't exist. |
+| `logs(id, opts?)` | `(id, { tail?: number }) → Promise<string>` | JSON-encoded `ContainerLogs` — `{ stdout, stderr }`. |
+| `exec(id, cmd, opts?)` | `(id, cmd[], { env?, workdir? }) → Promise<string>` | Runs a command in the container. JSON-encoded `ContainerLogs`. |
 | `stop(id, timeout?)` | `(id, seconds: number)` | Sends SIGTERM, then SIGKILL after `timeout` seconds. |
 | `start(id)` | `(id)` | Re-starts a stopped container. |
 | `remove(id, force?)` | `(id, force: boolean)` | `force=true` is `docker rm -f`. |
 
-> **Note on the `logs` and `exec` return shape:** today the FFI returns
-> a registry-id handle into a `Vec<ContainerLogs>` rather than a JS
-> object. Treat the returned value as opaque — a future ergonomics task
-> will expose `.stdout` / `.stderr` directly on the JS side. The
-> `ContainerLogs` shape over the wire is `{ stdout: string, stderr:
-> string }`.
+> **Note on the return shapes:** `list`, `inspect`, `logs`, `exec` and
+> `listImages` resolve with JSON strings — `JSON.parse` the result to
+> get the array/object (`ContainerLogs` is `{ stdout: string, stderr:
+> string }`). Materialising them as JS values on the native side is a
+> planned ergonomics task.
 
 ## Image management
 
@@ -93,7 +94,7 @@ is "drop everything, add back what you need":
 | Function | Signature |
 |---|---|
 | `pullImage(reference)` | `(reference: string) → Promise<void>` |
-| `listImages()` | `() → Promise<ImageInfo[]>` |
+| `listImages()` | `() → Promise<string>` (JSON-encoded `ImageInfo[]`) |
 | `removeImage(reference, force?)` | `(reference: string, force: boolean) → Promise<void>` |
 
 When `PERRY_CONTAINER_VERIFY_IMAGES=1` is set, every `run()`,

@@ -214,3 +214,49 @@ pub(super) const CONTAINER_ROWS: &[NativeModSig] = &[
         NR_PROMISE,
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::native_module_lookup;
+    use perry_api_manifest::{ApiKind, API_MANIFEST};
+
+    const MODULES: &[&str] = &[
+        "perry/container",
+        "perry/compose",
+        "perry/container-compose",
+        "perry/workloads",
+    ];
+
+    /// #11211: every function these modules declare must resolve to a
+    /// dispatch row. A declared-but-unrouted call lowers to `undefined`
+    /// silently, which is how the whole surface went dead unnoticed.
+    #[test]
+    fn every_declared_function_resolves_to_a_dispatch_row() {
+        let mut checked = 0;
+        let mut missing = Vec::new();
+        for entry in API_MANIFEST.iter() {
+            if !MODULES.contains(&entry.module) {
+                continue;
+            }
+            let ApiKind::Method {
+                has_receiver: false,
+                class_filter: None,
+            } = entry.kind
+            else {
+                continue;
+            };
+            checked += 1;
+            if native_module_lookup(entry.module, false, entry.name, None).is_none() {
+                missing.push(format!("{}.{}", entry.module, entry.name));
+            }
+        }
+        assert!(checked >= 40, "only {checked} manifest functions seen");
+        assert!(missing.is_empty(), "no dispatch row for: {missing:?}");
+    }
+
+    #[test]
+    fn container_compose_alias_shares_the_compose_rows() {
+        let alias = native_module_lookup("perry/container-compose", false, "up", None).unwrap();
+        assert_eq!(alias.runtime, "js_compose_up");
+    }
+}

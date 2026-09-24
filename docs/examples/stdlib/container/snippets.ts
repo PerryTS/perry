@@ -6,7 +6,12 @@
 // default Windows RS4GC pipeline intentionally refuses until WinEH funclet
 // statepoints are supported (#7354).
 // run: false
+// requires: auto-optimize
 
+// `requires: auto-optimize`: these modules live behind perry-stdlib's
+// `container` feature, which the prebuilt `full` archive the no-auto
+// doc-test run links against does not include.
+//
 // Each ANCHOR block below is the code that the container docs page renders
 // inline via {{#include ... :NAME}}. The file as a whole is compiled and
 // linked by the doc-tests harness — `run: false` because every example
@@ -49,11 +54,12 @@ async function runAlpine(): Promise<void> {
         user: "nobody",
         cap_drop: ["ALL"],
     });
-    console.log(`container handle: ${String(handle)}`);
+    // `handle` is `{ id, name? }` — the id the backend printed.
+    console.log(`container id: ${handle.id}`);
 
     // `force: true` removes the container even if still running (the
     // FFI calls `docker rm -f` / `podman rm -f`).
-    await remove(handle as unknown as string, true);
+    await remove(handle.id, true);
 }
 // ANCHOR_END: run-simple
 
@@ -88,20 +94,21 @@ import {
 } from "perry/container";
 
 async function inspectAll(): Promise<void> {
-    const containers = await list(true); // all=true → include stopped
-    console.log(containers);
+    // list / inspect / logs / exec resolve with JSON strings.
+    const containers = JSON.parse(await list(true)); // all=true → include stopped
+    console.log(containers.length);
 
     const id = "my-container-id";
-    const info = await inspect(id);
+    const info = JSON.parse(await inspect(id));
     console.log(info.status); // "running" | "exited" | …
 
     // Tail the last 50 stdout/stderr lines.
-    const tailed = await logs(id, { tail: 50 });
+    const tailed = JSON.parse(await logs(id, { tail: 50 }));
     console.log(tailed.stdout);
 
-    // Run a command inside the container; returns a ContainerLogs
-    // handle whose stdout/stderr you can read.
-    const r = await exec(id, ["ls", "-la"]);
+    // Run a command inside the container; resolves with a JSON-encoded
+    // ContainerLogs `{ stdout, stderr }`.
+    const r = JSON.parse(await exec(id, ["ls", "-la"]));
     console.log(r.stdout);
 }
 // ANCHOR_END: list-inspect
@@ -111,7 +118,7 @@ import { pullImage, listImages, removeImage } from "perry/container";
 
 async function manageImages(): Promise<void> {
     await pullImage("postgres:16-alpine");
-    const images = await listImages();
+    const images = JSON.parse(await listImages());
     console.log(`${images.length} images`);
     await removeImage("postgres:16-alpine", false);
 }
@@ -224,11 +231,10 @@ import {
 } from "perry/compose";
 
 async function manageStack(stack: number): Promise<void> {
-    // Status of every service in the stack (returns a registry
-    // handle to a ContainerInfo[]; user-side array materialisation
-    // is a follow-up ergonomics task).
-    const statusHandle = await ps(stack);
-    console.log(statusHandle);
+    // Status of every service in the stack, as a JSON-encoded
+    // ContainerInfo[].
+    const services = JSON.parse(await ps(stack));
+    console.log(services.length);
 
     // Aggregated logs from one or all services.
     await composeLogs(stack, { service: "db", tail: 200 });

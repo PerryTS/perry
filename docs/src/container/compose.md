@@ -156,16 +156,15 @@ service key no longer exists in the spec.
 {{#include ../../examples/stdlib/container/snippets.ts:compose-ops}}
 ```
 
-Like `perry/container.{logs, exec}`, the compose `logs` and `exec`
-return registry-id handles for the `ContainerLogs` array. Treat them as
-opaque for now; user-side materialisation is a planned ergonomics
-task.
+Like `perry/container.{list, logs, exec}`, the compose `ps`, `logs`
+and `exec` resolve with JSON strings — `JSON.parse` them to get the
+`ContainerInfo[]` / `ContainerLogs` value.
 
 | Function | Signature |
 |---|---|
-| `ps(handle)` | `(handle) → Promise<ContainerInfo[]>` |
-| `logs(handle, opts?)` | `(handle, { service?, tail? }) → Promise<ContainerLogs>` |
-| `exec(handle, service, cmd[])` | `(handle, service, cmd[]) → Promise<ContainerLogs>` |
+| `ps(handle)` | `(handle) → Promise<string>` (JSON-encoded `ContainerInfo[]`) |
+| `logs(handle, opts?)` | `(handle, { service?, tail? }) → Promise<string>` (JSON-encoded `ContainerLogs`) |
+| `exec(handle, service, cmd[])` | `(handle, service, cmd[]) → Promise<string>` (JSON-encoded `ContainerLogs`) |
 | `config(handle)` | `(handle) → Promise<string>` (resolved YAML) |
 | `start(handle, services?)` | `(handle, services?: string[]) → Promise<void>` |
 | `stop(handle, services?)` | `(handle, services?: string[]) → Promise<void>` |
