@@ -762,8 +762,17 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // members with dedicated consumers (GetIterator, `js_to_primitive`,
         // the using-block desugar) and established name-based resolution —
         // keep them on those paths rather than changing their behavior here.
-        if sym_key != 0 && !crate::symbol::is_well_known_symbol(sym_key) {
-            let is_proto_ref = crate::object::class_prototype_ref_id(obj_f64).is_some();
+        //
+        // A STATIC well-known-symbol method with no synthetic `@@name` slot
+        // (`static *[Symbol.iterator]() {}` — the alias above is instance-only)
+        // lives only in this table; the `@@name` probe just above already
+        // missed, so consult it too (#11170). Prototype refs keep the
+        // user-symbol-only rule.
+        let is_proto_ref_receiver = crate::object::class_prototype_ref_id(obj_f64).is_some();
+        if sym_key != 0
+            && (!crate::symbol::is_well_known_symbol(sym_key) || !is_proto_ref_receiver)
+        {
+            let is_proto_ref = is_proto_ref_receiver;
             if let Some((func_ptr, param_count, has_rest)) =
                 crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, !is_proto_ref)
             {

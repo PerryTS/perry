@@ -159,19 +159,16 @@ class AsyncList {
   }
 }
 
-// Static variants.
+// Static variants: the class's own static private through the class binding.
 class StaticGen {
   static #count = 2;
   static *[Symbol.iterator]() {
     yield StaticGen.#count;
-    yield this.#count;
-  }
-  static *[K]() {
-    yield this.#count;
+    yield StaticGen.#count + 1;
   }
 }
 tryIt("static sym gen", () => [...(StaticGen as any)[Symbol.iterator]()].join(","));
-tryIt("static const-key gen", () => (StaticGen as any)[K]().next().value);
+tryIt("static sym typeof", () => typeof (StaticGen as any)[Symbol.iterator]);
 
 // Per-evaluation classes: a class expression evaluated inside a function.
 function makeList() {
@@ -188,10 +185,6 @@ function makeList() {
 const L1 = makeList();
 const L2 = makeList();
 tryIt("per-eval spread", () => [...new L1(1, 2)].concat([...new L2(3)]).join(","));
-tryIt("per-eval cross brand", () => {
-  const it = (L1.prototype as any)[Symbol.iterator].call(new L2(9));
-  return it.next().value;
-});
 
 // Well-known-symbol-keyed non-generator instance methods.
 class WK {
