@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2015 entries across 114 modules
+// Coverage: 2009 entries across 111 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -1972,20 +1972,6 @@ declare module "inspector/promises" {
   export function Session(...args: any[]): any;
 }
 
-declare module "ioredis" {
-  /** stdlib */
-  export class Redis { [key: string]: any; }
-  /** stdlib */
-  export function createClient(p0: any): any;
-}
-
-declare module "iovalkey" {
-  /** stdlib */
-  export class Redis { [key: string]: any; }
-  /** stdlib */
-  export function createClient(...args: any[]): any;
-}
-
 declare module "lodash" {
   /** stdlib */
   export function camelCase(p0: string): string;
@@ -3501,13 +3487,6 @@ declare module "readline/promises" {
   export class Readline { [key: string]: any; }
   /** stdlib */
   export function createInterface(p0: any): any;
-}
-
-declare module "redis" {
-  /** stdlib */
-  export class Redis { [key: string]: any; }
-  /** stdlib */
-  export function createClient(...args: any[]): any;
 }
 
 declare module "repl" {
