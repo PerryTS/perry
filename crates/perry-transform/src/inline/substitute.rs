@@ -419,3 +419,69 @@ fn substitute_locals_in_stmts_inner(
 // call site. Codegen's `lower_expr_as_i32` and the f64-context arm in
 // `lower_call.rs` then emit `@llvm.smin.i32` / `@llvm.smax.i32` inline,
 // producing IR that LLVM's auto-vectorizer can lift.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fresh_class(owner: Option<LocalId>) -> Expr {
+        Expr::ClassExprFresh {
+            template: "C".into(),
+            evaluation_owner: owner,
+            named_statics: vec![("self".into(), Expr::LocalGet(7))],
+            computed_keys: vec![("key".into(), Expr::LocalGet(8))],
+            computed_statics: vec![("value".into(), Expr::LocalGet(7))],
+            static_init_order: vec![],
+            captured_args: vec![Expr::LocalGet(7), Expr::LocalGet(8)],
+        }
+    }
+
+    #[test]
+    fn inline_class_owner_and_children_use_the_same_remapping_once() {
+        let map = HashMap::from([
+            (7, Expr::LocalGet(17)),
+            (8, Expr::LocalGet(18)),
+            (17, Expr::LocalGet(27)),
+        ]);
+        let mut expr = fresh_class(Some(7));
+        substitute_locals(&mut expr, &map, &mut 30);
+        let Expr::ClassExprFresh {
+            evaluation_owner,
+            named_statics,
+            computed_keys,
+            computed_statics,
+            captured_args,
+            ..
+        } = expr
+        else {
+            panic!("fresh class preserved")
+        };
+        assert_eq!(evaluation_owner, Some(17));
+        assert!(matches!(named_statics[0].1, Expr::LocalGet(17)));
+        assert!(matches!(computed_keys[0].1, Expr::LocalGet(18)));
+        assert!(matches!(computed_statics[0].1, Expr::LocalGet(17)));
+        assert!(matches!(
+            captured_args.as_slice(),
+            [Expr::LocalGet(17), Expr::LocalGet(18)]
+        ));
+    }
+
+    #[test]
+    fn inline_class_keeps_absent_and_unmapped_owners() {
+        let map = HashMap::from([(7, Expr::LocalGet(17))]);
+        for owner in [None, Some(99)] {
+            let mut expr = fresh_class(owner);
+            substitute_locals(&mut expr, &map, &mut 30);
+            let Expr::ClassExprFresh {
+                evaluation_owner,
+                captured_args,
+                ..
+            } = expr
+            else {
+                panic!("fresh class preserved")
+            };
+            assert_eq!(evaluation_owner, owner);
+            assert!(matches!(captured_args[0], Expr::LocalGet(17)));
+        }
+    }
+}
