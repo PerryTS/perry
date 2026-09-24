@@ -108,3 +108,5 @@ mod zero_slot_skip;
 
 #[cfg(feature = "dyn-eval")]
 mod dyn_eval_registry;
+
+mod private_evaluation_storage;

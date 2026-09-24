@@ -206,6 +206,10 @@ pub struct ObjectMeta {
     /// SET_REGISTRY owns that native allocation; moving the metadata only
     /// copies the pointer and does not transfer ownership.
     ///
+    /// A heap class object uses this word for a unique scalar private-name
+    /// storage identity. It survives evacuation and never retains another
+    /// object. Class objects cannot also be native decoders or Sets.
+    ///
     /// POD. Never a managed-heap edge — the GC trace arm visits this record's
     /// child edges explicitly and this word is not one of them, exactly like
     /// `array_tail_object_hot`.

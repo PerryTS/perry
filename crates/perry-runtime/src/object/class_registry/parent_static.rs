@@ -1653,12 +1653,16 @@ pub unsafe extern "C" fn js_class_static_method_call(
         Ok(s) => s,
         Err(_) => return receiver,
     };
-    let private_name = if storage_name.starts_with("#<perry:private-member:") {
+    let private_hint = if storage_name.starts_with("#<perry:private-member:") {
         super::super::field_get_set::take_private_method_call_hint(storage_name)
-            .and_then(|(_, is_static, name)| is_static.then(|| name.to_string()))
     } else {
         None
     };
+    let _owner = super::super::field_get_set::PrivateHintBrandScope::new(
+        private_hint.as_ref().and_then(|(_, _, _, owner)| *owner),
+    );
+    let private_name =
+        private_hint.and_then(|(_, is_static, name, _)| is_static.then(|| name.to_string()));
     let name = private_name.as_deref().unwrap_or(storage_name);
     // Resolve the receiver's class_id: INT32 ClassRef payload, or the
     // class_id stamped on a POINTER class object's ObjectHeader.

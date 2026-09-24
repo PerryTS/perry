@@ -308,7 +308,7 @@ pub(crate) use ic_miss::{
     private_member_access_hints_restore, private_member_access_hints_savepoint,
     private_member_call_by_name, private_member_get_by_name, private_member_set_by_name,
     scan_private_lexical_brand_roots_mut, set_method_value_name, stamp_private_evaluation_brand,
-    take_private_method_call_hint, take_private_method_owner_hint,
+    take_private_method_call_hint, take_private_method_owner_hint, PrivateHintBrandScope,
 };
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
@@ -320,7 +320,10 @@ pub use ic_miss::{
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
 pub(crate) use ic_miss::PACKED_SPILL_FLIP;
 #[cfg(test)]
-pub(crate) use ic_miss::{primitive_proto_method_name_static, test_push_catch_private_hint};
+pub(crate) use ic_miss::{
+    primitive_proto_method_name_static, test_pending_private_access_owner,
+    test_push_catch_private_hint,
+};
 /// The one slow exit of the emitted generic property-get tower. Declared here
 /// rather than inside `ic_miss.rs` only because that file sits at the
 /// 2000-line cap; the source lives next to its sibling entries.
