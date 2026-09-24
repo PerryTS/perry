@@ -8,8 +8,12 @@ use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
 use crate::string::StringHeader;
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
 use std::ptr;
+
+mod index;
+pub(crate) use index::{prune_dead_identity_owners, scan_identity_roots_mut};
+#[cfg(test)]
+pub(crate) use index::{test_identity_count, test_snapshot as test_index_snapshot};
 
 crate::perry_thread_local! {
     static SET_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
@@ -67,6 +71,7 @@ pub fn is_registered_set_iterator(addr: usize) -> bool {
 /// Rekey legacy materialized-iterator brands after array evacuation without
 /// treating the metadata key as a root.
 pub(crate) fn scan_set_iterator_array_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    scan_identity_roots_mut(visitor);
     SET_ITERATOR_ARRAYS.with(|r| {
         let mut arrays = r.borrow_mut();
         let mut moved = Vec::new();
@@ -150,15 +155,21 @@ pub(crate) fn test_set_side_deallocation_snapshot() -> (u64, u64) {
 struct SetSideAllocation {
     elements: *mut f64,
     capacity: usize,
+    index: Option<Box<index::SetIndex>>,
 }
 
 impl SetSideAllocation {
     fn new(elements: *mut f64, capacity: usize) -> Self {
-        Self { elements, capacity }
+        Self {
+            elements,
+            capacity,
+            index: None,
+        }
     }
 
     fn byte_len(&self) -> usize {
         elements_layout(self.capacity).size()
+            + self.index.as_ref().map_or(0, |index| index.byte_len())
     }
 }
 
@@ -180,57 +191,6 @@ impl Drop for SetSideAllocation {
 crate::perry_thread_local! {
     static SET_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, SetSideAllocation>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
-
-/// A wrapper around f64 JSValues that implements Hash and Eq using
-/// content-based comparison for strings (matching jsvalue_eq semantics).
-#[derive(Clone)]
-struct JSValueKey(f64);
-
-impl Hash for JSValueKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let bits = self.0.to_bits();
-        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        if is_string_like(bits) {
-            if let Some((data, len)) = string_view_from_bits(bits, &mut scratch) {
-                // String value: hash by content so identical strings with
-                // different representations (heap STRING_TAG / inline SSO /
-                // POINTER_TAG / raw pointer) produce the same hash.
-                unsafe {
-                    // Distinct domain tag so string hashes don't collide
-                    // with non-string bit patterns.
-                    0xFFFF_FFFFu32.hash(state);
-                    len.hash(state);
-                    let slice = std::slice::from_raw_parts(data, len as usize);
-                    slice.hash(state);
-                }
-                return;
-            }
-        }
-        bits.hash(state);
-    }
-}
-
-impl PartialEq for JSValueKey {
-    fn eq(&self, other: &Self) -> bool {
-        jsvalue_eq(self.0, other.0)
-    }
-}
-impl Eq for JSValueKey {}
-
-// Side-table mapping set_ptr -> (JSValueKey -> index_in_elements).
-// Provides O(1) lookup for `find_value_index` instead of O(n) linear scan.
-//
-// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
-// avalanche). Outer key is set heap-pointer; inner is `JSValueKey` whose
-// `Hash` impl writes either string-content bytes or f64 bits — the
-// avalanche step handles both cleanly. Same rationale as MAP_INDEX
-// (commit 39e253cd) — the perry-runtime registries don't need
-// SipHash's DoS-resistance for keys that never come from external input.
-crate::perry_thread_local! {
-    static SET_INDEX: RefCell<
-        crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<JSValueKey, u32>>,
-    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// Has any thread ever registered a `Set`? Monotone twin of
@@ -327,6 +287,7 @@ pub fn set_ptr_from_receiver_bits(bits: u64) -> Option<*mut SetHeader> {
 
 #[cfg(test)]
 pub(crate) fn test_clear_set_roots() {
+    index::prune_dead_identity_owners(&|_| true);
     let allocations = SET_REGISTRY.with(|r| {
         r.borrow_mut()
             .drain()
@@ -337,7 +298,6 @@ pub(crate) fn test_clear_set_roots() {
         crate::gc::gc_note_external_side_free(allocation.byte_len());
         drop(allocation);
     }
-    SET_INDEX.with(|idx| idx.borrow_mut().clear());
     SET_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
 }
 
@@ -351,41 +311,12 @@ pub fn scan_set_roots_mut(_visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 }
 
 fn rebuild_set_index(set: *mut SetHeader) {
-    if set.is_null() {
-        return;
-    }
     unsafe {
-        let used = (*set).used as usize;
-        let capacity = (*set).capacity as usize;
-        if used > capacity || used > 16_000_000 || (*set).elements.is_null() {
-            return;
-        }
-        let elements = elements_ptr(set);
-        SET_INDEX.with(|idx| {
-            let mut idx = idx.borrow_mut();
-            let map = idx
-                .entry(set as usize)
-                .or_insert_with(crate::fast_hash::new_ptr_hash_map);
-            map.clear();
-            for i in 0..used {
-                let v = ptr::read(elements.add(i));
-                if v.to_bits() == SET_HOLE_VALUE_BITS {
-                    continue;
-                }
-                map.insert(JSValueKey(v), i as u32);
-            }
-        });
+        index::rebuild_index(set);
     }
-}
-
-pub(crate) fn rebuild_set_index_for_gc(set: *mut SetHeader) {
-    rebuild_set_index(set);
 }
 
 pub fn drop_set_index(addr: usize) {
-    SET_INDEX.with(|idx| {
-        idx.borrow_mut().remove(&addr);
-    });
     if let Some(allocation) = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr)) {
         crate::gc::gc_note_external_side_free(allocation.byte_len());
         drop(allocation);
@@ -406,13 +337,6 @@ pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
             panic!("Set move destination already owns a side allocation");
         }
         registry.insert(new_addr, allocation);
-    });
-    SET_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        idx.remove(&new_addr);
-        if let Some(slot) = idx.remove(&old_addr) {
-            idx.insert(new_addr, slot);
-        }
     });
     SET_COMPACTION_LOG.with(|log| {
         let mut log = log.borrow_mut();
@@ -436,9 +360,6 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     }
     let addr = set as usize;
     let allocation = SET_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
-    SET_INDEX.with(|idx| {
-        idx.borrow_mut().remove(&addr);
-    });
     let Some(allocation) = allocation else {
         return;
     };
@@ -446,6 +367,9 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
     crate::gc::gc_note_external_side_free(allocation.byte_len());
     drop(allocation);
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external elements side-allocation pointer after deregistration/deallocation.
+    if !(*set).meta.is_null() {
+        (*(*set).meta).native_state = 0;
+    }
     (*set).elements = std::ptr::null_mut();
     (*set).capacity = 0;
     (*set).size = 0;
@@ -538,12 +462,7 @@ pub(crate) fn finalize_dead_copied_minor_from_space_sets() -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_set_index_contains(set: *const SetHeader, value: f64) -> bool {
-    let value = normalize_zero(value);
-    SET_INDEX.with(|idx| {
-        idx.borrow()
-            .get(&(set as usize))
-            .is_some_and(|slot| slot.contains_key(&JSValueKey(value)))
-    })
+    unsafe { index::lookup_value(set, normalize_zero(value)).is_some_and(|i| i >= 0) }
 }
 
 #[cfg(test)]
@@ -567,7 +486,6 @@ pub(crate) fn release_current_thread_set_side_allocations() {
         crate::gc::gc_note_external_side_free(allocation.byte_len());
         drop(allocation);
     }
-    SET_INDEX.with(|idx| idx.borrow_mut().clear());
     SET_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
 }
 
@@ -858,7 +776,7 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
 }
 
 /// Find the index of a value in the set, or -1 if not found.
-/// Uses the O(1) hash index side-table.
+/// Uses the lazily allocated, owner-local hash index above eight elements.
 /// C-ABI: current elements-array index of `value` (SameValueZero), or `-1.0` if
 /// absent. Companion to `js_map_find_key_index` for the delete-safe Set `for-of`
 /// fast path (#6075). Only invoked from generated IR, so `#[used]` keeps it.
@@ -1124,7 +1042,7 @@ pub(crate) unsafe fn compact_if_holey_set(set: *mut SetHeader) {
 /// the membership (`delete` compacts, `add` normalises `-0`), and no tagged
 /// value equals a number, so a bit match is a hit and a full scan is a miss.
 /// Everything else — larger sets, tagged / zero / NaN values, every string —
-/// is [`find_value_index_cold`]'s, through the exact side-table.
+/// is [`find_value_index_cold`]'s, using a small scan or the owner-local index.
 #[inline(always)]
 unsafe fn find_value_index_hot(set: *const SetHeader, value: f64) -> Option<i32> {
     let bits = value.to_bits();
@@ -1154,17 +1072,17 @@ pub(crate) unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 
 
 #[inline(never)]
 unsafe fn find_value_index_cold(set: *const SetHeader, value: f64) -> i32 {
-    SET_INDEX.with(|idx| {
-        let idx = idx.borrow();
-        if let Some(map) = idx.get(&(set as usize)) {
-            if let Some(&index) = map.get(&JSValueKey(value)) {
-                if index < (*set).used {
-                    return index as i32;
-                }
-            }
+    if let Some(index) = index::lookup_value(set, value) {
+        return index;
+    }
+    let elements = elements_ptr(set);
+    for i in 0..(*set).used {
+        let candidate = ptr::read(elements.add(i as usize));
+        if candidate.to_bits() != SET_HOLE_VALUE_BITS && jsvalue_eq(candidate, value) {
+            return i as i32;
         }
-        -1
-    })
+    }
+    -1
 }
 
 /// Grow the elements array if needed (header stays at same address)
@@ -1264,12 +1182,6 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
 
         // Register in set registry for runtime type detection
         register_set(ptr, elements, cap as usize);
-
-        // Initialize O(1) lookup index
-        SET_INDEX.with(|idx| {
-            idx.borrow_mut()
-                .insert(ptr as usize, crate::fast_hash::new_ptr_hash_map());
-        });
 
         // #6010: the elements buffer is invisible to the arena/malloc GC
         // triggers; record its bytes as external churn so Set-heavy
@@ -1409,16 +1321,9 @@ fn set_add_resolved(set: *mut SetHeader, value: f64) {
             value.to_bits(),
         );
 
-        // Update the hash index
-        SET_INDEX.with(|idx| {
-            let mut idx = idx.borrow_mut();
-            if let Some(map) = idx.get_mut(&(set as usize)) {
-                map.insert(JSValueKey(value), used);
-            }
-        });
-
         (*set).size = size + 1;
         (*set).used = used + 1;
+        index::insert_value(set, value, used);
     }
 }
 
@@ -1467,15 +1372,9 @@ fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
             value.to_bits(),
         );
 
-        SET_INDEX.with(|idx| {
-            let mut idx = idx.borrow_mut();
-            if let Some(map) = idx.get_mut(&(set as usize)) {
-                map.insert(JSValueKey(value), used);
-            }
-        });
-
         (*set).size = size + 1;
         (*set).used = used + 1;
+        index::insert_value(set, value, used);
     }
 }
 
@@ -1680,12 +1579,7 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         );
 
         (*set).size = size - 1;
-        SET_INDEX.with(|indexes| {
-            let mut indexes = indexes.borrow_mut();
-            if let Some(index) = indexes.get_mut(&(set as usize)) {
-                index.remove(&JSValueKey(deleted_value));
-            }
-        });
+        index::remove_value(set, deleted_value, idx as u32);
 
         let used = (*set).used;
         if used >= 16 && (*set).size < used / 2 && !set_foreach_is_active(set) {
@@ -1865,12 +1759,9 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
             note_set_compaction(set, SetRemovedSlots::Prefix(extent));
         }
     }
-    SET_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        if let Some(map) = idx.get_mut(&(set as usize)) {
-            map.clear();
-        }
-    });
+    unsafe {
+        index::clear_index(set);
+    }
 }
 
 /// Direct read of the i-th element in insertion order — counterpart to
@@ -2953,8 +2844,8 @@ mod tests {
         assert_eq!(js_set_size(set), 1);
         assert_eq!(js_set_has_number(set, 0.0), 1);
         assert!(
-            test_set_index_contains(set, 0.0),
-            "numeric helper should populate the Set side-table"
+            !test_set_index_contains(set, 0.0),
+            "small numeric Sets should not allocate an index"
         );
 
         js_set_add_number(set, 0.0);

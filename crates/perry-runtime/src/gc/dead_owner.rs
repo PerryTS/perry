@@ -379,6 +379,12 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         young_prune: None,
     },
     DeadKeyPrune {
+        table: "SET_KEY_IDENTITIES",
+        owner: DeadKeyOwner::Any,
+        prune: crate::set::prune_dead_identity_owners,
+        young_prune: None,
+    },
+    DeadKeyPrune {
         table: "SET_ITERATOR_ARRAYS",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_iterator_array_owners,

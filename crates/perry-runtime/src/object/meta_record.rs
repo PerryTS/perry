@@ -202,6 +202,10 @@ pub struct ObjectMeta {
     /// enumeration. An inline slot would also be handed to the first user
     /// expando (`decoder.mine = 1`) by the slot allocator and overwritten.
     ///
+    /// A native Set uses this word for its lazily allocated lookup index.
+    /// SET_REGISTRY owns that native allocation; moving the metadata only
+    /// copies the pointer and does not transfer ownership.
+    ///
     /// POD. Never a managed-heap edge — the GC trace arm visits this record's
     /// child edges explicitly and this word is not one of them, exactly like
     /// `array_tail_object_hot`.

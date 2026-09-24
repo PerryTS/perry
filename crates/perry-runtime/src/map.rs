@@ -899,8 +899,7 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
 /// compare by CONTENT (limbs) per SameValueZero. The stored bits go stale
 /// whenever gen-GC evacuates a pointee, so this key type may only live in
 /// `MAP_PTR_INDEX`, which is rebuilt from the (already rewritten) entries
-/// buffer by `rebuild_map_ptr_index_for_gc` — the Map analog of Set's
-/// `rebuild_set_index_for_gc` hook.
+/// buffer by `rebuild_map_ptr_index_for_gc`.
 #[derive(Clone, Copy)]
 struct MapPtrKey(f64);
 
@@ -940,7 +939,7 @@ fn is_ptr_index_key(bits: u64) -> bool {
 // pointer keys — the third index alongside the direct numeric index and
 // `MAP_STRING_INDEX` (string content). Before #6084 object/bigint keys took
 // a full linear scan per operation (measured 1,793x slower than string keys
-// on a 20k-entry map). GC-move safety mirrors `set.rs`'s SET_INDEX: the
+// on a 20k-entry map). For GC-move safety, the
 // `GcRewriteHookKind::MapIndex` hook rebuilds this table from the rewritten
 // entries buffer whenever a GC pass changes any of the Map's entry slots
 // (remembered-set dirty scan, copying field scan, verify/force-evacuate
@@ -2810,8 +2809,7 @@ unsafe fn rebuild_map_ptr_index(map: *mut MapHeader) {
 /// GC rewrite hook (`GcRewriteHookKind::MapIndex`, #6084): a GC pass changed
 /// one or more of this Map's entry slots (key pointees evacuated), so every
 /// `MapPtrKey`'s stored bits may be stale. Rebuild from the rewritten
-/// entries buffer — the Map analog of `set::rebuild_set_index_for_gc`,
-/// invoked from the same four GC call sites via `run_gc_rewrite_hook`.
+/// entries buffer, invoked via `run_gc_rewrite_hook`.
 pub(crate) fn rebuild_map_ptr_index_for_gc(map: *mut MapHeader) {
     unsafe {
         rebuild_map_ptr_index(map);

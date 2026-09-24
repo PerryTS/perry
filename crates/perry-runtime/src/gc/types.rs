@@ -358,12 +358,10 @@ pub(crate) enum GcMoveHookKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteHookKind {
     None,
-    SetIndex,
     /// Rebuild the Map pointer-key lookup index (`map::MAP_PTR_INDEX`) after
     /// a GC pass rewrote this Map's entry slots: object/bigint keys are
     /// indexed by their pointer bits (identity) or pointee content (bigints),
     /// both of which go stale when the referenced allocation is evacuated.
-    /// Mirrors `SetIndex` (#6084).
     MapIndex,
 }
 
@@ -654,7 +652,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcLargeObjectPolicy::NotApplicable,
         false,
         GcMoveHookKind::SetSideTables,
-        GcRewriteHookKind::SetIndex,
+        GcRewriteHookKind::None,
         GcFinalizeHookKind::SetSideAllocation,
     )),
     Some(gc_type_info_entry(
@@ -903,9 +901,6 @@ pub(crate) fn gc_type_rewrite_hook_kind(obj_type: u8) -> GcRewriteHookKind {
 pub(crate) fn run_gc_rewrite_hook(obj_type: u8, user_ptr: usize) {
     match gc_type_rewrite_hook_kind(obj_type) {
         GcRewriteHookKind::None => {}
-        GcRewriteHookKind::SetIndex => {
-            crate::set::rebuild_set_index_for_gc(user_ptr as *mut crate::set::SetHeader);
-        }
         GcRewriteHookKind::MapIndex => {
             crate::map::rebuild_map_ptr_index_for_gc(user_ptr as *mut crate::map::MapHeader);
         }

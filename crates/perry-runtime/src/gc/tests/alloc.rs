@@ -543,7 +543,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             large_object_policy: GcLargeObjectPolicy::NotApplicable,
             pointer_free: false,
             move_hook_kind: GcMoveHookKind::SetSideTables,
-            rewrite_hook_kind: GcRewriteHookKind::SetIndex,
+            rewrite_hook_kind: GcRewriteHookKind::None,
             finalize_hook_kind: GcFinalizeHookKind::SetSideAllocation,
         },
     ];
