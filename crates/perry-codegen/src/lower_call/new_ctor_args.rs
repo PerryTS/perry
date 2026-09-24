@@ -75,7 +75,6 @@ pub(crate) fn bind_inline_constructor_params(
         .collect();
 
     crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
-    let mapped_param_ids = crate::codegen::arguments::mapped_parameter_ids(params);
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);
     for ((param, arg_val), proof) in params
@@ -87,34 +86,29 @@ pub(crate) fn bind_inline_constructor_params(
         let slot = ctx
             .func
             .alloca_entry(if boxed_param { I64 } else { DOUBLE });
-        if boxed_param && !mapped_param_ids.contains(&param.id) {
-            // #10464: this frame mints the cell (again per iteration when the
-            // `new` sits in a loop), so it also releases it.
-            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
-            ctx.func
-                .entry_allocas_push_store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot);
-            use crate::stmt::boxed_frame_release as frame_release;
-            frame_release::mint_frame_cell(
-                ctx,
-                &slot,
-                "js_box_alloc_bits",
-                &[(I64, &arg_bits)],
-                frame_release::JS_BOX_SCOPE_RELEASE,
-            );
-        } else if boxed_param {
-            let arg_bits = ctx.block().bitcast_double_to_i64(arg_val);
-            let box_ptr = ctx
-                .block()
-                .call(I64, "js_box_alloc_bits", &[(I64, &arg_bits)]);
-            ctx.block().store(I64, &box_ptr, &slot);
+        // Spill all incoming values before any cell allocation can collect.
+        if boxed_param {
+            let bits = ctx.block().bitcast_double_to_i64(arg_val);
+            ctx.block().store(I64, &bits, &slot);
         } else {
             ctx.block().store(DOUBLE, arg_val, &slot);
         }
         ctx.locals.insert(param.id, slot);
+        crate::expr::emit_shadow_slot_bind_for_local(ctx, param.id);
         ctx.local_types.insert(param.id, param.ty.clone());
         ctx.proven_local_types.remove(&param.id);
         if let Some(proof) = proof {
             ctx.proven_local_types.insert(param.id, proof);
+        }
+    }
+
+    crate::expr::root_inlined_ctor_pointer_locals(ctx, params, &[]);
+    for param in params {
+        if ctx.boxed_vars.contains(&param.id) && param.arguments_object.is_none() {
+            let slot = ctx.locals[&param.id].clone();
+            let bits = ctx.block().load(I64, &slot);
+            let cell = ctx.block().call(I64, "js_box_alloc_bits", &[(I64, &bits)]);
+            ctx.block().store(I64, &cell, &slot);
         }
     }
 

@@ -263,7 +263,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         if matches!(mode, MicrotaskDrainMode::EventLoop) {
             crate::perf_hooks::note_event_loop_start();
         }
-        finish_gc_and_box_boundary();
+        finish_gc_boundary();
         MICROTASK_RUN_DEPTH.with(|depth| depth.set(MicrotaskRunDepths { pump: 0, jobs: 0 }));
         bump(&MT_EMPTY_DRAIN_COUNT);
         return 0;
@@ -363,7 +363,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     crate::exception::js_try_end();
     crate::node_submodules::diagnostics_channel_drain_uncaught();
 
-    finish_gc_and_box_boundary();
+    finish_gc_boundary();
 
     ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
         let base = bases
@@ -389,7 +389,7 @@ pub(crate) fn empty_checkpoint_eligible_for_test() -> bool {
     empty::can_skip_callback_phases()
 }
 
-fn finish_gc_and_box_boundary() {
+fn finish_gc_boundary() {
     crate::gc::gc_runtime_safepoint_poll();
 
     // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
@@ -403,16 +403,6 @@ fn finish_gc_and_box_boundary() {
         && MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
     {
         crate::gc::gc_safepoint_moving_minor();
-    }
-
-    // Fallback for release entry points invoked without a tracked plain-async
-    // activation (principally direct runtime tests). Production async frames
-    // publish at their own queued/running AsyncStep refcount reaching zero;
-    // they do not wait for this global pump boundary.
-    if MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
-        && TASK_QUEUE.with(|q| q.borrow().is_empty())
-    {
-        crate::r#box::flush_released_boxes();
     }
 }
 

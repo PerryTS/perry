@@ -1237,6 +1237,7 @@ pub(crate) fn lower_let(
                     let init_val =
                         lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                     let init_bits = ctx.block().bitcast_double_to_i64(&init_val);
+                    let bptr = ctx.block().load(I64, &slot_clone);
                     ctx.block().call_void(
                         "js_box_set_bits",
                         &[(crate::types::I64, &bptr), (I64, &init_bits)],
@@ -1282,7 +1283,6 @@ pub(crate) fn lower_let(
             &slot,
             "js_box_alloc_bits",
             &[(I64, crate::nanbox::TAG_UNDEFINED_I64)],
-            super::boxed_frame_release::JS_BOX_SCOPE_RELEASE,
         );
         super::record_boxed_slot_js_value_bits(ctx, id, &box_ptr, "boxed_let.box_ptr_slot");
         // Step 2: register BEFORE lowering init.

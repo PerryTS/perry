@@ -464,8 +464,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         young_prune: None,
     },
     DeadKeyPrune {
-        table:
-            "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS",
+        table: "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS",
         owner: DeadKeyOwner::Closure,
         prune: crate::closure::prune_dead_closure_side_table_owners,
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),

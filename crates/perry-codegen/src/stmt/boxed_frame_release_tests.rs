@@ -109,7 +109,7 @@ fn releases_before_each_ret(ir: &str) -> Vec<usize> {
 }
 
 #[test]
-fn captured_reassigned_let_is_released_at_every_return() {
+fn captured_reassigned_let_is_left_to_gc_at_every_return() {
     // function counter(flag) { let n = 0; const inc = () => { n = 1 };
     //   if (flag) return inc; return n; }
     let body = vec![
@@ -141,8 +141,8 @@ fn captured_reassigned_let_is_released_at_every_return() {
     let per_ret = releases_before_each_ret(&ir);
     assert!(per_ret.len() >= 2, "both returns must be lowered:\n{ir}");
     assert!(
-        per_ret.iter().all(|n| *n == 1),
-        "each return releases the single frame-owned cell ({per_ret:?}):\n{ir}"
+        per_ret.iter().all(|n| *n == 0),
+        "no return explicitly releases a GC cell ({per_ret:?}):\n{ir}"
     );
     // Outside a loop the declaration runs once: no previous-iteration release.
     let alloc = ir.find("call i64 @js_box_alloc_bits(").unwrap();
@@ -153,7 +153,7 @@ fn captured_reassigned_let_is_released_at_every_return() {
 }
 
 #[test]
-fn loop_declaration_releases_the_previous_iterations_cell_before_minting() {
+fn loop_declaration_allocates_gc_cells_without_manual_release() {
     // while (flag) { let x = 0; keep = () => { x = 1 }; }
     let body = vec![
         Stmt::While {
@@ -178,28 +178,10 @@ fn loop_declaration_releases_the_previous_iterations_cell_before_minting() {
         .iter()
         .position(|l| l.contains("call i64 @js_box_alloc_bits("))
         .expect("premise: x is boxed");
-    let cell = lines[alloc].split(" = ").next().unwrap();
-    let slot = lines[alloc..]
-        .iter()
-        .find_map(|l| l.strip_prefix(&format!("store i64 {cell}, ptr ")))
-        .expect("the minted cell is stored in its slot");
-    let previous = lines[..alloc]
-        .iter()
-        .rev()
-        .take(4)
-        .find_map(|l| l.strip_suffix(&format!(" = load i64, ptr {slot}")))
-        .unwrap_or_else(|| panic!("the slot's previous cell is loaded before minting:\n{ir}"));
+    assert!(lines[alloc].contains("js_box_alloc_bits"));
     assert!(
-        lines[..alloc]
-            .iter()
-            .rev()
-            .take(4)
-            .any(|l| l.starts_with(&format!("{RELEASE}{previous})"))),
-        "and released before the next iteration's cell is minted:\n{ir}"
-    );
-    assert!(
-        releases_before_each_ret(&ir).iter().all(|n| *n == 1),
-        "{ir}"
+        !ir.contains(RELEASE),
+        "cells are reclaimed by tracing:\n{ir}"
     );
 }
 
@@ -246,8 +228,8 @@ fn mapped_arguments_parameter_is_never_released_by_its_frame() {
     );
     let per_ret = releases_before_each_ret(&ir);
     assert!(
-        !per_ret.is_empty() && per_ret.iter().all(|n| *n == 1),
-        "only the unmapped parameter is released ({per_ret:?}):\n{ir}"
+        !per_ret.is_empty() && per_ret.iter().all(|n| *n == 0),
+        "both parameters are owned by GC ({per_ret:?}):\n{ir}"
     );
 }
 
@@ -287,7 +269,7 @@ fn plain_async_step_counts_only_enclosing_cells_and_frame_keeps_its_own() {
     );
     let per_ret = releases_before_each_ret(&ir);
     assert!(
-        !per_ret.is_empty() && per_ret.iter().all(|n| *n == 1),
-        "the frame releases OUTER only; OWN belongs to the activation ({per_ret:?}):\n{ir}"
+        !per_ret.is_empty() && per_ret.iter().all(|n| *n == 0),
+        "both enclosing and activation cells are GC-owned ({per_ret:?}):\n{ir}"
     );
 }

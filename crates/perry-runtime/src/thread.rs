@@ -900,22 +900,27 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
             captures,
         } => {
             let closure = closure::js_closure_alloc(*func_ptr as *const u8, *capture_count);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let rooted = scope.root_raw_mut_ptr(closure);
             for (i, cap) in captures.iter().enumerate() {
+                // Deserializing a capture allocates (and may move the
+                // closure); the store itself does not, so re-read the rooted
+                // address in argument position.
                 let bits = deserialize_nanbox_on_current_thread(cap);
-                crate::closure::js_closure_set_capture_f64(closure, i as u32, f64::from_bits(bits));
+                rooted.with_mut_ptr(|closure| {
+                    crate::closure::js_closure_set_capture_f64(
+                        closure,
+                        i as u32,
+                        f64::from_bits(bits),
+                    )
+                });
             }
-            JSValue::pointer(closure as *const u8).bits()
+            rooted.with_mut_ptr(|closure: *mut u8| JSValue::pointer(closure).bits())
         }
 
         SerializedValue::BoxedCapture(inner) => {
-            // Re-box on THIS thread: deep-copy the held value into the local
-            // arena, then allocate a fresh box (registered in this thread's
-            // registry) holding it. The returned bits are the raw box POINTER,
-            // exactly what codegen expects a boxed-capture slot to contain, so
-            // `js_box_get`/`js_box_set` in the reconstructed closure body work
-            // (#6520). `js_box_alloc_bits` uses the system allocator (no GC
-            // trigger), so `value_bits` cannot be collected between the two
-            // steps; once stored, the box-registry GC scanner keeps it alive.
+            // Rebuild the cell in this thread's GC arena. The allocator roots
+            // the input across allocation; the closure's capture owns the result.
             let value_bits = deserialize_nanbox_on_current_thread(inner);
             let box_ptr = crate::r#box::js_box_alloc_bits(value_bits as i64);
             box_ptr as u64

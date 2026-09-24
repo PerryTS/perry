@@ -862,3 +862,12 @@ test_gap_gc_for_in_proxy_callback_roots
 
 test_gap_gc_string_suffix_cursor
 test_gap_gc_array_shift_queue
+
+# #11179: mutable capture cells are movable `GC_TYPE_BOX` / `I32_BOX` /
+# `BOOL_BOX` arena objects now, rooted by their frame slots and traced as
+# closure-capture children instead of by a registry. `gc()` moves nothing
+# unless the arm forces evacuation, so a plain gap run of this file only checks
+# parity; registering it here puts it in front of the force_evac /
+# force_verify / loop_polls arms, whose liveness check refuses a cell that did
+# not relocate.
+test_gap_gc_box_cells

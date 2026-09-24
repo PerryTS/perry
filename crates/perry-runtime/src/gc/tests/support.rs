@@ -458,7 +458,6 @@ pub(super) fn reset_copying_nursery_runtime_test_state() {
     crate::timer::test_clear_all_timer_scanner_roots();
     crate::closure::test_clear_singleton_closure_caches();
     crate::closure::test_clear_closure_side_tables();
-    crate::r#box::test_clear_box_registry();
     crate::builtins::test_set_console_log_singleton(0);
     crate::geisterhand_registry::test_clear_geisterhand_roots();
     crate::ui_text_registry::test_clear_ui_text_registry_roots();

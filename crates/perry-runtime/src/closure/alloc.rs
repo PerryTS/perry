@@ -863,8 +863,6 @@ pub extern "C" fn js_closure_set_box_capture_ptr(
     value: i64,
 ) {
     js_closure_set_capture_bits(closure, index, value as u64);
-    let cell = crate::r#box::registered_box_capture_addr(value as usize);
-    super::box_captures::set_closure_box_capture(closure, index, cell);
 }
 
 /// Get a captured value (as i64 pointer) by index

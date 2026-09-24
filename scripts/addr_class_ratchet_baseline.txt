@@ -39,7 +39,6 @@ handle-floor | crates/perry-runtime/src/array/push_pop.rs | 1
 handle-floor | crates/perry-runtime/src/async_hooks.rs | 1
 handle-floor | crates/perry-runtime/src/bigint/convert.rs | 2
 handle-floor | crates/perry-runtime/src/bigint/mod.rs | 2
-handle-floor | crates/perry-runtime/src/box.rs | 2
 handle-floor | crates/perry-runtime/src/buffer/access.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/cmp.rs | 2
 handle-floor | crates/perry-runtime/src/buffer/copy_bytes.rs | 1

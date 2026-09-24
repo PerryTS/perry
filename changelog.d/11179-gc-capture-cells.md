@@ -1,0 +1,9 @@
+Move mutable capture cells into the GC arena (`GC_TYPE_BOX`, plus pointer-free i32/bool cell kinds). Closure captures and generated frame roots now retain and relocate cells; NaN-box cells trace their contained value and setters maintain generational write barriers. Remove the per-cell malloc allocations, pre-sized box registries, registry scans, pointer caches, capture-count tables, and manual scope-release machinery.
+
+Root incoming parameters before allocating their cells, including closures and inline constructors, and root cached capture addresses across safepoints. Mapped arguments trace their cells as owner edges and rekey metadata before copied-object traversal. Async generation tokens remain separate from GC cell lifetime.
+
+This reverses #8132's "a boxed local's box-pointer slot is never bound" rule: a cell is a movable arena object now, so every boxed local (and every parameter a sloppy `arguments` object maps) keeps a root slot, bound before the next collecting call, and `js_box_alloc_bits` / `js_i32_box_alloc` / `js_bool_box_alloc` are collection points. Boxed-local slot numbering is sorted, so it no longer follows `HashSet` iteration order.
+
+The mapped-arguments slot is a malloc'd word outside the arguments object's body, so `js_arguments_object_map_index` uses the external-slot write barrier (the inline kind let an old — e.g. born-tenured, ~3000-argument — arguments object keep a young parameter cell's from-space address across a copying minor), and runs it after releasing the `ARGUMENTS_OBJECTS` borrow that tracing also takes.
+
+Add relocation, old-to-young barrier (including an old arguments object with a young mapped cell), unreachable-cycle, mapped-arguments, and compiled closure/async regression coverage; register `test_gap_gc_box_cells` in the GC stress corpus so the forced-evacuation arms run it. No version bump.

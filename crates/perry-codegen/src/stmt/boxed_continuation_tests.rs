@@ -37,6 +37,7 @@ fn branch(initialized: bool) -> Vec<Stmt> {
 }
 
 fn assert_each_continuation_allocates(initialized: bool) {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("boxed_continuation.ts");
     module.functions.push(Function {
         id: 1,

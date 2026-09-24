@@ -1265,7 +1265,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     let fixture = ForwardedRootFixture::new();
     let active_context_handle = -724_331;
     let shape_id = 0x51A9_E001;
-    let box_ptr = crate::r#box::js_box_alloc(fixture.nursery_value());
 
     crate::promise::test_seed_promise_scanner_roots(
         fixture.nursery_user as *mut crate::promise::Promise,
@@ -1375,7 +1374,6 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::builtins::scan_console_log_singleton_roots_mut(&mut visitor);
     crate::node_submodules::scan_node_submodule_singleton_roots_mut(&mut visitor);
     crate::os::scan_process_event_listener_roots_mut(&mut visitor);
-    crate::r#box::scan_box_roots_mut(&mut visitor);
     crate::promise::scan_iter_result_root_mut(&mut visitor);
     crate::promise::scan_async_step_thunk_cache_mut(&mut visitor);
     crate::closure::scan_singleton_closure_roots_mut(&mut visitor);
@@ -1497,10 +1495,7 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
         crate::os::test_process_event_listener_root_snapshot(),
         fixture.old_addr()
     );
-    assert_eq!(
-        crate::r#box::js_box_get(box_ptr).to_bits(),
-        fixture.old_bits
-    );
+
     assert_eq!(
         crate::promise::js_iter_result_get_value().to_bits(),
         fixture.old_bits

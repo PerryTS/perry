@@ -192,10 +192,6 @@ pub(crate) struct HotTls {
     /// addresses, `usize::MAX` = not yet computed. Rewritten by the
     /// collector's root scan like the slot it replaced.
     pub(crate) prototype_addrs: [Cell<usize>; INLINE_PROTOTYPE_ADDR_ROWS],
-    /// `box` — direct-mapped positive caches over the three box registries.
-    pub(crate) box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
-    pub(crate) i32_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
-    pub(crate) bool_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
     /// Generic slots, one per [`crate::perry_thread_local`] declaration that
     /// this thread has resolved at least once. Kept at its established offset
     /// so the named fields and inline values above do not move.
@@ -218,8 +214,6 @@ const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data)
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
 /// builtin-name table from this.
 pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 2;
-/// Slots of each [`HotTls`] box-pointer cache; `box` indexes with this.
-pub(crate) const INLINE_BOX_PTR_CACHE_SLOTS: usize = 8;
 
 impl HotTls {
     /// Read a claimed slot. `idx` must have passed the `< HOT_SLOT_CAPACITY`
@@ -262,9 +256,6 @@ impl HotTls {
         last_external_dirty_page: Cell::new(usize::MAX),
         last_external_dirty_header: Cell::new(usize::MAX),
         prototype_addrs: [const { Cell::new(usize::MAX) }; INLINE_PROTOTYPE_ADDR_ROWS],
-        box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
-        i32_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
-        bool_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         slots: [const { Cell::new(std::ptr::null_mut()) }; HOT_SLOT_CAPACITY],
         runtime_handle_stack: Cell::new(std::ptr::null_mut()),
     };

@@ -118,7 +118,7 @@ fn arguments_shared_keys_survive_moving_gc_without_a_live_arguments_owner() {
 
 #[test]
 fn arguments_values_callee_and_mapping_survive_moving_gc() {
-    let _guard = CopyingNurseryTestGuard::new(1);
+    let _guard = CopyingNurseryTestGuard::new(2);
     register_scanners();
     let child = js_object_alloc(0, 1);
     js_object_set_field(child, 0, JSValue::number(42.0));
@@ -129,6 +129,7 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     let mapped = crate::r#box::js_box_alloc(8.0);
     js_arguments_object_map_index(args, 2, mapped);
     js_shadow_slot_set(0, ptr_bits(args as usize));
+    js_shadow_slot_set(1, ptr_bits(mapped as usize));
 
     gc_collect_minor();
 
@@ -152,9 +153,102 @@ fn arguments_values_callee_and_mapping_survive_moving_gc() {
     assert!(unsafe { crate::string::js_string_key_matches(moved_text, key("arguments payload")) });
     assert_eq!(get(moved, "2").bits(), 8.0f64.to_bits());
     js_object_set_field_by_name(moved, key("2"), 9.0);
-    assert_eq!(crate::r#box::js_box_get(mapped), 9.0);
+    let moved_mapped = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::r#box::Box;
+    assert_ne!(moved_mapped, mapped);
+    assert_eq!(crate::r#box::js_box_get(moved_mapped), 9.0);
     assert_eq!(get(moved, "length").bits(), 3.0f64.to_bits());
     assert!(!get_property_attrs(moved as usize, "length")
         .unwrap()
         .enumerable());
+}
+
+#[test]
+fn unreachable_arguments_and_mapped_cell_cycle_is_reclaimed() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    register_scanners();
+    let args = arguments(&[0.0], f64::from_bits(crate::value::TAG_UNDEFINED), false);
+    let cell = crate::r#box::js_box_alloc_bits(ptr_bits(args as usize) as i64);
+    js_arguments_object_map_index(args, 0, cell);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    gc_collect_minor();
+    let moved_args = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let moved_cell = test_arguments_mapped_box(moved_args, 0).unwrap();
+    assert_ne!(moved_cell, cell as usize);
+    assert_eq!(
+        crate::r#box::js_box_get_bits(moved_cell as *mut _) as u64,
+        ptr_bits(moved_args)
+    );
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    gc_collect_inner();
+    let live = build_valid_pointer_set();
+    assert!(!live.contains(&moved_args));
+    assert!(!live.contains(&moved_cell));
+}
+
+/// Review of #11179, finding 5: the mapped slot is a malloc'd `Box<usize>`
+/// outside the owner's body, so an OLD arguments object storing a YOUNG
+/// parameter cell needs the external-slot barrier. With the inline barrier the
+/// dirty-slot scan filtered the out-of-body slot away, the minor never copied
+/// the cell, and the metadata kept its from-space address.
+///
+/// The owner is old because it survived enough minors to be promoted — an
+/// `arguments` object captured by a long-lived closure. (It can also be born
+/// tenured: past the 128 KiB pointer-bearing large-object threshold, i.e.
+/// `f.apply(null, Array(20000))` on a sloppy function that maps `arguments`.)
+#[test]
+fn old_arguments_owner_keeps_young_mapped_cell_across_copying_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = super::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_scanners();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let mut args = arguments(&[0.5; 8], undefined, false);
+    js_shadow_slot_set(0, ptr_bits(args as usize));
+    for _ in 0..16 {
+        if matches!(
+            crate::arena::classify_heap_generation(args as usize),
+            crate::arena::HeapGeneration::Old
+        ) {
+            break;
+        }
+        gc_collect_minor();
+        args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    }
+    assert!(
+        matches!(
+            crate::arena::classify_heap_generation(args as usize),
+            crate::arena::HeapGeneration::Old
+        ),
+        "fixture must start with an OLD owner, or the barrier kind is never exercised"
+    );
+    let cell = crate::r#box::js_box_alloc(8.0);
+    assert!(
+        !matches!(
+            crate::arena::classify_heap_generation(cell as usize),
+            crate::arena::HeapGeneration::Old
+        ),
+        "fixture must start with a YOUNG cell"
+    );
+    js_arguments_object_map_index(args, 7, cell);
+    // Only the owner is rooted (slot 0, above): the cell is reachable solely
+    // through the mapped slot, exactly as a parameter cell whose frame has
+    // returned.
+
+    let trace = super::support::collect_minor_trace(GcTriggerKind::Direct);
+    super::support::assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+
+    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+    assert_eq!(owner, args, "an old owner does not move in a minor");
+    let moved_cell = test_arguments_mapped_box(owner as usize, 7).unwrap();
+    assert_ne!(
+        moved_cell, cell as usize,
+        "the minor must copy the young cell and rewrite the out-of-body mapped slot"
+    );
+    assert!(build_valid_pointer_set().contains(&moved_cell));
+    assert_eq!(get(owner, "7").bits(), 8.0f64.to_bits());
+    js_object_set_field_by_name(owner, key("7"), 9.0);
+    assert_eq!(
+        crate::r#box::js_box_get(moved_cell as *mut crate::r#box::Box),
+        9.0
+    );
+    assert_eq!(get(owner, "7").bits(), 9.0f64.to_bits());
 }

@@ -2,6 +2,7 @@
 use perry_hir::{types::Type, Expr, Function, Module, Stmt};
 
 fn emit(body: Vec<Stmt>) -> String {
+    let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("tdz_paths.ts");
     module.functions.push(Function {
         id: 1,

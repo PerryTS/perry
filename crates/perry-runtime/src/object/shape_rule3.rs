@@ -245,6 +245,25 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "high half of word_count (< 2^30)",
         Rule3Word::NotPointerTagged,
     ),
+    // Cells are compiler-private raw addresses, never JavaScript receivers.
+    (
+        gc::GC_TYPE_BOX,
+        "Box",
+        "high half of NaN-box payload",
+        Rule3Word::NotPointerTagged,
+    ),
+    (
+        gc::GC_TYPE_I32_BOX,
+        "I32Box",
+        "padding",
+        Rule3Word::NotPointerTagged,
+    ),
+    (
+        gc::GC_TYPE_BOOL_BOX,
+        "BoolBox",
+        "padding",
+        Rule3Word::NotPointerTagged,
+    ),
 ];
 
 /// Rule 3, checked where the word is written.
