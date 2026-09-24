@@ -206,6 +206,12 @@
       "why": "Registered prune retains on !is_dead_owner over the iterator array address (set.rs:51)."
     },
     {
+      "site": "crates/perry-runtime/src/set/index.rs::scan_identity_roots_mut",
+      "table": "SET_KEY_IDENTITIES",
+      "death": "dead_owner:prune_dead_identity_owners",
+      "why": "#11169: stable hash identities for movable Set keys. Registered prune in gc/dead_owner.rs retains on !is_dead_owner over the key object's address (set/index.rs prune_dead_identity_owners), so a dead key's entry is dropped before a recycled address can be rekeyed."
+    },
+    {
       "site": "crates/perry-runtime/src/symbol/accessors.rs::scan_symbol_accessor_root_slot",
       "table": "SYMBOL_ACCESSOR_PROPERTIES (owner half)",
       "death": "dead_owner:prune_dead_symbol_property_owners",
