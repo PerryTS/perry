@@ -1,0 +1,9 @@
+**node:stream: every Readable/Writable now has a live `_readableState` / `_writableState` (#11197).** Both were `undefined` on every stream, so undici 8.9.0's `BodyReadable` constructor (`this._readableState.dataEmitted = false`) threw `Cannot set properties of null or undefined (setting 'dataEmitted')` and `request()` rejected.
+
+The state object is a view over the stream's hidden state, not a copy. Each stream side gets one small object whose only field is a non-enumerable back-pointer to the stream. Its prototype is a per-thread `ReadableState` / `WritableState` prototype with one accessor pair per field, which is how Node lays these out too. Getters read live state at call time: `length`, `buffer` (the live retained-chunk array undici's `consumeStart` iterates), `ended`, `endEmitted`, `flowing`, `destroyed`, `closed`, `errored`, `encoding` and the rest on the readable side, and `length`, `needDrain`, `ended`, `finished`, `corked`, `errored` and the rest on the writable side. Two flags are new: `dataEmitted` (set when `'data'` is emitted) and `closeEmitted` (set where `'close'` is emitted).
+
+`dataEmitted` writes through to the stream. Writes to any other field are absorbed, so library code can neither throw in strict mode nor desynchronize the stream. `JSON.stringify` of a view emits Node's own-field shape and never follows the back-pointer.
+
+The two cached prototypes are reported to the GC through the new `node_stream_state_protos` root scanner.
+
+Files: `crates/perry-runtime/src/node_stream_state_view.rs` (new), `node_stream_constructors.rs`, `node_stream_readwrite.rs`, `node_stream_json.rs`, `node_stream_state_tests.rs`, `scripts/gc_runtime_root_holders.json`. Gap test: `test-files/test_gap_stream_readable_state.ts`. It fails on main and is byte-identical to Node 26.5.1 with the fix. The 56-test stream A/B shows no regressions.
