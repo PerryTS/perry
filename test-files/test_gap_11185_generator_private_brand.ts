@@ -60,3 +60,17 @@ async function asyncChecks() {
   catch (e: any) { console.log('async-cross', 'threw', e.constructor.name); }
 }
 asyncChecks();
+
+// Lexical ownership survives changes to the public prototype.constructor.
+const C = make(), D = make();
+const c = new C(12), d = new D(24);
+C.prototype.constructor = D;
+test('changed-constructor-same', () => C.prototype[Symbol.iterator].call(c).next().value);
+test('changed-constructor-cross', () => C.prototype[Symbol.iterator].call(d).next().value);
+delete C.prototype.constructor;
+test('deleted-constructor-same', () => C.prototype[Symbol.iterator].call(c).next().value);
+test('deleted-constructor-cross', () => C.prototype[Symbol.iterator].call(d).next().value);
+const protoCheck = C.prototype.check.call(c, C.prototype);
+test('prototype-not-instance', () => protoCheck.next().value);
+test('prototype-private-read', () => protoCheck.next().value);
+console.log('prototype-keys', Reflect.ownKeys(C.prototype).map(key => String(key)).sort().join(','));

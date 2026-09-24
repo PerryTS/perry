@@ -1658,8 +1658,9 @@ pub(crate) fn current_private_lexical_brand_value(declaring_class_id: u32) -> Op
     current_private_lexical_brand(declaring_class_id).map(f64::from_bits)
 }
 
-/// Stamp an instance constructed through a `ClassExprFresh` value with the
-/// identity of that particular class evaluation. The brand lives in the
+/// Record the owner of a `ClassExprFresh` instance or evaluation prototype.
+/// Prototypes carry lexical ownership only; private access still separately
+/// requires an initialized instance element. The brand lives in the
 /// object's traced metadata record so it neither shifts user field slots nor
 /// changes the instance's ShapeId / own-key enumeration.
 pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, class_value: f64) {
@@ -1721,7 +1722,7 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 }
 
 /// Return the fresh ClassDefinitionEvaluation object carried by a constructor
-/// or instance. Unlike `private_evaluation_brand`, this does not require the
+/// or instance/prototype. Unlike `private_evaluation_brand`, this does not require the
 /// caller to know the compile-time template id; method dispatch uses it to
 /// establish the callee's lexical private-name environment.
 pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {

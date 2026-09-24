@@ -20,8 +20,9 @@ static CLASS_EVALUATION_PROTOTYPES_MATERIALIZED: std::sync::atomic::AtomicBool =
 /// a heap class object, else `None`.
 ///
 /// Recognized structurally rather than through a side table: the prototype's
-/// own `constructor` is the class object, and that class object's hidden
-/// evaluation-prototype slot points back at `ptr`. A side table would have to
+/// traced metadata holds the evaluation owner, and that class object's hidden
+/// evaluation-prototype slot points back at `ptr`. The public `constructor`
+/// property may be replaced or deleted. A side table would have to
 /// be either a GC root (leaking one prototype per evaluation of a class that
 /// lives in a factory) or a weak, evacuation-rekeyed map; the back-edge is
 /// already maintained by the heap itself. Never allocates — callers hold raw
@@ -47,11 +48,7 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
             return None;
         }
         let proto_value = crate::value::js_nanbox_pointer(ptr as i64);
-        let ctor = super::super::js_object_get_own_field_or_undef(
-            proto_value,
-            b"constructor".as_ptr(),
-            b"constructor".len(),
-        );
+        let ctor = super::super::private_evaluation_brand_value(proto_value)?;
         if !super::super::class_registry::is_class_object_value(ctor) {
             return None;
         }
@@ -91,6 +88,15 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     let class_id = class.with_mut_ptr::<ObjectHeader, _>(|class| (*class).class_id);
     let proto = scope.root_raw_mut_ptr(js_object_alloc(class_id, 0));
     CLASS_EVALUATION_PROTOTYPES_MATERIALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    // Symbol aliases resolve method values lazily. Their lexical evaluation
+    // owner must survive changes to the public `constructor` property. This
+    // traced metadata edge is not an initialized instance-private element.
+    let owner = class
+        .with_const_ptr::<ObjectHeader, _>(|class| crate::value::js_nanbox_pointer(class as i64));
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        super::stamp_private_evaluation_brand(proto, owner);
+    });
 
     let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
     let constructor_key = scope.root_string_ptr(constructor_key);
@@ -365,4 +371,50 @@ pub(super) unsafe fn instance_constructor_value(
         return Some(JSValue::from_bits(v.to_bits()));
     }
     None
+}
+
+#[cfg(test)]
+mod evaluation_owner_tests {
+    use super::*;
+
+    #[test]
+    fn prototype_owner_survives_constructor_replacement_and_deletion() {
+        unsafe {
+            const CID: u32 = 62_442;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let class = scope.root_raw_mut_ptr(js_object_alloc(CID, 0));
+            class.with_mut_ptr(|class: *mut ObjectHeader| {
+                crate::object::js_object_mark_class(class as i64);
+            });
+            let prototype = class.with_const_ptr(|class: *const ObjectHeader| {
+                class_evaluation_prototype_value(class)
+            });
+            let prototype = scope.root_nanbox_f64(prototype);
+            let ptr = || crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64()) as usize;
+            assert_eq!(class_evaluation_prototype_class_id(ptr()), Some(CID));
+            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                b"constructor".as_ptr(),
+                11,
+            ));
+            key.with_const_ptr(|key: *const crate::StringHeader| {
+                js_object_set_field_by_name(
+                    ptr() as *mut ObjectHeader,
+                    key,
+                    f64::from_bits(crate::value::TAG_NULL),
+                );
+            });
+            assert_eq!(class_evaluation_prototype_class_id(ptr()), Some(CID));
+            crate::object::js_object_delete_field(
+                ptr() as *mut ObjectHeader,
+                key.get_raw_const_ptr(),
+            );
+            assert_eq!(class_evaluation_prototype_class_id(ptr()), Some(CID));
+            let owner =
+                crate::object::private_evaluation_brand_value(prototype.get_nanbox_f64()).unwrap();
+            assert_eq!(
+                crate::value::js_nanbox_get_pointer(owner),
+                class.get_raw_const_ptr::<ObjectHeader>() as i64
+            );
+        }
+    }
 }

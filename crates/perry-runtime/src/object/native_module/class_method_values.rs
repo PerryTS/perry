@@ -128,17 +128,3 @@ pub(crate) fn build_bound_method_closure(
 ) -> f64 {
     build_bound_method_closure_with_private_brand(instance, method_name_ptr, method_name_len, None)
 }
-
-fn method_receiver_private_brand(instance: f64) -> Option<f64> {
-    private_evaluation_brand_value(instance).or_else(|| {
-        // Synthetic symbol aliases are not own string properties of an
-        // evaluation's prototype. Their method values still belong to its
-        // constructor, rather than the shared class template.
-        super::field_get_set::class_evaluation_prototype_class_id(
-            crate::value::js_nanbox_get_pointer(instance) as usize,
-        )?;
-        Some(super::js_object_get_own_field_or_undef(
-            instance, b"constructor".as_ptr(), 11,
-        ))
-    })
-}

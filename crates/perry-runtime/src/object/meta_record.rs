@@ -76,7 +76,7 @@ pub struct ObjectMeta {
     /// per-object finalization.
     pub spill: u64,
     /// Fresh ClassDefinitionEvaluation identity for instances constructed
-    /// from a heap class object. This is object metadata rather than an own
+    /// from a heap class object and for that evaluation's prototype. This is object metadata rather than an own
     /// property: private branding must not consume a user field slot, alter
     /// the ShapeId/key order, or become visible to enumeration.
     pub private_evaluation_brand: u64,
