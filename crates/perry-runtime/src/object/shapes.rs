@@ -3269,6 +3269,39 @@ pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
     // between this and `shapes.descriptors` is what chunk release reclaims.
     let minted = SHAPE_ID_NEXT.load(std::sync::atomic::Ordering::Relaxed) - SHAPE_ID_BASE;
     rows.push(("shapes.ids_minted(process)", minted as usize, 0));
+    // How the descriptor population splits by [[Prototype]] identity kind,
+    // and how many distinct prototype identities it names: what the
+    // prototype-in-shape rule costs in shapes.
+    let mut by_kind = [0usize; 6];
+    let mut distinct = std::collections::HashSet::new();
+    slab.for_each(|_, record| {
+        // SAFETY: live slab record, read immediately under agent ownership.
+        let proto_id = unsafe { (*record).proto_id };
+        distinct.insert(proto_id);
+        let kind = match proto_id {
+            PROTO_ID_DEFAULT => 0,
+            PROTO_ID_NULL => 1,
+            id if id >> PROTO_ID_TAG_SHIFT == 0 => 2,
+            id if id & PROTO_ID_UNIQUE == PROTO_ID_CLASS => 3,
+            id if id & PROTO_ID_UNIQUE == PROTO_ID_MIXED => 4,
+            _ => 5,
+        };
+        by_kind[kind] += 1;
+    });
+    for (name, count) in [
+        "shapes.proto(object_prototype)",
+        "shapes.proto(null)",
+        "shapes.proto(object_serial)",
+        "shapes.proto(class_default)",
+        "shapes.proto(class_recorded)",
+        "shapes.proto(unique)",
+    ]
+    .into_iter()
+    .zip(by_kind)
+    {
+        rows.push((name, count, 0));
+    }
+    rows.push(("shapes.proto.distinct_identities", distinct.len(), 0));
     rows
 }
 
