@@ -1251,6 +1251,12 @@
       "why": "Cell<bool> latch recording whether this thread already registered turnloop_pool's own mutable root scanner. It stores only true/false. The heap values that scanner walks live in POOL's job entries (the roots parked by submit_rooted), and the scanner it gates is registered through gc_register_mutable_root_scanner_named. It sits outside PoolState deliberately, so registering a scanner never happens while the job table's borrow is held."
     },
     {
+      "file": "crates/perry-runtime/src/node_stream_state_view.rs",
+      "name": "STATE_PROTO_SCANNER_REGISTERED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<bool> latch recording whether this thread already registered node_stream_state_protos, the mutable root scanner for STATE_PROTOS (the cached ReadableState/WritableState prototypes, #11197). It stores only true/false; the heap pointers live in STATE_PROTOS, which that same-file scanner visits."
+    },
+    {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
       "name": "DELIVERED",
       "verdict": "test_only",

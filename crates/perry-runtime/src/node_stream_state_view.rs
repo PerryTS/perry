@@ -9,7 +9,7 @@
 //! Perry keeps stream state in hidden fields on the stream object itself, so
 //! the state object here is a VIEW, not a copy: one small object per stream
 //! side, carrying only a back-pointer to its stream (under an internal key
-//! that reflection never reports), whose prototype is a per-thread
+//! that is non-enumerable), whose prototype is a per-thread
 //! `ReadableState` / `WritableState` prototype holding one accessor pair per
 //! field. Every getter reads the stream's own hidden state at call time, so
 //! nothing can drift out of sync with `push()` / `read()` / `end()` /
@@ -29,10 +29,11 @@ use super::*;
 use crate::object::{AccessorDescriptor, ObjectHeader, PropertyAttrs};
 use std::cell::{Cell, RefCell};
 
-/// Internal back-pointer from a state view to its stream. Listed in
-/// `is_internal_runtime_key_bytes`, so `Object.keys` / `JSON.stringify` /
-/// `hasOwnProperty` never report it.
-pub(crate) const STREAM_STATE_OWNER_KEY: &[u8] = b"__perry_stream_state_owner";
+/// Internal back-pointer from a state view to its stream. Installed
+/// non-enumerable, so `Object.keys` / `for…in` / `util.inspect` skip it, and
+/// the stream JSON hook serializes a view as Node's state shape instead of
+/// following it.
+pub(super) const STREAM_STATE_OWNER_KEY: &[u8] = b"__perry_stream_state_owner";
 const STREAM_DATA_EMITTED_KEY: &[u8] = b"__perryStreamDataEmitted";
 const STREAM_CLOSE_EMITTED_KEY: &[u8] = b"__perryStreamCloseEmitted";
 
@@ -149,18 +150,15 @@ fn readable_field(stream: f64, field: &str) -> f64 {
         "bufferIndex" => 0.0,
         "length" => get_hidden_value(stream, hidden_buffered_key()).unwrap_or(0.0),
         "pipes" => hidden_array_or_empty(stream, hidden_stream_pipes_key()),
-        "pipesCount" => array_len_value(hidden_array_or_empty(
-            stream,
-            hidden_stream_pipes_key(),
-        )),
+        "pipesCount" => array_len_value(hidden_array_or_empty(stream, hidden_stream_pipes_key())),
         "flowing" => readable_flowing_value(stream),
         // `ended` is "EOF was pushed"; `readableEnded` is the readable side's
         // own flag (a Duplex's writable `end()` must not set it).
         "ended" => bool_bits(has_truthy_hidden(stream, hidden_key(b"readableEnded"))),
         "endEmitted" => bool_bits(has_truthy_hidden(stream, hidden_end_emitted_key())),
-        "readableListening" => bool_bits(
-            stream_listener_count_for_event(stream, string_value(b"readable")) > 0,
-        ),
+        "readableListening" => {
+            bool_bits(stream_listener_count_for_event(stream, string_value(b"readable")) > 0)
+        }
         "resumeScheduled" => bool_bits(has_truthy_hidden(
             stream,
             hidden_readable_resume_scheduled_key(),
@@ -171,10 +169,7 @@ fn readable_field(stream: f64, field: &str) -> f64 {
 
 fn writable_field(stream: f64, field: &str) -> f64 {
     match field {
-        "objectMode" => bool_bits(has_truthy_hidden(
-            stream,
-            hidden_writable_object_mode_key(),
-        )),
+        "objectMode" => bool_bits(has_truthy_hidden(stream, hidden_writable_object_mode_key())),
         "highWaterMark" => get_hidden_value(stream, hidden_key(b"writableHighWaterMark"))
             .unwrap_or_else(|| default_hwm(false)),
         "length" => writable_length(stream),
@@ -337,10 +332,17 @@ fn install_state_view(stream: f64, kind: usize, property: &[u8]) {
     let stream = scope.root_nanbox_f64(stream);
     let proto = scope.root_nanbox_f64(state_proto(kind));
     let view = scope.root_nanbox_f64(box_pointer(
-        crate::object::js_object_alloc(0, 1) as *const u8,
+        crate::object::js_object_alloc(0, 1) as *const u8
     ));
     let owner_key = hidden_key(STREAM_STATE_OWNER_KEY);
     set_hidden_value(view.get_nanbox_f64(), owner_key, stream.get_nanbox_f64());
+    // Keyed by the view's address in the descriptor side table; nothing
+    // allocates between this read and the install.
+    crate::object::set_builtin_property_attrs(
+        raw_ptr_from_value(view.get_nanbox_f64()),
+        String::from_utf8_lossy(STREAM_STATE_OWNER_KEY).into_owned(),
+        PropertyAttrs::new(true, false, true),
+    );
     crate::object::prototype_chain::object_set_user_prototype(
         raw_ptr_from_value(view.get_nanbox_f64()),
         proto.get_nanbox_f64().to_bits(),

@@ -110,5 +110,24 @@ function step4(): void {
     const d = new Duplex({ read() {}, write(_c: any, _e: any, cb: any) { cb(); } });
     const dd: any = d;
     console.log("duplex:", typeof dd._readableState, typeof dd._writableState, dd._readableState.ended, dd._writableState.ended);
+    step5();
   });
+}
+
+// 5. undici's consume()/bodyLength() reads on a BodyReadable-shaped subclass.
+function step5(): void {
+  const b = new Body({ resume() {} });
+  const st: any = (b as any)._readableState;
+  b.push(Buffer.from("he"));
+  b.push(Buffer.from("llo"));
+  b.push(null);
+  const len = st && st.objectMode === false && st.ended === true && Number.isFinite(st.length) ? st.length : null;
+  console.log("bodyLength:", len);
+  const parts: string[] = [];
+  for (const chunk of st.buffer) parts.push(Buffer.isBuffer(chunk) ? chunk.toString() : "?");
+  console.log("consume buffer:", parts.join("+"), "bufferIndex", st.bufferIndex);
+  console.log("closeEmitted before:", st.closeEmitted, "dataEmitted before:", st.dataEmitted);
+  b.on("data", () => {});
+  b.on("end", () => console.log("end: endEmitted", st.endEmitted, "dataEmitted", st.dataEmitted));
+  b.on("close", () => console.log("close: closeEmitted", st.closeEmitted, "destroyed", st.destroyed));
 }

@@ -50,13 +50,22 @@ pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut St
         crate::array::array_elements_ptr(keys as *const crate::ArrayHeader) as *const f64;
     let mut readable_idx: Option<u32> = None;
     let mut writable_idx: Option<u32> = None;
+    let mut state_owner_idx: Option<u32> = None;
     for i in 0..key_count {
         let stored = JSValue::from_bits((*elements.add(i)).to_bits());
         if crate::string::js_string_key_matches_bytes(stored, READABLE_FLAG_KEY) {
             readable_idx = Some(i as u32);
         } else if crate::string::js_string_key_matches_bytes(stored, WRITABLE_FLAG_KEY) {
             writable_idx = Some(i as u32);
+        } else if crate::string::js_string_key_matches_bytes(stored, STREAM_STATE_OWNER_KEY) {
+            state_owner_idx = Some(i as u32);
         }
+    }
+    // #11197: a `_readableState` / `_writableState` view serializes as Node's
+    // state object does, and never walks its back-pointer to the stream
+    // (which would be a cycle: stream → view → stream).
+    if let Some(i) = state_owner_idx {
+        return stringify_state_view_json(obj, crate::object::js_object_get_field(obj, i), buf);
     }
     let flag_defined = |idx: Option<u32>| -> bool {
         idx.is_some_and(|i| {
@@ -71,26 +80,56 @@ pub(crate) unsafe fn try_stringify_node_stream_json(ptr: *const u8, buf: &mut St
 
     buf.push_str(r#"{"_events":{},"#);
     if readable {
-        let hwm =
-            own_field_by_key_bytes(obj, READABLE_HWM_KEY).unwrap_or_else(|| default_hwm(false));
-        let length = own_field_by_key_bytes(obj, READABLE_BUFFERED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_readableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","buffer":[],"bufferIndex":0,"length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","pipes":[],"awaitDrainWriters":null}}"#);
+        buf.push_str(r#""_readableState":"#);
+        push_readable_state_json(obj, buf);
     } else {
-        let hwm = own_field_by_key_bytes(obj, b"writableHighWaterMark")
-            .unwrap_or_else(|| default_hwm(false));
-        let length = 0.0;
-        let corked = own_field_by_key_bytes(obj, WRITABLE_CORKED_KEY).unwrap_or(0.0);
-        buf.push_str(r#""_writableState":{"highWaterMark":"#);
-        push_json_number(buf, hwm);
-        buf.push_str(r#","length":"#);
-        push_json_number(buf, length);
-        buf.push_str(r#","corked":"#);
-        push_json_number(buf, corked);
-        buf.push_str(r#","writelen":0,"bufferedIndex":0,"pendingcb":0}}"#);
+        buf.push_str(r#""_writableState":"#);
+        push_writable_state_json(obj, buf);
+    }
+    buf.push('}');
+    true
+}
+
+unsafe fn stringify_state_view_json(
+    view: *const ObjectHeader,
+    owner: JSValue,
+    buf: &mut String,
+) -> bool {
+    let Some(stream) = object_ptr_from_value(f64::from_bits(owner.bits())) else {
+        return false;
+    };
+    let view_bits = crate::value::js_nanbox_pointer(view as i64).to_bits();
+    let is_readable_view = own_field_by_key_bytes(stream, b"_readableState")
+        .is_some_and(|value| value.to_bits() == view_bits);
+    if is_readable_view {
+        push_readable_state_json(stream, buf);
+    } else {
+        push_writable_state_json(stream, buf);
     }
     true
+}
+
+unsafe fn push_readable_state_json(stream: *const ObjectHeader, buf: &mut String) {
+    let hwm =
+        own_field_by_key_bytes(stream, READABLE_HWM_KEY).unwrap_or_else(|| default_hwm(false));
+    let length = own_field_by_key_bytes(stream, READABLE_BUFFERED_KEY).unwrap_or(0.0);
+    buf.push_str(r#"{"highWaterMark":"#);
+    push_json_number(buf, hwm);
+    buf.push_str(r#","buffer":[],"bufferIndex":0,"length":"#);
+    push_json_number(buf, length);
+    buf.push_str(r#","pipes":[],"awaitDrainWriters":null}"#);
+}
+
+unsafe fn push_writable_state_json(stream: *const ObjectHeader, buf: &mut String) {
+    let hwm = own_field_by_key_bytes(stream, b"writableHighWaterMark")
+        .unwrap_or_else(|| default_hwm(false));
+    let length = 0.0;
+    let corked = own_field_by_key_bytes(stream, WRITABLE_CORKED_KEY).unwrap_or(0.0);
+    buf.push_str(r#"{"highWaterMark":"#);
+    push_json_number(buf, hwm);
+    buf.push_str(r#","length":"#);
+    push_json_number(buf, length);
+    buf.push_str(r#","corked":"#);
+    push_json_number(buf, corked);
+    buf.push_str(r#","writelen":0,"bufferedIndex":0,"pendingcb":0}"#);
 }
