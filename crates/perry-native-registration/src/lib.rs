@@ -266,6 +266,17 @@ impl NativeRegistrationRegistry {
         id: i64,
         kind: NativeRegistrationKind,
     ) -> Result<NativeRegistrationIdentity, NativeRegistrationError> {
+        self.begin_registration_with_id_in_domain(self.domain(), id, kind)
+    }
+
+    /// Explicit-id counterpart of [`Self::begin_registration_in_domain`], with
+    /// the same occupancy rules as [`Self::begin_registration_with_id`].
+    pub fn begin_registration_with_id_in_domain(
+        &self,
+        domain: NativeRegistryDomain,
+        id: i64,
+        kind: NativeRegistrationKind,
+    ) -> Result<NativeRegistrationIdentity, NativeRegistrationError> {
         if !(self.0.start..self.0.end).contains(&id) {
             return Err(NativeRegistrationError::InvalidId);
         }
@@ -277,13 +288,7 @@ impl NativeRegistrationRegistry {
         }
         let serial = issue_serial(&NEXT_SERIAL)?;
         state.free.retain(|entry| *entry != id);
-        Ok(Self::insert_pending(
-            &mut state,
-            self.domain(),
-            kind,
-            id,
-            serial,
-        ))
+        Ok(Self::insert_pending(&mut state, domain, kind, id, serial))
     }
 
     fn insert_pending(
@@ -410,6 +415,21 @@ impl NativeRegistrationRegistry {
             Phase::Abandoned
         };
         state.slots.get_mut(&identity.numeric_id).unwrap().phase = phase;
+        true
+    }
+
+    /// Complete removal and tombstone the id: it is never queued, so no drain
+    /// can make it reusable. For owners whose clients keep bare numeric ids
+    /// without leases, where reuse would let a stale id name a new payload.
+    pub fn finish_retirement_permanently(&self, identity: NativeRegistrationIdentity) -> bool {
+        let mut state = self.lock();
+        let Some(slot) = state.slots.get_mut(&identity.numeric_id) else {
+            return false;
+        };
+        if slot.identity != identity || slot.phase != Phase::Retiring {
+            return false;
+        }
+        slot.phase = Phase::Abandoned;
         true
     }
 

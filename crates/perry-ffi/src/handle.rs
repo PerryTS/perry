@@ -93,6 +93,16 @@ static REGISTRATIONS: Lazy<NativeRegistrationRegistry> = Lazy::new(|| {
     NativeRegistrationRegistry::new(FFI_HANDLE_ID_START, FFI_HANDLE_ID_END, FREE_HANDLES_CAP)
 });
 
+/// The process-wide numeric id pool behind every handle in the shared
+/// `[1, 0x40000)` band. A private payload registry that mints ids in that band
+/// must allocate them from this pool (under its own domain), or its ids alias
+/// this map's and every "is this handle mine?" probe answers for the wrong
+/// object (#11196: perry-stdlib's common registry minted its own `1` beside an
+/// ext-net socket `1`). Clones name the same allocator.
+pub fn shared_handle_id_pool() -> NativeRegistrationRegistry {
+    REGISTRATIONS.clone()
+}
+
 /// The authoritative domain for payloads stored in this FFI map.
 pub fn handle_registry_domain() -> NativeRegistryDomain {
     REGISTRATIONS.domain()

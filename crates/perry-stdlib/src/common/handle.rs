@@ -9,8 +9,8 @@ use std::any::Any;
 
 use dashmap::DashMap;
 use perry_ffi::{
-    NativeLeaseKind, NativeQuarantine, NativeRegistrationIdentity, NativeRegistrationKind,
-    NativeRegistrationLease, NativeRegistrationRegistry, NativeRegistryDomain,
+    NativeLeaseKind, NativeRegistrationIdentity, NativeRegistrationKind, NativeRegistrationLease,
+    NativeRegistrationRegistry, NativeRegistryDomain,
 };
 use std::sync::LazyLock as Lazy;
 
@@ -24,37 +24,57 @@ pub const INVALID_HANDLE: Handle = 0;
 static HANDLES: Lazy<DashMap<Handle, Box<dyn Any + Send + Sync>>> = Lazy::new(DashMap::new);
 
 // Band boundary owned by `perry_runtime::value::addr_class`.
-const COMMON_HANDLE_ID_START: Handle = 1;
+#[cfg(test)]
 const COMMON_HANDLE_ID_END: Handle =
     perry_runtime::value::addr_class::COMMON_HANDLE_BAND_END as Handle;
 
-static REGISTRATIONS: Lazy<NativeRegistrationRegistry> = Lazy::new(|| {
-    NativeRegistrationRegistry::new(COMMON_HANDLE_ID_START, COMMON_HANDLE_ID_END, 64 * 1024)
-});
+/// Common ids come from perry-ffi's SHARED numeric pool, under this registry's
+/// own domain — the same arrangement perry-ext-net uses for its sockets.
+///
+/// This used to be a private `NativeRegistrationRegistry` over the same
+/// `[1, COMMON_HANDLE_BAND_END)` band, so it minted `1, 2, 3, …` independently
+/// of perry-ffi, which every `perry-ext-*` wrapper allocates from. The first
+/// bundled-events `EventEmitter` and the first ext-net socket were therefore
+/// BOTH handle 1, and every consumer that asks "is this id in my registry?"
+/// answered for the wrong object: `events.once(socket, 'connect')` found the
+/// emitter, parked its promise there, and never listened on the socket, so
+/// redis@6.1.0's `connect()` hung forever (#11196).
+static REGISTRATIONS: Lazy<NativeRegistrationRegistry> =
+    Lazy::new(perry_ffi::shared_handle_id_pool);
+static COMMON_DOMAIN: Lazy<NativeRegistryDomain> =
+    Lazy::new(|| NativeRegistryDomain::new().expect("common native registry domains exhausted"));
 
 pub fn common_handle_registry_domain() -> NativeRegistryDomain {
-    REGISTRATIONS.domain()
+    *COMMON_DOMAIN
 }
 
+/// The shared pool also holds other owners' ids; only ours are reported.
 pub fn common_handle_registration(handle: Handle) -> Option<NativeRegistrationIdentity> {
-    REGISTRATIONS.identity(handle)
+    REGISTRATIONS
+        .identity(handle)
+        .filter(|identity| identity.domain() == *COMMON_DOMAIN)
 }
 
 pub fn acquire_common_handle_registration(
     identity: NativeRegistrationIdentity,
     kind: NativeLeaseKind,
 ) -> Option<NativeRegistrationLease> {
+    if identity.domain() != *COMMON_DOMAIN {
+        return None;
+    }
     REGISTRATIONS.acquire(identity, kind)
 }
 
-/// Native preparation API. Existing publication paths do not drive this drain.
+/// Native preparation API. Existing publication paths do not drive this drain,
+/// and common retirements are permanent (see `remove_payload`), so it never
+/// makes a common id reusable.
 pub fn drain_quarantined_common_handles() -> usize {
     REGISTRATIONS.drain(std::time::Instant::now())
 }
 
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     let identity = REGISTRATIONS
-        .begin_registration(NativeRegistrationKind::Payload)
+        .begin_registration_in_domain(*COMMON_DOMAIN, NativeRegistrationKind::Payload)
         .expect("common native handle registration exhausted");
     publish_payload(value, identity)
 }
@@ -63,7 +83,11 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
 /// quarantine, and lease release. It never replaces an existing payload.
 pub fn register_handle_with_id<T: 'static + Send + Sync>(value: T, handle: Handle) -> Handle {
     let identity = REGISTRATIONS
-        .begin_registration_with_id(handle, NativeRegistrationKind::Payload)
+        .begin_registration_with_id_in_domain(
+            *COMMON_DOMAIN,
+            handle,
+            NativeRegistrationKind::Payload,
+        )
         .expect("common explicit native handle id is unavailable");
     publish_payload(value, identity)
 }
@@ -131,10 +155,17 @@ pub fn drop_handle(handle: Handle) -> bool {
     remove_payload(handle).is_some()
 }
 
+/// Retirement tombstones the id. Before the pool was shared this registry's
+/// quarantine was never drained, so a common id was never reused; perry-ffi
+/// drains the shared pool at every tick, so an ordinary quarantine would now
+/// recycle ids that JS still holds as bare numbers, with no lease to stop it.
 fn remove_payload(handle: Handle) -> Option<Box<dyn Any + Send + Sync>> {
-    let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
+    let identity = common_handle_registration(handle)?;
+    if !REGISTRATIONS.begin_retirement_of(identity) {
+        return None;
+    }
     let removed = HANDLES.remove(&handle).map(|(_, boxed)| boxed);
-    assert!(REGISTRATIONS.finish_retirement(identity, NativeQuarantine::NextDrain));
+    assert!(REGISTRATIONS.finish_retirement_permanently(identity));
     removed
 }
 

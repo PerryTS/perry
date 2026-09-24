@@ -449,3 +449,51 @@ fn freelist_capacity_counts_preexisting_free_rows() {
         Phase::Abandoned
     );
 }
+
+#[test]
+fn explicit_id_in_a_private_domain_records_that_domain() {
+    let registry = registry();
+    let private_domain = NativeRegistryDomain::new().unwrap();
+    let explicit = registry
+        .begin_registration_with_id_in_domain(private_domain, 5, NativeRegistrationKind::Payload)
+        .unwrap();
+    assert!(registry.publish(explicit));
+    assert_eq!(explicit.numeric_id(), 5);
+    assert_eq!(explicit.domain(), private_domain);
+    assert_eq!(
+        registry.begin_registration_with_id_in_domain(
+            registry.domain(),
+            5,
+            NativeRegistrationKind::Payload
+        ),
+        Err(NativeRegistrationError::Occupied),
+        "a private-domain slot occupies the shared numeric id"
+    );
+}
+
+#[test]
+fn permanent_retirement_is_never_reused_by_any_drain() {
+    let registry = registry();
+    let tombstoned = live(&registry, NativeRegistrationKind::Payload);
+    assert!(registry.begin_retirement_of(tombstoned));
+    assert!(registry.finish_retirement_permanently(tombstoned));
+    assert!(
+        !registry.finish_retirement_permanently(tombstoned),
+        "a completed retirement cannot complete twice"
+    );
+    assert_eq!(
+        registry.drain(Instant::now() + Duration::from_secs(3600)),
+        0
+    );
+    assert!(registry.identity(tombstoned.numeric_id()).is_none());
+    assert!(registry
+        .acquire(tombstoned, NativeLeaseKind::Wrapper)
+        .is_none());
+    assert_eq!(
+        registry
+            .begin_registration_with_id(tombstoned.numeric_id(), NativeRegistrationKind::Payload),
+        Err(NativeRegistrationError::Occupied)
+    );
+    let fresh = live(&registry, NativeRegistrationKind::Payload);
+    assert_ne!(fresh.numeric_id(), tombstoned.numeric_id());
+}
