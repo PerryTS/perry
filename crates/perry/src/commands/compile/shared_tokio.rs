@@ -401,7 +401,6 @@ mod tests {
         let stems = shared_tokio_lib_stems();
         // The archive #7629's witnesses abort in, which still bundles tokio.
         assert!(stems.contains("perry_ext_http"), "{stems:?}");
-        assert!(stems.contains("perry_ext_ioredis"), "{stems:?}");
         assert!(stems.contains("perry_ext_mongodb"), "{stems:?}");
         // A wrapper with no tokio must NOT be in the set: it never enters a
         // tokio runtime context, so requiring a shared compilation would fail
