@@ -1176,6 +1176,12 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             }
         }
     }
+    // Plain function expressions lower their statement list directly rather
+    // than through lower_block_stmt, so establish the same type scope here.
+    let interfaces = crate::lower_decl::enter_interface_scope(
+        ctx,
+        fn_expr.function.body.iter().flat_map(|block| &block.stmts),
+    )?;
     let mut body = if let Some(ref block) = fn_expr.function.body {
         // #4795: a `using` / `await using` declaration in a function-expression
         // body must be desugared (scope-exit disposal + declaration-time
@@ -1253,6 +1259,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     } else {
         Vec::new()
     };
+
+    crate::lower_decl::exit_interface_scope(ctx, interfaces);
 
     // Mirror `lower_fn_body_block_stmt`'s (block.rs) end-of-body class-capture
     // re-registration for FUNCTION-EXPRESSION bodies — which previously skipped

@@ -1865,6 +1865,8 @@ pub(crate) fn lower_stmt(
         }
         ast::Stmt::Switch(switch_stmt) => {
             let mut discriminant = lower_expr(ctx, &switch_stmt.discriminant)?;
+            let interfaces =
+                enter_interface_scope(ctx, switch_stmt.cases.iter().flat_map(|case| &case.cons))?;
             let mut cases = Vec::new();
             let switch_scope_mark = ctx.push_block_scope();
             // Case statement-lists share the switch's block scope without
@@ -1898,6 +1900,7 @@ pub(crate) fn lower_stmt(
             }
 
             exit_class_rename_scope(ctx, saved_class_renames);
+            exit_interface_scope(ctx, interfaces);
             ctx.pop_block_scope(switch_scope_mark);
 
             if !tdz_boxes.is_empty() {

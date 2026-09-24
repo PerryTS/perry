@@ -21,6 +21,7 @@ pub(crate) use var_names::{
 };
 
 pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
+    let interfaces = enter_interface_scope(ctx, &block.stmts)?;
     let tdz_boxes = rebind_nested_forward_scope_lets(ctx, &block.stmts);
     // #9466: `class` is block-scoped, so a `class X` here is a DISTINCT class
     // from any enclosing/prior `class X` and needs its own registration key.
@@ -37,6 +38,7 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
     let lowered = lower_stmts_using_aware(ctx, &block.stmts);
     exit_class_rename_scope(ctx, saved_class_renames);
+    exit_interface_scope(ctx, interfaces);
     lowered.map(|mut body| {
         if !tdz_boxes.is_empty() {
             body.insert(0, Stmt::PreallocateTdzBoxes(tdz_boxes));
@@ -1069,12 +1071,14 @@ pub fn lower_block_stmt_scoped(
     ctx: &mut LoweringContext,
     block: &ast::BlockStmt,
 ) -> Result<Vec<Stmt>> {
+    let interfaces = enter_interface_scope(ctx, &block.stmts)?;
     let mark = ctx.push_block_scope();
     // #9466: this path does not route through `lower_block_stmt`, so bracket
     // block-scoped class disambiguation here.
     let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
     let stmts = lower_block_fn_decls(ctx, block);
     exit_class_rename_scope(ctx, saved_class_renames);
+    exit_interface_scope(ctx, interfaces);
     // `?` deliberately AFTER the rename restore but BEFORE `pop_block_scope`,
     // preserving this function's original error control flow exactly.
     let stmts = stmts?;

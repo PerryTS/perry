@@ -65,7 +65,8 @@ fn is_push_owning_class_type(ty: &Type, ctx: &LoweringContext) -> bool {
         Type::Generic { base, .. } if base == "InstanceType" => true,
         Type::Generic { base, .. } => {
             let builtin = ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
-            !builtin.contains(&base.as_str()) && ctx.lookup_class(base).is_some()
+            !builtin.contains(&base.as_str())
+                && (ctx.lookup_class(base).is_some() || ctx.is_interface_type(base))
         }
         Type::Object(_) => true, // object type literal with push property
         Type::Union(variants) => variants.iter().any(|v| is_push_owning_class_type(v, ctx)),

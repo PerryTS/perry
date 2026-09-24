@@ -131,7 +131,9 @@ fn type_is_class_instance(
         Type::Generic { base, .. } if base == "InstanceType" => true,
         Type::Generic { base, .. } => {
             !builtin_generic_bases.contains(&base.as_str())
-                && (ctx.lookup_class(base).is_some() || is_imported_class_name(base))
+                && (ctx.lookup_class(base).is_some()
+                    || ctx.is_interface_type(base)
+                    || is_imported_class_name(base))
         }
         Type::Union(variants) => variants
             .iter()
