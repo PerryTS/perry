@@ -1027,7 +1027,6 @@ pub(crate) fn lower_stmt(
                                 } = inner.as_ref()
                                 {
                                     let class_name = match (mod_name.as_str(), method.as_str()) {
-                                        ("mongodb", "connect") => Some("MongoClient"),
                                         ("pg", "connect") => Some("Client"),
                                         _ => None,
                                     };

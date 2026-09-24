@@ -209,7 +209,6 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                                     let class_name = match (module_name, method_ident.sym.as_ref())
                                     {
-                                        ("mongodb", "connect") => Some("MongoClient"),
                                         ("pg", "connect") => Some("Client"),
                                         ("readline", "createInterface") => Some("Interface"),
                                         _ => Some("Instance"),

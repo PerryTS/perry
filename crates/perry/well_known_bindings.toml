@@ -184,18 +184,6 @@ repo = "https://github.com/nodemailer/nodemailer"
 ref = "1f61eb49b4316589045576752c721bd89918ef21"
 ported-at = "9.0.3"
 date = "2026-07-30"
-[bindings.mongodb]
-crate = "perry-ext-mongodb"
-lib = "perry_ext_mongodb"
-tracking = "#466"
-
-[bindings.mongodb.upstream]
-version = "7.5.0"
-sha256 = "4d93c312a54bcfcc8f858f3f92de329b807fca53b4f1a456cea2b95e1cb1cdaa"
-repo = "https://github.com/mongodb/node-mongodb-native"
-ref = "c4368315b2ab08789f8ae505fce6721549f3bf9d"
-ported-at = "7.5.0"
-date = "2026-07-30"
 # `node-fetch` and the bare `fetch` alias deliberately have NO row here (P11).
 #
 # perry-ext-fetch defined the SAME 74 `js_fetch_*` / `js_headers_*` /

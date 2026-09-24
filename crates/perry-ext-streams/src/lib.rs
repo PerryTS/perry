@@ -1442,8 +1442,7 @@ mod tests {
     // archive that defines `perry_ffi_promise_new` etc. (perry-stdlib
     // gates those shims behind `async-runtime`). Live FFI exercise
     // happens at the wrapper-level smoke step in the well-known flip
-    // sweep — same model perry-ext-bcrypt / perry-ext-argon2 /
-    // perry-ext-mongodb use.
+    // sweep — same model perry-ext-bcrypt / perry-ext-argon2 use.
     use super::*;
     use std::sync::{Mutex, MutexGuard};
 

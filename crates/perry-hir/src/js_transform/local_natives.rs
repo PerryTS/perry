@@ -660,8 +660,6 @@ pub fn chained_native_class(module: &str, prior_method: &str) -> Option<&'static
         ("sqlite", "prepare") => Some("StatementSync"),
         ("sqlite", "createTagStore") => Some("SQLTagStore"),
         ("sqlite", "createSession") => Some("Session"),
-        ("mongodb", "db") => Some("Database"),
-        ("mongodb", "collection") => Some("Collection"),
         ("mysql2", "getConnection") | ("mysql2/promise", "getConnection") => Some("PoolConnection"),
         ("pg", "connect") => Some("PoolClient"),
         ("ioredis", "duplicate") => Some("Redis"),

@@ -222,7 +222,7 @@ pub use tls::*;
 // === Databases ===
 // The bundled `pg` / `mysql2` / `ioredis` / `mongodb` modules were deleted in
 // turnloop P8 group H. `import 'pg'` / `'mysql2'` / `'ioredis'` / `'redis'` /
-// `'iovalkey'` / `'mongodb'` are served exclusively by the perry-ext-*
+// `'iovalkey'` are served exclusively by the perry-ext-*
 // wrappers through the well-known flip, which is the only path they have taken
 // since v0.5.565-568; each wrapper defines a strict superset of the symbols the
 // bundled copy did. Only sqlite remains in-stdlib.

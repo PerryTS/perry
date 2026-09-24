@@ -62,30 +62,6 @@
       "plan": "J"
     },
     {
-      "crate": "perry-ext-mongodb",
-      "dep": "mongodb",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new MongoClient()` \u2014 connect, find, insert, update, delete, aggregate",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed, plus `mongodb+srv://`, several hosts, `replicaSet=`, `compressors=`, a per-connection TLS key (`tlsCAFile`, `tlsInsecure`, \u2026), an unparsable URI, or no /dev/urandom. A plain `tls=true`/`ssl=true` no longer declines.",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mongodb` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: SRV lookup and topology discovery/SDAM monitors stay in the `mongodb` driver; turnloop-mongodb is a single-connection protocol core. TLS itself is done \u2014 perry-db-turnloop installs a client session at connect time \u2014 but a URI naming its own trust store still declines, because this path honours the process TLS environment and has nowhere to put a per-URI store.",
-      "issue": "#10332, #10341",
-      "plan": "J"
-    },
-    {
-      "crate": "perry-ext-mongodb",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "as `mongodb` above",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed, or any of the URI features above (TLS by itself is no longer one).",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mongodb` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: `spawn_blocking` + `Handle::current().block_on` per operation. Goes with the driver.",
-      "issue": "#10339",
-      "plan": "J"
-    },
-    {
       "crate": "perry-stdlib",
       "dep": "tokio",
       "kind": "normal",
@@ -114,17 +90,11 @@
     "lettre": [
       "0.11.23"
     ],
-    "mongodb": [
-      "3.9.1"
-    ],
     "redis": [
       "1.7.0"
     ],
     "tokio": [
       "1.53.1"
-    ],
-    "tokio-rustls": [
-      "0.26.5"
     ],
     "tokio-util": [
       "0.7.18"
@@ -139,7 +109,6 @@
     "perry-ext-ads": 5,
     "perry-ext-http": 7,
     "perry-ext-ioredis": 13,
-    "perry-ext-mongodb": 29,
     "perry-ffi": 2,
     "perry-stdlib": 69,
     "perry-ui-gtk4": 6

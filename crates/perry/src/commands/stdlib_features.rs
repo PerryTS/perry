@@ -63,10 +63,10 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "tls" => &["tls"],
 
         // ── Databases ─────────────────────────────────────────────────
-        // pg / mysql2 / ioredis / mongodb need no perry-stdlib feature: the
+        // pg / mysql2 / ioredis need no perry-stdlib feature: the
         // bundled copies were deleted in turnloop P8 group H, so these imports
         // are served entirely by perry-ext-pg / perry-ext-mysql2 /
-        // perry-ext-ioredis / perry-ext-mongodb via the well-known flip — the
+        // perry-ext-ioredis via the well-known flip — the
         // same shape `fastify` and `node:http` already have above. Their
         // `async-runtime` requirement (the `perry_ffi_*` shim each wrapper
         // settles its promises through) is re-asserted in
@@ -92,8 +92,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // Redis is detected via the ioredis class name in collect_modules.
         // Served by perry-ext-ioredis only (see the note above).
         "ioredis" | "redis" | "iovalkey" => &[],
-        // Served by perry-ext-mongodb only (see the note above).
-        "mongodb" => &[],
 
         // ── Crypto ────────────────────────────────────────────────────
         // bcrypt split off into its own `bundled-bcrypt` feature in

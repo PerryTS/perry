@@ -250,7 +250,7 @@ drivers is the migration target:
 
 | Path | Install | Resolver layer | What it is |
 |---|---|---|---|
-| **Well-known native binding** | nothing (bundled) | (c) | Compatibility path: `import 'mysql2'` / `import 'mongodb'` route to in-tree Rust wrappers. They remain available until the source-package migration gates pass. `pg` has already migrated off this path — see the row below. |
+| **Well-known native binding** | nothing (bundled) | (c) | Compatibility path: `import 'mysql2'` routes to an in-tree Rust wrapper. It remains available until the source-package migration gates pass. `pg` and `mongodb` have already migrated off this path — see the row below. |
 | **`@perryts/{postgres,mysql,mongodb,redis}`** | `bun add @perryts/postgres` | (a) | Pure-TypeScript wire-protocol drivers — no Rust, no native dep. Use Perry's [`compilePackages`](../packages/porting.md) to compile the TS to native via LLVM. Also run unmodified on Node.js / Bun. Independent semver. |
 | **External native binding** | `bun add @perryts/tursodb` | (a) | Third-party Rust crate using `perry-ffi`, manifest at `package.json::perry.nativeLibrary`. Today: `@perryts/tursodb`, `@perryts/iroh`. |
 
@@ -263,11 +263,12 @@ shim, just don't import `mysql2`.
 
 **When to pick which:**
 
-- **Well-known native (`mysql2` / `mongodb`)** — current zero-install
+- **Well-known native (`mysql2`)** — current zero-install
   compatibility path; its feature set tracks Perry's release cadence and it is
-  scheduled to yield to compiled package source. `pg` no longer has a native
-  binding: a plain `import ... from "pg"` compiles the real npm `pg` package
-  from source instead.
+  scheduled to yield to compiled package source. `pg` and `mongodb` no longer
+  have a native binding: a plain `import ... from "pg"` or
+  `import { MongoClient } from "mongodb"` compiles the real npm package from
+  source instead.
 - **`@perryts/postgres` / `@perryts/mysql` / `@perryts/mongodb` / `@perryts/redis`** —
   you want to read / fork / patch the driver in plain TypeScript;
   you want the same code running on Node.js or Bun for fallback;

@@ -89,8 +89,17 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # providers; each figure is what the script reports on the resolved
 # tree, not arithmetic (#10739 -- these are CHAINED ABSOLUTES, so the
 # base moved when #11068 landed and the delta had to be re-derived).
-EXPECTED_ROWS = 309
-EXPECTED_PROVIDERS = 274
+#
+# -12 rows / -12 providers (native mongodb binding removal): deleting
+# `perry-ext-mongodb` dropped every `module: "mongodb"` row from
+# native_table/databases.rs. 12 js_mongodb_* providers were classified
+# here (10 NR_GCPTR promises -- the nine collection `_value` wrappers and
+# `js_mongodb_client_close` -- plus NR_HANDLE_ID `js_mongodb_client_db`
+# and `js_mongodb_db_collection`); the two `connect` rows were NR_PROMISE
+# and never counted. 309 -> 297 rows and 274 -> 262 providers; each figure
+# is what the script reports on the resolved tree, not arithmetic.
+EXPECTED_ROWS = 297
+EXPECTED_PROVIDERS = 262
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

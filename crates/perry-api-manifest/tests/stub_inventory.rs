@@ -90,7 +90,7 @@ fn stub_inventory_matches_known_clusters() {
         // Intentionally absent now: zlib decompressor factories (level
         // honored; a missing dictionary fails loudly), Agent.destroy
         // (drops the per-agent reqwest pool), worker ref/unref (real
-        // event-loop refcount), mongodb.findOne (parsed document).
+        // event-loop refcount).
         ("#4917", 9),
         ("#10100", 1),
     ];
@@ -116,7 +116,6 @@ fn stubs_only_appear_in_allowlisted_modules() {
         "http",
         "https",
         "worker_threads",
-        "mongodb",
         "inspector",
         "repl",
     ];
@@ -149,13 +148,11 @@ fn keystone_apis_are_flagged() {
 
     // The inverse: APIs implemented for real must NOT stay flagged.
     // v8 heap snapshots emit a real GC-walk object graph since #4916.
-    // mongodb.findOne resolves a parsed document, backOff honors its
-    // options, and worker ref/unref drive the event-loop refcount since
-    // #4917.
+    // backOff honors its options, and worker ref/unref drive the
+    // event-loop refcount since #4917.
     let must_not_be_stub: &[(&str, &str)] = &[
         ("v8", "getHeapSnapshot"),
         ("v8", "writeHeapSnapshot"),
-        ("mongodb", "findOne"),
         ("worker_threads", "ref"),
         ("worker_threads", "unref"),
         ("http", "destroy"),

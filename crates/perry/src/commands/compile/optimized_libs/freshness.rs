@@ -137,8 +137,8 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     // The stripped stdlib feature set is not enough to identify this Cargo
-    // graph. For example, mongodb and a CPU-only async wrapper both reduce to
-    // `async-runtime`, but only the mongodb build selects perry-ext-mongodb.
+    // graph. For example, ioredis and a CPU-only async wrapper both reduce to
+    // `async-runtime`, but only the ioredis build selects perry-ext-ioredis.
     // Sharing a target dir lets the second invocation replace stdlib after
     // the first invocation releases its build lock but before it links. The
     // first process then sees an ext archive and stdlib archive from different
@@ -758,7 +758,7 @@ pub(crate) fn resolve_auto_well_known_libs(
 }
 
 /// True if this binding's wrapper crate has its own tokio dependency
-/// for I/O (TcpStream, hyper, reqwest, mongodb, sqlx, redis,
+/// for I/O (TcpStream, hyper, reqwest, sqlx, redis,
 /// tokio-tungstenite, lettre, …) and must therefore share a single
 /// tokio compilation with perry-stdlib's runtime.
 ///
@@ -795,8 +795,7 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         | "undici"
         // HTTP server (hyper)
         | "fastify"
-        // Database drivers (mongodb, sqlx, redis)
-        | "mongodb"
+        // Database drivers (redis)
         | "ioredis"
         | "redis"
         // Mail (lettre)
