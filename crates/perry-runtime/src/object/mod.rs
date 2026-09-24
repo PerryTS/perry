@@ -342,6 +342,7 @@ pub(crate) use field_get_set::{
 };
 #[cfg(test)]
 pub(crate) use this_binding::js_derived_super_scope_push;
+pub(crate) use this_binding::SuperNewTargetScope;
 pub(crate) use this_binding::{
     derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
     implicit_this_trap_restore, implicit_this_trap_savepoint, new_target_trap_restore,

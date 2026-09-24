@@ -781,13 +781,15 @@ pub(crate) fn local_constructor_symbol_exists(ctx: &FnCtx<'_>, class: &Class) ->
 /// still observes the cell. Gating the cell write on the WHOLE chain keeps
 /// `new Child()` correct when only the inherited body reads `new.target`, while
 /// a chain with no reader anywhere stays on the zero-overhead fast path. The
-/// walk follows `extends_name` through the codegen class map; an unresolved
-/// parent name just stops the walk, and a depth cap guards a cyclic graph.
+/// walk follows `extends_name` through the codegen class map. A runtime or
+/// unresolved parent may read new.target, so it conservatively needs the cell;
+/// only a fully inspected chain with no readers may omit it.
 pub(crate) fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &Class) -> bool {
     let reads = |c: &Class| {
-        c.constructor
-            .as_ref()
-            .is_some_and(|f| ctor_body_uses_new_target(&f.body))
+        c.extends_expr.is_some()
+            || c.constructor
+                .as_ref()
+                .is_some_and(|f| ctor_body_uses_new_target(&f.body))
     };
     if reads(class) {
         return true;
@@ -797,10 +799,10 @@ pub(crate) fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &Class) -> bool
     while let Some(parent_name) = parent {
         depth += 1;
         if depth > 64 {
-            break;
+            return true;
         }
         let Some(pc) = ctx.classes.get(parent_name).copied() else {
-            break;
+            return true;
         };
         if reads(pc) {
             return true;

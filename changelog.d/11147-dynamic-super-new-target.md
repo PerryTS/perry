@@ -1,0 +1,2 @@
+Preserve `new.target` when `super()` dispatches through a runtime-valued parent, including spread calls. Recover the construction target for inlined calls without an active dynamic target, preserve explicit `Reflect.construct` targets, and restore the caller state after the parent call.
+Publish the lexical target around inlined runtime super calls so nested construction does not inherit an outer target. Preserve a class parent's returned replacement receiver, allowing wrappers based on `Object.create(new.target.prototype)` to construct the intended object.

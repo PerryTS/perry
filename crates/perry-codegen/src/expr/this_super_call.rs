@@ -473,10 +473,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let cid_str = child_cid.to_string();
                 let blk = ctx.block();
                 let arr_box = nanbox_pointer_inline(blk, &arr);
+                let nt_save = crate::rooting::new_target_save_for_super(ctx);
                 ctx.block().call_void(
                     "js_super_construct_apply",
                     &[(I32, &cid_str), (DOUBLE, &this_box), (DOUBLE, &arr_box)],
                 );
+                if let Some(save) = nt_save.as_ref() {
+                    crate::rooting::new_target_restore(ctx, save);
+                }
             }
             bind_derived_this_after_super(ctx);
             // Spec: subclass field initializers run AFTER super() returns
@@ -736,6 +740,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             // back to the ordinary implicit-`this`-bound
                             // `js_native_call_value` (unchanged behavior for
                             // every other runtime-value parent).
+                            let nt_save = crate::rooting::new_target_save_for_super(ctx);
                             let parent_result = ctx.block().call(
                                 DOUBLE,
                                 "js_fetch_or_value_super",
@@ -746,6 +751,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I64, &args_len),
                                 ],
                             );
+                            if let Some(save) = nt_save.as_ref() {
+                                crate::rooting::new_target_restore(ctx, save);
+                            }
                             // A duplicate `super()` still evaluates/calls the
                             // parent, but it must throw before replacing the
                             // already-initialized derived `this` binding with

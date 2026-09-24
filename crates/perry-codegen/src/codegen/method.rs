@@ -1254,6 +1254,7 @@ pub(super) fn compile_method(
                         Some(slot) => ctx.block().load(DOUBLE, &slot),
                         None => undef_lit.clone(),
                     };
+                    let nt_save = crate::rooting::new_target_save_for_super(&mut ctx);
                     let parent_result = ctx.block().call(
                         DOUBLE,
                         "js_fetch_or_value_super",
@@ -1264,6 +1265,9 @@ pub(super) fn compile_method(
                             (I64, &args_len),
                         ],
                     );
+                    if let Some(save) = nt_save.as_ref() {
+                        crate::rooting::new_target_restore(&mut ctx, save);
+                    }
                     if let Some(this_slot) = ctx.this_stack.last().cloned() {
                         let current_this = ctx.block().load(DOUBLE, &this_slot);
                         let bound_this = ctx.block().call(

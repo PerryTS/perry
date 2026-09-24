@@ -675,8 +675,8 @@ mod ledger;
 // produce them live.
 pub(crate) use group::{
     implicit_this_restore, implicit_this_save, new_target_restore, new_target_save,
-    open_rooted_group, with_rooted_accumulator, with_rooted_group, AccArray, EmittedValue,
-    RootedAcc, RootedGroup,
+    new_target_save_for_super, open_rooted_group, with_rooted_accumulator, with_rooted_group,
+    AccArray, EmittedValue, RootedAcc, RootedGroup,
 };
 
 // ---------------------------------------------------------------------------

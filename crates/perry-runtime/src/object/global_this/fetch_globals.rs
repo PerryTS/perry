@@ -668,6 +668,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    let new_target_scope = crate::gc::RuntimeHandleScope::new();
+    let _new_target = crate::object::SuperNewTargetScope::bind(&new_target_scope, this_box);
+
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     // `extends null` is valid at ClassDefinitionEvaluation time, but its
     // derived constructor has no super-constructor to invoke.  An explicit or
@@ -1090,7 +1093,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             if bits & TAG_MASK == INT32_TAG {
                 let parent_cid = bits as u32;
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
-                    super::super::class_constructors::run_class_constructor_on_this_flat(
+                    return super::super::class_constructors::run_class_constructor_on_this_flat(
                         parent_cid, obj as i64, args_ptr, args_len,
                     );
                 }
@@ -1162,10 +1165,9 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                         if parent_cid != 0
                             && !is_uncallable_builtin_super_parent_class_id(parent_cid)
                         {
-                            super::super::class_constructors::run_class_constructor_on_this_flat(
+                            return super::super::class_constructors::run_class_constructor_on_this_flat(
                                 parent_cid, obj as i64, args_ptr, args_len,
                             );
-                            return undef;
                         }
                     }
                 }
@@ -1270,6 +1272,69 @@ pub(crate) extern "C" fn global_this_eval_thunk(
             {
                 f64::from_bits(crate::value::TAG_UNDEFINED)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod dynamic_super_new_target_tests {
+    use super::*;
+
+    extern "C" fn read_new_target(_closure: *const crate::ClosureHeader) -> f64 {
+        crate::object::js_new_target_get()
+    }
+
+    #[test]
+    fn dynamic_super_publishes_and_restores_new_target() {
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(61_147, 0));
+            let parent = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+                read_new_target as *const u8,
+                0,
+            ));
+            let previous = scope.root_nanbox_f64(crate::object::js_new_target_set(f64::from_bits(
+                crate::value::TAG_UNDEFINED,
+            )));
+            let result = js_fetch_or_value_super(
+                crate::value::js_nanbox_pointer(
+                    parent.get_raw_const_ptr::<crate::ClosureHeader>() as i64
+                ),
+                crate::value::js_nanbox_pointer(instance.get_raw_const_ptr::<ObjectHeader>() as i64),
+                std::ptr::null(),
+                0,
+            );
+            let restored = crate::object::js_new_target_set(previous.get_nanbox_f64());
+            assert_eq!(restored.to_bits(), crate::value::TAG_UNDEFINED);
+            assert_eq!(
+                result.to_bits(),
+                crate::object::class_constructor_ref_value(61_147).to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_super_preserves_an_explicit_new_target() {
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let instance = scope.root_raw_mut_ptr(crate::object::js_object_alloc(61_147, 0));
+            let parent = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+                read_new_target as *const u8,
+                0,
+            ));
+            let explicit = crate::object::class_constructor_ref_value(61_148);
+            let previous = scope.root_nanbox_f64(crate::object::js_new_target_set(explicit));
+            let result = js_fetch_or_value_super(
+                crate::value::js_nanbox_pointer(
+                    parent.get_raw_const_ptr::<crate::ClosureHeader>() as i64
+                ),
+                crate::value::js_nanbox_pointer(instance.get_raw_const_ptr::<ObjectHeader>() as i64),
+                std::ptr::null(),
+                0,
+            );
+            let restored = crate::object::js_new_target_set(previous.get_nanbox_f64());
+            assert_eq!(restored.to_bits(), explicit.to_bits());
+            assert_eq!(result.to_bits(), explicit.to_bits());
         }
     }
 }

@@ -691,6 +691,7 @@ fn lower_new_impl_inner<'a>(
         // ctor that reads `new.target` (e.g. an abstract-class guard in a base)
         // observes the same cell — `new Child()` where only `Base` reads
         // `new.target` would otherwise see `undefined` instead of `Child`.
+        // A runtime parent is an unknown reader, so it also needs the cell.
         // ponytail: a throw inside the ctor skips the restore, leaving the cell
         // set — same edge case the runtime construct paths already have; fix
         // holistically if it bites.
@@ -1855,6 +1856,7 @@ fn lower_new_impl_inner<'a>(
                 // outer function's `this` (or undef at module scope). Use
                 // `obj_box` — the freshly-allocated object — directly.
                 let this_box = obj_box.clone();
+                let nt_save = crate::rooting::new_target_save_for_super(ctx);
                 let parent_result = ctx.block().call(
                     DOUBLE,
                     "js_fetch_or_value_super",
@@ -1865,6 +1867,9 @@ fn lower_new_impl_inner<'a>(
                         (I64, &args_len),
                     ],
                 );
+                if let Some(save) = nt_save.as_ref() {
+                    crate::rooting::new_target_restore(ctx, save);
+                }
                 // A function-valued base constructor can return a replacement
                 // object (notably a Proxy).  The implicit derived constructor
                 // binds that object as `this`; primitives retain the allocation.

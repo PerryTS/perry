@@ -592,6 +592,9 @@ pub unsafe extern "C" fn js_super_construct_apply(
     this_value: f64,
     args_array: f64,
 ) -> f64 {
+    let new_target_scope = crate::gc::RuntimeHandleScope::new();
+    let _new_target = crate::object::SuperNewTargetScope::bind(&new_target_scope, this_value);
+
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let this_raw = (this_value.to_bits() & crate::value::POINTER_MASK) as i64;
     if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
@@ -1055,16 +1058,18 @@ static KEEP_JS_SUPER_METHOD_CALL_DYNAMIC_APPLY: unsafe extern "C" fn(
 /// # Safety
 /// `this_raw` must be a valid `ObjectHeader` pointer (as `i64`); `args_ptr`
 /// must point to `args_len` valid `f64`s (or be null when `args_len == 0`).
+/// Return the constructor result so a super caller can adopt a replacement
+/// receiver; return undefined when no constructor was found.
 pub(crate) unsafe fn run_class_constructor_on_this_flat(
     parent_cid: u32,
     this_raw: i64,
     args_ptr: *const f64,
     args_len: usize,
-) -> bool {
-    if this_raw == 0 || parent_cid == 0 {
-        return false;
-    }
+) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    if this_raw == 0 || parent_cid == 0 {
+        return undef;
+    }
     let mut cur = parent_cid;
     let mut depth = 0usize;
     while cur != 0 && depth < 64 {
@@ -1093,7 +1098,7 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
             for slot in 0..sig_caps as usize {
                 final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
             }
-            let _ = call_vtable_method(
+            return call_vtable_method(
                 ctor_ptr,
                 this_raw,
                 final_args.as_ptr(),
@@ -1102,7 +1107,6 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
                 false,
                 false,
             );
-            return true;
         }
         let next = crate::object::get_parent_class_id(cur).unwrap_or(0);
         if next == cur {
@@ -1111,7 +1115,7 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
         cur = next;
         depth += 1;
     }
-    false
+    undef
 }
 
 /// Append the spread of `value` to `target` (array handle), handling BOTH

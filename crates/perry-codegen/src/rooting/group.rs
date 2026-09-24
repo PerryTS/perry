@@ -547,6 +547,15 @@ pub(crate) fn new_target_save(ctx: &mut FnCtx<'_>, new_target: &str) -> NewTarge
     }
 }
 
+/// Publish an inlined constructor's lexical target around a runtime super call.
+/// A standalone constructor already receives its target through the runtime
+/// cell; an inline nested `new` must temporarily replace that ambient target.
+pub(crate) fn new_target_save_for_super(ctx: &mut FnCtx<'_>) -> Option<NewTargetSave> {
+    let slot = ctx.new_target_stack.last()?.clone();
+    let target = ctx.block().load(DOUBLE, &slot);
+    Some(new_target_save(ctx, &target))
+}
+
 /// Restore the saved `new.target`, re-read from its root.
 ///
 /// Takes the save by REFERENCE, and does not release — which is the difference

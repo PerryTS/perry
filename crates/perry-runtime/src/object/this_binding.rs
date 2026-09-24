@@ -301,6 +301,44 @@ pub extern "C" fn js_new_target_set(value: f64) -> f64 {
     NEW_TARGET.with(|c| f64::from_bits(c.replace(value.to_bits())))
 }
 
+/// Publish the construction target while a runtime-dispatched super call runs.
+/// Inline construction can keep new.target only in generated locals, so recover
+/// its identity from the receiver when no dynamic target is already active.
+/// An explicit Reflect.construct target must win, even if its class differs.
+/// Throws are also covered by the NEW_TARGET catch savepoint below.
+pub(crate) struct SuperNewTargetScope<'scope> {
+    previous: crate::gc::RuntimeHandle<'scope>,
+}
+
+impl<'scope> SuperNewTargetScope<'scope> {
+    pub(crate) fn bind(scope: &'scope crate::gc::RuntimeHandleScope, receiver: f64) -> Self {
+        let previous = scope.root_nanbox_f64(js_new_target_get());
+        if previous.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
+            let target = super::private_evaluation_brand_value(receiver).or_else(|| unsafe {
+                let value = crate::value::JSValue::from_bits(receiver.to_bits());
+                if !value.is_pointer() {
+                    return None;
+                }
+                let obj = value.as_pointer::<super::ObjectHeader>();
+                if !super::object_is_shaped(obj) || (*obj).class_id == 0 {
+                    return None;
+                }
+                Some(super::class_constructor_ref_value((*obj).class_id))
+            });
+            if let Some(target) = target {
+                js_new_target_set(target);
+            }
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for SuperNewTargetScope<'_> {
+    fn drop(&mut self) {
+        js_new_target_set(self.previous.get_nanbox_f64());
+    }
+}
+
 /// `catch_savepoints!` capture/restore for `IMPLICIT_THIS` (PR #10564 review
 /// finding). Several runtime guards displace `IMPLICIT_THIS` around a call
 /// they don't control — a `super()` bridge, a prototype-walk accessor
