@@ -75,7 +75,9 @@ pub(crate) fn collect_module_finish(
             for (prior_path, prior_module) in &ctx.native_modules {
                 // The strict harvester rejects ExternFuncRef-using methods.
                 // The loose variant records each required extern name;
-                // `inline_functions` filters by destination imports.
+                // `inline_functions` imports a name into the destination only
+                // when a call site there actually inlined a body that reads
+                // it (#11244) -- each such import is a module-init edge.
                 // First-write-wins on key collision (rare — issue #309 cycle
                 // breaker). Strict-harvest entries are functionally equivalent
                 // when colliding with the loose variant (same body), so

@@ -14,6 +14,7 @@ mod closure_analysis;
 mod cross_module;
 mod discarded_result;
 mod exact_receivers;
+mod extern_imports;
 mod factory_specialize;
 mod imul;
 mod substitute;
@@ -58,7 +59,7 @@ pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexic
 
 use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Class, Expr, Function, Module, Stmt};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// Maximum number of statements for a function to be considered for inlining
 pub(crate) const MAX_INLINE_STMTS: usize = 10;
@@ -81,6 +82,8 @@ pub struct MethodCandidate {
     /// uses the `resolved_path` to add any missing import to the destination
     /// module's `hir.imports` so the codegen's `import_function_prefixes`
     /// table can dispatch the cross-module call (`perry_fn_<source_prefix>__<name>`).
+    /// That import is added only if a call site in the destination inlined
+    /// this body (#11244; see `extern_imports`).
     pub required_extern_imports: Vec<(String, String)>,
 }
 
@@ -590,15 +593,11 @@ fn inline_functions_inner(
             }
         }
     }
-    // Build the `(name, resolved_path) -> Import` map once for deduping.
-    // For each Named import in dest, we know which (name, path) is already
-    // satisfied. Anything required by an admitted candidate that isn't here
-    // gets appended below.
+    // `(local name, resolved_path)` pairs the destination already imports.
+    // A candidate requirement already satisfied here needs no new import.
     let mut dest_named_imports: HashSet<(String, String)> = HashSet::new();
-    let mut dest_resolved_paths: HashSet<String> = HashSet::new();
     for imp in &module.imports {
         if let Some(p) = &imp.resolved_path {
-            dest_resolved_paths.insert(p.clone());
             for spec in &imp.specifiers {
                 if let perry_hir::ImportSpecifier::Named { local, .. } = spec {
                     dest_named_imports.insert((local.clone(), p.clone()));
@@ -606,92 +605,28 @@ fn inline_functions_inner(
             }
         }
     }
-    // Source-of-truth: for each (name, source_path) combination requested by
-    // an admitted candidate, look up the matching `Import` from extra_methods
-    // (we need the original `Import` shape — `is_native`, `module_kind` —
-    // so the codegen processes the new entry the same way it processes a
-    // user-written import). Since we only have the resolved_path (not the
-    // original source string or module_kind) on the candidate side, we
-    // reconstruct a minimal Import here. `is_native = false` because the
-    // strict-cross-module-safe check already excluded NativeMethodCall and
-    // other native-only patterns; `module_kind = NativeCompiled` because
-    // that's the only category the codegen consults for
-    // `import_function_prefixes`.
-    let mut needed_imports: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // Admitting a candidate only makes it AVAILABLE to call sites; most
+    // admitted candidates are never inlined here. So a missing requirement is
+    // only queued now, and `pending_extern_imports.apply` adds the import
+    // after the inlining phases, and only if an inlined body now references
+    // the name (#11244). Each synthesized import is a static init edge, so
+    // adding one eagerly ran module bodies Node runs later or never, and in
+    // an import cycle re-entered a module whose exports were not populated.
+    let mut pending_extern_imports = extern_imports::PendingExternImports::default();
     method_candidates.extend(extra_methods.iter().filter_map(|(k, v)| {
         if !prototype_facts.method_table_is_stable(&module.classes, &k.0) {
             return None;
         }
-        // If any required (name, path) is missing from dest, queue an import.
-        // We always admit when the path is reachable from the destination —
-        // if dest has no import that resolves to that path, we synthesize
-        // one. (A path that names a module not in `ctx.native_modules` would
-        // still fail at codegen, but that's a pre-existing issue; the
-        // harvester wouldn't populate `required_extern_imports` from such a
-        // path.)
+        // A path that names a module not in `ctx.native_modules` would still
+        // fail at codegen, but the harvester never populates
+        // `required_extern_imports` from such a path.
         for (name, path) in &v.required_extern_imports {
             if !dest_named_imports.contains(&(name.clone(), path.clone())) {
-                needed_imports
-                    .entry(path.clone())
-                    .or_default()
-                    .push(name.clone());
+                pending_extern_imports.queue(name, path);
             }
         }
         Some((k.clone(), v.clone()))
     }));
-    // Synthesize import entries for the needed names. Group per source-path.
-    for (path, mut names) in needed_imports {
-        names.sort();
-        names.dedup();
-        // If dest already has an Import for this resolved_path, append the
-        // names there to keep the imports list clean. Otherwise create a
-        // fresh Import.
-        let existing_idx = module.imports.iter().position(|imp| {
-            imp.resolved_path
-                .as_deref()
-                .is_some_and(|p| p == path.as_str())
-        });
-        match existing_idx {
-            Some(idx) => {
-                for name in names {
-                    if !module.imports[idx]
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, perry_hir::ImportSpecifier::Named { local, .. } if local == &name))
-                    {
-                        module.imports[idx]
-                            .specifiers
-                            .push(perry_hir::ImportSpecifier::Named {
-                                imported: name.clone(),
-                                local: name,
-                            });
-                    }
-                }
-            }
-            None => {
-                module.imports.push(perry_hir::Import {
-                    source: path.clone(),
-                    specifiers: names
-                        .into_iter()
-                        .map(|name| perry_hir::ImportSpecifier::Named {
-                            imported: name.clone(),
-                            local: name,
-                        })
-                        .collect(),
-                    is_native: false,
-                    module_kind: perry_hir::ModuleKind::NativeCompiled,
-                    resolved_path: Some(path),
-                    type_only: false,
-                    runtime_erased: false,
-                    is_dynamic: false,
-                    is_dynamic_target: false,
-                    is_deferred_require: false,
-                    is_adopted_require: false,
-                });
-            }
-        }
-    }
-    let _ = dest_resolved_paths; // kept for future deduping diagnostics
     for class in &module.classes {
         class_names.insert(class.name.clone(), class.name.clone());
 
@@ -856,6 +791,9 @@ fn inline_functions_inner(
             next_module_id = local_id;
         }
     }
+
+    // Every inlining phase is done: import only what an inlined body uses.
+    pending_extern_imports.apply(module);
 }
 
 #[cfg(test)]
@@ -1037,9 +975,23 @@ mod tests {
         assert_eq!(next_local_id, 100);
     }
 
+    fn extern_ref(name: &str) -> Expr {
+        Expr::ExternFuncRef {
+            name: name.to_string(),
+            param_types: Vec::new(),
+            return_type: Type::Any,
+        }
+    }
+
     #[test]
     fn cross_module_synthetic_imports_are_sorted() {
         let mut module = Module::new("dest");
+        // Imports are synthesized only for names an inlined body left in the
+        // module (#11244); stand in for those bodies directly.
+        module.init = ["z", "a", "b", "a2"]
+            .into_iter()
+            .map(|name| Stmt::Expr(extern_ref(name)))
+            .collect();
         let mut extra_methods = HashMap::new();
         extra_methods.insert(
             ("B".to_string(), "m".to_string()),
@@ -1092,6 +1044,125 @@ mod tests {
             })
             .collect();
         assert_eq!(first_specifiers, vec![("a", "a"), ("a2", "a2")]);
+    }
+
+    /// #11244: an admitted candidate that no call site inlines must not give
+    /// the destination an import, because every import is an init edge.
+    #[test]
+    fn cross_module_candidate_not_inlined_adds_no_import() {
+        let mut module = Module::new("dest");
+        module.init = vec![Stmt::Expr(Expr::Integer(1))];
+        let mut extra_methods = HashMap::new();
+        extra_methods.insert(
+            ("ParseError".to_string(), "code".to_string()),
+            candidate(
+                1,
+                vec![Stmt::Return(Some(extern_ref("CODE")))],
+                vec![("CODE".to_string(), "/util.ts".to_string())],
+            ),
+        );
+
+        inline_functions(
+            &mut module,
+            &extra_methods,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            module.imports.is_empty(),
+            "unused candidate synthesized imports: {:?}",
+            module.imports
+        );
+    }
+
+    /// The counterpart: when a call site does inline the candidate, the
+    /// destination gains exactly the import the inlined body reads.
+    #[test]
+    fn cross_module_inlined_candidate_adds_its_import() {
+        let mut module = Module::new("dest");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "p".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "ParseError".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "code".to_string(),
+                        byte_offset: 0,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            },
+        ];
+        let mut extra_methods = HashMap::new();
+        extra_methods.insert(
+            ("ParseError".to_string(), "code".to_string()),
+            candidate(
+                1,
+                vec![Stmt::Return(Some(extern_ref("CODE")))],
+                vec![("CODE".to_string(), "/util.ts".to_string())],
+            ),
+        );
+        // A second admitted candidate this module never calls.
+        extra_methods.insert(
+            ("Other".to_string(), "m".to_string()),
+            candidate(
+                2,
+                vec![Stmt::Return(Some(extern_ref("UNUSED")))],
+                vec![("UNUSED".to_string(), "/unused.ts".to_string())],
+            ),
+        );
+
+        inline_functions(
+            &mut module,
+            &extra_methods,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let dump = format!("{:?}", module.init);
+        assert!(
+            !dump.contains("property: \"code\""),
+            "method call was not inlined: {dump}"
+        );
+        let imports: Vec<(&str, Vec<&str>)> = module
+            .imports
+            .iter()
+            .map(|import| {
+                (
+                    import.source.as_str(),
+                    import
+                        .specifiers
+                        .iter()
+                        .map(|s| match s {
+                            ImportSpecifier::Named { local, .. } => local.as_str(),
+                            _ => panic!("expected named import"),
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(imports, vec![("/util.ts", vec!["CODE"])]);
     }
 
     #[test]
