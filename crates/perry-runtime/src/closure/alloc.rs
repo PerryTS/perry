@@ -14,10 +14,8 @@ crate::perry_thread_local! {
 
     /// Per-`func_ptr` small-LRU cache. Each value holds up to
     /// `MAX_CAPTURED_CLOSURE_SLOTS` (captures-bits, ClosureHeader)
-    /// pairs. Multiple slots are critical for the parallel-instance
-    /// async-await pattern (e.g. `Promise.all` of N async closures
-    /// each capturing its own boxed `__async_step`), where a single-
-    /// slot cache evicts every cycle and effectively never hits.
+    /// pairs. Multiple slots serve interleaved repeated capture tuples;
+    /// the small bound limits the capture graphs held alive by this cache.
     /// `PtrHasher`-keyed for the same reason as the other registries
     /// here — on `promise_all_chains` this is hit on every closure
     /// alloc (150 k/run).
@@ -40,10 +38,14 @@ struct CapturedClosureEntry {
 /// trusted without exact capture-bit equality.
 const CAPTURED_HINT_SLOTS: usize = 128;
 
+struct CapturedClosureHints {
+    fingerprints: [u64; CAPTURED_HINT_SLOTS],
+    indices_plus_one: [u8; CAPTURED_HINT_SLOTS],
+}
+
 struct CapturedClosureCache {
     entries: Vec<CapturedClosureEntry>,
-    hint_fingerprints: [u64; CAPTURED_HINT_SLOTS],
-    hint_indices_plus_one: [u8; CAPTURED_HINT_SLOTS],
+    hints: Option<Box<CapturedClosureHints>>,
     clock: u64,
 }
 
@@ -51,8 +53,7 @@ impl CapturedClosureCache {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
-            hint_fingerprints: [0; CAPTURED_HINT_SLOTS],
-            hint_indices_plus_one: [0; CAPTURED_HINT_SLOTS],
+            hints: None,
             clock: 0,
         }
     }
@@ -73,8 +74,9 @@ impl CapturedClosureCache {
 
     fn lookup(&mut self, fingerprint: u64, captures: &[u64]) -> Option<*mut ClosureHeader> {
         let hint_slot = Self::hint_slot(fingerprint);
-        let hinted = self.hint_indices_plus_one[hint_slot];
-        if hinted != 0 && self.hint_fingerprints[hint_slot] == fingerprint {
+        let hints = self.hints.as_ref()?;
+        let hinted = hints.indices_plus_one[hint_slot];
+        if hinted != 0 && hints.fingerprints[hint_slot] == fingerprint {
             let index = (hinted - 1) as usize;
             if self
                 .entries
@@ -88,8 +90,7 @@ impl CapturedClosureCache {
         let index = self.entries.iter().position(|entry| {
             entry.fingerprint == fingerprint && entry.captures.as_slice() == captures
         })?;
-        self.hint_fingerprints[hint_slot] = fingerprint;
-        self.hint_indices_plus_one[hint_slot] = (index + 1) as u8;
+        self.set_hint(hint_slot, fingerprint, index);
         Some(self.touch(index))
     }
 
@@ -116,12 +117,24 @@ impl CapturedClosureCache {
             index
         };
         let hint_slot = Self::hint_slot(fingerprint);
-        self.hint_fingerprints[hint_slot] = fingerprint;
-        self.hint_indices_plus_one[hint_slot] = (index + 1) as u8;
+        self.set_hint(hint_slot, fingerprint, index);
+    }
+
+    fn set_hint(&mut self, slot: usize, fingerprint: u64, index: usize) {
+        let hints = self.hints.get_or_insert_with(|| {
+            Box::new(CapturedClosureHints {
+                fingerprints: [0; CAPTURED_HINT_SLOTS],
+                indices_plus_one: [0; CAPTURED_HINT_SLOTS],
+            })
+        });
+        hints.fingerprints[slot] = fingerprint;
+        hints.indices_plus_one[slot] = (index + 1) as u8;
     }
 
     fn clear_hints(&mut self) {
-        self.hint_indices_plus_one.fill(0);
+        if let Some(hints) = self.hints.as_mut() {
+            hints.indices_plus_one.fill(0);
+        }
     }
 }
 
@@ -132,6 +145,72 @@ mod captured_closure_cache_tests {
     fn fake_closure(id: usize) -> *mut ClosureHeader {
         // The cache treats these as opaque values. No test dereferences them.
         (0x1000 + id * std::mem::align_of::<ClosureHeader>()) as *mut ClosureHeader
+    }
+
+    #[test]
+    fn hints_are_lazy_and_can_be_cleared_without_losing_entries() {
+        let mut cache = CapturedClosureCache::new();
+        assert!(cache.hints.is_none());
+        cache.clear_hints();
+        assert!(cache.hints.is_none());
+        let captures = [42];
+        let fingerprint = capture_fingerprint(&captures);
+        assert_eq!(cache.lookup(fingerprint, &captures), None);
+        cache.insert(fingerprint, captures.to_vec(), fake_closure(1));
+        assert!(cache.hints.is_some());
+        cache.clear_hints();
+        assert_eq!(cache.lookup(fingerprint, &captures), Some(fake_closure(1)));
+    }
+
+    #[test]
+    fn bypass_drops_captured_roots_and_storage_but_preserves_returned_closure() {
+        struct ClearCaches;
+        impl Drop for ClearCaches {
+            fn drop(&mut self) {
+                test_clear_singleton_closure_caches();
+            }
+        }
+        test_clear_singleton_closure_caches();
+        let _guard = ClearCaches;
+        extern "C" fn literal() {}
+        let func = literal as *const u8;
+        let key = func as usize;
+        let root_count = || {
+            let mut count = 0;
+            scan_singleton_closure_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
+                &mut |_| count += 1,
+            ));
+            count
+        };
+        for i in 0..CAPTURED_MISS_STREAK_DISABLE - 1 {
+            let captured = js_closure_alloc(func, 0);
+            let captures = [captured as u64, (i as f64).to_bits()];
+            js_closure_alloc_with_captures_singleton(func, 2, captures.as_ptr());
+        }
+        SINGLETON_CAPTURED_CLOSURES.with(|s| {
+            let s = s.borrow();
+            let cache = s.get(&key).unwrap();
+            assert_eq!(cache.entries.len(), 8, "retention must stay bounded");
+            assert!(cache.hints.is_some());
+        });
+        assert!(
+            root_count() >= 16,
+            "the scanner must see the populated cache"
+        );
+
+        let captures = [999.0f64.to_bits()];
+        let allocated = js_closure_alloc_with_captures_singleton(func, 1, captures.as_ptr());
+        assert_eq!(js_closure_get_capture_bits(allocated, 0), captures[0]);
+        SINGLETON_CAPTURED_CLOSURES.with(|s| assert!(!s.borrow().contains_key(&key)));
+        CAPTURED_MISS_STREAK.with(|s| {
+            assert_eq!(s.borrow().get(&key), Some(&CAPTURED_DISABLED_SENTINEL));
+        });
+        assert_eq!(root_count(), 0, "disabled literals must retain no roots");
+
+        let bypassed = js_closure_alloc_with_captures_singleton(func, 1, captures.as_ptr());
+        assert_eq!(js_closure_get_capture_bits(bypassed, 0), captures[0]);
+        SINGLETON_CAPTURED_CLOSURES.with(|s| assert!(!s.borrow().contains_key(&key)));
+        assert_eq!(root_count(), 0);
     }
 
     #[test]
@@ -574,16 +653,9 @@ pub(crate) fn test_captured_singleton_closure_cache_entries(
     })
 }
 
-/// Maximum number of (captures-tuple, ClosureHeader) entries cached
-/// per-`func_ptr` in `SINGLETON_CAPTURED_CLOSURES`. Sized to absorb the
-/// parallel-instance async-await pattern (e.g. `Promise.all` of N
-/// concurrent unitOfWork calls each capturing their own boxed
-/// `__async_step`) without filling the cache when N is large. The
-/// LRU eviction inside the slot list keeps the most-recently-seen
-/// entries hot. Empirical: capping at 64 keeps memory bounded but
-/// covers the per-batch fan-out shape (50 promises) found in
-/// `benchmarks/app-patterns/kernels/promise_all_chains.ts`.
-const MAX_CAPTURED_CLOSURE_SLOTS: usize = 64;
+/// Bound the number of capture graphs rooted per closure literal. A small
+/// LRU still serves repeated tuples without retaining a whole request batch.
+const MAX_CAPTURED_CLOSURE_SLOTS: usize = 8;
 const _: () = assert!(
     MAX_CAPTURED_CLOSURE_SLOTS <= u8::MAX as usize,
     "hint_indices_plus_one stores an entry index plus one in a u8"
@@ -595,8 +667,9 @@ const _: () = assert!(
 /// captures-tuple cache; after `CAPTURED_MISS_STREAK_DISABLE` consecutive
 /// misses we mark the `func_ptr` as "cache-disabled" and route it to a
 /// direct `js_closure_alloc + memcpy` with no HashMap touch, no Vec scan,
-/// no Vec::to_vec capture-tuple allocation. A future hit (e.g. if the
-/// workload changes shape and captures stabilise) resets the counter.
+/// no Vec::to_vec capture-tuple allocation. Disabling drops the cache and
+/// its roots; bypass remains permanent for this literal. Hits before the
+/// threshold reset the counter.
 const CAPTURED_MISS_STREAK_DISABLE: u32 = 256;
 const CAPTURED_DISABLED_SENTINEL: u32 = u32::MAX;
 
@@ -605,18 +678,12 @@ crate::perry_thread_local! {
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
-/// Per-`func_ptr` single-slot cache for closures with captures. When
-/// the same closure literal is created again with the SAME capture
-/// bits, we return the cached closure; otherwise we allocate a fresh
-/// one and replace the slot.
+/// Per-`func_ptr` bounded LRU cache for closures with captures. Exact capture
+/// bits select a cached closure; misses allocate a fresh closure. After a
+/// sustained miss streak, drop the cache and bypass it for this literal.
 ///
 /// `captures_ptr` points at `capture_count` consecutive 8-byte values
 /// matching the layout `js_closure_set_capture_f64` writes.
-///
-/// One entry per closure literal (bounded by program size). Closures
-/// whose captures vary per call (e.g. `getOrCompute(map, key, () =>
-/// ...)` capturing a fresh array each call) miss every time but only
-/// occupy one slot, so they don't crowd out steady-state captures.
 #[no_mangle]
 pub extern "C" fn js_closure_alloc_with_captures_singleton(
     func_ptr: *const u8,
@@ -724,6 +791,12 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
             *entry += 1;
             if *entry >= CAPTURED_MISS_STREAK_DISABLE {
                 *entry = CAPTURED_DISABLED_SENTINEL;
+                // Removing the value frees entries, capture tuples and lazy
+                // hints, and removes every GC root owned by this literal.
+                // The returned closure remains owned by the caller.
+                SINGLETON_CAPTURED_CLOSURES.with(|s| {
+                    s.borrow_mut().remove(&(func_ptr as usize));
+                });
             }
         }
     });
@@ -834,6 +907,9 @@ pub(super) fn singleton_closure_census() -> Vec<crate::gc::census::SideTableRow>
             .values()
             .map(|c| {
                 vec_bytes(&c.entries)
+                    + c.hints
+                        .as_ref()
+                        .map_or(0, |_| std::mem::size_of::<CapturedClosureHints>())
                     + c.entries
                         .iter()
                         .map(|e| vec_bytes(&e.captures))

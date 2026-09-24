@@ -1,0 +1,1 @@
+Fix captured-closure singleton cache retention: cap each literal at eight LRU entries, allocate hint arrays lazily, and drop entries, capture tuples, and hints when adaptive bypass disables caching after 256 consecutive misses. Disabled literals no longer keep captured request graphs rooted. Active caches retain exact capture matching and moving-GC rewriting.
