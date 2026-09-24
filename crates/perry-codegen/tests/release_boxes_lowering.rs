@@ -226,7 +226,7 @@ fn release_boxes_lowers_through_closure_captures() {
         );
     }
     assert!(
-        !ir.contains("call void @js_closure_set_box_capture_ptr("),
+        !ir.contains("call void @js_closure_register_box_layout("),
         "the compiler-private step closure is covered by the activation refcount, \
          so its complete frame must not become escaped GC-closure edges:\n{ir}"
     );
@@ -276,7 +276,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
     let ir = ir_for_fn_body("release_nested_user_capture", body);
     let tracked_edges = ir
         .lines()
-        .filter(|line| line.contains("call void @js_closure_set_box_capture_ptr("))
+        .filter(|line| line.contains("call void @js_closure_register_box_layout("))
         .count();
     assert_eq!(
         tracked_edges, 1,

@@ -7,6 +7,8 @@
 
 mod alloc;
 mod box_captures;
+mod box_layout;
+pub use box_layout::js_closure_register_box_layout;
 mod dispatch;
 mod dynamic_props;
 mod registry;

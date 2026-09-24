@@ -505,6 +505,7 @@ NONCOLLECTING = {
     # verified non-allocating bookkeeping stores/reads (perry-runtime)
     "js_closure_set_capture_bits",   # closure/alloc.rs:477 raw slot write + layout note
     "js_closure_set_box_capture_ptr", # declared box edge + same raw slot write
+    "js_closure_register_box_layout", # Rust-owned bitmap/edge-count bookkeeping; no GC allocation
     "js_closure_get_capture_bits",   # closure/alloc.rs:463 raw slot read
     "js_closure_set_capture_ptr", "js_closure_get_capture_ptr",
     "js_box_set_bits", "js_box_set_bits_trusted_no_barrier",

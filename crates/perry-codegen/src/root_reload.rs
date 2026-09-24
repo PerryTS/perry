@@ -228,6 +228,7 @@ const NON_COLLECTING: &[&str] = &[
     // verified non-allocating bookkeeping stores/reads
     "js_closure_set_capture_bits",
     "js_closure_set_box_capture_ptr",
+    "js_closure_register_box_layout",
     "js_closure_get_capture_bits",
     "js_closure_set_capture_ptr",
     "js_closure_get_capture_ptr",

@@ -1,0 +1,3 @@
+Share compiler-declared boxed-capture layouts by function pointer. Generated closures now register a constant bitmap in one batch and retain only a weak owner address, replacing the per-instance capture-index/cell list. Fresh boxed closures also use bulk capture initialization. Per-box lifetime counts remain in place so frame and async release still wait for the final escaped capture.
+
+GC tracing, relocation, death pruning, singleton reuse, and runtime clones use the shared layout. The existing dynamic setter retains its exact-edge representation for compatibility. Regression coverage includes sparse layouts beyond 64 slots, duplicate edges, dynamic replacement, clone rebinding, released payload tracing, and wide/async compiled closures.
