@@ -178,28 +178,16 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
                 if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
                     crate::object::lookup_class_method_in_chain(owner_id, name)
                 {
-                    return if let Some(brand) = private_brand {
-                        crate::object::call_vtable_method_with_private_brand(
-                            func_ptr,
-                            call_receiver.to_bits() as i64,
-                            args.as_ptr(),
-                            args.len(),
-                            param_count,
-                            has_synth_args,
-                            has_rest,
-                            brand,
-                        )
-                    } else {
-                        crate::object::call_vtable_method(
-                            func_ptr,
-                            call_receiver.to_bits() as i64,
-                            args.as_ptr(),
-                            args.len(),
-                            param_count,
-                            has_synth_args,
-                            has_rest,
-                        )
-                    };
+                    return crate::object::call_vtable_method_value(
+                        func_ptr,
+                        call_receiver,
+                        args.as_ptr(),
+                        args.len(),
+                        param_count,
+                        has_synth_args,
+                        has_rest,
+                        private_brand,
+                    );
                 }
             }
         }

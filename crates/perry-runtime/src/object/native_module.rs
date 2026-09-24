@@ -1664,66 +1664,14 @@ pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
 
 pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {
     if class_prototype_ref_id(captured).is_some() {
-        let call_this = super::js_implicit_this_get();
-        if class_id_from_method_receiver(call_this).is_some() {
-            return call_this;
-        }
-        // #6699: a PROXY call-site `this` is a legitimate spec receiver for a
-        // class method reached through the proxy's get trap. `proxy.method()`
-        // is `Get(proxy, "method")` (the trap forwards to the real instance's
-        // method) then `Call(method, proxy)`, so the body must run with
-        // `this === proxy` — its `this.field` accesses then route back through
-        // the trap. A proxy id lives in the handle band, so
-        // `class_id_from_method_receiver` (which requires an above-band heap
-        // object) rejects it and we would otherwise fall through and leak the
-        // INT32 owner-marker as `this` (`typeof this === "number"`), exactly the
-        // marker-leak the #6475 closure case below guards against. pi's TUI
-        // theme is a `new Proxy({}, …)` whose get trap forwards to the real
-        // Theme; `theme.fg()` → `this.fgColors.get(...)` threw
-        // `Cannot read properties of undefined (reading 'get')` without this.
-        if crate::proxy::js_proxy_is_proxy(call_this) != 0 {
-            return call_this;
-        }
-        // #6475: a FUNCTION-object call-site `this` — effect's `TagClass`, a
-        // plain function given the Tag class prototype via
-        // `Object.setPrototypeOf(TagClass, Object.getPrototypeOf(tagInstance))` —
-        // is a legitimate spec receiver for an inherited class method
-        // (`TagClass.pipe(...)`: `pipe` lives on the Tag class prototype and
-        // must run with `this === TagClass`). `class_id_from_method_receiver`
-        // deliberately rejects closures (reading `class_id` off a
-        // `ClosureHeader` is type confusion), but that guard protects
-        // RESOLUTION — and `dispatch_bound_method` resolves the method from
-        // the CAPTURED owner proto-ref, never from this substituted receiver.
-        // Passing the closure through only changes the `this` the body
-        // observes, which previously leaked the INT32 proto-ref marker
-        // (`typeof this === "number"`): effect's Pipeable composed against
-        // it, `HttpApiBuilder.group(...)` returned a curried function instead
-        // of a Layer, and web.ts died with "Not a valid effect: undefined".
-        let jv = JSValue::from_bits(call_this.to_bits());
-        if jv.is_pointer() {
-            let raw = (call_this.to_bits() & crate::value::POINTER_MASK) as usize;
-            if crate::closure::is_closure_ptr(raw) {
-                return call_this;
-            }
-            // #11201: an ordinary class-id-0 object (`Object.create(...)`,
-            // `setPrototypeOf(Object.create(null), C.prototype)`) is a receiver
-            // too; rejecting it leaked the owner marker as `this`. Reached only
-            // after the class-instance test fails, so that path is unchanged.
-            if is_class_id_zero_ordinary_object(raw) {
-                return call_this;
-            }
-        }
+        // The captured prototype identifies the method's owner, not its receiver.
+        // Class methods are strict: every call-site value, including null,
+        // undefined, primitives and arrays, must reach the body unchanged.
+        // Dispatch resolves the body from the captured owner independently.
+        super::js_implicit_this_get()
+    } else {
+        captured
     }
-    captured
-}
-
-/// A `GC_TYPE_OBJECT` heap object whose class id is 0. Never allocates.
-fn is_class_id_zero_ordinary_object(addr: usize) -> bool {
-    // SAFETY: `try_read_gc_header` rejects the handle band and implausible
-    // addresses before it reads anything.
-    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
-        && crate::object::js_object_get_class_id(addr as *const ObjectHeader) == 0
 }
 
 /// The `class_id` of `instance`, when `instance` really is a class instance.

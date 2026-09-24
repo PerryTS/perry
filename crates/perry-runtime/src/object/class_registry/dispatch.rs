@@ -462,9 +462,9 @@ pub(crate) unsafe fn call_vtable_method(
     has_synthetic_arguments: bool,
     has_rest: bool,
 ) -> f64 {
-    call_vtable_method_inner(
+    call_vtable_method_value(
         func_ptr,
-        this,
+        legacy_method_receiver(this),
         args_ptr,
         args_len,
         param_count,
@@ -484,9 +484,9 @@ pub(crate) unsafe fn call_vtable_method_with_private_brand(
     has_rest: bool,
     private_brand: f64,
 ) -> f64 {
-    call_vtable_method_inner(
+    call_vtable_method_value(
         func_ptr,
-        this,
+        legacy_method_receiver(this),
         args_ptr,
         args_len,
         param_count,
@@ -496,9 +496,21 @@ pub(crate) unsafe fn call_vtable_method_with_private_brand(
     )
 }
 
-unsafe fn call_vtable_method_inner(
+/// Convert the legacy dispatch ABI, which accepts raw object pointers or tagged values.
+fn legacy_method_receiver(this: i64) -> f64 {
+    let bits = this as u64;
+    if bits != 0 && bits <= crate::value::POINTER_MASK {
+        f64::from_bits(JSValue::pointer(bits as *mut u8).bits())
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+/// Dispatch with an already boxed JavaScript receiver. In particular, positive
+/// subnormal numbers must not be mistaken for legacy raw object pointers.
+pub(crate) unsafe fn call_vtable_method_value(
     func_ptr: usize,
-    this: i64,
+    this_f64: f64,
     args_ptr: *const f64,
     args_len: usize,
     param_count: u32,
@@ -506,37 +518,6 @@ unsafe fn call_vtable_method_inner(
     has_rest: bool,
     explicit_private_brand: Option<f64>,
 ) -> f64 {
-    // (`arg_or_undefined` — the spec-correct missing-argument padding — is a
-    // module-level helper now, shared with `call_fn_with_this_and_args`.)
-
-    // LLVM-generated methods have signature `double(double this, double arg0, ...)`.
-    // `this` is NaN-boxed as f64, so we must pass it as f64 — not i64 — to match
-    // the calling convention. On ARM64 i64 and f64 share registers, so passing i64
-    // works by accident; on Windows x64 ABI they use *different* registers (rcx vs
-    // xmm0), causing segfaults when the method reads `this` from the wrong register.
-    //
-    // Issue #519: all call sites pass `this` as a RAW POINTER (the bottom-48-bit
-    // address from `jsval.as_pointer()`). Bit-casting raw pointer bits to f64
-    // produces a subnormal float (no NaN-box tag), which the method body
-    // interprets as a number — every nested method call inside the body sees
-    // `(number).<method>` and either returns garbage or throws TypeError via
-    // the issue #510 catch-all (e.g. RegExpRouter.match → `this.buildAllMatchers()`
-    // → "(number).buildAllMatchers is not a function" inside SmartRouter's
-    // dispatch chain). NaN-box with POINTER_TAG before passing so the body
-    // sees a real instance pointer.
-    let this_f64: f64 = {
-        let bits = this as u64;
-        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        if bits != 0 && bits <= PTR_MASK {
-            // Raw pointer (no NaN-box tag) — wrap with POINTER_TAG so the
-            // method body's `this` arrives as a real instance pointer.
-            f64::from_bits(JSValue::pointer(bits as *mut u8).bits())
-        } else {
-            // Already NaN-boxed (top bits set) or null — pass through.
-            f64::from_bits(bits)
-        }
-    };
-
     // A trailing param that is either the synthesized `arguments` object or a
     // user rest param (`method(a, ...rest)`) needs the call-site args bundled
     // into a JS array for that slot. Without this, an apply/dynamic dispatch

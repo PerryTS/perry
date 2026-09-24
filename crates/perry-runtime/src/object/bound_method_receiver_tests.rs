@@ -132,9 +132,9 @@ fn class_method_value_runs_with_a_class_id_zero_receiver_as_this() {
             instance_value.to_bits()
         );
 
-        // A non-object receiver still gets the marker, not a reinterpretation.
+        // Strict class methods preserve primitive receivers too.
         let number = 7.0f64;
-        assert_ne!(call_with_this(method, number).to_bits(), number.to_bits());
+        assert_eq!(call_with_this(method, number).to_bits(), number.to_bits());
     }
 }
 
@@ -160,5 +160,36 @@ fn inherited_class_setter_runs_for_a_class_id_zero_receiver() {
             js_object_get_field_by_name(obj, key).is_undefined(),
             "the write must not create an own data property that shadows the setter"
         );
+    }
+}
+
+#[test]
+fn class_method_value_preserves_primitive_and_array_receivers() {
+    let _scope = Scope::new();
+    unsafe {
+        let (method, _) = register_class();
+        let text = crate::string::js_string_from_bytes(b"receiver".as_ptr(), 8);
+        let array = crate::array::js_array_alloc(0);
+        let receivers = [
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_FALSE),
+            0.0,
+            -0.0,
+            7.0,
+            f64::NAN,
+            f64::from_bits(1),
+            crate::value::js_nanbox_string(text as i64),
+            crate::value::js_nanbox_pointer(array as i64),
+        ];
+        for receiver in receivers {
+            assert_eq!(
+                call_with_this(method, receiver).to_bits(),
+                receiver.to_bits(),
+                "strict class method must preserve receiver bits {:#x}",
+                receiver.to_bits()
+            );
+        }
     }
 }
