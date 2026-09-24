@@ -54,3 +54,11 @@ fn redirect_shorthand_is_preserved() {
         "shorthand redirect option must remain attached to FetchWithOptions"
     );
 }
+
+#[test]
+fn absent_redirect_lowers_to_none() {
+    let module = lower_src(r#"fetch("http://example.test/start", { method: "GET" });"#)
+        .expect("fetch without redirect should lower");
+
+    assert!(redirect_expr(&module).is_none());
+}

@@ -1,0 +1,6 @@
+`fetch` redirects now match Node 26.5.1's observable results beyond mode selection (which #11066's port, 42fcb5f66b, already restored):
+
+- `redirect: 'error'` hitting a 3xx now rejects with `TypeError: fetch failed` whose cause is `Error("unexpected redirect")` with no `.code`. It used to surface turnloop-http's `redirect mode is error` with `code: 'UND_ERR_REQ_RETRY'`. Exceeding the 20-redirect limit likewise rejects with `Error("redirect count exceeded")` and no `.code`, where the old cause carried `UND_ERR_REDIRECT` (`turnloop_bridge::failure_for`).
+- `Response.type` is `"cors"` once a followed redirect hop leaves the request's first origin, and it stays `"cors"` even if a later hop returns (A -> B -> A), which is undici's sticky response tainting. It was hardcoded to `"basic"`. A direct request to another origin with no redirect stays `"basic"`. The engine tracks this as `ResponseOut::cross_origin_redirect`.
+
+Adds `test-files/test_gap_fetch_redirect_modes.ts`: two local `node:http` servers (a genuine second origin) driving follow/manual/error across 301-308, a mixed chain, cross-origin hops (including A -> B -> A), a direct cross-origin request, and a redirect-limit loop. Also adds an `absent_redirect_lowers_to_none` HIR lowering test.
