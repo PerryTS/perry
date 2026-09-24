@@ -180,7 +180,8 @@ fn map_store_survives_tenured_evacuation_sweeps_and_exit_walk() {
 }
 
 /// Old-page defrag moves an old Map and releases the original's FORWARDED
-/// bit the same way; its store must stay with the copy too.
+/// bit the same way; its store must stay with the copy too. Defrag is opt-in
+/// on the allocation path and armed by idle compaction; the test enables it.
 #[test]
 fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
     on_fresh_thread(|| {
@@ -188,6 +189,7 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _barriers = GeneratedWriteBarrierTestGuard::active();
         let _force = ForcedEvacuationTestGuard::on();
+        let _defrag = super::super::oldgen_defrag::OldDefragTestEnable::new();
         let _scan = ConservativeScanDisabledGuard::new();
         reset_shadow_stack();
         reset_global_roots();
@@ -222,9 +224,14 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
         );
 
         let before = test_map_side_deallocation_snapshot();
-        let trace = collect_minor_trace(GcTriggerKind::Direct);
+        // Defrag runs in the non-copying minor's evacuation phase.
+        let trace = {
+            let _copy_only = TemporaryCopyOnlyRootScanner::rust_bits(&[]);
+            collect_minor_trace(GcTriggerKind::Direct)
+        };
         let moved = ptr_from_slot(0);
         assert_ne!(moved, old_map, "old-page defrag must actually move the Map");
+        assert!(trace.evacuation.released_original_objects > 0);
         assert!(trace.evacuation.old_page_moved_objects > 0);
         assert_eq!(
             dealloc_delta(before),
@@ -251,9 +258,9 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
 /// #6010: a dead Map in the ACTIVE nursery block must be finalized by a
 /// minor that does not copy, both monolithic (the copy-only-roots fallback)
 /// and budgeted (always non-moving), not only by full cycles or the copying
-/// minor's from-space walk. Barriers stay active: without them a minor keeps
-/// every young object (the dead Map is marked and age-bumped), so nothing is
-/// dead for it to finalize.
+/// minor's from-space walk. The Map is alone in its block: a reachable
+/// neighbour in a recent block would make block persistence force-mark it,
+/// and a force-marked Map is live, not leaked.
 #[test]
 fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
     for budgeted in [false, true] {
@@ -266,13 +273,10 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
             reset_global_roots();
             reset_remembered_set();
             let _roots = ShadowAndGlobalRootResetGuard;
-            let frame = js_shadow_frame_push(1);
-            let live = js_map_alloc(8);
-            js_map_set(live, 42.0, 99.0);
-            js_shadow_slot_set(0, ptr_bits(live as usize));
             let dead = js_map_alloc(8);
             js_map_set(dead, 1.0, 2.0);
             let from_space_before = test_from_space_map_finalizations();
+            let force_marks_before = crate::gc::block_persist_force_mark_count();
 
             let before = test_map_side_deallocation_snapshot();
             let trace = if budgeted {
@@ -297,6 +301,11 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
                 "the subject is a non-copying minor"
             );
             assert_eq!(
+                crate::gc::block_persist_force_mark_count(),
+                force_marks_before,
+                "block persistence kept the Map alive; the fixture proves nothing"
+            );
+            assert_eq!(
                 test_from_space_map_finalizations(),
                 from_space_before,
                 "the copying minor's from-space walk must not be what freed it"
@@ -306,11 +315,8 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
                 (1, 128),
                 "the dead Map's store must be freed by the minor that found it dead"
             );
-            let live = ptr_from_slot(0);
-            assert_eq!(js_map_get(live, 42.0), 99.0);
             release_current_thread_map_side_allocations();
-            assert_eq!(dealloc_delta(before), (2, 256));
-            js_shadow_frame_pop(frame);
+            assert_eq!(dealloc_delta(before), (1, 128), "and never freed again");
         });
     }
 }
