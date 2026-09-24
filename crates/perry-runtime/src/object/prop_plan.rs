@@ -118,8 +118,32 @@ struct PlanEntry {
     epoch: u64,
     /// [`super::class_registry::VTABLE_GEN`] at record time.
     vtable_gen: u64,
+    /// The receiver's recorded `[[Prototype]]` (`ObjectMeta.prototype`, 0
+    /// when its class implies it) the verdict was computed for. A class id
+    /// alone does NOT name the chain: `F.prototype = other` re-points a
+    /// function's prototype without minting a new synthetic class id, so
+    /// instances built before and after carry the same class id and the same
+    /// shape over DIFFERENT chains. Compare-only: an epoch window has no
+    /// collection in it (`PROP_PLAN_EPOCH` is bumped by every one), so the
+    /// address cannot be reused under an entry.
+    proto_bits: u64,
     /// Receiver class id the verdict was computed for.
     class_id: u32,
+}
+
+/// The receiver's recorded prototype bits, the chain half of a plan's
+/// identity: `ObjectMeta.prototype`, or 0 with no meta record.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+#[inline]
+pub(crate) unsafe fn receiver_proto_bits(obj: *const super::ObjectHeader) -> u64 {
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        0
+    } else {
+        (*meta).prototype
+    }
 }
 
 const PLAN_CACHE_SIZE: usize = 4096;
@@ -135,6 +159,7 @@ crate::perry_thread_local! {
                     key_ptr: 0,
                     epoch: 0,
                     vtable_gen: 0,
+                    proto_bits: 0,
                     class_id: 0,
                 };
                 PLAN_CACHE_SIZE
@@ -156,9 +181,11 @@ fn plan_diag_enabled() -> bool {
     *crate::once_init::get_or_init(&ON, || std::env::var_os("PERRY_PLAN_DIAG").is_some())
 }
 
-/// Does a valid fast-store verdict exist for (class_id, interned key)?
+/// Does a valid fast-store verdict exist for (class_id, interned key) on a
+/// receiver whose recorded prototype is `proto_bits`
+/// ([`receiver_proto_bits`])?
 #[inline]
-pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize) -> bool {
+pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize, proto_bits: u64) -> bool {
     if class_id == 0 || key_ptr == 0 {
         return false;
     }
@@ -167,6 +194,7 @@ pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize) -> bool {
         let e = (*c.get())[slot];
         e.key_ptr == key_ptr
             && e.class_id == class_id
+            && e.proto_bits == proto_bits
             && e.epoch == PROP_PLAN_EPOCH.load(Ordering::Relaxed)
             && e.vtable_gen == super::class_registry::vtable_generation()
     });
@@ -191,7 +219,7 @@ pub(crate) fn store_plan_check(class_id: u32, key_ptr: usize) -> bool {
 /// Record a fast-store verdict for (class_id, interned key). Caller has just
 /// completed the full interception vet with a negative result.
 #[inline]
-pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize) {
+pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize, proto_bits: u64) {
     if class_id == 0 || key_ptr == 0 {
         return;
     }
@@ -201,6 +229,7 @@ pub(crate) fn store_plan_record(class_id: u32, key_ptr: usize) {
             key_ptr,
             epoch: PROP_PLAN_EPOCH.load(Ordering::Relaxed),
             vtable_gen: super::class_registry::vtable_generation(),
+            proto_bits,
             class_id,
         };
     });
@@ -323,8 +352,8 @@ mod tests {
     /// only the positive direction needs this.
     fn store_plan_records_and_hits(class_id: u32, key_ptr: usize) -> bool {
         (0..64).any(|_| {
-            store_plan_record(class_id, key_ptr);
-            store_plan_check(class_id, key_ptr)
+            store_plan_record(class_id, key_ptr, 0);
+            store_plan_check(class_id, key_ptr, 0)
         })
     }
 
@@ -333,11 +362,11 @@ mod tests {
         let key = 0xDEAD_BEE0usize;
         assert!(store_plan_records_and_hits(7, key));
         // Different class or key misses.
-        assert!(!store_plan_check(8, key));
-        assert!(!store_plan_check(7, key + 16));
+        assert!(!store_plan_check(8, key, 0));
+        assert!(!store_plan_check(7, key + 16, 0));
         // Epoch bump invalidates.
         prop_plan_epoch_bump();
-        assert!(!store_plan_check(7, key));
+        assert!(!store_plan_check(7, key, 0));
         // Re-record under the new epoch works again.
         assert!(store_plan_records_and_hits(7, key));
     }
@@ -347,7 +376,22 @@ mod tests {
         let key = 0xBEEF_00F0usize;
         assert!(store_plan_records_and_hits(9, key));
         crate::object::class_registry::test_bump_vtable_generation();
-        assert!(!store_plan_check(9, key));
+        assert!(!store_plan_check(9, key, 0));
+    }
+
+    /// A class id does not name a chain: after `F.prototype = other`, old and
+    /// new instances of `F` share their class id over different prototypes,
+    /// so a verdict recorded for one prototype must not serve the other.
+    #[test]
+    fn a_verdict_for_one_prototype_does_not_serve_another() {
+        let key = 0xFACE_0100usize;
+        let (old_proto, new_proto) = (0x7FFD_0000_1234_5000u64, 0x7FFD_0000_1234_6000u64);
+        assert!((0..64).any(|_| {
+            store_plan_record(11, key, old_proto);
+            store_plan_check(11, key, old_proto)
+        }));
+        assert!(!store_plan_check(11, key, new_proto));
+        assert!(!store_plan_check(11, key, 0));
     }
 
     #[test]
@@ -373,9 +417,9 @@ mod tests {
 
     #[test]
     fn class_zero_and_null_key_never_cache() {
-        store_plan_record(0, 0x1000);
-        assert!(!store_plan_check(0, 0x1000));
-        store_plan_record(3, 0);
-        assert!(!store_plan_check(3, 0));
+        store_plan_record(0, 0x1000, 0);
+        assert!(!store_plan_check(0, 0x1000, 0));
+        store_plan_record(3, 0, 0);
+        assert!(!store_plan_check(3, 0, 0));
     }
 }

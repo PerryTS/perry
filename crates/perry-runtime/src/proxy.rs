@@ -2105,15 +2105,26 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                                 )
                                 && interned != 0;
                             let verdict = if plan_eligible
-                                && crate::object::prop_plan::store_plan_check(class_id, interned)
-                            {
+                                && crate::object::prop_plan::store_plan_check(
+                                    class_id,
+                                    interned,
+                                    crate::object::prop_plan::receiver_proto_bits(
+                                        addr as *const crate::ObjectHeader,
+                                    ),
+                                ) {
                                 true
                             } else {
                                 let clear = !crate::object::class_instance_set_may_intercept(
                                     addr, class_id, key,
                                 );
                                 if clear && plan_eligible {
-                                    crate::object::prop_plan::store_plan_record(class_id, interned);
+                                    crate::object::prop_plan::store_plan_record(
+                                        class_id,
+                                        interned,
+                                        crate::object::prop_plan::receiver_proto_bits(
+                                            cur_addr() as *const crate::ObjectHeader
+                                        ),
+                                    );
                                 }
                                 clear
                             };

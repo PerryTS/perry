@@ -205,7 +205,11 @@ pub extern "C" fn js_object_set_field_by_name(
                         // index below the floor.
                         && crate::object::reserved_slot_floor_for_class_id(class_id) == 0
                         && !super::prototype_chain::object_has_prototype_divergence(raw)
-                        && super::prop_plan::store_plan_check(class_id, key as usize)
+                        && super::prop_plan::store_plan_check(
+                            class_id,
+                            key as usize,
+                            super::prop_plan::receiver_proto_bits(o),
+                        )
                     {
                         let prev_shape_id = super::shapes::object_shape_stamp(o);
                         if prev_shape_id != 0 {

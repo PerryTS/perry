@@ -303,7 +303,11 @@ pub(crate) fn set_field_by_name_object_tail(
                 ))
             && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
         let plan_fast = plan_eligible
-            && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
+            && super::prop_plan::store_plan_check(
+                obj_class_id,
+                interned_key as usize,
+                super::prop_plan::receiver_proto_bits(obj),
+            );
 
         // A per-evaluation class object carries dynamically installed static
         // accessors in the descriptor side table, not in its ordinary field
@@ -551,7 +555,11 @@ pub(crate) fn set_field_by_name_object_tail(
                 && desc_gate_ok
                 && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
             if !plan_fast && record_plan_eligible {
-                super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
+                super::prop_plan::store_plan_record(
+                    obj_class_id,
+                    interned_key as usize,
+                    super::prop_plan::receiver_proto_bits(obj),
+                );
             }
             let lane_probe = transition_cache_lookup(prev_shape_id, interned_key);
             if let Some((next_keys, slot_idx, target_shape_id)) = lane_probe {
