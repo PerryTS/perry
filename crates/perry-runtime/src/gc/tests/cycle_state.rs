@@ -1634,7 +1634,9 @@ fn full_cycle_prototype_object_store_after_root_scan_preserves_new_value() {
         "full cycle should keep root barriers active after root scan"
     );
 
-    let _created = crate::object::js_object_create(f64::from_bits(ptr_bits(child as usize)));
+    // Exercise the permanent class registry directly: Object.create now
+    // records an owner-traced edge and must not populate this root table.
+    crate::object::class_prototype_object_root_store(0x5104, child.cast());
     run_cycle_in_single_unit_steps(&mut state);
 
     assert!(

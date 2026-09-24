@@ -383,10 +383,8 @@ fn several_object_create_receivers_do_not_evict_each_other() {
     unsafe {
         let proto = crate::object::js_object_alloc(0, 4);
         set(proto, "irc_shared", 13.0);
-        // Eight receivers built the same way. `js_object_create` mints a FRESH
-        // synthetic class id per call, so these have eight DIFFERENT class ids
-        // and one identical shape — and the slot index hashed only
-        // (shape, key), so all eight landed in one direct-mapped slot.
+        // Fresh objects sharing a prototype also share a class id and shape.
+        // Their inherited lookup should reuse a single cache entry.
         let mut objs = Vec::new();
         for i in 0..8 {
             let created = crate::object::js_object_create(boxed(proto));
@@ -411,15 +409,7 @@ fn several_object_create_receivers_do_not_evict_each_other() {
         let neg = inherited_read_cache_neg_served();
         let reads = (objs.len() * rounds) as u64;
 
-        assert_eq!(
-            primes,
-            objs.len() as u64,
-            "primed {primes} times for {} receivers. Exactly one prime per \
-             receiver is the property: more means the entries are evicting \
-             each other and every read pays a full chain walk AND an entry \
-             write",
-            objs.len()
-        );
+        assert_eq!(primes, 1, "equivalent receivers should share one cache entry");
 
         // At most ONE decline, and it is expected rather than tolerated.
         //

@@ -1,0 +1,3 @@
+Fix `Object.create(proto)` permanently retaining prototypes and consuming a synthetic class ID on every call. Created objects now carry the existing GC-traced per-object prototype link, so class-ID exhaustion cannot silently remove their prototype. Fresh links preserve individual-chain dispatch without invalidating class lookup, property-plan, or array element-shape caches. Root both endpoints across prototype metadata allocation.
+
+Regression coverage checks repeated creation, prototype identity and live inheritance, null prototypes, absence of permanent class roots, unchanged cache epochs, and a copying collection with only the descendant rooted.

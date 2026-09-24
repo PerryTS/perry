@@ -56,118 +56,38 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     f64::from_bits(bits)
 }
 
-/// Object.create(proto) — create empty object. Perry ignores prototype; Object.create(null) returns {}.
+/// Object.create(proto) — create an empty object with an owner-traced prototype.
 #[no_mangle]
 pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
-    // #809: actually wire up the prototype. Pre-fix this ignored its
-    // argument entirely, so `Object.create(Proto)` returned a bare empty
-    // object — `inst.method()` / `inst.prop` saw nothing and threw
-    // `TypeError: <m> is not a function`. Reuse the #711 prototype-object
-    // machinery: allocate a synthetic class_id, map it to `proto` in
-    // CLASS_PROTOTYPE_OBJECTS, and stamp the new object with that id. The
-    // chain walk in `js_object_get_field_by_name` (the `class_id != 0`
-    // branch) then resolves missing own props/methods off `proto`.
-    //
-    // `Object.create(null)` (or a non-object proto / a builtin-backed
-    // Set/Map/Regex source Perry can't model as a prototype) falls back
-    // to the original behavior: a plain prototype-less object.
-    const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-
-    // `Object.create(proxy)` — a Proxy is a small registered id, not a real
-    // heap pointer, so the synthetic-class-id modeling below (which stores a
-    // REAL prototype pointer) can't represent it, and the `is_valid_obj_ptr`
-    // check would reject it outright (falling back to a plain, prototype-less
-    // object — wrong: reads/writes/`in` on the result must still route through
-    // the proxy). Record it in the SAME observable `[[Prototype]]` side table
-    // `Object.setPrototypeOf` uses instead: a plain (class_id 0, non-null-proto)
-    // object whose prototype hop the generic chain walks (`ordinary_has_property`,
-    // `own_set_descriptor`'s `prototype_of_for_set`, field-get) already resolve
-    // through the proxy's traps. (test262 has/call-in-prototype.js,
-    // has/call-object-create.js, set/call-parameters-prototype.js.)
-    if crate::proxy::js_proxy_is_proxy(proto_value) != 0 {
-        let obj = js_object_alloc(0, 0);
-        crate::object::prototype_chain::object_set_user_prototype(
-            obj as usize,
-            proto_value.to_bits(),
-        );
-        return f64::from_bits((obj as u64) | POINTER_TAG);
-    }
-
-    // Integer-indexed exotic objects are valid prototypes even though their
-    // TypedArrayHeader cannot be modeled as an ObjectHeader-backed synthetic
-    // class prototype.  Preserve the exact object identity in the ordinary
-    // per-instance prototype side table so its [[Set]] intercepts canonical
-    // numeric keys on descendants.
-    if crate::typedarray_props::typed_array_addr_from_value(proto_value).is_some() {
-        let obj = js_object_alloc(0, 0);
-        crate::object::prototype_chain::object_set_user_prototype(
-            obj as usize,
-            proto_value.to_bits(),
-        );
-        return f64::from_bits((obj as u64) | POINTER_TAG);
-    }
-
-    let mut class_id: u32 = 0;
-    let proto_bits = proto_value.to_bits();
-    if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
-        let proto_ptr = crate::value::js_nanbox_get_pointer(proto_value) as *mut ObjectHeader;
-        if !proto_ptr.is_null() && (proto_ptr as usize) > 0x10000 {
-            let proto_addr = proto_ptr as usize;
-            let modellable = !(crate::set::is_registered_set(proto_addr)
-                || crate::map::is_registered_map(proto_addr)
-                || crate::regex::is_regex_pointer(proto_ptr as *const u8));
-            let valid = modellable && is_valid_obj_ptr(proto_ptr as *const u8);
-            if valid {
-                let cid = crate::object::class_registry::alloc_synthetic_class_id();
-                class_prototype_object_root_store(cid, proto_ptr);
-                unsafe { js_register_class_id(cid) };
-                // #1805: link the synthetic class_id into the original class's
-                // inheritance chain. `Object.getPrototypeOf(instance)` returns
-                // the instance pointer itself in Perry's model (see
-                // `js_object_get_prototype_of`), so `proto_ptr` here is a real
-                // class instance whose `class_id` field IS the user class's
-                // id. Registering it as the synthetic cid's parent lets
-                // `js_instanceof`'s `get_parent_class_id` walk reach the
-                // original class and match — without this, the chain stopped
-                // at the unregistered synthetic id and `Object.create(proto)
-                // instanceof C` was always false even though property /
-                // getter dispatch through the chain worked correctly.
-                let parent_class_id = unsafe { (*proto_ptr).class_id };
-                // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
-                // sentinel tagging native-module namespace objects, NOT a real
-                // declared class. Registering it as a synthetic class's parent
-                // makes `get_parent_class_id` return it, and
-                // `js_object_get_prototype_of`'s class-ref branch then returns
-                // the raw sentinel as an INT32-tagged class ref (`-2`).
-                // `Object.create(that)` rejects it with
-                // `TypeError: Object prototype may only be an Object or null: -2`
-                // (rolldown's `__toESM` → `Object.create(Object.getPrototypeOf(mod))`
-                // chain). Skip the registration so the synthetic class is treated
-                // as a root — its prototype is already stored in
-                // `CLASS_PROTOTYPE_OBJECTS` by `class_prototype_object_root_store`
-                // above, which is what `getPrototypeOf` reads.
-                if parent_class_id != 0
-                    && parent_class_id != cid
-                    && parent_class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
-                {
-                    register_class(cid, parent_class_id);
-                }
-                class_id = cid;
+    // Keep the existing accepted prototype kinds, but store their identity on
+    // the instance instead of permanently rooting them under a new class id.
+    let valid = crate::proxy::js_proxy_is_proxy(proto_value) != 0
+        || crate::typedarray_props::typed_array_addr_from_value(proto_value).is_some()
+        || {
+            let value = crate::value::JSValue::from_bits(proto_value.to_bits());
+            if value.is_pointer() {
+                let ptr = value.as_pointer::<ObjectHeader>();
+                let addr = ptr as usize;
+                crate::value::addr_class::is_above_handle_band(addr)
+                    && !crate::set::is_registered_set(addr)
+                    && !crate::map::is_registered_map(addr)
+                    && !crate::regex::is_regex_pointer(ptr as *const u8)
+                    && is_valid_obj_ptr(ptr as *const u8)
+            } else {
+                false
             }
-        }
+        };
+    if !valid {
+        return crate::value::js_nanbox_pointer(js_object_alloc_null_proto(0, 0) as i64);
     }
-    // #1175: when `proto_value` is null/undefined/non-object, the resulting
-    // object has no [[Prototype]]. Stamp OBJ_FLAG_NULL_PROTO so
-    // `Object.getPrototypeOf(Object.create(null))` returns null (it
-    // previously returned the object itself).
-    let null_proto = class_id == 0;
-    let obj = if null_proto {
-        js_object_alloc_null_proto(class_id, 0)
-    } else {
-        js_object_alloc(class_id, 0)
-    };
-    // Return NaN-boxed pointer
-    f64::from_bits((obj as u64) | 0x7FFD_0000_0000_0000)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto_value);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 0));
+    crate::object::prototype_chain::object_link_created_prototype(
+        obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
+        proto.get_nanbox_u64(),
+    );
+    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
 /// Object.getPrototypeOf(obj):

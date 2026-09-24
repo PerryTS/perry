@@ -194,7 +194,7 @@ per_test_global! {
 /// collides with the reserved builtin ids (`0xFFFF_0000..`), and on u32 wrap
 /// it lands back in — among others — the ShapeId range. Exhaustion is
 /// unreachable in practice (2^30 ids, one per distinct
-/// `Object.create(proto)` / `F.prototype = X` FUNCTION, not per call), so
+/// function constructor / `F.prototype = X` function, not per instance), so
 /// saturating is the conservative answer: `0` means "no synthetic id", which
 /// every caller already handles as "stays parentless".
 pub(crate) fn alloc_synthetic_class_id() -> u32 {
