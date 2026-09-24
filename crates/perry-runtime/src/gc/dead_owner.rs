@@ -480,6 +480,12 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
     },
     DeadKeyPrune {
+        table: "dyn_eval::CLOSURE_FN_IDS + FN_REGISTRY",
+        owner: DeadKeyOwner::Closure,
+        prune: crate::dyn_eval::prune_dead_function_owners,
+        young_prune: None,
+    },
+    DeadKeyPrune {
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
         owner: DeadKeyOwner::Closure,
         prune: crate::object::prune_dead_builtin_closure_metadata_owners,

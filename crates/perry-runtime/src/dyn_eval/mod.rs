@@ -58,6 +58,10 @@ mod bridge;
 mod env;
 mod expr;
 mod interp;
+mod registry_lifetime;
+#[cfg(test)]
+pub(crate) use registry_lifetime::register_closure;
+pub(crate) use registry_lifetime::{function_owner_moved, prune_dead_function_owners};
 #[cfg(test)]
 mod tests;
 
@@ -83,9 +87,8 @@ pub(crate) enum InterpBody {
 }
 
 thread_local! {
-    /// id → parsed function. Entries live for the program's lifetime (one per
-    /// distinct nested function per `new Function` call — bounded by the
-    /// number of codegen sites, not by request volume).
+    /// id → parsed function. GC prunes entries with no live closure, active
+    /// invocation/construction, or bounded source-cache entry. See registry_lifetime.
     static FN_REGISTRY: RefCell<HashMap<u32, Rc<InterpFn>>> =
         RefCell::new(HashMap::new());
     static NEXT_FN_ID: Cell<u32> = const { Cell::new(1) };
@@ -283,6 +286,7 @@ pub(crate) fn roots_len() -> usize {
 }
 
 pub(crate) fn roots_truncate(len: usize) {
+    registry_lifetime::release_function_pins(len);
     ROOTS.with(|r| {
         let mut v = r.borrow_mut();
         if v.len() > len {
@@ -359,15 +363,13 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
     let fn_id = prepare_function_args(args);
-    let function_length = lookup_fn(fn_id)
-        .map(|function| {
-            function
-                .params
-                .iter()
-                .take_while(|pat| !matches!(pat, ast::Pat::Assign(_) | ast::Pat::Rest(_)))
-                .count()
-        })
-        .unwrap_or(0);
+    // Keep the prepared AST alive across environment/closure allocations.
+    let prepared = registry_lifetime::pin_function(fn_id).expect("just prepared function");
+    let function_length = prepared
+        .params
+        .iter()
+        .take_while(|pat| !matches!(pat, ast::Pat::Assign(_) | ast::Pat::Rest(_)))
+        .count();
     // Preserve Function-constructor semantics: each instance owns a private
     // sloppy-assignment root, while universal globals resolve in this realm.
     let base = roots_len();
@@ -459,6 +461,7 @@ pub(crate) fn function_from_strings_in_with_codegen(
         .map(root_push)
         .collect::<Vec<_>>();
     let fn_id = prepare_function_args(args);
+    let _prepared = registry_lifetime::pin_function(fn_id).expect("just prepared function");
     let rooted_object_envs = object_env_idxs
         .iter()
         .map(|&idx| root_get(idx))

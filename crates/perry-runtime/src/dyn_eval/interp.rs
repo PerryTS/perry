@@ -17,7 +17,7 @@ use perry_parser::swc_ecma_ast as ast;
 use super::bridge::{self, throw_unsupported};
 use super::expr::eval_expr;
 use super::{
-    call_depth_enter, call_depth_leave, env, lookup_fn, root_get, root_push, root_set, roots_len,
+    call_depth_enter, call_depth_leave, env, root_get, root_push, root_set, roots_len,
     roots_truncate, InterpBody, InterpFn,
 };
 
@@ -54,9 +54,13 @@ crate::perry_thread_local! {
     /// AST-node address → registered fn id. Nested function/arrow expressions
     /// evaluate many times (ajv validators run per request); registering the
     /// node once keeps the registry bounded by the number of syntactic
-    /// functions. Addresses are stable because `FN_REGISTRY` holds every
-    /// `InterpFn` alive for the program's lifetime.
+    /// functions. Registry pruning clears this cache before freeing any AST,
+    /// so a recycled node address cannot resolve to an unrelated function.
     static NODE_FN_IDS: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
+}
+
+pub(super) fn clear_node_fn_cache() {
+    NODE_FN_IDS.with(|m| m.borrow_mut().clear());
 }
 
 fn fn_id_for_node(addr: usize, build: impl FnOnce() -> InterpFn) -> u32 {
@@ -230,6 +234,9 @@ pub(crate) fn alloc_interp_closure(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    // Allocation may collect before the closure has an owner-table entry.
+    let _prepared =
+        super::registry_lifetime::pin_function(fn_id).expect("registered interpreted function");
     ensure_thunk_registered();
     let env_idx = root_push(def_env);
     let this_idx = root_push(lexical_this.unwrap_or(f64::from_bits(NO_LEXICAL_THIS)));
@@ -252,6 +259,7 @@ pub(crate) fn alloc_interp_closure(
     unsafe {
         crate::closure::rebuild_closure_layout_and_barriers(closure, 7);
     }
+    super::registry_lifetime::register_closure(closure as usize, fn_id);
     roots_truncate(env_idx);
     crate::value::js_nanbox_pointer(closure as i64)
 }
@@ -338,7 +346,7 @@ pub(crate) fn invoke_interp_fn(
     is_arrow: bool,
     args: &[f64],
 ) -> f64 {
-    let fun = match lookup_fn(fn_id) {
+    let fun = match super::registry_lifetime::pin_function(fn_id) {
         Some(f) => f,
         None => bridge::throw_type_error(
             "perry runtime interpreter (#6559): interpreted function is not available on this \
@@ -450,6 +458,8 @@ pub(crate) fn make_function_value(
     env_idx: usize,
 ) -> f64 {
     let fn_id = fn_id_for_node(node_addr, || build_interp_fn(params, body, ctx.strict));
+    let _prepared =
+        super::registry_lifetime::pin_function(fn_id).expect("registered nested function");
     let lexical_this = if is_arrow {
         Some(root_get(ctx.this_idx))
     } else {
@@ -1182,8 +1192,8 @@ pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: u
             // `Class` node itself (there is no dedicated AST node for a
             // synthesized constructor) — only used as a cache key, stable
             // for the same reason every other node-address key here is:
-            // `FN_REGISTRY` keeps the owning `InterpFn` (and therefore this
-            // address) alive for the program's lifetime.
+            // the running call pins its AST, and registry pruning clears
+            // the node cache before releasing any AST.
             fn_id_for_node(class as *const ast::Class as usize, || {
                 build_interp_fn(Vec::new(), InterpBody::Block(Vec::new()), ctx.strict)
             })
