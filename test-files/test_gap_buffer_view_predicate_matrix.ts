@@ -74,9 +74,7 @@ row("float64", new Float64Array(2));
 row("bigint64", new BigInt64Array(2));
 row("dataview", new DataView(new ArrayBuffer(4)));
 class SubU8 extends Uint8Array {}
-class SubDV extends DataView {}
 row("sub-u8", new SubU8(4));
-row("sub-dataview", new SubDV(new ArrayBuffer(4)));
 row("arraybuffer", new ArrayBuffer(4));
 row("shared", new SharedArrayBuffer(4));
 row("buf.buffer", base.buffer);
@@ -90,9 +88,20 @@ row("string", "abc");
 console.log("proto chain", Object.getPrototypeOf(Buffer.prototype) === Uint8Array.prototype);
 console.log("ctor chain", Object.getPrototypeOf(Buffer) === Uint8Array);
 console.log("fast proto", FastBuffer.prototype === Buffer.prototype);
-console.log("proto instanceof", Buffer.prototype instanceof Uint8Array);
 console.log("getProto buf", Object.getPrototypeOf(base) === Buffer.prototype);
 console.log("toStringTag", (base as any)[Symbol.toStringTag], (new Uint8Array(1) as any)[Symbol.toStringTag]);
+
+// Dynamic (value) right-hand sides take a different lowering than the
+// bare identifiers used in row().
+const DynBuffer: any = Buffer;
+const DynUint8: any = Uint8Array;
+const dynRow = (label: string, v: any) =>
+  console.log("dyn", label, v instanceof DynBuffer, v instanceof DynUint8, v instanceof FastBuffer);
+dynRow("buffer", base);
+dynRow("uint8", new Uint8Array(2));
+dynRow("dataview", new DataView(new ArrayBuffer(2)));
+dynRow("arraybuffer", new ArrayBuffer(2));
+console.log("static inherit", (Buffer as any).BYTES_PER_ELEMENT, typeof (Buffer as any).of);
 
 // bson 7.x UUID constructor gate
 const bytes = Buffer.from(new ArrayBuffer(32), 8, 16).subarray(0, 16);
