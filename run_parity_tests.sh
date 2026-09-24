@@ -1527,7 +1527,15 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" ]]; then
         auto_optimize_on=0
     fi
-    if [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]] &&
+    # #11174 specifically guards the no-auto HTTP pump rebuild. The compiler
+    # builds the matching stdlib + HTTP wrapper together for this path; letting
+    # the usual mixed-suite override win would silently test the wrong mode.
+    force_no_auto=0
+    if [[ "$test_name" == "test_gap_11174_http_runtime_defaults" ]]; then
+        compile_env="PERRY_NO_AUTO_OPTIMIZE=1 $compile_env"
+        auto_optimize_on=0
+        force_no_auto=1
+    elif [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]] &&
         (( ext_routed )); then
         # `-u` and not `PERRY_NO_AUTO_OPTIMIZE=`: perry tests the variable with
         # `var_os(...).is_some()`, so an empty-but-set value still counts as on.
@@ -1535,12 +1543,13 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         auto_optimize_on=1
     fi
     # Two ways this compile can spend a `cargo build` on native artifacts:
-    # auto-optimize plus an ext-routed module (runtime+stdlib+wrapper), or a
+    # auto-optimize (or the explicit no-auto HTTP regression) plus an
+    # ext-routed module (runtime+stdlib+wrapper), or a
     # WebAssembly fixture (perry-wasm-host plus a wasm-host runtime, with or
     # without auto-optimize). See PERRY_TOOLCHAIN_COMPILE_TIMEOUT at the top
     # for the measurements.
     compile_timeout="$PERRY_COMPILE_TIMEOUT"
-    if (( auto_optimize_on && ext_routed )) || test_builds_wasm_host "$parity_test_file"; then
+    if (( (auto_optimize_on || force_no_auto) && ext_routed )) || test_builds_wasm_host "$parity_test_file"; then
         compile_timeout="$PERRY_TOOLCHAIN_COMPILE_TIMEOUT"
     fi
     compile_flags=()

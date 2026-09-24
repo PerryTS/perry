@@ -1,3 +1,4 @@
+// The parity runner pins this regression to PERRY_NO_AUTO_OPTIMIZE=1.
 const http = require('node:http');
 console.log('http', typeof http.createServer, typeof http.request);
 console.log('regex-methods', typeof RegExp.prototype.test, typeof RegExp.prototype.exec);
