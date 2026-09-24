@@ -210,7 +210,7 @@ pub(super) fn reason_phrase(head: &[u8]) -> String {
 
 /// `Basic` credentials for a proxy URL that carries them, percent-decoded.
 pub(super) fn basic_credentials(proxy: &url::Url) -> Option<String> {
-    use base64::Engine;
+    use perry_base64::Engine;
     if proxy.username().is_empty() && proxy.password().is_none() {
         return None;
     }
@@ -237,7 +237,7 @@ pub(super) fn basic_credentials(proxy: &url::Url) -> Option<String> {
     credential.extend(decode(proxy.password().unwrap_or("")));
     Some(format!(
         "Basic {}",
-        base64::engine::general_purpose::STANDARD.encode(credential)
+        perry_base64::engine::general_purpose::STANDARD.encode(credential)
     ))
 }
 
