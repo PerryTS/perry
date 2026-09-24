@@ -13,6 +13,28 @@ use std::sync::OnceLock;
 
 // ============ Container Lifecycle ============
 
+/// Materialise a `ContainerHandle` as the `{ id, name? }` object
+/// `types/perry/container/index.d.ts` documents for `run()` / `create()`.
+/// Runs on the main thread (the deferred-resolution converter).
+///
+/// Until #11211 these resolved with a POINTER-tagged id into a registry
+/// nothing ever read, so a program could not recover the container id it
+/// needs for `start` / `stop` / `remove` / `logs` / `exec`.
+fn container_handle_to_js(handle: ContainerHandle) -> u64 {
+    let mut obj = serde_json::Map::new();
+    obj.insert("id".into(), serde_json::Value::String(handle.id));
+    if let Some(name) = handle.name {
+        obj.insert("name".into(), serde_json::Value::String(name));
+    }
+    let json = serde_json::Value::Object(obj).to_string();
+    unsafe {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let source = string_to_js(&json);
+        scope.root_string_ptr(source);
+        perry_runtime::json::js_json_parse_or_null(source).bits()
+    }
+}
+
 /// Run a container from the given spec
 /// FFI: js_container_run(spec_json: *const StringHeader) -> *mut Promise
 #[no_mangle]
@@ -29,34 +51,30 @@ pub unsafe extern "C" fn js_container_run(spec_ptr: *const StringHeader) -> *mut
         }
     };
 
-    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
-        if let Err(e) = maybe_verify_image(&spec.image).await {
-            return Err::<u64, String>(e);
-        }
-        let backend = match get_global_backend().await {
-            Ok(b) => Arc::clone(b),
-            Err(e) => return Err::<u64, String>(e.to_string()),
-        };
-        // Route through the security-aware path when the spec carries
-        // fields (`seccomp`, `no_new_privileges`) that only exist on
-        // the protocol's `security_args`. Pre-fix `run()` always
-        // called `backend.run()`, so those knobs were unreachable via
-        // the public API — serde dropped them from the JSON and the
-        // documented hardening silently never reached the runtime.
-        let result = if spec.has_security_opts() {
-            let profile = spec.security_profile();
-            backend.run_with_security(&spec, &profile).await
-        } else {
-            backend.run(&spec).await
-        };
-        match result {
-            Ok(handle) => {
-                let handle_id = types::register_container_handle(handle);
-                Ok(handle_to_promise_bits(handle_id as u64))
-            }
-            Err(e) => Err::<u64, String>(e.to_string()),
-        }
-    });
+    crate::container::executor::spawn_for_promise_deferred(
+        promise as *mut u8,
+        async move {
+            maybe_verify_image(&spec.image).await?;
+            let backend = get_global_backend()
+                .await
+                .map(Arc::clone)
+                .map_err(|e| e.to_string())?;
+            // Route through the security-aware path when the spec carries
+            // fields (`seccomp`, `no_new_privileges`) that only exist on
+            // the protocol's `security_args`. Pre-fix `run()` always
+            // called `backend.run()`, so those knobs were unreachable via
+            // the public API — serde dropped them from the JSON and the
+            // documented hardening silently never reached the runtime.
+            let result = if spec.has_security_opts() {
+                let profile = spec.security_profile();
+                backend.run_with_security(&spec, &profile).await
+            } else {
+                backend.run(&spec).await
+            };
+            result.map_err(|e| e.to_string())
+        },
+        container_handle_to_js,
+    );
 
     promise
 }
@@ -77,30 +95,26 @@ pub unsafe extern "C" fn js_container_create(spec_ptr: *const StringHeader) -> *
         }
     };
 
-    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
-        if let Err(e) = maybe_verify_image(&spec.image).await {
-            return Err::<u64, String>(e);
-        }
-        let backend = match get_global_backend().await {
-            Ok(b) => Arc::clone(b),
-            Err(e) => return Err::<u64, String>(e.to_string()),
-        };
-        // Same security routing as `run()` above — `create()` must not
-        // silently drop `seccomp` / `no_new_privileges` either.
-        let result = if spec.has_security_opts() {
-            let profile = spec.security_profile();
-            backend.create_with_security(&spec, &profile).await
-        } else {
-            backend.create(&spec).await
-        };
-        match result {
-            Ok(handle) => {
-                let handle_id = types::register_container_handle(handle);
-                Ok(handle_to_promise_bits(handle_id as u64))
-            }
-            Err(e) => Err::<u64, String>(e.to_string()),
-        }
-    });
+    crate::container::executor::spawn_for_promise_deferred(
+        promise as *mut u8,
+        async move {
+            maybe_verify_image(&spec.image).await?;
+            let backend = get_global_backend()
+                .await
+                .map(Arc::clone)
+                .map_err(|e| e.to_string())?;
+            // Same security routing as `run()` above — `create()` must not
+            // silently drop `seccomp` / `no_new_privileges` either.
+            let result = if spec.has_security_opts() {
+                let profile = spec.security_profile();
+                backend.create_with_security(&spec, &profile).await
+            } else {
+                backend.create(&spec).await
+            };
+            result.map_err(|e| e.to_string())
+        },
+        container_handle_to_js,
+    );
 
     promise
 }

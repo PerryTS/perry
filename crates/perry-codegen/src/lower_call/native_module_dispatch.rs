@@ -45,6 +45,10 @@ pub fn native_module_lookup(
         // (opencode imports the fork, kimi-code the original); both route to
         // the one runtime pty implementation.
         "@lydell/node-pty" | "bun-pty" => "node-pty",
+        // #11211: `perry/container-compose` is the internal specifier for the
+        // same compose surface `perry/compose` exposes (stdlib_features.rs
+        // maps both to the `container` feature); share its rows.
+        "perry/container-compose" => "perry/compose",
         m => m,
     };
     // First pass: look for an exact class_filter match.

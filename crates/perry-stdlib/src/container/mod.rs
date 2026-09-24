@@ -14,6 +14,9 @@ mod compose_ffi;
 // Drives each operation's compose future on a turnloop worker (tokio lane K).
 pub(crate) mod executor;
 mod images;
+// JS-ABI adapters the codegen dispatch table routes to where a TS signature
+// does not map 1:1 onto the C FFI (#11211).
+mod js_api;
 mod lifecycle;
 mod logs_exec;
 mod workload;
@@ -26,6 +29,7 @@ mod workload;
 pub use backend_ctl::*;
 pub use compose_ffi::*;
 pub use images::*;
+pub use js_api::*;
 pub use lifecycle::*;
 pub use logs_exec::*;
 pub use workload::*;

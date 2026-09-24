@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 
 mod async_hooks;
 mod bun;
+mod container;
 mod databases;
 mod events_dispatch_parity_tests;
 mod extras;
@@ -199,6 +200,8 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     // Appended last (v0.5.1265, #466) so pre-existing rows keep their
     // declaration order for `iter_native_module_table` consumers.
     v.extend_from_slice(undici::UNDICI_ROWS);
+    // Appended after undici (#11211) for the same declaration-order reason.
+    v.extend_from_slice(container::CONTAINER_ROWS);
     v
 });
 
