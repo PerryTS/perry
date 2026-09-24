@@ -1,0 +1,1 @@
+Add regression coverage for inlined named class-expression self-bindings (#11154), using the evaluation-owner remapping already landed with #11142. Transform tests cover remapped, absent, and outer owners without double substitution. Native parity coverage checks repeated factory calls, distinct prototypes, and isolated prototype writes.
