@@ -87,7 +87,7 @@ const WRITABLE_FIELDS: &[&str] = &[
     "defaultEncoding",
 ];
 
-thread_local! {
+crate::perry_thread_local! {
     /// NaN-boxed `ReadableState` / `WritableState` prototypes (0 = not built).
     static STATE_PROTOS: RefCell<[u64; 2]> = const { RefCell::new([0, 0]) };
     static STATE_PROTO_SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
