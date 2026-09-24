@@ -14,8 +14,15 @@ store.
 Ordinary sweeps finalize owned stores through the Map type descriptor. Copying
 collection uses the existing from-space Map-start bitmap, with no old-generation
 registry walk or owner re-keying. Explicit shutdown and arena thread teardown
-release each store once, while forwarded headers leave ownership to the copy.
+release each store once. A move hands ownership to the copy: the move hook
+nulls the original header's `store` and `entries`, because old-generation
+evacuation (tenured nursery objects and old-page defrag) releases FORWARDED on
+the original before the sweep, which would otherwise finalize the live copy's
+store as a dead Map, and the exit walks would free it a second time.
 
 Regression coverage includes collision deletion, foreign/interior brand rejection,
 value-only versus key rewrites, actual evacuation with iterator compaction history,
-and bounded/unbounded full sweeps of live and dead Maps in an active block.
+bounded/unbounded full sweeps of live and dead Maps in an active block, tenured
+evacuation and old-page defrag followed by sweeps and the exit walk (exactly one
+free), non-copying monolithic and budgeted minors finalizing a dead active-block
+Map, and the copying minor's from-space walk finalizing a dead Map.
