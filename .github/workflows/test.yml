@@ -191,6 +191,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test
 
+      - name: Docs catalog toolchain tests
+        run: python3 docs/scripts/test_i18n_toolchain.py
+
       - name: Require a changelog.d/ fragment for crates/ changes
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
         env:

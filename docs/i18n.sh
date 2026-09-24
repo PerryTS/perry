@@ -10,6 +10,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
+source ./i18n-toolchain.env
 
 cmd=${1:-help}
 
@@ -17,8 +18,19 @@ require() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing tool: $1" >&2; exit 1; }
 }
 
+require_version() {
+  local tool=$1 expected=$2 actual
+  require "$tool"
+  actual=$("$tool" --version | head -n 1)
+  if [ "${actual##* }" != "$expected" ]; then
+    echo "i18n: $tool must be $expected; found: $actual" >&2
+    echo "See docs/i18n-toolchain.env for the catalog toolchain." >&2
+    exit 1
+  fi
+}
+
 extract() {
-  require mdbook
+  require_version mdbook "v$MDBOOK_VERSION"
   require mdbook-xgettext
   local extract_dir
   extract_dir=$(mktemp -d "${TMPDIR:-/tmp}/perry-i18n-extract.XXXXXX")
@@ -41,7 +53,7 @@ extract() {
 }
 
 sync_all() {
-  require msgmerge
+  require_version msgmerge "$GETTEXT_VERSION"
   for f in po/*.po; do
     [ -e "$f" ] || continue
     msgmerge --quiet --update --backup=none "$f" po/messages.pot
@@ -50,7 +62,7 @@ sync_all() {
 }
 
 add_lang() {
-  require msginit
+  require_version msginit "$GETTEXT_VERSION"
   local lang=${1:?usage: i18n.sh add <lang>}
   local out="po/${lang}.po"
   if [ -e "$out" ]; then
