@@ -479,11 +479,12 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::closure::prune_dead_closure_side_table_owners,
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
     },
+    #[cfg(feature = "dyn-eval")]
     DeadKeyPrune {
-        table: "dyn_eval::CLOSURE_FN_IDS + FN_REGISTRY",
+        table: "dyn_eval::LIFETIME.owners + FN_REGISTRY",
         owner: DeadKeyOwner::Closure,
         prune: crate::dyn_eval::prune_dead_function_owners,
-        young_prune: None,
+        young_prune: Some(crate::dyn_eval::prune_dead_function_owners_young),
     },
     DeadKeyPrune {
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",

@@ -66,3 +66,20 @@ fn dyn_eval_registry_preserves_old_owner_during_minor() {
     super::dead_owner_side_tables::full_gc_with_no_block_persistence();
     assert!(lookup_fn(id).is_none());
 }
+
+#[test]
+fn dyn_eval_registry_minor_prune_visits_only_young_owners() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let (_, old_id) = function_owner(true);
+    let (_, young_id) = function_owner(false);
+    let _ = gc_collect_minor();
+    let walk = crate::gc::young_log::last_walk("dyn_eval.closure_fn_ids")
+        .expect("the dyn_eval owner prune must have run");
+    assert!(walk.partial, "a minor must take the young-log prune");
+    assert_eq!(walk.visited, 1, "only the young owner is a minor candidate");
+    assert_eq!(walk.table_len, 1, "the old owner stays in the table");
+    assert!(lookup_fn(old_id).is_some());
+    assert!(lookup_fn(young_id).is_none());
+    super::dead_owner_side_tables::full_gc_with_no_block_persistence();
+    assert!(lookup_fn(old_id).is_none());
+}

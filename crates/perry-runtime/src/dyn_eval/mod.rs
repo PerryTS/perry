@@ -61,7 +61,9 @@ mod interp;
 mod registry_lifetime;
 #[cfg(test)]
 pub(crate) use registry_lifetime::register_closure;
-pub(crate) use registry_lifetime::{function_owner_moved, prune_dead_function_owners};
+pub(crate) use registry_lifetime::{
+    function_owner_moved, prune_dead_function_owners, prune_dead_function_owners_young,
+};
 #[cfg(test)]
 mod tests;
 
@@ -176,12 +178,21 @@ pub(crate) fn fast_scope_enabled() -> bool {
 const MAX_INTERP_CALL_DEPTH: u32 = 256;
 
 pub(crate) fn register_fn(f: InterpFn) -> u32 {
-    let id = NEXT_FN_ID.with(|c| {
-        let id = c.get();
-        c.set(id + 1);
+    let id = FN_REGISTRY.with(|r| {
+        let mut r = r.borrow_mut();
+        // Ids are recycled once reclaimed, so a long-running process can wrap
+        // the counter; never hand out 0 or an id that is still registered.
+        let id = NEXT_FN_ID.with(|c| loop {
+            let id = c.get();
+            c.set(id.checked_add(1).unwrap_or(1));
+            if id != 0 && !r.contains_key(&id) {
+                break id;
+            }
+        });
+        r.insert(id, Rc::new(f));
         id
     });
-    FN_REGISTRY.with(|r| r.borrow_mut().insert(id, Rc::new(f)));
+    registry_lifetime::note_registered(id);
     id
 }
 
@@ -509,7 +520,8 @@ pub(crate) fn eval_script_in_with_codegen(
     let global_idx = root_push(global_this);
     let intrinsics_idx = root_push(intrinsics);
     let env_idx = root_push(lexical_env);
-    let statements = parse_script_statements(source);
+    let (script_id, script) = register_script(parse_script_statements(source));
+    let statements = script_statements(&script);
     let variable_env_idx = root_push(env::variable_environment(root_get(env_idx)));
     let ret_idx = root_push(bridge::undefined());
     let ctx = interp::Ctx {
@@ -518,11 +530,12 @@ pub(crate) fn eval_script_in_with_codegen(
         global_idx,
         intrinsics_idx,
         variable_env_idx,
-        strict: interp::has_use_strict_directive(&statements),
+        strict: script.strict,
         strings_allowed,
         wasm_allowed,
+        owner_fn: script_id,
     };
-    let _ = interp::exec_script_stmts(&ctx, &statements, env_idx);
+    let _ = interp::exec_script_stmts(&ctx, statements, env_idx);
     let result = root_get(ret_idx);
     roots_truncate(base);
     result
@@ -544,8 +557,9 @@ pub(crate) fn eval_direct_in(
     let intrinsics_idx = root_push(intrinsics);
     let caller_env_idx = root_push(caller_env);
     let caller_variable_env_idx = root_push(caller_variable_env);
-    let statements = parse_script_statements(source);
-    let strict = interp::has_use_strict_directive(&statements);
+    let (script_id, script) = register_script(parse_script_statements(source));
+    let statements = script_statements(&script);
+    let strict = script.strict;
     let lexical_env_idx = root_push(env::env_new(root_get(caller_env_idx)));
     let ret_idx = root_push(bridge::undefined());
     let variable_env_idx = if strict {
@@ -562,11 +576,38 @@ pub(crate) fn eval_direct_in(
         strict,
         strings_allowed,
         wasm_allowed,
+        owner_fn: script_id,
     };
-    let _ = interp::exec_direct_eval_stmts(&ctx, &statements, lexical_env_idx, variable_env_idx);
+    let _ = interp::exec_direct_eval_stmts(&ctx, statements, lexical_env_idx, variable_env_idx);
     let result = root_get(ret_idx);
     roots_truncate(base);
     result
+}
+
+/// Register a parsed script/eval body as a pinned, parameterless `InterpFn`.
+/// Nested functions are cached by AST-node address, so the statements must
+/// stay allocated for as long as those cache entries exist: owning them in
+/// the registry lets the GC prune evict the entries together with the AST
+/// (the pin is released when the script's roots are truncated, including by
+/// a throw). A local `Vec` freed on return would let the next script's parse
+/// reuse an address and resolve to this script's function.
+fn register_script(statements: Vec<ast::Stmt>) -> (u32, registry_lifetime::FunctionPin) {
+    let strict = interp::has_use_strict_directive(&statements);
+    let id = register_fn(InterpFn {
+        params: Vec::new(),
+        body: InterpBody::Block(statements),
+        hoisted_vars: Vec::new(),
+        strict,
+    });
+    let pin = registry_lifetime::pin_function(id).expect("just registered script");
+    (id, pin)
+}
+
+fn script_statements(script: &InterpFn) -> &[ast::Stmt] {
+    match &script.body {
+        InterpBody::Block(statements) => statements,
+        InterpBody::Expr(_) => unreachable!("scripts register a block body"),
+    }
 }
 
 fn parse_script_statements(source: &str) -> Vec<ast::Stmt> {
@@ -641,6 +682,7 @@ fn prepare_function_args(args: &[String]) -> u32 {
                     {
                         SOURCE_FN_CACHE_BYTES.with(|b| b.set(bytes + source.len()));
                         c.insert(source, id);
+                        registry_lifetime::note_permanent(id);
                     }
                 });
                 id

@@ -103,4 +103,5 @@ mod young_log_tests;
 mod zero_slot_fixture;
 mod zero_slot_skip;
 
+#[cfg(feature = "dyn-eval")]
 mod dyn_eval_registry;

@@ -313,9 +313,27 @@
     },
     {
       "file": "crates/perry-runtime/src/dyn_eval/registry_lifetime.rs",
-      "name": "CLOSURE_FN_IDS",
+      "name": "LIFETIME",
       "verdict": "not_a_gc_pointer",
-      "why": "Weak closure-address identity keys mapped to numeric InterpFn ids; no traced heap values and no dereference here. gc_type_after_payload_move calls function_owner_moved on every closure relocation. The registered prune_dead_function_owners uses the collector closure-deadness predicate before storage recycling, including copying minors, and then releases unowned ASTs. The table must not root its owners."
+      "why": "Weak closure-address identity keys (owners) mapped to numeric InterpFn ids, per-id owner counts, the permanent/candidate id sets, and the nested-function node cache keyed by (parent id, AST-node address inside a Rust-owned InterpFn). No traced heap values and no dereference of an owner address. gc_type_after_payload_move calls function_owner_moved on every closure relocation; the registered prune_dead_function_owners (full) / prune_dead_function_owners_young (minor, via YOUNG_OWNERS) use the collector closure-deadness predicate before storage recycling, including copying minors, then release unowned ASTs and evict their node entries in the same step. The table must not root its owners."
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/registry_lifetime.rs",
+      "name": "YOUNG_OWNERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Young-entry log of the weak closure-owner keys in LIFETIME.owners (gc/young_log.rs). Candidate keys only, never dereferenced or marked; a stale key is a lookup miss. Rebuilt by the full prune."
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/registry_lifetime.rs",
+      "name": "PIN_TOP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Plain root-stack index (one past the newest AST pin); an integer, not an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/registry_lifetime.rs",
+      "name": "OWNER_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Plain count of LIFETIME.owners entries, read by the closure move hook's early-out; an integer, not an address."
     },
     {
       "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
@@ -2974,10 +2992,6 @@
     {
       "file": "crates/perry-runtime/src/cluster.rs",
       "name": "CLUSTER_GC_REGISTERED"
-    },
-    {
-      "file": "crates/perry-runtime/src/dyn_eval/interp.rs",
-      "name": "NODE_FN_IDS"
     },
     {
       "file": "crates/perry-runtime/src/dyn_eval/interp.rs",

@@ -9,9 +9,6 @@
 //! Unsupported statements throw the #6559 diagnostic TypeError naming the
 //! construct (see `bridge::throw_unsupported`).
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 use perry_parser::swc_ecma_ast as ast;
 
 use super::bridge::{self, throw_unsupported};
@@ -37,6 +34,9 @@ pub(crate) struct Ctx {
     pub strict: bool,
     pub strings_allowed: bool,
     pub wasm_allowed: bool,
+    /// `FN_REGISTRY` id whose AST holds the statements being executed; the
+    /// nested-function cache is scoped to it. Pinned for the frame's life.
+    pub owner_fn: u32,
 }
 
 /// Statement completion. Thrown exceptions never appear here — they longjmp
@@ -50,26 +50,15 @@ pub(crate) enum Flow {
 
 // ── nested-function registration cache ────────────────────────────────────
 
-crate::perry_thread_local! {
-    /// AST-node address → registered fn id. Nested function/arrow expressions
-    /// evaluate many times (ajv validators run per request); registering the
-    /// node once keeps the registry bounded by the number of syntactic
-    /// functions. Registry pruning clears this cache before freeing any AST,
-    /// so a recycled node address cannot resolve to an unrelated function.
-    static NODE_FN_IDS: RefCell<HashMap<usize, u32>> = RefCell::new(HashMap::new());
-}
-
-pub(super) fn clear_node_fn_cache() {
-    NODE_FN_IDS.with(|m| m.borrow_mut().clear());
-}
-
-fn fn_id_for_node(addr: usize, build: impl FnOnce() -> InterpFn) -> u32 {
-    if let Some(id) = NODE_FN_IDS.with(|m| m.borrow().get(&addr).copied()) {
-        return id;
-    }
-    let id = super::register_fn(build());
-    NODE_FN_IDS.with(|m| m.borrow_mut().insert(addr, id));
-    id
+/// AST-node address → registered fn id, scoped to the AST that contains the
+/// node (`ctx.owner_fn`). Nested function/arrow expressions evaluate many
+/// times (ajv validators run per request); registering the node once per
+/// parent keeps the registry bounded by the number of syntactic functions of
+/// live parents. The entry lives exactly as long as the parent AST: the GC
+/// prune evicts it in the same step that frees the parent (see
+/// `registry_lifetime`), so a recycled address never reaches a stale entry.
+fn fn_id_for_node(ctx: &Ctx, addr: usize, build: impl FnOnce() -> InterpFn) -> u32 {
+    super::registry_lifetime::node_fn_id(ctx.owner_fn, addr, build)
 }
 
 // ── construction ───────────────────────────────────────────────────────────
@@ -400,6 +389,7 @@ pub(crate) fn invoke_interp_fn(
         strict: fun.strict,
         strings_allowed,
         wasm_allowed,
+        owner_fn: fn_id,
     };
 
     // Parameters.
@@ -457,7 +447,7 @@ pub(crate) fn make_function_value(
     node_addr: usize,
     env_idx: usize,
 ) -> f64 {
-    let fn_id = fn_id_for_node(node_addr, || build_interp_fn(params, body, ctx.strict));
+    let fn_id = fn_id_for_node(ctx, node_addr, || build_interp_fn(params, body, ctx.strict));
     let _prepared =
         super::registry_lifetime::pin_function(fn_id).expect("registered nested function");
     let lexical_this = if is_arrow {
@@ -1183,7 +1173,7 @@ pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: u
             }
             let body =
                 InterpBody::Block(c.body.as_ref().map(|b| b.stmts.clone()).unwrap_or_default());
-            fn_id_for_node(c as *const ast::Constructor as usize, || {
+            fn_id_for_node(ctx, c as *const ast::Constructor as usize, || {
                 build_interp_fn(params, body, ctx.strict)
             })
         }
@@ -1192,9 +1182,9 @@ pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: u
             // `Class` node itself (there is no dedicated AST node for a
             // synthesized constructor) — only used as a cache key, stable
             // for the same reason every other node-address key here is:
-            // the running call pins its AST, and registry pruning clears
-            // the node cache before releasing any AST.
-            fn_id_for_node(class as *const ast::Class as usize, || {
+            // the entry is scoped to the pinned parent AST and evicted
+            // together with it.
+            fn_id_for_node(ctx, class as *const ast::Class as usize, || {
                 build_interp_fn(Vec::new(), InterpBody::Block(Vec::new()), ctx.strict)
             })
         }
