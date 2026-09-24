@@ -680,7 +680,27 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
                                 && crate::value::addr_class::is_above_handle_band(praw as usize)
                                 && crate::object::is_valid_obj_ptr(praw as *const u8)
                             {
+                                // #10911: the recursion re-enters with the
+                                // PARENT evaluation as the object, so a static
+                                // getter found there would bind `this` to the
+                                // parent (`Sub.tag` ran with `this === Base`).
+                                // Stash the class the read started from --
+                                // `begin` keeps the OUTERMOST one across a
+                                // multi-level walk -- exactly as the ClassRef
+                                // static-prototype walk below does.
+                                let scope = crate::gc::RuntimeHandleScope::new();
+                                let receiver = f64::from_bits(
+                                    crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                                );
+                                let prev =
+                                    crate::object::field_get_set::accessor_receiver_override_begin(
+                                        receiver,
+                                    )
+                                    .map(|value| scope.root_nanbox_f64(value));
                                 let v = js_object_get_field_by_name(praw, key);
+                                crate::object::field_get_set::accessor_receiver_override_end(
+                                    prev.map(|handle| handle.get_nanbox_f64()),
+                                );
                                 if !v.is_undefined() {
                                     return v;
                                 }
