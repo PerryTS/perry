@@ -93,10 +93,16 @@ const STATE_FATAL: u64 = 1 << 1;
 const STATE_IGNORE_BOM: u64 = 1 << 2;
 const STATE_ENCODING_SHIFT: u32 = 8;
 
-/// Distinct `(encoding, canonical label)` pairs named so far. Append-only,
-/// bounded by the compile-time label set — NOT a per-instance registry.
-static ENCODINGS: std::sync::LazyLock<Mutex<Vec<(DecoderEncoding, &'static str)>>> =
-    std::sync::LazyLock::new(|| Mutex::new(vec![(DecoderEncoding::Utf8, "utf-8")]));
+per_test_global! {
+    /// Distinct `(encoding, canonical label)` pairs named so far. Append-only,
+    /// bounded by the compile-time label set — NOT a per-instance registry.
+    ///
+    /// Per-thread in a test build: `the_encoding_intern_does_not_grow_per_decoder`
+    /// asserts on this table's length, and a sibling test naming a fresh label
+    /// on another libtest thread would otherwise shift it by one.
+    static ENCODINGS: std::sync::LazyLock<Mutex<Vec<(DecoderEncoding, &'static str)>>> =
+        std::sync::LazyLock::new(|| Mutex::new(vec![(DecoderEncoding::Utf8, "utf-8")]))
+}
 
 fn intern_encoding(encoding: DecoderEncoding, label: &'static str) -> u64 {
     let mut table = ENCODINGS.lock().unwrap();
