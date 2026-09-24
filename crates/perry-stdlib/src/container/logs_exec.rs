@@ -22,7 +22,7 @@ pub unsafe extern "C" fn js_container_logs(id_ptr: *const StringHeader, tail: i3
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid container ID".to_string())
             });
             return promise;
@@ -32,7 +32,7 @@ pub unsafe extern "C" fn js_container_logs(id_ptr: *const StringHeader, tail: i3
     let tail_opt = if tail >= 0 { Some(tail as u32) } else { None };
 
     // Resolves with a JSON-encoded `ContainerLogs` string.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let backend = get_global_backend().await.map_err(|e| e.to_string())?;
@@ -65,7 +65,7 @@ pub unsafe extern "C" fn js_container_exec(
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid container ID".to_string())
             });
             return promise;
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn js_container_exec(
     let workdir = string_from_header(workdir_ptr);
 
     // Resolves with a JSON-encoded `ContainerLogs` string.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let cmd: Vec<String> = cmd_json

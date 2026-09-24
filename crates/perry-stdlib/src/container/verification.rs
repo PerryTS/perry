@@ -26,7 +26,7 @@ pub async fn fetch_image_digest(reference: &str) -> Result<String, String> {
 }
 
 pub async fn run_cosign_verify(reference: &str, digest: &str) -> VerificationResult {
-    let output = tokio::process::Command::new("cosign")
+    let output = perry_container_compose::rt::Command::new("cosign")
         .args([
             "verify",
             "--certificate-identity",

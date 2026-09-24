@@ -74,7 +74,7 @@ pub unsafe extern "C" fn js_workload_runGraph(
     let graph_json = string_from_header(graph_json_ptr).unwrap_or_else(|| "{}".to_string());
     let opts_json = string_from_header(opts_json_ptr).unwrap_or_else(|| "{}".to_string());
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let graph: perry_container_compose::WorkloadGraph = serde_json::from_str(&graph_json)
             .map_err(|e| format!("Failed to parse graph: {}", e))?;
         let opts: perry_container_compose::RunGraphOptions = serde_json::from_str(&opts_json)
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn js_workload_inspectGraph(handle_id: i64) -> *mut Promis
     let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let engine = match types::WORKLOAD_HANDLES.get().and_then(|m| m.get(&id)) {
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn js_workload_handle_down(handle_id: i64, force: i32) -> 
     let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let engine = match types::WORKLOAD_HANDLES.get().and_then(|m| m.get(&id)) {
             Some(e) => e.clone(),
             None => return Err("Invalid workload handle".to_string()),
@@ -166,7 +166,7 @@ pub unsafe extern "C" fn js_workload_handle_status(handle_id: i64) -> *mut Promi
     let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let engine = match types::WORKLOAD_HANDLES.get().and_then(|m| m.get(&id)) {
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn js_workload_handle_logs(
     let node_id = string_from_header(node_id_ptr).unwrap_or_default();
     let tail_opt = if tail >= 0 { Some(tail as u32) } else { None };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let engine = match types::WORKLOAD_HANDLES.get().and_then(|m| m.get(&id)) {
             Some(e) => e.clone(),
             None => return Err("Invalid workload handle".to_string()),
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn js_workload_handle_exec(
     let node_id = string_from_header(node_id_ptr).unwrap_or_default();
     let cmd_json = string_from_header(cmd_json_ptr).unwrap_or_else(|| "[]".to_string());
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let cmd: Vec<String> = serde_json::from_str(&cmd_json).unwrap_or_default();
         let engine = match types::WORKLOAD_HANDLES.get().and_then(|m| m.get(&id)) {
             Some(e) => e.clone(),
@@ -261,7 +261,7 @@ pub unsafe extern "C" fn js_workload_handle_ps(handle_id: i64) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let engine = match types::WORKLOAD_HANDLES.get().and_then(|m| m.get(&id)) {
             Some(e) => e.clone(),
             None => return Err("Invalid workload handle".to_string()),

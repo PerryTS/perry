@@ -1049,85 +1049,87 @@ mod tests {
 
     /// All env-var-mutating tests in one function. cargo runs tests
     /// in parallel by default and `std::env::set_var` is process-global,
-    /// so independent `#[tokio::test]` cases would race the env var
+    /// so independent test cases would race the env var
     /// across threads and produce flaky results. Consolidate sequentially
     /// rather than depend on a serial-test crate (avoids the dep + the
     /// per-test setup overhead of `#[serial]`).
-    #[tokio::test]
-    async fn test_detect_backend_env_override_behavior() {
-        // -------------------------------------------------------------
-        // Phase 1: single name (existing behavior, backwards-compat)
-        // -------------------------------------------------------------
-        std::env::set_var("PERRY_CONTAINER_BACKEND", "invalid-backend-name");
-        let res = detect_backend().await;
-        std::env::remove_var("PERRY_CONTAINER_BACKEND");
+    #[test]
+    fn test_detect_backend_env_override_behavior() {
+        crate::rt::block_on(async {
+            // -------------------------------------------------------------
+            // Phase 1: single name (existing behavior, backwards-compat)
+            // -------------------------------------------------------------
+            std::env::set_var("PERRY_CONTAINER_BACKEND", "invalid-backend-name");
+            let res = detect_backend().await;
+            std::env::remove_var("PERRY_CONTAINER_BACKEND");
 
-        if let Err(ComposeError::NoBackendFound { probed }) = res {
-            assert_eq!(probed.len(), 1);
-            assert_eq!(probed[0].name, "invalid-backend-name");
-            assert_eq!(probed[0].reason, "unknown backend");
-        } else {
-            panic!("Expected NoBackendFound error from single-name override");
-        }
+            if let Err(ComposeError::NoBackendFound { probed }) = res {
+                assert_eq!(probed.len(), 1);
+                assert_eq!(probed[0].name, "invalid-backend-name");
+                assert_eq!(probed[0].reason, "unknown backend");
+            } else {
+                panic!("Expected NoBackendFound error from single-name override");
+            }
 
-        // -------------------------------------------------------------
-        // Phase 2: comma-separated user priority list (v0.5.380 feature)
-        // -------------------------------------------------------------
-        // Each name in the list gets probed in order. All-invalid case:
-        // returns NoBackendFound with one BackendProbeResult per
-        // attempted name, order preserved.
-        std::env::set_var("PERRY_CONTAINER_BACKEND", "bogus-one,bogus-two,bogus-three");
-        let res = detect_backend().await;
-        std::env::remove_var("PERRY_CONTAINER_BACKEND");
+            // -------------------------------------------------------------
+            // Phase 2: comma-separated user priority list (v0.5.380 feature)
+            // -------------------------------------------------------------
+            // Each name in the list gets probed in order. All-invalid case:
+            // returns NoBackendFound with one BackendProbeResult per
+            // attempted name, order preserved.
+            std::env::set_var("PERRY_CONTAINER_BACKEND", "bogus-one,bogus-two,bogus-three");
+            let res = detect_backend().await;
+            std::env::remove_var("PERRY_CONTAINER_BACKEND");
 
-        if let Err(ComposeError::NoBackendFound { probed }) = res {
-            assert_eq!(probed.len(), 3, "expected one probe per name");
-            assert_eq!(probed[0].name, "bogus-one");
-            assert_eq!(probed[1].name, "bogus-two");
-            assert_eq!(probed[2].name, "bogus-three");
-            assert!(probed.iter().all(|p| p.reason.contains("unknown")));
-        } else {
-            panic!("Expected NoBackendFound error from comma-separated list");
-        }
+            if let Err(ComposeError::NoBackendFound { probed }) = res {
+                assert_eq!(probed.len(), 3, "expected one probe per name");
+                assert_eq!(probed[0].name, "bogus-one");
+                assert_eq!(probed[1].name, "bogus-two");
+                assert_eq!(probed[2].name, "bogus-three");
+                assert!(probed.iter().all(|p| p.reason.contains("unknown")));
+            } else {
+                panic!("Expected NoBackendFound error from comma-separated list");
+            }
 
-        // -------------------------------------------------------------
-        // Phase 3: tolerant parsing — whitespace + empty entries
-        // -------------------------------------------------------------
-        // Real env-var input `"a, b,,c"` shouldn't produce 4 probe
-        // entries. Trim each entry; skip empties.
-        std::env::set_var("PERRY_CONTAINER_BACKEND", "  bogus-a  , bogus-b ,, ");
-        let res = detect_backend().await;
-        std::env::remove_var("PERRY_CONTAINER_BACKEND");
+            // -------------------------------------------------------------
+            // Phase 3: tolerant parsing — whitespace + empty entries
+            // -------------------------------------------------------------
+            // Real env-var input `"a, b,,c"` shouldn't produce 4 probe
+            // entries. Trim each entry; skip empties.
+            std::env::set_var("PERRY_CONTAINER_BACKEND", "  bogus-a  , bogus-b ,, ");
+            let res = detect_backend().await;
+            std::env::remove_var("PERRY_CONTAINER_BACKEND");
 
-        if let Err(ComposeError::NoBackendFound { probed }) = res {
-            assert_eq!(probed.len(), 2);
-            assert_eq!(probed[0].name, "bogus-a");
-            assert_eq!(probed[1].name, "bogus-b");
-        } else {
-            panic!("Expected NoBackendFound error from whitespace-padded list");
-        }
+            if let Err(ComposeError::NoBackendFound { probed }) = res {
+                assert_eq!(probed.len(), 2);
+                assert_eq!(probed[0].name, "bogus-a");
+                assert_eq!(probed[1].name, "bogus-b");
+            } else {
+                panic!("Expected NoBackendFound error from whitespace-padded list");
+            }
 
-        // -------------------------------------------------------------
-        // Phase 4: empty string falls through to platform default
-        // -------------------------------------------------------------
-        // `PERRY_CONTAINER_BACKEND= ./app` is a real shell idiom for
-        // "clear an override inherited from the parent env." It
-        // shouldn't error; should behave as if the var was unset.
-        std::env::set_var("PERRY_CONTAINER_BACKEND", "");
-        let res = detect_backend().await;
-        std::env::remove_var("PERRY_CONTAINER_BACKEND");
+            // -------------------------------------------------------------
+            // Phase 4: empty string falls through to platform default
+            // -------------------------------------------------------------
+            // `PERRY_CONTAINER_BACKEND= ./app` is a real shell idiom for
+            // "clear an override inherited from the parent env." It
+            // shouldn't error; should behave as if the var was unset.
+            std::env::set_var("PERRY_CONTAINER_BACKEND", "");
+            let res = detect_backend().await;
+            std::env::remove_var("PERRY_CONTAINER_BACKEND");
 
-        // Can't assert Ok vs Err deterministically (depends on test
-        // runner's installed runtimes), but if Err, the probed list
-        // length must match platform_candidates, NOT 0 (which would
-        // mean the empty-list path was taken).
-        if let Err(ComposeError::NoBackendFound { probed }) = res {
-            let candidates = platform_candidates();
-            assert_eq!(
-                probed.len(),
-                candidates.len(),
-                "empty env var should fall through to platform_candidates probe"
-            );
-        }
+            // Can't assert Ok vs Err deterministically (depends on test
+            // runner's installed runtimes), but if Err, the probed list
+            // length must match platform_candidates, NOT 0 (which would
+            // mean the empty-list path was taken).
+            if let Err(ComposeError::NoBackendFound { probed }) = res {
+                let candidates = platform_candidates();
+                assert_eq!(
+                    probed.len(),
+                    candidates.len(),
+                    "empty env var should fall through to platform_candidates probe"
+                );
+            }
+        })
     }
 }

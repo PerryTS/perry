@@ -2,6 +2,7 @@
 
 use crate::backend::ContainerBackend;
 use crate::error::{ComposeError, Result};
+use crate::rt::Mutex;
 use crate::types::{ContainerInfo, ContainerLogs, ContainerSpec};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock as Lazy;
-use tokio::sync::Mutex;
 
 // ============ Types ============
 

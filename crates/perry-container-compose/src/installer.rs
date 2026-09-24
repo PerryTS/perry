@@ -118,7 +118,7 @@ impl BackendInstaller {
     }
 
     async fn execute_install(&self, command: &str) -> Result<()> {
-        let status = tokio::process::Command::new("sh")
+        let status = crate::rt::Command::new("sh")
             .arg("-c")
             .arg(command)
             .status()

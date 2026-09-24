@@ -191,7 +191,7 @@ thread_local! {
     static GC_SCANNER_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub(super) fn ensure_gc_scanner_registered() {
+pub(crate) fn ensure_gc_scanner_registered() {
     GC_SCANNER_REGISTERED.with(|registered| {
         if registered.get() {
             return;

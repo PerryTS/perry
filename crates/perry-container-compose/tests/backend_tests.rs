@@ -20,15 +20,18 @@ fn test_docker_protocol_run_args() {
 }
 
 // Feature: perry-container | Layer: unit | Req: 16.1 | Property: -
-#[tokio::test]
-async fn test_detect_backend_env_override() {
-    std::env::set_var("PERRY_CONTAINER_BACKEND", "docker");
-    let result = detect_backend().await;
-    // This might still fail if docker isn't installed, but it should try ONLY docker
-    if let Err(perry_container_compose::error::ComposeError::NoBackendFound { probed }) = result {
-        assert_eq!(probed.len(), 1);
-        assert_eq!(probed[0].name, "docker");
-    }
+#[test]
+fn test_detect_backend_env_override() {
+    perry_container_compose::rt::block_on(async {
+        std::env::set_var("PERRY_CONTAINER_BACKEND", "docker");
+        let result = detect_backend().await;
+        // This might still fail if docker isn't installed, but it should try ONLY docker
+        if let Err(perry_container_compose::error::ComposeError::NoBackendFound { probed }) = result
+        {
+            assert_eq!(probed.len(), 1);
+            assert_eq!(probed[0].name, "docker");
+        }
+    })
 }
 
 // Coverage Table:

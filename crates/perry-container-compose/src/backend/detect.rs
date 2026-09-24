@@ -1,8 +1,8 @@
 use super::*;
 use crate::error::{ComposeError, Result};
+use crate::rt::Command;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::process::Command;
 
 pub async fn detect_backend() -> Result<Box<dyn ContainerBackend>> {
     // `PERRY_CONTAINER_BACKEND` accepts EITHER a single name (single-pin)
@@ -28,8 +28,7 @@ pub async fn detect_backend() -> Result<Box<dyn ContainerBackend>> {
         } else {
             let mut results = Vec::new();
             for candidate in &user_priority {
-                match tokio::time::timeout(Duration::from_secs(2), probe_candidate(candidate)).await
-                {
+                match crate::rt::timeout(Duration::from_secs(2), probe_candidate(candidate)).await {
                     Ok(Ok(backend)) => return Ok(backend),
                     Ok(Err(reason)) => results.push(BackendProbeResult {
                         name: candidate.to_string(),
@@ -51,7 +50,7 @@ pub async fn detect_backend() -> Result<Box<dyn ContainerBackend>> {
     let mut results = Vec::new();
 
     for candidate in candidates {
-        match tokio::time::timeout(Duration::from_secs(2), probe_candidate(candidate)).await {
+        match crate::rt::timeout(Duration::from_secs(2), probe_candidate(candidate)).await {
             Ok(Ok(backend)) => return Ok(backend),
             Ok(Err(reason)) => results.push(BackendProbeResult {
                 name: candidate.to_string(),
@@ -88,7 +87,7 @@ pub async fn probe_all_candidates() -> Vec<BackendProbeResult> {
     let candidates = platform_candidates();
     let mut results = Vec::with_capacity(candidates.len());
     for candidate in candidates {
-        match tokio::time::timeout(Duration::from_secs(2), probe_candidate(candidate)).await {
+        match crate::rt::timeout(Duration::from_secs(2), probe_candidate(candidate)).await {
             Ok(Ok(_backend)) => results.push(BackendProbeResult {
                 name: candidate.to_string(),
                 available: true,

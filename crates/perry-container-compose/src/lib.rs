@@ -9,6 +9,7 @@ pub mod error;
 pub mod installer;
 pub mod orchestrate;
 pub mod project;
+pub mod rt;
 pub mod service;
 pub mod types;
 pub mod workload;

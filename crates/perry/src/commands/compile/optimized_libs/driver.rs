@@ -580,7 +580,7 @@ pub(crate) fn build_optimized_libs(
     // so tokio was in every stdlib-linking binary. The bridge is tokio-free
     // now, and `async-runtime` is selected only by a feature that hands tokio
     // a future (Cargo implies it: web-fetch, bundled net/tls/ws, the
-    // external net/ws/http pumps, container) or by a shared-tokio wrapper
+    // external net/ws/http pumps) or by a shared-tokio wrapper
     // (above). A program that needs none of those links no tokio.
     features.insert("async-bridge");
     let feature_arg = features_to_cargo_arg(&features);

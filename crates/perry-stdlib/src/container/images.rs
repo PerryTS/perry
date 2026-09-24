@@ -24,14 +24,14 @@ pub unsafe extern "C" fn js_container_pullImage(
     let reference = match string_from_header(reference_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid image reference".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         if let Err(e) = maybe_verify_image(&reference).await {
             return Err::<u64, String>(e);
         }
@@ -55,7 +55,7 @@ pub unsafe extern "C" fn js_container_listImages() -> *mut Promise {
     let promise = js_promise_new_cross_thread();
 
     // Resolves with a JSON-encoded `ImageInfo[]` string.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let backend = get_global_backend().await.map_err(|e| e.to_string())?;
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn js_container_build(
     let spec_json = string_from_header(spec_ptr).unwrap_or_else(|| "{}".to_string());
     let image_name = string_from_header(image_name_ptr).unwrap_or_default();
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let spec: perry_container_compose::types::ComposeServiceBuild =
             serde_json::from_str(&spec_json).map_err(|e| format!("Invalid build spec: {}", e))?;
 
@@ -113,14 +113,14 @@ pub unsafe extern "C" fn js_container_removeImage(
     let reference = match string_from_header(reference_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid image reference".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),

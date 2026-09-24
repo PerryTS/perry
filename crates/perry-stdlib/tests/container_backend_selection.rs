@@ -287,56 +287,58 @@ fn select_backend_for_null_spec_returns_null() {
     }
 }
 
-#[tokio::test]
-async fn probe_all_candidates_returns_full_priority_list() {
-    // The contract for `probe_all_candidates()` (the Rust function
-    // backing `getAvailableBackends()`):
-    //
-    //   1. Always returns one entry per `platform_candidates()` name
-    //   2. Never short-circuits — full list even if first candidate is
-    //      installed (distinguishing from detect_backend's behavior)
-    //   3. Order matches the priority list
-    //   4. Every entry has the consistent shape: name + available + reason
-    //   5. available=true ↔ reason is empty
-    //   6. available=false ↔ reason explains why
-    //
-    // We call the Rust function directly here. The FFI wrapper
-    // (`js_container_getAvailableBackends`) is a thin
-    // `spawn_for_promise_deferred` over this function — its correctness
-    // follows from the wrapping pattern, which other tests in the suite
-    // exercise via the existing setBackend / detectBackend FFIs.
+#[test]
+fn probe_all_candidates_returns_full_priority_list() {
+    perry_container_compose::rt::block_on(async {
+        // The contract for `probe_all_candidates()` (the Rust function
+        // backing `getAvailableBackends()`):
+        //
+        //   1. Always returns one entry per `platform_candidates()` name
+        //   2. Never short-circuits — full list even if first candidate is
+        //      installed (distinguishing from detect_backend's behavior)
+        //   3. Order matches the priority list
+        //   4. Every entry has the consistent shape: name + available + reason
+        //   5. available=true ↔ reason is empty
+        //   6. available=false ↔ reason explains why
+        //
+        // We call the Rust function directly here. The FFI wrapper
+        // (`js_container_getAvailableBackends`) is a thin
+        // `spawn_for_promise_deferred` over this function — its correctness
+        // follows from the wrapping pattern, which other tests in the suite
+        // exercise via the existing setBackend / detectBackend FFIs.
 
-    let priority = perry_container_compose::platform_candidates();
-    let probed = perry_container_compose::probe_all_candidates().await;
+        let priority = perry_container_compose::platform_candidates();
+        let probed = perry_container_compose::probe_all_candidates().await;
 
-    assert_eq!(
-        probed.len(),
-        priority.len(),
-        "must return ONE entry per platform candidate; expected {} got {}",
-        priority.len(),
-        probed.len()
-    );
-
-    for (i, entry) in probed.iter().enumerate() {
         assert_eq!(
-            entry.name, priority[i],
-            "entry {i} must match priority list at same index"
+            probed.len(),
+            priority.len(),
+            "must return ONE entry per platform candidate; expected {} got {}",
+            priority.len(),
+            probed.len()
         );
-        assert!(!entry.name.is_empty(), "every entry must name a backend");
-        if entry.available {
-            assert!(
-                entry.reason.is_empty(),
-                "available=true entry must have empty reason; got {:?}",
-                entry.reason
+
+        for (i, entry) in probed.iter().enumerate() {
+            assert_eq!(
+                entry.name, priority[i],
+                "entry {i} must match priority list at same index"
             );
-        } else {
-            assert!(
-                !entry.reason.is_empty(),
-                "available=false entry must explain why; got empty for {:?}",
-                entry.name
-            );
+            assert!(!entry.name.is_empty(), "every entry must name a backend");
+            if entry.available {
+                assert!(
+                    entry.reason.is_empty(),
+                    "available=true entry must have empty reason; got {:?}",
+                    entry.reason
+                );
+            } else {
+                assert!(
+                    !entry.reason.is_empty(),
+                    "available=false entry must explain why; got empty for {:?}",
+                    entry.name
+                );
+            }
         }
-    }
+    })
 }
 
 #[test]

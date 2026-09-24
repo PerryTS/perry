@@ -73,7 +73,9 @@ report:
 * **They are incomplete, and nothing could tell you.** No lane report names the
   `perry` CLI, `perry-container-compose` or `perry-ui-gtk4`. Between them those
   hold **6 of the 46 edges** — a seventh of the problem, invisible because no
-  lane's scope included a crate with no JS surface, and no lane was measuring
+  lane's scope included a crate outside the default runtime build (the CLI and
+  gtk4 have no JS surface; perry-container-compose is reached only through
+  perry-stdlib's non-default `container` feature), and no lane was measuring
   edges in the first place.
 * **They scope the same blocker differently each time.** Every lane from P1 on
   says some version of "a worker agent has no loop". None says that it is *one
@@ -140,7 +142,7 @@ is tracked — is in `scripts/tokio_inventory.json` and renders with
 | crate | tokio-family deps | reached from JS by | status |
 |---|---|---|---|
 | `perry` | reqwest, tokio, tokio-tungstenite | **nothing** — the CLI's `publish`/`login`/`verify`/`audit`/`run --remote`/`setup`/update-check | never linked into a compiled program |
-| `perry-container-compose` | tokio (normal + dev) | **nothing** — the separate `perry-compose` binary | not in `full`; no JS surface |
+| `perry-container-compose` | ~~tokio (normal + dev)~~ | `import … from 'perry/container'` / `'perry/compose'` / `'perry/workloads'` (perry-stdlib's non-default `container` feature), and the separate `perry-compose` binary | **done (lane K)** — the engine runs on turnloop through its own `rt` module; neither edge remains |
 | `perry-ext-axios` | reqwest, tokio | `import axios` (its own `js_axios_*` symbols; it does **not** take the global `fetch` with it — measured) | never migrated |
 | `perry-ext-fetch` | reqwest, tokio | `import 'node-fetch'` (and the bare `fetch` alias) — and it defines the **same `js_fetch_*` symbols** perry-stdlib owns | never migrated; the overlap SIGSEGVs, see defect 1 |
 | `perry-ext-fastify` | hyper, hyper-util, tokio, tokio-tungstenite | `import Fastify` | never migrated — own accept loop, no edge to perry-ext-http |
@@ -595,10 +597,10 @@ fifteenth item late.
 | **H** | **`perry-stdlib`'s bundled `pg`/`mysql2`/`ioredis`/`mongodb`, its `ws` module and its hyper framework server** — all compiled out of every default build, so this is a policy call about whether the fallback stays, not a transport one | **6** — `perry-stdlib`'s `sqlx`, `redis`, `mongodb`, `hyper`, `hyper-util`, `tokio-rustls` | small as code, a decision as policy. It is the cheapest lockfile reduction in the tree |
 | **I** | **lettre's async transport** — lets `bundled-nodemailer` drop `tokio1` / `tokio1-rustls-tls` / `pool` and keep only the MIME builder, which stays forever (`turnloop-smtp` re-exports it). Gated on A. | **3** — `perry-ext-nodemailer` × 2, `perry-stdlib`'s `lettre` | small |
 | **J** | **The `perry` CLI** — `publish`, `login`, `verify`, `audit`, `run --remote`, `setup`, the update check, telemetry, compat reports. 14 `reqwest::Client` constructions (7 blocking, 7 async) across 11 files, 7 `Runtime::new` sites, 2 WebSocket clients | **3** — `perry` × 3 | medium, and it needs multipart in `turnloop-http`'s client, which does not have it |
-| **K** | **`perry-compose`** | **2** — `perry-container-compose` normal + dev | a rewrite of a 14.8k-line async tool with no JS surface |
+| **K** | **`perry-container-compose`** — the engine behind `perry/container`, `perry/compose` and `perry/workloads` (perry-stdlib's `container` feature) and the `perry-compose` binary | **2** — `perry-container-compose` normal + dev | **done.** Not a rewrite: the async code stays async; its leaves (the backend CLI child processes, timeouts, the async mutex) moved onto a turnloop-backed `rt::block_on`, and `container` needs only the promise bridge |
 | **L** | **`perry-stdlib`'s `tokio`** — the `async-runtime` feature, `common::async_bridge`, and the `perry_ffi_spawn_blocking*` / `spawn_async` C ABI | **1** — the last edge | falls out of A–K; see below |
 | **M** | ~~**`perry-ui-gtk4`** — `ksni` and `mpris-server` *require* tokio~~ — **this was wrong, and the edge is gone.** Neither crate requires tokio. `ksni`'s `async-io` feature is a first-class alternative to its `tokio` default (the two are mutually exclusive — `ksni::compat` has a `compile_error!` if both are on) and carries its own executor thread; `mpris-server`'s `tokio` feature is opt-in, is not in its defaults, and only forwards to `zbus/tokio`, which zbus needs no more than any of its other executor backends. Perry had asked for both features and then kept a direct tokio dependency to feed them. Removed with tray and MPRIS intact — `docs/turnloop/gtk4-report.md` | **1** | **done.** No crate replaced, no capability dropped |
-| **N** | **`perry-ui-android`'s `tungstenite`** — sync 0.24 on its own thread. **Not a tokio edge**; listed because it pins the third tungstenite major in the tree, which is part of E's cost | **1** | small, and only worth doing with E |
+| **N** | **`perry-ui-android`'s `tungstenite`** — synchronous tungstenite (0.24 when this was written, 0.30 since #11065) on a std background thread per connection, with no tokio anywhere in its graph. **Not a tokio edge**; listed because it pins the third tungstenite major in the tree, which is part of E's cost | **1** | small, and only worth doing with E |
 | | | **46** | |
 
 ### Why L is genuinely last, and not a layer you can lift out first

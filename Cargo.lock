@@ -5341,6 +5341,7 @@ dependencies = [
 name = "perry-container-compose"
 version = "0.5.1654"
 dependencies = [
+ "async-lock",
  "async-trait",
  "clap",
  "console 0.16.6",
@@ -5354,9 +5355,9 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 1.0.69",
- "tokio",
  "tracing",
  "tracing-subscriber",
+ "turnloop",
  "which",
 ]
 

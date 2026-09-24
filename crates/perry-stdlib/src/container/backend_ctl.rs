@@ -22,9 +22,9 @@ use std::sync::OnceLock;
 /// at module scope (before any `await` has triggered `get_global_backend`)
 /// gets the live name instead of the misleading `"unknown"` sentinel.
 ///
-/// The synchronous probe uses `tokio::runtime::Handle::try_current()` +
-/// `block_in_place` when called from inside a tokio worker, falling back
-/// to a one-shot `Runtime::new().block_on(...)` otherwise. Returns
+/// The synchronous probe drives `get_global_backend()` with
+/// `perry_container_compose::rt::try_block_on`, a one-shot turnloop loop on
+/// the calling thread (nesting inside another `block_on` is fine). Returns
 /// `"unknown"` only when detection genuinely fails (no backend installed
 /// + non-interactive). Detection latency is bounded by the same 2-second
 /// per-candidate timeout as `detect_backend()`.
@@ -34,38 +34,11 @@ pub unsafe extern "C" fn js_container_getBackend() -> *const StringHeader {
         return string_to_js(b.backend_name());
     }
 
-    // No backend yet — try to populate the singleton synchronously.
-    // Strategy:
-    //   1. If we're inside a tokio worker, `block_in_place` lets us call
-    //      the async detect_backend() without deadlocking the runtime.
-    //   2. If we're on the main thread with no runtime active, spin up
-    //      a fresh single-threaded runtime for the probe.
-    //   3. On any failure (no runtime + main-thread-bound, detection
-    //      error, etc.), fall back to the legacy "unknown" sentinel.
-    let resolved = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        match handle.runtime_flavor() {
-            tokio::runtime::RuntimeFlavor::CurrentThread => {
-                // current_thread runtimes can't `block_in_place`; the only
-                // safe move is to skip the sync probe and let the next
-                // async FFI call populate BACKEND. Return "unknown".
-                None
-            }
-            _ => Some(tokio::task::block_in_place(|| {
-                handle.block_on(get_global_backend())
-            })),
-        }
-    } else {
-        // No active runtime — spin up a temp one purely for detection.
-        // The result is stored in the OnceLock so subsequent FFI calls
-        // see it; the temp runtime is dropped immediately after.
-        match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => Some(rt.block_on(get_global_backend())),
-            Err(_) => None,
-        }
-    };
+    // No backend yet — populate the singleton synchronously on a one-shot
+    // loop. The result is stored in the OnceLock so subsequent FFI calls see
+    // it; the loop is dropped immediately after. On any failure (no loop,
+    // detection error), fall back to the legacy "unknown" sentinel.
+    let resolved = perry_container_compose::rt::try_block_on(get_global_backend()).ok();
 
     match resolved {
         Some(Ok(b)) => string_to_js(b.backend_name()),
@@ -78,7 +51,7 @@ pub unsafe extern "C" fn js_container_getBackend() -> *const StringHeader {
 #[no_mangle]
 pub unsafe extern "C" fn js_container_detectBackend() -> *mut Promise {
     let promise = js_promise_new_cross_thread();
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             match detect_backend().await {
@@ -200,7 +173,7 @@ pub unsafe extern "C" fn js_container_selectBackendFor(
 #[no_mangle]
 pub unsafe extern "C" fn js_container_getAvailableBackends() -> *mut Promise {
     let promise = js_promise_new_cross_thread();
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let probed = perry_container_compose::probe_all_candidates().await;
@@ -253,14 +226,14 @@ pub unsafe extern "C" fn js_container_setBackend(name_ptr: *const StringHeader) 
     let name = match string_from_header(name_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid backend name pointer".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             // Reject if BACKEND already initialised — OnceLock can't be
@@ -332,14 +305,14 @@ pub unsafe extern "C" fn js_container_setBackends(
     let names_json = match string_from_header(names_json_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid names array pointer".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             // Reject if BACKEND already initialised — same OnceLock

@@ -294,15 +294,18 @@ async-bridge = []
 
 # Async runtime (tokio) - internal feature. The bridge plus the tokio
 # current-thread runtime (`common::tokio_bridge`), for the features that still
-# hand it tokio futures: bundled net / tls / ws sockets, reqwest fetch, the
-# container engine, and the `perry_ffi_spawn_async` / `_with_reactor` ABI that
+# hand it tokio futures: bundled net / tls / ws sockets, reqwest fetch, and the
+# `perry_ffi_spawn_async` / `_with_reactor` ABI that
 # perry-ext-net / perry-ext-http / the db wrappers' decline paths use.
 async-runtime = ["async-bridge", "dep:tokio"]
 
 # OCI container subsystem (perry/container, perry/compose, perry/workloads).
 # Pulls in perry-container-compose and exposes the `js_container_*` and
-# `js_compose_*` FFI exports that the codegen dispatch table targets.
-container = ["dep:perry-container-compose", "async-runtime"]
+# `js_compose_*` FFI exports that the codegen dispatch table targets. No tokio
+# (tokio lane K): the compose engine runs on `perry_container_compose::rt`'s
+# turnloop loops (`container/executor.rs`) and settles through the promise
+# bridge alone.
+container = ["dep:perry-container-compose", "async-bridge"]
 
 [dependencies]
 perry-ffi.workspace = true

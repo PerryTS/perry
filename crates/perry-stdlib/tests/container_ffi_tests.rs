@@ -63,35 +63,41 @@ unsafe fn await_promise_sync(promise: *mut Promise) -> Result<u64, String> {
 // ========== js_container_run ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_run_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_run(null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_run_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_run(null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_list ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_list_contract() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_list(1);
-        let _ = await_promise_sync(p);
-    }
+#[test]
+fn test_js_container_list_contract() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_list(1);
+            let _ = await_promise_sync(p);
+        }
+    })
 }
 
 // ========== js_container_listImages ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_list_images_contract() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_listImages();
-        let _ = await_promise_sync(p);
-    }
+#[test]
+fn test_js_container_list_images_contract() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_listImages();
+            let _ = await_promise_sync(p);
+        }
+    })
 }
 
 // ========== js_container_getBackend ==========
@@ -108,189 +114,222 @@ fn test_js_container_get_backend_contract() {
 // ========== js_container_detectBackend ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 1.8 | Property: -
-#[tokio::test]
-async fn test_js_container_detect_backend_contract() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_detectBackend();
-        let _ = await_promise_sync(p);
-    }
+#[test]
+fn test_js_container_detect_backend_contract() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_detectBackend();
+            let _ = await_promise_sync(p);
+        }
+    })
 }
 
 // ========== js_container_compose_ps ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_compose_ps_contract() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_compose_ps(0.0);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_compose_ps_contract() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_compose_ps(0.0);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_compose_logs ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_compose_logs_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_compose_logs(0.0, null(), 10.0);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_compose_logs_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_compose_logs(0.0, null(), 10.0);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_compose_exec ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_compose_exec_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_compose_exec(0.0, null(), null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_compose_exec_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_compose_exec(0.0, null(), null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_run_malformed() {
-    unsafe {
-        let header = make_string_header("{ bad json");
-        let p = perry_stdlib::container::js_container_run(header.as_ptr() as *const StringHeader);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_run_malformed() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let header = make_string_header("{ bad json");
+            let p =
+                perry_stdlib::container::js_container_run(header.as_ptr() as *const StringHeader);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_create ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_create_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_create(null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_create_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_create(null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_start ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_start_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_start(null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_start_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_start(null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_stop ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_stop_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_stop(null(), 10);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_stop_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_stop(null(), 10);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_remove ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_remove_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_remove(null(), 1);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_remove_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_remove(null(), 1);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_inspect ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_inspect_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_inspect(null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_inspect_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_inspect(null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_logs ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_logs_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_logs(null(), 10);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_logs_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_logs(null(), 10);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_exec ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_exec_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_exec(null(), null(), null(), null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_exec_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_exec(null(), null(), null(), null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_pullImage ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_pull_image_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_pullImage(null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_pull_image_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_pullImage(null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_removeImage ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_remove_image_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_removeImage(null(), 0);
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_remove_image_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_removeImage(null(), 0);
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_composeUp ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_compose_up_null() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_composeUp(null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_compose_up_null() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_composeUp(null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }
 
 // ========== js_container_compose_down ==========
 
 // Feature: perry-container | Layer: ffi-contract | Req: 11.7 | Property: -
-#[tokio::test]
-async fn test_js_container_compose_down_contract() {
-    unsafe {
-        let p = perry_stdlib::container::js_container_compose_down(0.0, null());
-        let res = await_promise_sync(p);
-        assert!(res.is_err());
-    }
+#[test]
+fn test_js_container_compose_down_contract() {
+    perry_container_compose::rt::block_on(async {
+        unsafe {
+            let p = perry_stdlib::container::js_container_compose_down(0.0, null());
+            let res = await_promise_sync(p);
+            assert!(res.is_err());
+        }
+    })
 }

@@ -71,91 +71,99 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn already_running_skips_orchestration() {
-        let mock = MockBackend::new();
-        // Default: any inspect returns running info → is_running = true.
-        mock.set_inspect_running(true).await;
-        let svc = svc_with_image("alpine");
-        let result = orchestrate_service(&svc, "web", &mock).await.unwrap();
-        assert!(
-            matches!(result, None),
-            "running service should skip and return None"
-        );
-        let calls = mock.calls().await;
-        assert!(
-            !calls.iter().any(|c| matches!(c, RecordedCall::Run { .. })),
-            "running service must not call run"
-        );
-        assert!(
-            !calls
-                .iter()
-                .any(|c| matches!(c, RecordedCall::Start { .. })),
-            "running service must not call start"
-        );
+    #[test]
+    fn already_running_skips_orchestration() {
+        crate::rt::block_on(async {
+            let mock = MockBackend::new();
+            // Default: any inspect returns running info → is_running = true.
+            mock.set_inspect_running(true).await;
+            let svc = svc_with_image("alpine");
+            let result = orchestrate_service(&svc, "web", &mock).await.unwrap();
+            assert!(
+                matches!(result, None),
+                "running service should skip and return None"
+            );
+            let calls = mock.calls().await;
+            assert!(
+                !calls.iter().any(|c| matches!(c, RecordedCall::Run { .. })),
+                "running service must not call run"
+            );
+            assert!(
+                !calls
+                    .iter()
+                    .any(|c| matches!(c, RecordedCall::Start { .. })),
+                "running service must not call start"
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn stopped_existing_service_is_started_not_run() {
-        let mock = MockBackend::new();
-        mock.set_inspect_running(false).await;
-        let svc = svc_with_image("alpine");
-        let result = orchestrate_service(&svc, "web", &mock).await.unwrap();
-        assert!(
-            matches!(result, None),
-            "start path returns None (no fresh handle)"
-        );
-        let calls = mock.calls().await;
-        assert!(
-            calls
-                .iter()
-                .any(|c| matches!(c, RecordedCall::Start { .. })),
-            "expected backend.start to be called"
-        );
-        assert!(
-            !calls.iter().any(|c| matches!(c, RecordedCall::Run { .. })),
-            "stopped+existing path must not call run"
-        );
+    #[test]
+    fn stopped_existing_service_is_started_not_run() {
+        crate::rt::block_on(async {
+            let mock = MockBackend::new();
+            mock.set_inspect_running(false).await;
+            let svc = svc_with_image("alpine");
+            let result = orchestrate_service(&svc, "web", &mock).await.unwrap();
+            assert!(
+                matches!(result, None),
+                "start path returns None (no fresh handle)"
+            );
+            let calls = mock.calls().await;
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| matches!(c, RecordedCall::Start { .. })),
+                "expected backend.start to be called"
+            );
+            assert!(
+                !calls.iter().any(|c| matches!(c, RecordedCall::Run { .. })),
+                "stopped+existing path must not call run"
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn missing_service_with_build_calls_build_then_run() {
-        let mock = MockBackend::new();
-        mock.set_inspect_not_found().await;
-        let svc = svc_with_build(".");
-        let result = orchestrate_service(&svc, "api", &mock).await.unwrap();
-        assert!(matches!(result, Some(_)), "fresh run returns a handle");
-        let calls = mock.calls().await;
-        let build_idx = calls
-            .iter()
-            .position(|c| matches!(c, RecordedCall::Build { .. }))
-            .expect("expected backend.build");
-        let run_idx = calls
-            .iter()
-            .position(|c| matches!(c, RecordedCall::Run { .. }))
-            .expect("expected backend.run");
-        assert!(
-            build_idx < run_idx,
-            "build must precede run (Task 0.4 ordering invariant)"
-        );
+    #[test]
+    fn missing_service_with_build_calls_build_then_run() {
+        crate::rt::block_on(async {
+            let mock = MockBackend::new();
+            mock.set_inspect_not_found().await;
+            let svc = svc_with_build(".");
+            let result = orchestrate_service(&svc, "api", &mock).await.unwrap();
+            assert!(matches!(result, Some(_)), "fresh run returns a handle");
+            let calls = mock.calls().await;
+            let build_idx = calls
+                .iter()
+                .position(|c| matches!(c, RecordedCall::Build { .. }))
+                .expect("expected backend.build");
+            let run_idx = calls
+                .iter()
+                .position(|c| matches!(c, RecordedCall::Run { .. }))
+                .expect("expected backend.run");
+            assert!(
+                build_idx < run_idx,
+                "build must precede run (Task 0.4 ordering invariant)"
+            );
+        })
     }
 
-    #[tokio::test]
-    async fn missing_service_no_build_skips_build() {
-        let mock = MockBackend::new();
-        mock.set_inspect_not_found().await;
-        let svc = svc_with_image("alpine"); // image set, no build
-        let _ = orchestrate_service(&svc, "cache", &mock).await.unwrap();
-        let calls = mock.calls().await;
-        assert!(
-            !calls
-                .iter()
-                .any(|c| matches!(c, RecordedCall::Build { .. })),
-            "service without build field must not call build"
-        );
-        assert!(
-            calls.iter().any(|c| matches!(c, RecordedCall::Run { .. })),
-            "missing-image service should call run"
-        );
+    #[test]
+    fn missing_service_no_build_skips_build() {
+        crate::rt::block_on(async {
+            let mock = MockBackend::new();
+            mock.set_inspect_not_found().await;
+            let svc = svc_with_image("alpine"); // image set, no build
+            let _ = orchestrate_service(&svc, "cache", &mock).await.unwrap();
+            let calls = mock.calls().await;
+            assert!(
+                !calls
+                    .iter()
+                    .any(|c| matches!(c, RecordedCall::Build { .. })),
+                "service without build field must not call build"
+            );
+            assert!(
+                calls.iter().any(|c| matches!(c, RecordedCall::Run { .. })),
+                "missing-image service should call run"
+            );
+        })
     }
 }

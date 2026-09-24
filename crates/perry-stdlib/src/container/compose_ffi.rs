@@ -25,7 +25,7 @@ pub unsafe extern "C" fn js_container_compose_start(
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
@@ -34,7 +34,7 @@ pub unsafe extern "C" fn js_container_compose_start(
 
     let services_json = unsafe { string_from_header(services_json_ptr) };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let services: Vec<String> = services_json
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -63,7 +63,7 @@ pub unsafe extern "C" fn js_container_compose_stop(
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn js_container_compose_stop(
 
     let services_json = unsafe { string_from_header(services_json_ptr) };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let services: Vec<String> = services_json
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -101,7 +101,7 @@ pub unsafe extern "C" fn js_container_compose_restart(
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
@@ -110,7 +110,7 @@ pub unsafe extern "C" fn js_container_compose_restart(
 
     let services_json = unsafe { string_from_header(services_json_ptr) };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let services: Vec<String> = services_json
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
@@ -137,14 +137,14 @@ pub unsafe extern "C" fn js_container_compose_config(handle: f64) -> *mut Promis
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move { engine.config().map_err(|e| e.to_string()) },
         |yaml| {
@@ -169,15 +169,14 @@ pub unsafe extern "C" fn js_container_composeUp(
     let spec = match types::parse_compose_spec(spec_ptr) {
         Ok(s) => s,
         Err(e) => {
-            crate::common::spawn_for_promise(
-                promise as *mut u8,
-                async move { Err::<u64, String>(e) },
-            );
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
+                Err::<u64, String>(e)
+            });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
@@ -303,14 +302,14 @@ pub unsafe extern "C" fn js_container_compose_down(
     let engine = match types::take_compose_handle(handle_id as u64) {
         Some(h) => h,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let _backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
@@ -336,7 +335,7 @@ pub unsafe extern "C" fn js_container_compose_ps(handle: f64) -> *mut Promise {
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
@@ -348,7 +347,7 @@ pub unsafe extern "C" fn js_container_compose_ps(handle: f64) -> *mut Promise {
     // opaque NaN-boxed integer that user code couldn't iterate; the TS
     // type `Promise<ContainerInfo[]>` lied about the actual shape. Now
     // the Promise resolves to a JSON string the user `JSON.parse`s.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let _backend = get_global_backend().await.map_err(|e| e.to_string())?;
@@ -382,7 +381,7 @@ pub unsafe extern "C" fn js_container_compose_logs(
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
@@ -398,7 +397,7 @@ pub unsafe extern "C" fn js_container_compose_logs(
 
     // Resolve with a JSON-encoded `ContainerLogs` string ({ stdout,
     // stderr }) — see `compose_ps` for the rationale.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let _backend = get_global_backend().await.map_err(|e| e.to_string())?;
@@ -433,7 +432,7 @@ pub unsafe extern "C" fn js_container_compose_exec(
     let engine = match types::get_compose_handle(handle_id as u64) {
         Some(h) => h.clone(),
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid compose handle".to_string())
             });
             return promise;
@@ -444,7 +443,7 @@ pub unsafe extern "C" fn js_container_compose_exec(
     let cmd_json = unsafe { string_from_header(cmd_json_ptr) };
 
     // Resolve with a JSON-encoded `ContainerLogs` string.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let service = service_opt.ok_or_else(|| "Invalid service name".to_string())?;

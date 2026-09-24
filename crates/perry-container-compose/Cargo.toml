@@ -14,7 +14,10 @@ workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = "0.9"
-tokio = { workspace = true }
+# turnloop, not tokio: `rt` drives the async engine on a turnloop loop
+# (child processes, timers, signals) — see src/rt/mod.rs.
+turnloop = { workspace = true }
+async-lock = "3"
 clap = { workspace = true }
 thiserror = { workspace = true }
 tracing = "0.1"
@@ -29,7 +32,6 @@ console = "0.16"
 which = "8.0"
 
 [dev-dependencies]
-tokio = { workspace = true }
 proptest = "1"
 
 [features]

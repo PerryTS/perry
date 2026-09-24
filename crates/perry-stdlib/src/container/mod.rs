@@ -11,6 +11,8 @@ pub mod verification;
 // Topical FFI sub-modules split out of this trunk (pure code move).
 mod backend_ctl;
 mod compose_ffi;
+// Drives each operation's compose future on a turnloop worker (tokio lane K).
+pub(crate) mod executor;
 mod images;
 mod lifecycle;
 mod logs_exec;
@@ -56,7 +58,8 @@ use std::sync::OnceLock;
 
 // Global backend instance - initialised once at first use
 pub(crate) static BACKEND: OnceLock<Arc<dyn ContainerBackend>> = OnceLock::new();
-static BACKEND_INIT_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static BACKEND_INIT_MUTEX: perry_container_compose::rt::Mutex<()> =
+    perry_container_compose::rt::Mutex::new(());
 
 /// Get or initialise the global backend instance.
 ///
@@ -231,18 +234,19 @@ pub(crate) async fn maybe_verify_image(image: &str) -> Result<(), String> {
 /// 1. Forces `libperry_stdlib`'s container symbols to be retained (any
 ///    user code calling `js_container_module_init()` will pull in the
 ///    transitively-referenced FFI symbols and prevent dead-strip).
-/// 2. Pre-warms the backend singleton when called from a tokio context —
-///    avoids paying the probe latency on the first user `run()` call.
+/// 2. Pre-warms the backend singleton when called from inside an async
+///    context (an `rt::block_on`) — avoids paying the probe latency on the
+///    first user `run()` call.
 ///
 /// Backend probing is async + may invoke the interactive `BackendInstaller`,
 /// so we must not block here. Instead we spawn the probe as a detached
-/// tokio task; if a tokio runtime isn't yet running (called from `main`
-/// before any async setup), the task simply doesn't run and the first
-/// real FFI call will trigger probe-on-demand the same way it always has.
+/// background task; outside an async context (called from `main` before any
+/// async setup) nothing is spawned and the first real FFI call will trigger
+/// probe-on-demand the same way it always has.
 #[no_mangle]
 pub extern "C" fn js_container_module_init() {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async {
+    if perry_container_compose::rt::in_context() {
+        executor::spawn_detached(async {
             let _ = get_global_backend().await;
         });
     }
@@ -280,44 +284,20 @@ fn install_default_signal_cleanup() {
     if std::env::var("PERRY_NO_DEFAULT_SIGINT_CLEANUP").is_ok() {
         return;
     }
-    // Need a tokio runtime handle to drive the async `down()` calls
-    // from inside the signal handler. If there's no current runtime
-    // (the user invoked module_init before any async work), skip the
-    // install — the user will set up their own teardown if they need
-    // signal handling at all.
-    let rt = match tokio::runtime::Handle::try_current() {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    rt.spawn(async {
-        // Listen for both SIGINT (Ctrl-C) and SIGTERM (kill) on Unix;
-        // Windows only delivers Ctrl-C / Ctrl-Break which tokio maps to
-        // ctrl_c() / ctrl_break(). The select! exits as soon as either
-        // arrives, then the cleanup runs once.
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sigint = match signal(SignalKind::interrupt()) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            let mut sigterm = match signal(SignalKind::terminate()) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            let exit_code = tokio::select! {
-                _ = sigint.recv()  => 130,  // 128 + SIGINT(2)
-                _ = sigterm.recv() => 143,  // 128 + SIGTERM(15)
-            };
+    // Same gate as the pre-warm above: only from inside an async context
+    // (the user invoked module_init before any async work → skip the
+    // install; the user will set up their own teardown if they need signal
+    // handling at all).
+    if !perry_container_compose::rt::in_context() {
+        return;
+    }
+    executor::spawn_detached(async {
+        // SIGINT (Ctrl-C) or SIGTERM (kill) on Unix; Windows delivers only
+        // console Ctrl-C. Whichever arrives first runs the cleanup once, then
+        // the process exits 128 + signo (130 / 143).
+        if let Ok(signal) = perry_container_compose::rt::shutdown_signal().await {
             drain_compose_handles().await;
-            std::process::exit(exit_code);
-        }
-        #[cfg(not(unix))]
-        {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                drain_compose_handles().await;
-                std::process::exit(130);
-            }
+            std::process::exit(signal.exit_code());
         }
     });
 }
@@ -355,22 +335,21 @@ mod smoke_tests {
     use logs_exec::js_container_logs;
 
     /// Task 27.1: `js_container_module_init` must be callable without panic
-    /// outside an active tokio runtime. The link-anchor purpose mustn't
-    /// depend on async setup.
+    /// outside an async context. The link-anchor purpose mustn't depend on
+    /// async setup.
     #[test]
-    fn module_init_is_safe_to_call_outside_tokio() {
+    fn module_init_is_safe_to_call_outside_an_async_context() {
         js_container_module_init();
     }
 
-    /// Task 27.1: when called inside a tokio runtime, module_init schedules
+    /// Task 27.1: when called inside an async context, module_init schedules
     /// the backend probe without blocking the caller. The detached probe
     /// task may fail (no backend installed in CI); we only assert the call
     /// itself returns synchronously without panic and that the runtime is
     /// still alive afterwards.
     #[test]
-    fn module_init_inside_tokio_runtime_does_not_block() {
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        rt.block_on(async {
+    fn module_init_inside_an_async_context_does_not_block() {
+        perry_container_compose::rt::block_on(async {
             js_container_module_init();
             // If we reach here without hanging, the call returned
             // synchronously — invariant proved.

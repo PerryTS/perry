@@ -22,15 +22,14 @@ pub unsafe extern "C" fn js_container_run(spec_ptr: *const StringHeader) -> *mut
     let spec = match types::parse_container_spec(spec_ptr) {
         Ok(s) => s,
         Err(e) => {
-            crate::common::spawn_for_promise(
-                promise as *mut u8,
-                async move { Err::<u64, String>(e) },
-            );
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
+                Err::<u64, String>(e)
+            });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         if let Err(e) = maybe_verify_image(&spec.image).await {
             return Err::<u64, String>(e);
         }
@@ -71,15 +70,14 @@ pub unsafe extern "C" fn js_container_create(spec_ptr: *const StringHeader) -> *
     let spec = match types::parse_container_spec(spec_ptr) {
         Ok(s) => s,
         Err(e) => {
-            crate::common::spawn_for_promise(
-                promise as *mut u8,
-                async move { Err::<u64, String>(e) },
-            );
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
+                Err::<u64, String>(e)
+            });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         if let Err(e) = maybe_verify_image(&spec.image).await {
             return Err::<u64, String>(e);
         }
@@ -116,14 +114,14 @@ pub unsafe extern "C" fn js_container_start(id_ptr: *const StringHeader) -> *mut
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid container ID".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
@@ -149,14 +147,14 @@ pub unsafe extern "C" fn js_container_stop(
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid container ID".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let timeout_opt = if timeout < 0 {
             None
         } else {
@@ -187,14 +185,14 @@ pub unsafe extern "C" fn js_container_remove(
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid container ID".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
+    crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
         let backend = match get_global_backend().await {
             Ok(b) => Arc::clone(b),
             Err(e) => return Err::<u64, String>(e.to_string()),
@@ -234,7 +232,7 @@ pub unsafe extern "C" fn js_container_downByProject(
     let project = match string_from_header(project_ptr) {
         Some(s) if !s.is_empty() => s,
         _ => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("project name required".to_string())
             });
             return promise;
@@ -242,7 +240,7 @@ pub unsafe extern "C" fn js_container_downByProject(
     };
     let opts_json = string_from_header(opts_ptr);
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             use perry_container_compose::compose::{down_by_project, CleanupOptions};
@@ -274,7 +272,7 @@ pub unsafe extern "C" fn js_container_downAll(opts_ptr: *const StringHeader) -> 
     let promise = js_promise_new_cross_thread();
     let opts_json = string_from_header(opts_ptr);
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             use perry_container_compose::compose::{down_all, CleanupOptions};
@@ -306,14 +304,14 @@ pub unsafe extern "C" fn js_container_removeIfExists(
     let id = match string_from_header(id_ptr) {
         Some(s) if !s.is_empty() => s,
         _ => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("container ID required".to_string())
             });
             return promise;
         }
     };
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             use perry_container_compose::compose::remove_if_exists;
@@ -365,7 +363,7 @@ pub(crate) fn parse_cleanup_options(
 pub unsafe extern "C" fn js_container_list(all: i32) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
 
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let backend = get_global_backend().await.map_err(|e| e.to_string())?;
@@ -390,7 +388,7 @@ pub unsafe extern "C" fn js_container_inspect(id_ptr: *const StringHeader) -> *m
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
         None => {
-            crate::common::spawn_for_promise(promise as *mut u8, async move {
+            crate::container::executor::spawn_for_promise(promise as *mut u8, async move {
                 Err::<u64, String>("Invalid container ID".to_string())
             });
             return promise;
@@ -398,7 +396,7 @@ pub unsafe extern "C" fn js_container_inspect(id_ptr: *const StringHeader) -> *m
     };
 
     // Resolves with a JSON-encoded `ContainerInfo` string.
-    crate::common::spawn_for_promise_deferred(
+    crate::container::executor::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
             let backend = get_global_backend().await.map_err(|e| e.to_string())?;

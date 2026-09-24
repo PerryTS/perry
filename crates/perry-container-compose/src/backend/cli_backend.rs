@@ -1,5 +1,6 @@
 use super::*;
 use crate::error::{ComposeError, Result};
+use crate::rt::Command;
 use crate::types::{
     ComposeNetwork, ComposeServiceBuild, ComposeVolume, ContainerHandle, ContainerInfo,
     ContainerLogs, ContainerSpec, ImageInfo,
@@ -8,7 +9,6 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::process::Command;
 
 pub struct CliBackend {
     pub bin: PathBuf,
@@ -34,7 +34,7 @@ impl CliBackend {
         let timeout = Duration::from_secs(timeout_secs);
 
         let fut = Command::new(&self.bin).args(args).output();
-        let output = match tokio::time::timeout(timeout, fut).await {
+        let output = match crate::rt::timeout(timeout, fut).await {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => return Err(ComposeError::IoError(e)),
             Err(_) => {
