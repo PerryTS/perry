@@ -170,6 +170,17 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
                         uint8_proto.to_bits(),
                     );
                 }
+                // #11239: and the constructor side of the same edge —
+                // `Object.getPrototypeOf(Buffer) === Uint8Array`, as for any
+                // `class Buffer extends Uint8Array`.
+                let uint8_ctor =
+                    js_get_global_this_builtin_value("Uint8Array".as_ptr(), "Uint8Array".len());
+                if JSValue::from_bits(uint8_ctor.to_bits()).is_pointer() {
+                    crate::closure::closure_set_static_prototype(
+                        ctor.as_pointer::<crate::closure::ClosureHeader>() as usize,
+                        uint8_ctor.to_bits(),
+                    );
+                }
             }
             js_object_set_field_by_name(singleton(), name_key, ctor_value);
             super::super::set_builtin_property_attrs(

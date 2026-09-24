@@ -1,5 +1,10 @@
-/// Type ID constant for Buffer/Uint8Array - matches class_id 0xFFFF0004
+/// Reserved class id for `instanceof Uint8Array` (a plain `Uint8Array` or a
+/// Node `Buffer`, which is a `Uint8Array` subclass).
 pub const BUFFER_TYPE_ID: u32 = 0xFFFF0004;
+
+/// Reserved class id for `instanceof Buffer` (#11239): Node Buffers only, not
+/// a plain `Uint8Array`. Keep in sync with codegen's `lower_instanceof` map.
+pub const NODE_BUFFER_CLASS_ID: u32 = 0xFFFF000C;
 
 /// Buffer header - similar to StringHeader but specifically for binary data
 /// NOTE: Layout must match ArrayHeader (length at offset 0, capacity at offset 4)

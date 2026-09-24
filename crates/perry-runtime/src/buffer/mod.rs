@@ -47,7 +47,7 @@ mod view_tests;
 pub(crate) use view::resolve_data_ptr as resolve_span_data_ptr;
 
 // ---- Re-exports: types & constants ----
-pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
+pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
 pub(crate) use header::{is_small_buf_slab_addr, visit_ab_alias_slot};
@@ -111,7 +111,8 @@ pub use resizable::{
 // buffer registry with `Buffer` / `Uint8Array` but have NO integer-indexed own
 // properties. See `exotic_view`.
 pub use exotic_view::{
-    canonical_index_key, is_byte_indexed_buffer, is_node_buffer, is_non_indexed_buffer_view,
+    buffer_brand, canonical_index_key, is_byte_indexed_buffer, is_node_buffer,
+    is_non_indexed_buffer_view, BufferBrand,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----

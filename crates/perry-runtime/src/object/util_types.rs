@@ -26,34 +26,11 @@ fn jsvalue_addr(v: f64) -> usize {
     crate::value::addr_class::object_ref_addr(v)
 }
 
-fn jsvalue_extends_data_view(value: f64) -> bool {
-    let v = JSValue::from_bits(value.to_bits());
-    if !v.is_pointer() {
-        return false;
-    }
-    let ptr = v.as_pointer::<u8>();
-    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
-        return false;
-    }
-    unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return false;
-        }
-        let obj = ptr as *const ObjectHeader;
-        let class_id = (*obj).class_id;
-        class_id != 0 && crate::object::extends_builtin_data_view(class_id)
-    }
-}
-
+/// Element kind of a typed-array value (a Node `Buffer` is a `Uint8Array`).
+/// #11239: answered by the shared [`super::view_brand`] classifier.
 #[inline]
 fn jsvalue_typed_array_kind(v: f64) -> Option<u8> {
-    let addr = jsvalue_addr(v);
-    if super::typed_array_proto_thunks::is_typed_array_buffer(addr) {
-        Some(crate::typedarray::KIND_UINT8)
-    } else {
-        crate::typedarray::lookup_typed_array_kind(addr)
-    }
+    super::view_brand::view_brand(v).and_then(super::view_brand::ViewBrand::typed_array_kind)
 }
 
 #[inline]
@@ -193,26 +170,22 @@ pub extern "C" fn js_util_types_is_any_array_buffer(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_array_buffer_view(value: f64) -> f64 {
-    let addr = jsvalue_addr(value);
-    nanbox_bool(
-        !crate::buffer::is_any_array_buffer(addr)
-            && (crate::buffer::is_uint8array_buffer(addr)
-                || crate::buffer::is_data_view(addr)
-                || jsvalue_extends_data_view(value))
-            || jsvalue_typed_array_kind(value).is_some(),
-    )
+    nanbox_bool(super::view_brand::view_brand(value).is_some())
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
     nanbox_bool(
-        crate::buffer::is_data_view(jsvalue_addr(value)) || jsvalue_extends_data_view(value),
+        super::view_brand::view_brand(value) == Some(super::view_brand::ViewBrand::DataView),
     )
 }
 
 #[no_mangle]
 pub extern "C" fn js_util_types_is_typed_array(value: f64) -> f64 {
-    nanbox_bool(jsvalue_typed_array_kind(value).is_some())
+    nanbox_bool(
+        super::view_brand::view_brand(value)
+            .is_some_and(super::view_brand::ViewBrand::is_typed_array),
+    )
 }
 
 #[no_mangle]

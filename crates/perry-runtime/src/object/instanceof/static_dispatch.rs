@@ -273,24 +273,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
     }
 
-    // Special handling for Uint8Array/Buffer (class_id 0xFFFF0004)
-    // Perry buffers are raw BufferHeader pointers bitcast to f64 (not NaN-boxed),
-    // so the normal POINTER_TAG check doesn't work for them.
-    // We use a thread-local buffer registry to identify buffer pointers.
-    if class_id == crate::buffer::BUFFER_TYPE_ID {
-        // Check if NaN-boxed pointer
-        if jsval.is_pointer() {
-            let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-            if crate::buffer::is_registered_buffer(addr) {
-                return true_val;
-            }
-        }
-        // Check if raw pointer (buffer values are bitcast, not NaN-boxed)
-        let top16 = (bits >> 48) as u16;
-        if top16 == 0 && bits >= 0x1000 && crate::buffer::is_registered_buffer(bits as usize) {
-            return true_val;
-        }
-        return false_val;
+    // `instanceof Uint8Array` (class_id 0xFFFF0004) and `instanceof Buffer`
+    // (0xFFFF000C). #11239: both answer from the shared view classifier. The
+    // old arm tested bare buffer-registry membership for BOTH ids, which also
+    // holds for an ArrayBuffer, a DataView and crypto key material — so
+    // `new DataView(ab) instanceof Buffer` was true — while a registry-backed
+    // `class S extends Uint8Array` instance was not `instanceof Uint8Array`.
+    if class_id == crate::buffer::BUFFER_TYPE_ID || class_id == crate::buffer::NODE_BUFFER_CLASS_ID
+    {
+        let brand = super::super::view_brand::view_brand(value);
+        let matches = if class_id == crate::buffer::NODE_BUFFER_CLASS_ID {
+            brand == Some(super::super::view_brand::ViewBrand::NodeBuffer)
+        } else {
+            brand.and_then(super::super::view_brand::ViewBrand::typed_array_kind)
+                == Some(crate::typedarray::KIND_UINT8)
+        };
+        return if matches { true_val } else { false_val };
     }
 
     // ArrayBuffer — Perry models ArrayBuffer storage with BufferHeader values

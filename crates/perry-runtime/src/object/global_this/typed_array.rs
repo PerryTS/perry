@@ -294,63 +294,11 @@ pub(crate) extern "C" fn array_buffer_is_view_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
-    let jv = JSValue::from_bits(value.to_bits());
-    let addr = if jv.is_pointer() {
-        (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if value.to_bits() >> 48 == 0 && value.to_bits() > 0x10000 {
-        value.to_bits() as usize
-    } else {
-        0
-    };
-    let is_view = (addr != 0
-        && !crate::buffer::is_any_array_buffer(addr)
-        && (super::super::typed_array_proto_thunks::is_typed_array_buffer(addr)
-            || crate::buffer::is_data_view(addr)))
-        || jsvalue_extends_data_view(value)
-        || jsvalue_extends_typed_array(value)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some();
+    // #11239: the same classifier `util.types.isArrayBufferView` and the
+    // direct-call lowering answer from, so `const f = ArrayBuffer.isView`
+    // cannot disagree with `ArrayBuffer.isView(x)` (it did for a Buffer).
+    let is_view = crate::object::view_brand::view_brand(value).is_some();
     f64::from_bits(crate::value::JSValue::bool(is_view).bits())
-}
-
-fn jsvalue_extends_data_view(value: f64) -> bool {
-    let v = JSValue::from_bits(value.to_bits());
-    if !v.is_pointer() {
-        return false;
-    }
-    let ptr = v.as_pointer::<u8>();
-    let Some(gc_header) =
-        (unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) })
-    else {
-        return false;
-    };
-    unsafe {
-        if (*gc_header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return false;
-        }
-        let obj = ptr as *const ObjectHeader;
-        let class_id = (*obj).class_id;
-        class_id != 0 && crate::object::extends_builtin_data_view(class_id)
-    }
-}
-
-fn jsvalue_extends_typed_array(value: f64) -> bool {
-    let v = JSValue::from_bits(value.to_bits());
-    if !v.is_pointer() {
-        return false;
-    }
-    let ptr = v.as_pointer::<u8>();
-    let Some(gc_header) =
-        (unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) })
-    else {
-        return false;
-    };
-    unsafe {
-        if (*gc_header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
-            return false;
-        }
-        let class_id = (*(ptr as *const ObjectHeader)).class_id;
-        class_id != 0 && crate::object::extends_builtin_typed_array(class_id)
-    }
 }
 
 #[derive(Clone, Copy)]

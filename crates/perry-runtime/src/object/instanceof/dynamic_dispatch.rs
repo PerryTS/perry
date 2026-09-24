@@ -344,7 +344,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
     }
     if is_buffer_constructor_value(type_ref) {
-        return js_instanceof(value, crate::buffer::BUFFER_TYPE_ID);
+        return js_instanceof(value, crate::buffer::NODE_BUFFER_CLASS_ID);
     }
     if let Some(name) = identify_global_builtin_constructor(type_ref) {
         match name {

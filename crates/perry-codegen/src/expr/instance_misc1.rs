@@ -481,12 +481,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // GC_TYPE_OBJECT carrying this class id, so the runtime
                 // class-id chain fast-path matches it (see instanceof.rs).
                 "SuppressedError" => 0xFFFF003Eu32,
-                // Uint8Array / Buffer — runtime detects these via a
-                // thread-local buffer registry (see buffer.rs). The
-                // TextEncoder path registers its ArrayHeader result
-                // in that same registry so `encoded instanceof Uint8Array`
-                // returns true.
-                "Uint8Array" | "Buffer" => 0xFFFF0004u32,
+                // Uint8Array / Buffer — runtime answers both from the shared
+                // view classifier (perry-runtime object/view_brand.rs). They
+                // are distinct ids because a plain Uint8Array is NOT a
+                // Buffer (#11239); keep in sync with `BUFFER_TYPE_ID` and
+                // `NODE_BUFFER_CLASS_ID` in perry-runtime/src/buffer/header.rs.
+                "Uint8Array" => 0xFFFF0004u32,
+                "Buffer" => 0xFFFF000Cu32,
                 // Other %TypedArray% kinds (#3148). The runtime resolves the
                 // actual kind via TYPED_ARRAY_REGISTRY + class_id_for_kind in
                 // instanceof.rs; these reserved ids must match the

@@ -65,19 +65,73 @@ pub fn is_non_indexed_buffer_view(addr: usize) -> bool {
     super::is_any_array_buffer(addr) || super::is_data_view(addr)
 }
 
+/// #11239: which JS type a registered `BufferHeader` IS.
+///
+/// Five JS types share `BufferHeader` storage and the buffer registry. Every
+/// predicate that asks "is this a Buffer / a Uint8Array / a view?" must answer
+/// from this one classification — `ArrayBuffer.isView`, `util.types.*`,
+/// `instanceof Uint8Array` / `instanceof Buffer` and `Buffer.isBuffer` each
+/// used to spell their own subset of the side-table probes below, and they
+/// disagreed: a Buffer was `instanceof Uint8Array` but not `isView`, and a
+/// `DataView` or `ArrayBuffer` was `instanceof Buffer`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BufferBrand {
+    /// `ArrayBuffer` or `SharedArrayBuffer` — a backing store, not a view.
+    ArrayBuffer,
+    /// `DataView` — a view, but not a typed array.
+    DataView,
+    /// KeyObject / CryptoKey key material. Not a JS view of any kind.
+    KeyMaterial,
+    /// A `Uint8Array` made by the `Uint8Array` constructor (or a
+    /// typed-array method that returns one).
+    Uint8Array,
+    /// A Node `Buffer` — a `FastBuffer`, i.e. a `Uint8Array` whose prototype
+    /// is `Buffer.prototype`. Every other byte-indexed registered buffer.
+    NodeBuffer,
+}
+
+impl BufferBrand {
+    /// A `Uint8Array` in the JS sense: a plain `Uint8Array` or a `Buffer`.
+    #[inline]
+    pub fn is_uint8_array(self) -> bool {
+        matches!(self, Self::Uint8Array | Self::NodeBuffer)
+    }
+}
+
+/// The [`BufferBrand`] of `addr`, or `None` when it is not a registered buffer.
+///
+/// Ordered so the brands a Node `Buffer` is NOT are ruled out before it is
+/// named: a buffer carrying no other marker is a Buffer.
+#[inline]
+pub fn buffer_brand(addr: usize) -> Option<BufferBrand> {
+    if !super::is_registered_buffer(addr) {
+        return None;
+    }
+    Some(if super::is_any_array_buffer(addr) {
+        BufferBrand::ArrayBuffer
+    } else if super::is_data_view(addr) {
+        BufferBrand::DataView
+    } else if super::is_secret_key(addr)
+        || super::asymmetric_key_meta(addr).is_some()
+        || super::crypto_key_meta(addr).is_some()
+    {
+        BufferBrand::KeyMaterial
+    } else if super::is_uint8array_buffer(addr) {
+        BufferBrand::Uint8Array
+    } else {
+        BufferBrand::NodeBuffer
+    })
+}
+
 /// `true` only for a Node `Buffer`, not for another JS type that happens to
 /// share Perry's `BufferHeader` storage and registry entry.
 ///
 /// Keep this stricter than [`is_byte_indexed_buffer`]: a plain `Uint8Array` is
 /// also byte-indexed, but `Buffer.isBuffer(new Uint8Array(...))` must be false.
-/// ArrayBuffer, SharedArrayBuffer, and DataView are excluded independently
-/// because none of them carries the Uint8Array-constructor marker.
+/// See [`buffer_brand`].
 #[inline]
 pub fn is_node_buffer(addr: usize) -> bool {
-    super::is_registered_buffer(addr)
-        && !super::is_any_array_buffer(addr)
-        && !super::is_data_view(addr)
-        && !super::is_uint8array_buffer(addr)
+    buffer_brand(addr) == Some(BufferBrand::NodeBuffer)
 }
 
 /// The own-property key a NUMERIC computed key names on a non-indexed buffer

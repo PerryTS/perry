@@ -231,6 +231,7 @@ mod temporal_proto;
 mod typed_array_define;
 pub(crate) mod typed_array_proto_thunks;
 mod util_types;
+pub(crate) mod view_brand;
 mod weakref_proto_thunks;
 mod websocket_global;
 mod with_env;
