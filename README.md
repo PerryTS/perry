@@ -57,13 +57,13 @@ We publish *everything*, including the workloads where V8's JIT still beats us â
 
 <!-- public-node-bun:start -->
 Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `b77aba63433b`.
-Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks.
+Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks. Medians within 5% of a peer count as a tie with it.
 
 | Benchmark | Perry | Node.js | Bun | Result | What it tests |
 |---|---:|---:|---:|---|---|
-| factorial | 93 ms | 95 ms | 95 ms | win vs both | Modular accumulation |
+| modulo_loop | 93 ms | 95 ms | 95 ms | tie | Integer-modulo accumulation loop (microbenchmark) |
 | method_calls | 35 ms | 11 ms | 8 ms | loss vs both | Class method dispatch |
-| closure | 47 ms | 49 ms | 49 ms | win vs both | Closure creation and invocation |
+| closure | 47 ms | 49 ms | 49 ms | tie | Closure creation and invocation |
 | binary_trees | 13 ms | 6 ms | 6 ms | loss vs both | Tree allocation and traversal |
 | string_concat | 6 ms | 31 ms | 5 ms | mixed | String append loop |
 | prime_sieve | 6 ms | 5 ms | 5 ms | loss vs both | Sieve of Eratosthenes |

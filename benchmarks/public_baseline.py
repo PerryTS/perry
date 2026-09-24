@@ -524,7 +524,10 @@ def assemble(
 
 
 HEADLINE_SUITE = (
-    ("13_factorial", "factorial", "Modular accumulation"),
+    # The source file keeps its historical name (renaming it re-keys every
+    # committed baseline), but it computes no factorial: it is a counted loop
+    # summing `i % 1000`, so it is published under what it actually measures.
+    ("13_factorial", "modulo_loop", "Integer-modulo accumulation loop (microbenchmark)"),
     ("09_method_calls", "method_calls", "Class method dispatch"),
     ("14_closure", "closure", "Closure creation and invocation"),
     ("12_binary_trees", "binary_trees", "Tree allocation and traversal"),
@@ -543,12 +546,25 @@ def _fmt_ms(value: float) -> str:
     return f"{value:g} ms"
 
 
+# A median within this fraction of a peer's is reported as a tie with that
+# peer, not a win or loss. Without it a 93 ms vs 95 ms row printed as
+# "win vs both", which overstates a difference inside run-to-run noise.
+TIE_BAND = 0.05
+
+
+def _versus(perry: float, peer: float) -> int:
+    if abs(perry - peer) <= TIE_BAND * max(perry, peer):
+        return 0
+    return -1 if perry < peer else 1
+
+
 def _outcome(perry: float, node: float, bun: float) -> str:
-    if perry < node and perry < bun:
+    verdicts = {_versus(perry, node), _versus(perry, bun)}
+    if verdicts == {-1}:
         return "win vs both"
-    if perry > node and perry > bun:
+    if verdicts == {1}:
         return "loss vs both"
-    if perry == node and perry == bun:
+    if verdicts == {0}:
         return "tie"
     return "mixed"
 
@@ -563,7 +579,7 @@ def readme_block(artifact: Mapping[str, Any]) -> str:
     lines = [
         README_START,
         f"Generated from [`benchmarks/results/public-node-bun-v1.json`](benchmarks/results/public-node-bun-v1.json) at Perry commit `{artifact['commit'][:12]}`.",
-        "Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks.",
+        "Lower wall-clock median is better; every row includes complete raw samples and passed correctness checks. Medians within 5% of a peer count as a tie with it.",
         "",
         "| Benchmark | Perry | Node.js | Bun | Result | What it tests |",
         "|---|---:|---:|---:|---|---|",
