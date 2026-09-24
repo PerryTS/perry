@@ -1277,8 +1277,9 @@
     {
       "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
       "name": "FORM_DATA_REGISTRY",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by fetch handle id; FormDataStore is Rust-owned (Vec<(String, String)>). The bound-method closures for FormData live in FORM_DATA_METHOD_VALUE_CACHE, which fetch::gc::scan_fetch_roots_with visits."
+      "verdict": "covered_elsewhere",
+      "scanner": "fetch::gc::scan_fetch_roots_with (fetch/gc.rs), registered as stdlib:fetch",
+      "why": "FormDataStore.method_values owns the bound-method closures. The Fetch scanner visits and rewrites every cache slot while the record is registered."
     },
     {
       "file": "crates/perry-stdlib/src/fetch/mod.rs",

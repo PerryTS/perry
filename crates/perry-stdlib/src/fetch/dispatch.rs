@@ -251,28 +251,12 @@ pub(crate) unsafe fn fetch_request_body_bytes(body_ptr: *const StringHeader) -> 
     super::string_from_header(body_ptr).map(String::into_bytes)
 }
 
-lazy_static::lazy_static! {
-    /// Bound-method closures behind `formData.get` / `.entries` / … — the
-    /// `FormData` twin of `HEADERS_METHOD_VALUE_CACHE`, and a GC root for the
-    /// same reason (#8163): the values are heap closures held outside the heap.
-    pub(super) static ref FORM_DATA_METHOD_VALUE_CACHE: Mutex<HashMap<(usize, &'static str), u64>> =
-        Mutex::new(HashMap::new());
-}
-
-/// Visit every cached `FormData` bound-method closure (see `super::gc`).
-pub(super) fn visit_form_data_method_value_roots<V: super::gc::FetchRootVisitor>(visitor: &mut V) {
-    if let Ok(mut cache) = FORM_DATA_METHOD_VALUE_CACHE.lock() {
-        for bits in cache.values_mut() {
-            visitor.visit_nanbox_u64_slot(bits);
-        }
-    }
-}
-
 fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f64 {
-    if let Some(bits) = FORM_DATA_METHOD_VALUE_CACHE
+    if let Some(bits) = super::body_metadata::FORM_DATA_REGISTRY
         .lock()
         .unwrap()
-        .get(&(form_id, method_name))
+        .get(&form_id)
+        .and_then(|record| record.method_values.get(method_name))
         .copied()
     {
         return f64::from_bits(bits);
@@ -291,10 +275,13 @@ fn form_data_bound_method_value(form_id: usize, method_name: &'static str) -> f6
     perry_runtime::closure::js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
     let value = perry_runtime::value::js_nanbox_pointer(closure as i64);
     unsafe { js_write_barrier_root_nanbox(value.to_bits()) };
-    FORM_DATA_METHOD_VALUE_CACHE
+    if let Some(record) = super::body_metadata::FORM_DATA_REGISTRY
         .lock()
         .unwrap()
-        .insert((form_id, method_name), value.to_bits());
+        .get_mut(&form_id)
+    {
+        record.method_values.insert(method_name, value.to_bits());
+    }
     value
 }
 

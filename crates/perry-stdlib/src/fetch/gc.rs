@@ -4,9 +4,9 @@
 //! by small handle ids, and three of them hold *heap values*, not just Rust
 //! data:
 //!
-//! * `HEADERS_METHOD_VALUE_CACHE` — the bound-method closure behind
+//! * `HeadersStore::method_values` — the bound-method closure behind
 //!   `headers.get` / `headers.entries` / … (one per `(handle, method)`),
-//! * `FORM_DATA_METHOD_VALUE_CACHE` — the same for `FormData`,
+//! * `FormDataStore::method_values` — the same for `FormData`,
 //! * `RequestRecord::signal` — the `AbortSignal` object behind `request.signal`.
 //!
 //! Until #8163 nothing marked or rewrote those slots. `js_write_barrier_root_nanbox`
@@ -155,8 +155,20 @@ pub(super) fn scan_fetch_roots(mark: &mut dyn FnMut(f64)) {
 
 /// Visit every heap-value slot the Fetch registries own.
 pub(super) fn scan_fetch_roots_with<V: FetchRootVisitor>(visitor: &mut V) {
-    headers_method_value::visit_roots(visitor);
-    dispatch::visit_form_data_method_value_roots(visitor);
+    if let Ok(mut headers) = HEADERS_REGISTRY.lock() {
+        for record in headers.values_mut() {
+            for bits in record.method_values.values_mut() {
+                visitor.visit_nanbox_u64_slot(bits);
+            }
+        }
+    }
+    if let Ok(mut forms) = body_metadata::FORM_DATA_REGISTRY.lock() {
+        for record in forms.values_mut() {
+            for bits in record.method_values.values_mut() {
+                visitor.visit_nanbox_u64_slot(bits);
+            }
+        }
+    }
     if let Ok(mut requests) = REQUEST_REGISTRY.lock() {
         for request in requests.values_mut() {
             visitor.visit_nanbox_f64_slot(&mut request.signal);

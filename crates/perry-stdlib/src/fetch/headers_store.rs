@@ -6,10 +6,21 @@
 //! visibility is widened from private-to-`mod.rs` to `pub(super)` because the
 //! items now live one module down.
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) struct HeadersStore {
     /// (lowercase_name, value) entries — insertion order preserved
     pub(super) entries: Vec<(String, String)>,
+    /// Bound closures belong to this handle, never to a copied header list.
+    pub(super) method_values: std::collections::HashMap<&'static str, u64>,
+}
+
+impl Clone for HeadersStore {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            method_values: Default::default(),
+        }
+    }
 }
 
 impl HeadersStore {

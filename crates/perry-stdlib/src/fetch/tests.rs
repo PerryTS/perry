@@ -165,12 +165,15 @@ fn response_constructor_copies_headers_initializer() {
 fn fetch_root_scanner_emits_method_caches_and_request_signal() {
     let headers_id = alloc_headers(HeadersStore::default());
     let headers_get = headers_bound_method_value(headers_id, "get");
-    let form_id = alloc_fetch_handle_id();
+    let form_id = handle_id(body_metadata::js_form_data_new());
     let form_bits: u64 = 0x7FFD_0000_0000_1230;
-    dispatch::FORM_DATA_METHOD_VALUE_CACHE
+    body_metadata::FORM_DATA_REGISTRY
         .lock()
         .unwrap()
-        .insert((form_id, "get"), form_bits);
+        .get_mut(&form_id)
+        .unwrap()
+        .method_values
+        .insert("get", form_bits);
     let request = unsafe {
         js_request_new(
             std::ptr::null(),
@@ -212,10 +215,12 @@ fn fetch_root_scanner_emits_method_caches_and_request_signal() {
         "request.signal must be a root"
     );
 
-    dispatch::FORM_DATA_METHOD_VALUE_CACHE
+    body_metadata::FORM_DATA_REGISTRY
         .lock()
         .unwrap()
-        .remove(&(form_id, "get"));
+        .remove(&form_id);
+    HEADERS_REGISTRY.lock().unwrap().remove(&headers_id);
+    REQUEST_REGISTRY.lock().unwrap().remove(&handle_id(request));
 }
 
 /// #8163: marking alone is not enough under a moving collector — the cache
@@ -243,6 +248,8 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
 
     let headers_id = alloc_headers(HeadersStore::default());
     let before = headers_bound_method_value(headers_id, "entries");
+    let form_id = handle_id(body_metadata::js_form_data_new());
+    let form_before = dispatch::dispatch_form_data_property(form_id, "entries").unwrap();
     let request = unsafe {
         js_request_new(
             std::ptr::null(),
@@ -264,7 +271,11 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
     let signal_before = js_request_get_signal(request);
 
     gc::scan_fetch_roots_with(&mut Relocate {
-        targets: vec![before.to_bits(), signal_before.to_bits()],
+        targets: vec![
+            before.to_bits(),
+            form_before.to_bits(),
+            signal_before.to_bits(),
+        ],
     });
 
     // The cache HIT path must hand back the relocated value, not the planted one.
@@ -275,11 +286,19 @@ fn fetch_root_scanner_rewrites_relocated_slots_in_place() {
         signal_before.to_bits() + 0x1000
     );
 
-    // Leave no bogus (relocated) pointers behind for other tests.
-    headers_method_value::HEADERS_METHOD_VALUE_CACHE
+    assert_eq!(
+        dispatch::dispatch_form_data_property(form_id, "entries")
+            .unwrap()
+            .to_bits(),
+        form_before.to_bits() + 0x1000
+    );
+    body_metadata::FORM_DATA_REGISTRY
         .lock()
         .unwrap()
-        .remove(&(headers_id, "entries"));
+        .remove(&form_id);
+
+    // Leave no bogus (relocated) pointers behind for other tests.
+    HEADERS_REGISTRY.lock().unwrap().remove(&headers_id);
     REQUEST_REGISTRY.lock().unwrap().remove(&handle_id(request));
 }
 
@@ -539,4 +558,92 @@ fn headers_iteration_roots_every_heap_pointer_held_across_an_allocation() {
         "the body extractor no longer isolates a function body, so the positive \
          half of this test cannot fail"
     );
+}
+
+/// Dropping an owner must stop rooting its cached closures. Repeated reads
+/// retain identity while the record is live, including after data mutation.
+#[test]
+fn method_caches_stop_rooting_after_handle_removal() {
+    for _ in 0..32 {
+        let headers_id = alloc_headers(HeadersStore::default());
+        let form_id = handle_id(body_metadata::js_form_data_new());
+        let headers_method = headers_bound_method_value(headers_id, "entries");
+        let form_method = dispatch::dispatch_form_data_property(form_id, "entries").unwrap();
+        HEADERS_REGISTRY
+            .lock()
+            .unwrap()
+            .get_mut(&headers_id)
+            .unwrap()
+            .set("x", "y");
+        assert_eq!(
+            headers_method.to_bits(),
+            headers_bound_method_value(headers_id, "entries").to_bits()
+        );
+        assert_eq!(
+            form_method.to_bits(),
+            dispatch::dispatch_form_data_property(form_id, "entries")
+                .unwrap()
+                .to_bits()
+        );
+        let mut roots = Vec::new();
+        gc::scan_fetch_roots(&mut |v| roots.push(v.to_bits()));
+        assert!(roots.contains(&headers_method.to_bits()));
+        assert!(roots.contains(&form_method.to_bits()));
+        HEADERS_REGISTRY.lock().unwrap().remove(&headers_id);
+        body_metadata::FORM_DATA_REGISTRY
+            .lock()
+            .unwrap()
+            .remove(&form_id);
+        roots.clear();
+        gc::scan_fetch_roots(&mut |v| roots.push(v.to_bits()));
+        assert!(
+            !roots.contains(&headers_method.to_bits()),
+            "removed Headers must release its cache root"
+        );
+        assert!(
+            !roots.contains(&form_method.to_bits()),
+            "removed FormData must release its cache root"
+        );
+    }
+}
+
+#[test]
+fn copied_headers_bind_methods_to_the_new_handle() {
+    let source = alloc_headers(HeadersStore::default());
+    let original = headers_bound_method_value(source, "get");
+    let copy = HEADERS_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&source)
+        .unwrap()
+        .clone();
+    assert!(copy.method_values.is_empty());
+    let target = alloc_headers(copy);
+    let copied = headers_bound_method_value(target, "get");
+    assert_ne!(original.to_bits(), copied.to_bits());
+    let closure = perry_runtime::value::js_nanbox_get_pointer(copied)
+        as *const perry_runtime::closure::ClosureHeader;
+    assert_eq!(
+        handle_id(perry_runtime::closure::js_closure_get_capture_f64(
+            closure, 0
+        )),
+        target
+    );
+    HEADERS_REGISTRY.lock().unwrap().remove(&source);
+    HEADERS_REGISTRY.lock().unwrap().remove(&target);
+}
+
+#[test]
+fn copied_form_data_does_not_inherit_bound_methods() {
+    let source = handle_id(body_metadata::js_form_data_new());
+    dispatch::dispatch_form_data_property(source, "get").unwrap();
+    let forms = body_metadata::FORM_DATA_REGISTRY.lock().unwrap();
+    let record = forms.get(&source).unwrap();
+    assert_eq!(record.method_values.len(), 1);
+    assert!(record.clone().method_values.is_empty());
+    drop(forms);
+    body_metadata::FORM_DATA_REGISTRY
+        .lock()
+        .unwrap()
+        .remove(&source);
 }

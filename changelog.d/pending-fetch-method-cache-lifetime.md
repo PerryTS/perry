@@ -1,0 +1,3 @@
+Fetch Headers and FormData now own their bound-method caches in their handle records, so removing a record also releases its cache roots. Copied data starts with an empty cache, preserving the new handle as the method receiver. The GC scanner still marks and rewrites live cached closures. Headers string readers release the registry lock before allocating to avoid scanner deadlocks.
+
+Regression coverage checks live method identity, root removal across repeated handle lifetimes, independent copies, and relocation of both cache types. Automatic reclamation of the Fetch handle registries themselves remains outside this change.

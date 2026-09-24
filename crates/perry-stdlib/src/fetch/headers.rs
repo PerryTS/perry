@@ -464,12 +464,16 @@ pub unsafe extern "C" fn js_headers_get(
         Some(k) => k,
         None => return std::ptr::null_mut(),
     };
-    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get(&id) {
-        if let Some(v) = store.get(&key) {
-            return js_string_from_bytes(v.as_ptr(), v.len() as u32);
-        }
+    // The GC scanner locks this registry; snapshot before allocating.
+    let value = HEADERS_REGISTRY
+        .lock()
+        .unwrap()
+        .get(&id)
+        .and_then(|store| store.get(&key));
+    match value {
+        Some(v) => js_string_from_bytes(v.as_ptr(), v.len() as u32),
+        None => std::ptr::null_mut(),
     }
-    std::ptr::null_mut()
 }
 
 /// `headers.getSetCookie()` — returns all preserved Set-Cookie values.
@@ -535,6 +539,7 @@ pub extern "C" fn js_headers_setheaders_entries_json(handle: f64) -> *mut String
         }
     }
     let s = serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string());
+    drop(guard); // The GC scanner may lock the registry during allocation.
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
@@ -577,6 +582,7 @@ pub extern "C" fn js_headers_fetch_object_json(handle: f64) -> *mut StringHeader
     }
     let s =
         serde_json::to_string(&serde_json::Value::Object(out)).unwrap_or_else(|_| "{}".to_string());
+    drop(guard); // The GC scanner may lock the registry during allocation.
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 

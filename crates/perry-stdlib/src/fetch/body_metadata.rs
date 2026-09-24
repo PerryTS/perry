@@ -11,9 +11,20 @@ enum FormDataValue {
     File(usize),
 }
 
-#[derive(Clone, Default)]
-struct FormDataStore {
+#[derive(Default)]
+pub(super) struct FormDataStore {
     entries: Vec<(String, FormDataValue)>,
+    pub(super) method_values: HashMap<&'static str, u64>,
+}
+
+// A copied form gets its own bound methods when they are first read.
+impl Clone for FormDataStore {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            method_values: Default::default(),
+        }
+    }
 }
 
 impl FormDataStore {
@@ -64,14 +75,13 @@ impl FormDataStore {
 }
 
 lazy_static::lazy_static! {
-    static ref FORM_DATA_REGISTRY: Mutex<HashMap<usize, FormDataStore>> = Mutex::new(HashMap::new());
+    pub(super) static ref FORM_DATA_REGISTRY: Mutex<HashMap<usize, FormDataStore>> = Mutex::new(HashMap::new());
 }
 
 /// #10555: `instanceof FormData` / `Object.prototype.toString.call` /
 /// `x[Symbol.toStringTag]` membership probe, mirroring `dispatch.rs`'s
 /// `js_fetch_handle_kind` for the other Web Fetch handle kinds. Lives here
-/// (not `dispatch.rs`) because `FORM_DATA_REGISTRY` is private to this
-/// module; `dispatch.rs` reaches it via `super::body_metadata::…`.
+/// alongside the registry; dispatch uses this probe for membership checks.
 pub(super) fn is_registered_form_data(id: usize) -> bool {
     FORM_DATA_REGISTRY.lock().unwrap().contains_key(&id)
 }
