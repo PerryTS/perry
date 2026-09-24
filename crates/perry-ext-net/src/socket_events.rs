@@ -547,3 +547,43 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
 
     count
 }
+
+#[cfg(test)]
+mod listener_this_tests {
+    use super::*;
+
+    const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+    const NULL: u64 = 0x7FFC_0000_0000_0002;
+
+    /// #11227: every listener dispatch binds the emitter as `this`, rebinding
+    /// clobbers a leftover receiver, and the caller's receiver comes back.
+    #[test]
+    fn binds_the_handle_and_restores_the_callers_receiver() {
+        let caller = f64::from_bits(UNDEFINED);
+        unsafe { js_implicit_this_set(caller) };
+        {
+            let this = ListenerThis::bind(42);
+            let seen = unsafe { js_implicit_this_set(f64::from_bits(NULL)) };
+            assert_eq!(seen.to_bits(), socket_receiver(42).to_bits());
+            this.rebind();
+            let seen = unsafe { js_implicit_this_set(socket_receiver(42)) };
+            assert_eq!(seen.to_bits(), socket_receiver(42).to_bits());
+        }
+        let restored = unsafe { js_implicit_this_set(caller) };
+        assert_eq!(restored.to_bits(), UNDEFINED);
+    }
+
+    #[test]
+    fn nested_dispatch_restores_the_outer_emitter() {
+        unsafe { js_implicit_this_set(f64::from_bits(UNDEFINED)) };
+        let outer = ListenerThis::bind(7);
+        {
+            let _inner = ListenerThis::bind(9);
+        }
+        let seen = unsafe { js_implicit_this_set(socket_receiver(7)) };
+        assert_eq!(seen.to_bits(), socket_receiver(7).to_bits());
+        drop(outer);
+        let restored = unsafe { js_implicit_this_set(f64::from_bits(UNDEFINED)) };
+        assert_eq!(restored.to_bits(), UNDEFINED);
+    }
+}
