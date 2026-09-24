@@ -191,20 +191,19 @@ pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
         }
     });
     #[cfg(test)]
-    TEST_FROM_SPACE_MAP_FINALIZATIONS.with(|c| c.set(c.get() + count));
+    TEST_FROM_SPACE_MAP_FINALIZATIONS.fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
     count
 }
 
 #[cfg(test)]
-crate::perry_thread_local! {
-    static TEST_FROM_SPACE_MAP_FINALIZATIONS: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
+static TEST_FROM_SPACE_MAP_FINALIZATIONS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
-/// Dead Maps this thread's copying-minor from-space walk has finalized.
+/// Dead Maps the copying-minor from-space walk has finalized. Tests compare
+/// deltas; perry-runtime tests run single-threaded.
 #[cfg(test)]
-pub(crate) fn test_from_space_map_finalizations() -> usize {
-    TEST_FROM_SPACE_MAP_FINALIZATIONS.with(std::cell::Cell::get)
+pub(crate) fn test_from_space_map_finalizations() -> u64 {
+    TEST_FROM_SPACE_MAP_FINALIZATIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub(crate) fn release_current_thread_map_side_allocations() {
