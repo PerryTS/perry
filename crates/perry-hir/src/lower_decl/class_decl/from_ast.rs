@@ -29,12 +29,10 @@ pub(crate) fn lower_class_from_ast(
     ctx.current_class = Some(name.to_string());
     let old_class_scope_depth = ctx.current_class_scope_depth.replace(ctx.scope_depth);
     let old_inner_name = ctx.current_class_inner_name.take();
-    // A class-expression caller stashes the source ident here; fall back
-    // to the (possibly synthetic) registration name when absent.
+    // Only a source identifier creates an inner binding. An anonymous
+    // class's inferred display name must not shadow its enclosing variable.
     let explicit_inner_name = ctx.pending_class_inner_name.take();
-    ctx.current_class_inner_name = explicit_inner_name
-        .clone()
-        .or_else(|| Some(name.to_string()));
+    ctx.current_class_inner_name = explicit_inner_name.clone();
     let old_is_derived = ctx.current_class_is_derived;
     ctx.current_class_is_derived = class.super_class.is_some();
 

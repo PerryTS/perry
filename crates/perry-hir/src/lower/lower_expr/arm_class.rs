@@ -105,6 +105,16 @@ pub(crate) fn lower_class_expr(
             }
         }
     };
+    // #11153: members of an anonymous class close over the enclosing local.
+    // Resolve it dynamically while lowering the body, before capture analysis;
+    // the inferred name is not proof that the local holds a template class.
+    if !at_module_top && source_inner_name.is_none() {
+        if let Some(name) = assignment_name.as_ref() {
+            if ctx.lookup_local(name).is_some() {
+                ctx.inferred_class_bindings.remove(name);
+            }
+        }
+    }
     // Record the source-level inner binding name for the const-assignment
     // guard (assigning to it inside the body throws a TypeError).
     ctx.pending_class_inner_name = source_inner_name.clone();
