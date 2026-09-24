@@ -652,6 +652,7 @@ impl SH for Expr {
             Expr::ClassEnvGet { class_name, index, guarded } => { tag(h, 12244); class_name.hash(h); index.hash(h); guarded.hash(h); }
             Expr::ClassEnvSet { class_name, index, value, guarded, publish } => { tag(h, 12245); class_name.hash(h); index.hash(h); value.as_ref().hash(h); guarded.hash(h); publish.hash(h); }
             Expr::ClassEnvStamp { class_name, instance, evaluation } => { tag(h, 12246); class_name.hash(h); instance.as_ref().hash(h); evaluation.as_ref().hash(h); }
+            Expr::ClassEnvCurrent { class_name } => { tag(h, 12247); class_name.hash(h); }
             Expr::ClassCaptureValue { class_name, index, fallback, prefer_fallback } => { tag(h, 12242); class_name.hash(h); index.hash(h); fallback.hash(h); prefer_fallback.hash(h); }
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
             Expr::RegisterClassComputedMethod { class_name, key_expr, method_name, is_static, param_count, has_rest, definition_order } => { tag(h, 12233); class_name.hash(h); key_expr.as_ref().hash(h); method_name.hash(h); is_static.hash(h); param_count.hash(h); has_rest.hash(h); definition_order.hash(h); }

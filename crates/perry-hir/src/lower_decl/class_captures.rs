@@ -19,6 +19,132 @@ fn class_capture_diag() -> bool {
     *ON.get_or_init(|| std::env::var_os("PERRY_CLASS_CAPTURE_DIAG").is_some())
 }
 
+/// Guarded class-environment classes only: a `new <Self>()` inside the
+/// class's own member must record the member's evaluation, or once the class
+/// has several evaluations the new instance would read the first one's
+/// captures. Hoist that evaluation into a member-entry local (a state compare
+/// while the class has one evaluation) and stamp every self-construction.
+fn stamp_self_constructions(ctx: &mut LoweringContext, class_name: &str, body: &mut Vec<Stmt>) {
+    fn has_self_new(expr: &Expr, class_name: &str) -> bool {
+        if matches!(expr, Expr::ClassEnvStamp { .. }) {
+            return false;
+        }
+        if matches!(expr, Expr::New { class_name: cn, .. } if cn == class_name) {
+            return true;
+        }
+        if let Expr::Closure { body, .. } = expr {
+            return body.iter().any(|s| stmt_has_self_new(s, class_name));
+        }
+        let mut found = false;
+        crate::walker::walk_expr_children(expr, &mut |child| {
+            found = found || has_self_new(child, class_name);
+        });
+        found
+    }
+    fn stmt_has_self_new(stmt: &Stmt, class_name: &str) -> bool {
+        let mut found = false;
+        closure_free_exprs_of_stmt(stmt, &mut |e| found = found || has_self_new(e, class_name));
+        found
+    }
+    if !body.iter().any(|s| stmt_has_self_new(s, class_name)) {
+        return;
+    }
+    let eval_id = ctx.fresh_local();
+    for stmt in body.iter_mut() {
+        stamp_self_new_stmt(stmt, class_name, eval_id);
+    }
+    body.insert(
+        0,
+        Stmt::Let {
+            id: eval_id,
+            name: "__perry_class_env_evaluation".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::ClassEnvCurrent {
+                class_name: class_name.to_string(),
+            }),
+        },
+    );
+}
+
+/// Every expression of `stmt`, descending nested statements.
+fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                f(e);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => f(e),
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                f(e);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            f(condition);
+            for s in then_branch.iter().chain(else_branch.iter().flatten()) {
+                closure_free_exprs_of_stmt(s, f);
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            f(condition);
+            for s in body {
+                closure_free_exprs_of_stmt(s, f);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(i) = init {
+                closure_free_exprs_of_stmt(i, f);
+            }
+            for e in condition.iter().chain(update.iter()) {
+                f(e);
+            }
+            for s in body {
+                closure_free_exprs_of_stmt(s, f);
+            }
+        }
+        Stmt::Labeled { body, .. } => closure_free_exprs_of_stmt(body, f),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body
+                .iter()
+                .chain(catch.iter().flat_map(|c| c.body.iter()))
+                .chain(finally.iter().flatten())
+            {
+                closure_free_exprs_of_stmt(s, f);
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            f(discriminant);
+            for case in cases {
+                if let Some(t) = &case.test {
+                    f(t);
+                }
+                for s in &case.body {
+                    closure_free_exprs_of_stmt(s, f);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Drop the leading `prologue_len` capture rebinds of a member body that the
 /// rest of the body never names. Every member rebinds the class's whole
 /// capture union; in the class environment a rebind is a load plus a rooted
@@ -523,10 +649,14 @@ pub fn synthesize_class_captures(
             prune_unused_capture_rebinds(body, captures_vec.len());
         }
     };
+
     for m in methods.iter_mut() {
         let id_map = rewrite_method_body(ctx, &mut m.body);
         append_self_sites(&mut m.body, &id_map);
         prune(&mut m.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut m.body);
+        }
     }
     for (_, g) in getters
         .iter_mut()
@@ -535,6 +665,9 @@ pub fn synthesize_class_captures(
         let id_map = rewrite_method_body(ctx, &mut g.body);
         append_self_sites(&mut g.body, &id_map);
         prune(&mut g.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut g.body);
+        }
     }
     for (_, s) in setters
         .iter_mut()
@@ -543,6 +676,9 @@ pub fn synthesize_class_captures(
         let id_map = rewrite_method_body(ctx, &mut s.body);
         append_self_sites(&mut s.body, &id_map);
         prune(&mut s.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut s.body);
+        }
     }
     for member in computed_members
         .iter_mut()
@@ -551,6 +687,9 @@ pub fn synthesize_class_captures(
         let id_map = rewrite_method_body(ctx, &mut member.function.body);
         append_self_sites(&mut member.function.body, &id_map);
         prune(&mut member.function.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut member.function.body);
+        }
     }
 
     // Statics rebind from the decl-site snapshot and, historically, did not
@@ -609,6 +748,9 @@ pub fn synthesize_class_captures(
         sm.body = prologue;
         append_self_sites(&mut sm.body, &id_map);
         prune(&mut sm.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut sm.body);
+        }
     }
 
     // 2b-bis (#10835). STATIC accessors get the same treatment as static
@@ -653,6 +795,9 @@ pub fn synthesize_class_captures(
         acc.body = prologue;
         append_self_sites(&mut acc.body, &id_map);
         prune(&mut acc.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut acc.body);
+        }
     }
 
     // 2c. STATIC computed methods (`static [k]() {}`, and the static methods
@@ -701,6 +846,9 @@ pub fn synthesize_class_captures(
         member.function.body = prologue;
         append_self_sites(&mut member.function.body, &id_map);
         prune(&mut member.function.body);
+        if guarded {
+            stamp_self_constructions(ctx, name, &mut member.function.body);
+        }
     }
 
     // 3. Constructor.
@@ -852,6 +1000,9 @@ pub fn synthesize_class_captures(
         crate::analysis::remap_local_ids_in_stmts(&mut ctor.body, &ctor_id_map);
     }
     append_self_sites(&mut ctor.body, &ctor_id_map);
+    if guarded {
+        stamp_self_constructions(ctx, name, &mut ctor.body);
+    }
     // Finding #2: the param REBINDS (`param = param-or-snapshot`) go at
     // FUNCTION ENTRY (index 0), BEFORE any pre-`super()` user code — a derived
     // ctor may read a captured outer before calling `super()`, and that read
@@ -1285,6 +1436,140 @@ pub(crate) fn append_new_args_stmt(
                 }
                 for s in &mut c.body {
                     append_new_args_stmt(s, class_name, cap_args, skip_if_present);
+                }
+            }
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => {}
+    }
+}
+
+/// Wrap every `new <class_name>(…)` in `expr` (nested closures included,
+/// patching their capture lists) in an `Expr::ClassEnvStamp` recording the
+/// enclosing member's evaluation, held in `eval_id`.
+fn stamp_self_new_expr(expr: &mut Expr, class_name: &str, eval_id: LocalId) {
+    // A construct the `new`-site lowering already stamped keeps its binding.
+    if matches!(expr, Expr::ClassEnvStamp { .. }) {
+        return;
+    }
+    if matches!(expr, Expr::New { class_name: cn, .. } if cn == class_name) {
+        let instance = std::mem::replace(expr, Expr::Undefined);
+        *expr = Expr::ClassEnvStamp {
+            class_name: class_name.to_string(),
+            instance: Box::new(instance),
+            evaluation: Box::new(Expr::LocalGet(eval_id)),
+        };
+        return;
+    }
+    if let Expr::Closure { body, captures, .. } = expr {
+        for stmt in body.iter_mut() {
+            stamp_self_new_stmt(stmt, class_name, eval_id);
+        }
+        let mut refs = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        for stmt in body.iter() {
+            crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+        }
+        if refs.contains(&eval_id) && !captures.contains(&eval_id) {
+            captures.push(eval_id);
+        }
+        return;
+    }
+    crate::walker::walk_expr_children_mut(expr, &mut |child| {
+        stamp_self_new_expr(child, class_name, eval_id)
+    });
+}
+
+/// Statement-level driver for [`stamp_self_new_expr`].
+fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                stamp_self_new_expr(e, class_name, eval_id);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => stamp_self_new_expr(e, class_name, eval_id),
+        Stmt::Return(opt) => {
+            if let Some(e) = opt {
+                stamp_self_new_expr(e, class_name, eval_id);
+            }
+        }
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            stamp_self_new_expr(condition, class_name, eval_id);
+            for s in then_branch {
+                stamp_self_new_stmt(s, class_name, eval_id);
+            }
+            if let Some(eb) = else_branch {
+                for s in eb {
+                    stamp_self_new_stmt(s, class_name, eval_id);
+                }
+            }
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            stamp_self_new_expr(condition, class_name, eval_id);
+            for s in body {
+                stamp_self_new_stmt(s, class_name, eval_id);
+            }
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(s) = init {
+                stamp_self_new_stmt(s, class_name, eval_id);
+            }
+            if let Some(e) = condition {
+                stamp_self_new_expr(e, class_name, eval_id);
+            }
+            if let Some(e) = update {
+                stamp_self_new_expr(e, class_name, eval_id);
+            }
+            for s in body {
+                stamp_self_new_stmt(s, class_name, eval_id);
+            }
+        }
+        Stmt::Labeled { body, .. } => stamp_self_new_stmt(body, class_name, eval_id),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                stamp_self_new_stmt(s, class_name, eval_id);
+            }
+            if let Some(c) = catch {
+                for s in &mut c.body {
+                    stamp_self_new_stmt(s, class_name, eval_id);
+                }
+            }
+            if let Some(fb) = finally {
+                for s in fb {
+                    stamp_self_new_stmt(s, class_name, eval_id);
+                }
+            }
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            stamp_self_new_expr(discriminant, class_name, eval_id);
+            for c in cases {
+                if let Some(t) = &mut c.test {
+                    stamp_self_new_expr(t, class_name, eval_id);
+                }
+                for s in &mut c.body {
+                    stamp_self_new_stmt(s, class_name, eval_id);
                 }
             }
         }

@@ -538,9 +538,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::StructuredClone { .. }
         | Expr::WeakRefNew(..) => super::env_clones::lower(ctx, expr),
         Expr::FsUnlinkSync(..) | Expr::Await(..) => super::fs_await::lower(ctx, expr),
-        Expr::ClassEnvGet { .. } | Expr::ClassEnvSet { .. } | Expr::ClassEnvStamp { .. } => {
-            super::class_env::lower(ctx, expr)
-        }
+        Expr::ClassEnvGet { .. }
+        | Expr::ClassEnvSet { .. }
+        | Expr::ClassEnvStamp { .. }
+        | Expr::ClassEnvCurrent { .. } => super::class_env::lower(ctx, expr),
         Expr::StaticFieldGet { .. }
         | Expr::StaticFieldSet { .. }
         | Expr::RegisterClassParentDynamic { .. }

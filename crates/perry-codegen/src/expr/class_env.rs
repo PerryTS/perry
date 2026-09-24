@@ -321,6 +321,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             lowered?;
             Ok(out)
         }
+        Expr::ClassEnvCurrent { class_name } => {
+            let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let Some(state) = class_env_state_global(ctx, class_name) else {
+                return Ok(undefined);
+            };
+            let cid = ctx
+                .class_ids
+                .get(class_name)
+                .copied()
+                .unwrap_or(0)
+                .to_string();
+            Ok(branch_on_state(
+                ctx,
+                &state,
+                |_| undefined.clone(),
+                |ctx| {
+                    let recv = receiver(ctx);
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_class_env_current",
+                        &[(DOUBLE, &recv), (I32, &cid)],
+                    )
+                },
+            ))
+        }
         _ => unreachable!("class_env::lower called with {expr:?}"),
     }
 }

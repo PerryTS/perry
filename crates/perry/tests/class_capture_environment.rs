@@ -349,3 +349,42 @@ fn a_re_evaluated_module_body_keeps_old_instances_on_their_evaluation() {
         &[("Box", "env-guarded")],
     );
 }
+
+const REEVAL_SELF_MODULE: &str = r#"globalThis.__evals2 = (globalThis.__evals2 || 0) + 1;
+const tag = "e" + globalThis.__evals2;
+var Box = class Inner {
+  get() { return tag; }
+  make() { return new Inner(); }
+  makeLater() { return [1].map(() => new Inner())[0]; }
+  make2() { return new Box(); }
+};
+module.exports = { make: () => new Box(), Box: Box };
+"#;
+
+const REEVAL_SELF_DRIVER: &str = r#"const first = require("./m2.js");
+const a = first.make();
+const key = Object.keys(require.cache).find((k) => k.endsWith("/m2.js"));
+delete require.cache[key];
+const second = require("module").createRequire(__filename)(key);
+const b = second.make();
+module.exports = [a.make().get(), a.makeLater().get(), a.make2().get(),
+  b.make().get(), b.makeLater().get(), b.make2().get(),
+  first.Box.prototype.make.call(b).get()].join(" ");
+"#;
+
+#[test]
+fn a_self_construction_after_re_evaluation_keeps_the_members_evaluation() {
+    // `new Inner()` inside a member (directly and from an arrow) must build
+    // an instance of the member's OWN evaluation: the second evaluation's
+    // instance `b` makes `e2` objects, the first's `a` makes `e1` ones, and
+    // the first evaluation's extracted method called on `b` makes `e1`.
+    check_with(
+        "console.log(require('./driver_self.js'));",
+        &[
+            ("m2.js", REEVAL_SELF_MODULE),
+            ("driver_self.js", REEVAL_SELF_DRIVER),
+        ],
+        "e1 e1 e1 e2 e2 e2 e1\n",
+        &[("Inner", "env-guarded")],
+    );
+}

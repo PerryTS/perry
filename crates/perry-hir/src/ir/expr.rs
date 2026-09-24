@@ -536,6 +536,15 @@ pub enum Expr {
         evaluation: Box<Expr>,
     },
 
+    /// The class value of the evaluation the enclosing member of guarded
+    /// class `class_name` belongs to (the extracted method's own, else the
+    /// receiver's), or `undefined` while the class has had a single
+    /// evaluation or for its first one. Feeds `ClassEnvStamp` for a
+    /// `new <Self>()` inside the class's own members.
+    ClassEnvCurrent {
+        class_name: String,
+    },
+
     /// Read slot `index` of a class's decl-site capture snapshot
     /// (`CLASS_CAPTURE_VALUES`, written by `RegisterClassCaptures`). Used by
     /// STATIC method bodies of function-nested capturing classes — statics

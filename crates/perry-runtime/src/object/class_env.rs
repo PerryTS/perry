@@ -208,6 +208,16 @@ pub unsafe extern "C" fn js_class_env_set(receiver: f64, cid: u32, index: u32, v
     store_slot(slot, value);
 }
 
+/// Codegen FFI: the evaluation (class value) a member of class `cid` runs in,
+/// or `undefined` when it cannot be resolved — which, like an unrecorded
+/// instance, means the first evaluation.
+#[no_mangle]
+pub extern "C" fn js_class_env_current(receiver: f64, cid: u32) -> f64 {
+    member_evaluation(receiver, cid)
+        .map(f64::from_bits)
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED))
+}
+
 /// Codegen FFI: record `evaluation` as the evaluation of `instance`, built by
 /// a static `new` of class `cid` while the class has several evaluations.
 /// Returns the instance (the metadata allocation may move it).
@@ -249,4 +259,6 @@ mod keepalive {
     static SET: unsafe extern "C" fn(f64, u32, u32, f64) = super::js_class_env_set;
     #[used(compiler)]
     static STAMP: unsafe extern "C" fn(f64, u32, f64) -> f64 = super::js_class_env_stamp;
+    #[used(compiler)]
+    static CURRENT: extern "C" fn(f64, u32) -> f64 = super::js_class_env_current;
 }

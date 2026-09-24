@@ -39,6 +39,7 @@ where
         | Expr::EnumMember { .. }
         | Expr::StaticFieldGet { .. }
         | Expr::ClassEnvGet { .. }
+        | Expr::ClassEnvCurrent { .. }
         | Expr::Update { .. }
         | Expr::EnvGet(_)
         | Expr::ProcessEnv
