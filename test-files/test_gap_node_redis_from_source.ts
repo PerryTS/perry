@@ -4,6 +4,7 @@
 // SUBSCRIBE/PUBLISH on a duplicate() client and QUIT against an in-process
 // fake RESP server, so no external redis-server is needed.
 import { createClient } from "redis";
+import net from "node:net";
 import { startFakeRedis } from "./_helpers/fake_resp_server.ts";
 import { createRequire } from "node:module";
 
@@ -11,7 +12,7 @@ import { createRequire } from "node:module";
 const requireFromHere = createRequire(import.meta.url);
 console.log("redis version:", requireFromHere("redis/package.json").version);
 
-startFakeRedis(async (port, close) => {
+startFakeRedis(net, async (port, close) => {
   try {
     // RESP: 2 — the fake server speaks RESP2 only (node-redis 6 defaults to a
     // RESP3 `HELLO 3` handshake; the live-server probe covers that default).

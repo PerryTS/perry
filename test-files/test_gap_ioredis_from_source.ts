@@ -3,6 +3,7 @@
 // pipeline, MULTI/EXEC, SUBSCRIBE/PUBLISH and QUIT against an in-process
 // fake RESP server, so no external redis-server is needed.
 import Redis from "ioredis";
+import net from "node:net";
 import { startFakeRedis } from "./_helpers/fake_resp_server.ts";
 import { createRequire } from "node:module";
 
@@ -10,7 +11,7 @@ import { createRequire } from "node:module";
 const requireFromHere = createRequire(import.meta.url);
 console.log("ioredis version:", requireFromHere("ioredis/package.json").version);
 
-startFakeRedis(async (port, close) => {
+startFakeRedis(net, async (port, close) => {
   try {
     const r = new Redis({ host: "127.0.0.1", port });
     r.on("error", (e: any) => console.log("error:", e && e.message));

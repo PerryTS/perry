@@ -3,7 +3,6 @@
 // speaks just enough of the protocol for connect, SET/GET/INCR/DEL, a
 // pipeline, MULTI/EXEC, SUBSCRIBE/PUBLISH and QUIT, so the fixtures run
 // without an external redis-server — byte-identical under Node and Perry.
-import net from "node:net";
 
 type Reply = string;
 
@@ -50,7 +49,10 @@ function parseCommands(buf: string): { cmds: string[][]; rest: string } {
   return { cmds, rest: buf.slice(pos) };
 }
 
-export function startFakeRedis(onReady: (port: number, close: () => void) => void): void {
+// `net` is passed in by the caller so each gap fixture imports `node:net`
+// itself: the parity harness classifies ext-routed fixtures by their own
+// imports, and these need the auto-optimize (coherent net archive) path.
+export function startFakeRedis(net: any, onReady: (port: number, close: () => void) => void): void {
   const store = new Map<string, string>();
   const subscribers = new Map<string, Set<any>>();
   const sockets = new Set<any>();
