@@ -976,9 +976,6 @@ pub(crate) fn lower_module_decl(
                                                             module_name,
                                                             method_ident.sym.as_ref(),
                                                         ) {
-                                                            ("mongodb", "connect") => {
-                                                                Some("MongoClient")
-                                                            }
                                                             (
                                                                 "mysql2" | "mysql2/promise",
                                                                 "createPool",
@@ -1126,10 +1123,6 @@ pub(crate) fn lower_module_decl(
                                                             module_name.as_str(),
                                                             method_name,
                                                         ) {
-                                                            ("mongodb", "db") => Some("Database"),
-                                                            ("mongodb", "collection") => {
-                                                                Some("Collection")
-                                                            }
                                                             (
                                                                 "mysql2" | "mysql2/promise",
                                                                 "getConnection",

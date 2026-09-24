@@ -399,9 +399,10 @@ mod tests {
     #[test]
     fn shared_tokio_stems_cover_the_wrappers_that_own_sockets() {
         let stems = shared_tokio_lib_stems();
-        // The one wrapper that still bundles tokio. perry-ext-http, the
-        // archive #7629's witnesses aborted in, left the set with tokio lane D.
-        assert!(stems.contains("perry_ext_mongodb"), "{stems:?}");
+        // No wrapper bundles tokio any more: perry-ext-http, the archive
+        // #7629's witnesses aborted in, left the set with tokio lane D, and
+        // perry-ext-mongodb, the last member, was deleted (#11337).
+        assert!(stems.is_empty(), "{stems:?}");
         // A wrapper with no tokio must NOT be in the set: it never enters a
         // tokio runtime context, so requiring a shared compilation would fail
         // links that work. perry-ext-net (#11105) and perry-ext-ws run on
@@ -414,13 +415,15 @@ mod tests {
 
     #[test]
     fn link_line_paths_are_matched_on_both_platform_spellings() {
-        let stems = shared_tokio_lib_stems();
+        // The live set is empty since #11337, so exercise the matcher with a
+        // synthetic stem set rather than a vacuous one.
+        let stems: BTreeSet<String> = ["perry_ext_fake_tokio".to_string()].into_iter().collect();
         assert!(is_shared_tokio_archive(
-            Path::new("/x/target/release/libperry_ext_mongodb.a"),
+            Path::new("/x/target/release/libperry_ext_fake_tokio.a"),
             &stems
         ));
         assert!(is_shared_tokio_archive(
-            Path::new(r"C:\x\target\release\perry_ext_mongodb.lib"),
+            Path::new(r"C:\x\target\release\perry_ext_fake_tokio.lib"),
             &stems
         ));
         assert!(!is_shared_tokio_archive(

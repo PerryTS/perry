@@ -63,14 +63,13 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         "tls" => &["tls"],
 
         // ── Databases ─────────────────────────────────────────────────
-        // pg / mysql2 / mongodb need no perry-stdlib feature: the
-        // bundled copies were deleted in turnloop P8 group H. `mongodb` is
-        // served by perry-ext-mongodb via the well-known flip, and its
-        // `async-runtime` requirement is re-asserted in
-        // optimized_libs/driver.rs rather than named here, because everything
-        // named here gets STRIPPED by the flip loop. `pg` / `mysql2` have no
-        // wrapper at all any more (#10677 / #10680): the real npm packages
-        // compile from source over `net` / `tls`, so they need nothing here.
+        // pg / mysql2 need no perry-stdlib feature: the bundled copies were
+        // deleted in turnloop P8 group H, and none of the database wrappers
+        // exists any more (perry-ext-pg #10677, perry-ext-mysql2 #10680,
+        // perry-ext-mongodb #11337). The real npm packages compile from
+        // source over `net` / `tls`, so they need nothing here. `mongodb`
+        // has no arm at all: it falls through to the default like any other
+        // compiled-from-source package.
         "mysql2" | "mysql2/promise" => &[],
         "pg" => &[],
         "better-sqlite3" => &["database-sqlite"],
@@ -88,8 +87,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // repo (`bun add @perryts/iroh`) since v0.5.557 — same model
         // as tursodb above.
         "iroh" => &[],
-        // Served by perry-ext-mongodb only (see the note above).
-        "mongodb" => &[],
 
         // ── Crypto ────────────────────────────────────────────────────
         // bcrypt split off into its own `bundled-bcrypt` feature in
@@ -290,9 +287,8 @@ mod tests {
     fn bundled_database_copies_map_to_no_stdlib_features() {
         // turnloop P8 group H deleted perry-stdlib's bundled pg / mysql2 /
         // mongodb modules. Naming a feature here would ask cargo
-        // for a gate that no longer exists. mongodb's wrapper owns its import
-        // and its `async-runtime` need is re-asserted by the flip loop in
-        // optimized_libs/driver.rs; pg / mysql2 compile the npm package.
+        // for a gate that no longer exists. Their wrappers are gone too
+        // (#10677 / #10680 / #11337), so all three compile the npm package.
         for module in ["pg", "mysql2", "mysql2/promise", "mongodb", "node:mongodb"] {
             assert_eq!(
                 module_to_features(module),

@@ -22,7 +22,6 @@ cargo build --release `
     -p perry-stdlib-static `
     -p perry-ui-windows `
     -p perry-doc-tests `
-    -p perry-ext-mongodb `
     -p perry-ext-nodemailer
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

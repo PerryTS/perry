@@ -42,7 +42,7 @@ mod ws_events;
 mod yoga;
 
 // ============================================================================
-// Native stdlib module dispatch (fastify, ws, mongodb,
+// Native stdlib module dispatch (fastify, ws,
 // better-sqlite3, etc.). Ported from the old Cranelift codegen's dispatch
 // table that was lost in the v0.5.0 LLVM cutover.
 // ============================================================================

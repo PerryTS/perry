@@ -21,7 +21,7 @@ perry-native-registration.workspace = true
 # #1112: `perry-runtime` is restored as an OPTIONAL regular dep (not
 # a dev-dep) so the `runtime-link` feature actually propagates the
 # linkage into downstream test binaries (e.g.
-# `perry-ext-mongodb`'s `[dev-dependencies] perry-ffi = { ...,
+# `perry-ext-ioredis`'s `[dev-dependencies] perry-ffi = { ...,
 # features = ["runtime-link"] }`). Without that propagation, those
 # tests fail to link with `undefined symbol: js_string_from_bytes`
 # because the symbol perry-ffi's `alloc_string` calls lives in

@@ -19,7 +19,6 @@ implementations, organized by category:
 |-------------|--------------|-------------|
 | `mysql2` | [sqlx](https://crates.io/crates/sqlx) | MySQL/MariaDB client with connection pooling |
 | `pg` | [sqlx](https://crates.io/crates/sqlx) | PostgreSQL client with connection pooling |
-| `mongodb` | [mongodb](https://crates.io/crates/mongodb) | MongoDB driver with full CRUD support |
 | `better-sqlite3` | [rusqlite](https://crates.io/crates/rusqlite) | Synchronous SQLite3 with prepared statements |
 
 ### Security & Authentication
@@ -118,7 +117,6 @@ Click any library name to jump to its documentation:
 | jsonwebtoken | Security | [docs](#jsonwebtoken) |
 | lodash | Utilities | [docs](#lodash) |
 | moment | Date/Time | [docs](#moment) |
-| mongodb | Database | [docs](#mongodb) |
 | mysql2 | Database | [docs](#mysql2) |
 | nanoid | Utilities | [docs](#nanoid) |
 | node-fetch | HTTP Client | [docs](#node-fetch) |
@@ -749,66 +747,6 @@ if (isValid) {
 - Memory cost is in KB, not bytes
 - Hash format is PHC string format (contains all parameters)
 - More secure than bcrypt for new applications
-
----
-
-## mongodb
-
-**npm package:** [mongodb](https://www.npmjs.com/package/mongodb)
-**Rust backend:** [mongodb](https://crates.io/crates/mongodb) v2.8
-
-### Supported API
-
-```typescript
-import { MongoClient } from 'mongodb';
-
-// Connect to MongoDB
-const client = await MongoClient.connect('mongodb://localhost:27017');
-
-// Get database and collection
-const db = client.db('mydb');
-const users = db.collection('users');
-
-// Insert documents
-const result = await users.insertOne({ name: 'Alice', age: 30 });
-console.log('Inserted:', result.insertedId);
-
-const bulkResult = await users.insertMany([
-  { name: 'Bob', age: 25 },
-  { name: 'Charlie', age: 35 }
-]);
-
-// Find documents
-const user = await users.findOne({ name: 'Alice' });
-const allUsers = await users.find({ age: { $gte: 25 } });
-
-// Update documents
-const updateResult = await users.updateOne(
-  { name: 'Alice' },
-  { $set: { age: 31 } }
-);
-
-await users.updateMany(
-  { age: { $lt: 30 } },
-  { $inc: { age: 1 } }
-);
-
-// Delete documents
-await users.deleteOne({ name: 'Bob' });
-await users.deleteMany({ age: { $gt: 50 } });
-
-// Count documents
-const count = await users.countDocuments({ age: { $gte: 25 } });
-
-// Close connection
-await client.close();
-```
-
-### Notes
-- Filters and updates are passed as JSON strings internally
-- Supports standard MongoDB query operators ($eq, $gt, $lt, $gte, $lte, $in, etc.)
-- Connection pooling is automatic
-- All operations are async/Promise-based
 
 ---
 

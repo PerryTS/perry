@@ -2,7 +2,7 @@
 //!
 //! Tier 2.2 follow-up (v0.5.339) — extracts the 399-LOC dispatcher
 //! that handles `new` calls against built-in classes (Date, Map, Set,
-//! Buffer, fetch Headers / Request / Response, mongodb MongoClient,
+//! Buffer, fetch Headers / Request / Response,
 //! fastify App, ws WebSocketServer, pg Client /
 //! Pool, perry/plugin Decimal, AsyncLocalStorage, AbortController,
 //! Command, …). Each match arm emits a runtime call to the
@@ -100,7 +100,7 @@ pub(super) fn lower_builtin_new<'a>(
     group: &mut RootedGroup<'a>,
 ) -> Result<Option<String>> {
     // Issue #602: ambiguously-named built-in constructors (Client / Pool /
-    // Database / MongoClient / Decimal) collide with bindings from
+    // Database / Decimal) collide with bindings from
     // unrelated packages — `import Client from "better-sqlite3"` would
     // otherwise dispatch through pg's Client arm and emit an undefined
     // `js_pg_client_new` reference at link time. None of these names is a
@@ -119,7 +119,6 @@ pub(super) fn lower_builtin_new<'a>(
     let required_sources: Option<&[&str]> = match class_name {
         "Database" => Some(&["better-sqlite3"]),
         "DatabaseSync" | "Session" | "StatementSync" => Some(&["sqlite", "node:sqlite"]),
-        "MongoClient" => Some(&["mongodb"]),
         "Transpiler" => Some(&["bun"]),
         _ => None,
     };
@@ -748,19 +747,6 @@ pub(super) fn lower_builtin_new<'a>(
                 "js_node_sqlite_session_new",
                 &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
             );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
-        }
-        // mongodb MongoClient — `new MongoClient(uri)` matching npm mongodb's
-        // API. URI is a string; runtime stores it and connects later via
-        // `await client.connect()`.
-        "MongoClient" => {
-            let uri_ptr = if let Some(arg) = args.first() {
-                get_raw_string_ptr(ctx, arg)?
-            } else {
-                "0".to_string()
-            };
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_mongodb_client_new", &[(I64, &uri_ptr)]);
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
         // async_hooks.AsyncLocalStorage — `new AsyncLocalStorage()` produces a

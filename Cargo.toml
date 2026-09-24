@@ -32,7 +32,6 @@ members = [
     "crates/perry-ext-nodemailer",
 
     "crates/perry-ext-undici",
-    "crates/perry-ext-mongodb",
     "crates/perry-ext-ws",
     "crates/perry-ext-net",
     "crates/perry-ext-http",
@@ -450,15 +449,14 @@ turnloop-websocket = { version = "0.1.0-alpha.8", default-features = false }
 # (docs/turnloop/p6-report.md).
 turnloop-smtp = { version = "0.1.0-alpha.8", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
-# cores that replace sqlx and the `mongodb` driver on the
+# cores that replace sqlx on the
 # paths Perry's bindings own. Default features only, for the same reason as the
 # two above — with the `turnloop` feature off these crates depend on neither
 # `turnloop-io` nor `turnloop-tls`, so they are pure protocol state machines and
 # Perry drives them over P1's socket layer. alpha.4 rather than alpha.3 because
-# it is the release that gave MySQL and MongoDB one deflate state per
+# it is the release that gave MySQL one deflate state per
 # connection, each compressed message framed as its own zlib stream; alpha.3
 # re-created the state per message and is a wire-level regression to adopt.
-turnloop-mongodb = { version = "0.1.0-alpha.8", default-features = false }
 tempfile = "3"
 itoa = "1.0"
 ryu = "1.0"
@@ -486,7 +484,7 @@ http-body-util = "0.1"
 # The `http` types crate. Already in the graph via hyper/reqwest/turnloop-http;
 # named here so perry-stdlib can reach `StatusCode::canonical_reason` directly.
 http = "1"
-# ONE crypto provider: ring. reqwest, mongodb, turnloop-tls and perry-ext-http
+# ONE crypto provider: ring. reqwest, turnloop-tls and perry-ext-http
 # all hard-require ring; rustls/tokio-rustls DEFAULT features would add
 # aws-lc-rs (+aws-lc-sys) as a second provider (~1.3 MB stripped, ~1 MB RSS).
 # Keep default-features off; deny.toml bans aws-lc-rs so it can't creep back.
@@ -574,7 +572,6 @@ perry-ext-ethers = { path = "crates/perry-ext-ethers" }
 perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
 
 perry-ext-undici = { path = "crates/perry-ext-undici" }
-perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
 perry-ext-ws = { path = "crates/perry-ext-ws" }
 perry-ext-net = { path = "crates/perry-ext-net" }
 perry-ext-http = { path = "crates/perry-ext-http" }

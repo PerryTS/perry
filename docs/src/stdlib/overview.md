@@ -36,7 +36,6 @@ for compatibility guarantees.
 - **mysql2** — MySQL client
 - **pg** — PostgreSQL client
 - **bun:sqlite** / **node:sqlite** / **better-sqlite3** — SQLite, backed by Perry's native engine
-- **mongodb** — MongoDB client
 
 ### Cryptography
 - **bcrypt** — Password hashing

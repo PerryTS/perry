@@ -8,17 +8,16 @@ socket-registry fleet applies to its vendored upstream references, adapted for
 npm dists.
 
 ```toml
-[bindings.mongodb]
-crate = "perry-ext-mongodb"
-lib = "perry_ext_mongodb"
+[bindings.bcrypt]
+crate = "perry-ext-bcrypt"
+lib = "perry_ext_bcrypt"
 tracking = "#466"
 
-[bindings.mongodb.upstream]
-version   = "7.5.0"           # pinned npm release (immutable dist)
-sha256    = "4d93c312…"       # sha256 of the registry tarball at pin time
-repo      = "https://github.com/mongodb/node-mongodb-native"
-ref       = "c4368315…"       # publisher's gitHead for the release, when known
-ported-at = "7.5.0"           # release the wrapper was last REVIEWED against
+[bindings.bcrypt.upstream]
+version   = "6.0.0"           # pinned npm release (immutable dist)
+sha256    = "3b2478cd…"       # sha256 of the registry tarball at pin time
+repo      = "https://github.com/kelektiv/node.bcrypt.js"
+ported-at = "6.0.0"           # release the wrapper was last REVIEWED against
 date      = "2026-07-30"
 ```
 
@@ -50,7 +49,7 @@ even when they share a wrapper crate.
 
 ```sh
 # Provision or bump one pin to a specific version (default: latest stable)
-node scripts/binding_pins.mjs --set mongodb 7.5.0
+node scripts/binding_pins.mjs --set bcrypt 6.0.0
 
 # Provision every currently-unpinned binding at its latest stable
 node scripts/binding_pins.mjs --backfill
@@ -65,7 +64,7 @@ node scripts/binding_pins.mjs --check --refresh --soak-days 7
 
 # Materialize the upstream repo at the pinned ref into gitignored upstream/<name>
 # for port review (diff the old pin against a candidate new tag)
-node scripts/binding_pins.mjs --materialize mongodb
+node scripts/binding_pins.mjs --materialize bcrypt
 ```
 
 Never hand-edit `version` / `sha256` / `ref` — the tarball hash can't be

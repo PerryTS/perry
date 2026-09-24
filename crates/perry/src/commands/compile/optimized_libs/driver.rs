@@ -67,30 +67,6 @@ pub(crate) fn build_optimized_libs(
         );
         std::process::exit(1);
     }
-    // turnloop P8 group H: perry-stdlib's bundled mongodb copy was
-    // deleted, so with the flip disabled there is nothing left to define
-    // `js_mongodb_*` and the link would fail with a wall of
-    // undefined symbols. Say so up front instead.
-    //
-    // pg / mysql2 / fastify / ioredis / redis / iovalkey are NOT listed:
-    // main's npm-binding strip removed their well-known rows entirely, so
-    // those imports compile the real npm package from source and never reach
-    // a wrapper either way.
-    if let Some(module) = iteration_set
-        .iter()
-        .map(|m| m.strip_prefix("node:").unwrap_or(m))
-        .find(|m| *m == "mongodb")
-        .filter(|_| !use_well_known)
-    {
-        eprintln!(
-            "error: `import '{module}'` requires an external perry-ext-* wrapper, but the \
-             well-known flip is disabled (PERRY_DISABLE_WELL_KNOWN). perry-stdlib's bundled \
-             mongodb copy was removed; unset PERRY_DISABLE_WELL_KNOWN so the \
-             import routes to its wrapper crate."
-        );
-        std::process::exit(1);
-    }
-
     // `PERRY_NO_AUTO_OPTIMIZE=1` — opt out of the per-app feature-set
     // specialization and use the prebuilt `target/release/libperry_*.a`
     // built with the default `full` feature set. Used by CI doc-tests
@@ -150,7 +126,7 @@ pub(crate) fn build_optimized_libs(
     // partially-built workspace still produces a working binary.
     let mut well_known_libs: Vec<PathBuf> = Vec::new();
     // #507 — wrappers whose own crate-level `[dependencies]` pull tokio
-    // (TcpStream, hyper, reqwest, mongodb, sqlx, tokio-tungstenite,
+    // (TcpStream, hyper, reqwest, sqlx, tokio-tungstenite,
     // lettre, …) need to share a single tokio compilation with
     // perry-stdlib's runtime. If they're built in a different
     // target-dir than perry-stdlib (the workspace `target/release/`
@@ -271,18 +247,6 @@ pub(crate) fn build_optimized_libs(
                 if !crate_dir.is_dir() {
                     // turnloop P8 group H removed the bundled db copies, so
                     // the fall-back below has nothing to fall back to.
-                    if module_normalized == "mongodb" {
-                        eprintln!(
-                            "error: `import '{}'` requires the external {} wrapper, but its \
-                             source crate was not found at `{}`. perry-stdlib's bundled copy was \
-                             removed; build or restore {}.",
-                            module,
-                            binding.krate,
-                            crate_dir.display(),
-                            binding.krate
-                        );
-                        std::process::exit(1);
-                    }
                     if matches!(format, OutputFormat::Text) && verbose > 0 {
                         eprintln!(
                             "  well-known: skipping `{}` — crate `{}` source not on disk; \
@@ -380,25 +344,15 @@ pub(crate) fn build_optimized_libs(
             }) {
                 features.insert("async-bridge");
             }
-            // turnloop P8 group H: the bundled mongodb module was deleted, so
-            // `module_to_features` names no feature for it and the check above
-            // cannot see it. perry-ext-mongodb still settles every promise
-            // through perry-stdlib's `perry_ffi_*` shim and runs each operation
-            // on tokio (`Handle::current().block_on` inside
-            // `perry_ffi_spawn_blocking`), so key `async-runtime` on the module
-            // name.
-            //
-            // pg / mysql2 used to be listed here too. Their wrappers
-            // (perry-ext-pg #10677, perry-ext-mysql2 #10680) are gone and
-            // `well_known_bindings.toml` has no row for either, so this loop —
-            // which `continue`s at `lookup_well_known` for any module without a
-            // row — could never reach them: those imports compile the real npm
-            // package, whose sockets are `net` / `tls` and select whatever
-            // those select. `well_known::tests::pg_and_mysql2_have_no_well_known_row`
-            // pins that.
-            if module_normalized == "mongodb" {
-                features.insert("async-runtime");
-            }
+            // turnloop P8 group H deleted the bundled pg / mysql2 / mongodb
+            // modules, and their wrappers (perry-ext-pg #10677,
+            // perry-ext-mysql2 #10680, perry-ext-mongodb #11337) are gone too.
+            // `well_known_bindings.toml` has no row for any of them, so this
+            // loop — which `continue`s at `lookup_well_known` for any module
+            // without a row — never reaches them: those imports compile the
+            // real npm package, whose sockets are `net` / `tls` and select
+            // whatever those select. No module-name `async-runtime` rule is
+            // left here.
             // `undici` (#466): perry-ext-undici is thin glue over the
             // native Web Fetch stack. Its `setGlobalDispatcher` writes
             // the proxy config through `js_fetch_set_global_proxy`,
@@ -591,8 +545,8 @@ pub(crate) fn build_optimized_libs(
     // so tokio was in every stdlib-linking binary. The bridge is tokio-free
     // now, and `async-runtime` is selected only by a feature that hands tokio
     // a future (Cargo implies it: bundled net / ws) or by a wrapper that
-    // bundles tokio (`binding_bundles_tokio`, above: mongodb) or by the pg /
-    // mysql2 / mongodb decline paths. A program that needs none of those links
+    // bundles tokio (`binding_bundles_tokio`, above — empty since
+    // perry-ext-mongodb was deleted, #11337). A program that needs none of those links
     // no tokio — which, since lane L's second slice, includes one whose only
     // network imports are `fetch`, `net`, `tls`, `ws` and `http` / `https` /
     // `http2`.

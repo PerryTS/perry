@@ -137,8 +137,9 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     // The stripped stdlib feature set is not enough to identify this Cargo
-    // graph. For example, mongodb and a CPU-only async wrapper both reduce to
-    // `async-runtime`, but only the mongodb build selects perry-ext-mongodb.
+    // graph. For example, two programs whose wrappers both reduce to
+    // `async-runtime` can still select different wrapper crates, and so
+    // different Cargo graphs.
     // Sharing a target dir lets the second invocation replace stdlib after
     // the first invocation releases its build lock but before it links. The
     // first process then sees an ext archive and stdlib archive from different
@@ -758,7 +759,7 @@ pub(crate) fn resolve_auto_well_known_libs(
 }
 
 /// True if this binding's wrapper crate has its own tokio dependency
-/// for I/O (TcpStream, hyper, reqwest, mongodb, sqlx, redis,
+/// for I/O (TcpStream, hyper, reqwest, sqlx, redis,
 /// tokio-tungstenite, lettre, …) and must therefore share a single
 /// tokio compilation with perry-stdlib's runtime.
 ///
@@ -795,8 +796,6 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
         | "undici"
         // HTTP server (hyper)
         | "fastify"
-        // Database drivers (mongodb)
-        | "mongodb"
         // Mail (lettre)
         | "nodemailer"
     )
@@ -818,17 +817,18 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
 /// compilation), but asking for `async-runtime` on their behalf would put
 /// tokio back into every net / ws program for nothing.
 ///
-/// `pg` / `mysql2` are not here and need nothing: their wrappers were removed
-/// (#10677 / #10680), so the npm packages compile from source over `net` /
-/// `tls` and their decline paths are gone with them.
-pub(crate) fn binding_bundles_tokio(module: &str) -> bool {
-    matches!(
-        module,
-        // perry-ext-mongodb: `Handle::current().block_on` inside
-        // `perry_ffi_spawn_blocking` (group B/J). perry-ext-http left this
-        // set when tokio lane D dropped its last tokio edge (#11265): its
-        // servers (#11144), client (#11205) and `createConnection` all run on
-        // turnloop.
-        "mongodb"
-    )
+/// The set is EMPTY. `pg` / `mysql2` left with their wrappers (#10677 /
+/// #10680); perry-ext-http left when tokio lane D dropped its last tokio edge
+/// (#11265) — its servers (#11144), client (#11205) and `createConnection`
+/// all run on turnloop; and mongodb, the last member, left when
+/// perry-ext-mongodb was deleted (#11337) — its npm package now compiles from
+/// source over `net` / `tls`. So on the auto-optimize path no well-known
+/// wrapper selects `async-runtime` any more.
+///
+/// The predicate is kept, not deleted, because it is the single source the
+/// driver, the no-auto warning and the #7629 link check (`shared_tokio_lib_stems`)
+/// all key on: a future wrapper that bundles tokio goes back in here and
+/// those three pick it up together.
+pub(crate) fn binding_bundles_tokio(_module: &str) -> bool {
+    false
 }

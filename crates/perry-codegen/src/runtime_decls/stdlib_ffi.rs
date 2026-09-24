@@ -24,8 +24,8 @@ use utilities::declare_utilities;
 use web::declare_web;
 
 /// Stdlib / FFI runtime functions. Without these declarations, user code
-/// that touches any of the third-party stdlib modules (http, mongodb,
-/// redis, mongodb, bcrypt, jsonwebtoken, sharp, cron, WebSocket,
+/// that touches any of the third-party stdlib modules (http,
+/// redis, bcrypt, jsonwebtoken, sharp, cron, WebSocket,
 /// zlib, etc.) emits `use of undefined value '@js_*'` at clang -c time
 /// because the IR references the name without a preceding `declare`.
 ///
@@ -34,7 +34,7 @@ use web::declare_web;
 pub fn declare_stdlib_ffi(module: &mut LlModule) {
     // node:vm/repl/worker_threads + HTTP/HTTPS/HTTP2 client, server, agents.
     declare_net_http(module);
-    // PostgreSQL, MongoDB, SQLite, OS, Crypto, Nanoid.
+    // PostgreSQL, SQLite, OS, Crypto, Nanoid.
     declare_data_stores(module);
     // bcrypt/argon2, perry/ads, perry/thread, JWT, sharp, cron,
     // async_hooks/AsyncLocalStorage, DisposableStack, zlib, Buffer,

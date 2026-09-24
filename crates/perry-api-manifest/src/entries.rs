@@ -36,7 +36,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
     "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
     "ethers",         // Ethereum library (utils/wallet/ABI)
-    "mongodb",        // MongoDB driver
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
     "sqlite",         // node:sqlite builtin surface
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier

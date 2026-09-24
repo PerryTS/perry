@@ -14,29 +14,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     //  drift guarded by perry-codegen's manifest_consistency test)
     // ===========================================================
     method_sig(
-        "mongodb",
-        "connect",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("mongodb", "connect", true, None),
-    method("mongodb", "db", true, None),
-    method("mongodb", "collection", true, None),
-    method("mongodb", "insertOne", true, None),
-    method("mongodb", "insertMany", true, None),
-    method("mongodb", "find", true, None),
-    // #4917 — resolves a parsed document object (BSON-specific types in
-    // relaxed extended-JSON shape, e.g. `_id.$oid`), or null.
-    method("mongodb", "findOne", true, None),
-    method("mongodb", "updateOne", true, None),
-    method("mongodb", "updateMany", true, None),
-    method("mongodb", "deleteOne", true, None),
-    method("mongodb", "deleteMany", true, None),
-    method("mongodb", "countDocuments", true, None),
-    method("mongodb", "close", true, None),
-    method_sig(
         "better-sqlite3",
         "default",
         false,

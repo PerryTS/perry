@@ -257,7 +257,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                                     let class_name = match (module_name, method_ident.sym.as_ref())
                                     {
-                                        ("mongodb", "connect") => Some("MongoClient"),
                                         ("mysql2" | "mysql2/promise", "createPool") => Some("Pool"),
                                         ("mysql2" | "mysql2/promise", "createConnection") => {
                                             Some("Connection")
@@ -303,8 +302,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                 let method_name = method_ident.sym.as_ref();
                                 // Determine if the method returns a handle (another native instance)
                                 let returns_handle = match (module_name.as_str(), method_name) {
-                                    ("mongodb", "db") => Some("Database"),
-                                    ("mongodb", "collection") => Some("Collection"),
                                     ("mysql2" | "mysql2/promise", "getConnection") => {
                                         Some("PoolConnection")
                                     }

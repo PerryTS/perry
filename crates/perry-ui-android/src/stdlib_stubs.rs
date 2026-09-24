@@ -623,58 +623,6 @@ pub extern "C" fn js_moment_year() -> i64 {
     0
 }
 #[no_mangle]
-pub extern "C" fn js_mongodb_client_close() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_client_db() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_count() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_delete_many() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_delete_one() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_find() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_find_one() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_insert_many() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_insert_one() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_update_many() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_collection_update_one() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_connect() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_mongodb_db_collection() -> i64 {
-    0
-}
-#[no_mangle]
 pub extern "C" fn js_new_instance() -> i64 {
     0
 }

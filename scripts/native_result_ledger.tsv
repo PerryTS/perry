@@ -82,18 +82,6 @@ js_lodash_tail	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_take	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_times	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_lodash_uniq	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_mongodb_client_close	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_client_db	NR_HANDLE_ID	crates/perry-ext-mongodb/src/lib.rs	Handle
-js_mongodb_collection_count_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_delete_many_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_delete_one_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_find_one_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_find_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_insert_many_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_insert_one_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_update_many_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_collection_update_one_value	NR_GCPTR	crates/perry-ext-mongodb/src/lib.rs	*mut Promise
-js_mongodb_db_collection	NR_HANDLE_ID	crates/perry-ext-mongodb/src/lib.rs	Handle
 js_net_block_list_new	NR_HANDLE_ID	crates/perry-ext-net/src/classes.rs	i64
 js_net_block_list_rules	NR_GCPTR	crates/perry-ext-net/src/classes.rs	*mut ArrayHeader
 js_net_server_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64

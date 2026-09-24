@@ -149,7 +149,9 @@ pub mod subsystem {
     /// now compile from source over `net`). Kept reserved so the database
     /// band never renumbers and a stale archive cannot collide.
     pub const REDIS: u8 = 11;
-    /// `perry-ext-mongodb`.
+    /// Formerly `perry-ext-mongodb` (removed: npm `mongodb` now compiles
+    /// from source over `net`). Kept reserved so the database band never
+    /// renumbers and a stale archive cannot collide.
     pub const MONGODB: u8 = 12;
 }
 

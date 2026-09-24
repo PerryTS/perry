@@ -382,9 +382,17 @@ mod tests {
         // tokio `async-runtime` for `pg` / `mysql2` by module name: the flip
         // loop only reaches modules with a row here, and their wrappers were
         // removed (#10677 / #10680), so the npm packages compile from source.
+        // mongodb joined them when perry-ext-mongodb was deleted (#11337).
         // If a wrapper ever comes back, whether it needs tokio is
         // `binding_needs_shared_tokio`'s call, not a module-name rule.
-        for module in ["pg", "mysql2", "mysql2/promise", "node:pg"] {
+        for module in [
+            "pg",
+            "mysql2",
+            "mysql2/promise",
+            "node:pg",
+            "mongodb",
+            "node:mongodb",
+        ] {
             assert!(
                 lookup_well_known(module).is_none(),
                 "{module} must not route to a native wrapper"

@@ -484,13 +484,11 @@ fn net_needs_shared_tokio() {
 }
 
 /// turnloop P8 lane L: only wrappers that still bundle tokio make the driver
-/// select perry-stdlib's `async-runtime`. perry-ext-net / -ws run on turnloop,
-/// so a program importing only `net` / `ws` must link no tokio.
+/// select perry-stdlib's `async-runtime`. perry-ext-net / -ws / -http run on
+/// turnloop, and perry-ext-mongodb, the last wrapper that bundled tokio, was
+/// deleted (#11337), so no well-known module selects it any more.
 #[test]
 fn only_tokio_bundling_wrappers_select_async_runtime() {
-    for module in ["mongodb"] {
-        assert!(binding_bundles_tokio(module), "{module} bundles tokio");
-    }
     for module in [
         "net",
         "ws",
@@ -501,8 +499,19 @@ fn only_tokio_bundling_wrappers_select_async_runtime() {
         "nodemailer",
         "bcrypt",
         "zlib",
+        "mongodb",
     ] {
         assert!(!binding_bundles_tokio(module), "{module} carries no tokio");
+    }
+    for binding in super::super::well_known::iter_well_known() {
+        let module = binding
+            .package
+            .strip_prefix("node:")
+            .unwrap_or(&binding.package);
+        assert!(
+            !binding_bundles_tokio(module),
+            "{module}: no well-known wrapper bundles tokio since #11337"
+        );
     }
 }
 

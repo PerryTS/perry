@@ -134,10 +134,9 @@ def _self_test() -> int:
     # one of #7650's five and can never appear in the derived list again.
     # The 9-package binding-audit batch removed perry-ext-node-forge
     # (native binding deleted, real npm source compiles clean) for the
-    # same reason.
+    # same reason, and the mongodb binding removal dropped perry-ext-mongodb.
     for name in (
         "perry-ext-pdf",
-        "perry-ext-mongodb",
         "perry-ext-http",
     ):
         if name not in pkgs:

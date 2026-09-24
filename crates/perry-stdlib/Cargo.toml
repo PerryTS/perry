@@ -201,9 +201,8 @@ external-tls-server = [
 # flip had routed those imports down since v0.5.565-568. Keeping them cost
 # perry-stdlib a `sqlx` + `redis` + `mongodb` manifest edge, and 76 of the 502
 # packages in this crate's own dependency closure (502 -> 426), for code no
-# default compile reached. The pg / mysql2 / ioredis wrappers have since been
-# removed too (the npm packages compile from source over `net`); only
-# perry-ext-mongodb remains. `database-sqlite` is
+# default compile reached. All four wrappers have since been removed too (the
+# npm packages compile from source over `net`). `database-sqlite` is
 # NOT in that set: rusqlite is not a tokio dependency and `dispatch_sqlite_stmt`
 # is deliberately retained through the flip (Refs #643).
 database = ["database-sqlite"]

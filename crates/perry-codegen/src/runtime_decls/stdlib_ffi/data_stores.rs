@@ -1,63 +1,10 @@
 //! Database / data-store / crypto / OS stdlib FFI declarations
-//! (extracted from stdlib_ffi.rs): mongodb, sqlite, OS, crypto, nanoid.
+//! (extracted from stdlib_ffi.rs): sqlite, OS, crypto, nanoid.
 
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I32, I64, VOID};
 
 pub(crate) fn declare_data_stores(module: &mut LlModule) {
-    // ========== MongoDB ==========
-    module.declare_function("js_mongodb_client_close", I64, &[I64]);
-    module.declare_function("js_mongodb_client_connect", I64, &[I64]);
-    module.declare_function("js_mongodb_client_db", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_client_list_databases", I64, &[I64]);
-    module.declare_function("js_mongodb_client_new", I64, &[I64]);
-    // _value wrappers (JSON-stringify f64 JSValue arg, forward to existing fns)
-    module.declare_function("js_mongodb_collection_count_value", I64, &[I64, DOUBLE]);
-    module.declare_function(
-        "js_mongodb_collection_delete_many_value",
-        I64,
-        &[I64, DOUBLE],
-    );
-    module.declare_function(
-        "js_mongodb_collection_delete_one_value",
-        I64,
-        &[I64, DOUBLE],
-    );
-    module.declare_function("js_mongodb_collection_find_one_value", I64, &[I64, DOUBLE]);
-    module.declare_function("js_mongodb_collection_find_value", I64, &[I64, DOUBLE]);
-    module.declare_function(
-        "js_mongodb_collection_insert_many_value",
-        I64,
-        &[I64, DOUBLE],
-    );
-    module.declare_function(
-        "js_mongodb_collection_insert_one_value",
-        I64,
-        &[I64, DOUBLE],
-    );
-    module.declare_function(
-        "js_mongodb_collection_update_many_value",
-        I64,
-        &[I64, DOUBLE, DOUBLE],
-    );
-    module.declare_function(
-        "js_mongodb_collection_update_one_value",
-        I64,
-        &[I64, DOUBLE, DOUBLE],
-    );
-    module.declare_function("js_mongodb_collection_count", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_delete_many", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_delete_one", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_find", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_find_one", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_insert_many", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_insert_one", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_collection_update_many", I64, &[I64, I64, I64]);
-    module.declare_function("js_mongodb_collection_update_one", I64, &[I64, I64, I64]);
-    module.declare_function("js_mongodb_connect", I64, &[I64]);
-    module.declare_function("js_mongodb_db_collection", I64, &[I64, I64]);
-    module.declare_function("js_mongodb_db_list_collections", I64, &[I64]);
-
     // ========== SQLite ==========
     module.declare_function("js_sqlite_close", VOID, &[I64]);
     module.declare_function("js_sqlite_exec", VOID, &[I64, I64]);
