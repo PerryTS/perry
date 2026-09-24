@@ -126,7 +126,7 @@ pub(crate) fn resolve_no_auto_optimized_libs(
 /// any failure (no source on disk, no cargo, build error) so the caller
 /// falls back to the prebuilt full stdlib (same #10466 gap, not a new
 /// failure mode). Returns `(stdlib_archive, ext_http_archive)`.
-fn build_http_client_pump_stdlib(
+pub(super) fn build_http_client_pump_stdlib(
     target: Option<&str>,
     format: OutputFormat,
     verbose: u8,
@@ -168,6 +168,11 @@ fn build_http_client_pump_stdlib(
         .env("CARGO_TARGET_DIR", &cargo_target_dir)
         .arg("build")
         .arg("--release")
+        // The stdlib's dependency disables runtime defaults. Selecting the
+        // runtime package explicitly preserves the full no-auto engine set
+        // in the runtime code bundled into libperry_stdlib.a (#11174).
+        .arg("-p")
+        .arg("perry-runtime")
         .arg("-p")
         .arg("perry-stdlib-static")
         .arg("-p")
