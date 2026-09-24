@@ -110,8 +110,9 @@ pub(crate) fn lower_class_expr(
     // the inferred name is not proof that the local holds a template class.
     if !at_module_top && source_inner_name.is_none() {
         if let Some(name) = assignment_name.as_ref() {
-            if ctx.lookup_local(name).is_some() {
+            if let Some(local) = ctx.lookup_local(name) {
                 ctx.inferred_class_bindings.remove(name);
+                ctx.inferred_class_bindings.remove_binding(local);
             }
         }
     }

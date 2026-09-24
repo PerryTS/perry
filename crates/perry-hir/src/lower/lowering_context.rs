@@ -43,6 +43,11 @@ impl InferredClassBindings {
         self.names.remove(name)
     }
 
+    /// Forget the class previously held by this particular lexical binding.
+    pub(crate) fn remove_binding(&mut self, local: LocalId) {
+        self.by_local.remove(&local);
+    }
+
     /// A second class expression claimed `name` under a disambiguated key.
     pub(crate) fn mark_contested(&mut self, name: &str) {
         self.contested.insert(name.to_string());

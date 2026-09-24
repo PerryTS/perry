@@ -25,3 +25,23 @@ fn anonymous_class_members_capture_the_outer_binding() {
         identity.body
     );
 }
+
+#[test]
+fn reassigned_anonymous_class_does_not_reuse_the_previous_class_key() {
+    let ast = perry_parser::parse_typescript(
+        "function make() { let C: any = class { static tag = 1; }; C = class { static tag = 2; who() { return C.tag; } }; return C; }",
+        "anonymous-reassigned.ts",
+    ).unwrap();
+    let hir = super::lower_module(&ast, "anonymous_reassigned", "anonymous-reassigned.ts").unwrap();
+    let method = hir
+        .classes
+        .iter()
+        .flat_map(|class| &class.methods)
+        .find(|method| method.name == "who")
+        .unwrap();
+    assert!(
+        !format!("{:?}", method.body).contains("StaticFieldGet"),
+        "the reassigned local must not retain its previous class key: {:?}",
+        method.body
+    );
+}

@@ -34,3 +34,15 @@ function named() {
   console.log(new Original().self() === Original);
 }
 named();
+
+function reassign() {
+  let Rebound: any = class { static tag = 1; };
+  Rebound = class {
+    static tag = 2;
+    who() { return Rebound.tag; }
+    self() { return Rebound; }
+  };
+  return Rebound;
+}
+const Reassigned: any = reassign();
+console.log(new Reassigned().who(), new Reassigned().self() === Reassigned);
