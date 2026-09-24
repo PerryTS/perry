@@ -44,8 +44,6 @@ use super::FnCtx;
 const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
-const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
-const OBJ_FLAG_PACKED_NUMERIC_PROOF_BIT: &str = "128"; // OBJ_FLAG_PACKED_NUMERIC_PROOF (0x080)
 /// `OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES`.
 const OBJ_FLAG_READ_FAST_PATH_BLOCKED: &str = "3072";
 /// `OBJ_FLAG_FROZEN | OBJ_FLAG_STABLE_TOMBSTONES |
@@ -441,29 +439,41 @@ pub(crate) fn emit_proven_shape_recheck(
     blk.cond_br(&acc, proven_label, generic_label);
 }
 
-/// Emit the inline class-field shape pre-check.
+/// Emit the class-field WRITE guard (`this.x = v` on a known class).
 ///
 /// Before calling, the caller must have already created `fast_label` (the slot
-/// load/store block) and computed `obj_bits` (i64 bitcast of the receiver
-/// NaN-box) and `obj_handle` (the low-48 masked pointer) in a block that
-/// dominates everything that follows. On success the emitted IR branches to
-/// `fast_label`; on any miss it branches to a freshly created "guardcall" block.
+/// store block) and computed `obj_bits` (i64 bitcast of the receiver NaN-box)
+/// and `obj_handle` (the low-48 masked pointer) in a block that dominates
+/// everything that follows. On success the emitted IR branches to
+/// `fast_label`; on any miss it branches to a freshly created "guardcall"
+/// block, which is left current and whose label is returned, so the caller
+/// emits the unchanged `js_typed_feedback_class_field_set_guard` call next.
 ///
-/// Returns the guardcall block's label and leaves `ctx.current_block` set to it,
-/// so the caller emits the unchanged `js_typed_feedback_class_field_*_guard`
-/// call path next.
+/// It is the read guard ([`emit_class_field_read_precheck`]) plus the two
+/// facts a store needs that no ShapeId carries:
 ///
-/// `set_value_bits` is `Some(bits)` only for the property-set raw-f64 path: it
-/// adds the not-frozen and plain-finite-number checks the set fast contract
-/// requires (a non-number must downgrade through the boxed setter, never a raw
-/// store).
+/// * the receiver range check, as ONE biased unsigned compare (the shared
+///   fused receiver test, `crate::expr::receiver_range`);
+/// * ONE ShapeId compare against the class's own ShapeId global (or a subclass
+///   arm's), and for a raw-f64 field the (class id, ShapeId) pair, exactly as
+///   the read guard — see there for why a matching ShapeId proves the GC
+///   kind, not-forwarded, no descriptor, no tombstone and the slot;
+/// * **not frozen**: `Object.freeze` / `seal` / `preventExtensions` mint a
+///   counter-unique semantic generation (`set_integrity_flags`), so a
+///   receiver still carrying the class ShapeId is not frozen. The read
+///   guard's list therefore covers `OBJ_FLAG_FROZEN` too, and the header word
+///   test the old write guard made (GC kind, forwarded, descriptor, tombstone,
+///   frozen) is gone;
+/// * **kept, per object**: `OBJ_FLAG_PACKED_NUMERIC_PROOF` (an Array-subclass
+///   element-prefix claim any owner store must retire first) and, for a
+///   raw-f64 field, `GC_OBJ_TYPED_LAYOUT_INTACT`. Both live in the one
+///   `_reserved` half-word, so they are one load, one mask and one compare;
+/// * for a raw-f64 store, the value is a plain finite number (a non-number
+///   must downgrade through the guard call, never a raw store).
 ///
-/// `subclass_arms` widens the shape test from "is exactly the declared class"
-/// to "is the declared class or one of these subclasses, each of which puts
-/// this property at this same slot" — see [`class_field_subclass_arms`] for why
-/// the narrow form misses 100% of the time in a base-class body. Pass an empty
-/// slice to keep the single-pair check; a class with no subclasses emits
-/// byte-identical IR either way.
+/// `set_value_bits` is `Some(bits)` for a raw-f64 store's value check.
+/// `subclass_arms` widens the shape test to every subclass that keeps
+/// `property` at this slot (see [`class_field_subclass_arms`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_class_field_inline_precheck(
     ctx: &mut FnCtx,
@@ -482,20 +492,6 @@ pub(crate) fn emit_class_field_inline_precheck(
     let guardcall_idx = ctx.new_block("class_field_inline.guardcall");
     let deref_label = ctx.block_label(deref_idx);
     let guardcall_label = ctx.block_label(guardcall_idx);
-
-    // Gate the dereference: a basic block has no short-circuit, so the field
-    // loads below must only run once we know (a) the inline path is enabled and
-    // (b) the receiver is a real heap object (POINTER_TAG and above the handle
-    // band). Otherwise fall to the guard call, which classifies non-pointer /
-    // handle receivers safely and (under PERRY_VERIFY_TYPED_INTACT) runs the
-    // intact-bit verifier.
-    //
-    // The enable flag is checked *first* so the escape hatch
-    // (PERRY_DISABLE_CLASS_FIELD_INLINE) and verify mode cleanly bypass the
-    // inline reads entirely. It is a `volatile` load: the runtime flips it
-    // (sticky 0 -> 1) the moment descriptors / typed-feedback come into use, so
-    // LLVM must not hoist a stale 0 across a mid-execution flip — matching the
-    // relaxed-atomic read the guard itself performs.
     {
         let blk = ctx.block();
         // POINTER tag and above the handle band, in ONE unsigned range compare
@@ -505,7 +501,6 @@ pub(crate) fn emit_class_field_inline_precheck(
             crate::expr::receiver_range::emit_fused_receiver_test(blk, obj_bits).is_object_pointer;
         blk.cond_br(&ptr_safe, &deref_label, &guardcall_label);
     }
-
     ctx.current_block = deref_idx;
     {
         let blk = ctx.block();
@@ -514,47 +509,6 @@ pub(crate) fn emit_class_field_inline_precheck(
             crate::expr::receiver_range::Route::ClassWrite,
         );
         let obj_ptr = blk.inttoptr(I64, obj_handle);
-
-        // Two loads and two compares, not five of each. The GcHeader's first
-        // 32 bits (it precedes the object by 8 bytes) are obj_type @-8,
-        // gc_flags @-7 and _reserved @-6, little-endian, so every header
-        // predicate is one masked compare against one expected word:
-        //
-        // * obj_type == GC_TYPE_OBJECT (the whole type byte);
-        // * !GC_FLAG_FORWARDED;
-        // * #5654: no property/accessor descriptor was ever installed on this
-        //   receiver (OBJ_FLAG_READ_FAST_PATH_BLOCKED) — an accessor must fire,
-        //   a non-writable slot must reject the store. The per-object flag lets
-        //   the process-global gate above stay open for such installs (only
-        //   prototype-level descriptors flip it);
-        // * raw-f64 slots: the per-object typed layout is still INTACT (no
-        //   downgrade to a NaN-boxed value);
-        // * stores: not frozen (frozen objects route through the boxed
-        //   setter), and #8690 no Array-subclass numeric-prefix proof the
-        //   inline write could overlap.
-        let mut header_mask: u32 = 0xFF | (0x80 << 8) | (3072 << 16);
-        let mut header_expected: u32 = 2; // GC_TYPE_OBJECT
-        if require_raw_f64 {
-            header_mask |= 0x1000 << 16;
-            header_expected |= 0x1000 << 16;
-        }
-        if set_value_bits.is_some() {
-            header_mask |= (0x01 | 0x80) << 16;
-        }
-        debug_assert_eq!(GC_TYPE_OBJECT, "2");
-        debug_assert_eq!(GC_FLAG_FORWARDED_I8, "-128");
-        debug_assert_eq!(OBJ_FLAG_READ_FAST_PATH_BLOCKED, "3072");
-        debug_assert_eq!(TYPED_LAYOUT_INTACT_BIT, "4096");
-        debug_assert_eq!(OBJ_FLAG_FROZEN_BIT, "1");
-        debug_assert_eq!(OBJ_FLAG_PACKED_NUMERIC_PROOF_BIT, "128");
-        let header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
-        let header = blk.load(I32, &header_ptr);
-        let header_bits = blk.and(I32, &header, &(header_mask as i32).to_string());
-        let mut acc = blk.icmp_eq(I32, &header_bits, &(header_expected as i32).to_string());
-
-        // ObjectHeader word 0 is class_id @0 and the authoritative ShapeId @4
-        // (#8113): one 64-bit compare against `(shape << 32) | class_id`.
-        let identity = blk.load(I64, &obj_ptr);
         // The expectation is the class's OWN ShapeId global — the id every
         // instance is stamped with at birth — and nothing else: no site or
         // process switch can tell this compare not to trust the shape (S6).
@@ -562,36 +516,62 @@ pub(crate) fn emit_class_field_inline_precheck(
         // an imported class's defining module publishes its typed ShapeId
         // (`gc/layout/typed_shape.rs`); a stale copy could only miss.
         let live_shape = blk.load_volatile(I32, &format!("@{class_shape_global}"));
-        let declared = expected_class_identity(blk, expected_class_id, &live_shape);
-        let mut shape_ok = blk.icmp_eq(I64, &identity, &declared);
-        // The declared class's own (class id, ShapeId) pair, OR any subclass
-        // arm's. Each arm is a full pair — matching a class id without its
-        // canonical descriptor would accept a diverged layout.
-        for arm in subclass_arms {
-            let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
-            let arm_expected = expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
-            let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
-            shape_ok = blk.or(I1, &shape_ok, &arm_ok);
-        }
-        acc = blk.and(I1, &acc, &shape_ok);
-
+        let mut ok = if require_raw_f64 {
+            // ObjectHeader word 0 is class_id @0 and the ShapeId @4 (#8113):
+            // one 64-bit compare against `(shape << 32) | class_id`.
+            let identity = blk.load(I64, &obj_ptr);
+            let declared = expected_class_identity(blk, expected_class_id, &live_shape);
+            let mut ok = blk.icmp_eq(I64, &identity, &declared);
+            for arm in subclass_arms {
+                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_expected =
+                    expected_class_identity(blk, &arm.class_id.to_string(), &arm_shape);
+                let arm_ok = blk.icmp_eq(I64, &identity, &arm_expected);
+                ok = blk.or(I1, &ok, &arm_ok);
+            }
+            ok
+        } else {
+            let sid_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+            let shape_id = blk.load(I32, &sid_ptr);
+            let mut ok = blk.icmp_eq(I32, &shape_id, &live_shape);
+            for arm in subclass_arms {
+                let arm_shape = blk.load_volatile(I32, &format!("@{}", arm.shape_id_global));
+                let arm_ok = blk.icmp_eq(I32, &shape_id, &arm_shape);
+                ok = blk.or(I1, &ok, &arm_ok);
+            }
+            ok
+        };
+        // GcHeader `_reserved` (u16 @-6): no numeric proof, and for a raw-f64
+        // field the typed layout still intact.
+        let (mask, expected): (u16, u16) = if require_raw_f64 {
+            (WRITE_PROOF_BIT | WRITE_INTACT_BIT, WRITE_INTACT_BIT)
+        } else {
+            (WRITE_PROOF_BIT, 0)
+        };
+        let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+        let reserved = blk.load(I16, &res_ptr);
+        let bits = blk.and(I16, &reserved, &(mask as i16).to_string());
+        let facts_ok = blk.icmp_eq(I16, &bits, &(expected as i16).to_string());
+        ok = blk.and(I1, &ok, &facts_ok);
         if let (Some(value_bits), true) = (set_value_bits, require_raw_f64) {
             // Only a plain finite number may be stored raw. Non-finite
-            // (exponent all-ones: ±Inf/NaN — rare) and every NaN-boxed tag
-            // share the all-ones exponent, so a single mask/compare both keeps
-            // the fast path correct and routes the boxed/downgrade cases to the
-            // guard call.
+            // (exponent all-ones: +-Inf/NaN) and every NaN-boxed tag share the
+            // all-ones exponent, so one mask/compare routes them to the call.
             let exp = blk.and(I64, value_bits, F64_EXP_MASK);
             let finite = blk.icmp_ne(I64, &exp, F64_EXP_MASK);
-            acc = blk.and(I1, &acc, &finite);
+            ok = blk.and(I1, &ok, &finite);
         }
-
-        blk.cond_br(&acc, fast_label, &guardcall_label);
+        blk.cond_br(&ok, fast_label, &guardcall_label);
     }
-
     ctx.current_block = guardcall_idx;
     guardcall_label
 }
+
+/// `OBJ_FLAG_PACKED_NUMERIC_PROOF` (0x80) and `GC_OBJ_TYPED_LAYOUT_INTACT`
+/// (0x1000): the two per-object `_reserved` facts the write guard reads.
+const WRITE_PROOF_BIT: u16 = 0x80;
+const WRITE_INTACT_BIT: u16 = 0x1000;
+const _: () = assert!(WRITE_PROOF_BIT as u64 == 128 && WRITE_INTACT_BIT as u64 == 4096);
 
 /// Emit the class-field READ guard: receiver range check, ONE ShapeId compare
 /// against the class's own ShapeId global, and — for a raw-f64 site
