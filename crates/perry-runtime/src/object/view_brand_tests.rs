@@ -159,3 +159,28 @@ fn primitives_are_not_views() {
         assert_eq!(row(value), NOT_A_VIEW);
     }
 }
+
+#[test]
+fn uint8_view_shortcut_agrees_with_the_full_brand() {
+    let fixtures: [(&str, fn(usize)); 7] = [
+        ("Buffer", |_| {}),
+        ("Uint8Array", buffer::mark_as_uint8array),
+        ("DataView", buffer::mark_as_data_view),
+        ("ArrayBuffer", buffer::mark_as_array_buffer),
+        ("SharedArrayBuffer", buffer::mark_as_shared_array_buffer),
+        ("secret key", buffer::mark_as_secret_key),
+        ("asymmetric key", |addr| {
+            buffer::mark_as_asymmetric_key(addr, 0, 0)
+        }),
+    ];
+    for (label, mark) in fixtures {
+        let addr = buffer::buffer_alloc(4) as usize;
+        mark(addr);
+        assert_eq!(
+            buffer::is_uint8_view_buffer(addr),
+            buffer::buffer_brand(addr).is_some_and(buffer::BufferBrand::is_uint8_array),
+            "{label}"
+        );
+    }
+    assert!(!buffer::is_uint8_view_buffer(0x10_0000));
+}

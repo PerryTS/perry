@@ -98,29 +98,46 @@ impl BufferBrand {
     }
 }
 
+/// The brand of a registered buffer that is NOT a byte view, or `None` when
+/// it is one (a `Uint8Array` or a Node `Buffer`). Does not check registration.
+#[inline]
+fn non_byte_view_brand(addr: usize) -> Option<BufferBrand> {
+    if super::is_any_array_buffer(addr) {
+        Some(BufferBrand::ArrayBuffer)
+    } else if super::is_data_view(addr) {
+        Some(BufferBrand::DataView)
+    } else if super::is_secret_key(addr)
+        || super::asymmetric_key_meta(addr).is_some()
+        || super::crypto_key_meta(addr).is_some()
+    {
+        Some(BufferBrand::KeyMaterial)
+    } else {
+        None
+    }
+}
+
 /// The [`BufferBrand`] of `addr`, or `None` when it is not a registered buffer.
 ///
 /// Ordered so the brands a Node `Buffer` is NOT are ruled out before it is
-/// named: a buffer carrying no other marker is a Buffer.
+/// named: a byte view without the `Uint8Array`-constructor marker is a Buffer.
 #[inline]
 pub fn buffer_brand(addr: usize) -> Option<BufferBrand> {
     if !super::is_registered_buffer(addr) {
         return None;
     }
-    Some(if super::is_any_array_buffer(addr) {
-        BufferBrand::ArrayBuffer
-    } else if super::is_data_view(addr) {
-        BufferBrand::DataView
-    } else if super::is_secret_key(addr)
-        || super::asymmetric_key_meta(addr).is_some()
-        || super::crypto_key_meta(addr).is_some()
-    {
-        BufferBrand::KeyMaterial
-    } else if super::is_uint8array_buffer(addr) {
-        BufferBrand::Uint8Array
-    } else {
-        BufferBrand::NodeBuffer
+    Some(match non_byte_view_brand(addr) {
+        Some(brand) => brand,
+        None if super::is_uint8array_buffer(addr) => BufferBrand::Uint8Array,
+        None => BufferBrand::NodeBuffer,
     })
+}
+
+/// `buffer_brand(addr).is_some_and(BufferBrand::is_uint8_array)` without the
+/// `Uint8Array`-vs-`Buffer` probe neither answer needs — this sits on
+/// element-access paths (`%TypedArray%.prototype` receiver gating).
+#[inline]
+pub fn is_uint8_view_buffer(addr: usize) -> bool {
+    super::is_registered_buffer(addr) && non_byte_view_brand(addr).is_none()
 }
 
 /// `true` only for a Node `Buffer`, not for another JS type that happens to

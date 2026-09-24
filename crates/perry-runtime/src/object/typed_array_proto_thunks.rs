@@ -205,7 +205,7 @@ pub(crate) fn test_buffer_gate_probe_count() -> u64 {
 pub(crate) fn is_typed_array_buffer(addr: usize) -> bool {
     #[cfg(test)]
     TEST_BUFFER_GATE_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    crate::buffer::buffer_brand(addr).is_some_and(crate::buffer::BufferBrand::is_uint8_array)
+    crate::buffer::is_uint8_view_buffer(addr)
 }
 
 #[inline]

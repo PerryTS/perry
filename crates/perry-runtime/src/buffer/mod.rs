@@ -112,7 +112,7 @@ pub use resizable::{
 // properties. See `exotic_view`.
 pub use exotic_view::{
     buffer_brand, canonical_index_key, is_byte_indexed_buffer, is_node_buffer,
-    is_non_indexed_buffer_view, BufferBrand,
+    is_non_indexed_buffer_view, is_uint8_view_buffer, BufferBrand,
 };
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
