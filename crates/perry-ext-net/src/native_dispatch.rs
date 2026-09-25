@@ -26,6 +26,7 @@ extern "C" {
     fn js_value_to_str_ptr_for_ffi(value: f64) -> i64;
     fn js_value_is_closure(value_bits: i64) -> i32;
     fn js_net_validate_create_server_options(value: f64);
+    fn js_set_tls_connect_provider(f: unsafe extern "C" fn(f64, f64, f64, f64) -> i64);
 }
 
 /// Install the runtime's `net` dispatch bucket together with this crate's
@@ -34,6 +35,9 @@ extern "C" {
 pub unsafe extern "C" fn js_ext_net_nm_install() {
     js_set_native_net_dispatch(js_ext_net_native_dispatch);
     js_nm_install_net();
+    // perry-stdlib's `tls` module dispatch reaches `tls.connect` through this
+    // when its archive has no link-time provider (the prebuilt `full` one).
+    js_set_tls_connect_provider(crate::tls::js_tls_connect);
 }
 
 /// Handle ids box exactly like the static table's `NR_HANDLE_ID` rows; a

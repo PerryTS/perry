@@ -27,9 +27,17 @@ unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i6
     js_tls_connect(arg1, arg2, arg3, arg4)
 }
 
+/// No link-time provider (the prebuilt `full` archive, which must link without
+/// libperry_ext_net.a): use the one perry-ext-net registered with the runtime
+/// from its install hook, which the entry prologue calls for every program
+/// that imports `net` or `tls`. 0 (read as `undefined`) when ext-net is not
+/// linked at all.
 #[cfg(not(feature = "external-net-tls"))]
-unsafe fn dispatch_tls_connect(_arg1: f64, _arg2: f64, _arg3: f64, _arg4: f64) -> i64 {
-    0
+unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
+    match perry_runtime::tls::tls_connect_provider() {
+        Some(connect) => connect(arg1, arg2, arg3, arg4),
+        None => 0,
+    }
 }
 
 fn split_subject_alt_names(san: &str) -> Vec<(String, String)> {

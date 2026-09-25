@@ -1164,10 +1164,18 @@ pub fn run_with_parse_cache(
     // No flip, no provider on the link line: emit nothing — except for the
     // bindings whose wrapper is the only provider (`net`), which the flip
     // routes even with PERRY_DISABLE_WELL_KNOWN=1 (tokio lane L4).
+    // A `tls` import installs the `net` provider too: `tls.connect` is
+    // perry-ext-net's, and its install hook registers it with the runtime
+    // for the `tls` module's dynamic dispatch (tokio lane L4).
+    let imports_tls = ctx
+        .native_module_imports
+        .iter()
+        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls");
     let native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
         ctx.native_module_imports
             .iter()
             .map(String::as_str)
+            .chain(imports_tls.then_some("net"))
             .filter(|module| {
                 optimized_libs::well_known_flip_enabled()
                     || optimized_libs::wrapper_is_sole_provider(module)

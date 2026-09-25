@@ -24,6 +24,35 @@ static SHARED_SIGALGS_CACHE: AtomicU64 = AtomicU64::new(0);
 static DEFAULT_CA_CONFIGURED: AtomicBool = AtomicBool::new(false);
 static TLS_CLIENT_METADATA: OnceLock<Mutex<HashMap<i64, TlsClientMetadata>>> = OnceLock::new();
 
+/// `tls.connect` as perry-ext-net implements it (`js_tls_connect`).
+pub type TlsConnectProviderFn = unsafe extern "C" fn(f64, f64, f64, f64) -> i64;
+
+/// The `tls.connect` provider perry-ext-net registers when it installs itself.
+/// A code address, never a heap pointer.
+///
+/// perry-stdlib's `node:tls` module dispatch reaches `connect` through this
+/// when it was built without a link-time provider — the prebuilt `full`
+/// archive, which must link without libperry_ext_net.a. Before tokio lane L4
+/// that archive carried bundled `net`'s own `js_tls_connect` instead.
+static TLS_CONNECT_PROVIDER: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_set_tls_connect_provider(f: TlsConnectProviderFn) {
+    TLS_CONNECT_PROVIDER.store(f as *mut (), Ordering::Release);
+}
+
+pub fn tls_connect_provider() -> Option<TlsConnectProviderFn> {
+    let p = TLS_CONNECT_PROVIDER.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        // SAFETY: only `js_set_tls_connect_provider` stores here, and it
+        // stores a `TlsConnectProviderFn`.
+        Some(unsafe { std::mem::transmute::<*mut (), TlsConnectProviderFn>(p) })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TlsClientMetadata {
     pub servername: Option<String>,
