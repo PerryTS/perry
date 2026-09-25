@@ -26,38 +26,14 @@
   ],
   "edges": [
     {
-      "crate": "perry-ext-mongodb",
-      "dep": "mongodb",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "`new MongoClient()` \u2014 connect, find, insert, update, delete, aggregate",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed, plus `mongodb+srv://`, several hosts, `replicaSet=`, `compressors=`, a per-connection TLS key (`tlsCAFile`, `tlsInsecure`, \u2026), an unparsable URI, or no /dev/urandom. A plain `tls=true`/`ssl=true` no longer declines.",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mongodb` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: SRV lookup and topology discovery/SDAM monitors stay in the `mongodb` driver; turnloop-mongodb is a single-connection protocol core. TLS itself is done \u2014 perry-db-turnloop installs a client session at connect time \u2014 but a URI naming its own trust store still declines, because this path honours the process TLS environment and has nowhere to put a per-URI store.",
-      "issue": "#10332, #10341",
-      "plan": "J"
-    },
-    {
-      "crate": "perry-ext-mongodb",
-      "dep": "tokio",
-      "kind": "normal",
-      "optional": false,
-      "target": null,
-      "surface": "as `mongodb` above",
-      "reached_when": "a thread that could not get a loop of its own \u2014 since turnloop P9 that is a second thread acting for an agent another thread already owns (a host pump thread; Android's UI thread for `perry-native`), not a worker agent, or a host where Loop::new failed, or any of the URI features above (TLS by itself is no longer one).",
-      "blocker": "SUPERSEDED BY A SCOPE DECISION (Ralph, 2026-09-17): this crate is going away, so this edge goes with it and NOBODY SHOULD CONVERT IT. `mongodb` is a pure-JS npm package, and the native wrapper exists only because Perry was TypeScript-only at one time. The plan is to delete the wrapper and compile the package from its own JS source, which removes this edge by deletion rather than by migration. Do not spend a lane on a turnloop transport here. The pre-existing blocker, kept for the record and no longer actionable: `spawn_blocking` + `Handle::current().block_on` per operation. Goes with the driver.",
-      "issue": "#10339",
-      "plan": "J"
-    },
-    {
       "crate": "perry-stdlib",
       "dep": "tokio",
       "kind": "normal",
       "optional": true,
       "target": null,
       "surface": "the tokio HALF of the async bridge only (turnloop P8 lane L split it out): `common::tokio_bridge` \u2014 the current-thread `RUNTIME`, its wait-driver tick, `spawn` / `spawn_for_promise*` \u2014 plus the `perry_ffi_spawn_async` / `perry_ffi_spawn_blocking_with_reactor` C ABI and `perry_ffi_spawn_blocking`'s tokio-pool arm. The promise bridge itself (`common::async_bridge`'s settle queue and pump, and the promise / pool / blocking `perry_ffi_*` shims) is tokio-free under the `async-bridge` feature, which is what the auto-optimize driver now force-enables. `web-fetch`, the `node:tls` server (`tls-runtime`, on turnloop handles since lane L part 2) and the external net / ws adapters compile against that bridge only.",
-      "reached_when": "the `async-runtime` feature, which is selected only by (1) a Cargo feature whose code hands tokio a future \u2014 `bundled-net` (and so the `net` / `tls` umbrellas) and `bundled-ws` (tokio sockets); or (2) the auto-optimize driver, for every wrapper that still bundles tokio (`binding_bundles_tokio`: mongodb) and for mongodb by module name. pg / mysql2 have had no wrapper since #10677 / #10680, and lane L3 deleted their unreachable module-name rule; their npm packages compile from source over `net` / `tls`, so an auto-optimized pg- or mysql2-only program links no tokio either. `full` still implies it, so every PERRY_NO_AUTO_OPTIMIZE / prebuilt-archive build links tokio. Lane L part 2 took `web-fetch`, `tls-runtime`, `external-tls-server`, `external-net-tls`, `external-net-pump`, `external-ws-pump` and (after lane D, #11265) `external-http-server-pump` / `external-http-client-pump` off it (the `node:tls` server's sockets are turnloop handles, and perry-ext-net / perry-ext-ws carry no tokio), so an auto-optimized program whose network imports are only `fetch`, `net`, `tls` (both route to perry-ext-net, with the TLS server here), `ws` and `http` / `https` / `http2` links no tokio \u2014 on top of part 1's crypto, bcrypt, argon2, zlib, readline, worker_threads, timers and UI programs, and lane K's `container`.",
-      "blocker": "each selector in `reached_when` has to go; then `tokio_bridge.rs`, `tls_stream.rs` and the three `cfg(feature = \"async-runtime\")` shims in `perry_ffi_async.rs` delete whole and `async-runtime` collapses into `async-bridge` \u2014 nothing in `async_bridge.rs` has to move. In order: (1) B: the only db decline path left is perry-ext-mongodb's (`Handle::current().block_on` inside `perry_ffi_spawn_blocking`), which goes by deleting that wrapper; pg's and mysql2's went with their wrappers (#10677 / #10680). (2) P1 for the two bundled socket modules left \u2014 `net/mod.rs` (bundled `net.Socket`, `tls.connect`, `upgradeToTLS`) and `ws.rs`, both reached only with the well-known flip disabled or through `full`; `tls/turnloop_server.rs` is the worked example for moving a perry-stdlib socket surface onto `turnloop_net` with `perry-tls-session` above it. K took `container` off tokio (`perry_container_compose::rt`). PerryTS/turnloop#42 is NOT a blocker: `Occupancy::Long` shipped in turnloop 0.1.0-alpha.5, and the tokio-free `perry_ffi_spawn_blocking` runs on it through `turnloop_pool::submit_long`.",
+      "reached_when": "the `async-runtime` feature, which is selected only by (1) a Cargo feature whose code hands tokio a future \u2014 `bundled-net` (and so the `net` / `tls` umbrellas) and `bundled-ws` (tokio sockets); or (2) the auto-optimize driver, for every wrapper that still bundles tokio (`binding_bundles_tokio`) \u2014 an empty set since #11337 deleted perry-ext-mongodb, the last member, together with its module-name rule. pg / mysql2 have had no wrapper since #10677 / #10680, lane L3 deleted their unreachable module-name rule, and mongodb followed in #11337; all three npm packages compile from source over `net` / `tls`, so an auto-optimized pg-, mysql2- or mongodb-only program links no tokio either. `full` still implies it, so every PERRY_NO_AUTO_OPTIMIZE / prebuilt-archive build links tokio. Lane L part 2 took `web-fetch`, `tls-runtime`, `external-tls-server`, `external-net-tls`, `external-net-pump`, `external-ws-pump` and (after lane D, #11265) `external-http-server-pump` / `external-http-client-pump` off it (the `node:tls` server's sockets are turnloop handles, and perry-ext-net / perry-ext-ws carry no tokio), so an auto-optimized program whose network imports are only `fetch`, `net`, `tls` (both route to perry-ext-net, with the TLS server here), `ws` and `http` / `https` / `http2` links no tokio \u2014 on top of part 1's crypto, bcrypt, argon2, zlib, readline, worker_threads, timers and UI programs, and lane K's `container`.",
+      "blocker": "each selector in `reached_when` has to go; then `tokio_bridge.rs`, `tls_stream.rs` and the three `cfg(feature = \"async-runtime\")` shims in `perry_ffi_async.rs` delete whole and `async-runtime` collapses into `async-bridge` \u2014 nothing in `async_bridge.rs` has to move. In order: (1) B is DONE: no db decline path is left \u2014 pg's and mysql2's went with their wrappers (#10677 / #10680), and perry-ext-mongodb's (`Handle::current().block_on` inside `perry_ffi_spawn_blocking`) went when #11337 deleted that wrapper. (2) P1 for the two bundled socket modules left \u2014 `net/mod.rs` (bundled `net.Socket`, `tls.connect`, `upgradeToTLS`) and `ws.rs`, both reached only with the well-known flip disabled or through `full`; `tls/turnloop_server.rs` is the worked example for moving a perry-stdlib socket surface onto `turnloop_net` with `perry-tls-session` above it. K took `container` off tokio (`perry_container_compose::rt`). PerryTS/turnloop#42 is NOT a blocker: `Occupancy::Long` shipped in turnloop 0.1.0-alpha.5, and the tokio-free `perry_ffi_spawn_blocking` runs on it through `turnloop_pool::submit_long`.",
       "issue": "unfiled \u2014 P8; PerryTS/turnloop#42 closed (Occupancy::Long, turnloop 0.1.0-alpha.5+); lane L split the bridge from the runtime (#11115) and moved fetch / the TLS server / the net+ws adapters off tokio (part 2)",
       "plan": "L"
     },
@@ -78,17 +54,8 @@
     "lettre": [
       "0.11.23"
     ],
-    "mongodb": [
-      "3.9.1"
-    ],
     "tokio": [
       "1.53.1"
-    ],
-    "tokio-rustls": [
-      "0.26.5"
-    ],
-    "tokio-util": [
-      "0.7.18"
     ],
     "tungstenite": [
       "0.30.0"
@@ -98,7 +65,6 @@
     "perry": 3,
     "perry-container-compose": 27,
     "perry-ext-ads": 5,
-    "perry-ext-mongodb": 29,
     "perry-ffi": 2,
     "perry-stdlib": 62,
     "perry-ui-gtk4": 6

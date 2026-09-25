@@ -24,7 +24,7 @@
     "ioredis": "5.11.1",
     "iovalkey": "0.4.0",
     "moment": "^2.30.1",
-    "mongodb": "^7.0.0",
+    "mongodb": "7.5.0",
     "rate-limiter-flexible": "^11.2.0",
     "redis": "6.1.0",
     "slugify": "^1.6.9",

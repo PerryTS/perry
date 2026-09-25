@@ -58,19 +58,6 @@
       "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
     },
     {
-      "file": "crates/perry-ext-mongodb/src/turnloop_io/mod.rs",
-      "name": "OPEN",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P7. HashMap<perry-ffi handle id, driver id>: the binding's JS-visible client handle mapped to the connection's `perry_db_turnloop` id. Rule V fires on the i64s; both sides are ids -- one indexes perry-ffi's handle DashMap, the other indexes the thread-local connection table -- and neither is a heap address or is ever dereferenced. The entry is removed when the connection retires."
-    },
-    {
-      "file": "crates/perry-ext-mongodb/src/turnloop_io/mod.rs",
-      "name": "REGISTRY",
-      "verdict": "covered_elsewhere",
-      "scanner": "perry-runtime's native-async completion registry (promise::native_async::scan_native_async_completion_roots_mut), armed by perry_ffi_promise_new before the pointer is stored",
-      "why": "turnloop P7. A MongoCore is owned Rust state -- protocol buffers, owned reply bytes, an operation queue -- plus the `perry_ffi::JsPromise` of each outstanding operation. Rule S fires on those raw `*mut Promise`s. They are not unrooted and they do not move: `perry_ffi_promise_new` is `js_native_async_completion_new` + `js_native_async_completion_promise`, so every promise here was minted by `js_promise_new_cross_thread` -- pinned at creation in non-moving malloc space and rooted by its native-async token until settlement (#9356, #9552). That is the same contract perry-ext-net's P5 `LAYERS` records, reached through perry-ffi's promise constructor rather than through an explicit token. No JS value ever reaches the driver: read bytes are copied out of turnloop's pooled lease inside the dispatch call and every result crosses to the main thread as owned Rust data inside a `resolve_with` closure. `perry_db_turnloop::Registry::retire` settles and drops the entry on the terminal close, so no pointer outlives its promise."
-    },
-    {
       "file": "crates/perry-ext-net/src/bun_tcp.rs",
       "name": "NEXT_TOKEN",
       "verdict": "not_a_gc_pointer",
