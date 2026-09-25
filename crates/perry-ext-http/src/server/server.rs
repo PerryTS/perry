@@ -258,6 +258,22 @@ pub(crate) fn with_base_server<R>(handle: i64, f: impl FnOnce(&HttpServer) -> R)
         .map(|server| f(&server.base))
 }
 
+/// Mutate the same base server used by connection admission. The callback must
+/// finish before invoking JS, which can re-enter or close the server.
+pub(crate) fn with_base_server_mut<R>(
+    handle: i64,
+    f: impl FnOnce(&mut HttpServer) -> R,
+) -> Option<R> {
+    if let Some(server) = get_handle_mut::<HttpServer>(handle) {
+        return Some(f(server));
+    }
+    if let Some(server) = get_handle_mut::<crate::server::https_server::HttpsServer>(handle) {
+        return Some(f(&mut server.base));
+    }
+    get_handle_mut::<crate::server::http2_server::Http2SecureServer>(handle)
+        .map(|server| f(&mut server.base))
+}
+
 pub(crate) static TURNLOOP_UPGRADES: Mutex<std::collections::VecDeque<HttpPendingUpgrade>> =
     Mutex::new(std::collections::VecDeque::new());
 
@@ -1214,12 +1230,17 @@ fn drain_upgrades(server_handle: i64) -> i32 {
             // extensions + GC scanner are registered on the main thread before
             // user code touches the socket.
             perry_ext_net::ensure_adopted_socket_dispatch();
-            crate::server::upgrade::fire_upgrade_listeners(
+            if !crate::server::upgrade::fire_upgrade_listeners(
                 up.server_handle,
                 up.request_handle,
                 up.raw_socket_id,
                 up.head,
-            );
+            ) {
+                // Listeners may disappear between connection admission and
+                // delivery. Nobody owns this raw upgrade in that case.
+                perry_ext_net::js_ext_net_destroy_socket(up.raw_socket_id);
+                perry_ffi::drop_handle(up.request_handle);
+            }
         } else {
             perry_ext_ws::accept_attached_connection(
                 up.server_handle,
@@ -1480,3 +1501,7 @@ fn _force_promise_link(p: *mut Promise) -> i32 {
 fn _force_tag_link() -> u64 {
     TAG_NULL | (POINTER_TAG & PTR_MASK)
 }
+
+#[cfg(test)]
+#[path = "server/upgrade_tests.rs"]
+mod upgrade_tests;

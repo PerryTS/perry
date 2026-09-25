@@ -12,7 +12,7 @@
 //!
 //! Attached WebSocket servers are native observers registered by perry-ext-ws.
 
-use perry_ffi::{get_handle_mut, JsClosure, RawClosureHeader};
+use perry_ffi::{JsClosure, RawClosureHeader};
 
 use crate::server::request::handle_to_pointer_f64;
 use crate::server::server::HttpServer;
@@ -25,20 +25,19 @@ fn upgrade_head_arg(head_data: &[u8]) -> f64 {
 
 /// Fire the `'upgrade'` event listeners with `(im, wsId, head)`.
 /// Called from the main-thread event loop after the upgrade pending
-/// has been dispatched.
+/// has been dispatched. Returns whether a listener received ownership.
 pub(crate) fn fire_upgrade_listeners(
     server_handle: i64,
     im_handle: i64,
     ws_id: i64,
     head_data: Vec<u8>,
-) {
-    let listeners = if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        crate::server::server::take_server_event_listeners(s, "upgrade")
-    } else {
-        return;
-    };
+) -> bool {
+    let listeners = crate::server::server::with_base_server_mut(server_handle, |server| {
+        crate::server::server::take_server_event_listeners(server, "upgrade")
+    })
+    .unwrap_or_default();
     if listeners.is_empty() {
-        return;
+        return false;
     }
     let scope = perry_ffi::TransientRootScope::enter();
     let listeners = scope.root_addrs(&listeners);
@@ -56,6 +55,7 @@ pub(crate) fn fire_upgrade_listeners(
     // upgrade bytes are arbitrary protocol data rather than UTF-8 text.
     let head_arg = scope.root_nanbox(upgrade_head_arg(&head_data));
 
+    let mut delivered = false;
     for cb in listeners {
         if cb.get() == 0 {
             continue;
@@ -64,11 +64,13 @@ pub(crate) fn fire_upgrade_listeners(
             let raw = cb.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
+                delivered = true;
                 let _ = closure.call3(req_f64, ws_id_f64, head_arg.get());
             }
             js_promise_run_microtasks();
         }
     }
+    delivered
 }
 
 #[allow(dead_code)]
