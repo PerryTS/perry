@@ -238,6 +238,7 @@ pub(crate) fn lower_class_expr(
             || computed_name_evaluations.iter().any(uses_self)
     });
     let has_static_methods = !class.static_methods.is_empty();
+    let native_parent = class.native_extends.is_some();
     ctx.pending_classes.push(class);
     // #1772/#5893: a class EXPRESSION that carries per-evaluation static
     // fields, captures, or private elements lowers to a
@@ -272,11 +273,15 @@ pub(crate) fn lower_class_expr(
     // #11298: every evaluation of a class expression creates a distinct
     // constructor and prototype (ClassDefinitionEvaluation), even when the
     // class has none of the per-evaluation state above. A capture-free,
-    // heritage-free class expression in a function used to return the one
+    // statically-parented class expression in a function used to return the one
     // shared `ClassRef`, so `makeClass() === makeClass()` and a property
     // defined on the second evaluation's prototype leaked into instances of
-    // the first.
-    let identity_only = !at_module_top && !per_evaluation_state && parent_expr.is_none();
+    // the first. A native-module parent (`extends AsyncResource`) stays on
+    // the shared template: an implicit constructor constructed through a
+    // fresh class value does not forward its `new` arguments to the native
+    // base's init (#10623).
+    let identity_only =
+        !at_module_top && !per_evaluation_state && parent_expr.is_none() && !native_parent;
     let fresh_evaluation = per_evaluation_state || identity_only;
     if (!at_module_top && has_private_elements) || identity_only {
         // `const C = class { #x }` normally records C as an inferred static

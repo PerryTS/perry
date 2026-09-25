@@ -65,3 +65,18 @@ fn module_top_class_expr_keeps_the_shared_template() {
         "a module-top class expression needs no per-evaluation object: {init}"
     );
 }
+
+#[test]
+fn native_module_parent_keeps_the_shared_template() {
+    // #10623: an implicit constructor over a native-module base forwards its
+    // `new` arguments only on the shared-template construct path.
+    let module = lower(
+        r#"import { EventEmitter } from "node:events";
+        function make() { return class extends EventEmitter {}; }"#,
+    );
+    let body = body_of(&module, "make");
+    assert!(
+        !body.contains("ClassExprFresh{"),
+        "a native-module parent must stay on the shared template: {body}"
+    );
+}

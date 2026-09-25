@@ -7,12 +7,7 @@ lower to a per-evaluation heap class object (`ClassExprFresh`), which carries
 its own prototype (#11043). Their inferred local binding no longer takes the
 static `new C()` alias, so an instance's prototype is this evaluation's
 `C.prototype`. Module-top class expressions still evaluate once through the
-shared template. Heritage class expressions with static methods keep the
+shared template. Heritage class expressions with static methods, and class expressions
+extending a native-module class (`extends AsyncResource`, #10623), keep the
 shared template path, as before.
 
-A per-evaluation prototype now also links to a static native parent. `return
-class extends EventEmitter {}` pins its parent as a ClassRef to EventEmitter's
-reserved builtin id, which `class_ref_id` does not resolve, so the evaluation
-prototype skipped `EventEmitter.prototype`. It now resolves through
-`reserved_native_parent_prototype_bits`, the same path the declared-class
-prototype uses (#10599).

@@ -94,7 +94,7 @@ pub(crate) use state::{
     class_static_prototype_root_store, class_static_set_defined_attrs, class_unmark_key_deleted,
     global_object_prototype_bits, is_bound_native_constructor_closure_value,
     is_non_constructable_builtin_function_value, parent_closure_in_chain,
-    reserved_native_parent_prototype_bits, throw_non_constructable_builtin_function,
+    throw_non_constructable_builtin_function,
 };
 pub use state::{
     ClassVTable, VTableMethodEntry, CLASS_DECL_PROTOTYPE_OBJECTS, CLASS_DYNAMIC_PARENT_VALUE,
