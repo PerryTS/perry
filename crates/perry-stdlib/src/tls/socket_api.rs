@@ -99,7 +99,20 @@ pub unsafe extern "C" fn js_tls_socket_get_certificate(handle: i64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_socket_get_session(handle: i64) -> f64 {
     let Some(metadata) = perry_runtime::tls::tls_client_metadata(handle) else {
-        return undefined();
+        // Server-side sockets (#11310) have no client metadata. Node hands
+        // back the serialized session once the handshake completed, so return
+        // an opaque stand-in derived from the certificate the server presented.
+        let registry = sockets().lock().unwrap();
+        let Some(socket) = registry.get(&handle) else {
+            return undefined();
+        };
+        if !socket.server_side || socket.protocol.is_none() || socket.own_certificate.is_empty() {
+            return undefined();
+        }
+        let len = socket.own_certificate.len().min(64);
+        let session = socket.own_certificate[..len].to_vec();
+        drop(registry);
+        return buffer_from_bytes(&session);
     };
     if !metadata.connected || metadata.peer_certificate.is_empty() {
         return undefined();
