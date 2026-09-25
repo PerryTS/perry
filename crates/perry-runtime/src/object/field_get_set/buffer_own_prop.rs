@@ -49,3 +49,36 @@ pub(super) fn buffer_own_prop_or_method(
     }
     None
 }
+
+/// Resolve a DataView constructor after the caller has checked own properties.
+/// An explicit prototype (even null or one without a constructor) replaces the
+/// intrinsic chain. The shared walker preserves the view as an accessor receiver.
+pub(super) fn data_view_constructor(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> JSValue {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_raw_const_ptr(obj);
+    let key_h = scope.root_raw_const_ptr(key);
+    let proto_bits = receiver_h
+        .with_const_ptr(|receiver: *const ObjectHeader| {
+            super::super::prototype_chain::object_static_prototype(receiver as usize)
+        })
+        .unwrap_or_else(|| crate::object::builtin_prototype_value("DataView").to_bits());
+    // Re-read both pointers after materializing the intrinsic prototype, which
+    // can allocate. Neither raw pointer is retained across that operation.
+    receiver_h.with_const_ptr(|receiver: *const ObjectHeader| {
+        key_h.with_const_ptr(|key: *const crate::StringHeader| {
+            super::super::prototype_chain::resolve_inherited_field_from_prototype(
+                receiver as usize,
+                proto_bits,
+                key,
+            )
+            .unwrap_or_else(JSValue::undefined)
+        })
+    })
+}
+
+#[cfg(test)]
+#[path = "data_view_constructor_tests.rs"]
+mod data_view_constructor_tests;

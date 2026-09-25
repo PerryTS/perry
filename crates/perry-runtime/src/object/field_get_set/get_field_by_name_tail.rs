@@ -319,14 +319,10 @@ pub(crate) fn get_field_by_name_object_tail(
                         );
                         return JSValue::from_bits(ctor.to_bits());
                     }
-                    // #3657: a DataView's `.constructor` is the global
-                    // `DataView`, not `Buffer` — checked before the
-                    // Uint8Array/Buffer arms since a DataView slice is also a
-                    // registered buffer.
+                    // A DataView's constructor is inherited from its actual
+                    // prototype, including user subclasses and overrides.
                     if crate::buffer::is_data_view(obj as usize) {
-                        let ctor =
-                            super::super::js_get_global_this_builtin_value(b"DataView".as_ptr(), 8);
-                        return JSValue::from_bits(ctor.to_bits());
+                        return super::buffer_own_prop::data_view_constructor(obj, key);
                     }
                     // An ArrayBuffer / SharedArrayBuffer answers with ITS
                     // constructor (`ta.buffer.constructor === ArrayBuffer`,
