@@ -5450,7 +5450,6 @@ dependencies = [
  "rustls-pemfile",
  "rustls-webpki",
  "serde_json",
- "tokio",
  "turnloop-http",
  "url",
  "webpki-roots 1.0.9",

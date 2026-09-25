@@ -8,10 +8,10 @@
 
 use std::collections::HashMap;
 
-use perry_ffi::{spawn_blocking_with_reactor as spawn_blocking, Handle};
+use perry_ffi::Handle;
 
 use super::agent;
-use crate::{parse_http_response, push_event, ClientInflightGuard, PendingHttpEvent};
+use crate::{push_event, PendingHttpEvent};
 
 /// Look up `request_handle`'s own `createConnection` (if any) and, when
 /// set, dispatch over it. `None` means "not set / not usable" — the
@@ -96,12 +96,13 @@ fn serialize_http_request(
 /// `Connection: close` and read to EOF. A `101` response to an upgrade request
 /// detaches the still-live socket from the raw reader and pushes `Upgrade` with
 /// any bytes following the header block. Other responses are parsed with
-/// [`parse_http_response`] and produce the same `Response` / `Error` events as
+/// `plain_client::parse_http_response` and produce the same `Response` / `Error` events as
 /// the default transport.
 ///
 /// The socket I/O goes through perry-ffi's raw-net vtable (published by
-/// perry-ext-net), so this crate needs no link edge to perry-ext-net. If no
-/// net backend is linked the request errors out (the override couldn't have
+/// perry-ext-net) and runs on the agent's event loop, woken by
+/// `perry_ffi::raw_net_notify` (`client_turnloop::raw_socket`). If no net
+/// backend is linked the request errors out (the override couldn't have
 /// produced a socket without `net`, so this is a defensive guard).
 pub(crate) fn dispatch_request_over_socket(
     request_handle: Handle,
@@ -137,118 +138,13 @@ pub(crate) fn dispatch_request_over_socket(
     }
     let req_bytes = serialize_http_request(&method, &path, &host_header, &headers, &body);
     let wants_upgrade = crate::client_upgrade::wants_upgrade(&headers);
-    let deadline = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
-
-    spawn_blocking(move || {
-        let try_h = tokio::runtime::Handle::try_current();
-        std::hint::black_box(&try_h);
-        if try_h.is_err() {
-            push_event(PendingHttpEvent::Error {
-                request_handle,
-                error_message: "http client runtime unavailable".to_string(),
-            });
-            return;
-        }
-        let handle = tokio::runtime::Handle::current();
-        // #5779 follow-up: keep this fetch counted in-flight for its whole
-        // lifetime so the idle-kick recovers a lost worker-unpark.
-        let inflight_guard = ClientInflightGuard::new(request_handle);
-        let jh = handle.spawn(async move {
-            let _inflight = inflight_guard;
-            let vtable = match perry_ffi::raw_net() {
-                Some(v) => v,
-                None => {
-                    push_event(PendingHttpEvent::Error {
-                        request_handle,
-                        error_message: "agent.createConnection requires node:net (not linked)"
-                            .to_string(),
-                    });
-                    return;
-                }
-            };
-            // Attach is idempotent — the request path also attaches on the
-            // main thread before this task runs, to close any data race.
-            (vtable.attach)(socket_id);
-            if (vtable.write)(socket_id, req_bytes.as_ptr(), req_bytes.len()) == 0 {
-                push_event(PendingHttpEvent::Error {
-                    request_handle,
-                    error_message: "failed to write request to agent socket".to_string(),
-                });
-                return;
-            }
-
-            let mut raw = Vec::new();
-            let mut chunk = [0u8; 16 * 1024];
-            let start = tokio::time::Instant::now();
-            loop {
-                let n = (vtable.poll_read)(socket_id, chunk.as_mut_ptr(), chunk.len());
-                if n > 0 {
-                    raw.extend_from_slice(&chunk[..n as usize]);
-                    if wants_upgrade {
-                        if let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
-                            let header_end = header_end + 4;
-                            let status = std::str::from_utf8(&raw[..header_end])
-                                .ok()
-                                .and_then(|head| head.lines().next())
-                                .and_then(|line| line.split_whitespace().nth(1))
-                                .and_then(|code| code.parse::<u16>().ok());
-                            if status == Some(101) {
-                                match parse_http_response(&raw[..header_end]) {
-                                    Ok(parsed) => {
-                                        (vtable.detach)(socket_id);
-                                        push_event(PendingHttpEvent::Upgrade {
-                                            request_handle,
-                                            status: parsed.status,
-                                            status_message: parsed.status_message,
-                                            headers: parsed.headers,
-                                            socket_handle: socket_id,
-                                            head: raw[header_end..].to_vec(),
-                                        });
-                                    }
-                                    Err(error_message) => {
-                                        (vtable.close)(socket_id);
-                                        push_event(PendingHttpEvent::Error {
-                                            request_handle,
-                                            error_message,
-                                        });
-                                    }
-                                }
-                                return;
-                            }
-                        }
-                    }
-                } else if n == 0 {
-                    break; // clean EOF — peer closed after the response
-                } else {
-                    if start.elapsed() >= deadline {
-                        (vtable.close)(socket_id);
-                        push_event(PendingHttpEvent::Timeout { request_handle });
-                        return;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                }
-            }
-            (vtable.close)(socket_id);
-
-            match parse_http_response(&raw) {
-                Ok(parsed) => push_event(PendingHttpEvent::Response {
-                    request_handle,
-                    status: parsed.status,
-                    status_message: parsed.status_message,
-                    headers: parsed.headers,
-                    trailers: parsed.trailers,
-                    body: parsed.body,
-                    http_version: parsed.http_version,
-                }),
-                Err(error_message) => push_event(PendingHttpEvent::Error {
-                    request_handle,
-                    error_message,
-                }),
-            }
-        });
-        std::hint::black_box(&jh);
-        std::mem::forget(jh);
-    });
+    crate::client_turnloop::raw_socket::start_raw_exchange(
+        request_handle,
+        req_bytes,
+        wants_upgrade,
+        timeout_ms,
+        socket_id,
+    );
 }
 
 #[cfg(test)]

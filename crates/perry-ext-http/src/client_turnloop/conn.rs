@@ -1098,11 +1098,14 @@ pub(super) fn on_timer(st: &mut State, timer: i64) -> Vec<Effect> {
                 close(st, conn, &mut fx);
             }
         }
-        Timer::Standalone { request } => {
-            fx.push(Effect::Push(PendingHttpEvent::Timeout {
-                request_handle: request,
-            }));
+        Timer::Deferred(event) => {
+            super::DEFERRED_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            fx.push(Effect::Push(event));
         }
+        Timer::RawDrain { socket } => {
+            fx.extend(super::raw_socket::on_raw_drain_timer(st, socket, timer))
+        }
+        Timer::RawDeadline { socket } => fx.extend(super::raw_socket::on_raw_deadline(st, socket)),
     }
     fx
 }

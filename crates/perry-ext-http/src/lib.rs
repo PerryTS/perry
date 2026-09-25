@@ -53,7 +53,6 @@ mod tls_client;
 mod client_connect_override;
 mod client_upgrade;
 mod plain_client;
-use plain_client::parse_http_response;
 
 // `Expect: 100-continue` (#5080): arms the head-first exchange and hands the
 // withheld body to it at `end()`.

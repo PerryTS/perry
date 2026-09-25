@@ -54,6 +54,7 @@
 mod conn;
 mod pool;
 mod proxy;
+pub(crate) mod raw_socket;
 pub(crate) mod tls;
 mod wire;
 
@@ -96,6 +97,8 @@ static COMPLETED: AtomicU64 = AtomicU64::new(0);
 static REUSED: AtomicU64 = AtomicU64::new(0);
 static HANDSHAKES: AtomicU64 = AtomicU64::new(0);
 static TIMED_OUT: AtomicU64 = AtomicU64::new(0);
+static RAW_COMPLETED: AtomicU64 = AtomicU64::new(0);
+static DEFERRED_FIRED: AtomicU64 = AtomicU64::new(0);
 
 /// Exchanges handed to this module (directly or posted to the loop owner).
 pub fn accepted_total() -> u64 {
@@ -120,6 +123,17 @@ pub fn tls_handshakes_total() -> u64 {
 /// Exchanges torn down by their deadline.
 pub fn timed_out_total() -> u64 {
     TIMED_OUT.load(Ordering::Relaxed)
+}
+
+/// `createConnection` / `createSocket` exchanges ([`raw_socket`]) that
+/// delivered a response or an upgrade.
+pub fn raw_completed_total() -> u64 {
+    RAW_COMPLETED.load(Ordering::Relaxed)
+}
+
+/// Deferred events ([`push_after`]) whose loop deadline fired.
+pub fn deferred_fired_total() -> u64 {
+    DEFERRED_FIRED.load(Ordering::Relaxed)
 }
 
 // ── The request ─────────────────────────────────────────────────────────────
@@ -162,14 +176,18 @@ pub(crate) struct Outbound {
 // ── Shared state ────────────────────────────────────────────────────────────
 
 /// A deadline this module armed, and what it is for.
-#[derive(Clone, Copy, Debug)]
 enum Timer {
     /// `options.timeout` for an in-flight exchange.
     Deadline { conn: i64, request: Handle },
     /// An idle pooled connection's expiry.
     Idle { conn: i64 },
-    /// `req.setTimeout(ms, cb)` armed before (or independently of) dispatch.
-    Standalone { request: Handle },
+    /// An event queued for later: `req.setTimeout(ms, cb)` armed before (or
+    /// independently of) dispatch, or an Agent socket facade's idle expiry.
+    Deferred(PendingHttpEvent),
+    /// Read a `createConnection` socket that `perry-ext-net` said is ready.
+    RawDrain { socket: i64 },
+    /// A `createConnection` exchange's deadline.
+    RawDeadline { socket: i64 },
 }
 
 #[derive(Default)]
@@ -180,6 +198,8 @@ struct State {
     by_request: HashMap<Handle, i64>,
     timers: HashMap<i64, Timer>,
     idle: HashMap<PoolKey, Vec<i64>>,
+    /// `createConnection` exchanges, keyed by the user's socket id.
+    raw: HashMap<i64, raw_socket::RawExchange>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -209,6 +229,10 @@ enum Effect {
     Push(PendingHttpEvent),
     /// Hand a connection to `net` after a `101`, then publish the event.
     Handoff(i64, PendingHttpEvent),
+    /// Read a `createConnection` socket ([`raw_socket::drain_raw_socket`]).
+    RawDrain(i64),
+    /// Close a `createConnection` socket through the raw-net vtable.
+    RawClose(i64),
     /// Run a request again on a fresh connection (a reused one died before
     /// the response began), keeping its in-flight guard.
     Redispatch(Box<Outbound>, crate::ClientInflightGuard),
@@ -271,6 +295,14 @@ fn run(effects: Vec<Effect>) {
             }
             Effect::Push(event) => {
                 push_event(event);
+                Vec::new()
+            }
+            Effect::RawDrain(socket) => {
+                raw_socket::drain_raw_socket(socket);
+                Vec::new()
+            }
+            Effect::RawClose(socket) => {
+                raw_socket::close_raw_socket(socket);
                 Vec::new()
             }
             Effect::Handoff(id, event) => {
@@ -353,10 +385,20 @@ impl perry_ffi::agent_post::AgentJob for LoopJob {
 /// How often a transiently refused post is retried before the request fails.
 const POST_ATTEMPTS: usize = 64;
 
+thread_local! {
+    /// This thread has already been found to own the agent's loop by
+    /// [`on_loop`]. Asking [`available`] *claims* the route for the first
+    /// thread that asks, so [`push_after`] consults this instead of asking:
+    /// scheduling a deferred event must never be what decides which thread
+    /// owns the loop.
+    static OWNS_LOOP_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Run `op` on the loop: here when this thread owns it, else on the owner.
 /// `false` means no loop exists for this agent at all; `op` was not run.
 fn on_loop(op: impl FnOnce() + Send + 'static) -> bool {
     if available() {
+        OWNS_LOOP_HERE.with(|owns| owns.set(true));
         op();
         return true;
     }
@@ -611,29 +653,51 @@ pub fn purge_agent(agent_handle: Handle) {
 /// `req.setTimeout(ms[, cb])` / `options.timeout` armed at request creation:
 /// a one-shot `'timeout'` for the request, independent of any exchange.
 pub(crate) fn arm_request_timeout(request_handle: Handle, ms: u64) {
+    push_after(ms, PendingHttpEvent::Timeout { request_handle });
+}
+
+/// Queue `event` for the drain `ms` milliseconds from now, on a loop deadline.
+///
+/// The deadline is unreferenced (`tl::timer_arm`): like the tokio sleeps it
+/// replaces for `'timeout'` and the Agent facade's idle expiry, it never keeps
+/// the process alive on its own.
+pub(crate) fn push_after(ms: u64, event: PendingHttpEvent) {
+    if !OWNS_LOOP_HERE.with(std::cell::Cell::get) {
+        // Not (yet) known to be the loop owner — a `'timeout'` armed before
+        // this thread's first request, or bookkeeping on a thread that never
+        // carried one. A plain thread keeps the promise that the event fires
+        // without claiming the loop route as a side effect.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            push_event(event);
+        });
+        return;
+    }
+    // `on_loop` drops its closure unrun when it refuses, so the event is held
+    // in a shared slot the "no loop at all" fallback below can take back.
+    let slot = std::sync::Arc::new(Mutex::new(Some(event)));
+    let posted = slot.clone();
     let carried = on_loop(move || {
+        let Some(event) = posted.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+            return;
+        };
         let id = next_id();
         if id == perry_ffi::INVALID_HANDLE {
-            push_event(PendingHttpEvent::Timeout { request_handle });
+            push_event(event);
             return;
         }
-        with_state(|st| {
-            st.timers.insert(
-                id,
-                Timer::Standalone {
-                    request: request_handle,
-                },
-            )
-        });
+        with_state(|st| st.timers.insert(id, Timer::Deferred(event)));
         run(vec![Effect::ArmTimer(id, ms)]);
     });
     if !carried {
         // No loop anywhere for this agent: a plain thread keeps the promise
-        // that `'timeout'` fires, without a second event loop.
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-            push_event(PendingHttpEvent::Timeout { request_handle });
-        });
+        // that the event fires, without a second event loop.
+        if let Some(event) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                push_event(event);
+            });
+        }
     }
 }
 
@@ -727,6 +791,35 @@ pub fn try_dispatch_pooled(
     outbound.reuse = Some(Reuse { max_free, idle_ms });
     ACCEPTED.fetch_add(1, Ordering::Relaxed);
     on_loop(move || start(outbound))
+}
+
+/// Run an HTTP exchange over an already-open `perry-ext-net` socket, as
+/// `agent.createConnection` does. For `tests/turnloop_client_exchange.rs`.
+#[allow(clippy::too_many_arguments)]
+pub fn try_dispatch_over_socket(
+    request_handle: Handle,
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    body: &[u8],
+    timeout_ms: Option<u64>,
+    socket_id: i64,
+) {
+    crate::client_connect_override::dispatch_request_over_socket(
+        request_handle,
+        method.to_string(),
+        url.to_string(),
+        headers.clone(),
+        body.to_vec(),
+        timeout_ms,
+        socket_id,
+    );
+}
+
+/// Queue a `'timeout'` for `request_handle` in `ms` ([`push_after`]). For
+/// `tests/turnloop_client_exchange.rs`.
+pub fn schedule_timeout_for_test(request_handle: Handle, ms: u64) {
+    arm_request_timeout(request_handle, ms);
 }
 
 // ── The completion sink ─────────────────────────────────────────────────────

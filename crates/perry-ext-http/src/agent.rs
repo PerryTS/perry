@@ -761,20 +761,20 @@ fn release_request_inner(
             );
         }
         let key = key.to_string();
-        perry_ffi::spawn_async(async move {
-            // The transport owns the physical pooled connection, so the public
-            // net.Socket facade cannot receive its idle read/EOF edge.
-            // Conservatively retire an unclaimed facade after the I/O
-            // guard window; immediate/next-tick reuse cancels this via the
-            // generation check below.
-            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-            crate::push_event(crate::PendingHttpEvent::AgentIdleExpire {
+        // The transport owns the physical pooled connection, so the public
+        // net.Socket facade cannot receive its idle read/EOF edge.
+        // Conservatively retire an unclaimed facade after the I/O guard
+        // window; immediate/next-tick reuse cancels this via the generation
+        // check below. A deadline on the loop, not a tokio sleep.
+        crate::client_turnloop::push_after(
+            40,
+            crate::PendingHttpEvent::AgentIdleExpire {
                 agent_handle: handle,
                 key,
                 socket,
                 generation,
-            });
-        });
+            },
+        );
     }
     None
 }

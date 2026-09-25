@@ -57,6 +57,9 @@ pub(crate) fn route_data(id: i64, bytes: &[u8]) -> bool {
             if let Ok(mut st) = raw.lock() {
                 st.buf.extend(bytes.iter().copied());
             }
+            // After the buffer lock is released: the consumer drains on a
+            // later turn (see `perry_ffi::RawNetNotify`'s contract).
+            perry_ffi::raw_net_notify(id);
             true
         }
         None => false,
@@ -71,6 +74,7 @@ pub(crate) fn mark_terminal(id: i64, error: Option<String>) -> bool {
     match raw_state_for(id) {
         Some(raw) => {
             raw_mark_closed(&raw, error);
+            perry_ffi::raw_net_notify(id);
             true
         }
         None => false,
@@ -114,7 +118,7 @@ extern "C" fn perry_net_raw_write(socket_id: i64, ptr: *const u8, len: usize) ->
 /// Drain up to `max` buffered inbound bytes from socket `socket_id` into `out`.
 /// Returns the byte count (`> 0`), `0` for clean EOF once drained and the peer
 /// closed, or `-1` when nothing is available but the socket is still open
-/// ("would block" — the caller should yield and retry).
+/// ("would block" — wait for the next `perry_ffi::raw_net_notify`).
 extern "C" fn perry_net_raw_poll_read(socket_id: i64, out: *mut u8, max: usize) -> isize {
     if out.is_null() || max == 0 {
         return -1;

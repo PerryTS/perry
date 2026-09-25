@@ -83,6 +83,8 @@ const POOLED_B: i64 = GET_307 + 3;
 const DEADLINE: i64 = GET_307 + 4;
 const TRAILERS: i64 = GET_307 + 5;
 const SECURE: i64 = GET_307 + 6;
+const OVER_SOCKET: i64 = GET_307 + 7;
+const DEFERRED: i64 = GET_307 + 8;
 
 const CERT_PEM: &[u8] =
     include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
@@ -196,6 +198,8 @@ fn every_client_shape_is_carried_end_to_end_on_turnloop() {
     a_deadline_tears_down_an_exchange_the_server_never_answers();
     a_te_trailers_response_is_decoded_to_its_end();
     an_https_request_handshakes_with_the_callers_ca();
+    a_create_connection_socket_is_read_when_net_says_it_is_ready();
+    a_deferred_event_fires_from_a_loop_deadline();
 }
 
 fn a_cleartext_get_is_carried_and_a_307_is_not_followed() {
@@ -532,4 +536,89 @@ fn an_https_request_handshakes_with_the_callers_ca() {
     settle();
     assert!(head.starts_with("GET /secure HTTP/1.1\r\n"), "{head}");
     assert_eq!(alpn, None, "Node's https client offers no ALPN");
+}
+
+/// `agent.createConnection`: the exchange runs over a socket `perry-ext-net`
+/// owns, through the raw-net vtable. The socket here is a real ext-net socket
+/// (a connected stream adopted onto the loop exactly as an HTTP upgrade hands
+/// one over), in raw mode, so this is the production read path end to end.
+///
+/// What it proves beyond "a response arrived": the response is written by the
+/// server only AFTER the request has been read, so the one drain `start`
+/// schedules up front finds nothing, and every byte after that is read only
+/// because `perry-ext-net` called `perry_ffi::raw_net_notify`. Sabotage-checked:
+/// with the notify registration removed, this shape never completes.
+fn a_create_connection_socket_is_read_when_net_says_it_is_ready() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
+    let port = listener.local_addr().expect("a bound address").port();
+    let (heads, received) = mpsc::channel::<String>();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("one connection");
+        let (head, _) = read_request(&mut stream).expect("a request head");
+        // Two writes with a gap: the second arrives on a later read, so the
+        // exchange needs a second notification to finish.
+        let _ = stream.write_all(b"HTTP/1.1 200 Over Your Socket\r\ncontent-length: 5\r\n\r\nhe");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = stream.write_all(b"llo");
+        let _ = heads.send(head);
+        // Close: this path reads to EOF (it sends `Connection: close`).
+    });
+
+    let stream = TcpStream::connect(("127.0.0.1", port)).expect("the client side connects");
+    let socket = perry_ext_net::adopt_upgraded_tcp_stream(stream);
+    assert_ne!(
+        socket,
+        perry_ffi::INVALID_HANDLE,
+        "ext-net adopted the socket"
+    );
+    // On the loop owner: finish the adoption and publish the raw-net vtable.
+    perry_ext_net::ensure_adopted_socket_dispatch();
+    assert!(
+        perry_ffi::raw_net().is_some(),
+        "perry-ext-net's raw-net vtable must be published, or this shape tests nothing"
+    );
+
+    let completed_before = client_turnloop::raw_completed_total();
+    let url = format!("http://127.0.0.1:{port}/over-socket");
+    client_turnloop::try_dispatch_over_socket(
+        OVER_SOCKET,
+        "GET",
+        &url,
+        &no_headers(),
+        &[],
+        None,
+        socket,
+    );
+    drive("createConnection");
+    assert_eq!(
+        client_turnloop::raw_completed_total(),
+        completed_before + 1,
+        "the response must have been read to EOF and delivered"
+    );
+    let head = received
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the server must have received the request over the adopted socket");
+    join(server, "createConnection server");
+    settle();
+    assert!(head.starts_with("GET /over-socket HTTP/1.1\r\n"), "{head}");
+    assert!(head.contains("Connection: close\r\n"), "{head}");
+}
+
+/// The Agent facade's idle expiry and `req.setTimeout`'s early `'timeout'` are
+/// deadlines on the loop now (they were tokio sleeps).
+fn a_deferred_event_fires_from_a_loop_deadline() {
+    let fired_before = client_turnloop::deferred_fired_total();
+    let started = Instant::now();
+    client_turnloop::schedule_timeout_for_test(DEFERRED, 40);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while client_turnloop::deferred_fired_total() == fired_before {
+        turn();
+        assert!(Instant::now() < deadline, "the loop deadline never fired");
+    }
+    assert!(
+        started.elapsed() >= Duration::from_millis(40),
+        "it fired early: {:?}",
+        started.elapsed()
+    );
 }

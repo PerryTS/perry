@@ -73,3 +73,42 @@ pub fn register_raw_net(vtable: RawNetVtable) {
 pub fn raw_net() -> Option<&'static RawNetVtable> {
     RAW_NET.get()
 }
+
+/// Readiness callback for raw-mode sockets.
+///
+/// [`RawNetVtable::poll_read`] only answers "what is buffered now". Without a
+/// push, a consumer can learn that bytes arrived only by polling, which is
+/// what the `createConnection` exchange used to do from a tokio task on a 1 ms
+/// sleep. The `net` backend calls [`raw_net_notify`] whenever a raw-mode
+/// socket gains buffered bytes or reaches a terminal state (EOF, error,
+/// destroy), so the consumer can drain it then.
+///
+/// Scope, same as [`raw_net`]'s slot: this is a `static` in perry-ffi, so it
+/// is shared only by code linked against one perry-ffi instance. The default
+/// (auto-optimize) build links one; a `PERRY_NO_AUTO_OPTIMIZE` link of
+/// separately built extension archives can carry several, and then neither
+/// slot reaches across them (tracked in the perry-ffi cross-archive state
+/// issue, together with the duplicated perry-ext-net crate that makes moving
+/// only these two slots insufficient).
+///
+/// Contract for the consumer's callback: it runs on the thread that owns the
+/// agent's event loop, from inside the `net` backend's completion handling,
+/// with no `net` lock held. It must not call back into the vtable
+/// synchronously (the backend is mid-dispatch); it should schedule the drain
+/// for a later turn instead.
+pub type RawNetNotify = extern "C" fn(socket_id: i64);
+
+static RAW_NET_NOTIFY: OnceLock<RawNetNotify> = OnceLock::new();
+
+/// Install the raw-mode readiness callback. The first registration wins.
+pub fn register_raw_net_notify(notify: RawNetNotify) {
+    let _ = RAW_NET_NOTIFY.set(notify);
+}
+
+/// Called by the `net` backend when raw-mode socket `socket_id` has new
+/// buffered bytes or has gone terminal. A no-op when no consumer registered.
+pub fn raw_net_notify(socket_id: i64) {
+    if let Some(notify) = RAW_NET_NOTIFY.get() {
+        notify(socket_id);
+    }
+}

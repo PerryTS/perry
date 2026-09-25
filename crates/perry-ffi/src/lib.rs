@@ -130,7 +130,9 @@ mod event_pump;
 pub use event_pump::{notify_main_thread, register_aux_event_pump};
 
 mod raw_net;
-pub use raw_net::{raw_net, register_raw_net, RawNetVtable};
+pub use raw_net::{
+    raw_net, raw_net_notify, register_raw_net, register_raw_net_notify, RawNetNotify, RawNetVtable,
+};
 
 // `runtime-link` gates this `extern crate` so external npm-packaged
 // wrappers (which lack perry-runtime in their Cargo graph) compile

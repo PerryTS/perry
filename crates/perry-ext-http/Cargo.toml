@@ -24,7 +24,6 @@ http = "1"
 rustls = { workspace = true, features = ["std", "ring", "tls12"] }
 rustls_webpki = { package = "rustls-webpki", version = "0.103" }
 rustls-pemfile.workspace = true
-tokio = { workspace = true }
 # The client transport (`client_turnloop`): the rustls session that runs
 # `https:` above a turnloop socket, and the URL type requests are parsed into.
 perry-tls-session.workspace = true
