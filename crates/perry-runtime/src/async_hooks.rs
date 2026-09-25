@@ -201,6 +201,14 @@ thread_local! {
     // callback is on the stack, then commit the batch at depth zero.
     static HOOK_CALLBACK_DEPTH: Cell<usize> = const { Cell::new(0) };
     static PENDING_HOOK_STATES: RefCell<HashMap<usize, bool>> = RefCell::new(HashMap::new());
+    // #11258: backings whose `event_emitter` holds a movable heap object (an
+    // `EventEmitterAsyncResource` subclass's `this`). The field is a raw
+    // address, so without a root it keeps the from-space copy after a moving
+    // collection and `sub.asyncResource.eventEmitter === sub` breaks.
+    // `scan_async_hooks_roots_mut` visits (marks AND rewrites) each one.
+    // Per-thread because the emitter lives in the linking thread's arena;
+    // backings are never freed, so the addresses stay dereferenceable.
+    static EVENT_EMITTER_LINKED_BACKINGS: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
 }
 
 pub struct AsyncHookHandle {
@@ -1259,7 +1267,9 @@ pub extern "C" fn js_async_resource_subclass_init(
 
 /// Link the backing AsyncResource owned by EventEmitterAsyncResource to its
 /// public emitter. Node exposes this as `emitter.asyncResource.eventEmitter`.
-/// Both sides are stable native handles, so the link does not need GC rooting.
+/// The stdlib emitter is a stable numeric handle, but a source-compiled
+/// subclass links its own `this` -- a movable heap object -- so that link is
+/// registered as a GC root (#11258).
 pub fn set_async_resource_event_emitter(handle: i64, event_emitter: i64) {
     // #10926: callers hold what `js_async_resource_new` returned, which is the
     // handle OBJECT now, not the backing. Resolve it like every other entry
@@ -1269,6 +1279,16 @@ pub fn set_async_resource_event_emitter(handle: i64, event_emitter: i64) {
         return;
     };
     unsafe { (*(handle as *mut AsyncResourceHandle)).event_emitter = event_emitter };
+    let heap_emitter =
+        event_emitter > 0 && !crate::value::addr_class::is_handle_band(event_emitter as usize);
+    EVENT_EMITTER_LINKED_BACKINGS.with(|linked| {
+        let mut linked = linked.borrow_mut();
+        if heap_emitter {
+            linked.insert(handle);
+        } else {
+            linked.remove(&handle);
+        }
+    });
 }
 
 #[no_mangle]
@@ -1900,6 +1920,15 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
         visitor.visit_nanbox_u64_slot(&mut providers_bits);
         ASYNC_WRAP_PROVIDERS.store(providers_bits, Ordering::Relaxed);
     }
+
+    // #11258: a strong root, like Node's `asyncResource.eventEmitter` edge.
+    // `try_with`: the scanner can run during thread teardown.
+    let _ = EVENT_EMITTER_LINKED_BACKINGS.try_with(|linked| {
+        for &backing in linked.borrow().iter() {
+            let slot = unsafe { &mut (*(backing as *mut AsyncResourceHandle)).event_emitter };
+            visitor.visit_i64_slot(slot);
+        }
+    });
 
     let mut top_level_bits = TOP_LEVEL_RESOURCE.load(Ordering::Relaxed);
     if top_level_bits != 0 {

@@ -519,3 +519,60 @@ fn test_set_materializers_runtime_handles_survive_copied_minor_gc() {
         );
     }
 }
+
+/// #11258: an `EventEmitterAsyncResource` subclass links its own `this` into
+/// the native backing's `event_emitter` word. That link is the emitter's only
+/// root here, so the collection must both keep it alive and rewrite the word
+/// to the moved copy -- otherwise `asyncResource.eventEmitter` answers the
+/// stale from-space address and `sub.asyncResource.eventEmitter === sub` is
+/// false.
+#[test]
+fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
+    const EMITTER_CLASS_ID: u32 = 0x7A11;
+
+    let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    let _verify_evacuation = crate::gc::knob_overrides::VerifyEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
+
+    let scope = RuntimeHandleScope::new();
+    let resource_type = test_string_value(b"EventEmitterAsyncResource");
+    let resource = crate::async_hooks::js_async_resource_new(
+        resource_type,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    let resource_root = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(resource));
+    let emitter = crate::object::js_object_alloc(EMITTER_CLASS_ID, 1);
+    let emitter_before = emitter as usize;
+    crate::async_hooks::set_async_resource_event_emitter(
+        (resource_root.get_nanbox_f64().to_bits() & POINTER_MASK) as i64,
+        emitter as i64,
+    );
+
+    let before = crate::gc::copying_minor_cycles();
+    crate::gc::gc_collect_minor();
+    assert!(
+        crate::gc::copying_minor_cycles() > before,
+        "the collection under test must be a copying minor"
+    );
+
+    let resource_now = (resource_root.get_nanbox_f64().to_bits() & POINTER_MASK) as i64;
+    let linked = crate::async_hooks::try_async_resource_property_dispatch(
+        resource_now,
+        "eventEmitter",
+    )
+    .expect("eventEmitter must resolve on an AsyncResource");
+    let emitter_after = (linked.to_bits() & POINTER_MASK) as usize;
+    assert_ne!(
+        emitter_after, emitter_before,
+        "the backing still names the emitter's from-space copy"
+    );
+    assert_eq!(
+        unsafe { (*(emitter_after as *const crate::object::ObjectHeader)).class_id },
+        EMITTER_CLASS_ID,
+        "the rewritten link must name the moved emitter"
+    );
+}
