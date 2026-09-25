@@ -127,6 +127,14 @@ object PerryBridge {
     @JvmStatic
     fun getActivity(): Activity = activity
 
+    @JvmStatic
+    fun createSplitView(): View = PerrySplitView(activity)
+
+    @JvmStatic
+    fun splitViewAddChild(parent: View, child: View) {
+        (parent as? PerrySplitView)?.addPane(child)
+    }
+
     // --- Content view ---
 
     @JvmStatic

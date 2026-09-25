@@ -25,6 +25,7 @@ pub mod scrollview;
 pub mod securefield;
 pub mod slider;
 pub mod spacer;
+pub mod splitview;
 pub mod tabbar;
 pub mod text;
 pub mod text_registry;
