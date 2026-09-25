@@ -1,6 +1,6 @@
 use super::*;
 
-fn resolve(source: &str) -> Resolution {
+fn resolution_info(source: &str) -> (Resolution, bool) {
     let ast = perry_parser::parse_typescript(source, "worker-helpers.ts").unwrap();
     let module = crate::lower_module(&ast, "worker-helpers", "worker-helpers.ts").unwrap();
     let consts = collect_module_const_locals(&module);
@@ -16,6 +16,10 @@ fn resolve(source: &str) -> Resolution {
     });
     assert_eq!(results.len(), 1, "fixture must contain one Worker");
     results.remove(0)
+}
+
+fn resolve(source: &str) -> Resolution {
+    resolution_info(source).0
 }
 
 fn paths(source: &str, expected: &[&str]) {
@@ -248,7 +252,7 @@ fn awaited_helpers_and_if_return_unions() {
 
 #[test]
 fn return_union_rejections_and_limits() {
-    rejected("async function entry() { if (await opaque()) return './a.js'; return opaque(); } new Worker(await entry());", "opaque call");
+    paths("async function entry() { if (await opaque()) return './a.js'; return opaque(); } new Worker(await entry());", &["./a.js"]);
     rejected("async function entry() { if (true) return './a.js'; return await entry(); } new Worker(await entry());", "recursive");
     rejected(
         "function entry() { if (opaque()) return './a.js'; } new Worker(entry());",
@@ -277,5 +281,28 @@ fn return_union_rejections_and_limits() {
     rejected(
         &format!("function entry() {{ {branches} return './last.js'; }} new Worker(entry());"),
         "work limit",
+    );
+}
+
+#[test]
+fn opaque_return_keeps_static_siblings() {
+    paths("async function target() { if (typeof WORKER_PATH !== 'undefined') return WORKER_PATH; const dist = new URL('./dist.js', import.meta.url); if (await exists(dist)) return dist; return new URL('./worker.ts', import.meta.url); } new Worker(await target());", &["./dist.js", "./worker.ts"]);
+    paths("function target() { if (choose()) return './worker.ts'; return opaque(); } new Worker(target());", &["./worker.ts"]);
+    paths("function target() { if (choose()) return opaque(); return './worker.ts'; } const identity = (path) => path; new Worker(identity(target()));", &["./worker.ts"]);
+}
+
+#[test]
+fn partial_marker_survives_nested_calls_and_string_operations() {
+    for source in [
+        "function target() { if (choose()) return opaque(); return './worker'; } new Worker(target() + '.ts');",
+        "function target() { if (choose()) return opaque(); return './worker.ts'; } const identity = (x) => x; new Worker(identity(target()));",
+        "async function target() { if (choose()) return opaque(); return new URL('./worker.ts', import.meta.url); } new Worker(await target());",
+    ] {
+        let (result, partial) = resolution_info(source);
+        assert!(partial, "{source}");
+        assert!(matches!(result, Resolution::Set(ref paths) if paths == &["./worker.ts"]), "{result:?}");
+    }
+    assert!(
+        !resolution_info("function target() { return './worker.ts'; } new Worker(target());").1
     );
 }

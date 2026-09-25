@@ -43,9 +43,9 @@ pub(super) fn lower_candidates(
             return Ok(undefined);
         }
         let file = roots.reread(ctx, file)?;
-        // The path grammar proves each value is a string or URL. Decode URL
-        // objects through fileURLToPath, so both encoded and unescaped hrefs
-        // (including spaces) compare as filesystem paths, without coercion.
+        // Decode object values through fileURLToPath, which validates URL
+        // objects even when an opaque return is selected from a partial set.
+        // Encoded and unescaped hrefs compare as filesystem paths.
         let bits = ctx.block().bitcast_double_to_i64(&file);
         let tag = ctx.block().lshr(I64, &bits, "48");
         let is_url = ctx.block().icmp_eq(I64, &tag, POINTER_TAG_TOP16_I64);

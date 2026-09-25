@@ -731,6 +731,7 @@ fn worker_new_visitor_descends_into_closure_bodies() {
         params: vec![],
         return_type: Type::Void,
         body: vec![Stmt::Expr(Expr::WorkerNew {
+            partial: false,
             paths: vec![],
             filename: Box::new(Expr::String("./worker.js".to_string())),
             options: None,

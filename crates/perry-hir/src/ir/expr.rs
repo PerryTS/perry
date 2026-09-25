@@ -2766,6 +2766,8 @@ pub enum Expr {
     /// empty, and the module collector resolves it before codegen.
     WorkerNew {
         paths: Vec<String>,
+        /// Opaque return paths remain possible; never assume a sole candidate.
+        partial: bool,
         filename: Box<Expr>,
         options: Option<Box<Expr>>,
         /// `true` when the Worker options carry `eval: true` — i.e. the first

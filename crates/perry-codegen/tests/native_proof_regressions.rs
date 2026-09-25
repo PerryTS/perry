@@ -7635,6 +7635,7 @@ fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
     // undefined registers (the Pi agent bundle exposed this at LLVM parse
     // time).
     let replacement = Expr::WorkerNew {
+        partial: false,
         paths: Vec::new(),
         filename: Box::new(Expr::LocalGet(99)),
         options: None,
@@ -7722,6 +7723,7 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
             class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
             args: vec![
                 Expr::WorkerNew {
+                    partial: false,
                     paths: Vec::new(),
                     filename: Box::new(local(99)),
                     options: None,

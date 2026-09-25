@@ -155,9 +155,9 @@ try {
 }
 
 #[test]
-fn opaque_return_and_recursive_helper_keep_existing_warnings() {
+fn fully_opaque_and_recursive_helpers_keep_existing_warnings() {
     for (helper, warning) in [
-        ("async function target() { if (process.argv.length) return './worker.ts'; return opaque(); }", "opaque call target"),
+        ("async function target() { return opaque(); }", "opaque call target"),
         ("async function target() { if (process.argv.length) return './worker.ts'; return await target(); }", "recursive helper call"),
     ] {
         let dir = fixture();
@@ -167,4 +167,55 @@ fn opaque_return_and_recursive_helper_keep_existing_warnings() {
         assert!(log.contains("this Worker will throw"), "{log}");
         assert_eq!(run(dir.path(), &[]), "cold\n");
     }
+}
+
+#[test]
+fn opaque_return_keeps_single_candidate_and_checks_runtime_selection() {
+    let dir = fixture();
+    let source = format!(
+        r#"
+function opaque() {{ console.log('opaque'); return process.argv[3]; }}
+function target() {{
+    if (process.argv.includes('--opaque')) return opaque();
+    return new URL('./worker.ts', import.meta.url);
+}}
+const file = target();
+try {{
+{START}
+}} catch (error) {{ console.log('caught', error.message); }}
+"#
+    );
+    let log = compile(dir.path(), &source);
+    assert!(log.contains("Found 2 module(s): 2 native"), "{log}");
+    assert!(!log.contains("this Worker will throw"), "{log}");
+    assert_eq!(run(dir.path(), &[]), "reply ready\n");
+    let worker_path = dir.path().join("worker.ts").canonicalize().unwrap();
+    assert_eq!(
+        run(dir.path(), &["--opaque", worker_path.to_str().unwrap()]),
+        "opaque\nreply ready\n"
+    );
+    assert_eq!(run(dir.path(), &["--opaque", "./missing.ts"]), "opaque\ncaught worker_threads Worker filename did not match an existing compile-time-resolved worker entry\n");
+}
+
+#[test]
+fn opaque_return_keeps_awaited_url_union_with_missing_sibling() {
+    let dir = fixture();
+    let source = format!(
+        r#"
+import {{ existsSync }} from 'node:fs';
+import {{ fileURLToPath }} from 'node:url';
+async function target() {{
+    if (process.argv.includes('--opaque')) return process.argv[3];
+    const dist = new URL('./missing.ts', import.meta.url);
+    if (await existsSync(fileURLToPath(dist))) return dist;
+    return new URL('./worker.ts', import.meta.url);
+}}
+const file = await target();
+{START}
+"#
+    );
+    let log = compile(dir.path(), &source);
+    assert!(log.contains("Found 2 module(s): 2 native"), "{log}");
+    assert!(log.contains("skipping candidate"), "{log}");
+    assert_eq!(run(dir.path(), &[]), "reply ready\n");
 }

@@ -309,6 +309,7 @@ pub(crate) fn lower_worker_new(ctx: &mut LoweringContext, new_expr: &ast::NewExp
     let filename = args.next().unwrap_or(Expr::Undefined);
     let options = args.next().map(Box::new);
     Ok(Expr::WorkerNew {
+        partial: false,
         paths: Vec::new(),
         filename: Box::new(filename),
         options,

@@ -517,8 +517,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             filename,
             options,
             is_eval: _,
+            partial,
         } => {
-            if paths.len() > 1 {
+            if !paths.is_empty() && (*partial || paths.len() > 1) {
                 return worker_new::lower_candidates(ctx, paths, filename, options.as_deref());
             }
             let _ = lower_expr(ctx, filename)?;

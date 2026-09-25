@@ -982,7 +982,7 @@ fn collect_module_one(
             }
         }
     });
-    let mut worker_path_sets: Vec<Vec<String>> = Vec::new();
+    let mut worker_path_sets: Vec<(Vec<String>, bool)> = Vec::new();
     let mut saw_worker_new = false;
     perry_hir::for_each_worker_new(&hir_module, &mut |expr| {
         saw_worker_new = true;
@@ -1002,13 +1002,16 @@ fn collect_module_one(
             // doesn't misclassify multi-line filenames).
             let eval_mode = *is_eval;
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            let resolution = if eval_mode {
-                perry_hir::resolve_import_path_with_context(
-                    filename.as_ref(),
-                    &module_const_locals,
-                    &dynamic_param_literals,
-                    &dynamic_local_literals,
-                    &mut visiting,
+            let (resolution, partial) = if eval_mode {
+                (
+                    perry_hir::resolve_import_path_with_context(
+                        filename.as_ref(),
+                        &module_const_locals,
+                        &dynamic_param_literals,
+                        &dynamic_local_literals,
+                        &mut visiting,
+                    ),
+                    false,
                 )
             } else {
                 perry_hir::resolve_worker_path(
@@ -1081,7 +1084,7 @@ fn collect_module_one(
                             new_dyn_imports.push(path);
                         }
                     }
-                    worker_path_sets.push(set);
+                    worker_path_sets.push((set, partial));
                 }
                 perry_hir::Resolution::Unresolved(reason) => {
                     // Real-world packages (e.g. Next.js build-time worker
@@ -1097,7 +1100,7 @@ fn collect_module_one(
                             module_name, reason
                         );
                     }
-                    worker_path_sets.push(Vec::new());
+                    worker_path_sets.push((Vec::new(), false));
                 }
             }
         }
@@ -1135,10 +1138,11 @@ fn collect_module_one(
     });
     let mut worker_path_sets = worker_path_sets.into_iter();
     perry_hir::for_each_worker_new_mut(&mut hir_module, &mut |expr| {
-        if let perry_hir::Expr::WorkerNew { paths, .. } = expr {
+        if let perry_hir::Expr::WorkerNew { paths, partial, .. } = expr {
             if paths.is_empty() {
-                if let Some(set) = worker_path_sets.next() {
+                if let Some((set, incomplete)) = worker_path_sets.next() {
                     *paths = set;
+                    *partial = incomplete;
                 }
             }
         }

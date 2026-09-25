@@ -7,7 +7,32 @@ use super::*;
 const DEPTH_LIMIT: usize = 64;
 const WORK_LIMIT: usize = 4096;
 const STRING_LIMIT: usize = 65_536;
-type Paths = Result<PathValues, String>;
+type Paths = Result<PathValues, PathError>;
+
+// Opaque values leave a partial set. Resource limits and cycles must still
+// reject the entire expansion rather than silently truncating its candidates.
+#[derive(Debug)]
+enum PathError {
+    Opaque(String),
+    Invalid(String),
+}
+impl From<&str> for PathError {
+    fn from(reason: &str) -> Self {
+        Self::Opaque(reason.into())
+    }
+}
+impl From<String> for PathError {
+    fn from(reason: String) -> Self {
+        Self::Opaque(reason)
+    }
+}
+impl std::fmt::Display for PathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Opaque(reason) | Self::Invalid(reason) => reason.fmt(f),
+        }
+    }
+}
 
 // A URL is a carrier for a module edge, not its relative input string. Keep
 // that distinction when substituting arguments: stringifying a URL would use
@@ -31,13 +56,15 @@ impl PathValues {
 
 /// Extend the existing path grammar for Workers with local helper calls. Keep
 /// dynamic import and eval-source resolution on their existing code paths.
+/// The boolean marks an incomplete set: even one candidate requires runtime
+/// matching because an opaque return may produce a different filename.
 pub fn resolve_worker_path<V: Borrow<Expr>>(
     arg: &Expr,
     module: &Module,
     consts: &HashMap<u32, V>,
     param_literals: &HashMap<u32, Vec<String>>,
     local_literals: &HashMap<u32, Vec<String>>,
-) -> Resolution {
+) -> (Resolution, bool) {
     let original = resolve_import_path_with_context(
         arg,
         consts,
@@ -46,7 +73,7 @@ pub fn resolve_worker_path<V: Borrow<Expr>>(
         &mut HashSet::new(),
     );
     if matches!(original, Resolution::Set(_)) {
-        return original;
+        return (original, false);
     }
     let mut resolver = WorkerPaths {
         module,
@@ -57,11 +84,20 @@ pub fn resolve_worker_path<V: Borrow<Expr>>(
         locals: HashSet::new(),
         calls: HashSet::new(),
         work: WORK_LIMIT,
+        opaque_return: None,
     };
-    match resolver.resolve(arg, 0) {
-        Ok(values) => Resolution::Set(values.paths),
+    let resolution = match resolver.resolve(arg, 0) {
+        Ok(values) if !values.paths.is_empty() => Resolution::Set(values.paths),
+        Ok(_) => Resolution::Unresolved(format!(
+            "Worker path helper: {}",
+            resolver
+                .opaque_return
+                .as_deref()
+                .unwrap_or("no static paths")
+        )),
         Err(reason) => Resolution::Unresolved(format!("Worker path helper: {reason}")),
-    }
+    };
+    (resolution, resolver.opaque_return.is_some())
 }
 
 struct WorkerPaths<'a, V> {
@@ -73,17 +109,20 @@ struct WorkerPaths<'a, V> {
     locals: HashSet<u32>,
     calls: HashSet<u32>,
     work: usize,
+    opaque_return: Option<String>,
 }
 
 impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
-    fn tick(&mut self, depth: usize) -> Result<(), String> {
+    fn tick(&mut self, depth: usize) -> Result<(), PathError> {
         if depth >= DEPTH_LIMIT {
-            return Err(format!("resolution exceeds depth limit {DEPTH_LIMIT}"));
+            return Err(PathError::Invalid(format!(
+                "resolution exceeds depth limit {DEPTH_LIMIT}"
+            )));
         }
         spend(&mut self.work)
     }
 
-    fn strings(&mut self, expr: &Expr, depth: usize) -> Result<Vec<String>, String> {
+    fn strings(&mut self, expr: &Expr, depth: usize) -> Result<Vec<String>, PathError> {
         let values = self.resolve(expr, depth)?;
         if values.is_url {
             return Err("URL string coercion is not a static path operation".into());
@@ -104,7 +143,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                     return Ok(values.clone());
                 }
                 if !self.locals.insert(*id) {
-                    return Err("circular binding reference".into());
+                    return Err(PathError::Invalid("circular binding reference".into()));
                 }
                 let result = if let Some(init) = self.consts.get(id) {
                     self.resolve(init.borrow(), depth + 1)
@@ -244,7 +283,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
         let values: Vec<&Expr> = match object {
             Expr::LocalGet(id) => {
                 if !self.locals.insert(*id) {
-                    return Err("circular registry reference".into());
+                    return Err(PathError::Invalid("circular registry reference".into()));
                 }
                 let result = match self.consts.get(id) {
                     Some(init) => self.registry(init.borrow(), depth + 1),
@@ -272,7 +311,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
     }
 
     // Do not discard effects hidden in ternary conditions or registry indices.
-    fn pure_selector(&mut self, expr: &Expr, depth: usize) -> Result<(), String> {
+    fn pure_selector(&mut self, expr: &Expr, depth: usize) -> Result<(), PathError> {
         self.tick(depth)?;
         match expr {
             Expr::Bool(_) | Expr::String(_) | Expr::Integer(_) | Expr::Number(_) => Ok(()),
@@ -292,7 +331,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
         while let Expr::LocalGet(id) = target {
             self.tick(depth + aliases.len())?;
             if !aliases.insert(*id) {
-                return Err("circular callable binding".into());
+                return Err(PathError::Invalid("circular callable binding".into()));
             }
             target = self
                 .consts
@@ -341,7 +380,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
             bindings.push((param.id, self.resolve(arg, depth + 1)?));
         }
         if !self.calls.insert(id) {
-            return Err("recursive helper call".into());
+            return Err(PathError::Invalid("recursive helper call".into()));
         }
         let saved: Vec<_> = bindings
             .into_iter()
@@ -369,24 +408,31 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
     }
 
     // Discover edges, not control flow: conditions can contain opaque calls
-    // (including awaited filesystem probes). Every returned value and every
-    // const initializer must still belong to the bounded static path grammar.
+    // (including awaited filesystem probes). Opaque returns leave a partial
+    // set; initializers and statement structure still use the bounded grammar.
     fn returns(
         &mut self,
         body: &[Stmt],
         values: &mut PathValues,
         depth: usize,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, PathError> {
         self.tick(depth)?;
         let mut always_returns = false;
         for stmt in body {
             self.tick(depth)?;
             match stmt {
                 Stmt::Return(Some(value)) => {
-                    let returned = self.resolve(value, depth + 1)?;
-                    values.is_url |= returned.is_url;
-                    for path in returned.paths {
-                        push_path(&mut values.paths, path, &mut self.work)?;
+                    match self.resolve(value, depth + 1) {
+                        Ok(returned) => {
+                            values.is_url |= returned.is_url;
+                            for path in returned.paths {
+                                push_path(&mut values.paths, path, &mut self.work)?;
+                            }
+                        }
+                        Err(PathError::Opaque(reason)) => {
+                            self.opaque_return.get_or_insert(reason);
+                        }
+                        Err(error) => return Err(error),
                     }
                     always_returns = true;
                 }
@@ -420,7 +466,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
         Ok(always_returns)
     }
 
-    fn condition(&mut self, expr: &Expr, depth: usize) -> Result<(), String> {
+    fn condition(&mut self, expr: &Expr, depth: usize) -> Result<(), PathError> {
         self.tick(depth)?;
         if matches!(
             expr,
@@ -465,25 +511,25 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
     }
 }
 
-fn spend(work: &mut usize) -> Result<(), String> {
+fn spend(work: &mut usize) -> Result<(), PathError> {
     *work = work
         .checked_sub(1)
-        .ok_or_else(|| format!("resolution exceeds work limit {WORK_LIMIT}"))?;
+        .ok_or_else(|| PathError::Invalid(format!("resolution exceeds work limit {WORK_LIMIT}")))?;
     Ok(())
 }
 
-fn push_path(paths: &mut Vec<String>, path: String, work: &mut usize) -> Result<(), String> {
+fn push_path(paths: &mut Vec<String>, path: String, work: &mut usize) -> Result<(), PathError> {
     spend(work)?;
     if path.len() > STRING_LIMIT {
-        return Err(format!(
+        return Err(PathError::Invalid(format!(
             "resolved path exceeds string length limit {STRING_LIMIT}"
-        ));
+        )));
     }
     if !paths.contains(&path) {
         if paths.len() == DYNAMIC_IMPORT_PATH_CAP {
-            return Err(format!(
+            return Err(PathError::Invalid(format!(
                 "candidate count exceeds limit {DYNAMIC_IMPORT_PATH_CAP}"
-            ));
+            )));
         }
         paths.push(path);
     }

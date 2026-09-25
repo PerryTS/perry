@@ -1623,6 +1623,7 @@ mod tests {
         let mut starts_relative_worker = function(
             1,
             vec![Stmt::Return(Some(Expr::WorkerNew {
+                partial: false,
                 paths: vec!["./worker.ts".to_string()],
                 filename: Box::new(Expr::String("./worker.ts".to_string())),
                 options: None,

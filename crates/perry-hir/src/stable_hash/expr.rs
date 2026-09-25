@@ -667,7 +667,7 @@ impl SH for Expr {
             Expr::WebAssemblyInstantiate { bytes, imports } => { tag(h, 12028); bytes.as_ref().hash(h); imports.hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
             Expr::DynamicImport { paths, arg, options, byte_offset, deferred_error, synchronous } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); options.hash(h); byte_offset.hash(h); deferred_error.hash(h); synchronous.hash(h); }
-            Expr::WorkerNew { paths, filename, options, is_eval } => {
+            Expr::WorkerNew { paths, filename, options, is_eval, partial } => {
                 tag(h, 12055);
                 for p in paths { p.hash(h); }
                 filename.as_ref().hash(h);
@@ -679,6 +679,7 @@ impl SH for Expr {
                     None => false.hash(h),
                 }
                 is_eval.hash(h);
+                partial.hash(h);
             }
         }
     }

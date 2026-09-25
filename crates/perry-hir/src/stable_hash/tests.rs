@@ -456,3 +456,20 @@ fn same_expr_structure_matches_clones_and_rejects_differences() {
 pub(crate) fn canonical_hash() -> u64 {
     hash_module(&canonical_module())
 }
+
+#[test]
+fn partial_worker_resolution_changes_the_cache_key() {
+    let mut complete = empty_module();
+    complete.init.push(Stmt::Expr(Expr::WorkerNew {
+        paths: vec!["./worker.ts".into()],
+        partial: false,
+        filename: Box::new(Expr::LocalGet(1)),
+        options: None,
+        is_eval: false,
+    }));
+    let mut incomplete = complete.clone();
+    if let Stmt::Expr(Expr::WorkerNew { partial, .. }) = &mut incomplete.init[0] {
+        *partial = true;
+    }
+    assert_ne!(hash_module(&complete), hash_module(&incomplete));
+}
