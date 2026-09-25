@@ -179,6 +179,10 @@ pub fn set_string(handle: i64, text_ptr: *const u8) {
 ///                 before this fix)
 /// - other       → silent no-op (matches the codegen's documented intent)
 pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    set_ns_color(handle, &super::dynamic_color::rgba([r, g, b, a]));
+}
+
+pub(super) fn set_ns_color(handle: i64, color: &objc2_app_kit::NSColor) {
     let Some(view) = super::get_widget(handle) else {
         return;
     };
@@ -187,7 +191,7 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             let is_btn: bool = objc2::msg_send![&*view, isKindOfClass: btn_cls];
             if is_btn {
                 drop(view);
-                super::button::set_text_color(handle, r, g, b, a);
+                super::button::set_ns_text_color(handle, color);
                 return;
             }
         }
@@ -198,14 +202,7 @@ pub fn set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
             }
         }
         let tf: &NSTextField = &*(Retained::as_ptr(&view) as *const NSTextField);
-        let color: Retained<objc2_app_kit::NSColor> = objc2::msg_send![
-            objc2::runtime::AnyClass::get(c"NSColor").unwrap(),
-            colorWithRed: r as objc2_core_foundation::CGFloat,
-            green: g as objc2_core_foundation::CGFloat,
-            blue: b as objc2_core_foundation::CGFloat,
-            alpha: a as objc2_core_foundation::CGFloat
-        ];
-        tf.setTextColor(Some(&color));
+        tf.setTextColor(Some(color));
     }
     refresh_spacing(handle);
 }

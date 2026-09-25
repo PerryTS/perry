@@ -11,6 +11,7 @@ pub mod combobox;
 pub mod command_palette;
 pub mod date_picker;
 pub mod divider;
+pub mod dynamic_color;
 pub mod foreach_registry;
 pub mod form;
 pub mod hstack;
@@ -314,6 +315,7 @@ pub fn set_hidden(handle: i64, hidden: bool) {
             if let Some((r, g, b, a)) = cached_bg {
                 apply_background_color(handle, r, g, b, a);
             }
+            dynamic_color::refresh(handle);
         }
     }
 }
@@ -688,6 +690,7 @@ extern "C" {
 /// Set a solid background color on any widget via its layer.
 /// Also caches the color so it can be re-applied after NSStackView detach/re-attach.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    dynamic_color::clear_layer_color(handle, false);
     // Cache the color for re-application after hide/show
     BG_COLOR_MAP.with(|m| {
         m.borrow_mut().insert(handle, (r, g, b, a));
@@ -808,6 +811,7 @@ pub fn set_background_gradient(
 
 /// Set the border color on any widget via its layer.
 pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    dynamic_color::clear_layer_color(handle, true);
     if let Some(view) = get_widget(handle) {
         unsafe {
             let _: () = objc2::msg_send![&*view, setWantsLayer: true];

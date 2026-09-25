@@ -218,3 +218,67 @@ pub extern "C" fn perry_ui_canvas_draw_image(
 ) {
     widgets::canvas::draw_image(h, image, sx, sy, sw, sh, dx, dy, dw, dh);
 }
+
+/// Set light/dark RGBA variants, resolved using the widget's macOS appearance.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_dynamic_background_color(
+    handle: i64,
+    lr: f64,
+    lg: f64,
+    lb: f64,
+    la: f64,
+    dr: f64,
+    dg: f64,
+    db: f64,
+    da: f64,
+) {
+    widgets::dynamic_color::set_background(handle, [lr, lg, lb, la], [dr, dg, db, da]);
+}
+
+/// Set light/dark RGBA variants, resolved using the widget's macOS appearance.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_dynamic_border_color(
+    handle: i64,
+    lr: f64,
+    lg: f64,
+    lb: f64,
+    la: f64,
+    dr: f64,
+    dg: f64,
+    db: f64,
+    da: f64,
+) {
+    widgets::dynamic_color::set_border(handle, [lr, lg, lb, la], [dr, dg, db, da]);
+}
+
+/// Set light/dark RGBA variants, resolved using the widget's macOS appearance.
+#[no_mangle]
+pub extern "C" fn perry_ui_text_set_dynamic_color(
+    handle: i64,
+    lr: f64,
+    lg: f64,
+    lb: f64,
+    la: f64,
+    dr: f64,
+    dg: f64,
+    db: f64,
+    da: f64,
+) {
+    widgets::dynamic_color::set_text(handle, [lr, lg, lb, la], [dr, dg, db, da]);
+}
+
+/// Set light/dark RGBA variants, resolved using the widget's macOS appearance.
+#[no_mangle]
+pub extern "C" fn perry_ui_button_set_dynamic_content_tint_color(
+    handle: i64,
+    lr: f64,
+    lg: f64,
+    lb: f64,
+    la: f64,
+    dr: f64,
+    dg: f64,
+    db: f64,
+    da: f64,
+) {
+    widgets::dynamic_color::set_button_tint(handle, [lr, lg, lb, la], [dr, dg, db, da]);
+}

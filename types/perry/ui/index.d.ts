@@ -1966,3 +1966,15 @@ export function appSetActivationPolicy(policy: "regular" | "accessory" | "backgr
 
 /** Embed a raw NSView pointer as a widget. Advanced use only. */
 export function embedNSView(pointer: number): Widget;
+
+/** macOS appearance-adaptive colors. Components are 0–1, light RGBA first,
+ * then dark RGBA. Existing widgets update automatically when their effective
+ * appearance changes. A static setter replaces the corresponding dynamic color.
+ * These APIs currently require the native macOS backend. */
+export function widgetSetDynamicBackgroundColor(widget: Widget, lr: number, lg: number, lb: number, la: number, dr: number, dg: number, db: number, da: number): void;
+/** macOS-only light RGBA + dark RGBA; follows the widget's effective appearance. */
+export function widgetSetDynamicBorderColor(widget: Widget, lr: number, lg: number, lb: number, la: number, dr: number, dg: number, db: number, da: number): void;
+/** macOS-only light RGBA + dark RGBA; follows the widget's effective appearance. */
+export function textSetDynamicColor(widget: Widget, lr: number, lg: number, lb: number, la: number, dr: number, dg: number, db: number, da: number): void;
+/** macOS-only light RGBA + dark RGBA; follows the widget's effective appearance. */
+export function buttonSetDynamicContentTintColor(widget: Widget, lr: number, lg: number, lb: number, la: number, dr: number, dg: number, db: number, da: number): void;

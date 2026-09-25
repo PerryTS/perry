@@ -121,3 +121,8 @@ harness = false
 name = "native_window_appearance"
 path = "tests/native_window_appearance.rs"
 harness = false
+
+[[test]]
+name = "native_dynamic_colors"
+path = "tests/native_dynamic_colors.rs"
+harness = false

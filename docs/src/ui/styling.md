@@ -247,3 +247,28 @@ cannot drift from the backend inventory.
 - [Layout](layout.md) — Layout containers
 - [Animation](animation.md) — Animate style changes
 - [Theming](theming.md) — Design tokens via the `perry-styling` package
+
+## Appearance-adaptive colors (macOS)
+
+Custom colors can supply light and dark variants on the native macOS backend.
+Each setter takes the widget, four light RGBA components, then four dark RGBA
+components (all in `[0, 1]`):
+
+```typescript
+import { Text, textSetDynamicColor, widgetSetDynamicBackgroundColor } from "perry/ui";
+
+const label = Text("Appearance-aware brand colors");
+textSetDynamicColor(label, 0.1, 0.2, 0.5, 1, 0.7, 0.8, 1, 1);
+widgetSetDynamicBackgroundColor(label, 0.95, 0.95, 1, 1, 0.08, 0.08, 0.15, 1);
+```
+
+`widgetSetDynamicBorderColor` and `buttonSetDynamicContentTintColor` accept the
+same arguments for borders and button icons. Border width is still set separately
+with `widgetSetBorderWidth`. `textSetDynamicColor` also supports button titles,
+like `textSetColor`.
+
+Colors follow the widget's effective appearance, including window-specific
+appearance overrides, and update on existing widgets when appearance changes.
+High-contrast appearances use their matching light or dark variant. Calling the
+corresponding static color setter replaces the dynamic color. These APIs are
+currently macOS-only.
