@@ -21,7 +21,7 @@ exported `validateAsync` in `core/parse.ts`, both behind `core/index.ts`'s
 - Fix at the root cause in `binding_origin.rs`; keep #7980 / #836 green.
 - Regression test lives in the Node parity suite (module semantics), not the gap suite.
 - zod 4.6.5 fixture under `tests/release/packages/zod-4-6/` as post-fix check.
-- Version bump only after asking the user.
+- No version bump: the PR template and CLAUDE.md leave it to the maintainer at merge time.
 
 ## TDD
 Mode: on (user brief: "test-first"). Runner: `scripts/node_suite_run.py` (module lane)
@@ -31,9 +31,10 @@ plus `cargo test --release -p perry-hir` unit tests.
 - [ ] T0 Build Perry + baseline (gap suite, node-suite module lane). Route: inline.
 - [x] T1 RED (commit 796a5c35c): `test-parity/node-suite/module/imports/export-star-private-name-collision.ts`
       + fixtures in `imports/fixtures/export-star-private/`. Route: inline.
-- [ ] T2 Fix at root cause + unit test; GREEN node-suite; zod-4-6 fixture passes;
+- [x] T2 Fix (commit 33cbfe741) at root cause + unit test; GREEN node-suite; zod-4-6 fixture passes;
       #7980/#836 green; perry-hir tests; gap suite no new failures; file-size check. Route: inline (1 file + tests).
-- [ ] T3 changelog.d fragment; version bump (ask first).
+- [x] T3 changelog.d fragment. The version bump was dropped before pushing
+      (PR template: the maintainer bumps at merge).
 
 ## Evidence
 - Baseline build: 0.5.1654 @ d65528b53, `cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static` OK.
@@ -69,3 +70,22 @@ plus `cargo test --release -p perry-hir` unit tests.
 - Gap suite runs in fast mode (`PERRY_SKIP_BUILD=1`, pinned `PERRY_BIN`/`PERRY_RUNTIME_DIR`)
   so before/after use the same mode; COMPILE_FAILs are re-checked by hand
   (load avg ~40 from a parallel session causes timeouts).
+- Gap suite, scoped (user-approved 2026-09-25): the full local run took ~15 s/test
+  (two sessions share the CPU), so it was stopped at 350 PASS / 6 COMPILE_FAIL
+  (the COMPILE_FAILs compiled fine by hand). The fix only changes
+  cross-module export resolution, so the before/after compared the 135 of 1017
+  gap tests that import a relative or package module (`target/probe/gap_subset.txt`),
+  with pinned binaries (`target/baseline` = d65528b53, `target/fixed` = 33cbfe741),
+  `PERRY_NO_AUTO_OPTIMIZE=1`, and Node 26.5.1 without FORCE_COLOR:
+  - 117 PASS / PASS, 0 changed.
+  - 18 COMPILE_FAIL in both: `runtime library does not match` because these tests
+    need the `perry-no-auto-http-pump` runtime, which Perry builds from the
+    current tree (a different commit stamp than either pinned compiler).
+    With a fresh cache, the fixed compiler PASSES `test_gap_turnloop_fetch`.
+    For all 18, the emitted LLVM IR (`--trace llvm`) matches between baseline and
+    fixed: 8 byte-identical; 10 http2 tests differ only in the order of one
+    `external global` declaration, which also flips between repeated runs of the
+    SAME compiler (lines 83/84), so it is pre-existing nondeterminism.
+    The IR check was proven able to fail: on the new node-suite test it reports
+    `fixtures_export_star_private_bridge_ts.ll` as different.
+  - The full gap suite is left to CI's `pr-gate`.
