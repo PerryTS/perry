@@ -1621,11 +1621,14 @@ def run_self_tests() -> int:
                 "// GC_STORE_AUDIT(BARRIERED): planted\n"
                 "// GC_STORE_AUDIT(BARRIERED): planted store\n" + codegen_calls
             ),
-            # The static-key store IC: one bound marker and one stem-literal
-            # call, so V-P1 tracks the real binding table.
+            # The static-key store IC: two bound markers (the existing-key and
+            # the key-add store) and their stem-literal calls, so V-P1 tracks
+            # the real binding table.
             "crates/perry-codegen/src/expr/put_value_store_ic.rs": (
                 "// GC_STORE_AUDIT(BARRIERED): planted\n"
+                "// GC_STORE_AUDIT(BARRIERED): planted add\n"
                 "fn lower_store(ctx: &mut FnCtx) {\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
                 "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, \"put.pic\");\n"
                 "}\n"
             ),
