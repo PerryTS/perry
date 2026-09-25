@@ -266,6 +266,17 @@ pub(super) fn emit_typed_shape_layout_init(
     if layout_declared_at_allocation(ctx, class_name) {
         return;
     }
+    // A class whose constructor adds keys is born wide with no typed layout:
+    // installing one here would only be retired again by the first key-add
+    // (`js_gc_key_add_layout_unknown`), a layout install and a retirement on
+    // every construction.
+    if ctx
+        .classes
+        .get(class_name)
+        .is_some_and(|class| super::new_alloc::constructor_added_key_count(ctx, class) > 0)
+    {
+        return;
+    }
     emit_typed_shape_layout_call(ctx, class_name, obj_handle, "js_gc_init_typed_shape_layout");
 }
 
