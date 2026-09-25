@@ -1,0 +1,3 @@
+Make the HTTP TLS-option regression independent of ambient `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, and `NODE_TLS_REJECT_UNAUTHORIZED` settings. Its original default-client assertion fails when a custom CA bundle legitimately requires a custom client. Run option checks and separate environment-policy cases in fresh subprocesses so perry-ffi's first-use CA cache cannot leak between cases or parallel tests. Explicitly assert that custom CA roots do not disable certificate verification.
+
+The actual `perry-ext-http` filtered unit test passes with clean and configured ambient environments. An isolated before/after check of the production policy methods and unit-test body reproduces the original failure for all three settings. Production TLS behavior is unchanged.
