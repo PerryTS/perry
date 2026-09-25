@@ -118,18 +118,6 @@ fn write(conn_id: i64, bytes: &[u8]) {
     }
 }
 
-fn destroy(conn_id: i64) {
-    if let Some(transport) = transport_of(conn_id) {
-        (transport.destroy)(conn_id);
-    }
-}
-
-fn finish(conn_id: i64) {
-    if let Some(transport) = transport_of(conn_id) {
-        (transport.finish)(conn_id);
-    }
-}
-
 /// Rebuild the decoded request as a `turnloop_http` head.
 ///
 /// The host has already parsed the request; `accept` needs it back in the crate's
@@ -345,8 +333,7 @@ pub(crate) fn terminate(conn_id: i64) -> bool {
         return false;
     };
     crate::connection_closed(ws_id, crate::codec::CLOSE_ABNORMAL, String::new());
-    forget(conn_id);
-    destroy(conn_id);
+    forget_and(conn_id, |t| t.destroy);
     true
 }
 
@@ -355,11 +342,29 @@ fn with_link<R>(conn_id: i64, f: impl FnOnce(&mut Link) -> R) -> Option<R> {
     map.get_mut(&conn_id).map(f)
 }
 
-fn forget(conn_id: i64) {
+fn forget(conn_id: i64) -> Option<Transport> {
     links()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&conn_id);
+        .remove(&conn_id)
+        .map(|link| link.transport)
+}
+
+/// Forget the link, then end the connection through the transport the link
+/// was adopted with.
+///
+/// The transport is taken out of the removed link rather than looked up
+/// afterwards. A lookup after `forget` finds no link and falls back to the
+/// process-wide default, which only `perry-ext-http` registers: in a program
+/// with a standalone `WebSocketServer({ port })` and a `ws` client, and no
+/// `http` import, that default does not exist, so the socket was never shut
+/// down and its handle kept the event loop alive for ever (#11309). Where the
+/// default does exist it is `perry-ext-http`'s writer, the wrong one for a
+/// connection this crate dialled or accepted.
+fn forget_and(conn_id: i64, end: impl FnOnce(Transport) -> fn(i64)) {
+    if let Some(transport) = forget(conn_id).or_else(|| TRANSPORT.get().copied()) {
+        end(transport)(conn_id);
+    }
 }
 
 fn deliver(
@@ -387,12 +392,10 @@ fn deliver(
                 // own close frame is a reset, and the peer would then report
                 // 1006 instead of the code it sent.
                 crate::connection_closed(ws_id, code, reason);
-                forget(conn_id);
-                finish(conn_id);
+                forget_and(conn_id, |t| t.finish);
             } else if terminal {
                 crate::connection_closed(ws_id, crate::codec::CLOSE_ABNORMAL, String::new());
-                forget(conn_id);
-                finish(conn_id);
+                forget_and(conn_id, |t| t.finish);
             }
         }
         Err(e) => {
@@ -400,8 +403,7 @@ fn deliver(
             // which `ws` sends before going away.
             crate::connection_error(ws_id, &crate::codec_error_message(&e));
             crate::connection_closed(ws_id, crate::codec::CLOSE_ABNORMAL, String::new());
-            forget(conn_id);
-            finish(conn_id);
+            forget_and(conn_id, |t| t.finish);
         }
     }
 }
@@ -507,6 +509,51 @@ mod tests {
         );
         forget(-101);
         forget(-102);
+    }
+
+    static FINISHES: AtomicUsize = AtomicUsize::new(0);
+    static DESTROYS: AtomicUsize = AtomicUsize::new(0);
+
+    fn count_finish(_id: i64) {
+        FINISHES.fetch_add(1, Ordering::SeqCst);
+    }
+    fn count_destroy(_id: i64) {
+        DESTROYS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn counting_transport() -> Transport {
+        Transport {
+            write: count_write,
+            finish: count_finish,
+            destroy: count_destroy,
+        }
+    }
+
+    /// #11309: a completed closing handshake ends the connection through the
+    /// transport the link was adopted with. It used to `forget` the link first
+    /// and then look the transport up, which found only the process default —
+    /// absent unless `perry-ext-http` is linked — so the socket was never shut
+    /// down and a standalone server + client program never exited.
+    #[test]
+    fn a_completed_close_finishes_through_the_links_own_transport() {
+        FINISHES.store(0, Ordering::SeqCst);
+        adopt_existing(-201, 9201, counting_transport(), Role::Server, &[]);
+        // A masked, empty client close frame.
+        on_data(-201, &[0x88, 0x80, 0, 0, 0, 0]);
+        assert_eq!(FINISHES.load(Ordering::SeqCst), 1);
+        assert!(
+            !owns(-201),
+            "the link is forgotten once the close completes"
+        );
+    }
+
+    #[test]
+    fn terminate_destroys_through_the_links_own_transport() {
+        DESTROYS.store(0, Ordering::SeqCst);
+        adopt_existing(-202, 9202, counting_transport(), Role::Client, &[]);
+        assert!(terminate(-202));
+        assert_eq!(DESTROYS.load(Ordering::SeqCst), 1);
+        assert!(!owns(-202));
     }
 
     #[test]

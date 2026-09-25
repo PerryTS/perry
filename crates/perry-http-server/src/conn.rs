@@ -55,6 +55,16 @@ struct Active {
 pub(crate) struct Conn {
     id: i64,
     listener_id: i64,
+    /// The host this connection was accepted for, held by the connection
+    /// itself rather than looked up through its listener.
+    ///
+    /// `close_listener` removes the listener, and Node's contract for
+    /// `server.close()` is that in-flight connections *finish*. Resolving the
+    /// host through the listener map silently dropped every later completion
+    /// on those connections: a WebSocket closed after `wss.close()` never saw
+    /// its peer's close frame, so neither side finished the closing handshake
+    /// and the program never exited (#11309).
+    host: Arc<dyn Host>,
     peer_address: String,
     peer_port: u16,
     decoder: http1::Decoder,
@@ -93,8 +103,7 @@ fn with_conn<R>(id: i64, f: impl FnOnce(&mut Conn) -> R) -> Option<R> {
 }
 
 fn host_of(conn_id: i64) -> Option<Arc<dyn Host>> {
-    let listener = with_conn(conn_id, |c| c.listener_id)?;
-    crate::with_listener(listener, |l| l.host.clone())
+    with_conn(conn_id, |c| c.host.clone())
 }
 
 /// Every live connection of one listener.
@@ -167,6 +176,7 @@ fn on_accept(listener_id: i64, conn_id: i64) {
         Conn {
             id: conn_id,
             listener_id,
+            host: host.clone(),
             peer_address: peer.as_ref().map(|e| e.address.clone()).unwrap_or_default(),
             peer_port: peer.as_ref().map(|e| e.port).unwrap_or(0),
             decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
@@ -436,7 +446,7 @@ fn building_from(head: &http1::Head) -> Building {
 
 /// Whether this connection's listener diverts upgrades to its host.
 fn takes_upgrades(c: &Conn) -> bool {
-    crate::with_listener(c.listener_id, |l| l.host.takes_upgrades()).unwrap_or(false)
+    c.host.takes_upgrades()
 }
 
 /// The [`Request`] handed to [`Host::on_upgrade`].
@@ -464,8 +474,7 @@ fn upgrade_request(c: &Conn, building: Building) -> Request {
 
 /// Turn a fully decoded request into the [`Request`] the host receives.
 fn finish_request(c: &mut Conn, building: Building) -> (Request, bool) {
-    let host_intercepts =
-        crate::with_listener(c.listener_id, |l| l.host.intercepts_continue()).unwrap_or(false);
+    let host_intercepts = c.host.intercepts_continue();
     // Node's `100 Continue` is automatic unless a `'checkContinue'` listener
     // takes over. hyper sent it when the body was polled; here it goes out as
     // soon as the head says the client is waiting, once the caller has
@@ -517,14 +526,18 @@ fn prepare_headers(c: &mut Conn, response: &mut Response) -> bool {
         let active = c.active.as_ref().expect("an active request");
         (active.version, active.connection.clone())
     };
-    let (closing, max_requests, keep_alive_timeout_ms) = crate::with_listener(c.listener_id, |l| {
+    // A closed listener still answers its in-flight requests, but never keeps
+    // the connection for another one.
+    let listener_open = crate::with_listener(c.listener_id, |_| ()).is_some();
+    let (closing, max_requests, keep_alive_timeout_ms) = if listener_open {
         (
-            l.host.is_closing(),
-            l.host.max_requests_per_socket(),
-            l.host.keep_alive_timeout_ms(),
+            c.host.is_closing(),
+            c.host.max_requests_per_socket(),
+            c.host.keep_alive_timeout_ms(),
         )
-    })
-    .unwrap_or((true, 0, 0.0));
+    } else {
+        (true, 0, 0.0)
+    };
     let over_quota = max_requests > 0 && c.requests >= max_requests;
     let keep_alive = crate::connection_headers(
         &mut response.headers,

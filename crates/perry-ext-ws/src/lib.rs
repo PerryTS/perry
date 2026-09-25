@@ -290,6 +290,11 @@ fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
     });
 }
 
+/// Whether an event matching `pred` is still waiting for the pump.
+fn event_is_queued(pred: impl Fn(&PendingWsEvent) -> bool) -> bool {
+    WS_PENDING_EVENTS.lock().unwrap().iter().any(pred)
+}
+
 fn push_ws_event(ev: PendingWsEvent) {
     WS_PENDING_EVENTS.lock().unwrap().push(ev);
     notify_main_thread();
@@ -1030,15 +1035,20 @@ pub unsafe extern "C" fn js_ws_on(
     let is_client = WS_CONNECTIONS.lock().unwrap().contains_key(&ws_id);
     if !is_client {
         if let Some(server) = get_handle_mut::<WsServerHandle>(handle) {
-            // If the server has already bound by the time the user
-            // registers a "listening" handler, re-emit the event so the
-            // late-registered callback fires on the next event-loop pump.
-            // Without this, the accept-loop task races the JS-side `wss.on(
-            // "listening", cb)` registration — `push_ws_event(Listening)`
-            // happens immediately after the bind succeeds, and any pump
-            // tick that drains it before the user's listener registers
-            // discards the event silently.
-            let already_listening = event_name == "listening" && server.is_listening;
+            // If the server has already bound and its `Listening` event has
+            // already been drained, re-emit it so a late-registered callback
+            // fires on the next event-loop pump instead of never.
+            //
+            // Only once drained: the standalone server binds synchronously
+            // and queues `Listening` in its constructor, so a listener
+            // registered in the same tick is reached by that event, and a
+            // replay on top of it fired every `'listening'` listener twice
+            // (#11309).
+            let already_listening = event_name == "listening"
+                && server.is_listening
+                && !event_is_queued(
+                    |ev| matches!(ev, PendingWsEvent::Listening(h) if *h == handle),
+                );
             server
                 .listeners
                 .entry(event_name)
@@ -1060,7 +1070,8 @@ pub unsafe extern "C" fn js_ws_on(
             .unwrap()
             .get(&ws_id)
             .map(|c| c.is_open)
-            .unwrap_or(false);
+            .unwrap_or(false)
+        && !event_is_queued(|ev| matches!(ev, PendingWsEvent::Open(id) if *id == ws_id));
     let replay_messages = event_name == "message";
     let mut g = WS_CLIENT_LISTENERS.lock().unwrap();
     let entry = g.entry(ws_id).or_insert_with(|| WsClientListeners {
@@ -1742,6 +1753,55 @@ mod tests {
         assert_eq!(perry_runtime::set::js_set_size(clients), 0);
 
         drop_handle(client_id as i64);
+        drop_handle(server_handle);
+    }
+
+    /// #11309: a `'listening'` listener registered while the bind's own
+    /// `Listening` event is still queued is reached by that event; replaying
+    /// on top of it fired every listener twice. The replay is for a listener
+    /// registered after the event was drained, and still happens then.
+    #[test]
+    fn listening_is_replayed_only_once_the_queued_event_has_drained() {
+        let _lock = GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
+        let server_handle = js_ws_server_new(undefined);
+        get_handle_mut::<WsServerHandle>(server_handle)
+            .expect("server handle")
+            .is_listening = true;
+        let queued_for_server = || {
+            WS_PENDING_EVENTS
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|ev| matches!(ev, PendingWsEvent::Listening(h) if *h == server_handle))
+                .count()
+        };
+        // Drop this server's events without running them: the callback below
+        // is a placeholder, not a closure.
+        let discard = || {
+            WS_PENDING_EVENTS
+                .lock()
+                .unwrap()
+                .retain(|ev| !matches!(ev, PendingWsEvent::Listening(h) if *h == server_handle))
+        };
+        let event = alloc_string("listening");
+        let callback = 0x1000;
+
+        push_ws_event(PendingWsEvent::Listening(server_handle));
+        unsafe { js_ws_on(server_handle, event.as_raw(), callback) };
+        assert_eq!(queued_for_server(), 1, "the queued event is not doubled");
+
+        discard();
+        unsafe { js_ws_on(server_handle, event.as_raw(), callback) };
+        assert_eq!(
+            queued_for_server(),
+            1,
+            "a late listener still gets a replay"
+        );
+
+        discard();
         drop_handle(server_handle);
     }
 
