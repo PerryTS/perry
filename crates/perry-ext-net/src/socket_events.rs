@@ -236,6 +236,15 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "data");
             }
             PendingNetEvent::Error(id, msg) => {
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
+                    if socket.unconnected_write_failed {
+                        socket.destroyed = true;
+                        socket.is_open = false;
+                        socket.connecting = false;
+                        socket.bytes_queued = 0;
+                        socket.need_drain = false;
+                    }
+                }
                 let cbs = listeners_for(id, "error");
                 if cbs.is_empty() {
                     continue;

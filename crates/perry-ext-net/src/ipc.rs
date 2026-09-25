@@ -22,6 +22,7 @@ fn allocate_socket() -> i64 {
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: false,
+            unconnected_write_failed: false,
             is_open: false,
             raw_fd: None,
             refed: true,
@@ -91,6 +92,9 @@ pub(crate) fn connect_existing(handle: i64, path: String) {
                 // #10465 — `socket.connect(path)` on a `new net.Socket()`
                 // starts connecting synchronously, same as the TCP path.
                 socket.connecting = true;
+                if socket.unconnected_write_failed {
+                    return;
+                }
             }
             _ => {
                 push_event(PendingNetEvent::Error(

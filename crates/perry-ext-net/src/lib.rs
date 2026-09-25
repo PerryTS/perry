@@ -257,11 +257,11 @@ pub(crate) struct SocketState {
     /// reports "already connected"; `has_active_handles` does not count a
     /// socket that has never been asked to connect.
     ///
-    /// It is the whole of what the old per-socket command *receiver* parked
-    /// here meant. Commands issued while it is true are accepted and counted
-    /// but not delivered — exactly what happened to the ones that receiver
-    /// buffered, which the turnloop connect path dropped with it.
+    /// Writes in this state fail: no connection attempt owns their bytes.
     pub(crate) awaiting_connect: bool,
+    /// An unopened write failed; its callbacks, error and close are queued.
+    /// A synchronous connect() must not revive this failed writable stream.
+    pub(crate) unconnected_write_failed: bool,
     pub(crate) is_open: bool,
     /// Borrowed OS descriptor for Node's private `socket._handle.fd` shape.
     /// turnloop owns its descriptors without exposing them, so this is unset
@@ -352,14 +352,15 @@ impl SocketState {
             SocketCommand::Write(bytes, _) => bytes.len() as u64,
             _ => 0,
         };
+        if matches!(&cmd, SocketCommand::Write(..))
+            && (self.unconnected_write_failed || (!self.turnloop && self.awaiting_connect))
+        {
+            return Err("Socket is closed".to_string());
+        }
         if !self.turnloop {
-            // Never connected. Accepted and counted, then dropped: see
-            // `awaiting_connect`. A socket that is not even waiting for a
-            // connect any more (its connect was refused) has nothing to take
-            // the command, which is the "write failed" the old closed channel
-            // reported.
+            // Configuration commands may precede connect(), but there is no
+            // transport to accept writes until a connection is submitted.
             if self.awaiting_connect {
-                self.bytes_queued = self.bytes_queued.saturating_add(bytes);
                 return Ok(());
             }
             return Err("Socket write failed".to_string());
@@ -404,6 +405,7 @@ pub(crate) fn register_turnloop_socket(
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: false,
+            unconnected_write_failed: false,
             is_open: true,
             raw_fd: None,
             refed: true,
@@ -437,15 +439,15 @@ pub(crate) fn register_turnloop_socket(
 #[cfg(test)]
 impl SocketState {
     /// Minimal socket state that has not reached the loop, for the byte
-    /// accounting tests. `awaiting_connect` picks whether a command is
-    /// accepted (a socket still waiting for `connect()`) or refused (one whose
-    /// connect never reached the driver).
+    /// accounting tests. Neither form has a driver; `awaiting_connect`
+    /// distinguishes an unopened socket from a refused connection.
     pub(crate) fn for_test(awaiting_connect: bool) -> Self {
         SocketState {
             tcp_async_id: 0,
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect,
+            unconnected_write_failed: false,
             is_open: true,
             raw_fd: None,
             refed: true,
@@ -697,6 +699,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             connect_async_id: 0,
             shutdown_async_id: 0,
             awaiting_connect: true,
+            unconnected_write_failed: false,
             is_open: false,
             raw_fd: None,
             refed: true,
@@ -1120,6 +1123,10 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
         // connecting synchronously from the caller's point of view, same as
         // the eager `net.connect()` factory.
         socket.connecting = true;
+        if socket.unconnected_write_failed {
+            // Its queued write error will close it before any I/O can begin.
+            return;
+        }
     }
 
     let local_server = server_state::begin_local_connect(&host, port);
@@ -1231,6 +1238,7 @@ where
             connect_async_id,
             shutdown_async_id: 0,
             awaiting_connect: false,
+            unconnected_write_failed: false,
             is_open: false,
             raw_fd: None,
             refed: true,

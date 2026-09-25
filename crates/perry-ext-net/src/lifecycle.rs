@@ -205,7 +205,7 @@ pub unsafe extern "C" fn js_net_socket_get_destroyed(handle: i64) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_get_writable(handle: i64) -> f64 {
     nanbox_bool(with_socket(handle, false, |s| {
-        !s.destroyed && !s.writable_ended
+        !s.destroyed && !s.writable_ended && (!s.unconnected_write_failed || s.connecting)
     }))
 }
 
@@ -580,18 +580,28 @@ pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) -
 /// Queue `bytes`; false when the submission was refused (and reported).
 fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) -> bool {
     let mut sockets = statics::sockets().lock().unwrap();
-    let (failure, turnloop) = match sockets.get_mut(&handle) {
-        Some(s) => (
-            s.command(handle, crate::SocketCommand::Write(bytes, completion))
-                .err(),
-            s.turnloop,
-        ),
-        None => (Some("Socket is closed".to_string()), false),
+    let (failure, turnloop, unopened, first_failure) = match sockets.get_mut(&handle) {
+        Some(s) => {
+            let failure = s
+                .command(handle, crate::SocketCommand::Write(bytes, completion))
+                .err();
+            let unopened = failure.is_some()
+                && !s.turnloop
+                && (s.awaiting_connect || s.unconnected_write_failed);
+            let first = unopened && !s.unconnected_write_failed;
+            s.unconnected_write_failed |= unopened;
+            (failure, s.turnloop, unopened, first)
+        }
+        None => (Some("Socket is closed".to_string()), false, false, false),
     };
     drop(sockets);
     let Some(message) = failure else {
         return true;
     };
+    if unopened {
+        queue_unconnected_write_failure(handle, completion, first_failure);
+        return false;
+    }
     if turnloop {
         // The driver refused the submission: report it as a write failure,
         // including the 'error' + teardown.
@@ -604,6 +614,36 @@ fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) -> bool {
         }
     }
     false
+}
+
+// Write callbacks precede the one terminal error/close pair, including
+// multiple writes made synchronously before the pending events are drained.
+fn queue_unconnected_write_failure(handle: i64, completion: u64, first: bool) {
+    use crate::PendingNetEvent;
+    let mut events = statics::pending_events().lock().unwrap();
+    if completion != 0 {
+        let before_error = events
+            .iter()
+            .position(|event| matches!(event, PendingNetEvent::Error(id, _) if *id == handle))
+            .unwrap_or(events.len());
+        events.insert(
+            before_error,
+            PendingNetEvent::WriteComplete(
+                handle,
+                completion,
+                Some("Socket is closed".to_string()),
+            ),
+        );
+    }
+    if first {
+        events.push(PendingNetEvent::Error(
+            handle,
+            "Socket is closed".to_string(),
+        ));
+        events.push(PendingNetEvent::Close(handle));
+    }
+    drop(events);
+    perry_ffi::notify_main_thread();
 }
 
 /// `socket.write(chunk)` under the name the static NATIVE_MODULE_TABLE path
@@ -1562,13 +1602,10 @@ mod tests {
     #[test]
     fn bytes_written_includes_queue_then_keeps_only_dispatched_progress_on_close() {
         let handle = -91_239;
-        // A socket still waiting for `connect()` accepts and counts the write.
-        statics::sockets()
-            .lock()
-            .unwrap()
-            .insert(handle, crate::SocketState::for_test(true));
-
-        enqueue_socket_write(handle, vec![1, 2, 3, 4], 0);
+        // Model the queue reported by the driver for an accepted write.
+        let mut socket = crate::SocketState::for_test(false);
+        socket.bytes_queued = 4;
+        statics::sockets().lock().unwrap().insert(handle, socket);
         assert_eq!(unsafe { js_net_socket_get_bytes_written(handle) }, 4.0);
         // Two bytes reached the wire (what the write sink records), two are
         // still queued when the socket closes.
@@ -1659,6 +1696,7 @@ mod tests {
             "no drain is owed for bytes that will never be flushed"
         );
         statics::sockets().lock().unwrap().remove(&handle);
+        super::unconnected_write_tests::take_events(handle);
     }
 
     /// A refused write, or one after `end()`, is `false` — never `undefined`.
@@ -1687,6 +1725,7 @@ mod tests {
         );
 
         statics::sockets().lock().unwrap().remove(&handle);
+        super::unconnected_write_tests::take_events(handle);
         assert_eq!(
             write_return_value(handle, true).to_bits(),
             js_bool(false),
@@ -1720,3 +1759,7 @@ mod tests {
         assert!(!take_drain(&mut socket), "or once destroyed");
     }
 }
+
+#[cfg(test)]
+#[path = "unconnected_write_tests.rs"]
+mod unconnected_write_tests;

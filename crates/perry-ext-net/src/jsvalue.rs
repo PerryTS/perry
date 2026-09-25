@@ -338,6 +338,8 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
         Some(code)
     } else if msg.starts_with("ERR_") {
         Some(msg)
+    } else if msg == "Socket is closed" {
+        Some("ERR_SOCKET_CLOSED")
     } else if msg.contains("UnknownIssuer")
         || msg.contains("unknown issuer")
         || msg.contains("invalid peer certificate")
