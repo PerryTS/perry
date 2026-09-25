@@ -80,6 +80,26 @@ function writeAfterLoop(): string {
 }
 console.log("write after loop:", writeAfterLoop());
 
+// The class also captures a `const` declared after the loop. The refresh
+// that publishes it must still run for the last class, keeping its own `i`.
+// (Only the most recent class object is refreshed, so earlier iterations
+// are not asserted here.)
+function forwardCapture(): string {
+  const classes: Array<new () => { get(): string }> = [];
+  for (let i = 0; i < 3; i++) {
+    classes.push(
+      class {
+        get(): string {
+          return i + ":" + later;
+        }
+      },
+    );
+  }
+  const later = "L";
+  return new classes[2]().get();
+}
+console.log("forward capture, last class:", forwardCapture());
+
 // A head write to ANOTHER captured variable must not re-read `i` either: the
 // refresh it would trigger reads the next iteration's slot.
 function headWritesOther(): string {

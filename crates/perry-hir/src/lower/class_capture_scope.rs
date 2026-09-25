@@ -1,25 +1,31 @@
-//! #11250: drop class-capture refreshes that would read a `for (let …)` head
+//! #11250: keep class-capture refreshes from reading a `for (let …)` head
 //! binding outside the iteration that owns it.
 //!
 //! A refresh (`RegisterClassCaptures` / `RefreshClassExprCaptures`) re-reads
 //! every capture of its class. A class that closed over a per-iteration head
-//! binding `i` may only be refreshed inside the loop body: the head's
-//! condition and update already run against the NEXT iteration's binding,
-//! and after the loop the single HIR slot for `i` holds the post-increment
-//! value. The refresh passes in `expr_function.rs` place refreshes by
-//! assignment site and before returns, whatever capture triggered them, so a
-//! write to another capture (`i++, x++`), a later `return`, or the loop head
-//! itself would otherwise overwrite the last class's `i` with the value that
-//! stopped the loop.
+//! binding `i` may only re-read `i` inside the loop body: the head's condition
+//! and update already run against the NEXT iteration's binding, and after the
+//! loop the single HIR slot for `i` holds the post-increment value. The refresh
+//! passes in `expr_function.rs` place refreshes by assignment site and before
+//! returns, whatever capture triggered them, so a write to another capture
+//! (`i++, x++`), a later `return`, or the loop head itself would otherwise
+//! overwrite the last class's `i` with the value that stopped the loop.
+//!
+//! The refresh itself must still run: it also carries the other captures,
+//! e.g. a `const` declared after the loop that the class read while still in
+//! its TDZ. So a per-object refresh keeps every in-scope capture and re-reads
+//! an expired head from the class object's own capture slot instead. The
+//! name-keyed `RegisterClassCaptures` snapshot has no per-evaluation slot to
+//! re-read and is dropped; the per-object refresh is authoritative over it.
 
 use std::collections::HashSet;
 
 use crate::ir::{Expr, Stmt};
 use crate::types::LocalId;
 
-/// Remove every refresh in `stmts` that captures a `for`-head lexical binding
-/// outside that loop's body. Closures are not descended: each owns its own
-/// refresh region.
+/// Rewrite every refresh in `stmts` that captures a `for`-head lexical binding
+/// outside that loop's body (see the module docs). Closures are not descended:
+/// each owns its own refresh region.
 pub(crate) fn prune_out_of_scope_capture_refreshes(stmts: &mut Vec<Stmt>) {
     let mut heads = HashSet::new();
     collect_for_heads(stmts, &mut heads);
@@ -96,20 +102,38 @@ struct Pruner {
 }
 
 impl Pruner {
-    fn out_of_scope(&self, expr: &Expr) -> bool {
-        let captures = match expr {
-            Expr::RegisterClassCaptures { captures, .. }
-            | Expr::RefreshClassExprCaptures { captures, .. } => captures,
-            _ => return false,
-        };
-        captures.iter().any(|capture| {
-            matches!(capture, Expr::LocalGet(id)
-                if self.heads.contains(id) && !self.enclosing.contains(id))
-        })
+    fn expired(&self, capture: &Expr) -> bool {
+        matches!(capture, Expr::LocalGet(id)
+            if self.heads.contains(id) && !self.enclosing.contains(id))
+    }
+
+    /// Whether `expr` is a refresh to drop outright. A per-object refresh
+    /// reading an expired head is rewritten in place and kept.
+    fn rewrite_refresh(&self, expr: &mut Expr) -> bool {
+        match expr {
+            Expr::RegisterClassCaptures { captures, .. } => {
+                captures.iter().any(|capture| self.expired(capture))
+            }
+            Expr::RefreshClassExprCaptures {
+                class_value,
+                captures,
+            } => {
+                for (index, capture) in captures.iter_mut().enumerate() {
+                    if self.expired(capture) {
+                        *capture = current_capture_slot(class_value, index);
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     fn stmts(&mut self, stmts: &mut Vec<Stmt>) {
-        stmts.retain(|stmt| !matches!(stmt, Stmt::Expr(expr) if self.out_of_scope(expr)));
+        stmts.retain_mut(|stmt| match stmt {
+            Stmt::Expr(expr) => !self.rewrite_refresh(expr),
+            _ => true,
+        });
         for stmt in stmts.iter_mut() {
             self.stmt(stmt);
         }
@@ -198,8 +222,26 @@ impl Pruner {
             return;
         }
         if let Expr::Sequence(items) = expr {
-            items.retain(|item| !self.out_of_scope(item));
+            items.retain_mut(|item| !self.rewrite_refresh(item));
         }
         crate::walker::walk_expr_children_mut(expr, &mut |child| self.expr(child));
+    }
+}
+
+/// `class_value.__perry_ctor_caps[index]` — the value the class object already
+/// holds for that capture — or `undefined` when the class was never evaluated
+/// (the refresh is then a no-op, but its captures are still evaluated).
+fn current_capture_slot(class_value: &Expr, index: usize) -> Expr {
+    Expr::Conditional {
+        condition: Box::new(class_value.clone()),
+        then_expr: Box::new(Expr::IndexGet {
+            object: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(class_value.clone()),
+                property: "__perry_ctor_caps".to_string(),
+            }),
+            index: Box::new(Expr::Integer(index as i64)),
+        }),
+        else_expr: Box::new(Expr::Undefined),
     }
 }
