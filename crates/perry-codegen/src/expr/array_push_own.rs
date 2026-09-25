@@ -44,7 +44,7 @@
 //! allocating) only once the bit is set.
 
 use crate::expr::FnCtx;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 /// The runtime entry every ArrayPush slow arm calls.
 pub(super) const PUSH_SPEC_OR_OWN: &str = "js_array_push_f64_spec_or_own";
@@ -93,6 +93,10 @@ impl OwnPushJoin {
             );
             let own = blk.load(I32, &own_slot);
             let took_own = blk.icmp_ne(I32, &own, "0");
+            // Unlikely, and said so: without the hint the exit's blocks cost
+            // the function's HOT loop a few register moves (+3 instructions
+            // per iteration on an object-push loop, shipping profile).
+            let took_own = blk.call(I1, "llvm.expect.i1", &[(I1, &took_own), (I1, "false")]);
             blk.cond_br(&took_own, &own_label, &builtin_label);
             bits
         };

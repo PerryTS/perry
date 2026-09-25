@@ -457,9 +457,27 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
     // owns no named property at all. Asking `array_owning_push` first cost the
     // local tail — whose EVERY push is this call — a second probe: +46
     // instructions per push on a captured receiver, measured.
+    //
+    // Everything else lives out of line, and that is measured too: with the
+    // handle scope and the resolve/invoke halves inlined here, this entry paid
+    // a frame of its own (+28 instructions per call on the same row, shipping
+    // profile) and stopped inlining the plain push.
     if let Some(head) = crate::array::push_spec_if_plain(arr, value) {
         return head as u64;
     }
+    push_or_own_declined(arr, value, own_out)
+}
+
+/// [`js_array_push_f64_spec_or_own`] for every receiver the plain push
+/// declined: forwarded, carrying named properties or descriptors, sealed,
+/// frozen, or not an ordinary array at all.
+#[cold]
+#[inline(never)]
+unsafe fn push_or_own_declined(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> u64 {
     let Some(live) = array_owning_push(arr) else {
         return crate::array::push_spec_declined(arr, value) as u64;
     };

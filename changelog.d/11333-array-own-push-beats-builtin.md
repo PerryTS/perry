@@ -46,12 +46,23 @@ so a caller with its own proof skips `PERRY_OWN_NAMED_PROP_INSTALLED` (which
 half classifies the value it already read instead of performing `Get` again, so
 an own accessor's getter runs once.
 
-Instructions per iteration (callgrind, `(Ir(2N) - Ir(N)) / N`, main -> this
-branch): hot `a.push(i)` 42.233 -> 42.242; consumed `s += a.push(i)` 152.218 ->
-150.236; `a.push({v: i})` 2050.209 -> 2041.736; a captured receiver (the local
-tail, where every push is the new call) 529.264 -> 524.258. A first cut that
-probed the header twice cost that last row +46; sharing `push_spec_if_plain`
-removed it.
+Instructions per iteration (callgrind, `(Ir(2N) - Ir(N)) / N`, the shipping
+`release` profile — thin LTO, one codegen unit — main -> this branch): hot
+`a.push(i)` 42.234 -> 42.232; consumed `s += a.push(i)` 154.215 -> 152.238;
+`a.push({v: i})` 1987.783 -> 1988.531 (main's own run-to-run spread is ~1); a
+captured receiver (the local tail, where EVERY push is the new call) 529.259 ->
+529.254; `a.indexOf(x)` 477.250 -> 477.250; element-read control 15.031 ->
+15.031. Three things were needed to get there, each measured: the plain case
+shares `js_array_push_f64_spec`'s single header probe (`push_spec_if_plain`,
+`inline(always)`) instead of probing twice (+46 on the captured row); everything
+past it lives in a `#[cold]` out-of-line function, because a handle scope and
+the resolve/invoke halves inlined into the entry gave it a frame of its own
+(+28); and the own-exit branch carries `llvm.expect.i1(false)`, without which
+the new blocks cost an object-push loop three register moves per iteration.
+(With 16 codegen units a `#[inline]` helper in `buffer_receiver_dispatch`,
+which this change does not touch, was outlined and read as +16 on `indexOf`;
+the shipping profile shows no such difference, and the generated IR is
+identical apart from one `declare`.)
 
 `a.push()` is not an `ArrayPush` — HIR folds a zero-argument push to a
 `NativeMethodCall` so a frozen array still throws — and is a call on both arms
@@ -62,6 +73,12 @@ Still open, because they do not lower through a guarded push: `a.push(...xs)`
 (`ArrayPushSpread`), and `a.push(x, y)`, which HIR desugars into one
 `ArrayPush` per argument — so with an own `push` it now calls the method once
 per argument (Node calls it once with both) where it previously ran the builtin.
+And the method is resolved AFTER the argument, as perry's push lowering has
+always evaluated the argument first (#7634): an argument that itself installs,
+replaces or deletes `a.push` sees the method as the argument left it, where
+Node resolved it before. Of those, only installing an own `push` on an array
+that had none newly differs from main; resolving first would put a header
+probe ahead of every call-bearing argument, `out.push(f(x))` included.
 
 Tests: `expr/array_push_own_tests.rs` asserts on emitted IR that both inline
 slow arms and the spec-order arm call the own-aware push and never the bare
@@ -73,5 +90,5 @@ number_guard` now pins the numeric fallback to the own-aware call.
 `object/own_override_push_tests.rs` covers the plain and unrelated-property
 builtin exits, the probe on both named-property storages and through a
 forwarded alias, the own exit's value and non-append, and the non-callable
-throw. `test_parity_own_override_beats_builtin.ts` gains 13 rows across the
+throw. `test_parity_own_override_beats_builtin.ts` gains 14 rows across the
 tiers, all red on main and byte-identical to Node here. No version bump.

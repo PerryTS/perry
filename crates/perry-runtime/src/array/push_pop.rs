@@ -917,7 +917,10 @@ pub extern "C" fn js_array_push_f64_spec(arr: *mut ArrayHeader, value: f64) -> *
 /// `js_array_push_f64_spec_or_own` (#11021), whose absence proof it also is:
 /// admission requires `OBJ_FLAG_ARRAY_DESCRIPTORS` clear, so such a receiver
 /// owns no named property, `push` included, and one header probe answers both.
-#[inline]
+///
+/// `inline(always)`: both entries are hot, and with two callers the shipping
+/// profile outlined it from the second, costing that one a call per push.
+#[inline(always)]
 pub(crate) fn push_spec_if_plain(arr: *mut ArrayHeader, value: f64) -> Option<*mut ArrayHeader> {
     let plain = direct_plain_push_receiver(arr)?;
     // A non-extensible receiver must THROW here, not decline silently.
