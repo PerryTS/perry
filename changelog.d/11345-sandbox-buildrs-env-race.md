@@ -1,0 +1,1 @@
+**test(perry): the two `sandbox_buildrs` wrap-cargo tests no longer race on `PERRY_SANDBOX_BUILDRS`.** One removed the variable while the other set it, on parallel test threads. Both now hold `test_env_lock::env_lock()`.
