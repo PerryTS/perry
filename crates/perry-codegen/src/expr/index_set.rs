@@ -1337,7 +1337,14 @@ pub(crate) fn lower(
                     // declared empty was a silent no-op, both the value
                     // and the implicit length update vanishing.
                     if let Some(id) = local_id {
-                        if ctx.locals.contains_key(&id) {
+                        // #11335: a BOXED local's slot holds the box pointer,
+                        // not the array head, so it cannot take the slot
+                        // write-back `lower_index_set_fast` does on growth —
+                        // that store clobbered the box, and every later read
+                        // of the binding dereferenced the array as a box. It
+                        // takes the captured arm below, which writes the new
+                        // head back through the box.
+                        if ctx.locals.contains_key(&id) && !ctx.boxed_vars.contains(&id) {
                             let value_is_canonical_raw_f64 =
                                 crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
                             let string_addref_needed =
@@ -1443,11 +1450,16 @@ pub(crate) fn lower(
                             let val_double_c = val_double.clone();
                             let idx_i32_c = idx_i32.clone();
                             let feedback_site_id_c = feedback_site_id.clone();
+                            // #11335: a boxed binding gets the grown head
+                            // written back through its box (the same chain
+                            // `push` uses), so no reader depends on the old
+                            // head's forwarding pointer.
+                            let write_back_boxed = ctx.boxed_vars.contains(&id);
                             let slow_store = move |ctx: &mut FnCtx<'_>| -> Result<()> {
                                 let blk = ctx.block();
                                 let arr_bits = blk.bitcast_double_to_i64(&arr_box_c);
                                 let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                blk.call(
+                                let new_handle = blk.call(
                                     I64,
                                     "js_typed_feedback_array_set_f64_extend",
                                     &[
@@ -1457,6 +1469,12 @@ pub(crate) fn lower(
                                         (DOUBLE, &val_double_c),
                                     ],
                                 );
+                                if write_back_boxed {
+                                    let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+                                    super::array_push::emit_push_writeback(
+                                        ctx, id, &new_box, "IndexSet",
+                                    )?;
+                                }
                                 // The extending runtime setter barriers the actual
                                 // destination slot on every pointer-bearing store.
                                 Ok(())
