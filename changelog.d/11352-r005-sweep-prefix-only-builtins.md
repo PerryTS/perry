@@ -1,0 +1,1 @@
+**test(hir): the R005 unimplemented-API sweep imports prefix-only builtins (`sqlite`, `test`, `sea`) as `node:<name>`.** Since bare specifiers for these now resolve as packages, the sweep had been failing on main.
