@@ -163,10 +163,19 @@ pub(crate) fn add_generation() -> u64 {
 /// identically, the off arm through the full `[[Set]]`).
 #[inline]
 fn lane_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        crate::gc::env_default_on_from_value(std::env::var("PERRY_KEYADD_IC").ok().as_deref())
-    })
+    // A test build never reads the process environment for it: a
+    // process-global latch readable from tests is a #10944 hazard.
+    #[cfg(test)]
+    {
+        true
+    }
+    #[cfg(not(test))]
+    {
+        static KEYADD_LANE_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *KEYADD_LANE_ON.get_or_init(|| {
+            crate::gc::env_default_on_from_value(std::env::var("PERRY_KEYADD_IC").ok().as_deref())
+        })
+    }
 }
 
 crate::perry_thread_local! {
@@ -240,6 +249,7 @@ pub(crate) const C_FULL_KEYADD_CLASS: usize = 22;
 pub(crate) const C_FULL_KEYADD_SPILL: usize = 23;
 pub(crate) const C_PRIME_UNVERIFIED: usize = 24;
 
+#[cfg_attr(test, allow(dead_code))]
 const CENSUS_NAMES: [&str; 32] = [
     "emit.pic.word_hit",
     "emit.pic.way_hit",
@@ -277,24 +287,31 @@ const CENSUS_NAMES: [&str; 32] = [
 
 #[inline]
 pub(crate) fn census_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| {
-        let on = std::env::var_os("PERRY_STORE_CENSUS").is_some();
-        if on {
-            extern "C" fn report() {
-                let mut line = String::from("[store-census]");
-                for (i, c) in PERRY_STORE_CENSUS.iter().enumerate() {
-                    let n = c.load(Ordering::Relaxed);
-                    if n != 0 {
-                        line.push_str(&format!(" {}={}", CENSUS_NAMES[i], n));
+    #[cfg(test)]
+    {
+        false
+    }
+    #[cfg(not(test))]
+    {
+        static STORE_CENSUS_ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *STORE_CENSUS_ON.get_or_init(|| {
+            let on = std::env::var_os("PERRY_STORE_CENSUS").is_some();
+            if on {
+                extern "C" fn report() {
+                    let mut line = String::from("[store-census]");
+                    for (i, c) in PERRY_STORE_CENSUS.iter().enumerate() {
+                        let n = c.load(Ordering::Relaxed);
+                        if n != 0 {
+                            line.push_str(&format!(" {}={}", CENSUS_NAMES[i], n));
+                        }
                     }
+                    eprintln!("{line}");
                 }
-                eprintln!("{line}");
+                unsafe { libc::atexit(report) };
             }
-            unsafe { libc::atexit(report) };
-        }
-        on
-    })
+            on
+        })
+    }
 }
 
 /// Arm the exit report. A census build calls this from `main` right after

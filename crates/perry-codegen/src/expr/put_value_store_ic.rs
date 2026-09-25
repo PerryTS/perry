@@ -608,14 +608,7 @@ fn emit_key_add_hit(
     let reserved_ptr = ctx.block().inttoptr(I64, &reserved_addr);
     let reserved = ctx.block().load(I16, &reserved_ptr);
     emit_static_store_ic_bookkeeping(
-        ctx,
-        handle,
-        &slot,
-        &slot_ptr,
-        &reserved,
-        &fixed,
-        value_bits,
-        STORE_IC_STEM,
+        ctx, handle, &slot, &slot_ptr, &reserved, &fixed, value_bits, "put.pic",
     );
     let end = ctx.block().label.clone();
     ctx.block().br(merge_label);

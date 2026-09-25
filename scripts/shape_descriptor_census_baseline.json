@@ -13,7 +13,7 @@
     "crates/perry-codegen/src/expr/property_set/sloppy_class_field.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/property_set/sloppy_class_field.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
     "crates/perry-codegen/src/expr/proxy_reflect.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
-    "crates/perry-codegen/src/expr/put_value_store_ic.rs|let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
+    "crates/perry-codegen/src/expr/put_value_store_ic.rs|let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
     "crates/perry-codegen/src/expr/region_guard.rs|let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;": 1,
     "crates/perry-codegen/src/lower_call/new.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/new_alloc.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
@@ -60,7 +60,7 @@
     "crates/perry-runtime/src/object/test_root_accessors.rs|keys_array|access|let inline = unsafe { (*st.object_hot.shape_inline_cache.get())[slot].keys_array as usize };": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 43,
+    "codegen_object_header_size_sites": 44,
     "raw_member_files": 12,
     "raw_member_sites": {
       "keys_array": 31
