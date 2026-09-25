@@ -64,6 +64,26 @@ use super::{
 /// is used.  Keeping this in one helper prevents the allocation-free `.test`
 /// paths from inventing a second site-key scheme or hand-writing an ABI
 /// constant that can drift from ordinary literal lowering.
+/// A zero-initialized `[words x i64]` owned by one private-member access site
+/// (#10501): `js_private_guard_site` / `js_private_method_guard` keep the last
+/// proven receiver shape there and `js_private_method_call` its resolved
+/// vtable entry. Scalars only, so it is not a GC root; same naming and
+/// `typed_parse_rodata` publication as [`emit_regexp_site_key`].
+pub(crate) fn emit_private_site_cache(ctx: &mut FnCtx<'_>, words: usize) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let prefix = ctx.strings.module_prefix();
+    let slot_name = if prefix.is_empty() {
+        format!("perry_private_site_{site_id}")
+    } else {
+        format!("perry_private_site_{prefix}__{site_id}")
+    };
+    ctx.typed_parse_rodata.push(format!(
+        "@{slot_name} = private global [{words} x i64] zeroinitializer"
+    ));
+    format!("@{slot_name}")
+}
+
 pub(crate) fn emit_regexp_site_key(ctx: &mut FnCtx<'_>) -> String {
     let site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
@@ -1317,6 +1337,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.class_ids.get(class_name).copied().unwrap_or(0)
             };
             let key_label = emit_string_literal_global(ctx, field_name);
+            // #10501: an instance FIELD access (kind 0, op 0/1) records no
+            // member hint, so it can own a per-site cache of its last proven
+            // receiver shape; every other kind keeps the plain guard.
+            if *kind == 0 && *op < 2 && class_id != 0 {
+                let site = emit_private_site_cache(ctx, 1);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_private_guard_site",
+                    &[
+                        (DOUBLE, &obj),
+                        (DOUBLE, &brand_owner),
+                        (I32, &class_id.to_string()),
+                        (PTR, &key_label),
+                        (I32, &field_name.len().to_string()),
+                        (I32, &kind.to_string()),
+                        (I32, &op.to_string()),
+                        (PTR, &site),
+                    ],
+                ));
+            }
             Ok(ctx.block().call(
                 DOUBLE,
                 "js_private_guard",

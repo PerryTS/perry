@@ -477,6 +477,22 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32],
     );
+    // #10501: per-site cached field guard and the fused `recv.#m(args)` pair.
+    module.declare_function(
+        "js_private_guard_site",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32, PTR],
+    );
+    module.declare_function(
+        "js_private_method_guard",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, PTR],
+    );
+    module.declare_function(
+        "js_private_method_call",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, PTR, I64, PTR],
+    );
     module.declare_function("js_private_lexical_brand_capture", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_private_lexical_brand_push", DOUBLE, &[DOUBLE]);
     module.declare_function("js_private_lexical_brand_pop", DOUBLE, &[]);

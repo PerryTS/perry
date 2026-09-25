@@ -49,24 +49,36 @@ fn private_instance_value_name(
 
 /// The compiler's template key is a request for a lexical private name.
 /// Qualified storage keys deliberately do not match this parser again.
-fn private_value_request(key: *const crate::StringHeader) -> Option<(u32, String)> {
-    let key = unsafe { super::super::has_own_helpers::str_from_string_header(key) }?;
-    let rest = key
-        .strip_prefix("#<perry:private-value:")?
-        .strip_suffix('>')?;
+///
+/// The name borrows `key`'s bytes, so it is only valid until the next
+/// allocation: callers reject the common single-evaluation case first
+/// (nothing on that path allocates) and copy the name before going further
+/// (#10501 — the owned copy used to be made on every IC-miss access).
+unsafe fn private_value_request<'a>(key: *const crate::StringHeader) -> Option<(u32, &'a str)> {
+    const PREFIX: &[u8] = b"#<perry:private-value:";
+    if key.is_null() || ((*key).byte_len as usize) <= PREFIX.len() {
+        return None;
+    }
+    // Reject an ordinary `#`-prefixed key on its bytes before validating it.
+    let bytes = std::slice::from_raw_parts(crate::string::string_data(key), PREFIX.len());
+    if bytes != PREFIX {
+        return None;
+    }
+    let key = super::super::has_own_helpers::str_from_string_header(key)?;
+    let rest = key.strip_prefix("#<perry:private-value:")?.strip_suffix('>')?;
     let (class_id, name) = rest.split_once(':')?;
     if !name.starts_with('#') {
         return None;
     }
-    Some((class_id.parse().ok()?, name.to_owned()))
+    Some((class_id.parse().ok()?, name))
 }
 
 fn private_evaluation_field_get(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<f64> {
-    let (class_id, name) = private_value_request(key)?;
-    let owner = take_private_field_owner(class_id, &name, false);
+    let (class_id, name) = unsafe { private_value_request(key) }?;
+    let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
     if super::super::class_registry::is_class_object_value(receiver)
@@ -76,6 +88,7 @@ fn private_evaluation_field_get(
     {
         return None;
     }
+    let name = name.to_owned();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let name = private_instance_value_name(class_id, &name, receiver.get_nanbox_f64(), owner);
@@ -91,10 +104,10 @@ fn private_evaluation_field_set(
     key: *const crate::StringHeader,
     value: f64,
 ) -> bool {
-    let Some((class_id, name)) = private_value_request(key) else {
+    let Some((class_id, name)) = (unsafe { private_value_request(key) }) else {
         return false;
     };
-    let owner = take_private_field_owner(class_id, &name, true);
+    let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
     if super::super::class_registry::is_class_object_value(receiver)
@@ -104,6 +117,7 @@ fn private_evaluation_field_set(
     {
         return false;
     }
+    let name = name.to_owned();
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let value = scope.root_nanbox_f64(value);

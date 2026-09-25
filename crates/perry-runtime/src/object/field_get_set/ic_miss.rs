@@ -1757,6 +1757,7 @@ pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {
 }
 
 include!("ic_miss/private_member_access.rs");
+include!("ic_miss/private_guard_fast.rs");
 
 #[cfg(test)]
 fn private_field_marker_key(
@@ -1998,48 +1999,104 @@ pub extern "C" fn js_private_guard(
     if declaring_class_id == 0 {
         return obj;
     }
-    // A first private-name lookup can allocate the class metadata. Keep the
-    // requested name independent of a caller-owned GC string across it.
     if _field_name_ptr.is_null() || _field_name_len == 0 {
         throw_private_type_error("Invalid private field name");
     }
     let field_name =
-        unsafe { std::slice::from_raw_parts(_field_name_ptr, _field_name_len as usize) }.to_vec();
-    let _field_name_ptr = field_name.as_ptr();
+        unsafe { std::slice::from_raw_parts(_field_name_ptr, _field_name_len as usize) };
+    private_guard_checked(
+        obj,
+        brand_owner,
+        declaring_class_id,
+        field_name,
+        kind,
+        op,
+        true,
+    )
+}
+
+/// The body of [`js_private_guard`]. `record_hints == false` performs the same
+/// checks and throws but leaves the member-hint stack alone, for a caller that
+/// consumes the access itself (`js_private_method_guard`).
+fn private_guard_checked(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_bytes: &[u8],
+    kind: u32,
+    op: u32,
+    record_hints: bool,
+) -> f64 {
+    let is_static = op >= 2;
+    let is_write = op & 1 != 0;
+    // #10501: settle the common instance access without spelling a marker.
+    if !is_static {
+        if let Some(slot) = private_instance_access_is_proven(
+            obj,
+            brand_owner,
+            declaring_class_id,
+            field_name_bytes,
+            kind,
+        ) {
+            private_guard_record_access(
+                declaring_class_id,
+                slot.name,
+                kind,
+                false,
+                is_write,
+                None,
+                record_hints,
+            );
+            return obj;
+        }
+    }
+    // Interning also makes the name independent of the caller's buffer across
+    // any allocation below (a first private-name lookup can allocate class
+    // metadata). Only a non-UTF-8 spelling, which codegen never emits, keeps
+    // the historical owned copy and the empty hint name.
+    let interned = intern_private_name(field_name_bytes);
+    let owned_name;
+    let (_field_name_ptr, _field_name_len) = match interned {
+        Some(name) => (name.as_ptr(), name.len() as u32),
+        None => {
+            owned_name = field_name_bytes.to_vec();
+            (owned_name.as_ptr(), owned_name.len() as u32)
+        }
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_root = scope.root_nanbox_f64(obj);
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
-    let is_static = op >= 2;
-    let read_write = op & 1; // 0=read, 1=write
     if is_static && crate::proxy::js_proxy_is_proxy(obj) != 0 {
         throw_private_type_error(
             "Cannot access private member from an object whose class did not declare it",
         );
     }
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
-    let has_brand = private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
-        .unwrap_or_else(|| {
-            if is_static {
-                // Static private brand: the receiver must be exactly the
-                // declaring class constructor (identity), not an instance or
-                // a subclass.
-                super::super::class_ref_id(obj) == Some(declaring_class_id)
-            } else {
-                private_instance_element_is_present(
-                    crate::proxy::private_element_receiver(obj),
-                    declaring_class_id,
-                    _field_name_ptr,
-                    _field_name_len,
-                    kind,
-                )
-            }
-        });
+    let evaluation_verdict = private_evaluation_brand_matches(obj, brand_owner, declaring_class_id);
+    let has_brand = evaluation_verdict.unwrap_or_else(|| {
+        if is_static {
+            // Static private brand: the receiver must be exactly the
+            // declaring class constructor (identity), not an instance or
+            // a subclass.
+            super::super::class_ref_id(obj) == Some(declaring_class_id)
+        } else {
+            private_instance_element_is_present(
+                crate::proxy::private_element_receiver(obj),
+                declaring_class_id,
+                _field_name_ptr,
+                _field_name_len,
+                kind,
+            )
+        }
+    });
     if !has_brand {
         throw_private_type_error(
             "Cannot access private member from an object whose class did not declare it",
         );
     }
-    if !is_static {
+    // Without an evaluation verdict the brand above WAS the element-present
+    // check, under this same lexical scope, so repeating it cannot differ.
+    if !is_static && evaluation_verdict.is_some() {
         let storage = crate::proxy::private_element_receiver(obj_root.get_nanbox_f64());
         if !private_instance_element_is_present(
             storage,
@@ -2051,51 +2108,16 @@ pub extern "C" fn js_private_guard(
             throw_private_type_error("Cannot access private member before it has been initialized");
         }
     }
-    let op = read_write;
-    // Kind/op legality, after the brand check (spec order).
-    let illegal = matches!(
-        (op, kind),
-        (0, 3) /* read setter-only: [[Get]] of accessor without getter */
-            | (1, 2) /* write getter-only: [[Set]] of accessor without setter */
-            | (1, 1) /* write private method */
-    );
-    if illegal {
-        throw_private_type_error("Invalid private member operation for its kind");
-    }
     let access_owner = private_access_owner(brand_owner_root.get_nanbox_f64(), declaring_class_id);
-    if kind != 0 || (!is_static && access_owner.is_some()) {
-        let field_name = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(
-                _field_name_ptr,
-                _field_name_len as usize,
-            ))
-            .unwrap_or("")
-            .to_string()
-        };
-        PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
-            hints.borrow_mut().push(PrivateMemberAccessHint {
-                class_id: declaring_class_id,
-                name: field_name.clone(),
-                kind,
-                is_static,
-                is_write: read_write != 0,
-                brand_owner: access_owner,
-            });
-        });
-    }
-    if kind == 1 && read_write == 0 {
-        let field_name = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(
-                _field_name_ptr,
-                _field_name_len as usize,
-            ))
-            .unwrap_or("")
-            .to_string()
-        };
-        PRIVATE_METHOD_OWNER_HINT.with(|hint| {
-            *hint.borrow_mut() = Some((declaring_class_id, field_name));
-        });
-    }
+    private_guard_record_access(
+        declaring_class_id,
+        interned.unwrap_or(""),
+        kind,
+        is_static,
+        is_write,
+        access_owner,
+        record_hints,
+    );
     if is_static {
         obj_root.get_nanbox_f64()
     } else {

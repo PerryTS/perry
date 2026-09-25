@@ -2713,6 +2713,18 @@
       "name": "CLOSED",
       "verdict": "not_a_gc_pointer",
       "why": "Vec<i64> of connection-socket handle ids (alloc_connection_socket) whose TCP connection fully closed, queued by note_closed_socket/on_closed and drained by the pump — same shape and same file as the pre-existing ABORTED/aborted() request-handle queue this crate already uses for 'aborted'. A registry id, not a NaN-boxed value: the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage> in server/mod.rs's scan_http_server_roots."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
+      "name": "PRIVATE_NAME_MEMO",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10501 per-agent memo in front of the private-name interner: each entry is a caller name ADDRESS (a codegen .rodata literal, compared as an integer and re-verified by content) and a leaked &'static str. Neither is a managed-heap pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
+      "name": "PRIVATE_MARKER_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10501 (ShapeId, class id, access-site name) -> private-marker slot cache. Entries hold u32 ShapeIds/class ids/key indices, bools, the caller's .rodata name address (compared as an integer) and a leaked &'static str. No NaN-boxed value or heap address; ShapeIds are never reused, so an entry can only miss."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

@@ -105,6 +105,7 @@ pub(crate) use i32_fast_path::{
     try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
 pub(crate) use index::lower_index_set_fast;
+pub(crate) use logical_collections::emit_private_site_cache;
 pub(crate) use nanbox_inline::{
     i32_bool_to_nanbox, i32_to_nanbox, nanbox_bigint_inline, nanbox_pointer_inline,
     nanbox_pointer_inline_pub, nanbox_string_inline,

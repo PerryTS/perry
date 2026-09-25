@@ -1,7 +1,7 @@
 include!("private_evaluation_storage.rs");
 
 crate::perry_thread_local! {
-    static PRIVATE_METHOD_OWNER_HINT: std::cell::RefCell<Option<(u32, String)>> =
+    static PRIVATE_METHOD_OWNER_HINT: std::cell::RefCell<Option<(u32, &'static str)>> =
         std::cell::RefCell::new(None);
     static PRIVATE_MEMBER_ACCESS_HINTS: std::cell::RefCell<crate::exception::CatchStack<PrivateMemberAccessHint>> =
         std::cell::RefCell::new(crate::exception::CatchStack::new(
@@ -12,7 +12,8 @@ crate::perry_thread_local! {
 #[derive(Clone)]
 struct PrivateMemberAccessHint {
     class_id: u32,
-    name: String,
+    /// Interned by `intern_private_name`: recording a hint allocates nothing.
+    name: &'static str,
     kind: u32,
     is_static: bool,
     is_write: bool,
@@ -32,7 +33,7 @@ pub(crate) fn take_private_method_owner_hint(method_name: &str) -> Option<u32> {
     PRIVATE_METHOD_OWNER_HINT.with(|hint| {
         let mut hint = hint.borrow_mut();
         match hint.as_ref() {
-            Some((class_id, name)) if name == method_name => {
+            Some((class_id, name)) if *name == method_name => {
                 let class_id = *class_id;
                 *hint = None;
                 Some(class_id)
@@ -359,14 +360,38 @@ pub extern "C" fn js_private_brand_check(
         return false_value;
     }
 
-    let field_name =
-        unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) }.to_vec();
-    let field_name_ptr = field_name.as_ptr();
+    let field_name_bytes =
+        unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
+    // #10501: a proven-present instance element answers without a marker
+    // string; absence is always decided by the general path below.
+    if is_static == 0
+        && private_instance_access_is_proven(
+            obj,
+            brand_owner,
+            declaring_class_id,
+            field_name_bytes,
+            kind,
+        )
+        .is_some()
+    {
+        return true_value;
+    }
+    let interned = intern_private_name(field_name_bytes);
+    let owned_name;
+    let field_name_ptr = match interned {
+        Some(name) => name.as_ptr(),
+        None => {
+            owned_name = field_name_bytes.to_vec();
+            owned_name.as_ptr()
+        }
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_root = scope.root_nanbox_f64(obj);
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
+    let evaluation_verdict =
+        private_evaluation_brand_matches(obj, brand_owner, declaring_class_id);
     let has_declaring_brand =
-        private_evaluation_brand_matches(obj, brand_owner, declaring_class_id).unwrap_or_else(
+        evaluation_verdict.unwrap_or_else(
             || {
                 if is_static != 0 {
                     super::super::class_ref_id(obj) == Some(declaring_class_id)
@@ -385,7 +410,8 @@ pub extern "C" fn js_private_brand_check(
         return false_value;
     }
 
-    if is_static == 0 {
+    // Without an evaluation verdict the brand above WAS this check.
+    if is_static == 0 && evaluation_verdict.is_some() {
         let storage = crate::proxy::private_element_receiver(obj_root.get_nanbox_f64());
         if !private_instance_element_is_present(
             storage,
@@ -419,7 +445,7 @@ pub(crate) fn test_push_catch_private_hint(marker: u32) {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
         hints.borrow_mut().push(PrivateMemberAccessHint {
             class_id: marker,
-            name: format!("catch-savepoint-{marker}"),
+            name: intern_private_name(format!("catch-savepoint-{marker}").as_bytes()).unwrap(),
             kind: 0,
             is_static: false,
             is_write: true,

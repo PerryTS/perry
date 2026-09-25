@@ -304,18 +304,20 @@ pub use has_property_ic::js_in_operator_presence_ic;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
     current_private_lexical_brand_value, is_array_method_value_name,
-    private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
-    private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
-    private_member_access_hints_restore, private_member_access_hints_savepoint,
-    private_member_call_by_name, private_member_get_by_name, private_member_set_by_name,
-    scan_private_lexical_brand_roots_mut, set_method_value_name, stamp_private_evaluation_brand,
-    take_private_method_call_hint, take_private_method_owner_hint, PrivateHintBrandScope,
+    note_private_template_evaluated, private_evaluation_brand_value, private_lexical_brand_pop,
+    private_lexical_brand_push, private_lexical_brand_stack_restore,
+    private_lexical_brand_stack_savepoint, private_member_access_hints_restore,
+    private_member_access_hints_savepoint, private_member_call_by_name, private_member_get_by_name,
+    private_member_set_by_name, scan_private_lexical_brand_roots_mut, set_method_value_name,
+    stamp_private_evaluation_brand, take_private_method_call_hint, take_private_method_owner_hint,
+    PrivateHintBrandScope,
 };
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic, js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed,
     js_object_set_field_by_property_id, js_private_brand_add, js_private_brand_check,
-    js_private_field_add, js_private_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
+    js_private_field_add, js_private_guard, js_private_guard_site, js_private_method_call,
+    js_private_method_guard, PicCache, PicCacheSlot, PIC_CACHE_WORDS,
 };
 // The read path's spill flip, shared with the static-key store IC's ways
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.

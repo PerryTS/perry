@@ -566,6 +566,10 @@ pub extern "C" fn js_object_mark_class(obj: i64) {
             // `CLASS_OBJECT_VALUES`). The template cid was stamped by the
             // `js_object_alloc(cid, …)` call directly preceding this mark.
             let cid = (*(obj as *const ObjectHeader)).class_id;
+            // #10501: a class object is a ClassDefinitionEvaluation of `cid`;
+            // private accesses of that template now need their full brand
+            // resolution (see `note_private_template_evaluated`).
+            crate::object::field_get_set::note_private_template_evaluated(cid);
             super::class_object_value_root_store(cid, obj as *mut ObjectHeader);
         }
     }

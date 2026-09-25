@@ -98,6 +98,7 @@ mod new_helpers;
 pub(crate) use new_helpers::emit_ctor_return_override;
 mod omitted_native_params;
 mod options;
+mod private_method;
 /// `pub(crate)` so `type_analysis` can reuse the exact receiver/method
 /// predicates that decide whether a `PropertyGet` call takes the static
 /// String lowering — a static type claim about such a call must be gated on
@@ -565,6 +566,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     // numeric `this` fields. Must run before generic property-get method
     // dispatch, which requires a heap receiver.
     if let Some(v) = scalar_method::try_lower_scalar_replaced_method_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+
+    // #10501: `recv.#m(args)` — guard, then a direct vtable call.
+    if let Some(v) = private_method::try_lower_private_method_call(ctx, callee, args)? {
         return Ok(v);
     }
 
