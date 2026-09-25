@@ -1,0 +1,1 @@
+Report all unrooted-local ratchet violations in one check: total-budget failures no longer hide per-file ceiling regressions, and every stale baseline entry is listed. Add regression coverage for combined failures and unchanged/improved passing checks without changing the baseline. Fixes #10373.
