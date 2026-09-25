@@ -1,0 +1,3 @@
+Implement Android `SplitView` and `splitViewAddChild`, fixing the missing native symbols that prevented apps using split panes from loading. Panes fill the container, retain relative widths on resize, and have draggable dividers with minimum adjacent pane sizes. Native-thread child insertion is posted to the UI thread.
+
+Add an Android device regression that compiles the production SplitView ABI and JNI code in isolation and verifies visible panes, dragging, dynamic insertion and container resizing. The full Android backend build remains blocked by existing `turnloop` Android compilation errors; the isolated native device test passes. No version bump.
