@@ -84,8 +84,8 @@
       "total": 115
     },
     "http": {
-      "pass": 22,
-      "total": 53
+      "pass": 23,
+      "total": 55
     },
     "http2": {
       "pass": 32,
