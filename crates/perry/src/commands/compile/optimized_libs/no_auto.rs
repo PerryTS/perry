@@ -43,11 +43,10 @@ pub(crate) fn resolve_no_auto_optimized_libs(
         eprintln!("  auto-optimize: skipped; using prebuilt target/release/libperry_*.a");
     }
     let iteration_set = well_known_iteration_set(ctx);
-    let mut well_known_libs = if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none() {
-        resolve_prebuilt_ext_libs(&iteration_set, target, format, verbose)
-    } else {
-        Vec::new()
-    };
+    // PERRY_DISABLE_WELL_KNOWN=1 keeps only the wrappers that have no
+    // perry-stdlib copy to revert to (`net`, `ws`).
+    let mut well_known_libs =
+        resolve_prebuilt_ext_libs(&retain_routed(iteration_set.clone()), target, format, verbose);
     // #10458: native addons need every runtime-bearing archive rebuilt
     // together with the host feature.
     if !ctx.native_addons.is_empty() {
@@ -202,12 +201,9 @@ pub(super) fn linked_ext_crates(
     iteration_set: &std::collections::BTreeSet<String>,
     target: Option<&str>,
 ) -> Vec<(String, String)> {
-    if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_some() {
-        return Vec::new();
-    }
     let mut seen = std::collections::BTreeSet::new();
     let mut crates = Vec::new();
-    for module in iteration_set {
+    for module in &retain_routed(iteration_set.clone()) {
         let Some(binding) = super::super::well_known::lookup_well_known(module) else {
             continue;
         };

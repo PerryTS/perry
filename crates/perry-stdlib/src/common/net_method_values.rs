@@ -1,11 +1,17 @@
-//! net.Socket/net.Server method-value helpers for handle dispatch.
+//! net.Socket/net.Server method-value helpers for handle dispatch — all of
+//! them for perry-ext-net handles (`external-net-pump`), the only net
+//! provider since tokio lane L4 deleted perry-stdlib's bundled copy.
 
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 fn nanbox_handle(handle: i64) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -15,7 +21,6 @@ fn undefined() -> f64 {
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -24,6 +29,11 @@ fn null() -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0002)
 }
 
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
     extern "C" {
         fn js_class_method_bind(
@@ -36,7 +46,6 @@ fn bind_handle_method(handle: i64, name: &'static [u8]) -> f64 {
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -46,7 +55,6 @@ fn unbox_to_i64(v: f64) -> i64 {
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -58,6 +66,11 @@ fn json_str_to_value(s: *mut perry_runtime::StringHeader) -> f64 {
     f64::from_bits(unsafe { perry_runtime::json::js_json_parse_or_null(s).bits() })
 }
 
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 fn net_socket_method_name(prop: &str) -> Option<&'static [u8]> {
     match prop {
         "address" => Some(b"address"),
@@ -98,7 +111,6 @@ fn net_socket_method_name(prop: &str) -> Option<&'static [u8]> {
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -127,7 +139,6 @@ fn net_server_method_name(prop: &str) -> Option<&'static [u8]> {
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -144,35 +155,30 @@ fn net_block_list_method_name(prop: &str) -> Option<&'static [u8]> {
     }
 }
 
+#[cfg_attr(
+    not(all(
+        feature = "external-net-pump",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )),
+    allow(unused_variables)
+)]
 pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64> {
+    #[cfg(all(
+        feature = "external-net-pump",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     if let Some(name) = net_socket_method_name(property_name) {
-        #[cfg(all(
-            feature = "bundled-net",
-            not(target_os = "ios"),
-            not(target_os = "android")
-        ))]
-        if crate::net::is_net_socket_handle(handle) {
-            return Some(bind_handle_method(handle, name));
+        extern "C" {
+            fn js_ext_net_is_socket_handle(handle: i64) -> i32;
         }
-
-        #[cfg(all(
-            not(feature = "bundled-net"),
-            feature = "external-net-pump",
-            not(target_os = "ios"),
-            not(target_os = "android")
-        ))]
-        {
-            extern "C" {
-                fn js_ext_net_is_socket_handle(handle: i64) -> i32;
-            }
-            if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
-                return Some(bind_handle_method(handle, name));
-            }
+        if unsafe { js_ext_net_is_socket_handle(handle) } != 0 {
+            return Some(bind_handle_method(handle, name));
         }
     }
 
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -187,7 +193,6 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
     }
 
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -202,7 +207,6 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
     }
 
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -218,7 +222,6 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
     }
 
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -238,7 +241,6 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
     }
 
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -255,7 +257,6 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
     }
 
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -290,7 +291,6 @@ pub(crate) fn dispatch_property(handle: i64, property_name: &str) -> Option<f64>
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -323,7 +323,6 @@ pub(crate) unsafe fn dispatch_property_set(handle: i64, property_name: &str, val
 }
 
 #[cfg(not(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -334,7 +333,6 @@ pub(crate) unsafe fn dispatch_property_set(handle: i64, property_name: &str, val
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -406,7 +404,6 @@ pub(crate) unsafe fn dispatch_external_block_list_method(
 }
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")

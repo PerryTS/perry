@@ -468,6 +468,21 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_socket_raw_listeners",                 OwnerKind::WellKnown("net")),
     ("js_net_socket_reset_and_destroy",             OwnerKind::WellKnown("net")),
     ("js_net_server_once",                          OwnerKind::WellKnown("net")),
+    // tokio lane L4: the socket-side core and `tls.connect`. These had no
+    // row because perry-stdlib's bundled `net` copy also defined them, so a
+    // stdlib-only link resolved them without the wrapper. That copy is
+    // deleted; perry-ext-net is the only definition, so an emitted call must
+    // put its archive on the link line like every other net symbol.
+    ("js_net_socket_alloc",                         OwnerKind::WellKnown("net")),
+    ("js_net_socket_connect",                       OwnerKind::WellKnown("net")),
+    ("js_net_socket_method_connect",                OwnerKind::WellKnown("net")),
+    ("js_net_socket_on",                            OwnerKind::WellKnown("net")),
+    ("js_net_socket_read",                          OwnerKind::WellKnown("net")),
+    ("js_net_socket_write",                         OwnerKind::WellKnown("net")),
+    ("js_net_socket_end",                           OwnerKind::WellKnown("net")),
+    ("js_net_socket_destroy",                       OwnerKind::WellKnown("net")),
+    ("js_net_socket_upgrade_tls",                   OwnerKind::WellKnown("net")),
+    ("js_tls_connect",                              OwnerKind::WellKnown("net")),
     ("js_net_server_remove_listener",               OwnerKind::WellKnown("net")),
     ("js_net_server_remove_all_listeners",          OwnerKind::WellKnown("net")),
     ("js_net_server_listener_count",                OwnerKind::WellKnown("net")),
@@ -1230,6 +1245,28 @@ mod tests {
             "js_net_socket_set_timeout",
             "js_net_socket_get_type_of_service",
             "js_net_socket_set_type_of_service",
+        ] {
+            assert_symbol_routes_to(symbol, OwnerKind::WellKnown("net"));
+        }
+    }
+
+    /// tokio lane L4: perry-stdlib's bundled `net` copy — the other definition
+    /// of the socket core and `tls.connect` — is deleted, so every one of these
+    /// must pull libperry_ext_net.a onto the link line when emitted.
+    #[test]
+    fn emitted_net_socket_core_symbols_route_to_net() {
+        let _guard = ProviderTestGuard::new();
+        for symbol in [
+            "js_net_socket_alloc",
+            "js_net_socket_connect",
+            "js_net_socket_method_connect",
+            "js_net_socket_on",
+            "js_net_socket_read",
+            "js_net_socket_write",
+            "js_net_socket_end",
+            "js_net_socket_destroy",
+            "js_net_socket_upgrade_tls",
+            "js_tls_connect",
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown("net"));
         }

@@ -1,85 +1,3 @@
-/// Dispatch method calls on net.Socket handles when codegen couldn't tag
-/// the receiver type. Mirrors the static NATIVE_MODULE_TABLE entries for
-/// the same methods (write/end/destroy/on/upgradeToTLS).
-///
-/// Args arrive as NaN-boxed `f64`s: BufferHeader / StringHeader / Closure
-/// pointers in the low 48 bits with POINTER_TAG / STRING_TAG in the top.
-/// We strip the tag and pass the raw `i64` to the FFI — same shape the
-/// codegen path produces.
-#[cfg(all(
-    feature = "bundled-net",
-    not(target_os = "ios"),
-    not(target_os = "android")
-))]
-pub(crate) unsafe fn dispatch_net_socket(handle: i64, method: &str, args: &[f64]) -> f64 {
-    /// Strip a NaN-box tag (POINTER / STRING / BIGINT) to get the raw 48-bit pointer.
-    fn unbox_to_i64(v: f64) -> i64 {
-        (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64
-    }
-
-    match method {
-        "read" => crate::net::js_net_socket_read(
-            handle,
-            args.first()
-                .copied()
-                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001)),
-        ),
-        "write" if !args.is_empty() => {
-            // Issue #1131 — pass the full NaN-box bits; the runtime
-            // probes Buffer-vs-string and reads the correct layout.
-            crate::net::js_net_socket_write(handle, args[0].to_bits() as i64);
-            f64::from_bits(0x7FFC_0000_0000_0001) // undefined
-        }
-        "end" => {
-            // Issue #1852 — forward the optional `socket.end(data)` chunk.
-            let chunk = args
-                .first()
-                .copied()
-                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
-            crate::net::js_net_socket_end(handle, chunk.to_bits() as i64);
-            f64::from_bits(0x7FFC_0000_0000_0001)
-        }
-        "destroy" | "destroySoon" => {
-            crate::net::js_net_socket_destroy(handle);
-            f64::from_bits(0x7FFC_0000_0000_0001)
-        }
-        "getTypeOfService" => crate::net::js_net_socket_get_type_of_service(handle),
-        "setTypeOfService" => {
-            let value = args
-                .first()
-                .copied()
-                .unwrap_or(f64::from_bits(0x7FFC_0000_0000_0001));
-            crate::net::js_net_socket_set_type_of_service(handle, value);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
-        }
-        "on" if args.len() >= 2 => {
-            let event_ptr = unbox_to_i64(args[0]);
-            let cb_ptr = unbox_to_i64(args[1]);
-            crate::net::js_net_socket_on(handle, event_ptr, cb_ptr);
-            f64::from_bits(0x7FFC_0000_0000_0001)
-        }
-        // Issue #422: `sock.connect(port, host)` for the deferred-connect
-        // shape (`new net.Socket()` then `.connect(...)`). The first arg
-        // is the port (raw f64); the second is a string handle (NaN-boxed
-        // STRING_TAG'd f64) that we strip back to the StringHeader pointer.
-        "connect" if args.len() >= 2 => {
-            let port = args[0];
-            let host_ptr = unbox_to_i64(args[1]);
-            crate::net::js_net_socket_method_connect(handle, port, host_ptr);
-            f64::from_bits(0x7FFC_0000_0000_0001)
-        }
-        "upgradeToTLS" if !args.is_empty() => {
-            // upgradeToTLS(servername, verify) → Promise. Default verify=1
-            // when omitted, mirroring the safer default in the static table.
-            let servername_ptr = unbox_to_i64(args[0]);
-            let verify = if args.len() >= 2 { args[1] } else { 1.0 };
-            let promise = crate::net::js_net_socket_upgrade_tls(handle, servername_ptr, verify);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF))
-        }
-        _ => f64::from_bits(0x7FFC_0000_0000_0001),
-    }
-}
-
 /// Dispatch a method call on a zlib Transform-stream handle (#1843).
 ///
 /// `createGzip()` / `createDeflate()` / `createBrotliCompress()` / … return
@@ -154,16 +72,15 @@ pub(crate) unsafe fn dispatch_zlib_stream(handle: i64, method: &str, args: &[f64
 }
 
 /// Dispatch a method call on a perry-ext-net Socket handle via
-/// extern "C" symbols. Same shape as `dispatch_net_socket` above
-/// but the per-method functions resolve to perry-ext-net's archive
-/// at link time, not perry-stdlib's `crate::net::*`.
+/// extern "C" symbols that resolve to perry-ext-net's archive at link time.
+/// (perry-stdlib's bundled `net` copy and its `dispatch_net_socket` twin
+/// were deleted in tokio lane L4; perry-ext-net is the only provider.)
 ///
 /// Closes issue #91 regression for the well-known-flipped path:
 /// Map.get'd / struct-field / wrapper-function receivers where
 /// the static type was lost get caught by HANDLE_METHOD_DISPATCH
 /// and routed here.
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")

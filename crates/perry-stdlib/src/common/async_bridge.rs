@@ -434,23 +434,9 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         }
     }
 
-    // Process pending WebSocket events (server/client listener callbacks).
-    // External WebSocket implementations register their own pump with runtime.
-    #[cfg(feature = "websocket")]
-    {
-        count += unsafe { crate::ws::js_ws_process_pending() };
-    }
-
-    // Process pending bundled raw TCP socket events (net.Socket).
-    // External net implementations register their own pump with runtime.
-    #[cfg(all(
-        feature = "bundled-net",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    {
-        count += unsafe { crate::net::js_net_process_pending() };
-    }
+    // WebSocket and raw TCP socket events are pumped by perry-ext-ws /
+    // perry-ext-net, which register their own pumps with the runtime (the
+    // bundled copies that drained here were deleted in tokio lane L4).
 
     #[cfg(all(
         feature = "tls-runtime",
@@ -524,32 +510,9 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if crate::turnloop_smtp::has_pending() {
         return 1;
     }
-    // Check for active WebSocket servers/connections
-    #[cfg(feature = "websocket")]
-    {
-        // #854: removed an unused `js_ws_process_pending` extern decl here —
-        // this block only checks for active handles; the drain path with its
-        // own extra decl lives earlier in the pump.
-        // If there are pending WS events, keep running
-        // (we don't drain here — just check)
-        let has_ws = crate::ws::js_ws_has_active_handles();
-        if has_ws != 0 {
-            return 1;
-        }
-    }
-    // Check bundled raw TCP sockets. External net implementations register
-    // their own keepalive contributor with runtime and remain invisible here.
-    #[cfg(all(
-        feature = "bundled-net",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    {
-        let has_net = crate::net::js_net_has_active_handles();
-        if has_net != 0 {
-            return 1;
-        }
-    }
+    // Active WebSocket / raw TCP handles keep the loop alive through the
+    // keepalive contributors perry-ext-ws / perry-ext-net register with the
+    // runtime (the bundled copies checked here were deleted in tokio lane L4).
     #[cfg(all(
         feature = "tls-runtime",
         not(target_os = "ios"),

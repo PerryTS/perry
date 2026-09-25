@@ -532,18 +532,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         }
     }
 
-    // net.Socket: covers wrapper-function, struct-field, and Map.get
-    // receivers where codegen lost the static type. Static NATIVE_MODULE_TABLE
-    // path is still preferred when types are visible.
-    #[cfg(all(
-        feature = "bundled-net",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    if crate::net::is_net_socket_handle(handle) {
-        return dispatch_net_socket(handle, method_name, &args);
-    }
-
     // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
     // in the zlib small-handle range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
     // `.params`/`.reset`/`.close` calls lose their static type and route here.
@@ -880,7 +868,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // the well-known flip strips bundled-net. Same dispatch contract,
     // but routes through extern "C" symbols perry-ext-net provides.
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")

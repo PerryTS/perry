@@ -17,12 +17,9 @@ use super::{
     TLS_DISPATCH_MISSING_BITS,
 };
 
-#[cfg(feature = "bundled-net")]
-unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
-    crate::net::js_tls_connect(arg1, arg2, arg3, arg4)
-}
-
-#[cfg(all(not(feature = "bundled-net"), feature = "external-net-tls"))]
+// `tls.connect` is perry-ext-net's (`js_tls_connect`); perry-stdlib's bundled
+// `net` copy that also defined it was deleted in tokio lane L4.
+#[cfg(feature = "external-net-tls")]
 unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
     unsafe extern "C" {
         fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64;
@@ -30,7 +27,7 @@ unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i6
     js_tls_connect(arg1, arg2, arg3, arg4)
 }
 
-#[cfg(not(any(feature = "bundled-net", feature = "external-net-tls")))]
+#[cfg(not(feature = "external-net-tls"))]
 unsafe fn dispatch_tls_connect(_arg1: f64, _arg2: f64, _arg3: f64, _arg4: f64) -> i64 {
     0
 }

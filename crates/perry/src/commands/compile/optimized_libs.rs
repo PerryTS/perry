@@ -95,6 +95,33 @@ pub(crate) fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<Str
     iteration_set
 }
 
+/// Whether the well-known flip is on — i.e. `PERRY_DISABLE_WELL_KNOWN` unset.
+pub(crate) fn well_known_flip_enabled() -> bool {
+    std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none()
+}
+
+/// Bindings whose wrapper crate is the ONLY implementation, so the flip routes
+/// them even when PERRY_DISABLE_WELL_KNOWN=1 — disabling it reverts to
+/// perry-stdlib's copies, and these have none. perry-stdlib's bundled `net`
+/// (the other `js_net_socket_*` / `js_tls_connect`) and `ws` copies ran on
+/// tokio sockets and were strict subsets of perry-ext-net / perry-ext-ws;
+/// tokio lane L4 deleted them. A `tls` import is covered through `net`:
+/// `tls.connect` is perry-ext-net's, and its symbols route to `net`
+/// (`perry_codegen::ext_registry`).
+pub(crate) fn wrapper_is_sole_provider(module: &str) -> bool {
+    matches!(module.strip_prefix("node:").unwrap_or(module), "net" | "ws")
+}
+
+/// The modules of an iteration set the well-known flip routes to a wrapper
+/// archive: every well-known import normally, only the
+/// [`wrapper_is_sole_provider`] ones when PERRY_DISABLE_WELL_KNOWN=1.
+pub(crate) fn retain_routed(mut set: BTreeSet<String>) -> BTreeSet<String> {
+    if !well_known_flip_enabled() {
+        set.retain(|module| wrapper_is_sole_provider(module));
+    }
+    set
+}
+
 /// Name wrapper archives needed by emitted object-file symbols but absent from
 /// the link line. The caller has already scanned the runtime and stdlib too,
 /// so a symbol those archives define does not produce a false missing-wrapper

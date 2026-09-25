@@ -915,6 +915,60 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     );
 }
 
+/// tokio lane L4: perry-stdlib's bundled `net` / `ws` copies are deleted, so
+/// PERRY_DISABLE_WELL_KNOWN=1 must still put those two wrappers on the link
+/// line (there is no copy to revert to) while every other binding keeps
+/// reverting to perry-stdlib.
+#[test]
+fn disabled_flip_still_routes_sole_provider_wrappers() {
+    let _guard = env_lock();
+    let saved: Vec<_> = ["PERRY_LIB_DIR", "PERRY_RUNTIME_DIR", "PERRY_DISABLE_WELL_KNOWN"]
+        .iter()
+        .map(|k| (*k, std::env::var(k).ok()))
+        .collect();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut archives = Vec::new();
+    for module in ["net", "ws", "events"] {
+        let binding = super::super::well_known::lookup_well_known(module).expect("binding");
+        let lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &binding.lib,
+                rust_target_triple(None),
+            ));
+        std::fs::write(&lib, b"!<arch>\n").expect("write fake archive");
+        archives.push(lib);
+    }
+    set_env_var("PERRY_LIB_DIR", dir.path().to_str());
+    set_env_var("PERRY_RUNTIME_DIR", None);
+    set_env_var("PERRY_DISABLE_WELL_KNOWN", Some("1"));
+
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    for module in ["net", "ws", "events"] {
+        ctx.native_module_imports.insert(module.to_string());
+    }
+    let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
+    let routed = super::retain_routed(well_known_iteration_set(&ctx));
+
+    for (key, value) in &saved {
+        set_env_var(key, value.as_deref());
+    }
+
+    assert!(libs.well_known_libs.contains(&archives[0]), "net: {libs:?}", libs = libs.well_known_libs);
+    assert!(libs.well_known_libs.contains(&archives[1]), "ws: {libs:?}", libs = libs.well_known_libs);
+    assert!(
+        !libs.well_known_libs.contains(&archives[2]),
+        "events has a perry-stdlib copy and must revert under the disabled flip"
+    );
+    assert_eq!(
+        routed,
+        std::collections::BTreeSet::from(["net".to_string(), "ws".to_string()])
+    );
+    assert!(super::wrapper_is_sole_provider("node:net"));
+    assert!(!super::wrapper_is_sole_provider("tls"));
+}
+
 /// #10466 — the flip side of the test above: when the program DOES import
 /// `http`, no-auto now rebuilds `perry-stdlib-static` (with
 /// `external-http-client-pump`) and `perry-ext-http` together, and the

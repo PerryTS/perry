@@ -16,8 +16,11 @@ use super::super::{
 /// Select the provider for TLS module/server state after well-known routing.
 ///
 /// perry-ext-net (directly or through perry-ext-http) owns the socket/connect
-/// symbols, but calls back into perry-stdlib for TLS SNI/ALPN preflight. Keep
-/// that provider without compiling bundled net beside the external wrapper.
+/// symbols, but calls back into perry-stdlib for TLS SNI/ALPN preflight.
+/// `external-net-tls` keeps that provider and binds the `tls` module's dynamic
+/// `connect` to perry-ext-net's `js_tls_connect`. A TLS program that routes no
+/// net transport (a server-only `node:tls` program) keeps the `tls` umbrella,
+/// which since tokio lane L4 is `tls-runtime` alone — bundled net is gone.
 pub(super) fn finalize_tls_transport_features(
     features: &mut BTreeSet<&'static str>,
     imports_tls: bool,
@@ -120,7 +123,9 @@ pub(crate) fn build_optimized_libs(
     // in-tree binding). The env-var gate (`PERRY_USE_WELL_KNOWN=1`)
     // that gated the introductory cycle is now inverted:
     // `PERRY_DISABLE_WELL_KNOWN=1` reverts to perry-stdlib's
-    // copies for bisection. If a bundled `.a` is missing on disk,
+    // copies for bisection — except for the bindings that no longer have
+    // one (`net`, `ws`: `wrapper_is_sole_provider`), which route to their
+    // wrapper either way. If a bundled `.a` is missing on disk,
     // each entry falls back to the perry-stdlib copy individually
     // (logged with `well-known: skipping` when verbose), so a
     // partially-built workspace still produces a working binary.
@@ -151,8 +156,12 @@ pub(crate) fn build_optimized_libs(
     let mut external_net_transport = false;
     // Web Fetch is selected independently from the external node:http
     // binding. `uses_fetch` adds `web-fetch` in compute_required_features.
-    if use_well_known {
-        for module in &iteration_set {
+    // Was `if use_well_known { … }`; the gate is now per module
+    // (`retain_routed`), and the block is kept to leave the body's
+    // indentation — and its blame — as it was.
+    let routed_set = retain_routed(iteration_set.clone());
+    {
+        for module in &routed_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
             let Some(binding) = super::super::well_known::lookup_well_known(module) else {
                 continue;
@@ -247,6 +256,18 @@ pub(crate) fn build_optimized_libs(
                 if !crate_dir.is_dir() {
                     // turnloop P8 group H removed the bundled db copies, so
                     // the fall-back below has nothing to fall back to.
+                    if wrapper_is_sole_provider(module_normalized) {
+                        eprintln!(
+                            "error: `import '{}'` requires the external {} wrapper, but its \
+                             source crate was not found at `{}`. perry-stdlib's bundled copy was \
+                             removed; build or restore {}.",
+                            module,
+                            binding.krate,
+                            crate_dir.display(),
+                            binding.krate
+                        );
+                        std::process::exit(1);
+                    }
                     if matches!(format, OutputFormat::Text) && verbose > 0 {
                         eprintln!(
                             "  well-known: skipping `{}` — crate `{}` source not on disk; \
@@ -633,11 +654,7 @@ pub(crate) fn build_optimized_libs(
             // (PERRY_LIB_DIR / PERRY_RUNTIME_DIR, the exe dir, Homebrew
             // `../lib`, …) and hand them back so they join the link line
             // after the full stdlib.
-            let well_known_libs = if use_well_known {
-                resolve_prebuilt_ext_libs(&iteration_set, target, format, verbose)
-            } else {
-                Vec::new()
-            };
+            let well_known_libs = resolve_prebuilt_ext_libs(&routed_set, target, format, verbose);
             // Out-of-tree size salvage: release packaging ships a
             // panic=abort prebuilt runtime variant alongside the unwind
             // one (stage-npm.sh / release-packages.yml). When the app

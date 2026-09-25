@@ -1,8 +1,18 @@
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 #[inline]
 fn nanbox_small_handle(handle: i64) -> f64 {
     f64::from_bits(0x7FFD_0000_0000_0000u64 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
 }
 
+#[cfg(all(
+    feature = "external-net-pump",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
 #[inline]
 unsafe fn bind_class_method(handle: i64, name_bytes: &'static [u8]) -> f64 {
     extern "C" {
@@ -20,25 +30,6 @@ unsafe fn bind_class_method(handle: i64, name_bytes: &'static [u8]) -> f64 {
 }
 
 #[cfg(all(
-    feature = "bundled-net",
-    not(target_os = "ios"),
-    not(target_os = "android")
-))]
-fn bundled_socket_method_name(property_name: &str) -> Option<&'static [u8]> {
-    match property_name {
-        "connect" => Some(b"connect"),
-        "write" => Some(b"write"),
-        "end" => Some(b"end"),
-        "destroy" => Some(b"destroy"),
-        "on" => Some(b"on"),
-        "read" => Some(b"read"),
-        "upgradeToTLS" => Some(b"upgradeToTLS"),
-        _ => None,
-    }
-}
-
-#[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
@@ -78,20 +69,16 @@ fn external_socket_method_name(property_name: &str) -> Option<&'static [u8]> {
     }
 }
 
-pub(super) unsafe fn bind_net_socket_property(handle: i64, property_name: &str) -> Option<f64> {
-    #[cfg(all(
-        feature = "bundled-net",
+#[cfg_attr(
+    not(all(
+        feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
-    ))]
-    if crate::net::is_net_socket_handle(handle) {
-        if let Some(name_bytes) = bundled_socket_method_name(property_name) {
-            return Some(bind_class_method(handle, name_bytes));
-        }
-    }
-
+    )),
+    allow(unused_variables)
+)]
+pub(super) unsafe fn bind_net_socket_property(handle: i64, property_name: &str) -> Option<f64> {
     #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
@@ -110,30 +97,20 @@ pub(super) unsafe fn bind_net_socket_property(handle: i64, property_name: &str) 
     None
 }
 
+/// Registers perry-ext-net's socket-handle probe with the runtime. With no
+/// ext-net adapter compiled in there is nothing to register: perry-ext-net
+/// registers its own probe (`gc_roots.rs`), and perry-stdlib's bundled `net`
+/// probe that used to sit here was deleted in tokio lane L4.
 pub(super) unsafe fn register_net_socket_handle_probe() {
-    extern "C" {
-        fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
-    }
-
     #[cfg(all(
-        feature = "bundled-net",
-        not(target_os = "ios"),
-        not(target_os = "android")
-    ))]
-    {
-        unsafe extern "C" fn net_socket_probe(handle: i64) -> bool {
-            crate::net::is_net_socket_handle(handle)
-        }
-        js_register_net_socket_handle_probe(net_socket_probe);
-    }
-
-    #[cfg(all(
-        not(feature = "bundled-net"),
         feature = "external-net-pump",
         not(target_os = "ios"),
         not(target_os = "android")
     ))]
     {
+        extern "C" {
+            fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+        }
         unsafe extern "C" fn external_net_socket_probe(handle: i64) -> bool {
             extern "C" {
                 fn js_ext_net_is_socket_handle(handle: i64) -> i32;

@@ -1430,24 +1430,6 @@
       "why": "Monotonic u64 counter used to allocate in-process Worker registry IDs. It contains no address."
     },
     {
-      "file": "crates/perry-stdlib/src/ws.rs",
-      "name": "NEXT_WS_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic ws id counter."
-    },
-    {
-      "file": "crates/perry-stdlib/src/ws.rs",
-      "name": "WS_CLIENT_PARENT_SERVER",
-      "verdict": "not_a_gc_pointer",
-      "why": "Client ws id -> parent server HANDLE id. No address."
-    },
-    {
-      "file": "crates/perry-stdlib/src/ws.rs",
-      "name": "WS_CONNECTIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
-    },
-    {
       "file": "crates/perry-stdlib/src/tls/turnloop_server.rs",
       "name": "ACCEPTORS",
       "verdict": "not_a_gc_pointer",
@@ -4288,14 +4270,6 @@
       "name": "PENDING_FETCH_BODY_STREAM_ID"
     },
     {
-      "file": "crates/perry-stdlib/src/net/mod.rs",
-      "name": "NET_GC_REGISTERED"
-    },
-    {
-      "file": "crates/perry-stdlib/src/net/mod.rs",
-      "name": "SCRATCH"
-    },
-    {
       "file": "crates/perry-stdlib/src/readline/mod.rs",
       "name": "CLOSE_FIRED"
     },
@@ -4370,14 +4344,6 @@
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "WORKER_GC_REGISTERED"
-    },
-    {
-      "file": "crates/perry-stdlib/src/ws.rs",
-      "name": "SCRATCH"
-    },
-    {
-      "file": "crates/perry-stdlib/src/ws.rs",
-      "name": "WS_GC_REGISTERED"
     },
     {
       "file": "crates/perry-stdlib/src/zlib.rs",

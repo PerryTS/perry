@@ -34,18 +34,11 @@ pub(crate) use emitter_als::{dispatch_event_emitter_method, dispatch_event_emitt
 pub(crate) use sqlite::{dispatch_sqlite_db, dispatch_sqlite_stmt};
 
 #[cfg(all(
-    not(feature = "bundled-net"),
     feature = "external-net-pump",
     not(target_os = "ios"),
     not(target_os = "android")
 ))]
 pub(crate) use fastify_net_zlib::dispatch_external_net_socket;
-#[cfg(all(
-    feature = "bundled-net",
-    not(target_os = "ios"),
-    not(target_os = "android")
-))]
-pub(crate) use fastify_net_zlib::dispatch_net_socket;
 #[cfg(feature = "compression-gzip")]
 pub(crate) use fastify_net_zlib::dispatch_zlib_stream;
 

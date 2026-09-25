@@ -1161,15 +1161,18 @@ pub fn run_with_parse_cache(
     // wrapper called from the entry prologue, so the provider's export
     // dispatcher is live for module objects the runtime creates itself (a
     // CommonJS `require('net')` goes through `createRequire`, not codegen).
-    // No flip, no provider on the link line: emit nothing.
-    let native_provider_installs: Vec<String> =
-        if std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_some() {
-            Vec::new()
-        } else {
-            perry_codegen::native_provider_install_symbols(
-                ctx.native_module_imports.iter().map(String::as_str),
-            )
-        };
+    // No flip, no provider on the link line: emit nothing — except for the
+    // bindings whose wrapper is the only provider (`net`), which the flip
+    // routes even with PERRY_DISABLE_WELL_KNOWN=1 (tokio lane L4).
+    let native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
+        ctx.native_module_imports
+            .iter()
+            .map(String::as_str)
+            .filter(|module| {
+                optimized_libs::well_known_flip_enabled()
+                    || optimized_libs::wrapper_is_sole_provider(module)
+            }),
+    );
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>

@@ -23,7 +23,13 @@ default = ["full"]
 # must stay out of this list: release archives enable `full` without linking
 # their per-program provider archives, and adding an external HTTP pump here
 # made HTTP-free Linux UI links require libperry_ext_http.a (#5983, #8587).
-full = ["http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client"]
+#
+# `async-runtime` is listed explicitly since tokio lane L4: `full` used to get
+# it through bundled `net` / `ws`, and the prebuilt full archive is what the
+# no-auto and out-of-tree links resolve the tokio-backed `perry_ffi_*` shims
+# from (perry-ext-http's and the db wrappers' decline paths). Dropping it is
+# the final tokio-deletion step's call, not this one's.
+full = ["async-runtime", "http-server", "http-client", "database", "crypto", "compression", "email", "websocket", "image", "scheduler", "ids", "html-parser", "net", "tls", "bundled-events", "bundled-streams", "streams-brotli", "turnloop-smtp-client"]
 
 # Minimal core - just what's needed for basic programs
 core = []
@@ -79,26 +85,16 @@ http-client = ["web-fetch"]
 bundled-streams = ["dep:flate2"]
 streams-brotli = ["bundled-streams", "dep:brotli"]
 
-# WebSocket — `websocket` umbrella retained for backwards-compat;
-# v0.5.571's well-known flip toggles `bundled-ws` instead so
-# `import 'ws'` can route to perry-ext-ws without duplicate
-# `_js_ws_*` symbols at link time.
+# WebSocket — served only by perry-ext-ws (on turnloop). perry-stdlib's
+# bundled `ws` copy — a tokio-socket client/server with a `wss://` connector
+# over `src/tls_stream.rs` — was deleted in tokio lane L4: perry-ext-ws's
+# symbol surface was a strict superset of it, and the CLI routes `import 'ws'`
+# to perry-ext-ws in every mode, PERRY_DISABLE_WELL_KNOWN=1 included. Both
+# names stay as EMPTY features, like `ids`: `websocket` for `--features`
+# callers, `bundled-ws` because the CLI's feature table
+# (`stdlib_features::module_to_features`) keys `external-ws-pump` on it.
 websocket = ["bundled-ws"]
-# turnloop WS lane: the codec is `turnloop-websocket`'s sans-I/O protocol core,
-# with `turnloop-http` supplying the HTTP/1 head codec the opening handshake is
-# expressed in, driven over the tokio streams `ws.rs` already owned. It
-# replaced the old `WebSocketStream<S>` wrapper, which welded the codec to the
-# transport. `dep:url` parses the connect target; `dep:perry-tls-session`
-# (the sans-I/O rustls session `src/tls_stream.rs` drives over the tokio
-# socket — turnloop P8 group H replaced tokio-rustls with it) +
-# `dep:rustls-native-certs` are the outbound `wss://` client. perry-stdlib must NOT depend on perry-ext-ws: it is the bundled
-# alternative to that crate, so the duplication between the two `ws` bindings
-# is deliberate.
-# #6117: `dep:rustls` so the client-connect path can install a process-level
-# CryptoProvider before the first `wss://` handshake — feature unification
-# enables BOTH `ring` and `aws-lc-rs` in the final link, so rustls panics
-# unless one is installed explicitly (same as the `tls` feature's paths).
-bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:perry-tls-session", "dep:rustls", "dep:rustls-native-certs", "async-runtime"]
+bundled-ws = []
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to
@@ -107,12 +103,14 @@ bundled-ws = ["dep:turnloop-websocket", "dep:turnloop-http", "dep:url", "dep:per
 # carries no tokio, so this needs only the promise bridge (turnloop P8 lane L).
 external-ws-pump = ["async-bridge"]
 
-# Raw TCP sockets (`net.Socket` — Postgres wire driver, custom protocols).
-# `net` umbrella retained for backwards-compat; v0.5.571's
-# well-known flip toggles `bundled-net` instead so `import 'net'`
-# can route to perry-ext-net.
+# Raw TCP sockets (`net.Socket` — Postgres wire driver, custom protocols) —
+# served only by perry-ext-net (on turnloop, #11105). perry-stdlib's bundled
+# `net` copy (tokio sockets, `tls.connect` / `upgradeToTLS` over
+# `src/tls_stream.rs`) was deleted in tokio lane L4, for the same reason as
+# bundled `ws` above. `net` and `bundled-net` stay as EMPTY features: the
+# CLI keys `external-net-pump` on `bundled-net`.
 net = ["bundled-net"]
-bundled-net = ["async-runtime"]
+bundled-net = []
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.579) when
 # the well-known flip strips `bundled-net` and routes `import 'net'`
@@ -157,16 +155,16 @@ external-http-client-pump = ["async-bridge"]
 # emitter construction. Issue #4995.
 external-events-construct = []
 
-# TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
+# TLS — the `node:tls` module surface, `tls.createServer()` and TLSSocket.
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches the reqwest/mongodb feature flags.
 #
 # `tls-runtime` contains the shared TLS server/preflight implementation. The
-# `external-net-tls` adapter uses that implementation while resolving
-# `js_tls_connect` from perry-ext-net; compiling bundled net beside the wrapper
-# would reintroduce duplicate `js_net_*` / `js_tls_connect` symbols. The public
-# `tls` umbrella retains its historical bundled-net behavior.
-tls = ["bundled-net", "tls-runtime"]
+# client half — `tls.connect()` and `socket.upgradeToTLS()` — is perry-ext-net's;
+# the `external-net-tls` adapter resolves `js_tls_connect` from it. The public
+# `tls` umbrella used to add bundled `net` (the other `js_tls_connect`); since
+# tokio lane L4 deleted that copy it is `tls-runtime` alone.
+tls = ["tls-runtime"]
 external-net-tls = ["tls-runtime"]
 tls-runtime = [
     "async-bridge",
@@ -299,10 +297,10 @@ ids = []
 async-bridge = []
 
 # Async runtime (tokio) - internal feature. The bridge plus the tokio
-# current-thread runtime (`common::tokio_bridge`), for the features that still
-# hand it tokio futures: bundled net / tls / ws sockets, reqwest fetch, and the
-# `perry_ffi_spawn_async` / `_with_reactor` ABI that
-# perry-ext-net / perry-ext-http / the db wrappers' decline paths use.
+# current-thread runtime (`common::tokio_bridge`), for what still hands it
+# tokio futures: the `perry_ffi_spawn_async` / `_with_reactor` ABI that
+# perry-ext-http / the db wrappers' decline paths use. (Bundled net / tls / ws
+# sockets were the last in-crate users; tokio lane L4 deleted them.)
 async-runtime = ["async-bridge", "dep:tokio"]
 
 # OCI container subsystem (perry/container, perry/compose, perry/workloads).
@@ -363,10 +361,8 @@ bytes = { workspace = true, optional = true }
 # so it must NOT be optional — every minimal-stdlib build needs it.
 dashmap.workspace = true
 
-# WebSocket — the sans-I/O protocol core the `ws` module's codec is built on.
-# `turnloop-http` is declared with the other turnloop client engines above.
-turnloop-websocket = { workspace = true, optional = true }
-# TLS (for net.Socket.upgradeToTLS, tls.connect, tls.createServer and wss://)
+# TLS (tls.createServer, the TLSSocket surface, and the SNI/ALPN preflight
+# perry-ext-net's client calls back into)
 # — rustls-only, no OpenSSL. The handshakes run on `perry-tls-session`'s
 # sans-I/O session (declared with the turnloop client engines above), not on
 # tokio-rustls (turnloop P8 group H).

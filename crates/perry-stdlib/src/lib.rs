@@ -179,37 +179,17 @@ pub mod streams;
 #[cfg(feature = "bundled-streams")]
 pub use streams::*;
 
-// === TLS over a tokio transport (turnloop P8 group H) ===
-// perry-tls-session's sans-I/O rustls session driven over the tokio sockets
-// the bundled `net` client (`tls`) and `wss://` connector (`bundled-ws`) still
-// use — the replacement for their former tokio-rustls streams. The `node:tls`
-// server no longer needs it: its sockets are turnloop handles
-// (`tls/turnloop_server.rs`, turnloop P8 lane L), so `tls-runtime` alone —
-// what `external-net-tls` selects for every net / http program — links no
-// tokio.
-#[cfg(any(feature = "tls", feature = "bundled-ws"))]
-pub(crate) mod tls_stream;
+// === WebSocket / raw TCP sockets (net.Socket) ===
+// Served only by perry-ext-ws and perry-ext-net, on turnloop. perry-stdlib's
+// bundled copies (`ws.rs`, `net/`, and `tls_stream.rs`, the TLS stream they
+// drove over tokio sockets) were deleted in tokio lane L4: the wrappers were a
+// strict superset of their `js_ws_*` / `js_net_*` / `js_tls_connect` surface,
+// and the CLI routes `ws` / `net` / `tls` to them in every mode, including
+// PERRY_DISABLE_WELL_KNOWN=1. The `bundled-ws` / `bundled-net` features stay
+// as empty markers the CLI's feature table still names.
 
-// === WebSocket ===
-#[cfg(feature = "bundled-ws")]
-pub mod ws;
-#[cfg(feature = "bundled-ws")]
-pub use ws::*;
-
-// === Raw TCP sockets (net.Socket) + TLS (tls.connect, socket.upgradeToTLS) ===
+// === TLS: the `node:tls` module surface, server and TLSSocket ===
 // Desktop only; iOS/Android stdlib are stubs for now.
-#[cfg(all(
-    feature = "bundled-net",
-    not(target_os = "ios"),
-    not(target_os = "android")
-))]
-pub mod net;
-#[cfg(all(
-    feature = "bundled-net",
-    not(target_os = "ios"),
-    not(target_os = "android")
-))]
-pub use net::*;
 #[cfg(all(
     feature = "tls-runtime",
     not(target_os = "ios"),

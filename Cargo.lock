@@ -5441,7 +5441,6 @@ dependencies = [
  "turnloop-http",
  "turnloop-smtp",
  "turnloop-tls",
- "turnloop-websocket",
  "url",
  "windows-sys 0.61.2",
  "x25519-dalek",
