@@ -1686,7 +1686,13 @@ pub(crate) fn object_owns_user_method(object: f64, method: &str) -> bool {
     let raw = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const crate::object::ObjectHeader;
     let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
     let own = crate::object::js_object_get_field_by_name_f64(raw, key);
-    matches!(classify_own_slot(own, method), OwnSlot::UserMethod)
+    value_is_own_user_method(own, method)
+}
+
+/// [`object_owns_user_method`]'s classification of a value the caller has
+/// ALREADY read, so an own accessor's getter is not run a second time.
+pub(crate) fn value_is_own_user_method(value: f64, method: &str) -> bool {
+    matches!(classify_own_slot(value, method), OwnSlot::UserMethod)
 }
 
 /// Dispatch a generic `Array.prototype` mutator over an array-like receiver.

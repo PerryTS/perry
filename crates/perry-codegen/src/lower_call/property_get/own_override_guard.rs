@@ -67,11 +67,11 @@ fn shadowable_builtin_name(property: &str) -> bool {
         // Map / Set
         "get" | "set" | "has" | "delete" | "add" | "clear" | "entries" | "keys" | "values"
             | "forEach"
-        // Array. `push` is ABSENT: guarding it costs the inline store (+94
-        // instructions per call, against +6 for `indexOf`), and the cheap
-        // absence proof every other kind has does not exist for an array --
-        // see #11021. An own `push` on a proven array therefore
-        // still loses to the builtin, as it does on main.
+        // Array. `push` is ABSENT, and needs no diamond: a proven array's
+        // push is folded by HIR into `Expr::ArrayPush`, whose slow arms honour
+        // an own `push` themselves (`expr/array_push_own.rs`, #11021). A
+        // diamond here would cost the inline store +94 instructions per call
+        // for a receiver the inline tier's admission mask already excludes.
             | "pop" | "shift" | "unshift" | "slice" | "splice" | "indexOf"
             | "lastIndexOf" | "includes" | "join" | "concat" | "reverse" | "sort" | "fill"
             | "find" | "findIndex" | "filter" | "map" | "some" | "every" | "reduce"

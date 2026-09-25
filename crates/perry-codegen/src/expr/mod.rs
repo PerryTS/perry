@@ -161,6 +161,8 @@ mod array_callback_shape_tests;
 #[cfg(test)]
 mod array_push_guard_tests;
 #[cfg(test)]
+mod array_push_own_tests;
+#[cfg(test)]
 mod barrier_stem_census_tests;
 #[cfg(test)]
 mod class_field_barrier_tests;
@@ -2985,6 +2987,7 @@ impl<'a> FnCtx<'a> {
 mod array_methods;
 pub(crate) mod array_pop;
 mod array_push;
+mod array_push_own;
 mod arrays_finds;
 mod bigint_set;
 mod binary;

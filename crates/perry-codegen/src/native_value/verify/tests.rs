@@ -561,6 +561,7 @@ fn rejects_raw_f64_checked_native_without_consumed_layout_fact() {
 fn rejects_raw_f64_dynamic_fallback_without_rejected_and_invalidated_layout_facts() {
     for (expr_kind, consumer) in [
         ("NumericArrayPush", "js_array_push_f64"),
+        ("NumericArrayPush", "js_array_push_f64_spec_or_own"),
         (
             "NumericArrayIndexGet",
             "js_typed_feedback_array_index_get_fallback_boxed",

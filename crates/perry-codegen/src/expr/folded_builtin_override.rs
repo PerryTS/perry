@@ -128,16 +128,30 @@ fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
             method: "add",
             args: vec![value],
         },
-        // `Expr::ArrayPush` is deliberately ABSENT, and an own `push` on a
-        // proven array therefore still loses to the builtin, exactly as on
-        // main. A diamond around this node costs it the INLINE STORE: measured
-        // at +94 instructions per call, against +6 for `indexOf`, which is a
-        // call on both arms either way. The cheap alternative every other kind
-        // has does not exist here -- an array that takes an own named property
-        // records nothing in its header that the inline push tier can test, so
-        // the admission mask never sees the receiver. See #11021;
-        // the diamond is not heavy-handed, it is the only instrument that can
-        // see a receiver the flags cannot describe.
+        // `Expr::ArrayPush` is deliberately ABSENT: it honours an own `push`
+        // itself (#11021, `expr/array_push_own.rs`). A diamond around this node
+        // costs it the INLINE STORE -- measured at +94 instructions per call,
+        // against +6 for `indexOf`, which is a call on both arms either way --
+        // and buys nothing: every inline push tier's admission mask already
+        // tests `OBJ_FLAG_ARRAY_DESCRIPTORS`, which every install of an array's
+        // own named property arms, so a receiver that owns `push` always lands
+        // in a slow arm, and each slow arm has an exit whose value is the
+        // method's return.
+        // `a.push()` with NO arguments is not an `ArrayPush`: HIR folds it to
+        // this native call so `Set(O, "length", …)` still throws on a frozen
+        // array. It is a call on both arms either way, so unlike `ArrayPush`
+        // a diamond here costs no inline store (#11021).
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: Some(object),
+            args,
+            ..
+        } if module == "array" && method == "push" && args.is_empty() => FoldedCall {
+            receiver: Receiver::Expr(object),
+            method: "push",
+            args: Vec::new(),
+        },
         Expr::ArrayIndexOf {
             array,
             value,
@@ -481,12 +495,11 @@ mod tests {
         assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
     }
 
-    /// `push` is OUT of the gate. The table must not carry it, or the diamond
+    /// `push` is not guarded HERE. The table must not carry it, or the diamond
     /// comes back and with it the +94 instructions per call that made this one
-    /// node the exception: guarding `push` costs it the INLINE STORE, and the
-    /// cheap absence proof every other kind has does not exist for an array.
-    /// The differential row it would have fixed is still red, on this branch
-    /// and on main, and the follow-up issue says why.
+    /// node the exception: guarding `push` costs it the INLINE STORE. An own
+    /// `push` is honoured by the node's own slow arms instead (#11021), whose
+    /// admission is the header bit the inline tier already tests.
     #[test]
     fn array_push_is_not_a_folded_guard_target() {
         let push = Expr::ArrayPush {
@@ -496,8 +509,34 @@ mod tests {
         };
         assert!(
             folded_call(&push).is_none(),
-            "ArrayPush must not be guarded: a diamond costs it the inline store"
+            "ArrayPush must not be guarded: a diamond costs it the inline store, \
+             and its slow arms already honour an own `push` (#11021)"
         );
+    }
+
+    /// A zero-argument `a.push()` is a native call, not an `ArrayPush`, and is
+    /// guarded like the other call-only folds (#11021). The single-argument
+    /// `push_single` spelling is left alone: it is not this node's shape.
+    #[test]
+    fn a_zero_argument_push_is_a_folded_guard_target() {
+        let zero = Expr::NativeMethodCall {
+            module: "array".to_string(),
+            class_name: None,
+            object: Some(Box::new(Expr::LocalGet(7))),
+            method: "push".to_string(),
+            args: Vec::new(),
+        };
+        let call = folded_call(&zero).expect("a zero-argument push is guarded");
+        assert_eq!((call.method, call.args.len()), ("push", 0));
+        assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
+        let single = Expr::NativeMethodCall {
+            module: "array".to_string(),
+            class_name: None,
+            object: Some(Box::new(Expr::LocalGet(7))),
+            method: "push_single".to_string(),
+            args: vec![lit(1.0)],
+        };
+        assert!(folded_call(&single).is_none());
     }
 
     /// An optional argument is part of the call when present and absent when

@@ -77,9 +77,12 @@ pub(crate) fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool 
         // expr/static_method.rs, expr/static_field_meta.rs and
         // rooting/temp_root.rs), so both must keep the raw_f64_layout
         // requirement. Replacing the entry rather than adding to it silently
-        // dropped it for `js_array_push_f64`.
+        // dropped it for `js_array_push_f64`. #11021 then moved the ArrayPush
+        // fallback onto `js_array_push_f64_spec_or_own` (the same push, plus an
+        // own-`push` exit); no NumericArrayPush record names the bare `_spec`
+        // helper any more, so that pair was carried over rather than kept.
         ("NumericArrayPush", "js_array_push_f64")
-            | ("NumericArrayPush", "js_array_push_f64_spec")
+            | ("NumericArrayPush", "js_array_push_f64_spec_or_own")
             | (
                 "NumericArrayIndexGet",
                 "js_typed_feedback_array_index_get_fallback_boxed"

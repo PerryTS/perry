@@ -241,6 +241,22 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     if PERRY_OWN_NAMED_PROP_INSTALLED.load(Ordering::Relaxed) == 0 {
         return None;
     }
+    resolve_own_user_method(recv, name)
+}
+
+/// [`own_user_method_value`] without the global install arm, for a caller that
+/// has already proven the receiver owns `name` by other means.
+///
+/// The array push arm is that caller (#11021): an array records its own named
+/// properties in its header and its own side tables, and not every install
+/// path passes the exotic-store gauntlet that arms
+/// [`PERRY_OWN_NAMED_PROP_INSTALLED`] — `js_array_set_string_key` reaches
+/// `array_named_property_set` directly. Consulting the global arm there would
+/// be the flags-cannot-describe-the-receiver bug again, one layer down.
+///
+/// # Safety
+/// As [`own_user_method_value`].
+unsafe fn resolve_own_user_method(recv: f64, name: &str) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv = scope.root_nanbox_f64(recv);
     let jsval = crate::JSValue::from_bits(recv.get_nanbox_u64());
@@ -283,8 +299,11 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
     }
     // A borrowed builtin (`m.get = Map.prototype.get`) must keep the native
     // arm: dispatching it by name again is the recursion an earlier attempt
-    // hit. `object_owns_user_method` is the existing two-valued classifier.
-    if !crate::array::object_owns_user_method(recv.get_nanbox_f64(), name) {
+    // hit. The classifier `object_owns_user_method` uses is applied to the
+    // value already read, rather than through that function, because it
+    // performs the `Get` a second time — and an own ACCESSOR's getter is user
+    // code that `Get(O, P)` runs exactly once.
+    if !crate::array::value_is_own_user_method(value.get_nanbox_f64(), name) {
         return None;
     }
     Some(value.get_nanbox_f64())
@@ -294,10 +313,13 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
 /// has no own user method of that name (nothing owns it, or what owns it is a
 /// borrowed builtin, which must take the native arm).
 ///
-/// THE one implementation. The universal dispatcher and the array-push arm are
-/// both callers: two copies of this sequence is how the next divergence gets
-/// introduced, and the difference between them would be a wrong `this` or an
-/// unrooted method value, neither of which a fixture reliably catches.
+/// THE one implementation. The universal dispatcher calls it whole, and the
+/// array push arm ([`js_array_push_f64_spec_or_own`]) calls its two halves —
+/// [`resolve_own_user_method`] and [`invoke_own_user_method`] — because it has
+/// its own proof that the receiver owns the name. Two copies of this sequence
+/// is how the next divergence gets introduced, and the difference between them
+/// would be a wrong `this` or an unrooted method value, neither of which a
+/// fixture reliably catches.
 ///
 /// `IMPLICIT_THIS` is bound across the call and restored after it, because the
 /// callee reads its receiver from there when it has no lexical `this`.
@@ -306,6 +328,16 @@ pub(crate) unsafe fn own_user_method_value(recv: f64, name: &str) -> Option<f64>
 /// `recv` is any NaN-boxed value; `args` are NaN-boxed values live at the call.
 pub(crate) unsafe fn call_own_user_method(recv: f64, name: &str, args: &[f64]) -> Option<f64> {
     let own = own_user_method_value(recv, name)?;
+    Some(invoke_own_user_method(own, recv, args))
+}
+
+/// The Call half of [`call_own_user_method`], for a method value already
+/// resolved (and still live) at the call.
+///
+/// # Safety
+/// `own` is a callable NaN-boxed value; `recv` and `args` are NaN-boxed
+/// values live at the call.
+unsafe fn invoke_own_user_method(own: f64, recv: f64, args: &[f64]) -> f64 {
     let root_scope = crate::gc::RuntimeHandleScope::new();
     let method_handle = root_scope.root_nanbox_f64(own);
     let recv_handle = root_scope.root_nanbox_f64(recv);
@@ -323,5 +355,153 @@ pub(crate) unsafe fn call_own_user_method(recv: f64, name: &str, args: &[f64]) -
         refreshed.len(),
     );
     crate::object::this_binding::IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
-    Some(result)
+    result
 }
+
+/// Does the array behind `arr` OWN a property named `push`? Returns the LIVE
+/// head when it does. Non-allocating, and never runs user code.
+///
+/// `OBJ_FLAG_ARRAY_DESCRIPTORS` clear is the absence proof, answered from the
+/// header the caller's admission mask already read (#11021). Every path that
+/// gives an array an own named property arms it: `array_named_property_set`
+/// on both of its storages (the pairs reserve and the full-array fallback
+/// table — `named_props::mark_array_descriptors`), and every
+/// `Object.defineProperty` route (`array_object_ops`). It is monotone, and
+/// growth carries it (`js_array_grow` copies `_reserved` to the new head). The
+/// one named-property store that does NOT arm it is a regex result's inline
+/// reserve, whose key set is fixed (`index`, `input`, `groups`, `indices`);
+/// adding any other key materialises the reserve into pairs mode, which arms
+/// the flag like every other install.
+///
+/// With the flag set this asks the two places an array's own `push` can live,
+/// exactly as `Object.hasOwn`'s array arm does (`array_own_key_present`): the
+/// accessor descriptors and the named properties. Asked by bytes, so an array
+/// that merely carries an unrelated named property (`a.foo = 1`) pays two
+/// lookups and no allocation.
+///
+/// Only a `GC_TYPE_ARRAY` receiver is answered. An object-backed Array
+/// subclass reaches `js_array_push_f64_spec` only through a declared-type lie
+/// (`const a: number[] = new MyArr()`), and keeps that behaviour.
+unsafe fn array_owning_push(
+    arr: *mut crate::array::ArrayHeader,
+) -> Option<*mut crate::array::ArrayHeader> {
+    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    // A forwarded head's own header is a stub's: the flag that matters is the
+    // live head's, which is where a later install through any alias landed.
+    let live = if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        crate::array::clean_arr_ptr_mut(arr)
+    } else {
+        if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0 {
+            return None;
+        }
+        arr
+    };
+    if live.is_null()
+        || crate::array::array_object_flags_resolved(live) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
+            == 0
+    {
+        return None;
+    }
+    let owns = crate::object::get_accessor_descriptor(live as usize, "push").is_some()
+        || crate::array::array_named_property_get_by_name(live, "push").is_some();
+    owns.then_some(live)
+}
+
+/// `arr.push(value)` from the slow arms of the `Expr::ArrayPush` lowering, with
+/// an own `push` honoured (#11021).
+///
+/// # Why the inline tier needs no test of its own
+///
+/// Every inline push tier admits a receiver through a mask over
+/// `GcHeader::_reserved` that already includes `OBJ_FLAG_ARRAY_DESCRIPTORS`,
+/// and every own-named-property install arms that bit (see
+/// [`array_owning_push`]). So an array that owns `push` can never take the
+/// inline store: it fails admission and lands in a slow arm, and every slow arm
+/// calls THIS. The hot path pays nothing — the absence proof rides the
+/// instructions it already spends on `_reserved`.
+///
+/// # Why a second exit, and not a bail
+///
+/// `js_array_push_f64_spec` returns the new head, and the expression's value is
+/// computed from the array's length afterwards, so a receiver that fails the
+/// admission mask and is handed to it still runs the builtin: no bail from it
+/// can carry an own method's return value. This entry has two exits instead:
+///
+/// * `*own_out = 0` and the new head's address — exactly
+///   `js_array_push_f64_spec`, which the caller writes back and measures;
+/// * `*own_out = 1` and the NaN-boxed bits of the METHOD's return, which the
+///   caller's phi takes as the expression's value: no append happened, so
+///   there is no head to write back and no length to recompute.
+///
+/// A borrowed builtin (`a.push = Array.prototype.push`) is not a user method
+/// and takes the first exit; an own non-callable value throws `TypeError`
+/// before anything is appended, as `Get` then `Call` requires.
+///
+/// # Safety
+/// `arr` is the receiver's unboxed address; `value` is a NaN-boxed value;
+/// `own_out` points at a writable `u32`.
+#[no_mangle]
+pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> u64 {
+    if !own_out.is_null() {
+        *own_out = 0;
+    }
+    // The common case, in the one header probe `js_array_push_f64_spec` makes
+    // anyway: a plain live array has `OBJ_FLAG_ARRAY_DESCRIPTORS` clear, so it
+    // owns no named property at all. Asking `array_owning_push` first cost the
+    // local tail — whose EVERY push is this call — a second probe: +46
+    // instructions per push on a captured receiver, measured.
+    if let Some(head) = crate::array::push_spec_if_plain(arr, value) {
+        return head as u64;
+    }
+    let Some(live) = array_owning_push(arr) else {
+        return crate::array::push_spec_declined(arr, value) as u64;
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(live as i64));
+    let value = scope.root_nanbox_f64(value);
+    // Get: resolving the method may run an own accessor's getter, so nothing
+    // below may hold a value read before it.
+    match resolve_own_user_method(recv.get_nanbox_f64(), "push") {
+        Some(method) => {
+            let method = scope.root_nanbox_f64(method);
+            let result = invoke_own_user_method(
+                method.get_nanbox_f64(),
+                recv.get_nanbox_f64(),
+                &[value.get_nanbox_f64()],
+            );
+            if !own_out.is_null() {
+                *own_out = 1;
+            }
+            result.to_bits()
+        }
+        None => {
+            let head = (recv.get_nanbox_u64() & crate::value::POINTER_MASK)
+                as *mut crate::array::ArrayHeader;
+            crate::array::js_array_push_f64_spec(head, value.get_nanbox_f64()) as u64
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn array_owning_push_for_test(
+    arr: *mut crate::array::ArrayHeader,
+) -> Option<*mut crate::array::ArrayHeader> {
+    array_owning_push(arr)
+}
+
+// Called from generated code only, so release/LTO builds may otherwise strip
+// the `#[no_mangle]` export.
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ARRAY_PUSH_F64_SPEC_OR_OWN: unsafe extern "C" fn(
+    *mut crate::array::ArrayHeader,
+    f64,
+    *mut u32,
+) -> u64 = js_array_push_f64_spec_or_own;

@@ -909,29 +909,43 @@ static KEEP_JS_ARRAY_PUSH_U31_WITH_LENGTH: extern "C" fn(
 /// receiver or its prototype chain is exotic.
 #[no_mangle]
 pub extern "C" fn js_array_push_f64_spec(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
-    if let Some(plain) = direct_plain_push_receiver(arr) {
-        // A non-extensible receiver must THROW here, not decline silently.
-        // `js_array_push_f64_resolved` answers `SEALED | NO_EXTEND` with a bare
-        // `return arr`, which is right for its other caller — `js_array_push_f64`
-        // is the INTERNAL CreateDataProperty-style append that runtime code uses
-        // to build fresh result arrays, and those must not throw. It is wrong for
-        // user `push`: `Object.preventExtensions(a); a.push(1)` silently kept the
-        // old length where Node raises TypeError. `Object.seal` happened to throw
-        // only because sealing also marks the receiver's element descriptors,
-        // which sends it down the exotic route instead of this one.
-        //
-        // FROZEN is left to the resolved append below, which throws its own
-        // frozen message; only the extensibility bits are answered here.
-        // SAFETY: `direct_plain_push_receiver` just proved the resolved head.
-        let flags = unsafe { array_object_flags_resolved(plain) };
-        if flags & crate::gc::OBJ_FLAG_FROZEN == 0
-            && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
-        {
-            throw_non_extensible_array_push(unsafe { (*plain).length });
-        }
-        crate::string::js_string_addref_if_heap_string(value);
-        return unsafe { js_array_push_f64_resolved(plain, value) };
+    push_spec_if_plain(arr, value).unwrap_or_else(|| push_spec_declined(arr, value))
+}
+
+/// [`js_array_push_f64_spec`]'s first arm: `Some(new head)` when the receiver
+/// is a plain live array, `None` — having done nothing — otherwise. Shared with
+/// `js_array_push_f64_spec_or_own` (#11021), whose absence proof it also is:
+/// admission requires `OBJ_FLAG_ARRAY_DESCRIPTORS` clear, so such a receiver
+/// owns no named property, `push` included, and one header probe answers both.
+#[inline]
+pub(crate) fn push_spec_if_plain(arr: *mut ArrayHeader, value: f64) -> Option<*mut ArrayHeader> {
+    let plain = direct_plain_push_receiver(arr)?;
+    // A non-extensible receiver must THROW here, not decline silently.
+    // `js_array_push_f64_resolved` answers `SEALED | NO_EXTEND` with a bare
+    // `return arr`, which is right for its other caller — `js_array_push_f64`
+    // is the INTERNAL CreateDataProperty-style append that runtime code uses
+    // to build fresh result arrays, and those must not throw. It is wrong for
+    // user `push`: `Object.preventExtensions(a); a.push(1)` silently kept the
+    // old length where Node raises TypeError. `Object.seal` happened to throw
+    // only because sealing also marks the receiver's element descriptors,
+    // which sends it down the exotic route instead of this one.
+    //
+    // FROZEN is left to the resolved append below, which throws its own
+    // frozen message; only the extensibility bits are answered here.
+    // SAFETY: `direct_plain_push_receiver` just proved the resolved head.
+    let flags = unsafe { array_object_flags_resolved(plain) };
+    if flags & crate::gc::OBJ_FLAG_FROZEN == 0
+        && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
+    {
+        throw_non_extensible_array_push(unsafe { (*plain).length });
     }
+    crate::string::js_string_addref_if_heap_string(value);
+    Some(unsafe { js_array_push_f64_resolved(plain, value) })
+}
+
+/// [`js_array_push_f64_spec`] for every receiver [`push_spec_if_plain`]
+/// declines.
+pub(crate) fn push_spec_declined(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
     if array_ptr_as_proxy(arr).is_some() {
         return js_array_push_f64(arr, value);
     }

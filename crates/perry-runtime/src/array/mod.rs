@@ -133,6 +133,7 @@ pub use self::generic::{
 };
 pub(crate) use self::generic::{
     non_array_object_receiver, object_owns_user_method, plain_object_value,
+    value_is_own_user_method,
 };
 pub use self::generic_mutators::{
     js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
@@ -264,6 +265,7 @@ pub use self::push_pop::{
     js_array_push_u31_with_length, js_array_set_length, js_array_set_length_strict,
     js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
 };
+pub(crate) use self::push_pop::{push_spec_declined, push_spec_if_plain};
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
     js_array_includes_f64, js_array_includes_jsvalue, js_array_indexOf_f64,

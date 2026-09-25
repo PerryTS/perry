@@ -124,28 +124,87 @@ const m11 = new Map(); m11.set("k", "native11");
 const m12 = new Map();
 t("native get in set argument", () => { m12.set("k", m11.get("k")); return m12.get("k"); });
 
-// --- `push` is OUT of the gate ---------------------------------------------
-// An own `push` still loses to the builtin, exactly as on main. A diamond
-// around this node costs it the inline store (+94 instructions per call,
-// against +6 for `indexOf`), and the cheap alternative does not exist: an
-// array that takes an own named property records NOTHING in its header that
-// the inline push tier can test -- `GC_ARRAY_NAMED_PROPS` is set only when a
-// reserve is created and `OBJ_FLAG_ARRAY_DESCRIPTORS` gates the fallback
-// table, and for `const a = [1]; a.push = fn` neither is set. See #11021.
-// The rows below are the ones that are TRUE without the arm: an unrelated
-// named property and a borrowed builtin must both keep the builtin.
+// --- `push`: an own method beats the builtin on every tier (#11021) --------
 // `push` is not guarded by a diamond: a diamond around it costs the inline
-// store (+94 per call), so the check rides the header bit its admission mask
-// already tests and routes to `js_array_push_or_own`. These rows are the phi
-// at that join: on the own arm the expression's value must be the METHOD's
-// return, not a recomputed length, and the array must not be appended to.
+// store (+94 instructions per call, against +6 for `indexOf`). It does not
+// need one. Every inline push tier's admission mask tests
+// OBJ_FLAG_ARRAY_DESCRIPTORS, and every install of an array's own named
+// property arms that bit, so an array that owns `push` always lands in a slow
+// arm -- and each of the five slow arms now has an exit whose value is the
+// METHOD's return, not a recomputed length, with nothing appended.
+//
+// The rows are spread over the receivers that select each tier: a module
+// global and a function local (inline tier: realloc arm), a pre-growth alias
+// (forwarded arm), a captured and a boxed binding (the local tail), a number[]
+// (the numeric tier's fallback).
+const p1 = [1]; p1.push = (x) => "own:" + x;
+t("array.push own value", () => p1.push(9));
+t("array.push own length", () => p1.length);
+// the own method still runs when the value is discarded (side effects only).
+const p4 = []; let p4seen = 0; p4.push = (x) => { p4seen = x; return 0; };
+p4.push(7);
+t("array.push own discarded", () => p4seen + "/" + p4.length);
+t("array.push own function-local this", () => {
+  const a = [1, 2]; a.push = function (x) { return this.length * 100 + x; };
+  return a.push(5);
+});
+t("array.push own captured", () => {
+  const a = [1]; a.push = (x) => "cap:" + x; const f = () => a.push(3); return f();
+});
+t("array.push own boxed", () => {
+  let a = [1]; const g = () => { a = [2]; }; a.push = (x) => "boxed:" + x;
+  const r = a.push(4); g(); return r;
+});
+t("array.push own number[]", () => {
+  const a: number[] = [1.5, 2.5]; let s = 0;
+  a.push = (x) => { s += x; return 0; };
+  for (let i = 0; i < 3; i++) a.push(i + 0.5);
+  return s + "/" + a.length;
+});
+t("array.push own installed after growth", () => {
+  const a = [1]; for (let i = 0; i < 100; i++) a.push(i);
+  a.push = (x) => "late:" + x; return a.push(0) + "/" + a.length;
+});
+t("array.push own through a pre-growth alias", () => {
+  const a = [1]; const b = a; for (let i = 0; i < 100; i++) a.push(i);
+  b.push = (x) => "alias:" + x; return a.push(0) + "/" + b.push(1) + "/" + a.length;
+});
+t("array.push own in a loop, discarded", () => {
+  const a = []; let n = 0; a.push = (x) => { n += x; return -1; };
+  for (let i = 0; i < 10; i++) a.push(i);
+  return n + "/" + a.length;
+});
+t("array.push own via defineProperty", () => {
+  const a = [1];
+  Object.defineProperty(a, "push", { value: (x) => "dp:" + x, writable: true, configurable: true });
+  return a.push(1);
+});
+t("array.push own accessor", () => {
+  const a = [1]; let gets = 0;
+  Object.defineProperty(a, "push", { get() { gets++; return (x) => "get:" + x; } });
+  return a.push(1) + "/" + gets;
+});
+t("array.push own then deleted", () => {
+  const a = [1]; a.push = () => "own"; const r1 = a.push(2);
+  delete a.push; const r2 = a.push(3); return r1 + "/" + r2 + "/" + a.length;
+});
 // the bit means "some named property", not "an own push": an unrelated one
 // must still take the builtin, through the same arm.
 const p2 = [1]; p2.foo = 1;
 t("array.push unrelated named prop", () => p2.push(2));
 t("array.push unrelated named prop length", () => p2.length);
+t("array.push unrelated named prop in a loop", () => {
+  const a = [0]; a.foo = 1; for (let i = 0; i < 50; i++) a.push(i);
+  return a.length + "/" + a[50];
+});
 // a BORROWED builtin is not a user method and must take the native arm.
 const p3 = [1]; p3.push = Array.prototype.push;
 t("array.push borrowed builtin", () => p3.push(2));
 t("array.push borrowed builtin length", () => p3.length);
-// the own method still wins when the value is discarded (side effects only).
+// a zero-argument push is a native call, guarded like the other call-only folds.
+t("array.push own zero-argument", () => {
+  const a = [1]; a.push = (...xs) => "zero:" + xs.length; return a.push() + "/" + a.length;
+});
+// Not covered here, because they do not lower through a guarded push:
+// `a.push(x, y)` (HIR desugars it into one ArrayPush per argument, so an own
+// method runs once per argument) and `a.push(...xs)` (ArrayPushSpread).

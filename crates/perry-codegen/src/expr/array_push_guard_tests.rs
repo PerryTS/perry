@@ -478,7 +478,9 @@ fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
     assert!(
         generic.contains("call i32 @js_typed_feedback_numeric_array_push_guard")
             && generic.contains("call i64 @js_array_numeric_push_f64_unboxed")
-            && generic.contains("call i64 @js_array_push_f64_spec"),
+            // #11021: the fallback is the own-aware push, never the bare one.
+            && generic.contains("call i64 @js_array_push_f64_spec_or_own(")
+            && !generic.contains("call i64 @js_array_push_f64_spec("),
         "a declared-number addition must validate the live value and retain the generic push fallback:\n{generic}"
     );
     assert!(

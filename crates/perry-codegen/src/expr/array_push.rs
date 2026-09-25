@@ -54,6 +54,7 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
+use super::array_push_own::{OwnPushJoin, PUSH_SPEC_OR_OWN};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::{
@@ -623,12 +624,10 @@ fn lower_array_push_spec_order(
             let cur_bits = blk.bitcast_double_to_i64(&cur_box);
             let still_bound = blk.icmp_eq(I64, &cur_bits, &recv_bits);
             let recv_handle = unbox_to_i64(blk, &recv_box);
-            let new_handle = blk.call(
-                I64,
-                "js_array_push_f64_spec",
-                &[(I64, &recv_handle), (DOUBLE, &v)],
-            );
-            let new_box = nanbox_pointer_inline(blk, &new_handle);
+            // #11021: an own `push` exits here with the method's return.
+            let mut own = OwnPushJoin::new(ctx);
+            let new_handle = own.emit_push(ctx, &recv_handle, &v);
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
 
             let wb_idx = ctx.new_block("apush.spec.writeback");
             let done_idx = ctx.new_block("apush.spec.done");
@@ -641,7 +640,8 @@ fn lower_array_push_spec_order(
             ctx.block().br(&done_label);
 
             ctx.current_block = done_idx;
-            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+            let length = emit_array_handle_length(ctx, &new_handle, value_discarded);
+            Ok(own.finish(ctx, length))
         },
     )
 }
@@ -922,6 +922,9 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         "array.push",
                         TypedFeedbackContract::numeric_array_push(),
                     );
+                    // #11021: the fallback is where an own `push` lands (the
+                    // guard rejects `OBJ_FLAG_ARRAY_DESCRIPTORS`), and exits here.
+                    let mut own = OwnPushJoin::new(ctx);
                     let fast_idx = ctx.new_block("apush.numeric_fast");
                     let fallback_idx = ctx.new_block("apush.numeric_fallback");
                     let merge_idx = ctx.new_block("apush.numeric_merge");
@@ -985,19 +988,18 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     );
 
                     ctx.current_block = fallback_idx;
-                    {
+                    let arr_handle = {
                         let blk = ctx.block();
                         crate::expr::emit_typed_feedback_record_call(
                             blk,
                             "js_typed_feedback_record_fallback_call",
                             &[(I64, &feedback_site_id)],
                         );
-                        let arr_handle = unbox_to_i64(blk, &arr_box);
-                        let new_handle = blk.call(
-                            I64,
-                            "js_array_push_f64_spec",
-                            &[(I64, &arr_handle), (DOUBLE, &v)],
-                        );
+                        unbox_to_i64(blk, &arr_box)
+                    };
+                    let new_handle = own.emit_push(ctx, &arr_handle, &v);
+                    {
+                        let blk = ctx.block();
                         let new_box = nanbox_pointer_inline(blk, &new_handle);
                         home.store_head(blk, &new_box);
                         blk.br(&merge_label);
@@ -1011,7 +1013,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.record_lowered_value_with_access_mode_and_facts(
                         "NumericArrayPush",
                         Some(*array_id),
-                        "js_array_push_f64_spec",
+                        PUSH_SPEC_OR_OWN,
                         &fallback,
                         Some(BoundsState::Unknown),
                         None,
@@ -1040,12 +1042,15 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     );
 
                     ctx.current_block = merge_idx;
-                    if value_discarded {
-                        // Skip the slot reload too — it only feeds the length.
-                        return Ok(double_literal(0.0));
-                    }
-                    let current_box = home.load_head(ctx.block());
-                    return Ok(emit_array_box_length(ctx, &current_box, false));
+                    // Skip the slot reload when discarded — it only feeds the
+                    // length.
+                    let length = if value_discarded {
+                        double_literal(0.0)
+                    } else {
+                        let current_box = home.load_head(ctx.block());
+                        emit_array_box_length(ctx, &current_box, false)
+                    };
+                    return Ok(own.finish(ctx, length));
                 }
             }
 
@@ -1122,6 +1127,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 let fwd_set = blk.icmp_ne(I8, &fwd_bits, "0");
                 let is_fwd = blk.or(I1, &not_array, &fwd_set);
 
+                // #11021: the forwarded and realloc arms are where an own
+                // `push` lands — the admission mask below tests
+                // `OBJ_FLAG_ARRAY_DESCRIPTORS`, which every own-named-property
+                // install arms — and both exit here with the method's return.
+                let mut own = OwnPushJoin::new(ctx);
                 let fwd_idx = ctx.new_block("apush.fwd");
                 // An elements-backed Array subclass (`ObjectMeta.elements`)
                 // appends to its store: the payload is resolved here and the
@@ -1198,13 +1208,9 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
 
                 // FORWARDED branch: route through runtime.
                 ctx.current_block = fwd_idx;
+                let new_handle = own.emit_push(ctx, &arr_handle, &v);
                 {
                     let blk = ctx.block();
-                    let new_handle = blk.call(
-                        I64,
-                        "js_array_push_f64_spec",
-                        &[(I64, &arr_handle), (DOUBLE, &v)],
-                    );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
                     home.store_head(blk, &new_box);
                     blk.br(&merge_label);
@@ -1454,37 +1460,34 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // bigger backing block and installs the forwarding
                 // pointer; writeback the new head to the local slot.
                 ctx.current_block = realloc_idx;
+                let new_handle = own.emit_push(ctx, &arr_handle, &v);
                 {
                     let blk = ctx.block();
-                    let new_handle = blk.call(
-                        I64,
-                        "js_array_push_f64_spec",
-                        &[(I64, &arr_handle), (DOUBLE, &v)],
-                    );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
                     home.store_head(blk, &new_box);
                     blk.br(&merge_label);
                 }
 
                 ctx.current_block = merge_idx;
-                if value_discarded {
-                    // Skip the slot reload too — it only feeds the length.
-                    return Ok(double_literal(0.0));
-                }
-                let current_box = home.load_head(ctx.block());
-                return Ok(emit_array_box_length(ctx, &current_box, false));
+                // Skip the slot reload when discarded — it only feeds the length.
+                let length = if value_discarded {
+                    double_literal(0.0)
+                } else {
+                    let current_box = home.load_head(ctx.block());
+                    emit_array_box_length(ctx, &current_box, false)
+                };
+                return Ok(own.finish(ctx, length));
             }
 
-            let blk = ctx.block();
-            let arr_handle = unbox_to_i64(blk, &arr_box);
-            let new_handle = blk.call(
-                I64,
-                "js_array_push_f64_spec",
-                &[(I64, &arr_handle), (DOUBLE, &v)],
-            );
-            let new_box = nanbox_pointer_inline(blk, &new_handle);
+            let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
+            // #11021: a boxed or captured receiver's every push is this call,
+            // and an own `push` exits here with the method's return.
+            let mut own = OwnPushJoin::new(ctx);
+            let new_handle = own.emit_push(ctx, &arr_handle, &v);
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
             emit_push_writeback(ctx, *array_id, &new_box, "ArrayPush")?;
-            Ok(emit_array_handle_length(ctx, &new_handle, value_discarded))
+            let length = emit_array_handle_length(ctx, &new_handle, value_discarded);
+            Ok(own.finish(ctx, length))
         }
 
         // `arr.push(...src)` — HIR variant carrying the destination
