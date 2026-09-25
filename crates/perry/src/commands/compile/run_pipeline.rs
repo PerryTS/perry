@@ -1948,15 +1948,54 @@ pub fn run_with_parse_cache(
         }
     }
 
-    // Propagate exports through ExportAll and ReExport chains
+    // Propagate exports through ExportAll and ReExport chains.
+    //
+    // #11275: which `export *` source supplied each star-provided entry.
+    // An entry copied through `export *` must keep TRACKING its source: the
+    // source's own entry can still be refined by a later iteration (its
+    // `export { x }` of an imported `x` first records the source module
+    // itself as the origin, and only the next pass walks it to the module
+    // that declares `x`). Copying once and never revisiting left the barrel
+    // pointing at the intermediate module, where `x` is not declared, so
+    // the var/function classification missed and importers of the barrel
+    // got the intermediate module's zero-arg getter wrapped as a function.
+    // Names a module exports explicitly are never recorded here: those
+    // shadow `export *` and must not be overwritten.
+    let mut star_export_sources: BTreeMap<(String, String), String> = BTreeMap::new();
+    // Names each module exports by its own `export { .. }` / `export { .. }
+    // from` / `export * as ns`. Those shadow every `export *`; the explicit
+    // re-export forms only reach `all_module_exports` inside the loop below,
+    // so a star must not claim them in the meantime (and then fight the
+    // explicit entry forever).
+    let mut explicit_exports: BTreeSet<(String, String)> = BTreeSet::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let path_str = path.to_string_lossy().to_string();
+        for export in &hir_module.exports {
+            let name = match export {
+                // A type-only `export { T }` is erased; it shadows nothing.
+                perry_hir::Export::Named { local, .. }
+                    if is_type_only_export_binding(hir_module, local) =>
+                {
+                    continue
+                }
+                perry_hir::Export::Named { exported, .. }
+                | perry_hir::Export::ReExport { exported, .. } => exported,
+                perry_hir::Export::NamespaceReExport { name, .. } => name,
+                perry_hir::Export::ExportAll { .. } => continue,
+            };
+            explicit_exports.insert((path_str.clone(), name.clone()));
+        }
+    }
     loop {
-        // (module_path, export_name, origin_path, origin_name_in_origin).
-        // The fourth tuple element drives Issue #678's per-export
-        // origin-name map: when a re-export renames a name across a hop
-        // (`export { default as render } from './render.js'`), the
+        // (module_path, export_name, origin_path, origin_name_in_origin,
+        // star_source). The fourth tuple element drives Issue #678's
+        // per-export origin-name map: when a re-export renames a name across
+        // a hop (`export { default as render } from './render.js'`), the
         // consumer must use the *origin* name (`default`) as the symbol
-        // suffix, not the consumer-visible one (`render`).
-        let mut new_export_entries: Vec<(String, String, String, String)> = Vec::new();
+        // suffix, not the consumer-visible one (`render`). The fifth is the
+        // `export *` source when the entry came through one (#11275).
+        let mut new_export_entries: Vec<(String, String, String, String, Option<String>)> =
+            Vec::new();
         for (path, hir_module) in &ctx.native_modules {
             let path_str = path.to_string_lossy().to_string();
             for export in &hir_module.exports {
@@ -1980,27 +2019,49 @@ pub fn run_with_parse_cache(
                                     if name == "default" {
                                         continue;
                                     }
-                                    let already_exists = current_exports
-                                        .map(|e| e.contains_key(name))
-                                        .unwrap_or(false);
-                                    if !already_exists {
-                                        // `export * from "src"` doesn't
-                                        // rename — origin_name == export_name.
-                                        // But if `src` itself remapped this
-                                        // name (e.g. `export { default as
-                                        // foo } from './x.js'`), propagate
-                                        // the deeper origin name across this
-                                        // transitive hop.
-                                        let deep_origin_name = all_module_export_origin_names
-                                            .get(&source_path_str)
-                                            .and_then(|m| m.get(name))
-                                            .cloned()
-                                            .unwrap_or_else(|| name.clone());
+                                    let star_key = (path_str.clone(), name.clone());
+                                    let current = current_exports.and_then(|e| e.get(name));
+                                    let claimed_by = star_export_sources.get(&star_key);
+                                    // A name this module already exports
+                                    // explicitly (or that another `export *`
+                                    // claimed first) is not this star's to
+                                    // supply.
+                                    let owned_here = !explicit_exports.contains(&star_key)
+                                        && match claimed_by {
+                                            Some(claimed) => claimed == &source_path_str,
+                                            None => current.is_none(),
+                                        };
+                                    if !owned_here {
+                                        continue;
+                                    }
+                                    // `export * from "src"` doesn't
+                                    // rename — origin_name == export_name.
+                                    // But if `src` itself remapped this
+                                    // name (e.g. `export { default as
+                                    // foo } from './x.js'`), propagate
+                                    // the deeper origin name across this
+                                    // transitive hop.
+                                    let deep_origin_name = all_module_export_origin_names
+                                        .get(&source_path_str)
+                                        .and_then(|m| m.get(name))
+                                        .cloned()
+                                        .unwrap_or_else(|| name.clone());
+                                    let current_origin_name = all_module_export_origin_names
+                                        .get(&path_str)
+                                        .and_then(|m| m.get(name))
+                                        .cloned()
+                                        .unwrap_or_else(|| name.clone());
+                                    // #11275: re-copy whenever the source's
+                                    // entry has moved on since we copied it.
+                                    if current != Some(origin)
+                                        || current_origin_name != deep_origin_name
+                                    {
                                         new_export_entries.push((
                                             path_str.clone(),
                                             name.clone(),
                                             origin.clone(),
                                             deep_origin_name,
+                                            Some(source_path_str.clone()),
                                         ));
                                     }
                                 }
@@ -2041,6 +2102,7 @@ pub fn run_with_parse_cache(
                                             exported.clone(),
                                             origin.clone(),
                                             deep_origin_name,
+                                            None,
                                         ));
                                     }
                                 }
@@ -2091,6 +2153,7 @@ pub fn run_with_parse_cache(
                                                         exported.clone(),
                                                         origin.clone(),
                                                         deep_origin_name,
+                                                        None,
                                                     ));
                                                 }
                                             }
@@ -2107,7 +2170,18 @@ pub fn run_with_parse_cache(
         if new_export_entries.is_empty() {
             break;
         }
-        for (module_path, name, origin, origin_name) in new_export_entries {
+        for (module_path, name, origin, origin_name, star_source) in new_export_entries {
+            if let Some(star_source) = star_source {
+                // First `export *` to supply a name keeps it; a later star
+                // offering the same name is the ambiguous case ESM drops,
+                // and letting it overwrite would never reach a fixpoint.
+                let claimed = star_export_sources
+                    .entry((module_path.clone(), name.clone()))
+                    .or_insert_with(|| star_source.clone());
+                if *claimed != star_source {
+                    continue;
+                }
+            }
             all_module_exports
                 .entry(module_path.clone())
                 .or_default()
@@ -2116,12 +2190,15 @@ pub fn run_with_parse_cache(
             // from the export name (the common identity case is implicit —
             // the codegen helper falls back to the imported name when no
             // entry is present). This keeps the map sparse and easy to
-            // reason about.
+            // reason about. A refined entry (#11275) can also move back to
+            // the identity case, so drop a stale rename then.
             if origin_name != name {
                 all_module_export_origin_names
                     .entry(module_path)
                     .or_default()
                     .insert(name, origin_name);
+            } else if let Some(names) = all_module_export_origin_names.get_mut(&module_path) {
+                names.remove(&name);
             }
         }
     }
