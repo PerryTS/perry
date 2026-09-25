@@ -6,6 +6,34 @@
 
 use super::*;
 
+/// Heap-backed builtins whose reserved ids otherwise dispatch by native brand.
+fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
+    Some(match class_id {
+        crate::buffer::BUFFER_TYPE_ID => "Uint8Array",
+        crate::buffer::NODE_BUFFER_CLASS_ID => "Buffer",
+        0xFFFF0020 => "Date",
+        0xFFFF0021 => "RegExp",
+        0xFFFF0022 => "Map",
+        0xFFFF0023 => "Set",
+        0xFFFF0025 => "ArrayBuffer",
+        0xFFFF002E => "SharedArrayBuffer",
+        crate::error::CLASS_ID_ERROR => "Error",
+        crate::error::CLASS_ID_TYPE_ERROR => "TypeError",
+        crate::error::CLASS_ID_RANGE_ERROR => "RangeError",
+        crate::error::CLASS_ID_REFERENCE_ERROR => "ReferenceError",
+        crate::error::CLASS_ID_SYNTAX_ERROR => "SyntaxError",
+        crate::error::CLASS_ID_EVAL_ERROR => "EvalError",
+        crate::error::CLASS_ID_URI_ERROR => "URIError",
+        crate::error::CLASS_ID_AGGREGATE_ERROR => "AggregateError",
+        crate::typedarray::CLASS_ID_INT8_ARRAY..=crate::typedarray::CLASS_ID_FLOAT16_ARRAY => {
+            crate::typedarray::name_for_kind(
+                (class_id - crate::typedarray::CLASS_ID_INT8_ARRAY) as u8,
+            )
+        }
+        _ => return None,
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
@@ -256,6 +284,23 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
+
+    // #11256: Object.create(Builtin.prototype) has no native brand, but is
+    // still an instance of Builtin. Ordinary objects may store their chain
+    // through a synthetic class id rather than per-object prototype metadata.
+    // Native cells retain their brand path unless their prototype is recorded.
+    if let Some(name) = heap_builtin_name(class_id) {
+        let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+        let matches = if ordinary {
+            prototype_instanceof_builtin(value, name)
+        } else {
+            recorded_prototype_instanceof_builtin(value, name)
+        };
+        if let Some(matches) = matches {
+            return if matches { true_val } else { false_val };
+        }
+    }
 
     // Native/exotic subclass instances (typed arrays, ArrayBuffers, boxed
     // primitives, Dates, …) do not carry a Perry `ObjectHeader.class_id`.

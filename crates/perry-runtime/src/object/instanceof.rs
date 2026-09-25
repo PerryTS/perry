@@ -19,6 +19,8 @@ const CLASS_ID_CRYPTO_KEY: u32 = 0xFFFF00C2;
 const CLASS_ID_FUNCTION: u32 = 0xFFFF00F0;
 const CLASS_ID_URL: u32 = 0xFFFF0063;
 
+#[cfg(test)]
+mod builtin_prototype_tests;
 mod dynamic_dispatch;
 mod static_dispatch;
 
@@ -87,6 +89,10 @@ fn recorded_prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool>
     if addr == 0 || super::prototype_chain::object_static_prototype(addr).is_none() {
         return None;
     }
+    prototype_instanceof_builtin(value, name)
+}
+
+fn prototype_instanceof_builtin(value: f64, name: &str) -> Option<bool> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let constructor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
