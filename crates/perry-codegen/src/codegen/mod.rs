@@ -2327,12 +2327,31 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .iter()
         .map(|class| class.name.as_str())
         .collect();
-    let class_header_image_inits: std::collections::HashMap<String, (u32, u64)> = {
-        let mut inits: std::collections::HashMap<String, (u32, u64)> =
+    let class_header_image_inits: std::collections::HashMap<String, (u32, u64, u32)> = {
+        let mut inits: std::collections::HashMap<String, (u32, u64, u32)> =
             std::collections::HashMap::new();
         for (class_name, keys_global) in &class_keys_globals_map {
-            let Some(&field_count) = class_field_counts_map.get(class_name) else {
+            let Some(&key_count) = class_field_counts_map.get(class_name) else {
                 continue;
+            };
+            // In-object slack for constructor key-adds (see
+            // `lower_call::new_alloc::constructor_added_key_count`): such a
+            // class is born with a live bound of keys + slack, minted beside
+            // this image by the string pool (`birth_live`, 0 = the key count).
+            let slack = if imported_stub_names.contains(class_name.as_str()) {
+                0
+            } else {
+                class_table.get(class_name).map_or(0, |class| {
+                    crate::lower_call::new_alloc::constructor_added_key_count_in(class, &|name| {
+                        class_table.get(name).copied()
+                    })
+                })
+            };
+            let birth_live = if slack > 0 { key_count + slack } else { 0 };
+            let field_count = if slack > 0 {
+                key_count + slack
+            } else {
+                key_count
             };
             let Some(&class_id) = class_ids.get(class_name) else {
                 continue;
@@ -2344,7 +2363,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // runtime class two exact identities across modules. Keep the
             // consumer on the canonical structural identity and validate the
             // typed layout after the producer's constructor returns.
-            let typed_layout = if imported_stub_names.contains(class_name.as_str()) {
+            let typed_layout = if imported_stub_names.contains(class_name.as_str()) || slack > 0 {
                 crate::target_layout::InlineTypedLayout::None
             } else {
                 crate::lower_call::typed_shape_init::layout_at_allocation_in(
@@ -2361,24 +2380,27 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 // Two names (an alias) sharing one keys global must agree on
                 // the word module init writes; if they do not, neither may use
                 // the image — drop the keys global from the table.
-                Some(&(existing_id, existing_gc)) => {
-                    if existing_id != class_id || existing_gc != gc_packed {
-                        inits.insert(keys_global.clone(), (u32::MAX, 0));
+                Some(&(existing_id, existing_gc, existing_live)) => {
+                    if existing_id != class_id
+                        || existing_gc != gc_packed
+                        || existing_live != birth_live
+                    {
+                        inits.insert(keys_global.clone(), (u32::MAX, 0, 0));
                     }
                 }
                 None => {
-                    inits.insert(keys_global.clone(), (class_id, gc_packed));
+                    inits.insert(keys_global.clone(), (class_id, gc_packed, birth_live));
                 }
             }
         }
-        inits.retain(|_, (class_id, _)| *class_id != u32::MAX);
+        inits.retain(|_, (class_id, _, _)| *class_id != u32::MAX);
         inits
     };
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
         class_keys_globals_map
             .iter()
             .filter_map(|(class_name, keys_global)| {
-                let &(class_id, gc_packed) = class_header_image_inits.get(keys_global)?;
+                let &(class_id, gc_packed, _) = class_header_image_inits.get(keys_global)?;
                 Some((
                     class_name.clone(),
                     (

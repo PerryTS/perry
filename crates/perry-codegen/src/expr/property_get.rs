@@ -1656,10 +1656,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // A subclass the guard cannot name would miss it on
                         // every read and pay the IC call behind it; the
                         // generic IC serves such a site from its own word.
+                        // The same holds when instances outgrow the birth
+                        // shape the guard compares against: a constructor
+                        // that adds keys moves every finished instance off
+                        // it, so every read would miss (tsc's per-evaluation
+                        // classes, Zod's `ZodType`).
                         if !crate::expr::class_field_inline_guard::class_field_arms_cover_every_subclass(
                             ctx,
                             &class_name,
                             &subclass_arms,
+                        ) || crate::expr::class_field_inline_guard::class_instances_grow_past_layout(
+                            ctx,
+                            &class_name,
                         ) {
                             return lower_generic_property_get(ctx, object, property, *byte_offset);
                         }

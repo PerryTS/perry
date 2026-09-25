@@ -114,7 +114,7 @@ pub(super) fn emit_string_pool(
     // `perry_plugin_unload` will `dlclose`. See `runtime_decls`.
     output_type: &str,
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
-    class_header_image_inits: &std::collections::HashMap<String, (u32, u64)>,
+    class_header_image_inits: &std::collections::HashMap<String, (u32, u64, u32)>,
     class_ids: &HashMap<String, u32>,
     classes: &HashMap<String, &perry_hir::Class>,
     // Imported class stubs: their ShapeId slots are registered so they follow
@@ -612,7 +612,7 @@ pub(super) fn emit_string_pool(
         let typed_side_mask =
             class_header_image_inits
                 .get(global_name)
-                .is_some_and(|&(_, packed)| {
+                .is_some_and(|&(_, packed, _)| {
                     ((packed >> 16) & GC_LAYOUT_AND_INTACT_MASK) == GC_SIDE_MASK_AND_INTACT
                 });
         let shape_id = if typed_side_mask {
@@ -644,11 +644,26 @@ pub(super) fn emit_string_pool(
         } else {
             // The class id rides along: a birth shape names the prototype
             // its class implies ([[Prototype]] is a shape fact).
-            blk.call(
-                I32,
-                "js_object_shape_id_for_class_keys",
-                &[(I64, &arr), (I32, &fc_str), (I32, &cid_str)],
-            )
+            // A class born WIDE (constructor key-add slack) gets a birth
+            // shape whose live bound is the widened slot count its header
+            // image allocates (`codegen/mod.rs`, `birth_live`).
+            match class_header_image_inits.get(global_name) {
+                Some(&(_, _, birth_live)) if birth_live > *field_count => blk.call(
+                    I32,
+                    "js_object_shape_id_for_class_keys_live",
+                    &[
+                        (I64, &arr),
+                        (I32, &fc_str),
+                        (I32, &birth_live.to_string()),
+                        (I32, &cid_str),
+                    ],
+                ),
+                _ => blk.call(
+                    I32,
+                    "js_object_shape_id_for_class_keys",
+                    &[(I64, &arr), (I32, &fc_str), (I32, &cid_str)],
+                ),
+            }
         };
         let shape_global = format!(
             "@{}",
@@ -664,7 +679,7 @@ pub(super) fn emit_string_pool(
         // allocator). The packed word came from
         // `target_layout::inline_alloc_gc_packed`, the same derivation the
         // site performs and cross-checks before it trusts this global.
-        if let Some(&(image_class_id, gc_packed)) = class_header_image_inits.get(global_name) {
+        if let Some(&(image_class_id, gc_packed, _)) = class_header_image_inits.get(global_name) {
             let image_global = format!(
                 "@{}",
                 crate::typed_shape::header_image_global_name_from_keys_global(global_name)

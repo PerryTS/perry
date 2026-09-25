@@ -148,11 +148,21 @@ pub(super) struct InstanceAlloc {
 /// functions excluded, since their `this` is not the instance). Capped, so a
 /// generated constructor cannot make an instance arbitrarily wide.
 pub(crate) fn constructor_added_key_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> u32 {
+    constructor_added_key_count_in(class, &|name| ctx.classes.get(name).copied())
+}
+
+/// [`constructor_added_key_count`] over any class table: module init
+/// (`codegen/mod.rs`) derives the same count from its own table to mint the
+/// wide birth shape the inline allocator stamps.
+pub(crate) fn constructor_added_key_count_in<'c>(
+    class: &'c perry_hir::Class,
+    lookup: &dyn Fn(&str) -> Option<&'c perry_hir::Class>,
+) -> u32 {
     const SLACK_CAP: usize = 64;
     let mut chain: Vec<&perry_hir::Class> = vec![class];
     let mut parent = class.extends_name.as_deref();
     while let Some(name) = parent {
-        match ctx.classes.get(name).copied() {
+        match lookup(name) {
             Some(p) if chain.len() < 32 => {
                 chain.push(p);
                 parent = p.extends_name.as_deref();
@@ -506,10 +516,35 @@ fn emit_instance_alloc_inner(
         // allocation's live-slot bound exactly equals the module-init keys
         // count used to mint that id. Width-hinted/mismatched allocations use
         // the outlined entry point, which installs an exact local descriptor.
-        let descriptor_facts_exact = inline_shape_descriptor_facts_exact(
+        // A class whose constructor adds keys is born WIDE: module init mints
+        // its birth ShapeId with the widened live bound and composes the
+        // header image for the widened size (`codegen/mod.rs`). The inline
+        // allocator may stamp that image only when it is byte-for-byte the
+        // one this site would build; and no site may stamp a module image
+        // whose object SIZE differs from its own, since the image's ShapeId
+        // then names a live bound this allocation may not have.
+        let site_total =
+            crate::target_layout::inline_alloc_total_size_bytes(ctx.target_triple, field_count);
+        let module_image = ctx
+            .class_header_image_globals
+            .get(class_name)
+            .map(|(_, packed, image_cid)| (*packed, *image_cid));
+        let image_size_agrees = module_image.is_none_or(|(packed, _)| packed >> 32 == site_total);
+        let wide_birth_image = slack > 0
+            && module_image
+                == Some((
+                    crate::target_layout::inline_alloc_gc_packed(
+                        ctx.target_triple,
+                        field_count,
+                        crate::target_layout::InlineTypedLayout::None,
+                    ),
+                    cid,
+                ));
+        let descriptor_facts_exact = (inline_shape_descriptor_facts_exact(
             ctx.class_field_counts.get(class_name).copied(),
             field_count,
-        );
+        ) && image_size_agrees)
+            || wide_birth_image;
         if !descriptor_facts_exact || (!force_inline_new && !new_site_is_in_loop(ctx)) {
             let keys_slot = if let Some(s) = ctx.class_keys_slots.get(class_name).cloned() {
                 s
@@ -592,8 +627,13 @@ fn emit_instance_alloc_inner(
             // (`layout_set_typed_unknown`), and a constant cannot express "it
             // depends". Computed here, before `ctx.block()` takes its mutable
             // borrow.
-            let inline_typed_layout =
-                super::typed_shape_init::layout_at_allocation(ctx, class_name, field_count);
+            // A wide birth carries no typed layout (the module image was
+            // composed without one); its stores settle the layout per slot.
+            let inline_typed_layout = if wide_birth_image {
+                crate::target_layout::InlineTypedLayout::None
+            } else {
+                super::typed_shape_init::layout_at_allocation(ctx, class_name, field_count)
+            };
             *typed_layout_baked = inline_typed_layout.is_baked();
             let (layout_bits, typed_intact_bits) = match inline_typed_layout {
                 crate::target_layout::InlineTypedLayout::None => (GC_LAYOUT_POINTER_FREE, 0),

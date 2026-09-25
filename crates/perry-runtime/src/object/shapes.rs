@@ -1180,6 +1180,31 @@ pub extern "C" fn js_object_shape_id_for_class_keys(
     id
 }
 
+/// The birth ShapeId of a class born WIDE: its canonical keys with a live
+/// inline bound of `live` (> `key_count`), the in-object slack codegen gives a
+/// constructor that adds keys (`lower_call::new_alloc`). The inline allocator
+/// stamps it on an object with exactly `max(live, INLINE_SLOT_FLOOR)` slots,
+/// and the outlined one matches it for any allocation of that width.
+#[no_mangle]
+pub extern "C" fn js_object_shape_id_for_class_keys_live(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+) -> u32 {
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        keys as usize as *const ArrayHeader,
+        key_count,
+        live.max(key_count),
+        0,
+        ShapeObjectKind::Ordinary,
+        class_proto_id(class_id),
+    ));
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
+    id
+}
+
 /// #10123: the inline slot a PLAIN ordinary shape assigns to `key`, or `-1`.
 ///
 /// The element-shape loop clone's shape-keyed arm asks this once per tracked

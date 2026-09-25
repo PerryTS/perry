@@ -1213,6 +1213,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_build_class_keys_array", I64, &[I32, I32, PTR, I32]);
     module.declare_function("js_object_shape_id_for_keys", I32, &[I64, I32]);
     module.declare_function("js_object_shape_id_for_class_keys", I32, &[I64, I32, I32]);
+    module.declare_function(
+        "js_object_shape_id_for_class_keys_live",
+        I32,
+        &[I64, I32, I32, I32],
+    );
     // #10123: (shape_id, NaN-boxed key) -> inline slot index, or -1. The
     // element-shape loop clone's shape-keyed preheader resolves each tracked
     // property once against the shape the runtime just proved.
