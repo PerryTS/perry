@@ -44,6 +44,76 @@ for (let i = 0; i < 3; i = i + 1) {
 }
 console.log("module, i = i + 1:", exprs.map((C) => new C().get()).join(","));
 
+// Class expressions in a function body refresh before `return`; that
+// refresh must not read the loop's final `i`.
+function exprInFunction(): string {
+  const classes: Array<new () => { get(): number }> = [];
+  for (let i = 0; i < 3; i++) {
+    classes.push(
+      class {
+        get(): number {
+          return i;
+        }
+      },
+    );
+  }
+  return classes.map((C) => new C().get()).join(",");
+}
+console.log("function body, class expr:", exprInFunction());
+
+// A write to another capture AFTER the loop refreshes the class, but must
+// keep the iteration's own `i`.
+function writeAfterLoop(): string {
+  const classes: Array<new () => { get(): string }> = [];
+  let x = 0;
+  for (let i = 0; i < 3; i++) {
+    classes.push(
+      class {
+        get(): string {
+          return i + ":" + x;
+        }
+      },
+    );
+  }
+  x = 5;
+  return classes.map((C) => new C().get()).join(",");
+}
+console.log("write after loop:", writeAfterLoop());
+
+// A head write to ANOTHER captured variable must not re-read `i` either: the
+// refresh it would trigger reads the next iteration's slot.
+function headWritesOther(): string {
+  const classes: Array<new () => { get(): string }> = [];
+  let x = 0;
+  for (let i = 0; i < 3; i++, x++) {
+    classes.push(
+      class {
+        get(): string {
+          return i + ":" + x;
+        }
+      },
+    );
+  }
+  return classes.map((C) => new C().get()).join(",");
+}
+console.log("head writes other capture:", headWritesOther());
+
+function headAssignsOther(): string {
+  const classes: Array<new () => { get(): string }> = [];
+  let x = 0;
+  for (let i = 0; i < 3; i = i + 1, x = x + 1) {
+    classes.push(
+      class {
+        get(): string {
+          return i + ":" + x;
+        }
+      },
+    );
+  }
+  return classes.map((C) => new C().get()).join(",");
+}
+console.log("head assigns other capture:", headAssignsOther());
+
 // An in-body write belongs to the current iteration and IS visible.
 const bodyWrites: Array<new () => { get(): number }> = [];
 for (let i = 0; i < 6; i++) {

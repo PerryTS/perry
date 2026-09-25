@@ -714,6 +714,7 @@ pub fn lower_fn_body_block_stmt(
             crate::lower::expr_function::insert_class_capture_refresh_before_returns(
                 &mut body, &re_regs,
             );
+            crate::lower::class_capture_scope::prune_out_of_scope_capture_refreshes(&mut body);
         }
         crate::lower::expr_function::apply_class_expr_capture_refreshes(
             &mut body,
