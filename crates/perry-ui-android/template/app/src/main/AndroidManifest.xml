@@ -55,11 +55,14 @@
             android:name="com.google.android.geo.API_KEY"
             android:value="__YOUR_GOOGLE_MAPS_API_KEY__" />
 
+        <!-- Keep the native runtime and its view state alive across theme changes
+             (#10561). Activity's default onConfigurationChanged updates resources;
+             recreating PerryActivity would call nativeMain again in this process. -->
         <activity
             android:name="com.perry.app.PerryActivity"
             android:exported="true"
             android:theme="@style/Theme.Perry.Splash"
-            android:configChanges="orientation|screenSize|keyboardHidden">
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
