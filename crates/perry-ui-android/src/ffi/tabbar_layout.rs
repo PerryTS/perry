@@ -17,9 +17,9 @@ pub extern "C" fn perry_ui_tabbar_create(on_select: f64) -> i64 {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_tabbar_add_tab(tabbar_handle: i64, label_ptr: i64) {
+pub extern "C" fn perry_ui_tabbar_add_tab(tabbar_handle: i64, label_ptr: i64, content: i64) {
     catch_panic_void("perry_ui_tabbar_add_tab", || {
-        widgets::tabbar::add_tab(tabbar_handle, label_ptr as *const u8)
+        widgets::tabbar::add_tab(tabbar_handle, label_ptr as *const u8, content)
     });
 }
 

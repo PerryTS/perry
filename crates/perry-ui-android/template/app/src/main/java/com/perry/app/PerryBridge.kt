@@ -160,6 +160,31 @@ object PerryBridge {
         }
     }
 
+    // TabBar state and all view mutations belong to the Android UI thread.
+    private fun <T> tabBarOnUiThread(action: () -> T): T {
+        if (Looper.myLooper() == Looper.getMainLooper()) return action()
+        val task = java.util.concurrent.FutureTask<T> { action() }
+        uiHandler.post(task)
+        return task.get()
+    }
+
+    @JvmStatic
+    fun createTabBar(callbackKey: Long): View = tabBarOnUiThread {
+        PerryTabBar(activity, callbackKey)
+    }
+
+    @JvmStatic
+    fun tabBarAddTab(view: View, label: String, content: View) = tabBarOnUiThread {
+        (view as? PerryTabBar)?.addTab(label, content)
+        Unit
+    }
+
+    @JvmStatic
+    fun tabBarSetSelected(view: View, index: Int) = tabBarOnUiThread {
+        (view as? PerryTabBar)?.selectTab(index)
+        Unit
+    }
+
     // --- dp conversion ---
 
     @JvmStatic
