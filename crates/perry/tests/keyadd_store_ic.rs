@@ -275,3 +275,42 @@ console.log(s, Object.keys(p).join(","), fi.join(","), JSON.stringify(Object.ent
         "the inline add hit never ran (hits={hits} memo={memo})"
     );
 }
+
+/// A marked prototype is on a private shape lineage, so a site primed on plain
+/// objects of the same key list never adds to it inline: its structural change
+/// must go through the stamp funnel, which moves the prototype-validity word.
+/// The witness is the hit COUNT (the prototype is the one receiver of 3,001
+/// that must miss), because the inherited reads here re-prove their answer by
+/// other means and stay correct either way. Sabotage: marking keeps the
+/// ShapeId -> 3,000 hits.
+#[test]
+fn a_marked_prototype_never_takes_the_inline_add() {
+    let (stdout, hits, _memo) = run(
+        r#"// One key-add site, primed on plain objects, then handed an object of the
+// same key list that is somebody's PROTOTYPE, adding a key that shadows one an
+// inherited read already found further up the chain: the read must see the
+// new value, so the add must move the prototype-validity word. One loop feeds
+// every receiver, so an inlining compiler cannot split the site.
+(Object.prototype as any).k = 1;
+function mk(i: number): any { return { a: i }; }
+const P = mk(7);
+const Q: any = Object.create(P);
+let before = 0;
+for (let i = 0; i < 3000; i++) before += Q.k + Q.a;
+const objs: any[] = [];
+for (let i = 0; i < 3000; i++) objs.push(mk(i));
+objs.push(P);
+let s = 0;
+for (let i = 0; i < objs.length; i++) { objs[i].k = i; s += objs[i].k; }
+let after = 0;
+for (let i = 0; i < 3000; i++) after += Q.k;
+delete (Object.prototype as any).k;
+console.log(s, before, after, Object.keys(P).join(","), Q.k, Object.keys(Q).length);
+"#,
+    );
+    assert_eq!(stdout, r#"4501500 24000 9000000 a,k 3000 0"#);
+    assert_eq!(
+        hits, 2999,
+        "the prototype must miss the inline add (first receiver primes)"
+    );
+}
