@@ -956,17 +956,24 @@ mod rel_numeric_fastpath_tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         unsafe {
-            // An Error whose padding still holds a dead closure's tag.
+            // An Error whose tag-offset word (padding on 64-bit) still holds a
+            // dead closure's tag.
             let err = crate::error::js_error_new() as *mut u8;
-            // GC_STORE_AUDIT(POINTER_FREE): plants the u32 magic in the padding word.
+            // GC_STORE_AUDIT(POINTER_FREE): plants the u32 magic in a non-pointer word.
             (err.add(CLOSURE_TYPE_TAG_OFFSET) as *mut u32).write(CLOSURE_MAGIC);
             let err = crate::value::js_nanbox_pointer(err as i64);
             assert_eq!(classify_value_typeof(err), ValueTypeofTag::Object);
             assert_eq!(js_value_typeof_tag(err), ValueTypeofTag::Object as u32);
 
-            // `[15937034497556480]`: element 0's high word is "CLOS".
+            // Element 0 carries "CLOS" in whichever of its words sits at the tag
+            // offset: the high word on 64-bit (`[15937034497556480]`), the low
+            // word where the offset is 8.
+            let shift =
+                (CLOSURE_TYPE_TAG_OFFSET - std::mem::size_of::<crate::array::ArrayHeader>()) * 8;
+            let bits = (CLOSURE_MAGIC as u64) << shift;
+            assert!(cfg!(not(target_pointer_width = "64")) || bits == 0x434C_4F53_0000_0000);
             let arr = crate::array::js_array_alloc(1);
-            let arr = crate::array::js_array_push_f64(arr, f64::from_bits(0x434C_4F53_0000_0000));
+            let arr = crate::array::js_array_push_f64(arr, f64::from_bits(bits));
             let arr_ptr = arr as *const u8;
             assert_eq!(
                 *(arr_ptr.add(CLOSURE_TYPE_TAG_OFFSET) as *const u32),
