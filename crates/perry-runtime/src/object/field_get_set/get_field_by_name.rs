@@ -235,7 +235,10 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     // change: heap-object type, not forwarded, no blocking flags, a real class
     // id, and the receiver's CURRENT shape token. The token pins the exact key
     // set and order, so a match means the cached slot still names this key; a
-    // stale entry misses rather than resolving to the wrong property.
+    // stale entry misses rather than resolving to the wrong property. That
+    // guard is `read_stub::stub_receiver_token`, the same function the prime
+    // runs (#10768). The slot word carries the inline/overflow verdict from
+    // prime time, so a hit fetches no bound.
     //
     // Sits after the process.env and Proxy arms above, which have their own
     // semantics and must keep them, and before the lane's guard chain plus the
@@ -244,34 +247,8 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     // it is repeatedly cold and falls through to a shape-index hash lookup.
     unsafe {
         if let Some(key_bits) = super::super::read_stub::read_stub_key_bits(key) {
-            let addr = obj as usize;
-            if let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) {
-                const STUB_BLOCKING: u16 =
-                    crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-                if gc.obj_type == crate::gc::GC_TYPE_OBJECT
-                    && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                    && gc._reserved & STUB_BLOCKING == 0
-                {
-                    let o = addr as *const ObjectHeader;
-                    let class_id = (*o).class_id;
-                    if class_id != 0
-                        && class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
-                    {
-                        if let Some(token) = super::super::read_stub::receiver_shape_token(o) {
-                            if let Some(slot) =
-                                super::super::read_stub::read_stub_probe(token, key_bits)
-                            {
-                                // The slot word carries the inline/overflow
-                                // verdict from prime time; no bound fetch.
-                                if let Some(v) =
-                                    super::super::read_stub::read_slot_by_tag(o, addr, slot)
-                                {
-                                    return JSValue::from_bits(v.to_bits());
-                                }
-                            }
-                        }
-                    }
-                }
+            if let Some(v) = super::super::read_stub::read_stub_lookup(obj, key_bits) {
+                return JSValue::from_bits(v.to_bits());
             }
         }
     }
@@ -1910,7 +1887,9 @@ mod null_key_guard_5972 {
 /// Only called from inside the fast lane, i.e. once the receiver has already
 /// been proved an ordinary shaped heap object with a resolvable own slot, so
 /// the stub never learns an entry for a receiver whose reads have other
-/// semantics. Keys that cannot be represented as content bits are skipped by
+/// semantics. The lane's proof does not include "not forwarded"; the stub's
+/// own guard, which `read_stub_prime` shares with the probe, does (#10768).
+/// Keys that cannot be represented as content bits are skipped by
 /// `read_stub_key_bits`.
 #[inline]
 fn prime_read_stub(
@@ -1925,8 +1904,6 @@ fn prime_read_stub(
         slot | crate::proxy::IC_SLOT_OVERFLOW_BIT
     };
     if let Some(key_bits) = super::super::read_stub::read_stub_key_bits(key) {
-        if let Some(token) = unsafe { super::super::read_stub::receiver_shape_token(obj) } {
-            super::super::read_stub::read_stub_insert(token, key_bits, slot);
-        }
+        unsafe { super::super::read_stub::read_stub_prime(obj, key_bits, slot) };
     }
 }

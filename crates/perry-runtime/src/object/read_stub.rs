@@ -21,6 +21,18 @@
 //! AND order, so a matching token means the cached slot still names this key.
 //! A stale entry therefore misses; it cannot resolve to the wrong property.
 //!
+//! The same guard runs before an entry is INSTALLED, and it is one function
+//! ([`stub_receiver_token`]), not two copies (#10768). The prime's copy had
+//! lost the `GC_FLAG_FORWARDED` test, and the probe's test does not cover for
+//! it: see that function for why.
+//!
+//! The token also carries the slot word's inline-versus-overflow verdict,
+//! which is decided at prime time and never re-derived. That holds because a
+//! ShapeId pins `max(live_inline_slot_count, INLINE_SLOT_FLOOR)`: an ordinary
+//! bound change mints a new id, and the one in-place writer —
+//! `shapes::try_update_stable_tombstone_shape{,_cached}` for #9064's
+//! stable-tombstone receivers — refuses any update that would move it.
+//!
 //! Entries hold no roots and no addresses: the key is stored as CONTENT bits
 //! (an SSO immediate, or a short ASCII heap string folded to the bits its
 //! content would encode as), so a key that dies and has its address recycled
@@ -64,7 +76,7 @@ fn bucket_of(token: u64, key_bits: u64) -> usize {
 }
 
 #[inline(always)]
-pub(crate) fn read_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
+fn read_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
     READ_STUB.with(|t| {
         for way in t[bucket_of(token, key_bits)].iter() {
             let (tok, kb, slot) = way.get();
@@ -77,7 +89,7 @@ pub(crate) fn read_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
 }
 
 #[inline(always)]
-pub(crate) fn read_stub_insert(token: u64, key_bits: u64, slot: u32) {
+fn read_stub_insert(token: u64, key_bits: u64, slot: u32) {
     if token == 0 || key_bits == 0 {
         return;
     }
@@ -109,7 +121,7 @@ pub(crate) fn read_stub_insert(token: u64, key_bits: u64, slot: u32) {
 /// Same discriminated form the write ICs use, so the two caches agree on what
 /// "this shape" means.
 #[inline(always)]
-pub(crate) unsafe fn receiver_shape_token(obj: *const ObjectHeader) -> Option<u64> {
+unsafe fn receiver_shape_token(obj: *const ObjectHeader) -> Option<u64> {
     let stamp = crate::object::shapes::object_shape_stamp(obj);
     if stamp == 0 {
         return None;
@@ -117,34 +129,33 @@ pub(crate) unsafe fn receiver_shape_token(obj: *const ObjectHeader) -> Option<u6
     Some(crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64)
 }
 
-/// Resolve an own data slot straight from an SSO key's CONTENT bits, without
-/// building a `StringHeader` for it at all.
+/// The stub's receiver guard: the token to file or look up an entry under, or
+/// `None` when the stub must not answer for this receiver at all.
 ///
-/// The computed-read lowering hands the key to `js_get_string_pointer_unified`
-/// before calling the by-name entry, because that entry's signature wants a
-/// `*const StringHeader`. For an SSO key that means materialising inline bytes
-/// onto the heap — an intern hash and table probe — on EVERY read, purely to
-/// satisfy a pointer signature. On the combined overwrite loop
-/// `intern_dispatch_bytes` is 5.5% of self time, all of it that.
+/// Heap-object type, not forwarded, none of the blocking flags, a real class
+/// id, a live shape. The probe ([`read_stub_lookup`]) and the prime
+/// ([`read_stub_prime`]) both call this, and the table accessors are private,
+/// so the two arms cannot drift apart again (#10768).
 ///
-/// Validation is the read stub's usual one, so this can only answer for a
-/// receiver the stub was primed from: heap-object type, not forwarded, no
-/// blocking flags, a real class id, and the receiver's CURRENT shape token,
-/// which pins the key set and order. Anything else returns `None` and the
-/// caller takes its normal route.
+/// They had. The prime's copy of this chain skipped `GC_FLAG_FORWARDED`, and
+/// the probe's copy of the check does not cover for that: a later hit on an
+/// entry comes from some other, live receiver, not from the forwarded one.
+/// What has kept it harmless is layout, not a guard. An evacuating copy
+/// writes the forwarding address over the first payload word
+/// (`gc::set_forwarding_address`), which on an `ObjectHeader` is `class_id`
+/// plus the ShapeId word. On a 64-bit host the ShapeId word then holds the
+/// address's upper half, which can never reach `SHAPE_ID_BASE`, so the stamp
+/// reads as absent and no token comes back. On ILP32 the forwarding word
+/// covers `class_id` alone. Both are facts about the id range and the header
+/// layout, and neither says anything about the stub, so the stub checks the
+/// flag itself.
 ///
 /// # Safety
-/// `obj` must be a plausible heap address or null; nothing is dereferenced
-/// before the GC header read classifies it.
-pub(crate) unsafe fn try_read_by_content_bits(
-    obj: *const ObjectHeader,
-    key_bits: u64,
-) -> Option<f64> {
-    if obj.is_null() {
-        return None;
-    }
-    let addr = obj as usize;
-    let gc = crate::value::addr_class::try_read_gc_header(addr)?;
+/// `obj` must be a plausible heap address or arbitrary non-pointer bits;
+/// nothing is dereferenced before the GC header read classifies it.
+#[inline(always)]
+unsafe fn stub_receiver_token(obj: *const ObjectHeader) -> Option<u64> {
+    let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
     const STUB_BLOCKING: u16 =
         crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
     if gc.obj_type != crate::gc::GC_TYPE_OBJECT
@@ -157,9 +168,56 @@ pub(crate) unsafe fn try_read_by_content_bits(
     if class_id == 0 || class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         return None;
     }
-    let token = receiver_shape_token(obj)?;
+    receiver_shape_token(obj)
+}
+
+/// Answer a read of `key_bits` on `obj` from the stub, or `None` to take the
+/// caller's normal route.
+///
+/// # Safety
+/// As [`stub_receiver_token`].
+#[inline(always)]
+pub(crate) unsafe fn read_stub_lookup(obj: *const ObjectHeader, key_bits: u64) -> Option<f64> {
+    let token = stub_receiver_token(obj)?;
     let slot = read_stub_probe(token, key_bits)?;
-    read_slot_by_tag(obj, addr, slot)
+    read_slot_by_tag(obj, obj as usize, slot)
+}
+
+/// Record that `key_bits` lives at `slot_word` (carrying
+/// `IC_SLOT_OVERFLOW_BIT` when it is an overflow slot) on `obj`'s CURRENT
+/// shape. A receiver the lookup would refuse is not recorded.
+///
+/// # Safety
+/// As [`stub_receiver_token`].
+#[inline]
+pub(crate) unsafe fn read_stub_prime(obj: *const ObjectHeader, key_bits: u64, slot_word: u32) {
+    if let Some(token) = stub_receiver_token(obj) {
+        read_stub_insert(token, key_bits, slot_word);
+    }
+}
+
+/// Resolve an own data slot straight from an SSO key's CONTENT bits, without
+/// building a `StringHeader` for it at all.
+///
+/// The computed-read lowering hands the key to `js_get_string_pointer_unified`
+/// before calling the by-name entry, because that entry's signature wants a
+/// `*const StringHeader`. For an SSO key that means materialising inline bytes
+/// onto the heap — an intern hash and table probe — on EVERY read, purely to
+/// satisfy a pointer signature. On the combined overwrite loop
+/// `intern_dispatch_bytes` is 5.5% of self time, all of it that.
+///
+/// Validation is the read stub's usual one ([`stub_receiver_token`]), so this
+/// can only answer for a receiver the stub was primed from. Anything else
+/// returns `None` and the caller takes its normal route.
+///
+/// # Safety
+/// `obj` must be a plausible heap address or null; nothing is dereferenced
+/// before the GC header read classifies it.
+pub(crate) unsafe fn try_read_by_content_bits(
+    obj: *const ObjectHeader,
+    key_bits: u64,
+) -> Option<f64> {
+    read_stub_lookup(obj, key_bits)
 }
 
 /// Read the value a bit-tagged cached slot names. The inline/overflow verdict
@@ -169,11 +227,7 @@ pub(crate) unsafe fn try_read_by_content_bits(
 /// mutable shape epoch: its deleted slot contains `TAG_HOLE`, which must miss
 /// so the ordinary lookup can continue through the prototype chain.
 #[inline(always)]
-pub(crate) unsafe fn read_slot_by_tag(
-    obj: *const ObjectHeader,
-    addr: usize,
-    slot: u32,
-) -> Option<f64> {
+unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> Option<f64> {
     use crate::proxy::IC_SLOT_OVERFLOW_BIT;
     if slot & IC_SLOT_OVERFLOW_BIT != 0 {
         return crate::object::overflow_get(addr, (slot & !IC_SLOT_OVERFLOW_BIT) as usize)
@@ -193,3 +247,7 @@ pub(crate) unsafe fn read_slot_by_tag(
     }
     Some(f64::from_bits(val.bits()))
 }
+
+#[cfg(test)]
+#[path = "read_stub_tests.rs"]
+mod tests;

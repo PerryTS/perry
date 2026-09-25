@@ -416,6 +416,33 @@ pub(crate) unsafe fn retire_owned_shape_history(
     }
 }
 
+/// The inline/overflow boundary a live count implies: slot `i` is inline iff
+/// `i < inline_slot_bound(live)`. Every reader and writer splits on this.
+#[inline(always)]
+fn inline_slot_bound(live_inline_slot_count: u32) -> u32 {
+    live_inline_slot_count.max(crate::object::INLINE_SLOT_FLOOR as u32)
+}
+
+/// May a stable-tombstone update rewrite `from` to `to` UNDER THE SAME ID?
+///
+/// Only if the boundary does not move (#10768). Caches record a slot's
+/// inline-or-overflow verdict when they prime (`IC_SLOT_OVERFLOW_BIT` in the
+/// read and write stubs' slot words) and re-prove it only through the shape
+/// token. That is sound only if an id pins the boundary. A general
+/// publication pins it by minting a new id for a new count. These two
+/// updaters are the one place a count changes under an id that is already
+/// stamped, so they check it here, for every caller, instead of each caller
+/// showing its own change is harmless. A change that WOULD move the boundary
+/// declines, and the caller mints a successor like any other receiver.
+///
+/// A raise that stays below the floor is admitted. That is the #9064 re-add
+/// into an unused inline slot (`live 1 -> 2` under a floor of 2), which moves
+/// no slot across the boundary.
+#[inline(always)]
+fn stable_update_keeps_inline_bound(from: u32, to: u32) -> bool {
+    inline_slot_bound(from) == inline_slot_bound(to)
+}
+
 /// Update the private structural facts of a stable-tombstone receiver without
 /// changing its ShapeId.
 ///
@@ -423,8 +450,9 @@ pub(crate) unsafe fn retire_owned_shape_history(
 /// allocation must stay at the same address, so the descriptor's GC edge and
 /// every surviving `(token, slot)` remain unchanged. Deletes change only the
 /// hole count; a re-add appends at the private array's tail and may also widen
-/// the inline live bound. A grow-reallocation declines and uses the ordinary
-/// mint-then-stamp path.
+/// the live count below the inline boundary. A grow-reallocation declines and
+/// uses the ordinary mint-then-stamp path, and so does any update that would
+/// move the inline/overflow boundary (`stable_update_keeps_inline_bound`).
 ///
 /// A mutable private epoch must not participate in exact-facts interning.
 /// Detach it on entry and leave it in the keys-address family, which keeps GC
@@ -467,6 +495,9 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         && current.hole_count == hole_count
     {
         return Some(id);
+    }
+    if !stable_update_keeps_inline_bound(current.live_inline_slot_count, live_inline_slot_count) {
+        return None;
     }
 
     // Detach from exact-facts interning, so a mutable private epoch is never
@@ -527,6 +558,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     if record.keys != current.keys
         || record.has(RECORD_FLAG_FACTS_INDEXED)
         || record.object_kind() != super::ShapeObjectKind::Ordinary
+        || !stable_update_keeps_inline_bound(record.live_inline_slot_count, live_inline_slot_count)
     {
         return None;
     }

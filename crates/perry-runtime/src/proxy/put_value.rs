@@ -985,7 +985,9 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
                 | unsafe { crate::object::shapes::object_shape_stamp(obj) } as u64;
             if let Some(kb) = stub_bits {
                 write_stub_insert(token, kb, slot);
-                crate::object::read_stub::read_stub_insert(token, kb, slot);
+                // Through the read stub's own receiver guard, the one its
+                // probe runs (#10768), not a raw insert under `token`.
+                unsafe { crate::object::read_stub::read_stub_prime(obj, kb, slot) };
             }
             return value;
         }

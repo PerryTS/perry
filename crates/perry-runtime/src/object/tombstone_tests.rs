@@ -953,3 +953,168 @@ fn the_delete_successor_generation_is_deterministic_not_a_counter_draw() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// #10768: a stable-tombstone update never moves the inline/overflow boundary
+// under one ShapeId.
+//
+// The read and write stubs record each slot's inline-or-overflow verdict when
+// they prime, and re-prove it only through the shape token. The two in-place
+// updaters are the one place a live count changes under an id that is already
+// stamped, so they refuse a change that moves `max(live, INLINE_SLOT_FLOOR)`.
+// Anything else mints a successor, which retires the token.
+// ---------------------------------------------------------------------------
+
+/// A stable-tombstone receiver with one deleted key, allocated with
+/// `field_count` physical slots. Returns it with its descriptor.
+unsafe fn stable_receiver_one_hole(
+    field_count: u32,
+    name: &[u8],
+) -> (
+    *mut crate::object::ObjectHeader,
+    super::shapes::ShapeDescriptor,
+) {
+    let obj = js_object_alloc(0, field_count);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    js_object_set_field_by_name(obj, key, 1.0);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    assert_eq!(super::delete_rest::js_object_delete_field(obj, key), 1);
+    let gc = crate::value::addr_class::try_read_gc_header(obj as usize).unwrap();
+    assert_ne!(
+        gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES,
+        0,
+        "fixture premise: the delete left a stable-tombstone receiver"
+    );
+    let shape = super::shapes::object_shape_descriptor(obj).unwrap();
+    assert_eq!(
+        shape.hole_count, 1,
+        "fixture premise: the delete tombstoned"
+    );
+    (obj, shape)
+}
+
+/// The in-place raise #9064 exists for still keeps its id: a re-add into an
+/// unused inline slot below the floor (`live 1 -> 2`, floor 2) moves no slot
+/// across the boundary.
+#[test]
+fn stable_tombstone_readd_below_the_floor_keeps_its_shape_id() {
+    super::delete_rest::test_set_tombstone_deletes(Some(true));
+    let _restore = scopeguard_tombstone_flag();
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let (obj, shape) = stable_receiver_one_hole(0, b"floor_a");
+        assert_eq!(
+            shape.live_inline_slot_count,
+            1,
+            "fixture premise: one inline slot live, under a floor of {}",
+            crate::object::INLINE_SLOT_FLOOR
+        );
+        let before = super::shapes::object_shape_stamp(obj);
+
+        let sso = crate::value::JSValue::try_short_string(b"fl_b").unwrap();
+        let (slot_word, obj, _) =
+            crate::object::try_readd_stable_tombstone(obj, f64::from_bits(sso.bits()), 2.0)
+                .expect("a stable receiver re-adds an SSO key");
+        assert_eq!(slot_word, 1, "the re-add lands in inline slot 1");
+        let after = super::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(after.live_inline_slot_count, 2);
+        assert_eq!(
+            super::shapes::object_shape_stamp(obj),
+            before,
+            "a live raise that keeps the inline boundary must keep the id"
+        );
+    }
+}
+
+/// Both updaters refuse, before writing anything, a live count that moves the
+/// boundary, and still admit one that does not.
+#[test]
+fn stable_tombstone_updaters_refuse_to_move_the_inline_bound() {
+    super::delete_rest::test_set_tombstone_deletes(Some(true));
+    let _restore = scopeguard_tombstone_flag();
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let (obj, shape) = stable_receiver_one_hole(0, b"bound_a");
+        let id = super::shapes::object_shape_stamp(obj);
+        let keys = shape.keys as usize as *mut crate::ArrayHeader;
+        let floor = crate::object::INLINE_SLOT_FLOOR as u32;
+        assert!(shape.live_inline_slot_count < floor, "fixture premise");
+
+        assert_eq!(
+            super::shapes::try_update_stable_tombstone_shape_cached(
+                obj,
+                shape,
+                shape.logical_key_count,
+                floor + 1,
+                shape.hole_count,
+            ),
+            None,
+            "the cached updater raised the inline boundary in place"
+        );
+        assert_eq!(
+            super::shapes::try_update_stable_tombstone_shape(
+                obj,
+                keys,
+                shape.logical_key_count,
+                floor + 1,
+                shape.hole_count,
+            ),
+            None,
+            "the updater raised the inline boundary in place"
+        );
+        let unchanged = super::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(super::shapes::object_shape_stamp(obj), id);
+        assert_eq!(
+            unchanged.live_inline_slot_count, shape.live_inline_slot_count,
+            "a refused update must not have written the record"
+        );
+
+        // Positive control: up to the floor, the boundary does not move.
+        assert_eq!(
+            super::shapes::try_update_stable_tombstone_shape_cached(
+                obj,
+                shape,
+                shape.logical_key_count,
+                floor,
+                shape.hole_count,
+            ),
+            Some(id)
+        );
+        assert_eq!(
+            super::shapes::object_shape_descriptor(obj)
+                .unwrap()
+                .live_inline_slot_count,
+            floor
+        );
+    }
+}
+
+/// End to end through the general publisher, which routes EVERY live-count
+/// change on a stable receiver through the in-place updater: a boundary move
+/// now mints a successor, so any `(token, key)` entry primed on the old id
+/// stops matching. Before #10768 this returned the same id with the lowered
+/// count written into it.
+#[test]
+fn stable_tombstone_bound_move_mints_a_new_shape_id() {
+    super::delete_rest::test_set_tombstone_deletes(Some(true));
+    let _restore = scopeguard_tombstone_flag();
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        // Eight physical slots, all live from birth: lowering the count only
+        // stops tracing slots that hold `undefined`.
+        let (obj, shape) = stable_receiver_one_hole(8, b"wide_a");
+        assert_eq!(shape.live_inline_slot_count, 8, "fixture premise");
+        let before = super::shapes::object_shape_stamp(obj);
+
+        let published = super::shapes::publish_object_live_slot_count(obj, 4);
+        assert_ne!(
+            published, before,
+            "a stable-tombstone receiver kept its ShapeId across an inline-bound move"
+        );
+        assert_eq!(super::shapes::object_shape_stamp(obj), published);
+        let after = super::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(after.live_inline_slot_count, 4);
+        assert_eq!(after.logical_key_count, shape.logical_key_count);
+        assert_eq!(after.hole_count, shape.hole_count);
+    }
+}
