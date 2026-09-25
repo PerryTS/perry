@@ -1034,6 +1034,93 @@ mod tests {
 
     #[test]
     fn needs_custom_client_logic() {
+        const CASE_ENV: &str = "PERRY_TLS_CLIENT_TEST_CASE";
+        let Ok(case) = std::env::var(CASE_ENV) else {
+            // CA files are cached on first use by perry-ffi. A fresh process
+            // isolates both that cache and ambient TLS settings without
+            // mutating the environment under parallel tests.
+            use std::io::Write;
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let ca_path = std::env::temp_dir().join(format!(
+                "perry-tls-client-{}-{nonce}.pem",
+                std::process::id()
+            ));
+            let mut ca = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&ca_path)
+                .unwrap();
+            ca.write_all(&fixture(include_str!("../tests/fixtures/ca2-cert.pem.b64")))
+                .unwrap();
+            drop(ca);
+            let mut results = Vec::new();
+            for case in ["clean", "reject", "ssl_ca", "extra_ca"] {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([
+                        "--exact",
+                        "tls_client::tests::needs_custom_client_logic",
+                        "--nocapture",
+                    ])
+                    .env_remove("NODE_TLS_REJECT_UNAUTHORIZED")
+                    .env_remove("SSL_CERT_FILE")
+                    .env_remove("NODE_EXTRA_CA_CERTS")
+                    .env(CASE_ENV, case);
+                match case {
+                    "reject" => {
+                        command.env("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+                    }
+                    "ssl_ca" => {
+                        command.env("SSL_CERT_FILE", &ca_path);
+                    }
+                    "extra_ca" => {
+                        command.env("NODE_EXTRA_CA_CERTS", &ca_path);
+                    }
+                    _ => {}
+                }
+                results.push((
+                    case,
+                    command.output().expect("run isolated TLS options test"),
+                ));
+            }
+            std::fs::remove_file(ca_path).unwrap();
+            for (case, output) in results {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                assert!(
+                    output.status.success() && stdout.contains("test result: ok. 1 passed;"),
+                    "TLS case {case} failed or did not run:\n{stdout}\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
+
+        let environment = perry_ffi::node_tls_client_environment();
+        let defaults = TlsOptions::default();
+        match case.as_str() {
+            "reject" => {
+                assert!(environment.accepts_invalid_certificates());
+                assert!(defaults.needs_custom_client());
+                assert!(defaults.accept_invalid_certs());
+                return;
+            }
+            "ssl_ca" | "extra_ca" => {
+                assert_eq!(environment.ca_pems().len(), 1);
+                assert!(defaults.needs_custom_client());
+                // A custom trust store must never mean "skip verification".
+                assert!(!environment.accepts_invalid_certificates());
+                assert!(!defaults.accept_invalid_certs());
+                return;
+            }
+            "clean" => {
+                assert!(environment.ca_pems().is_empty());
+                assert!(!environment.accepts_invalid_certificates());
+            }
+            other => panic!("unknown TLS test case: {other}"),
+        }
         let mut t = TlsOptions::default();
         assert!(!t.needs_custom_client());
         t.reject_unauthorized = Some(true);
