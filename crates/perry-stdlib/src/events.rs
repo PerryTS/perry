@@ -838,7 +838,7 @@ pub unsafe extern "C" fn js_event_emitter_on(
     event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
-    return_if_foreign!(listener_fwd(handle, "on", event_bits, listener_bits));
+    return_if_foreign!(handle => listener_fwd(handle, "on", event_bits, listener_bits));
     ensure_gc_scanner_registered();
     // #3072: throw TypeError [ERR_INVALID_ARG_TYPE] for a non-function
     // listener before touching the event name (Node validates listener first).
@@ -860,7 +860,7 @@ pub unsafe extern "C" fn js_event_emitter_once(
     event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
-    return_if_foreign!(listener_fwd(handle, "once", event_bits, listener_bits));
+    return_if_foreign!(handle => listener_fwd(handle, "once", event_bits, listener_bits));
     ensure_gc_scanner_registered();
     let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match event_name_from_bits(event_bits) {
@@ -880,12 +880,7 @@ pub unsafe extern "C" fn js_event_emitter_prepend_listener(
     event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
-    return_if_foreign!(listener_fwd(
-        handle,
-        "prependListener",
-        event_bits,
-        listener_bits
-    ));
+    return_if_foreign!(handle => listener_fwd(handle, "prependListener", event_bits, listener_bits));
     ensure_gc_scanner_registered();
     let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match event_name_from_bits(event_bits) {
@@ -905,12 +900,7 @@ pub unsafe extern "C" fn js_event_emitter_prepend_once_listener(
     event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
-    return_if_foreign!(listener_fwd(
-        handle,
-        "prependOnceListener",
-        event_bits,
-        listener_bits
-    ));
+    return_if_foreign!(handle => listener_fwd(handle, "prependOnceListener", event_bits, listener_bits));
     ensure_gc_scanner_registered();
     let callback_ptr = validate_event_listener(listener_bits);
     let event_name = match event_name_from_bits(event_bits) {
@@ -1074,7 +1064,7 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     event_bits: i64,
     args_ptr: *mut ArrayHeader,
 ) -> f64 {
-    return_if_foreign!(foreign_varargs(handle, "emit", Some(event_bits), args_ptr));
+    return_if_foreign!(handle => varargs_fwd(handle, "emit", Some(event_bits), args_ptr));
     let event_name = match event_name_from_bits(event_bits) {
         Some(name) => name,
         None => return TAG_FALSE_F64,
@@ -1161,7 +1151,7 @@ pub unsafe extern "C" fn js_event_emitter_emit(
 /// EventEmitter.emit with no arguments
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64) -> f64 {
-    return_if_foreign!(foreign_event_call(handle, "emit", event_bits));
+    return_if_foreign!(handle => event_fwd(handle, "emit", event_bits));
     let event_name = match event_name_from_bits(event_bits) {
         Some(name) => name,
         None => return TAG_FALSE_F64,
@@ -1244,12 +1234,7 @@ pub unsafe extern "C" fn js_event_emitter_remove_listener(
     event_bits: i64,
     listener_bits: i64,
 ) -> Handle {
-    return_if_foreign!(listener_fwd(
-        handle,
-        "removeListener",
-        event_bits,
-        listener_bits
-    ));
+    return_if_foreign!(handle => listener_fwd(handle, "removeListener", event_bits, listener_bits));
     // #3072: `removeListener`/`off` also require a callable listener; Node
     // throws TypeError [ERR_INVALID_ARG_TYPE] for non-functions before any
     // table lookup.
@@ -1280,7 +1265,7 @@ pub unsafe extern "C" fn js_event_emitter_remove_all_listeners(
     handle: Handle,
     args_ptr: *const ArrayHeader,
 ) -> Handle {
-    return_if_foreign!(remove_all_fwd(handle, args_ptr));
+    return_if_foreign!(handle => remove_all_fwd(handle, args_ptr));
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         if args_ptr.is_null() || js_array_length(args_ptr) == 0 {
             let removed: Vec<(String, i64)> = emitter
@@ -1331,7 +1316,7 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
     event_bits: i64,
     listener_bits: i64,
 ) -> f64 {
-    return_if_foreign!(foreign_listener_count(handle, event_bits, listener_bits));
+    return_if_foreign!(handle => count_fwd(handle, event_bits, listener_bits));
     let event_name = match event_name_from_bits(event_bits) {
         Some(name) => name,
         None => return 0.0,
@@ -1363,7 +1348,7 @@ pub unsafe extern "C" fn js_event_emitter_listener_count(
 /// EventEmitter.setMaxListeners(n).
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f64) -> Handle {
-    return_if_foreign!(foreign_call(handle, "setMaxListeners", &[n]).map(|_| handle));
+    return_if_foreign!(handle => call_fwd(handle, "setMaxListeners", &[n]).map(|_| handle));
     let n = validate_max_listeners(n);
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         emitter.max_listeners = n;
@@ -1374,7 +1359,7 @@ pub unsafe extern "C" fn js_event_emitter_set_max_listeners(handle: Handle, n: f
 /// EventEmitter.getMaxListeners().
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_get_max_listeners(handle: Handle) -> f64 {
-    return_if_foreign!(foreign_call(handle, "getMaxListeners", &[]));
+    return_if_foreign!(handle => call_fwd(handle, "getMaxListeners", &[]));
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         return emitter.max_listeners;
     }
@@ -1386,7 +1371,7 @@ pub unsafe extern "C" fn js_event_emitter_get_max_listeners(handle: Handle) -> f
 /// order (matches Node).
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_event_names(handle: Handle) -> *mut ArrayHeader {
-    return_if_foreign!(foreign_call(handle, "eventNames", &[]).map(result_array));
+    return_if_foreign!(handle => call_fwd(handle, "eventNames", &[]).map(result_array));
     let arr = js_array_alloc(0);
     if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
         let mut result = arr;
@@ -1420,7 +1405,7 @@ pub unsafe extern "C" fn js_event_emitter_listeners(
     handle: Handle,
     event_bits: i64,
 ) -> *mut ArrayHeader {
-    return_if_foreign!(foreign_event_call(handle, "listeners", event_bits).map(result_array));
+    return_if_foreign!(handle => event_fwd(handle, "listeners", event_bits).map(result_array));
     let arr = js_array_alloc(0);
     let event_name = match event_name_from_bits(event_bits) {
         Some(name) => name,
@@ -1448,7 +1433,7 @@ pub unsafe extern "C" fn js_event_emitter_raw_listeners(
     handle: Handle,
     event_bits: i64,
 ) -> *mut ArrayHeader {
-    return_if_foreign!(foreign_event_call(handle, "rawListeners", event_bits).map(result_array));
+    return_if_foreign!(handle => event_fwd(handle, "rawListeners", event_bits).map(result_array));
     let arr = js_array_alloc(0);
     let event_name = match event_name_from_bits(event_bits) {
         Some(name) => name,

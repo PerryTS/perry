@@ -18,23 +18,32 @@
 use super::*;
 
 /// `return` the foreign-receiver result from the enclosing entry point.
+/// The receiver test is inlined at the call site (for a handle this provider
+/// owns it is the whole cost); the re-dispatch itself is out of line and
+/// `#[cold]`. One line per call site keeps the provider file under the
+/// file-size cap.
 macro_rules! return_if_foreign {
-    ($result:expr) => {
-        if let Some(result) = $result {
-            return result;
+    ($handle:expr => $result:expr) => {
+        if $crate::events::foreign_receiver::is_foreign_receiver($handle) {
+            if let Some(result) = $result {
+                return result;
+            }
         }
     };
 }
 pub(super) use return_if_foreign;
 
-fn is_foreign_receiver(handle: Handle) -> bool {
+#[inline(always)]
+pub(crate) fn is_foreign_receiver(handle: Handle) -> bool {
     let addr = handle as u64;
     (0x100000..=POINTER_MASK_BITS).contains(&addr) && addr & 0x7 == 0
 }
 
 /// Call `name(args...)` on a foreign receiver through the runtime's dynamic
 /// method dispatcher; `None` when `handle` may be this provider's.
-pub(super) unsafe fn foreign_call(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn call_fwd(handle: Handle, name: &str, args: &[f64]) -> Option<f64> {
     if !is_foreign_receiver(handle) {
         return None;
     }
@@ -49,6 +58,8 @@ pub(super) unsafe fn foreign_call(handle: Handle, name: &str, args: &[f64]) -> O
 }
 
 /// The listener-registration family, whose native ABI returns the receiver.
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn listener_fwd(
     handle: Handle,
     name: &str,
@@ -59,16 +70,20 @@ pub(super) unsafe fn listener_fwd(
         return None;
     }
     let args = [value_from_bits(event_bits), value_from_bits(listener_bits)];
-    foreign_call(handle, name, &args).map(|_| handle)
+    call_fwd(handle, name, &args).map(|_| handle)
 }
 
 /// `removeAllListeners(event?)`, whose native ABI returns the receiver.
+#[cold]
+#[inline(never)]
 pub(super) unsafe fn remove_all_fwd(handle: Handle, rest: *const ArrayHeader) -> Option<Handle> {
-    foreign_varargs(handle, "removeAllListeners", None, rest).map(|_| handle)
+    varargs_fwd(handle, "removeAllListeners", None, rest).map(|_| handle)
 }
 
 /// A varargs entry point: the optional event, then every element of `rest`.
-pub(super) unsafe fn foreign_varargs(
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn varargs_fwd(
     handle: Handle,
     name: &str,
     event_bits: Option<i64>,
@@ -83,35 +98,31 @@ pub(super) unsafe fn foreign_varargs(
             args.push(perry_runtime::array::js_array_get_f64(rest, index));
         }
     }
-    foreign_call(handle, name, &args)
+    call_fwd(handle, name, &args)
 }
 
 /// A one-argument entry point whose argument is the event name.
-pub(super) unsafe fn foreign_event_call(
-    handle: Handle,
-    name: &str,
-    event_bits: i64,
-) -> Option<f64> {
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn event_fwd(handle: Handle, name: &str, event_bits: i64) -> Option<f64> {
     if !is_foreign_receiver(handle) {
         return None;
     }
-    foreign_call(handle, name, &[value_from_bits(event_bits)])
+    call_fwd(handle, name, &[value_from_bits(event_bits)])
 }
 
 /// `listenerCount(event, listener?)`: an absent listener stays absent.
-pub(super) unsafe fn foreign_listener_count(
-    handle: Handle,
-    event_bits: i64,
-    listener_bits: i64,
-) -> Option<f64> {
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn count_fwd(handle: Handle, event_bits: i64, listener_bits: i64) -> Option<f64> {
     if !is_foreign_receiver(handle) {
         return None;
     }
     let event = value_from_bits(event_bits);
     if listener_bits as u64 == TAG_UNDEFINED_F64_BITS {
-        foreign_call(handle, "listenerCount", &[event])
+        call_fwd(handle, "listenerCount", &[event])
     } else {
-        foreign_call(
+        call_fwd(
             handle,
             "listenerCount",
             &[event, value_from_bits(listener_bits)],
