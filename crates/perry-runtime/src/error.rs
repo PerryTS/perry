@@ -292,6 +292,11 @@ unsafe fn alloc_error(
         crate::gc::GC_TYPE_ERROR,
     );
     let ptr = raw as *mut ErrorHeader;
+    // #10956: zero the cell before writing its fields. Arena slots are
+    // recycled without zeroing, and the padding after `flags` sits at
+    // `CLOSURE_TYPE_TAG_OFFSET`: an Error born where a dead same-size closure
+    // lived kept its "CLOS" there, which bare-magic probes read as a function.
+    std::ptr::write_bytes(ptr, 0, 1);
 
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -1959,41 +1964,5 @@ pub use subclass_stack::js_error_subclass_capture_stack;
 mod tostring_tests;
 
 #[cfg(test)]
-mod header_unification_tests {
-    use super::*;
-
-    /// #6759 phase 1: an `ErrorHeader` owns a metadata edge, and it is
-    /// reachable through the SAME accessor an `ObjectHeader` is.
-    ///
-    /// This is the gate the rest of the migration stands on: while "does this
-    /// cell own an ObjectMeta?" had no uniform answer, per-error state had
-    /// nowhere to live but a side table keyed by the error's address.
-    #[test]
-    fn error_cell_exposes_a_meta_edge_like_an_object() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            let msg = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
-            let err = js_error_new_with_message(msg);
-            assert!(
-                (*err).meta.is_null(),
-                "a fresh error must start with no metadata record"
-            );
-            assert!(
-                crate::object::cell_has_meta_edge(err as usize),
-                "an error cell must be reachable through the uniform meta accessor"
-            );
-            let obj = crate::object::js_object_alloc(0, 0);
-            assert!(
-                crate::object::cell_has_meta_edge(obj as usize),
-                "an object cell must answer the same accessor"
-            );
-            // A cell type that has NOT been unified yet must answer `None`
-            // rather than mis-reading its own layout as a meta pointer.
-            let arr = crate::array::js_array_alloc(0);
-            assert!(
-                !crate::object::cell_has_meta_edge(arr as usize),
-                "a cell without a meta edge must report absence, not garbage"
-            );
-        }
-    }
-}
+#[path = "error_header_tests.rs"]
+mod header_unification_tests;

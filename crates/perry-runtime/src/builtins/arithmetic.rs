@@ -760,10 +760,14 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
                 // that read would fall off the end of the allocation.
                 ValueTypeofTag::Object
             } else {
-                // ClosureHeader has type_tag at offset 12 (after func_ptr:8 + capture_count:4)
-                let type_tag =
-                    unsafe { *(ptr.add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
-                if type_tag == crate::closure::CLOSURE_MAGIC {
+                // #10956: ask `is_closure_ptr`, not a bare `CLOSURE_MAGIC` read
+                // at the tag offset. Arena slots are recycled without zeroing,
+                // and that offset is padding in an `ErrorHeader` and element
+                // data in an array or buffer, so its four bytes can spell
+                // "CLOS" in a cell that is no closure: an Error born where a
+                // dead closure lived answered "function". `is_closure_ptr`
+                // also requires an arena cell's GC header to say closure.
+                if crate::closure::is_closure_ptr(ptr as usize) {
                     ValueTypeofTag::Function
                 } else if crate::object::is_class_object_ptr(ptr) {
                     // #1789: a class-expression VALUE is a heap object stamped
@@ -939,6 +943,42 @@ mod rel_numeric_fastpath_tests {
         for (value, expected) in cases {
             assert_eq!(classify_value_typeof(value), expected);
             assert_eq!(js_value_typeof_tag(value), expected as u32);
+        }
+    }
+
+    /// #10956: four bytes that spell `CLOSURE_MAGIC` at the closure tag offset
+    /// do not make a cell a function. That offset is padding in an
+    /// `ErrorHeader` and element data in an array, and arena slots are
+    /// recycled without zeroing, so `typeof` must ask the GC header.
+    #[test]
+    fn typeof_ignores_closure_magic_in_a_non_closure_cell() {
+        use crate::closure::{CLOSURE_MAGIC, CLOSURE_TYPE_TAG_OFFSET};
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        unsafe {
+            // An Error whose padding still holds a dead closure's tag.
+            let err = crate::error::js_error_new() as *mut u8;
+            // GC_STORE_AUDIT(POINTER_FREE): plants the u32 magic in the padding word.
+            (err.add(CLOSURE_TYPE_TAG_OFFSET) as *mut u32).write(CLOSURE_MAGIC);
+            let err = crate::value::js_nanbox_pointer(err as i64);
+            assert_eq!(classify_value_typeof(err), ValueTypeofTag::Object);
+            assert_eq!(js_value_typeof_tag(err), ValueTypeofTag::Object as u32);
+
+            // `[15937034497556480]`: element 0's high word is "CLOS".
+            let arr = crate::array::js_array_alloc(1);
+            let arr = crate::array::js_array_push_f64(arr, f64::from_bits(0x434C_4F53_0000_0000));
+            let arr_ptr = arr as *const u8;
+            assert_eq!(
+                *(arr_ptr.add(CLOSURE_TYPE_TAG_OFFSET) as *const u32),
+                CLOSURE_MAGIC
+            );
+            let arr = crate::value::js_nanbox_pointer(arr as i64);
+            assert_eq!(classify_value_typeof(arr), ValueTypeofTag::Object);
+
+            // A real closure is still a function.
+            let func = crate::closure::js_closure_alloc(std::ptr::null(), 7);
+            let func = crate::value::js_nanbox_pointer(func as i64);
+            assert_eq!(classify_value_typeof(func), ValueTypeofTag::Function);
         }
     }
 
