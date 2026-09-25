@@ -560,11 +560,9 @@ fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
     );
 
     let resource_now = (resource_root.get_nanbox_f64().to_bits() & POINTER_MASK) as i64;
-    let linked = crate::async_hooks::try_async_resource_property_dispatch(
-        resource_now,
-        "eventEmitter",
-    )
-    .expect("eventEmitter must resolve on an AsyncResource");
+    let linked =
+        crate::async_hooks::try_async_resource_property_dispatch(resource_now, "eventEmitter")
+            .expect("eventEmitter must resolve on an AsyncResource");
     let emitter_after = (linked.to_bits() & POINTER_MASK) as usize;
     assert_ne!(
         emitter_after, emitter_before,
