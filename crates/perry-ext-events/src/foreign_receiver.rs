@@ -164,3 +164,35 @@ pub(super) fn result_array(value: f64) -> *mut ArrayHeader {
         unsafe { js_array_alloc(0) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn own_band_is_exactly_the_registry_range() {
+        assert!(in_own_band(EVENT_EMITTER_HANDLE_ID_START));
+        assert!(in_own_band(EVENT_EMITTER_HANDLE_ID_END - 1));
+        assert!(!in_own_band(EVENT_EMITTER_HANDLE_ID_START - 1));
+        assert!(!in_own_band(EVENT_EMITTER_HANDLE_ID_END));
+    }
+
+    #[test]
+    fn a_real_emitter_is_never_re_dispatched() {
+        let handle = js_event_emitter_new();
+        assert!(in_own_band(handle));
+        assert!(!unsafe { is_foreign_receiver(handle) });
+        assert!(unsafe { call_fwd(handle, "on", &[]) }.is_none());
+    }
+
+    #[test]
+    fn heap_objects_are_foreign_and_non_values_are_not() {
+        // A heap object (stream, user subclass, `process`) is someone else's.
+        assert!(unsafe { is_foreign_receiver(0x7f00_0000_1000) });
+        // The payload of `undefined` / `null` / a boolean, or an unregistered
+        // small id, keeps the old no-op instead of dispatching on garbage.
+        for payload in [0, 1, 2, 3, 4, 0x1234] {
+            assert!(!unsafe { is_foreign_receiver(payload) }, "{payload:#x}");
+        }
+    }
+}

@@ -140,3 +140,18 @@ pub(super) fn result_array(value: f64) -> *mut ArrayHeader {
         js_array_alloc(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_aligned_heap_addresses_are_foreign() {
+        assert!(is_foreign_receiver(0x7f00_0000_1000));
+        assert!(!is_foreign_receiver(0x7f00_0000_1001));
+        // Registry handles and the payloads of undefined/null/booleans.
+        for payload in [0, 1, 2, 3, 4, 0x38000, 0xFFFFF] {
+            assert!(!is_foreign_receiver(payload), "{payload:#x}");
+        }
+    }
+}
