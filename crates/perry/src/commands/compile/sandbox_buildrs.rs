@@ -248,6 +248,7 @@ mod tests {
     #[test]
     fn wrap_cargo_falls_through_when_sandbox_disabled() {
         // Sandbox off → just `cargo`.
+        let _env = crate::test_env_lock::env_lock();
         let ctx = CompilationContext::new(std::path::PathBuf::from("/tmp"));
         std::env::remove_var("PERRY_SANDBOX_BUILDRS");
         let cmd = wrap_cargo_command(&ctx, "demo");
@@ -258,6 +259,7 @@ mod tests {
     fn wrap_cargo_falls_through_when_package_exempt() {
         let mut ctx = CompilationContext::new(std::path::PathBuf::from("/tmp"));
         ctx.allow_unsandboxed_build.push("demo".to_string());
+        let _env = crate::test_env_lock::env_lock();
         std::env::set_var("PERRY_SANDBOX_BUILDRS", "1");
         let cmd = wrap_cargo_command(&ctx, "demo");
         std::env::remove_var("PERRY_SANDBOX_BUILDRS");
