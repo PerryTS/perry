@@ -65,6 +65,11 @@ pub(crate) struct Conn {
     /// its peer's close frame, so neither side finished the closing handshake
     /// and the program never exited (#11309).
     host: Arc<dyn Host>,
+    /// The listener closed while this connection was still HTTP. It answers
+    /// the request it is on, then closes: no further request, no keep-alive,
+    /// and no upgrade. Kept apart from `closing`, which says the connection is
+    /// already being torn down and changes how an EOF is handled.
+    listener_closed: bool,
     peer_address: String,
     peer_port: u16,
     decoder: http1::Decoder,
@@ -115,6 +120,33 @@ pub fn connections_of(listener_id: i64) -> Vec<i64> {
         .filter(|(_, c)| c.listener_id == listener_id)
         .map(|(id, _)| *id)
         .collect()
+}
+
+/// The listener closed: stop taking new work on its connections.
+///
+/// Node's contract for `server.close()` is that in-flight exchanges finish and
+/// idle connections close. An upgraded connection belongs to its host now and
+/// is left alone — ending it here would cut a WebSocket off mid-handshake,
+/// which is the #11309 hang from the other side. Every other connection is
+/// marked, and closed now if it has nothing in flight; a busy one closes once
+/// its response completes. Without this, a keep-alive connection could carry a
+/// fresh request, or a fresh WebSocket upgrade, to the host after it closed.
+pub(crate) fn listener_closed(listener_id: i64) {
+    let idle: Vec<i64> = conns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values_mut()
+        .filter(|c| c.listener_id == listener_id && !c.upgraded)
+        .filter_map(|c| {
+            c.listener_closed = true;
+            let idle = c.active.is_none() && c.building.is_none() && c.input.is_empty();
+            (idle && !c.closing).then_some(c.id)
+        })
+        .collect();
+    // Outside the lock: `finish_and_close` takes it again.
+    for id in idle {
+        finish_and_close(id);
+    }
 }
 
 /// Whether this connection is mid-exchange — decoding or answering.
@@ -177,6 +209,7 @@ fn on_accept(listener_id: i64, conn_id: i64) {
             id: conn_id,
             listener_id,
             host: host.clone(),
+            listener_closed: false,
             peer_address: peer.as_ref().map(|e| e.address.clone()).unwrap_or_default(),
             peer_port: peer.as_ref().map(|e| e.port).unwrap_or(0),
             decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
@@ -446,7 +479,7 @@ fn building_from(head: &http1::Head) -> Building {
 
 /// Whether this connection's listener diverts upgrades to its host.
 fn takes_upgrades(c: &Conn) -> bool {
-    c.host.takes_upgrades()
+    !c.listener_closed && c.host.takes_upgrades()
 }
 
 /// The [`Request`] handed to [`Host::on_upgrade`].
@@ -528,15 +561,14 @@ fn prepare_headers(c: &mut Conn, response: &mut Response) -> bool {
     };
     // A closed listener still answers its in-flight requests, but never keeps
     // the connection for another one.
-    let listener_open = crate::with_listener(c.listener_id, |_| ()).is_some();
-    let (closing, max_requests, keep_alive_timeout_ms) = if listener_open {
+    let (closing, max_requests, keep_alive_timeout_ms) = if c.listener_closed {
+        (true, 0, 0.0)
+    } else {
         (
             c.host.is_closing(),
             c.host.max_requests_per_socket(),
             c.host.keep_alive_timeout_ms(),
         )
-    } else {
-        (true, 0, 0.0)
     };
     let over_quota = max_requests > 0 && c.requests >= max_requests;
     let keep_alive = crate::connection_headers(
@@ -766,6 +798,10 @@ fn complete_response(conn_id: i64, seq: u64, framing: Framing) {
         let reuse = keep_alive
             && framing != Framing::UntilClose
             && !c.closing
+            // Enforced here, not only in `prepare_headers`: a streamed response
+            // whose head went out before the listener closed, or one that set
+            // `Connection: keep-alive` itself, has already decided to reuse.
+            && !c.listener_closed
             && !c.read_eof
             // `reset` refuses a decoder the request itself made unreusable (a
             // `Connection: close` request, an unframed body). Trusting the

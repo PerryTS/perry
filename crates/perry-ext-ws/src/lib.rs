@@ -215,8 +215,13 @@ static WS_CLIENT_PARENT_SERVER: std::sync::LazyLock<Mutex<HashMap<usize, Handle>
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static WS_CLIENT_LISTENERS: std::sync::LazyLock<Mutex<HashMap<usize, WsClientListeners>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static WS_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<PendingWsEvent>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+static WS_PENDING_EVENTS: std::sync::LazyLock<Mutex<std::collections::VecDeque<PendingWsEvent>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::VecDeque::new()));
+/// The `'listening'` / `'open'` events `js_ws_process_pending` is delivering
+/// right now, innermost last. A drain pops each event before running its
+/// listeners, so without this a listener registered *inside* that event's
+/// own callback would find it neither queued nor delivered and replay it.
+static WS_DISPATCHING: Mutex<Vec<ReplayKey>> = Mutex::new(Vec::new());
 
 static WS_ACTIVE_SERVERS: AtomicI32 = AtomicI32::new(0);
 static WS_RUNTIME_HOOKS_REGISTERED: std::sync::Once = std::sync::Once::new();
@@ -290,13 +295,62 @@ fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
     });
 }
 
-/// Whether an event matching `pred` is still waiting for the pump.
-fn event_is_queued(pred: impl Fn(&PendingWsEvent) -> bool) -> bool {
-    WS_PENDING_EVENTS.lock().unwrap().iter().any(pred)
+/// An event a late-registered listener may be owed a replay of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ReplayKey {
+    Listening(Handle),
+    Open(usize),
+}
+
+impl ReplayKey {
+    fn of(event: &PendingWsEvent) -> Option<Self> {
+        match event {
+            PendingWsEvent::Listening(handle) => Some(Self::Listening(*handle)),
+            PendingWsEvent::Open(ws_id) => Some(Self::Open(*ws_id)),
+            _ => None,
+        }
+    }
+}
+
+/// Whether the event `key` names has not finished reaching its listeners:
+/// still queued, or being delivered right now. Either way a listener
+/// registered now needs no replay — a queued event will reach it, and Node
+/// does not call a listener added during an emit for that emit.
+fn replay_is_pending(key: ReplayKey) -> bool {
+    WS_DISPATCHING.lock().unwrap().contains(&key)
+        || WS_PENDING_EVENTS
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|ev| ReplayKey::of(ev) == Some(key))
+}
+
+/// Marks one event as being delivered for the life of the guard.
+struct Dispatching(Option<ReplayKey>);
+
+impl Dispatching {
+    fn enter(event: &PendingWsEvent) -> Self {
+        let key = ReplayKey::of(event);
+        if let Some(key) = key {
+            WS_DISPATCHING.lock().unwrap().push(key);
+        }
+        Self(key)
+    }
+}
+
+impl Drop for Dispatching {
+    fn drop(&mut self) {
+        if let Some(key) = self.0 {
+            let mut dispatching = WS_DISPATCHING.lock().unwrap();
+            if let Some(at) = dispatching.iter().rposition(|k| *k == key) {
+                dispatching.remove(at);
+            }
+        }
+    }
 }
 
 fn push_ws_event(ev: PendingWsEvent) {
-    WS_PENDING_EVENTS.lock().unwrap().push(ev);
+    WS_PENDING_EVENTS.lock().unwrap().push_back(ev);
     notify_main_thread();
 }
 
@@ -1046,9 +1100,7 @@ pub unsafe extern "C" fn js_ws_on(
             // (#11309).
             let already_listening = event_name == "listening"
                 && server.is_listening
-                && !event_is_queued(
-                    |ev| matches!(ev, PendingWsEvent::Listening(h) if *h == handle),
-                );
+                && !replay_is_pending(ReplayKey::Listening(handle));
             server
                 .listeners
                 .entry(event_name)
@@ -1071,7 +1123,7 @@ pub unsafe extern "C" fn js_ws_on(
             .get(&ws_id)
             .map(|c| c.is_open)
             .unwrap_or(false)
-        && !event_is_queued(|ev| matches!(ev, PendingWsEvent::Open(id) if *id == ws_id));
+        && !replay_is_pending(ReplayKey::Open(ws_id));
     let replay_messages = event_name == "message";
     let mut g = WS_CLIENT_LISTENERS.lock().unwrap();
     let entry = g.entry(ws_id).or_insert_with(|| WsClientListeners {
@@ -1300,15 +1352,20 @@ fn payload_value(payload: &WsPayload) -> f64 {
 /// Called by perry-codegen's main-thread event-loop pump.
 #[no_mangle]
 pub extern "C" fn js_ws_process_pending() -> i32 {
-    let events: Vec<PendingWsEvent> = {
-        let mut g = WS_PENDING_EVENTS.lock().unwrap();
-        std::mem::take(&mut *g)
-    };
-    if events.is_empty() {
+    // One event at a time, and only the ones queued before this drain began:
+    // an event a listener queues is delivered on the next tick, as it was when
+    // the whole batch was taken at once. Popping singly is what keeps the rest
+    // of the batch visible to `replay_is_pending` while each listener runs.
+    let batch = WS_PENDING_EVENTS.lock().unwrap().len();
+    if batch == 0 {
         return 0;
     }
     let mut fired = 0;
-    for ev in events {
+    for _ in 0..batch {
+        let Some(ev) = WS_PENDING_EVENTS.lock().unwrap().pop_front() else {
+            break;
+        };
+        let _dispatching = Dispatching::enter(&ev);
         match ev {
             PendingWsEvent::Connection(server_handle, client_id) => {
                 // Match `ws`: clients is current before the user-visible
@@ -1756,57 +1813,131 @@ mod tests {
         drop_handle(server_handle);
     }
 
-    /// #11309: a `'listening'` listener registered while the bind's own
-    /// `Listening` event is still queued is reached by that event; replaying
-    /// on top of it fired every listener twice. The replay is for a listener
-    /// registered after the event was drained, and still happens then.
+    static FIRST_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static SECOND_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn count_second(_c: *const perry_runtime::closure::ClosureHeader) -> f64 {
+        SECOND_CALLS.fetch_add(1, Ordering::SeqCst);
+        f64::from_bits(JsValue::UNDEFINED.bits())
+    }
+
+    extern "C" fn count_first(_c: *const perry_runtime::closure::ClosureHeader) -> f64 {
+        FIRST_CALLS.fetch_add(1, Ordering::SeqCst);
+        f64::from_bits(JsValue::UNDEFINED.bits())
+    }
+
+    /// Counts its calls and registers a `count_second` listener, from inside
+    /// this callback, on the server handle in its capture slot 0.
+    extern "C" fn count_first_and_register(c: *const perry_runtime::closure::ClosureHeader) -> f64 {
+        FIRST_CALLS.fetch_add(1, Ordering::SeqCst);
+        let server = perry_runtime::closure::js_closure_get_capture_f64(c, 0) as Handle;
+        let event = alloc_string("listening");
+        unsafe { js_ws_on(server, event.as_raw(), closure_of(count_second)) };
+        f64::from_bits(JsValue::UNDEFINED.bits())
+    }
+
+    fn closure_of(f: extern "C" fn(*const perry_runtime::closure::ClosureHeader) -> f64) -> i64 {
+        perry_runtime::closure::js_closure_alloc(f as *const u8, 0) as i64
+    }
+
+    /// A server that reads as bound, with nothing of its own queued.
+    fn listening_server() -> Handle {
+        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
+        let server = js_ws_server_new(undefined);
+        get_handle_mut::<WsServerHandle>(server)
+            .expect("server handle")
+            .is_listening = true;
+        server
+    }
+
+    fn listening_queued_for(server: Handle) -> usize {
+        WS_PENDING_EVENTS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|ev| matches!(ev, PendingWsEvent::Listening(h) if *h == server))
+            .count()
+    }
+
+    /// #11309: the standalone server queues `Listening` in its constructor, so
+    /// a listener registered in the same tick is reached by that event. The
+    /// replay `js_ws_on` used to queue on top of it ran every listener twice.
+    /// A listener registered after the event was delivered still gets one.
     #[test]
-    fn listening_is_replayed_only_once_the_queued_event_has_drained() {
+    fn listening_reaches_each_listener_once() {
         let _lock = GC_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
-        let server_handle = js_ws_server_new(undefined);
-        get_handle_mut::<WsServerHandle>(server_handle)
-            .expect("server handle")
-            .is_listening = true;
-        let queued_for_server = || {
-            WS_PENDING_EVENTS
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|ev| matches!(ev, PendingWsEvent::Listening(h) if *h == server_handle))
-                .count()
-        };
-        // Drop this server's events without running them: the callback below
-        // is a placeholder, not a closure.
-        let discard = || {
-            WS_PENDING_EVENTS
-                .lock()
-                .unwrap()
-                .retain(|ev| !matches!(ev, PendingWsEvent::Listening(h) if *h == server_handle))
-        };
+        let _ = js_ws_process_pending();
+        FIRST_CALLS.store(0, Ordering::SeqCst);
+        SECOND_CALLS.store(0, Ordering::SeqCst);
+        let server = listening_server();
         let event = alloc_string("listening");
-        let callback = 0x1000;
 
-        push_ws_event(PendingWsEvent::Listening(server_handle));
-        unsafe { js_ws_on(server_handle, event.as_raw(), callback) };
-        assert_eq!(queued_for_server(), 1, "the queued event is not doubled");
-
-        discard();
-        unsafe { js_ws_on(server_handle, event.as_raw(), callback) };
+        push_ws_event(PendingWsEvent::Listening(server));
+        unsafe { js_ws_on(server, event.as_raw(), closure_of(count_first)) };
         assert_eq!(
-            queued_for_server(),
+            listening_queued_for(server),
+            1,
+            "the queued event is not doubled"
+        );
+        js_ws_process_pending();
+        assert_eq!(FIRST_CALLS.load(Ordering::SeqCst), 1);
+
+        unsafe { js_ws_on(server, event.as_raw(), closure_of(count_second)) };
+        assert_eq!(
+            listening_queued_for(server),
             1,
             "a late listener still gets a replay"
         );
+        js_ws_process_pending();
+        assert_eq!(SECOND_CALLS.load(Ordering::SeqCst), 1);
 
-        discard();
-        drop_handle(server_handle);
+        drop_handle(server);
+    }
+
+    /// A drain pops each event before running its listeners. A listener that
+    /// registers another `'listening'` listener from inside that event's own
+    /// callback must not be answered with a replay: Node does not call a
+    /// listener added during an emit for that emit, and the replay would run
+    /// the first listener a second time.
+    #[test]
+    fn a_listener_registered_during_its_event_gets_no_replay() {
+        let _lock = GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = js_ws_process_pending();
+        FIRST_CALLS.store(0, Ordering::SeqCst);
+        SECOND_CALLS.store(0, Ordering::SeqCst);
+        let server = listening_server();
+        let event = alloc_string("listening");
+        let first =
+            perry_runtime::closure::js_closure_alloc(count_first_and_register as *const u8, 1);
+        perry_runtime::closure::js_closure_set_capture_f64(first, 0, server as f64);
+
+        push_ws_event(PendingWsEvent::Listening(server));
+        unsafe { js_ws_on(server, event.as_raw(), first as i64) };
+        js_ws_process_pending();
+        assert_eq!(FIRST_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(listening_queued_for(server), 0, "no replay was queued");
+        js_ws_process_pending();
+        assert_eq!(
+            FIRST_CALLS.load(Ordering::SeqCst),
+            1,
+            "the first listener ran once"
+        );
+        assert_eq!(SECOND_CALLS.load(Ordering::SeqCst), 0);
+
+        drop_handle(server);
     }
 
     #[test]
     fn has_pending_returns_zero_with_no_state() {
+        // Drains the shared queue, so it must not run inside another test's
+        // setup.
+        let _lock = GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // May be non-zero if a prior test left state behind, but
         // process_pending drains it.
         let _ = js_ws_process_pending();

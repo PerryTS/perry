@@ -17,8 +17,15 @@
 //    client from inside `'listening'`, so a double fire would also open a
 //    second client and print its rows twice.
 //
+// 3. The flip side of (1): a connection that has NOT upgraded when the server
+//    closes must not start a WebSocket afterwards. An upgrade request sent on
+//    an already-accepted socket after `wss.close()` gets no `'connection'`
+//    and no `101`. (Node answers `426`; Perry closes the idle socket. Only
+//    "did it upgrade" is printed, which both agree on.)
+//
 // Nothing host-specific is printed, so the output is byte-comparable against
 // `node --experimental-strip-types`.
+import net from 'node:net';
 import { WebSocket, WebSocketServer } from 'ws';
 
 function closeInSameTick(): Promise<void> {
@@ -83,9 +90,42 @@ function serverInitiatedClose(): Promise<void> {
   });
 }
 
+function upgradeAfterClose(): Promise<void> {
+  return new Promise<void>((done) => {
+    let connections = 0;
+    const wss: any = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    wss.on('connection', () => connections++);
+    wss.on('listening', () => {
+      const sock = net.connect(wss.address().port, '127.0.0.1');
+      let got = '';
+      sock.on('error', () => {});
+      sock.on('data', (d: any) => { got += String(d); });
+      sock.on('close', () => {
+        console.log('C upgraded after close', got.startsWith('HTTP/1.1 101'));
+        console.log('C connection events', connections);
+        done();
+      });
+      sock.on('connect', () => {
+        setTimeout(() => {
+          wss.close();
+          setTimeout(() => {
+            sock.write('GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n' +
+              'Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+              'Sec-WebSocket-Version: 13\r\n\r\n', () => {});
+            // A server that neither answers nor closes would hang the file;
+            // end our side so the socket always reaches 'close'.
+            setTimeout(() => sock.end(), 500);
+          }, 50);
+        }, 50);
+      });
+    });
+  });
+}
+
 async function main() {
   await closeInSameTick();
   await serverInitiatedClose();
+  await upgradeAfterClose();
   console.log('done');
 }
 

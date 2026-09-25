@@ -402,14 +402,16 @@ pub fn listen(
     })
 }
 
-/// Stop accepting. In-flight connections finish, which is Node's contract for
-/// `server.close()`; tearing those down is `closeAllConnections`.
+/// Stop accepting. In-flight exchanges finish and idle connections close,
+/// which is Node's contract for `server.close()`; upgraded connections are the
+/// host's and keep running. Tearing everything down is `closeAllConnections`.
 pub fn close_listener(id: i64) {
     listeners()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&id);
     let _ = tl::close(id);
+    conn::listener_closed(id);
 }
 
 /// Node's `Connection` / `Keep-Alive` response headers, for a response that has
