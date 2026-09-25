@@ -308,14 +308,22 @@ pub(crate) extern "C" fn webcrypto_get_random_values_thunk(
     }
 }
 
+/// #10523: the receiver is already brand-checked, so go straight to
+/// perry-stdlib's crypto dispatcher (the same `("crypto.webcrypto", _)` arm
+/// `js_native_call_method` ends at) instead of re-resolving `randomUUID` by
+/// name through the whole native-call tower on every UUID.
 pub(crate) extern "C" fn webcrypto_random_uuid_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
-    let this_value = require_webcrypto_this();
+    require_webcrypto_this();
+    let ptr = crate::value::JS_NATIVE_CRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     unsafe {
-        js_native_call_method(
-            this_value,
-            b"randomUUID".as_ptr() as *const i8,
+        let dispatch: crate::value::JsNativeCryptoDispatchFn = std::mem::transmute(ptr);
+        dispatch(
+            b"randomUUID".as_ptr(),
             "randomUUID".len(),
             std::ptr::null(),
             0,
@@ -398,14 +406,38 @@ pub(crate) fn webcrypto_method_value(property_name: &str) -> Option<f64> {
         "randomUUID" => (webcrypto_random_uuid_thunk as *const u8, 0),
         _ => return None,
     };
-    crate::closure::js_register_closure_arity(func_ptr, arity);
+    Some(webcrypto_singleton_method(
+        func_ptr,
+        property_name,
+        arity,
+        || crate::closure::js_register_closure_arity(func_ptr, arity),
+    ))
+}
+
+/// #10523: decorate a Web Crypto method's singleton closure (body registry
+/// entry, `name`, `length`) only when it is first minted. Redoing it on every
+/// read allocated a name string, reinstalled the `name` descriptor and
+/// invalidated the thunk's cached call-dispatch strategy each time, which was
+/// most of what `crypto.randomUUID ? crypto.randomUUID() : …` spent in Perry.
+fn webcrypto_singleton_method(
+    func_ptr: *const u8,
+    name: &str,
+    length: u32,
+    register_body: impl FnOnce(),
+) -> f64 {
+    if let Some(closure) = crate::closure::singleton_closure_if_cached(func_ptr) {
+        return crate::value::js_nanbox_pointer(closure as i64);
+    }
+    register_body();
     let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
     if closure.is_null() {
-        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    super::super::native_module::set_bound_native_closure_name(closure, property_name);
-    super::super::native_module::set_builtin_closure_length(closure as usize, arity);
-    Some(crate::value::js_nanbox_pointer(closure as i64))
+    super::super::native_module::set_bound_native_closure_name(closure, name);
+    // The name install allocates; re-read the GC-rewritten singleton slot.
+    let closure = crate::closure::singleton_closure_if_cached(func_ptr).unwrap_or(closure);
+    super::super::native_module::set_builtin_closure_length(closure as usize, length);
+    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
@@ -424,12 +456,58 @@ fn subtle_crypto_method_spec(property_name: &str) -> Option<(*const u8, u32)> {
 /// see #10427's PR body for which paths were and weren't affected).
 pub(crate) fn subtle_crypto_method_value(property_name: &str) -> Option<f64> {
     let (func_ptr, length) = subtle_crypto_method_spec(property_name)?;
-    crate::closure::js_register_closure_rest(func_ptr, 0);
-    let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-    if closure.is_null() {
-        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    Some(webcrypto_singleton_method(
+        func_ptr,
+        property_name,
+        length,
+        || crate::closure::js_register_closure_rest(func_ptr, 0),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::native_module::{builtin_closure_length, set_builtin_closure_length};
+
+    fn closure_addr(value: f64) -> usize {
+        (value.to_bits() & crate::value::POINTER_MASK) as usize
     }
-    super::super::native_module::set_bound_native_closure_name(closure, property_name);
-    super::super::native_module::set_builtin_closure_length(closure as usize, length);
-    Some(crate::value::js_nanbox_pointer(closure as i64))
+
+    // #10523: a repeat read hands back the same singleton WITHOUT decorating
+    // it again (the tampered length survives; the old per-read install reset
+    // it), and a re-minted singleton is decorated afresh.
+    #[test]
+    fn webcrypto_methods_are_decorated_once_per_singleton() {
+        for (name, length, read) in [
+            (
+                "randomUUID",
+                0,
+                super::webcrypto_method_value as fn(&str) -> Option<f64>,
+            ),
+            ("getRandomValues", 1, super::webcrypto_method_value),
+            ("encapsulateBits", 2, super::subtle_crypto_method_value),
+        ] {
+            crate::closure::test_clear_singleton_closure_caches();
+            let first = read(name).unwrap();
+            assert_eq!(
+                builtin_closure_length(closure_addr(first)),
+                Some(length),
+                "{name}"
+            );
+            set_builtin_closure_length(closure_addr(first), 99);
+            let second = read(name).unwrap();
+            assert_eq!(second.to_bits(), first.to_bits(), "{name} identity");
+            assert_eq!(
+                builtin_closure_length(closure_addr(first)),
+                Some(99),
+                "{name} redecorated"
+            );
+            crate::closure::test_clear_singleton_closure_caches();
+            let reminted = read(name).unwrap();
+            assert_eq!(
+                builtin_closure_length(closure_addr(reminted)),
+                Some(length),
+                "{name}"
+            );
+        }
+    }
 }

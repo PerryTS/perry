@@ -123,10 +123,18 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
 
 /// Generate a random UUID v4 using crypto-secure random
 /// crypto.randomUUID([options]) -> string
+///
+/// #10523: served from perry-uuid's per-thread entropy cache (one
+/// `getrandom` per 128 UUIDs, like Node) unless the caller passes
+/// `{ disableEntropyCache: true }`, which draws fresh OS entropy.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut StringHeader {
-    validate_random_uuid_options(options_bits);
-    let uuid_str = perry_uuid::v4();
+    let uuid = if validate_random_uuid_options(options_bits) {
+        perry_uuid::v4_uncached()
+    } else {
+        perry_uuid::v4()
+    };
+    let uuid_str = uuid.as_str();
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
@@ -138,14 +146,16 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 /// accepted for shape parity but does not change the generated value.
 #[no_mangle]
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
-    let uuid_str = perry_uuid::v7();
+    let uuid = perry_uuid::v7();
+    let uuid_str = uuid.as_str();
     js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
 }
 
-unsafe fn validate_random_uuid_options(options_bits: f64) {
+/// Validates `randomUUID`'s options bag and returns `disableEntropyCache`.
+unsafe fn validate_random_uuid_options(options_bits: f64) -> bool {
     let value = JSValue::from_bits(options_bits.to_bits());
     if value.is_undefined() {
-        return;
+        return false;
     }
     if !value.is_pointer() {
         let message = format!(
@@ -172,12 +182,12 @@ unsafe fn validate_random_uuid_options(options_bits: f64) {
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
     if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
-        return;
+        return false;
     }
     let key = js_string_from_bytes(b"disableEntropyCache".as_ptr(), 19);
     let field = js_object_get_field_by_name(ptr as *const ObjectHeader, key);
     if field.is_undefined() {
-        return;
+        return false;
     }
     if !field.is_bool() {
         let message = format!(
@@ -186,6 +196,7 @@ unsafe fn validate_random_uuid_options(options_bits: f64) {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
+    field.as_bool()
 }
 
 const RANDOM_INT_MAX_RANGE: i64 = (1i64 << 48) - 1;

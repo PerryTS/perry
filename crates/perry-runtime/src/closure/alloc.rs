@@ -616,6 +616,14 @@ pub extern "C" fn js_closure_alloc_singleton(func_ptr: *const u8) -> *mut Closur
     allocated
 }
 
+/// The no-capture singleton `js_closure_alloc_singleton` already minted for
+/// `func_ptr`, without minting one. Lets a caller that decorates the singleton
+/// (name, length) do so once rather than on every lookup. The table's slot is
+/// GC-rewritten, so a value read here is current until the next allocation.
+pub(crate) fn singleton_closure_if_cached(func_ptr: *const u8) -> Option<*mut ClosureHeader> {
+    SINGLETON_CLOSURES.with(|s| s.borrow().get(&(func_ptr as usize)).copied())
+}
+
 /// Mutable GC scanner for singleton closure caches.
 ///
 /// No-capture cache values are raw closure pointers. Captured cache entries

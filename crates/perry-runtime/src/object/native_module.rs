@@ -147,8 +147,13 @@ pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, val
 /// Read back a stored native-namespace property override, if any.
 pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Option<f64> {
     NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
-        m.borrow()
-            .get(&format!("{module}\0{prop}"))
+        let m = m.borrow();
+        // #10523: every native namespace member read lands here and almost no
+        // program monkey-patches one, so skip building the probe key.
+        if m.is_empty() {
+            return None;
+        }
+        m.get(&format!("{module}\0{prop}"))
             .map(|bits| f64::from_bits(*bits))
     })
 }

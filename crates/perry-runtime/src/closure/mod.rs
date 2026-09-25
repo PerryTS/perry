@@ -17,7 +17,6 @@ mod wide_call;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use alloc::gc_capture_slot_range;
 pub use alloc::{
     closure_alloc_storage, closure_capture_slots_mut, closure_payload_size, js_closure_alloc,
     js_closure_alloc_singleton, js_closure_alloc_with_captures_singleton,
@@ -28,6 +27,7 @@ pub use alloc::{
     CLOSURE_ALLOC_COUNT, CLOSURE_CAP_SINGLETON_HIT, CLOSURE_CAP_SINGLETON_MISS,
     CLOSURE_TYPE_TAG_OFFSET,
 };
+pub(crate) use alloc::{gc_capture_slot_range, singleton_closure_if_cached};
 
 pub(crate) use registry::closure_registry_census;
 pub(crate) use registry::DispatchKind;

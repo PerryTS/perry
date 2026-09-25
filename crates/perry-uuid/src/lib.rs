@@ -1,30 +1,113 @@
 //! The two UUID versions Perry generates. Features default to empty: mail
-//! selects v4; node:crypto selects v4+v7. Entropy comes from the OS.
+//! selects v4; node:crypto selects v4+v7. Entropy comes from the OS, drawn
+//! through a per-thread cache the way Node's `randomUUID` buffers it (#10523):
+//! one `getrandom` fills 128 UUIDs' worth of bytes instead of one syscall per
+//! UUID. `v4_uncached` is Node's `{ disableEntropyCache: true }`.
 #[cfg(any(feature = "v4", feature = "v7"))]
-fn random_bytes() -> [u8; 16] {
-    let mut bytes = [0; 16];
-    getrandom::fill(&mut bytes).expect("OS entropy unavailable for UUID generation");
-    bytes
+mod entropy {
+    use std::cell::RefCell;
+
+    /// Node's `kBatchSize`: UUIDs served per entropy refill.
+    const BATCH: usize = 128;
+    const POOL_BYTES: usize = 16 * BATCH;
+
+    struct Pool {
+        bytes: [u8; POOL_BYTES],
+        next: usize,
+    }
+
+    thread_local! {
+        // Per-thread, so perry/thread agents never contend or share bytes.
+        static POOL: RefCell<Pool> = const {
+            RefCell::new(Pool { bytes: [0; POOL_BYTES], next: POOL_BYTES })
+        };
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        pub(crate) static FILLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn fill(buf: &mut [u8]) {
+        #[cfg(test)]
+        FILLS.with(|n| n.set(n.get() + 1));
+        getrandom::fill(buf).expect("OS entropy unavailable for UUID generation");
+    }
+
+    pub(crate) fn fresh() -> [u8; 16] {
+        let mut bytes = [0; 16];
+        fill(&mut bytes);
+        bytes
+    }
+
+    /// Hands out each pooled byte once. Falls back to a fresh draw while the
+    /// thread's locals are being torn down.
+    pub(crate) fn cached() -> [u8; 16] {
+        POOL.try_with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.next == POOL_BYTES {
+                fill(&mut pool.bytes);
+                pool.next = 0;
+            }
+            let start = pool.next;
+            pool.next += 16;
+            let mut bytes = [0; 16];
+            bytes.copy_from_slice(&pool.bytes[start..start + 16]);
+            bytes
+        })
+        .unwrap_or_else(|_| fresh())
+    }
+}
+/// A UUID in its 36-byte hyphenated form, formatted without allocating.
+#[cfg(any(feature = "v4", feature = "v7"))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Hyphenated([u8; 36]);
+#[cfg(any(feature = "v4", feature = "v7"))]
+impl Hyphenated {
+    fn new(bytes: [u8; 16]) -> Self {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = [b'-'; 36];
+        let mut at = 0;
+        for (i, b) in bytes.into_iter().enumerate() {
+            if matches!(i, 4 | 6 | 8 | 10) {
+                at += 1;
+            }
+            out[at] = HEX[(b >> 4) as usize];
+            out[at + 1] = HEX[(b & 15) as usize];
+            at += 2;
+        }
+        Hyphenated(out)
+    }
+    pub fn as_str(&self) -> &str {
+        // Only ASCII hex digits and hyphens are ever written.
+        std::str::from_utf8(&self.0).unwrap()
+    }
 }
 #[cfg(any(feature = "v4", feature = "v7"))]
-fn format(bytes: [u8; 16]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(36);
-    for (i, b) in bytes.into_iter().enumerate() {
-        if matches!(i, 4 | 6 | 8 | 10) {
-            out.push('-');
-        }
-        out.push(char::from(HEX[(b >> 4) as usize]));
-        out.push(char::from(HEX[(b & 15) as usize]));
+impl std::fmt::Display for Hyphenated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
-    out
+}
+#[cfg(any(feature = "v4", feature = "v7"))]
+impl std::fmt::Debug for Hyphenated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self.as_str(), f)
+    }
 }
 #[cfg(feature = "v4")]
-pub fn v4() -> String {
-    let mut bytes = random_bytes();
+fn v4_from(mut bytes: [u8; 16]) -> Hyphenated {
     bytes[6] = (bytes[6] & 15) | 0x40;
     bytes[8] = (bytes[8] & 63) | 0x80;
-    format(bytes)
+    Hyphenated::new(bytes)
+}
+#[cfg(feature = "v4")]
+pub fn v4() -> Hyphenated {
+    v4_from(entropy::cached())
+}
+#[cfg(feature = "v4")]
+pub fn v4_uncached() -> Hyphenated {
+    v4_from(entropy::fresh())
 }
 #[cfg(feature = "v7")]
 #[derive(Default)]
@@ -58,7 +141,7 @@ impl Sequence {
     }
 }
 #[cfg(feature = "v7")]
-pub fn v7() -> String {
+pub fn v7() -> Hyphenated {
     use std::{
         sync::Mutex,
         time::{SystemTime, UNIX_EPOCH},
@@ -71,21 +154,64 @@ pub fn v7() -> String {
         .duration_since(UNIX_EPOCH)
         .expect("UUID clock precedes Unix epoch")
         .as_millis() as u64;
-    let random = random_bytes();
+    let random = entropy::cached();
     let bytes = SEQUENCE.lock().unwrap().next(millis, random);
-    format(bytes)
+    Hyphenated::new(bytes)
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "v4")]
+    fn assert_v4_layout(s: &str) {
+        assert_eq!(s.len(), 36);
+        assert_eq!(&s[14..15], "4");
+        assert!(matches!(s.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
+        for (i, c) in s.bytes().enumerate() {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                assert_eq!(c, b'-');
+            } else {
+                assert!(c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
+            }
+        }
+    }
     #[cfg(feature = "v4")]
     #[test]
     fn v4_layout_and_fresh_entropy() {
         let a = super::v4();
         let b = super::v4();
-        assert_eq!(a.len(), 36);
-        assert_eq!(&a[14..15], "4");
-        assert!(matches!(a.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
+        assert_v4_layout(a.as_str());
+        assert_v4_layout(super::v4_uncached().as_str());
+        assert_eq!(format!("{a}"), a.as_str());
         assert_ne!(a, b);
+    }
+    // #10523: one OS draw per 128 cached UUIDs, every UUID distinct across
+    // refills, and the uncached path never consumes the pool. Runs on its own
+    // thread so the pool and counter start empty whatever the test harness
+    // reuses.
+    #[cfg(feature = "v4")]
+    #[test]
+    fn v4_draws_one_refill_per_128_uuids() {
+        std::thread::spawn(|| {
+            let fills = || super::entropy::FILLS.with(|n| n.get());
+            let mut seen = std::collections::HashSet::new();
+            let mut cached = |n: usize| {
+                for _ in 0..n {
+                    let id = super::v4();
+                    assert_v4_layout(id.as_str());
+                    assert!(seen.insert(id), "cached UUID repeated");
+                }
+            };
+            cached(128);
+            assert_eq!(fills(), 1);
+            let uncached = super::v4_uncached();
+            assert_eq!(fills(), 2);
+            cached(128);
+            assert_eq!(fills(), 3);
+            cached(1);
+            assert_eq!(fills(), 4);
+            assert!(seen.insert(uncached));
+        })
+        .join()
+        .unwrap();
     }
     #[cfg(feature = "v7")]
     #[test]
