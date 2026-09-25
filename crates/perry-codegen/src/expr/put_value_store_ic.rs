@@ -107,22 +107,6 @@ use super::FnCtx;
 /// by the runtime's `packed_set_empty_matches_codegen`.
 pub(crate) const PACKED_SET_EMPTY: i64 = 0xFFFF_FFFF;
 
-/// The handle band's exclusive ceiling: native registry ids and the Proxy id
-/// band live below it, and are never dereferenced. **Must equal
-/// `perry_runtime::value::addr_class::HANDLE_BAND_MAX`** (the read path's
-/// small-handle test, `handle > 0xFFFFF`, is the same boundary).
-const HANDLE_BAND_MAX: u64 = 0x10_0000;
-
-/// `bits - RECEIVER_RANGE_BASE <u RECEIVER_RANGE_SPAN` is "POINTER tag and a
-/// payload at or above the handle band" — derived from the tag constant, never
-/// typed as a literal.
-fn receiver_range_base() -> String {
-    ((crate::nanbox::POINTER_TAG | HANDLE_BAND_MAX) as i64).to_string()
-}
-fn receiver_range_span() -> String {
-    ((crate::nanbox::POINTER_MASK + 1 - HANDLE_BAND_MAX) as i64).to_string()
-}
-
 /// Ways of the site's cache the emitted code compares after a word miss.
 /// **Must equal `perry_runtime::proxy::PACKED_SET_INLINE_WAYS`**; pinned by the
 /// runtime's `packed_set_inline_ways_matches_codegen`.
@@ -227,15 +211,17 @@ pub(crate) fn emit_static_store_ic(
     // payload is >= 0x100000 (a smaller payload, or any other tag, wraps above
     // the bound). Native registry ids and the Proxy id band live below
     // 0x100000, so neither is ever dereferenced. The handle is `t + 0x100000`.
-    let biased = ctx.block().sub(I64, &obj_bits, &receiver_range_base());
-    let is_object_pointer = ctx.block().icmp_ult(I64, &biased, &receiver_range_span());
+    // The one shared form every read and write route takes
+    // (`crate::expr::receiver_range`).
+    let recv = crate::expr::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    let biased = recv.biased;
     ctx.block()
-        .cond_br(&is_object_pointer, &tok_label, &miss_label);
+        .cond_br(&recv.is_object_pointer, &tok_label, &miss_label);
 
     // THE shape compare. The compact word and the receiver's ShapeId word are
     // independent loads; the ShapeId load's only use is the compare.
     ctx.current_block = tok_idx;
-    let handle = ctx.block().add(I64, &biased, &HANDLE_BAND_MAX.to_string());
+    let handle = crate::expr::receiver_range::emit_handle(ctx.block(), &biased);
     let word = ctx.block().load_atomic_monotonic(I64, &packed_ref, 8);
     let sid_addr = ctx.block().add(I64, &handle, "4");
     let sid_ptr = ctx.block().inttoptr(I64, &sid_addr);

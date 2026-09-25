@@ -70,8 +70,8 @@ use super::*;
 /// compares the receiver's ShapeId word against the low half, and a receiver
 /// that was never shape-stamped carries a small `parent_class_id` there (0 for
 /// an anonymous literal), which a zero sentinel would match. `0xFFFF_FFFF` is
-/// above every ShapeId and every class id (`u32::MAX` is reserved, see
-/// `class_guard_shape.rs`), so the compare refuses an unprimed site by itself.
+/// above every ShapeId and every class id (`u32::MAX` is never allocated
+/// as either), so the compare refuses an unprimed site by itself.
 pub const PACKED_SET_EMPTY: u64 = 0xFFFF_FFFF;
 
 /// Ways in a site's cache. The first [`PACKED_SET_INLINE_WAYS`] are compared by
@@ -393,7 +393,10 @@ unsafe fn prime_packed_set(
         return;
     }
     let stamp = crate::object::shapes::object_shape_stamp(obj);
-    if !crate::object::shapes::is_shape_id(stamp) {
+    // Only an ORDINARY-band ShapeId may enter a site word: a dictionary
+    // shape's id is outside it (`shapes::DICTIONARY_SHAPE_ID_BASE`), so no
+    // emitted store compare can equal a dictionary receiver's word.
+    if !crate::object::shapes::is_site_matchable_shape_id(stamp) {
         return;
     }
     // One word format for the MRU word and every way: `(index << 32) | key`,

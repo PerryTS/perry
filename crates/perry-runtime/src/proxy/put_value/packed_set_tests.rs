@@ -62,10 +62,10 @@ fn packed_set_empty_matches_codegen() {
     // It must be unmatchable by any receiver's `+4` word: above the ShapeId
     // range, and `u32::MAX` is reserved as a never-allocated class id.
     assert!(PACKED_SET_EMPTY as u32 >= crate::object::shapes::SHAPE_ID_END);
-    assert_eq!(
-        PACKED_SET_EMPTY as u32,
-        crate::object::CLASS_GUARD_SHAPE_POISON
-    );
+    assert_eq!(PACKED_SET_EMPTY as u32, u32::MAX);
+    assert!(!crate::object::shapes::is_site_matchable_shape_id(
+        PACKED_SET_EMPTY as u32
+    ));
 }
 
 #[test]
@@ -458,5 +458,39 @@ fn a_key_adding_static_store_is_served_by_the_chain_verdict() {
     assert!(
         served >= STORES - 1,
         "every store after the prime is served by the chain verdict: {served} of {STORES}"
+    );
+}
+
+/// S6 on the store side: a dictionary-mode receiver must never publish a store
+/// site word. Its ShapeId survives appends and in-place deletes, so no
+/// `(ShapeId, slot)` is a fact of that id. The control is the same receiver
+/// before the latch, which does publish. Two independent facts refuse it: the
+/// dictionary shape publishes no key list (so the prime finds no slot), and the
+/// prime admits only a matchable ShapeId. This pins the outcome; it goes red
+/// only if BOTH are removed, which is why the band check is not the only
+/// guard here.
+#[test]
+fn a_dictionary_receiver_never_publishes_a_store_site_word() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let target = parsed(SRC);
+    let key = interned(b"n");
+    let (_, word) = store_fresh(target, key, 7.0);
+    assert_eq!(
+        word as u32,
+        stamp(target),
+        "control: an ordinary receiver publishes"
+    );
+    assert!(unsafe { crate::object::dictionary::latch_object_to_dictionary(object_of(target)) });
+    let id = stamp(target);
+    assert!(
+        !crate::object::shapes::is_site_matchable_shape_id(id),
+        "premise: the dictionary id is outside the matchable band: {id:#x}"
+    );
+    let (stored, word) = store_fresh(target, key, 8.0);
+    assert_eq!(stored, 8.0, "the miss still performs the store");
+    assert_eq!(
+        word, PACKED_SET_EMPTY,
+        "a dictionary receiver must not publish"
     );
 }
