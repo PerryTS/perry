@@ -138,9 +138,12 @@ pub mod subsystem {
     //! the database slots, and `perry-runtime`'s `turnloop_net::sink` carries
     //! the full map. The ceiling is `MAX_SUBSYSTEMS` (16).
 
-    /// `perry-ext-pg`.
+    /// Formerly `perry-ext-pg` (removed, #10677: npm `pg` now compiles from
+    /// source over `net`). Kept reserved so the database band never renumbers
+    /// and a stale archive cannot collide.
     pub const PG: u8 = 9;
-    /// `perry-ext-mysql2`.
+    /// Formerly `perry-ext-mysql2` (removed, #10680: npm `mysql2` now compiles
+    /// from source over `net`). Kept reserved, as `PG`.
     pub const MYSQL: u8 = 10;
     /// Formerly `perry-ext-ioredis` (removed: npm `redis`/`ioredis`/`iovalkey`
     /// now compile from source over `net`). Kept reserved so the database

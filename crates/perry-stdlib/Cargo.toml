@@ -196,13 +196,14 @@ external-tls-server = [
 # turnloop P8 group H: the bundled `pg` / `mysql2` / `ioredis` / `mongodb`
 # copies are GONE. They were the pre-#466 in-stdlib implementations, kept as
 # the fallback the well-known flip declined to. Every `extern "C"` symbol they
-# defined is also defined — and strictly extended — by perry-ext-pg /
-# perry-ext-mysql2 / perry-ext-ioredis (since removed) / perry-ext-mongodb, which is the only
-# path the flip has routed those imports down since v0.5.565-568. Keeping them
-# cost perry-stdlib a `sqlx` + `redis` + `mongodb` manifest edge, and 76 of the
-# 502 packages in this crate's own dependency closure (502 -> 426), for code no
-# default compile reached. Cargo.lock itself does NOT shrink: perry-ext-pg /
-# -mysql2 / -ioredis / -mongodb keep the same drivers. `database-sqlite` is
+# defined was also defined — and strictly extended — by perry-ext-pg /
+# perry-ext-mysql2 / perry-ext-ioredis / perry-ext-mongodb, the only path the
+# flip had routed those imports down since v0.5.565-568. Keeping them cost
+# perry-stdlib a `sqlx` + `redis` + `mongodb` manifest edge, and 76 of the 502
+# packages in this crate's own dependency closure (502 -> 426), for code no
+# default compile reached. The pg / mysql2 / ioredis wrappers have since been
+# removed too (the npm packages compile from source over `net`); only
+# perry-ext-mongodb remains. `database-sqlite` is
 # NOT in that set: rusqlite is not a tokio dependency and `dispatch_sqlite_stmt`
 # is deliberately retained through the flip (Refs #643).
 database = ["database-sqlite"]

@@ -145,7 +145,7 @@ pub(crate) fn auto_optimized_cache_key(
     // dependency graphs (#9470; the same class produced #9094's Linux link).
     //
     // Sort and deduplicate here as a defensive measure: aliases such as
-    // `mysql2` + `mysql2/promise` name the same wrapper and must
+    // `http` + `https` name the same wrapper and must
     // describe the same graph regardless of discovery order or alias
     // multiplicity.
     let mut tokio_bindings: Vec<String> = tokio_using_bindings
@@ -818,9 +818,9 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
 /// compilation), but asking for `async-runtime` on their behalf would put
 /// tokio back into every net / ws program for nothing.
 ///
-/// `pg` / `mysql2` are not here because they are not in the co-build set
-/// either; the driver selects `async-runtime` for their decline paths by
-/// module name.
+/// `pg` / `mysql2` are not here and need nothing: their wrappers were removed
+/// (#10677 / #10680), so the npm packages compile from source over `net` /
+/// `tls` and their decline paths are gone with them.
 pub(crate) fn binding_bundles_tokio(module: &str) -> bool {
     matches!(
         module,

@@ -301,7 +301,7 @@ pub(crate) fn build_optimized_libs(
                     );
                 }
                 // Multiple import spellings can resolve to one archive
-                // (`mysql2` + `mysql2/promise`, `http` + `https`). Keep the
+                // (`http` + `https` + `http2`). Keep the
                 // Cargo package set and link line unique; alias multiplicity
                 // is not a different build graph.
                 if !tokio_using_bindings
@@ -380,16 +380,23 @@ pub(crate) fn build_optimized_libs(
             }) {
                 features.insert("async-bridge");
             }
-            // turnloop P8 group H: the bundled pg / mysql2 / mongodb
-            // modules were deleted, so `module_to_features` names no feature
-            // for them and the check above cannot see them. The wrappers still
-            // settle every promise through perry-stdlib's `perry_ffi_*` shim,
-            // which only compiles under `async-runtime` — key it on the module
-            // name, the same way `undici` / `nodemailer` / `fastify` do below.
-            if matches!(
-                module_normalized,
-                "pg" | "mysql2" | "mysql2/promise" | "mongodb"
-            ) {
+            // turnloop P8 group H: the bundled mongodb module was deleted, so
+            // `module_to_features` names no feature for it and the check above
+            // cannot see it. perry-ext-mongodb still settles every promise
+            // through perry-stdlib's `perry_ffi_*` shim and runs each operation
+            // on tokio (`Handle::current().block_on` inside
+            // `perry_ffi_spawn_blocking`), so key `async-runtime` on the module
+            // name.
+            //
+            // pg / mysql2 used to be listed here too. Their wrappers
+            // (perry-ext-pg #10677, perry-ext-mysql2 #10680) are gone and
+            // `well_known_bindings.toml` has no row for either, so this loop —
+            // which `continue`s at `lookup_well_known` for any module without a
+            // row — could never reach them: those imports compile the real npm
+            // package, whose sockets are `net` / `tls` and select whatever
+            // those select. `well_known::tests::pg_and_mysql2_have_no_well_known_row`
+            // pins that.
+            if module_normalized == "mongodb" {
                 features.insert("async-runtime");
             }
             // `undici` (#466): perry-ext-undici is thin glue over the

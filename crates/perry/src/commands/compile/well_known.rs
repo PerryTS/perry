@@ -377,6 +377,22 @@ mod tests {
     }
 
     #[test]
+    fn pg_and_mysql2_have_no_well_known_row() {
+        // optimized_libs/driver.rs no longer selects perry-stdlib's
+        // tokio `async-runtime` for `pg` / `mysql2` by module name: the flip
+        // loop only reaches modules with a row here, and their wrappers were
+        // removed (#10677 / #10680), so the npm packages compile from source.
+        // If a wrapper ever comes back, whether it needs tokio is
+        // `binding_needs_shared_tokio`'s call, not a module-name rule.
+        for module in ["pg", "mysql2", "mysql2/promise", "node:pg"] {
+            assert!(
+                lookup_well_known(module).is_none(),
+                "{module} must not route to a native wrapper"
+            );
+        }
+    }
+
+    #[test]
     fn node_prefix_stripped_on_lookup() {
         let bare = lookup_well_known("bcrypt");
         let prefixed = lookup_well_known("node:bcrypt");
