@@ -1266,10 +1266,23 @@ impl LoweringContext {
     /// implicit-namespace lowering when no ordinary local shadows them. Imports
     /// may use any registered alias; the native-module shadow stack records
     /// when an inner local masks one of those aliases.
+    ///
+    /// #11336: a binding imported from a *source* module shadows the canonical
+    /// name too. `import * as crypto from "./utils"` — or CommonJS
+    /// `const crypto = require('./utils')`, which the CJS wrap hoists to an
+    /// import — is not a local, so the implicit arm used to claim it, and
+    /// `crypto.sha256(buf)` lowered to Perry's hex-digest intrinsic instead of
+    /// calling the module's own `sha256`. node-postgres names its WebCrypto
+    /// helper module exactly that, which broke every scram-sha-256 login.
+    /// Native imports never register an imported function (they register an
+    /// alias, checked above), so this only ever removes a false match.
     pub(crate) fn is_builtin_module_namespace(&self, name: &str, module: &str) -> bool {
         let alias_matches = self.lookup_builtin_module_alias(name) == Some(module)
             && !self.module_shadow_stack.iter().any(|shadow| shadow == name);
-        alias_matches || (name == module && self.lookup_local(name).is_none())
+        alias_matches
+            || (name == module
+                && self.lookup_local(name).is_none()
+                && self.lookup_imported_func(name).is_none())
     }
 
     /// #1750: record `const w = <root>.win32` / `.posix` so that later
