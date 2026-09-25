@@ -422,24 +422,27 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // like string-keyed ones: an existing prop is non-writable when frozen
     // (or its per-symbol attrs say so), a new prop is forbidden when
     // non-extensible. Only heap receivers carry the GC flag word.
-    if !native_async_resource
-        && (obj_f64.to_bits() >> 48) == 0x7FFD
-        && obj_key >= 0x10000
-        && crate::object::is_valid_obj_ptr(obj_key as *const u8)
-    {
-        let gc = (obj_key - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let flags = (*gc)._reserved;
-        if has_own_data {
-            if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
-                return value_f64;
-            }
-            if let Some(attrs) = get_symbol_property_attrs(obj_key, sym_key) {
-                if !attrs.writable() {
+    //
+    // `try_read_gc_header` rejects the whole handle band (and misaligned or
+    // slab addresses) before dereferencing. A hand-typed `>= 0x10000` floor
+    // plus `is_valid_obj_ptr` is not enough: Web Fetch handles
+    // (Request/Response/Headers) live above that floor, and
+    // `Reflect.set(new Request(url), sym, v)` read an unmapped GcHeader.
+    if !native_async_resource && (obj_f64.to_bits() >> 48) == 0x7FFD {
+        if let Some(gc) = crate::value::addr_class::try_read_gc_header(obj_key) {
+            let flags = gc._reserved;
+            if has_own_data {
+                if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
                     return value_f64;
                 }
+                if let Some(attrs) = get_symbol_property_attrs(obj_key, sym_key) {
+                    if !attrs.writable() {
+                        return value_f64;
+                    }
+                }
+            } else if flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
+                return value_f64;
             }
-        } else if flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
-            return value_f64;
         }
     }
     if !has_own_data {
@@ -498,15 +501,14 @@ pub(crate) fn symbol_property_is_non_writable(obj_f64: f64, sym_f64: f64) -> boo
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
-    // Only heap receivers carry the GC integrity flag word.
-    if (obj_f64.to_bits() >> 48) == 0x7FFD
-        && obj_key >= 0x10000
-        && crate::object::is_valid_obj_ptr(obj_key as *const u8)
-    {
-        let gc = (obj_key - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let flags = unsafe { (*gc)._reserved };
-        if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
-            return true;
+    // Only heap receivers carry the GC integrity flag word; see
+    // `set_symbol_property` for why this must reject the whole handle band.
+    if (obj_f64.to_bits() >> 48) == 0x7FFD {
+        if let Some(gc) = unsafe { crate::value::addr_class::try_read_gc_header(obj_key) } {
+            let flags = gc._reserved;
+            if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+                return true;
+            }
         }
     }
     get_symbol_property_attrs(obj_key, sym_key).is_some_and(|attrs| !attrs.writable())
