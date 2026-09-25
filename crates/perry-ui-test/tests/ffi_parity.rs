@@ -414,6 +414,7 @@ fn test_android_styling_codegen_ffi_signatures() {
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
 
 /// Table's string getter returns a raw string pointer, while selection getters
 /// return integer indices. Check every Android Table entry against codegen.
