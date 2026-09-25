@@ -7,3 +7,8 @@ so each instance still sees its own evaluation's values. TypeScript's AST
 nodes lose their 3-10 hidden `__perry_cap_*` keys (25% fewer bytes per node),
 `pos`/`end`/`kind` no longer shift with a class's capture count, and
 `ts.transpileModule` runs about 11% fewer instructions.
+
+A class expression in env mode that closes over a `for (let …)` head binding
+keeps #11250's expired-head rewrite: the refresh re-reads that evaluation's
+own capture array, which the runtime republishes into the environment slots
+only for the owning evaluation (`test_gap_11297_env_class_for_let_capture`).

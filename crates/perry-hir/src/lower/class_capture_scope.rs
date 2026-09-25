@@ -17,6 +17,19 @@
 //! an expired head from the class object's own capture slot instead. The
 //! name-keyed `RegisterClassCaptures` snapshot has no per-evaluation slot to
 //! re-read and is dropped; the per-object refresh is authoritative over it.
+//!
+//! A class-environment refresh (`env_class: Some`) is rewritten the same way.
+//! Only a fresh class expression can close over a loop-head binding in env
+//! mode: a class declaration in a loop body is `Repeatable` (per-instance
+//! snapshot) and a run-once definition is never inside a loop. A fresh class
+//! expression is GUARDED: every evaluation, owner included, still carries its
+//! own `__perry_ctor_caps` array, the refresh rebuilds that array, and
+//! `js_class_env_refresh` copies it into the environment slots only for the
+//! class's first (owner) evaluation. Re-reading the expired head from the
+//! array therefore republishes the value the evaluation already holds. The
+//! array and the owner's slots cannot disagree on a head binding: a member
+//! that writes it makes it a shared-mutable capture (the loop head writes it
+//! too), which `shared_mutable_capture` boxes, so both hold the same box.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -120,6 +133,7 @@ impl Pruner {
             Expr::RefreshClassExprCaptures {
                 class_value,
                 captures,
+                ..
             } => {
                 for (index, capture) in captures.iter_mut().enumerate() {
                     if self.expired(capture) {
