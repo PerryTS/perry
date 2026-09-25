@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2009 entries across 111 modules
+// Coverage: 2008 entries across 110 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2099,11 +2099,6 @@ declare module "module" {
   export function stripTypeScriptTypes(...args: any[]): any;
   /** stdlib */
   export function syncBuiltinESMExports(...args: any[]): any;
-}
-
-declare module "mongodb" {
-  /** stdlib */
-  export function connect(p0: any): any;
 }
 
 declare module "net" {
