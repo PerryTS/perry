@@ -147,7 +147,7 @@ pub(super) struct InstanceAlloc {
 /// constructor body's statements (branches, loops and `try` included; nested
 /// functions excluded, since their `this` is not the instance). Capped, so a
 /// generated constructor cannot make an instance arbitrarily wide.
-fn constructor_added_key_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> u32 {
+pub(crate) fn constructor_added_key_count(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> u32 {
     const SLACK_CAP: usize = 64;
     let mut chain: Vec<&perry_hir::Class> = vec![class];
     let mut parent = class.extends_name.as_deref();

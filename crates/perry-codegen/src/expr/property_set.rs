@@ -803,7 +803,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                 // setter that throws does so because of its own body, not because
                 // of the assignment's `Throw` flag.
                 if !assignment_strict {
-                    if matches!(object.as_ref(), Expr::LocalGet(_) | Expr::This) {
+                    // A class whose instances outgrow the birth shape misses
+                    // the class guard on every store (see
+                    // `class_instances_grow_past_layout`); the generic tail
+                    // below serves it from the shapes it sees.
+                    if matches!(object.as_ref(), Expr::LocalGet(_) | Expr::This)
+                        && !crate::expr::class_field_inline_guard::class_instances_grow_past_layout(
+                            ctx,
+                            &class_name,
+                        )
+                    {
                         if let Some(result) =
                             try_lower_sloppy_class_field_store(ctx, object, property, value)?
                         {
@@ -852,6 +861,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         let route_proven = ctx
                             .ptr_shape_receiver_fact(object.as_ref())
                             .is_some_and(|fact| fact.class_name == class_name);
+                        if !route_proven
+                            && crate::expr::class_field_inline_guard::class_instances_grow_past_layout(
+                                ctx,
+                                &class_name,
+                            )
+                        {
+                            return lower_put_value_property_set_by_name(
+                                ctx,
+                                object,
+                                property,
+                                value,
+                                assignment_strict,
+                            );
+                        }
                         if !route_raw_f64 && !route_proven {
                             let route_arms =
                                 crate::expr::class_field_inline_guard::class_field_subclass_arms(

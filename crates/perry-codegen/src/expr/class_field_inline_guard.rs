@@ -198,6 +198,30 @@ pub(crate) fn class_field_arms_cover_every_subclass(
 /// heavily-modular packages declare same-named classes across modules, and the
 /// name-keyed `ctx.classes` can then form a parent cycle (see
 /// `type_analysis_class_fields.rs`).
+/// Do instances of `class_name` (or of any subclass) gain keys in their
+/// constructors beyond the declared layout?
+///
+/// The class-field guards compare the receiver's ShapeId with the class's
+/// BIRTH ShapeId (the canonical keys global). A constructor that stores an
+/// undeclared key (`this.parse = this.parse.bind(this)`, Zod's `ZodType`)
+/// moves every finished instance off that shape, so every guard compare on it
+/// misses and pays the guard call and the by-name fallback. Measured on
+/// Zod 3.23: every one of the 7,600 class-field store misses per 200 parses
+/// was a receiver with 28 keys against a 5-key birth shape. Such a site
+/// belongs on the generic store IC, whose word learns the shapes the site
+/// actually sees.
+pub(crate) fn class_instances_grow_past_layout(ctx: &FnCtx<'_>, class_name: &str) -> bool {
+    let grows = |name: &str| {
+        ctx.classes.get(name).copied().is_some_and(|class| {
+            crate::lower_call::new_alloc::constructor_added_key_count(ctx, class) > 0
+        })
+    };
+    grows(class_name)
+        || ctx.classes.keys().any(|sub| {
+            sub != class_name && is_transitive_subclass(ctx, sub, class_name) && grows(sub)
+        })
+}
+
 fn is_transitive_subclass(ctx: &FnCtx<'_>, name: &str, ancestor: &str) -> bool {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut parent = ctx.classes.get(name).and_then(|c| c.extends_name.clone());
