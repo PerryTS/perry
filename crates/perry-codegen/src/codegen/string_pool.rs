@@ -342,7 +342,11 @@ pub(super) fn emit_string_pool(
     {
         let mut named: Vec<(u32, String)> = Vec::new();
         for (class_name, class) in classes.iter() {
-            if *class_name != class.name {
+            // Imported stubs (id == 0) use consumer lookup keys, which may
+            // be aliases or synthetic namespace keys. Only the defining
+            // module owns the JavaScript display name; an importer must not
+            // overwrite it when its string initializer runs.
+            if class.id == 0 || *class_name != class.name {
                 continue;
             }
             let cid = match class_ids.get(class_name).copied() {
@@ -1773,3 +1777,7 @@ pub(super) fn emit_string_pool(
     }
     blk.ret_void();
 }
+
+#[cfg(test)]
+#[path = "class_name_registration_tests.rs"]
+mod class_name_registration_tests;

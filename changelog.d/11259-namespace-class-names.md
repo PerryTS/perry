@@ -1,0 +1,1 @@
+Fix class names being overwritten by aliases or internal namespace keys when classes are reexported through a module namespace (#11259). Only the defining module registers the JavaScript display name. Add LLVM-emission and native Node-oracle coverage for namespace reexports, aliases, constructor names, class identity, and inheritance.
