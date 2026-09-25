@@ -871,6 +871,7 @@ jobs:
         run: |
           python3 scripts/check_test_registration.py --self-test
           python3 scripts/check_test_registration.py
+          python3 scripts/node_suite_run.py --self-test
 
       # #7672: the GC test guards CLEAR ~20 process-global side tables from
       # whatever libtest thread constructs a guard, and nothing requires a

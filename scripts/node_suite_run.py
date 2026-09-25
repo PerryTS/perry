@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Differential runner for the print-and-diff node-suite (test-parity/node-suite).
 
-For every `test-parity/node-suite/<module>/**/*.ts`, run `node <t>` and
+For every `test-parity/node-suite/<module>/**/*.ts` outside a `fixtures/`
+directory, run `node <t>` and
 `perry <t> -o out && out`, then compare stdout (trailing whitespace ignored).
 Prints a per-module pass/total table plus an overall figure.
 
@@ -20,7 +21,11 @@ Two correctness measures learned the hard way (see CHANGELOG / project memory):
    run STRICTLY SEQUENTIALLY so their numbers are trustworthy; everything else
    stays parallel.
 
+A `fixtures/` directory holds modules that tests import, never tests: its `.ts`
+files print nothing, so counting them would only add trivial passes.
+
 Usage: node_suite_run.py <perry-bin> <repo-root> [comma-separated-modules]
+       node_suite_run.py --self-test
 """
 import os, re, subprocess, sys, tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -71,6 +76,43 @@ def normalize(text: str) -> str:
     return "\n".join(out)
 
 
+FIXTURE_DIR = "fixtures"
+
+
+def discover(base, mods=None):
+    """(module, path) for every test entry under `base`, skipping `fixtures/`."""
+    found = []
+    for mod in (mods or sorted(os.listdir(base))):
+        md = os.path.join(base, mod)
+        if not os.path.isdir(md):
+            continue
+        for dp, dirs, files in os.walk(md):
+            dirs[:] = [d for d in dirs if d != FIXTURE_DIR]
+            for f in files:
+                if f.endswith(".ts") and not f.endswith(".d.ts"):
+                    found.append((mod, os.path.join(dp, f)))
+    return found
+
+
+def self_test():
+    with tempfile.TemporaryDirectory() as td:
+        for rel in ("m/a.ts", "m/sub/b.ts", "m/sub/fixtures/dep.ts",
+                    "m/fixtures/nested/dep.ts", "m/types.d.ts", "n/c.ts"):
+            path = os.path.join(td, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w").close()
+        got = sorted(os.path.relpath(p, td) for _, p in discover(td))
+        want = ["m/a.ts", "m/sub/b.ts", "n/c.ts"]
+        if got != want:
+            print(f"FAIL: discovered {got}, want {want}")
+            return 1
+    print("OK: node-suite discovery skips fixtures/ and .d.ts")
+    return 0
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+    sys.exit(self_test())
+
 PERRY = sys.argv[1]
 ROOT = sys.argv[2]
 MODS = sys.argv[3].split(",") if len(sys.argv) > 3 and sys.argv[3] else None
@@ -87,16 +129,7 @@ SLOW_MODULES = {
     "trace_events",
 }
 
-tests = []
-base = os.path.join(ROOT, "test-parity", "node-suite")
-for mod in (MODS or sorted(os.listdir(base))):
-    md = os.path.join(base, mod)
-    if not os.path.isdir(md):
-        continue
-    for dp, _, files in os.walk(md):
-        for f in files:
-            if f.endswith(".ts") and not f.endswith(".d.ts"):
-                tests.append((mod, os.path.join(dp, f)))
+tests = discover(os.path.join(ROOT, "test-parity", "node-suite"), MODS)
 
 
 def run_one(args):

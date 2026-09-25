@@ -1308,7 +1308,7 @@ case "$TEST_SUITE" in
         if [[ -d "$node_suite_search_root" ]]; then
             while IFS= read -r test_file; do
                 TEST_FILES+=("$test_file")
-            done < <(find "$node_suite_search_root" -type f -name '*.ts' | sort)
+            done < <(find "$node_suite_search_root" -type f -name '*.ts' -not -path '*/fixtures/*' | sort)
         fi
         ;;
     *)

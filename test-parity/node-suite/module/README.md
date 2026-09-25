@@ -21,10 +21,11 @@ to 69**. The 69 entries are grouped by directory as follows:
 | `require`    |    13 |    15 | overloads, resolution, cache, cycles, metadata, packages      |
 | `source-map` |     7 |     7 | payloads, getters, mappings, origins, validation              |
 
-`loader/fixtures/**/*.ts` contains ten pre-existing executable fixture modules.
-The generic runner intentionally counts every `.ts` file recursively, so they
-remain represented in the total and baseline rather than being silently
-subtracted in this document.
+`loader/fixtures/**/*.ts` contains ten fixture modules that the loader tests
+import. The runners skip every `fixtures/` directory, so these modules are not
+counted as tests: the runner-visible lane is **59** entries (69 minus those
+ten). The historical figures below were measured when the fixtures were still
+counted.
 
 ## Primary evidence
 
