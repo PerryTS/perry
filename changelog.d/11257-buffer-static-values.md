@@ -1,0 +1,1 @@
+Fix `Buffer.from`, `Buffer.alloc`, `Buffer.concat`, and other Buffer static methods returning `undefined` when read as values (#11257). Preserve the Buffer constructor receiver during HIR lowering so detached methods retain their callable value, identity, and metadata. Add HIR regressions and native Node-oracle coverage with direct-call and shadowed-binding controls.

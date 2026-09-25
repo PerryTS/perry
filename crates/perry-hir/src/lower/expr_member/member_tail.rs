@@ -299,6 +299,12 @@ pub(crate) fn lower_member_tail(
                     // with detached `Math.log`.
                     let receiver_is_detached_console_read =
                         property == "console" && !member_is_call_callee;
+                    // #11257: Buffer statics are reified on its constructor.
+                    // Value reads must retain that receiver: names such as
+                    // `from` are shared with Array and typed-array constructors.
+                    // Direct calls keep their existing intrinsic dispatch.
+                    let receiver_is_detached_buffer_read =
+                        property == "Buffer" && !member_is_call_callee;
                     // #4596: `Date.now` / `Date.parse` / `Date.UTC` read as a
                     // VALUE needs the reified Date constructor receiver so it
                     // resolves to the real native function object (typeof
@@ -490,6 +496,7 @@ pub(crate) fn lower_member_tail(
                         && !outer_is_inherited_object_proto_method
                         && !outer_is_inherited_function_proto_method
                         && !receiver_is_detached_console_read
+                        && !receiver_is_detached_buffer_read
                         && !outer_is_dynamic_computed_key
                     {
                         object_expr = Expr::GlobalGet(0);
