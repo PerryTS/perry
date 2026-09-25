@@ -418,16 +418,18 @@ fn emit_array_runtime_key_store(
         ],
     );
     if let Expr::LocalGet(id) = object {
-        // A binding with no storage in this context (a property chain has no
-        // `LocalGet`; an unresolvable id has none of these) keeps the prior
-        // behavior: the store relies on in-place mutation / forwarding.
-        let has_home = ctx.boxed_vars.contains(id)
-            || ctx.closure_captures.contains_key(id)
-            || ctx.locals.contains_key(id)
-            || ctx.module_globals.contains_key(id);
-        if has_home {
+        if ctx.boxed_vars.contains(id) {
+            // Through the box (or, for a boxed id with no box in this context,
+            // the capture / slot / global it falls through to).
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
             super::array_push::emit_push_writeback(ctx, *id, &new_box, "IndexSet")?;
+        } else if let Some(slot) = ctx.locals.get(id).cloned() {
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            ctx.block().store(DOUBLE, &new_box, &slot);
+        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            let g_ref = format!("@{}", global_name);
+            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
         }
     }
     if value_needs_barrier {
