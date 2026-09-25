@@ -44,7 +44,10 @@ unsafe extern "C" fn property_ext<const K: i64>(
     1
 }
 
-static SET_HITS: [AtomicU64; N as usize] = [const { AtomicU64::new(0) }; N as usize];
+per_test_global! {
+    // Per test thread, so no sibling test can observe or disturb it.
+    static SET_HITS: [AtomicU64; N as usize] = [const { AtomicU64::new(0) }; N as usize];
+}
 
 unsafe extern "C" fn property_set_ext<const K: i64>(
     handle: i64,
