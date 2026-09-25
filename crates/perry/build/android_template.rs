@@ -2,7 +2,12 @@
 use std::{env, fs, io, path::Path};
 
 pub fn emit() -> io::Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../perry-ui-android/template");
+    // Read the manifest dir at build-script RUN time, not via `env!` at its
+    // compile time: cargo reuses a compiled build script across checkouts that
+    // share a target dir, and a baked-in path points at whichever checkout
+    // compiled it (a deleted worktree then panics every later build).
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+    let root = Path::new(&manifest_dir).join("../perry-ui-android/template");
     let mut files = Vec::new();
     collect(&root, &root, &mut files)?;
     files.sort();
