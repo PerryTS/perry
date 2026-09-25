@@ -72,7 +72,7 @@ macro_rules! for_each_k {
 fn extension_table_keeps_every_registrant_in_order() {
     let table = ExtensionTable::new();
     assert!(table.is_empty());
-    assert!(table.entries().is_empty());
+    assert!(table.snapshot().is_empty());
     let fns: Vec<*mut ()> = for_each_k!(method_ext: HandleMethodDispatchExtensionFn)
         .iter()
         .map(|&f| f as *mut ())
@@ -85,8 +85,8 @@ fn extension_table_keeps_every_registrant_in_order() {
     table.register(fns[N as usize - 1]);
     table.register(ptr::null_mut());
     assert_eq!(
-        table.entries(),
-        &fns[..],
+        table.snapshot(),
+        fns,
         "registration order is dispatch order"
     );
     assert!(!table.is_empty());

@@ -137,7 +137,7 @@ pub type EventEmitterOnFn =
 static HANDLE_METHOD_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROPERTY_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HANDLE_PROPERTY_SET_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
-// Extension dispatchers (#11286): one growable table per surface. These used
+// Extension dispatchers (#11286): one unbounded table per surface. These used
 // to be fixed `[AtomicPtr<()>; 4]` arrays whose overflow path overwrote the
 // LAST slot, so with five method registrants (perry-ext-{http server, http
 // client, net, ws, nodemailer}) the fourth crate to initialize silently lost
@@ -166,21 +166,28 @@ static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-/// Append-only, growable table of extension dispatcher function pointers.
+/// Number of extension dispatchers held inline. Registrations beyond it go to
+/// the growable overflow list instead of evicting anything (#11286).
+const INLINE_EXTENSION_SLOTS: usize = 4;
+
+/// Append-only table of extension dispatcher function pointers.
 ///
-/// Readers (every untyped handle method call / property access) do ONE
-/// `Acquire` load of `head` and iterate the published slice — no lock, no
-/// per-slot atomic loads, and an empty table is a single null check (the old
-/// fixed array scanned all four slots to answer "is anything registered?").
+/// The first `INLINE_EXTENSION_SLOTS` registrants live in fixed atomic slots,
+/// filled strictly in order, so the hot path for the common case is the same
+/// unrolled scan the old fixed array compiled to (and an empty table is one
+/// null check on slot 0). Further registrants go to `overflow`, a growable
+/// list consulted only once every inline slot is taken — the old code
+/// overwrote the last slot there instead.
 ///
 /// Writers (a handful of one-time `Once`-guarded registrations per process)
-/// serialize on `lock`, copy the current slice, append, and publish the new
-/// list with a `Release` store. The superseded list is intentionally leaked:
-/// a concurrent reader may still be iterating it, and the total leak is
-/// bounded by the number of distinct registrations (a few dozen bytes each).
-/// Entries are code pointers, never GC heap pointers, so this is not a root.
+/// serialize on `lock`. The overflow list is copy-on-append and published with
+/// a `Release` store; a superseded list is intentionally leaked, because a
+/// concurrent reader may still be iterating it, and the leak is bounded by the
+/// number of distinct registrations. Entries are code pointers, never GC heap
+/// pointers, so none of this is a GC root.
 pub(crate) struct ExtensionTable {
-    head: AtomicPtr<ExtensionList>,
+    inline: [AtomicPtr<()>; INLINE_EXTENSION_SLOTS],
+    overflow: AtomicPtr<ExtensionList>,
     lock: Mutex<()>,
 }
 
@@ -191,26 +198,53 @@ struct ExtensionList {
 impl ExtensionTable {
     pub(crate) const fn new() -> Self {
         Self {
-            head: AtomicPtr::new(ptr::null_mut()),
+            inline: [const { AtomicPtr::new(ptr::null_mut()) }; INLINE_EXTENSION_SLOTS],
+            overflow: AtomicPtr::new(ptr::null_mut()),
             lock: Mutex::new(()),
         }
     }
 
+    /// Slots fill in order, so slot 0 is set iff anything is registered.
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.head.load(Ordering::Acquire).is_null()
+        self.inline[0].load(Ordering::Acquire).is_null()
     }
 
-    /// The registered dispatchers, in registration order (= dispatch priority).
-    #[inline]
-    pub(crate) fn entries(&self) -> &[*mut ()] {
-        let p = self.head.load(Ordering::Acquire);
-        if p.is_null() {
-            &[]
-        } else {
-            // SAFETY: a published list is never freed or mutated (see above).
-            unsafe { &(*p).fns }
+    /// Offer each registered dispatcher, in registration order (= dispatch
+    /// priority), to `claims` until one returns `true`.
+    #[inline(always)]
+    fn any_claims(&self, mut claims: impl FnMut(*mut ()) -> bool) -> bool {
+        for slot in &self.inline {
+            let p = slot.load(Ordering::Acquire);
+            if p.is_null() {
+                // In-order fill: an empty inline slot means no overflow yet.
+                return false;
+            }
+            if claims(p) {
+                return true;
+            }
         }
+        let list = self.overflow.load(Ordering::Acquire);
+        if !list.is_null() {
+            // SAFETY: a published list is never freed or mutated (see above).
+            for &p in unsafe { (*list).fns.iter() } {
+                if claims(p) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Every registered dispatcher, in registration order.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Vec<*mut ()> {
+        let mut out = Vec::new();
+        self.any_claims(|p| {
+            out.push(p);
+            false
+        });
+        out
     }
 
     /// Register `f`; idempotent for a pointer already present. Never evicts.
@@ -219,10 +253,22 @@ impl ExtensionTable {
             return;
         }
         let _guard = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let current = self.entries();
-        if current.contains(&f) {
+        if self.any_claims(|p| p == f) {
             return;
         }
+        for slot in &self.inline {
+            if slot.load(Ordering::Acquire).is_null() {
+                slot.store(f, Ordering::Release);
+                return;
+            }
+        }
+        let current = self.overflow.load(Ordering::Acquire);
+        let current: &[*mut ()] = if current.is_null() {
+            &[]
+        } else {
+            // SAFETY: as in `any_claims`.
+            unsafe { &(*current).fns }
+        };
         let mut fns = Vec::with_capacity(current.len() + 1);
         fns.extend_from_slice(current);
         fns.push(f);
@@ -230,7 +276,7 @@ impl ExtensionTable {
             fns: fns.into_boxed_slice(),
         }));
         // The previous list (if any) is leaked on purpose — see the type doc.
-        self.head.store(list, Ordering::Release);
+        self.overflow.store(list, Ordering::Release);
     }
 }
 
@@ -249,10 +295,11 @@ unsafe extern "C" fn composite_handle_method_dispatch(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
-    for &p in HANDLE_METHOD_EXTENSION_DISPATCH_PTRS.entries() {
+    let mut out = f64::from_bits(TAG_UNDEFINED);
+    if HANDLE_METHOD_EXTENSION_DISPATCH_PTRS.any_claims(|p| {
         let f = std::mem::transmute::<*mut (), HandleMethodDispatchExtensionFn>(p);
-        let mut out = f64::from_bits(TAG_UNDEFINED);
-        if f(
+        out = f64::from_bits(TAG_UNDEFINED);
+        f(
             handle,
             method_name_ptr,
             method_name_len,
@@ -260,9 +307,8 @@ unsafe extern "C" fn composite_handle_method_dispatch(
             args_len,
             &mut out,
         ) != 0
-        {
-            return out;
-        }
+    }) {
+        return out;
     }
 
     let p = HANDLE_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
@@ -279,12 +325,13 @@ unsafe extern "C" fn composite_handle_property_dispatch(
     property_name_ptr: *const u8,
     property_name_len: usize,
 ) -> f64 {
-    for &p in HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS.entries() {
+    let mut out = f64::from_bits(TAG_UNDEFINED);
+    if HANDLE_PROPERTY_EXTENSION_DISPATCH_PTRS.any_claims(|p| {
         let f = std::mem::transmute::<*mut (), HandlePropertyDispatchExtensionFn>(p);
-        let mut out = f64::from_bits(TAG_UNDEFINED);
-        if f(handle, property_name_ptr, property_name_len, &mut out) != 0 {
-            return out;
-        }
+        out = f64::from_bits(TAG_UNDEFINED);
+        f(handle, property_name_ptr, property_name_len, &mut out) != 0
+    }) {
+        return out;
     }
 
     let p = HANDLE_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
@@ -302,11 +349,11 @@ unsafe extern "C" fn composite_handle_property_set_dispatch(
     property_name_len: usize,
     value: f64,
 ) {
-    for &p in HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS.entries() {
+    if HANDLE_PROPERTY_SET_EXTENSION_DISPATCH_PTRS.any_claims(|p| {
         let f = std::mem::transmute::<*mut (), HandlePropertySetDispatchExtensionFn>(p);
-        if f(handle, property_name_ptr, property_name_len, value) != 0 {
-            return;
-        }
+        f(handle, property_name_ptr, property_name_len, value) != 0
+    }) {
+        return;
     }
 
     let p = HANDLE_PROPERTY_SET_DISPATCH_PTR.load(Ordering::Acquire);
