@@ -367,7 +367,7 @@ fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str, value_discarded: 
 /// array as the box and silently lose the realloc write-back.
 ///
 /// `what` names the caller for the "local not in scope" diagnostic.
-fn emit_push_writeback(
+pub(super) fn emit_push_writeback(
     ctx: &mut FnCtx<'_>,
     array_id: u32,
     new_box: &str,

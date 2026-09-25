@@ -361,8 +361,7 @@ fn lower_array_index_set_via_runtime_key(
                         value_needs_barrier,
                         source_label,
                         assignment_strict,
-                    );
-                    Ok(())
+                    )
                 },
             )?;
             Ok(val_double)
@@ -372,7 +371,18 @@ fn lower_array_index_set_via_runtime_key(
 
 /// The exact store for a numeric key the inline tier declined: the helper
 /// resolves `ToPropertyKey`, extends/reallocates, and returns the live head,
-/// which is written back to a local or module-global receiver.
+/// which is written back to the receiver's binding.
+///
+/// #11335: the write-back goes through `emit_push_writeback`, the one storage
+/// chain `push` / `unshift` already use. It used to store the new head straight
+/// into `ctx.locals[id]` — but for a BOXED local (a `var` captured by a closure,
+/// e.g. every module-level `var` of a CommonJS module, whose body runs inside
+/// the CJS factory closure) that slot holds the box pointer, not the value.
+/// The first store that grew the array past its capacity overwrote the box
+/// pointer with the array pointer, so every later read of the binding
+/// dereferenced an array as a box: `undefined`, or a SIGSEGV. iconv-lite's
+/// `encodings/utf7.js` fills a 256-entry table this way at load time, which
+/// crashed every compiled mysql2 program at its first connection.
 #[allow(clippy::too_many_arguments)]
 fn emit_array_runtime_key_store(
     ctx: &mut FnCtx<'_>,
@@ -384,7 +394,7 @@ fn emit_array_runtime_key_store(
     value_needs_barrier: bool,
     source_label: &str,
     assignment_strict: bool,
-) {
+) -> Result<()> {
     let arr_handle = {
         let blk = ctx.block();
         unbox_to_i64(blk, arr_box)
@@ -408,19 +418,23 @@ fn emit_array_runtime_key_store(
         ],
     );
     if let Expr::LocalGet(id) = object {
-        if let Some(slot) = ctx.locals.get(id).cloned() {
+        // A binding with no storage in this context (a property chain has no
+        // `LocalGet`; an unresolvable id has none of these) keeps the prior
+        // behavior: the store relies on in-place mutation / forwarding.
+        let has_home = ctx.boxed_vars.contains(id)
+            || ctx.closure_captures.contains_key(id)
+            || ctx.locals.contains_key(id)
+            || ctx.module_globals.contains_key(id);
+        if has_home {
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
-            ctx.block().store(DOUBLE, &new_box, &slot);
-        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
-            let g_ref = format!("@{}", global_name);
-            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+            super::array_push::emit_push_writeback(ctx, *id, &new_box, "IndexSet")?;
         }
     }
     if value_needs_barrier {
         let arr_bits = ctx.block().bitcast_double_to_i64(arr_box);
         emit_write_barrier(ctx, &arr_bits, val_bits);
     }
+    Ok(())
 }
 
 /// #9459: the SLOPPY object-by-name tail for `Expr::IndexSet`.
