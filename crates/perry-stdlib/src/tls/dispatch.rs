@@ -211,6 +211,19 @@ pub unsafe fn dispatch_tls_handle(handle: i64, method: &str, args: &[f64]) -> f6
         // net provider. Keep their stream/event methods in that provider's
         // listener and command maps; the TLS-local maps below belong to
         // accepted/server-side and directly constructed TLS sockets.
+        //
+        // The provider is perry-ext-net, the only one since tokio lane L4
+        // deleted bundled `net`, so these arms exist only in a build that
+        // links it (every `external-*` net / TLS feature implies it). The
+        // prebuilt `full` archive has none of them and must still link
+        // without libperry_ext_net.a; when ext-net IS linked beside it, its
+        // handle-method extension (`dispatch.rs`, registered with the
+        // runtime) answers these calls before this dispatcher is asked.
+        #[cfg(any(
+            feature = "external-net-tls",
+            feature = "external-tls-server",
+            feature = "external-net-pump"
+        ))]
         if perry_runtime::tls::is_tls_client_handle(handle) {
             match method {
                 "write" if !args.is_empty() => {

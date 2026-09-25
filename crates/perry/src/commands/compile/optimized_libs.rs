@@ -92,6 +92,16 @@ pub(crate) fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<Str
             }
         }
     }
+    // tokio lane L4: `node:tls` is served by perry-stdlib's TLS module over
+    // perry-ext-net's sockets — `tls.connect` and every client TLSSocket
+    // method are ext-net's — and bundled `net`, which used to fill that role
+    // for a TLS-only program, is gone. So a `tls` import routes `net` too.
+    if iteration_set
+        .iter()
+        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls")
+    {
+        iteration_set.insert("net".to_string());
+    }
     iteration_set
 }
 

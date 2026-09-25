@@ -915,6 +915,16 @@ fn no_auto_still_resolves_prebuilt_well_known_archives() {
     );
 }
 
+/// tokio lane L4: a `tls` import routes `net` — the TLS client and every
+/// client TLSSocket method are perry-ext-net's, and bundled `net` is gone.
+#[test]
+fn tls_import_routes_net_wrapper() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.native_module_imports.insert("node:tls".to_string());
+    assert!(well_known_iteration_set(&ctx).contains("net"));
+}
+
 /// tokio lane L4: perry-stdlib's bundled `net` / `ws` copies are deleted, so
 /// PERRY_DISABLE_WELL_KNOWN=1 must still put those two wrappers on the link
 /// line (there is no copy to revert to) while every other binding keeps
