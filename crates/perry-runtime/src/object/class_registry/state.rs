@@ -1029,7 +1029,7 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
 /// identity, not merely by shape. Array/Map/Set/Error/typed-array subclasses
 /// have their own dedicated instance/prototype modeling and don't reach this
 /// fallback the same way.
-fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
+pub(crate) fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
     const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
     const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
     let (module, symbol) = match parent_id {

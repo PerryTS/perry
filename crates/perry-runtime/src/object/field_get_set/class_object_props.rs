@@ -149,6 +149,19 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
                     .then(|| class_evaluation_prototype_value(parent_obj).to_bits())
             } else if let Some(parent_id) = super::super::class_ref_id(parent_value) {
                 Some(super::super::class_registry::class_decl_prototype_value(parent_id).to_bits())
+            } else if let Some(proto) = ((parent_value.to_bits() >> 48) == 0x7FFE)
+                .then(|| {
+                    // #11298: a static native parent (`extends EventEmitter`)
+                    // pins as a ClassRef to a RESERVED builtin id, which has
+                    // no class registration. Resolve it as the declared-class
+                    // path does (#10599).
+                    super::super::class_registry::reserved_native_parent_prototype_bits(
+                        parent_value.to_bits() as u32,
+                    )
+                })
+                .flatten()
+            {
+                Some(proto)
             } else {
                 let parent_js = JSValue::from_bits(parent_value.to_bits());
                 if parent_js.is_pointer()
