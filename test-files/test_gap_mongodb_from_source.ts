@@ -4,6 +4,7 @@
 // string parsing, SDAM/server selection, the OP_QUERY handshake, OP_MSG
 // command encoding, BSON, cursors and write results.
 import { MongoClient } from "mongodb";
+import net from "node:net";
 import { startFakeMongo } from "./_helpers/fake_mongo_server.ts";
 import { createRequire } from "node:module";
 
@@ -11,7 +12,7 @@ import { createRequire } from "node:module";
 const requireFromHere = createRequire(import.meta.url);
 console.log("mongodb version:", requireFromHere("mongodb/package.json").version);
 
-const server = startFakeMongo(async (port: number, served: string[]) => {
+const server = startFakeMongo(net, async (port: number, served: string[]) => {
   const client = new MongoClient("mongodb://127.0.0.1:" + port + "/?directConnection=true", {
     serverSelectionTimeoutMS: 5000,
     heartbeatFrequencyMS: 60000,

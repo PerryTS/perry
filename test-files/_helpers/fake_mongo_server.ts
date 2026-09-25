@@ -4,7 +4,6 @@
 // topology: hello, ping, insert, find, update, delete, aggregate-count,
 // endSessions. Records every non-handshake command name it serves so a test
 // can prove the driver really went over the wire.
-import net from "node:net";
 import { BSON } from "mongodb";
 
 const OP_REPLY = 1;
@@ -46,7 +45,11 @@ function applySort(docs: any[], sort: any): any[] {
   return out;
 }
 
-export function startFakeMongo(onReady: (port: number, served: string[]) => void) {
+// `net` is passed in by the test rather than imported here: the parity
+// harness decides a fixture's compile mode (auto-optimize for modules routed
+// to a perry-ext-* wrapper, such as `net`) from the TEST file's own imports,
+// the same arrangement as fake_resp_server.ts.
+export function startFakeMongo(net: any, onReady: (port: number, served: string[]) => void) {
   const collections: Record<string, any[]> = {};
   const served: string[] = [];
   const coll = (db: string, name: string) => {
