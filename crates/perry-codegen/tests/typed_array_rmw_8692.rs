@@ -111,6 +111,11 @@ fn rmw_module(name: &str, rhs: Expr) -> Module {
 }
 
 fn compile_ir(module: Module) -> String {
+    // Hold the same lock as `compile_artifact`: that helper points the
+    // process-global PERRY_NATIVE_REPS_DIR at a temp dir it deletes on drop, and
+    // an unlocked compile running meanwhile writes its native-reps record into
+    // that dir and fails with "failed to write native reps ... No such file".
+    let _lock = artifact_env_lock();
     String::from_utf8(
         compile_module(
             &module,
