@@ -50,11 +50,14 @@ use super::{
 /// Accessor calls still require a real receiver proof; a lying annotation is
 /// routed to the by-name setter path instead.
 fn guarded_declared_class_store_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
-    let Expr::LocalGet(id) = object else {
-        return None;
-    };
-    let perry_hir::types::Type::Named(name) = ctx.local_type_hint(id)? else {
-        return None;
+    let name = match object {
+        Expr::LocalGet(id) => match ctx.local_type_hint(id)? {
+            perry_hir::types::Type::Named(name) => name,
+            _ => return None,
+        },
+        // #10906: `this` in a closed-shape object-literal method.
+        Expr::This => ctx.guarded_this_class.as_ref()?,
+        _ => return None,
     };
     ctx.classes.contains_key(name).then(|| name.clone())
 }

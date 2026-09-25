@@ -213,6 +213,8 @@ mod hoisted_callback_method_tests;
 #[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
+#[cfg(test)]
+mod literal_method_this_tests;
 mod ordinary_method_artifacts;
 mod tdz_names;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
@@ -2470,6 +2472,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
         module_global_proven_types: std::collections::HashMap::new(),
         funcs_reading_dynamic_this,
+        literal_method_home_classes: crate::collectors::literal_method_home_classes(hir),
         type_aliases: opts.type_aliases,
         imported_func_param_counts: opts.imported_func_param_counts,
         import_function_origin_names: opts.import_function_origin_names.clone(),

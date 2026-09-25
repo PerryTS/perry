@@ -411,6 +411,7 @@ pub(in crate::codegen) fn compile_static_method(
         stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
+        guarded_this_class: None,
         proven_shape_params: std::collections::HashMap::new(),
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,

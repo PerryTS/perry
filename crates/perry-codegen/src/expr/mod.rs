@@ -1174,6 +1174,13 @@ pub(crate) struct FnCtx<'a> {
     /// keeps today's guarded lowering because its receiver is unproven.
     pub proven_this: Option<crate::collectors::PtrShapeLocal>,
 
+    /// #10906: a metadata-only class candidate for `this` in a closed-shape
+    /// object-literal method body — the `__AnonShape_*` class its literal
+    /// allocates. Nominates only the guarded class-field get/set paths, whose
+    /// runtime class-id/shape check owns the fallback; `receiver_class_name`
+    /// never sees it, so nothing that trusts a proven receiver does either.
+    pub guarded_this_class: Option<String>,
+
     /// #8774: parameter-local exact-shape proofs installed only in a guarded
     /// `$pshape_args` method clone.  Like `proven_this`, each value remains a
     /// tagged JSValue in its ordinary shadow-bound slot; field lowering reloads

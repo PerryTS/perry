@@ -751,6 +751,7 @@ pub(super) fn compile_method(
         stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this,
+        guarded_this_class: None,
         proven_shape_params: pshape_arg_plan
             .map(|plan| {
                 plan.args

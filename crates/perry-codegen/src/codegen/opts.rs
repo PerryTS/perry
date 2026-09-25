@@ -870,6 +870,11 @@ pub(crate) struct CrossModuleCtx {
     /// sloppy/strict `this` resolution sees "no receiver" instead of a
     /// leaked receiver from an enclosing method dispatch (#3576).
     pub funcs_reading_dynamic_this: std::collections::HashSet<u32>,
+    /// #10906: closed-shape object-literal method closure `func_id` ->
+    /// the `__AnonShape_*` class its literal allocates. A guarded-candidate
+    /// class for `this` in that method body (see
+    /// `collectors::literal_method_home_classes`), never a receiver proof.
+    pub literal_method_home_classes: std::collections::HashMap<u32, String>,
     pub type_aliases: std::collections::HashMap<String, perry_hir::types::Type>,
     pub imported_func_param_counts: std::collections::HashMap<String, usize>,
     /// Issue #678: see `CompileOptions::import_function_origin_names`.

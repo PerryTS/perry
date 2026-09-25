@@ -462,6 +462,7 @@ pub(super) fn compile_closure(
         captures_this,
         captures_new_target,
         enclosing_class,
+        is_arrow,
         is_async,
         is_generator,
         is_strict,
@@ -473,6 +474,7 @@ pub(super) fn compile_closure(
             captures_this,
             captures_new_target,
             enclosing_class,
+            is_arrow,
             is_async,
             is_generator,
             is_strict,
@@ -484,6 +486,7 @@ pub(super) fn compile_closure(
             *captures_this,
             *captures_new_target,
             enclosing_class.clone(),
+            *is_arrow,
             *is_async,
             *is_generator,
             *is_strict,
@@ -564,6 +567,28 @@ pub(super) fn compile_closure(
         lf.linkage = "internal".to_string();
     }
 
+    // #10906: a non-arrow closure with its OWN `this` binding (a function
+    // expression, or an object-literal method — the closed-shape literal path
+    // lowers every method to exactly this) used to call
+    // `js_implicit_this_get{,_sloppy}` at EVERY `this` in its body. Bind the
+    // receiver once instead, at entry, into a rooted `this` slot that every
+    // `Expr::This` loads — what OrdinaryCallBindThis does, and what a class
+    // method gets from `%this_arg`. The sloppy conversion (nullish ->
+    // globalThis, primitive -> wrapper) then also runs once, so `this === this`
+    // holds for a primitive receiver instead of boxing a fresh wrapper per read.
+    //
+    // Async and generator bodies are excluded: their statements run across
+    // resumptions, and the entry read has not been audited against re-entry.
+    // Arrows have lexical `this`, which is `captures_this`'s job.
+    let entry_bound_this = !captures_this
+        && enclosing_class.is_none()
+        && !is_arrow
+        && !is_async
+        && !is_generator
+        && !cross_module.local_generator_funcs.contains(&func_id)
+        && !cross_module.async_step_closures.contains(&func_id)
+        && perry_hir::analysis::body_reads_dynamic_this(body);
+
     // gh #6206 / #6081: closures/arrows compiled WITHOUT a shadow frame left
     // their pointer-typed params/locals invisible to the exact-roots copying
     // minor (production skips the conservative native-stack scan), so an
@@ -587,7 +612,8 @@ pub(super) fn compile_closure(
         // timing of the READ; it says nothing about the lifetime of the SLOT,
         // which spans the body.
         let capture_root_slots =
-            u32::from(captures_this || enclosing_class.is_some()) + u32::from(captures_new_target);
+            u32::from(captures_this || enclosing_class.is_some() || entry_bound_this)
+                + u32::from(captures_new_target);
         crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
             lf,
             &llvm_name,
@@ -729,7 +755,7 @@ pub(super) fn compile_closure(
         Vec::new()
     };
 
-    let this_stack = if captures_this || enclosing_class.is_some() {
+    let this_stack = if captures_this || enclosing_class.is_some() || entry_bound_this {
         let this_cap_idx = (auto_captures.len() + usize::from(captures_new_target)) as u32;
         let blk = lf.block_mut(0).unwrap();
         let slot = blk.alloca(DOUBLE);
@@ -759,6 +785,11 @@ pub(super) fn compile_closure(
                 crate::nanbox::INT32_TAG | class_id as u64,
             ));
             blk.store(DOUBLE, &class_ref, &slot);
+        } else if entry_bound_this {
+            // A valid non-pointer until the prologue's receiver read below
+            // fills it, so the slot is safe to bind here with the others.
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            blk.store(DOUBLE, &undef, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
         }
@@ -1243,6 +1274,14 @@ pub(super) fn compile_closure(
         stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
+        guarded_this_class: if entry_bound_this {
+            cross_module
+                .literal_method_home_classes
+                .get(&func_id)
+                .cloned()
+        } else {
+            None
+        },
         proven_shape_params: std::collections::HashMap::new(),
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
@@ -1285,6 +1324,25 @@ pub(super) fn compile_closure(
         Some(body),
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
+
+    // #10906: read the dynamic receiver into the entry `this` slot. It runs
+    // after every parameter, capture and `arguments` root is bound, because
+    // the sloppy read can allocate a primitive wrapper — and ahead of the
+    // first statement, so no user code can have rebound IMPLICIT_THIS yet.
+    if entry_bound_this {
+        let helper = if is_strict {
+            "js_implicit_this_get"
+        } else {
+            "js_implicit_this_get_sloppy"
+        };
+        let slot = ctx
+            .this_stack
+            .last()
+            .cloned()
+            .expect("entry-bound `this` has a slot");
+        let receiver = ctx.block().call(DOUBLE, helper, &[]);
+        ctx.block().store(DOUBLE, &receiver, &slot);
+    }
 
     // #9060 follow-up: resolve loop-called immutable callee bindings once at
     // entry — parameters, captured bindings, and module globals (the
