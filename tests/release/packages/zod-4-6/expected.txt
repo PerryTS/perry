@@ -1,0 +1,8 @@
+safeParse ok: true {"name":"Ada","age":36}
+safeParse error: false
+  invalid_type name
+  too_small age
+z.core: object function
+validate: function function
+parseAsync: {"name":"Grace","age":85}
+parseAsync error: true

@@ -171,13 +171,11 @@ fn flatten_into<'a, F>(
                 // Resolving the binding to its defining module instead lets the
                 // classifier see the real function/class/global and emit the
                 // proper closure/global reference.
-                let origin =
-                    resolve_binding_origin(module_name, local, lookup).unwrap_or_else(|| {
-                        BindingOrigin {
-                            source_module: module_name.to_string(),
-                            source_local: local.clone(),
-                            namespace_of: None,
-                        }
+                let origin = resolve_binding_origin(module_name, local, false, lookup)
+                    .unwrap_or_else(|| BindingOrigin {
+                        source_module: module_name.to_string(),
+                        source_local: local.clone(),
+                        namespace_of: None,
                     });
                 out.push(FlatExport {
                     name: exported.clone(),
@@ -200,7 +198,7 @@ fn flatten_into<'a, F>(
                 // fall back to naming the directly-importing source — the
                 // long-standing one-hop behaviour.
                 let origin =
-                    resolve_binding_origin(source, imported, lookup).unwrap_or_else(|| {
+                    resolve_binding_origin(source, imported, true, lookup).unwrap_or_else(|| {
                         BindingOrigin {
                             source_module: source.clone(),
                             source_local: imported.clone(),

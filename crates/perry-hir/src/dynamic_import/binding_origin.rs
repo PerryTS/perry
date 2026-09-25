@@ -30,6 +30,15 @@ fn defines_local_binding(module: &Module, name: &str) -> bool {
         })
 }
 
+/// True when `module` exports its own binding `name` under that same name.
+/// Only such a binding answers an export-name lookup: a private `function foo`
+/// is not the export `foo`, which may instead arrive through `export *`.
+fn exports_own_binding(module: &Module, name: &str) -> bool {
+    module.exports.iter().any(|export| {
+        matches!(export, Export::Named { local, exported } if local == name && exported == name)
+    })
+}
+
 /// The import binding, if any, that `name` refers to in `module`.
 /// Native imports are excluded because their source has no compiled HIR owner.
 fn find_import_binding(module: &Module, name: &str) -> Option<(String, ImportBindingKind)> {
@@ -69,16 +78,19 @@ enum ImportBindingKind {
 /// Resolve `(module_name, local)` to the module that actually defines the
 /// binding. Returns `None` when the chain does not move or leaves the compiled
 /// module graph, preserving the caller's existing one-hop fallback.
+/// `as_export` says `start_local` is an export name of `start_module` rather
+/// than a binding in its scope.
 pub(super) fn resolve_binding_origin<'a, F>(
     start_module: &str,
     start_local: &str,
+    as_export: bool,
     lookup: &F,
 ) -> Option<BindingOrigin>
 where
     F: Fn(&str) -> Option<&'a Module>,
 {
     let mut seen = HashSet::new();
-    let origin = resolve_exported_binding(start_module, start_local, lookup, &mut seen)?;
+    let origin = resolve_exported_binding(start_module, start_local, as_export, lookup, &mut seen)?;
     (origin.source_module != start_module
         || origin.source_local != start_local
         || origin.namespace_of.is_some())
@@ -91,9 +103,15 @@ where
 /// `bridge: export { v } from barrel` must resolve to `leaf`, because the pure
 /// barrel does not emit a `perry_fn_barrel__v` getter. Each star branch gets its
 /// own cycle set; distinct successful owners are ambiguous and do not resolve.
+///
+/// `as_export` marks `local` as an export name (import, re-export, and star
+/// hops). A same-named binding then only resolves when the module exports it,
+/// so a private `foo` in one star source cannot shadow or conflict with the
+/// exported `foo` of another.
 fn resolve_exported_binding<'a, F>(
     module_name: &str,
     local: &str,
+    as_export: bool,
     lookup: &F,
     seen: &mut HashSet<(String, String)>,
 ) -> Option<BindingOrigin>
@@ -104,8 +122,9 @@ where
         return None;
     }
     let module = lookup(module_name)?;
+    let own_binding = !as_export || exports_own_binding(module, local);
 
-    if defines_local_binding(module, local) {
+    if own_binding && defines_local_binding(module, local) {
         return Some(BindingOrigin {
             source_module: module_name.to_string(),
             source_local: local.to_string(),
@@ -113,11 +132,16 @@ where
         });
     }
 
-    if let Some((source, kind)) = find_import_binding(module, local) {
+    let import = if own_binding {
+        find_import_binding(module, local)
+    } else {
+        None
+    };
+    if let Some((source, kind)) = import {
         if lookup(&source).is_some() {
             return match kind {
                 ImportBindingKind::Value(imported) => {
-                    resolve_exported_binding(&source, &imported, lookup, seen)
+                    resolve_exported_binding(&source, &imported, true, lookup, seen)
                 }
                 ImportBindingKind::Namespace => Some(BindingOrigin {
                     source_module: source.clone(),
@@ -138,7 +162,7 @@ where
         } = export
         {
             if exported == local && source != local {
-                return resolve_exported_binding(module_name, source, lookup, seen);
+                return resolve_exported_binding(module_name, source, false, lookup, seen);
             }
         }
     }
@@ -151,7 +175,7 @@ where
                 imported,
                 exported,
             } if exported == local && lookup(source).is_some() => {
-                return resolve_exported_binding(source, imported, lookup, seen);
+                return resolve_exported_binding(source, imported, true, lookup, seen);
             }
             Export::NamespaceReExport { source, name }
                 if name == local && lookup(source).is_some() =>
@@ -176,7 +200,8 @@ where
             continue;
         };
         let mut branch_seen = seen.clone();
-        let Some(candidate) = resolve_exported_binding(source, local, lookup, &mut branch_seen)
+        let Some(candidate) =
+            resolve_exported_binding(source, local, true, lookup, &mut branch_seen)
         else {
             continue;
         };

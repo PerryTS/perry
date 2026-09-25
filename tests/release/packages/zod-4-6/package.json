@@ -1,0 +1,16 @@
+{
+  "name": "perry-release-fixture-zod-4-6",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture: zod 4.6.5 compile/run smoke (export-star private-name collision).",
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "perry": {
+    "compilePackages": ["zod"],
+    "allow": {
+      "compilePackages": ["zod"]
+    }
+  }
+}
