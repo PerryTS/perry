@@ -135,7 +135,7 @@ fn captured_reassigned_let_is_released_at_every_return() {
         "premise: n is boxed\n{ir}"
     );
     assert!(
-        ir.contains("js_closure_set_box_capture_ptr"),
+        ir.contains("js_closure_register_box_layout"),
         "premise: counted edge\n{ir}"
     );
     let per_ret = releases_before_each_ret(&ir);
@@ -280,7 +280,7 @@ fn plain_async_step_counts_only_enclosing_cells_and_frame_keeps_its_own() {
         "premise: both cells are minted by this frame:\n{ir}"
     );
     assert_eq!(
-        ir.matches("call void @js_closure_set_box_capture_ptr(")
+        ir.matches("call void @js_closure_register_box_layout(")
             .count(),
         1,
         "the enclosing cell is a counted edge, the activation's own is not:\n{ir}"
@@ -289,5 +289,41 @@ fn plain_async_step_counts_only_enclosing_cells_and_frame_keeps_its_own() {
     assert!(
         !per_ret.is_empty() && per_ret.iter().all(|n| *n == 1),
         "the frame releases OUTER only; OWN belongs to the activation ({per_ret:?}):\n{ir}"
+    );
+}
+
+#[test]
+fn wide_box_captures_emit_one_constant_bitmap_and_one_registration() {
+    let ids: Vec<u32> = (100..166).collect();
+    let mut body: Vec<Stmt> = ids
+        .iter()
+        .map(|&id| let_stmt(id, Expr::Integer(0)))
+        .collect();
+    let nested_body = ids
+        .iter()
+        .map(|&id| Stmt::Expr(Expr::LocalSet(id, Box::new(Expr::Integer(1)))))
+        .collect();
+    body.push(Stmt::Return(Some(closure(2, nested_body, ids))));
+    let mut module = Module::new("wide_box_layout.ts");
+    module
+        .functions
+        .push(function("wide_boxes", Vec::new(), body));
+    let ir = String::from_utf8(
+        crate::compile_module(&module, super::prealloc_module_global_tests::ir_opts()).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        ir.contains("constant [2 x i64] [i64 18446744073709551615, i64 3]"),
+        "{ir}"
+    );
+    assert_eq!(
+        ir.matches("call void @js_closure_register_box_layout(")
+            .count(),
+        1,
+        "{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_closure_set_box_capture_ptr("),
+        "{ir}"
     );
 }

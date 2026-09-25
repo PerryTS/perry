@@ -270,8 +270,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // is created per-call but always with the same `this` (the
             // World) and same captures (`this._changeset`).
             // Boxed captures may use the bulk cache helper, but codegen still
-            // follows it with `js_closure_set_box_capture_ptr` for only those
-            // slots. The idempotent write declares exact lifetime edges
+            // follows it with `js_closure_register_box_layout`. The idempotent
+            // registration declares exact lifetime edges
             // without guessing from arbitrary pointer-shaped values.
             //
             // IDENTITY CAVEAT (#4831 follow-up — Stripe `protoExtend`):
@@ -370,16 +370,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 None
             };
 
-            // Bulk-init admission: a fresh closure whose captures are all plain
-            // bits. Box-cell captures keep the per-slot setter path — their
-            // `set_closure_box_capture` bookkeeping has no bulk twin.
+            // Fresh closures can initialize all captures in bulk. Box lifetime
+            // edges are registered afterward, independently of the stores.
             let bulk_fresh_init = !no_capture_singleton
                 && !captured_singleton
                 && total_caps > 0
-                && !captured_value_bits.is_empty()
-                && auto_captures.iter().all(|cap_id| {
-                    !ctx.boxed_vars.contains(cap_id) || uncounted_box_capture(cap_id)
-                });
+                && !captured_value_bits.is_empty();
             let closure_handle = if no_capture_singleton {
                 let blk = ctx.block();
                 blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &func_ref)])
@@ -460,40 +456,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .call_void("js_register_closure_async_function", &[(PTR, &func_ref)]);
             }
 
-            // The captured-singleton helper writes captures internally. Boxed
-            // slots still take the dedicated, idempotent setter afterward so
-            // their lifetime edges are declared; fresh closures need every
-            // slot initialized here. The compiler-private plain-async step
-            // closure is different: its activation refcount already covers
-            // every queued/running instance of its OWN cells, so declaring its
-            // whole boxed frame as escaped would delay every terminal cell
-            // until a full GC. User closures nested inside it still take the
-            // dedicated setter and therefore preserve #8213's escaped-cell
-            // lifetime, and so does a step closure's capture of an enclosing
-            // scope's cell (#10464).
-            let tracked_box_capture_slots = auto_captures
-                .iter()
-                .map(|cap_id| ctx.boxed_vars.contains(cap_id) && !uncounted_box_capture(cap_id))
-                .collect::<Vec<_>>();
-            let blk = ctx.block();
-            for (idx, val_bits) in captured_value_bits.iter().enumerate() {
-                let track_box_capture = tracked_box_capture_slots[idx];
-                if bulk_fresh_init {
-                    // Every slot was written by `js_closure_alloc_init`.
-                    continue;
+            // Lifetime edges are declared once after initialization, using a
+            // function-wide immutable bitmap. The async step's own cells are
+            // retained by its activation; only enclosing cells escape here.
+            let mut box_mask = vec![0u64; auto_captures.len().div_ceil(64)];
+            for (index, cap_id) in auto_captures.iter().enumerate() {
+                if ctx.boxed_vars.contains(cap_id) && !uncounted_box_capture(cap_id) {
+                    box_mask[index / 64] |= 1 << (index % 64);
                 }
-                if !captured_singleton || track_box_capture {
-                    let idx_str = idx.to_string();
-                    let setter = if track_box_capture {
-                        "js_closure_set_box_capture_ptr"
-                    } else {
-                        "js_closure_set_capture_bits"
-                    };
-                    blk.call_void(
-                        setter,
-                        &[(I64, &closure_handle), (I32, &idx_str), (I64, val_bits)],
+            }
+            if !bulk_fresh_init && !captured_singleton {
+                for (idx, val_bits) in captured_value_bits.iter().enumerate() {
+                    ctx.block().call_void(
+                        "js_closure_set_capture_bits",
+                        &[
+                            (I64, &closure_handle),
+                            (I32, &idx.to_string()),
+                            (I64, val_bits),
+                        ],
                     );
                 }
+            }
+            if box_mask.iter().any(|&word| word != 0) {
+                let name = format!(
+                    "perry_box_layout_{}_{}",
+                    ctx.strings.module_prefix(),
+                    ctx.ic_site_counter
+                );
+                ctx.ic_site_counter += 1;
+                let words = box_mask
+                    .iter()
+                    .map(|word| format!("i64 {word}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ctx.typed_parse_rodata.push(format!(
+                    "@{name} = private unnamed_addr constant [{} x i64] [{words}]",
+                    box_mask.len(),
+                ));
+                ctx.block().call_void(
+                    "js_closure_register_box_layout",
+                    &[
+                        (I64, &closure_handle),
+                        (PTR, &format!("@{name}")),
+                        (I32, &box_mask.len().to_string()),
+                    ],
+                );
             }
             // Issue #291: when the closure is built inside a method
             // body (or constructor), the enclosing frame's `this` is the

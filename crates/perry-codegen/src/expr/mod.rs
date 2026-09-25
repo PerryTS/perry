@@ -674,7 +674,7 @@ pub(crate) struct FnCtx<'a> {
     pub resolved_versioned_loop_callback_targets: std::collections::HashMap<(u32, usize), String>,
     /// This is an internal clone of a compiler-proven direct arrow body. Its
     /// boxed capture slots were installed through
-    /// `js_closure_set_box_capture_ptr`, so captured-box accesses may use the
+    /// `js_closure_register_box_layout`, so captured-box accesses may use the
     /// raw helpers. Public and dynamically dispatched closure bodies keep the
     /// defensive runtime registry validation.
     pub trusted_box_captures: bool,

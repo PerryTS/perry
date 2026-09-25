@@ -1182,7 +1182,7 @@ fn box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
 /// Raw read for an internal closure body selected from an exact arrow target.
 ///
 /// Codegen emits this only for capture slots installed by
-/// `js_closure_set_box_capture_ptr`. The public closure body retains
+/// `js_closure_register_box_layout`. The public closure body retains
 /// `js_box_get_bits` and its authoritative registry check. A live closure's
 /// exact capture edge keeps the non-moving box cell from being published for
 /// reuse, so the compiler-installed pointer stays valid for this call. TDZ

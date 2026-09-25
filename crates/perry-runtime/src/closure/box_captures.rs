@@ -1,6 +1,7 @@
 //! Lifetime bridge between GC closures and malloc-side async box cells.
 //!
-//! Codegen identifies the capture slots which contain raw box addresses. We
+//! Codegen identifies raw box slots through the shared `box_layout` bitmap.
+//! This module keeps per-cell counts and legacy dynamically declared edges. We
 //! count only those declared edges before a box reaches terminal
 //! `ReleaseBoxes`; arbitrary JS values must never be guessed to be boxes from
 //! pointer-shaped bits. Once its async activation drains, the box runtime
@@ -55,7 +56,8 @@ impl BoxCaptureSlots {
 }
 
 crate::perry_thread_local! {
-    /// Closure address -> compiler-declared `(capture index, box address)` edges.
+    /// Legacy/dynamically patched closures only. Generated closures use the
+    /// shared function bitmap and weak owner set in `box_layout`.
     static CLOSURE_BOX_CELLS: RefCell<crate::fast_hash::PtrHashMap<usize, BoxCaptureSlots>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
     /// Box address -> packed edge record: the number of capture slots naming
@@ -73,7 +75,7 @@ const FRAME_RELEASE_TAG_SHIFT: u32 = 60;
 const FRAME_RELEASE_TAG_MASK: usize = 0b11 << FRAME_RELEASE_TAG_SHIFT;
 const EDGE_COUNT_MASK: usize = (1 << FRAME_RELEASE_TAG_SHIFT) - 1;
 
-fn increment_cell_capture_count(cell: usize, amount: usize) {
+pub(super) fn increment_cell_capture_count(cell: usize, amount: usize) {
     BOX_CAPTURE_COUNTS.with(|counts| {
         let mut counts = counts.borrow_mut();
         let record = counts.entry(cell).or_default();
@@ -85,7 +87,7 @@ fn increment_cell_capture_count(cell: usize, amount: usize) {
     });
 }
 
-fn decrement_cell_capture_count(cell: usize, amount: usize) {
+pub(super) fn decrement_cell_capture_count(cell: usize, amount: usize) {
     // `Some(record)` when the final edge disappeared.
     let reached_zero = BOX_CAPTURE_COUNTS.with(|counts| {
         let mut counts = counts.borrow_mut();
@@ -173,6 +175,7 @@ pub(crate) fn visit_closure_box_payload_slots_mut(closure: usize, mut visit: imp
     if closure == 0 || !crate::gc::full_trace_active() {
         return;
     }
+    super::box_layout::visit_payloads(closure, &mut visit);
     CLOSURE_BOX_CELLS.with(|captures| {
         let captures = captures.borrow();
         let Some(cells) = captures.get(&closure) else {
@@ -182,6 +185,27 @@ pub(crate) fn visit_closure_box_payload_slots_mut(closure: usize, mut visit: imp
             crate::r#box::visit_pending_captured_js_box_payload_slot(cell, &mut visit);
         }
     });
+}
+
+pub(super) fn has_dynamic_box_captures(closure: *mut ClosureHeader) -> bool {
+    CLOSURE_BOX_CELLS.with(|all| {
+        let all = all.borrow();
+        !all.is_empty() && all.contains_key(&(closure as usize))
+    })
+}
+
+/// Preserve counted edges before a legacy caller mutates a shared-layout closure.
+pub(super) fn prepare_dynamic_box_capture(closure: *mut ClosureHeader) {
+    let edges = super::box_layout::take_dynamic_edges(closure);
+    if !edges.is_empty() {
+        CLOSURE_BOX_CELLS.with(|all| {
+            let mut slots = BoxCaptureSlots::default();
+            for (index, cell) in edges {
+                slots.push(index, cell);
+            }
+            all.borrow_mut().insert(closure as usize, slots);
+        });
+    }
 }
 
 /// Record a compiler-declared boxed capture slot.
@@ -225,6 +249,19 @@ pub(crate) fn clone_closure_box_captures(
     if source.is_null() || destination.is_null() || source.cast_mut() == destination {
         return;
     }
+    if super::box_layout::clone_owner(source, destination) {
+        return;
+    }
+    let shared_edges = super::box_layout::copy_edges(source);
+    if !shared_edges.is_empty() {
+        for (index, _) in shared_edges {
+            let cell = crate::r#box::registered_box_capture_addr(
+                super::js_closure_get_capture_bits(destination, index) as usize,
+            );
+            set_closure_box_capture(destination, index, cell);
+        }
+        return;
+    }
     let source = source as usize;
     let destination = destination as usize;
     let copied = CLOSURE_BOX_CELLS.with(|all| {
@@ -245,6 +282,7 @@ pub(crate) fn closure_box_captures_owner_moved(old_owner: usize, new_owner: usiz
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
     }
+    super::box_layout::owner_moved(old_owner, new_owner);
     CLOSURE_BOX_CELLS.with(|all| {
         let mut all = all.borrow_mut();
         if let Some(cells) = all.remove(&old_owner) {
@@ -255,6 +293,7 @@ pub(crate) fn closure_box_captures_owner_moved(old_owner: usize, new_owner: usiz
 }
 
 pub(crate) fn prune_dead_closure_box_capture_owners(is_dead_closure: &dyn Fn(usize) -> bool) {
+    super::box_layout::prune(is_dead_closure);
     // One pass: dropping a dead owner and collecting its edges together avoids
     // a second probe per dead closure. Counts (and any publication they
     // trigger) are settled after the table borrow ends.
@@ -276,6 +315,7 @@ pub(crate) fn prune_dead_closure_box_capture_owners(is_dead_closure: &dyn Fn(usi
 
 #[cfg(test)]
 pub(crate) fn test_clear_closure_box_capture_indexes() {
+    super::box_layout::clear();
     CLOSURE_BOX_CELLS.with(|all| all.borrow_mut().clear());
     BOX_CAPTURE_COUNTS.with(|all| all.borrow_mut().clear());
 }

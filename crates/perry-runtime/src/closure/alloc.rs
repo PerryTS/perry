@@ -927,6 +927,7 @@ pub extern "C" fn js_closure_set_box_capture_ptr(
     index: u32,
     value: i64,
 ) {
+    super::box_captures::prepare_dynamic_box_capture(closure);
     js_closure_set_capture_bits(closure, index, value as u64);
     let cell = crate::r#box::registered_box_capture_addr(value as usize);
     super::box_captures::set_closure_box_capture(closure, index, cell);
