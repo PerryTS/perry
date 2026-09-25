@@ -14,7 +14,7 @@ pub(super) fn optimize_and_emit(
     emit_asm: bool,
     native_roots: bool,
     mut stats: Option<&mut UnitCodegenStats>,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     global_init(mllvm);
     announce();
 
@@ -81,13 +81,17 @@ pub(super) fn optimize_and_emit(
     // backend that can root an `invoke`, and since #7302 every call inside a
     // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
     // which the explicit bridge refuses outright (#7327/#7330).
+    // Functions RS4GC rewrites, and their pre-rewrite sizes: the machine
+    // budget below re-lowers an over-budget one of these onto a shadow frame.
+    let mut rewritten_functions = std::collections::HashSet::new();
+    let mut pre_sizes = std::collections::HashMap::new();
     if native_roots {
         // Sizes before the rewrite: the budget message below names them, and
         // the per-unit report compares them with the post-rewrite census.
         let budget = rs4gc_instruction_budget();
         let preflight_cap = crate::codegen::helpers::root_spill_relocation_threshold();
-        let rewritten_functions = rs4gc_functions(module);
-        let pre_sizes = if budget == RewriteBudget::Off && preflight_cap == 0 && stats.is_none() {
+        rewritten_functions = rs4gc_functions(module);
+        pre_sizes = if budget == RewriteBudget::Off && preflight_cap == 0 && stats.is_none() {
             std::collections::HashMap::new()
         } else {
             pre_rewrite_sizes(module)
@@ -184,49 +188,140 @@ pub(super) fn optimize_and_emit(
     // The IR pipeline above has already done the requested optimization. For
     // an extreme generated function, LLVM's optimized *machine* pipeline can
     // still become super-linear in instruction selection / LiveIntervals /
-    // register allocation. Use an O0 target machine only for final emission
-    // of that unit; ordinary units keep `tm`, and the optimized IR is not
-    // rebuilt or demoted.
+    // register allocation, so such a function is emitted by a bounded target
+    // machine instead. The optimized IR is not rebuilt or demoted.
     //
-    // The selection is per function, the emission cannot be — a TargetMachine
-    // carries one optimization level for the whole module, and `optnone` does
-    // not reach LiveIntervals or the register allocator. Every ordinary
-    // function in the unit is demoted with the offender, which is why the
-    // budget sits above the measured population of extreme functions and why
-    // the log below names each of them.
-    let fast_emit = if opt == '0' {
+    // A TargetMachine carries one optimization level for a whole module, and
+    // `optnone` does not reach LiveIntervals or the register allocator, so the
+    // over-budget functions are first moved into a module of their own
+    // (`fast_emit_split`): the unit's ordinary functions keep `tm`, and only
+    // the moved ones pay for the bounded pipeline. Where the cut cannot be
+    // made (see `split_emission_supported` and `SplitDeclined`), the whole
+    // unit takes the bounded pipeline as it did before containment.
+    let mut fast_emit = if opt == '0' {
         Vec::new()
     } else {
         fast_emit_fallbacks(module, fast_emit_budget(effective_target))
     };
+    // First tier past the budget: a statepoint function is sent back to
+    // codegen and re-lowered with its GC roots in a shadow frame, then the
+    // unit is compiled again at the same optimization level through the
+    // optimized machine pipeline. Its size is mostly RS4GC's relocation
+    // fan-out, which the shadow frame does not have. Only a function that is
+    // still over the budget without statepoints (or never had them) reaches
+    // the bounded pipeline below.
+    let relower: Vec<Rs4gcBudgetViolation> = fast_emit
+        .iter()
+        .filter(|f| rewritten_functions.contains(&f.name))
+        .map(|f| Rs4gcBudgetViolation {
+            name: f.name.clone(),
+            pre_instructions: pre_sizes.get(&f.name).copied(),
+            cause: Rs4gcBudgetCause::MachineBudget {
+                instructions: f.instructions,
+            },
+            cap: f.cap,
+        })
+        .collect();
+    if !relower.is_empty() {
+        crate::machine_tiers::note_relowered(relower.len());
+        if let Ok(dir) = std::env::var("PERRY_LL_FAST_EMIT_DUMP") {
+            // The statepoint form of the unit, as the machine pipeline would
+            // have received it, for `llc` study of what the re-lowering saved.
+            dump_module(module, &dir, &relower[0].name, "relowered-unit");
+        }
+        return Err(anyhow::Error::new(Rs4gcBudgetExceeded {
+            violations: relower,
+        }));
+    }
+    // `split`: `None` — no split (nothing over budget, or the cut declined);
+    // `Some(None)` — every function of the unit is over budget, so the whole
+    // unit is exactly the contained set; `Some(Some(m))` — `m` holds the
+    // moved functions and `module` the rest.
+    let split =
+        if fast_emit.is_empty() || !fast_emit_split::split_emission_supported(effective_target) {
+            None
+        } else {
+            let names: Vec<String> = fast_emit.iter().map(|f| f.name.clone()).collect();
+            match fast_emit_split::split_moved_functions(module, &names) {
+                Ok(contained) => Some(contained),
+                Err(declined) => {
+                    eprintln!(
+                        "perry: fast-emit containment declined for the unit of `{}`: {declined}",
+                        names[0]
+                    );
+                    None
+                }
+            }
+        };
+    let whole_unit_is_contained = matches!(split, Some(None));
+    let contained = split.flatten();
+    if contained.is_some() || whole_unit_is_contained {
+        for fallback in &mut fast_emit {
+            fallback.contained = true;
+        }
+    }
+    // The bounded machine: the requested optimization level with FastISel
+    // instruction selection for a function up to `FAST_ISEL_TIER_FACTOR`
+    // times the budget, LLVM's O0 machine pipeline only past that (see
+    // `MachineTier`).
+    let tier = fast_emit
+        .first()
+        .map(|widest| MachineTier::for_function(widest.instructions, widest.cap));
+    if let Some(tier) = tier {
+        for fallback in &mut fast_emit {
+            fallback.tier = tier;
+        }
+    }
     for fallback in &fast_emit {
         eprintln!("perry: {fallback}");
+    }
+    if let (Some(contained), Ok(dir)) = (&contained, std::env::var("PERRY_LL_FAST_EMIT_DUMP")) {
+        dump_module(contained, &dir, &fast_emit[0].name, "contained");
     }
     if let Some(stats) = stats.as_deref_mut() {
         stats.fast_emit_fallbacks = fast_emit.clone();
     }
-    let fast_tm = if !fast_emit.is_empty() {
-        Some(
-            target
+    let fast_tm = match tier {
+        None => None,
+        Some(tier) => {
+            let level = match tier {
+                MachineTier::FastIsel => opt_level,
+                MachineTier::O0 => OptimizationLevel::None,
+            };
+            let machine = target
                 .create_target_machine(
                     &triple,
                     &cpu,
                     &features,
-                    OptimizationLevel::None,
+                    level,
                     RelocMode::PIC,
                     CodeModel::Default,
                 )
                 .ok_or_else(|| {
                     anyhow!(
-                        "failed to create bounded O0 emission TargetMachine for \
-                         `{effective_target}`"
+                        "failed to create bounded emission TargetMachine for `{effective_target}`"
                     )
-                })?,
-        )
-    } else {
-        None
+                })?;
+            if tier == MachineTier::FastIsel {
+                // SAFETY: `machine` is a live TargetMachine owned by this frame.
+                unsafe {
+                    llvm_sys::target_machine::LLVMSetTargetMachineFastISel(machine.as_mut_ptr(), 1)
+                };
+            }
+            if contained.is_some() || whole_unit_is_contained {
+                crate::machine_tiers::note_contained(tier, fast_emit.len());
+            } else {
+                crate::machine_tiers::note_whole_unit(tier, fast_emit[0].unit_functions);
+            }
+            Some(machine)
+        }
     };
-    let emit_tm = fast_tm.as_ref().unwrap_or(&tm);
+    // Contained: the unit keeps `tm` and only the moved functions use the
+    // bounded machine. Not contained: the whole unit uses it.
+    let unit_tm = match (&contained, &fast_tm) {
+        (None, Some(fast_tm)) => fast_tm,
+        _ => &tm,
+    };
 
     let kind = if emit_asm {
         FileType::Assembly
@@ -234,13 +329,51 @@ pub(super) fn optimize_and_emit(
         FileType::Object
     };
     let emit_started = std::time::Instant::now();
-    let obj = emit_tm
+    let mut parts = Vec::with_capacity(2);
+    let obj = unit_tm
         .write_to_memory_buffer(module, kind)
         .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))?;
+    parts.push(obj.as_slice().to_vec());
+    drop(obj);
+    if let (Some(contained), Some(fast_tm)) = (&contained, &fast_tm) {
+        let obj = fast_tm
+            .write_to_memory_buffer(contained, kind)
+            .map_err(|e| {
+                anyhow!(
+                    "{kind:?} emission of the contained over-budget functions failed:\n{}",
+                    e.to_string()
+                )
+            })?;
+        parts.push(obj.as_slice().to_vec());
+    }
     if let Some(stats) = stats {
         stats.emit_secs = emit_started.elapsed().as_secs_f64();
     }
-    Ok(obj.as_slice().to_vec())
+    Ok(parts)
+}
+
+/// `PERRY_LL_FAST_EMIT_DUMP=<dir>`: keep the bitcode of a contained module
+/// (or of a unit whose statepoint functions are being re-lowered), so the
+/// machine pipeline of an extreme function can be studied with `llc`
+/// without recompiling the program that produced it. Diagnostic only; it
+/// does not change what is emitted.
+fn dump_module(module: &inkwell::module::Module<'_>, dir: &str, first: &str, kind: &str) {
+    let safe: String = first
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(120)
+        .collect();
+    let path = std::path::Path::new(dir).join(format!("{safe}.{kind}.bc"));
+    let _ = std::fs::create_dir_all(dir);
+    if module.write_bitcode_to_path(&path) {
+        eprintln!("perry: kept {kind} fast-emit module: {}", path.display());
+    }
 }
 
 #[cfg(test)]
@@ -1188,9 +1321,11 @@ entry:
                 name: "wide".to_string(),
                 instructions: 9,
                 cap: 8,
-                // `narrow` is under the cap and `sink` is a declaration; both
-                // are still emitted by the demoted machine pipeline.
+                // `narrow` is under the cap and `sink` is a declaration.
                 unit_functions: 2,
+                contained: false,
+                // 9 is within four times 8.
+                tier: MachineTier::FastIsel,
             }],
             "only the function over the budget is selected"
         );
@@ -1210,7 +1345,7 @@ entry:
             "9 instructions",
             "budget 8",
             "requested IR optimization",
-            "O0 machine pipeline",
+            "optimized machine pipeline with FastISel",
             "all 2 of its defined functions",
             "PERRY_LL_FAST_EMIT_MAX_INSTRS",
         ] {
@@ -1422,132 +1557,5 @@ entry:
         })
         .expect("-O0 emits");
         assert!(stats.fast_emit_fallbacks.is_empty());
-    }
-
-    /// One function over the budget, one ordinary function that is nowhere
-    /// near it, and one external callee so nothing folds away. `narrow`
-    /// holds three values across three calls, which is what makes its
-    /// machine code differ between the optimized and the O0 register
-    /// allocators.
-    fn sibling_cost_fixture(with_wide: bool) -> String {
-        let wide = r#"
-define i64 @wide(i64 %n) {
-entry:
-  %a = call i64 @src(i64 %n)
-  %b = call i64 @src(i64 %a)
-  %c = call i64 @src(i64 %b)
-  %d = call i64 @src(i64 %c)
-  %s = add i64 %a, %b
-  %t = add i64 %s, %c
-  %u = add i64 %t, %d
-  ret i64 %u
-}
-"#;
-        format!(
-            r#"
-declare i64 @src(i64)
-
-define i64 @narrow(i64 %x, i64 %y) {{
-entry:
-  %a = call i64 @src(i64 %x)
-  %b = call i64 @src(i64 %y)
-  %c = call i64 @src(i64 %a)
-  %s = add i64 %a, %b
-  %t = add i64 %s, %c
-  ret i64 %t
-}}
-{}"#,
-            if with_wide { wide } else { "" }
-        )
-    }
-
-    /// The assembly of one function, from its label to the end of its body.
-    /// Tolerates ELF (`narrow:` / `.size`) and Mach-O (`_narrow:`) spelling.
-    fn function_assembly(asm: &str, name: &str) -> String {
-        let label_elf = format!("{name}:");
-        let label_macho = format!("_{name}:");
-        let mut body: Vec<&str> = Vec::new();
-        let mut inside = false;
-        for line in asm.lines() {
-            let trimmed = line.trim();
-            if !inside {
-                inside = trimmed == label_elf || trimmed == label_macho;
-                continue;
-            }
-            let next_symbol = trimmed.ends_with(':')
-                && !trimmed.starts_with('.')
-                && !trimmed.starts_with('L')
-                && !trimmed.contains(' ');
-            if trimmed.starts_with(".size") || trimmed == ".cfi_endproc" || next_symbol {
-                break;
-            }
-            body.push(line);
-        }
-        assert!(
-            body.len() > 3,
-            "no body extracted for `{name}` — the assertion below would be vacuous:\n{asm}"
-        );
-        body.join("\n")
-    }
-
-    fn emit_assembly(ir: &str, module_name: &str, budget: FastEmitBudget) -> (String, Vec<String>) {
-        global_init(&[]);
-        let target = crate::codegen::default_target_triple();
-        let context = Context::create();
-        let module = parse_ir_text(&context, ir, module_name).expect("fixture parses");
-        let mut stats = UnitCodegenStats::default();
-        let asm = with_test_fast_emit_budget_value(budget, || {
-            optimize_and_emit_module_with_stats(
-                &module,
-                &target,
-                &["-Os".into(), "-S".into()],
-                false,
-                Some(&mut stats),
-            )
-        })
-        .expect("the fixture emits");
-        (
-            String::from_utf8(asm).expect("LLVM emits UTF-8 assembly"),
-            stats
-                .fast_emit_fallbacks
-                .iter()
-                .map(|f| f.name.clone())
-                .collect(),
-        )
-    }
-
-    /// What the budget actually costs, and why it is calibrated above the
-    /// measured population instead of below the smallest pathological case:
-    /// the demotion is a whole-unit act. An ordinary function emits the same
-    /// machine code whether or not an extreme function shares its unit — but
-    /// only while the unit keeps the optimized machine pipeline. Cross the
-    /// budget and that ordinary function's code changes too, without ever
-    /// having been over any budget itself.
-    #[test]
-    fn the_budget_is_what_makes_ordinary_siblings_pay() {
-        let with_wide = sibling_cost_fixture(true);
-        let alone = sibling_cost_fixture(false);
-
-        let (undemoted, none) = emit_assembly(&with_wide, "sibling_cost_ok", FastEmitBudget::Off);
-        assert!(none.is_empty(), "this arm must not demote: {none:?}");
-        let (solo, _) = emit_assembly(&alone, "sibling_cost_alone", FastEmitBudget::Off);
-        assert_eq!(
-            function_assembly(&undemoted, "narrow"),
-            function_assembly(&solo, "narrow"),
-            "an undemoted unit emits an ordinary function exactly as a unit without the \
-             extreme function does"
-        );
-
-        // Same module, same IR pipeline, budget crossed: `narrow` is not over
-        // it and is compiled differently anyway.
-        let (demoted, over) =
-            emit_assembly(&with_wide, "sibling_cost_demoted", FastEmitBudget::Cap(7));
-        assert_eq!(over, ["wide"], "only `wide` is over the budget");
-        assert_ne!(
-            function_assembly(&demoted, "narrow"),
-            function_assembly(&undemoted, "narrow"),
-            "if the demotion did not reach `narrow`, LLVM grew a per-function escape from the \
-             optimized machine pipeline and this budget can move back down"
-        );
     }
 }

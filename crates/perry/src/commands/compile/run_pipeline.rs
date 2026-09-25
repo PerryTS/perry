@@ -6029,6 +6029,12 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Any function that left the optimized machine pipeline (see
+    // `perry_codegen::machine_tiers`), in one line.
+    if let Some(line) = perry_codegen::machine_tiers::summary() {
+        eprintln!("perry: {line}");
+    }
+
     // ── Loud failure summary ─────────────────────────────────────────
     //
     // Render the per-module compile errors prominently *here*, before

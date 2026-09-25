@@ -543,7 +543,8 @@ pub(crate) fn assembly_for(ir: &str, target: &str) -> String {
         true,
     )
     .unwrap_or_else(|e| panic!("assembly emission failed for {target}: {e:#}"));
-    String::from_utf8(bytes).expect("assembler text should be UTF-8")
+    assert_eq!(bytes.len(), 1, "an -O0 emission is never split");
+    String::from_utf8(bytes.concat()).expect("assembler text should be UTF-8")
 }
 
 /// Per-safepoint root lists for `symbol` from the compact map the binary ships.

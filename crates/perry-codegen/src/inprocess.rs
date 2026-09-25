@@ -17,6 +17,7 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+mod fast_emit_split;
 mod optimize_emit;
 use optimize_emit::optimize_and_emit;
 
@@ -168,7 +169,7 @@ pub fn compile_ll_to_object_inprocess(
     clang_style_args: &[String],
     module_name: &str,
     native_roots: bool,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     // Same guard as the external `opt` path (`linker::rs4gc_funclet_refusal`):
     // rewrite-statepoints-for-gc crashes on WinEH funclet pads, and here the
@@ -295,12 +296,17 @@ pub(crate) fn parse_ir_text<'ctx>(
 /// Interpret plan argv (same grammar as `compile_ll_to_object_inprocess`) and
 /// run verify -> pass pipeline -> object emission on an already-built module.
 /// The native construction path calls this directly.
+///
+/// Returns one emission per part: normally one, two when fast-emit
+/// containment moved over-budget functions into a module of their own (see
+/// `fast_emit_split`). `linker::finish_native_emission` turns the parts into
+/// one object.
 pub(crate) fn optimize_and_emit_module(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
     clang_style_args: &[String],
     native_roots: bool,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     optimize_and_emit_module_with_stats(
         module,
         effective_target,
@@ -319,7 +325,7 @@ pub(crate) fn optimize_and_emit_module_with_stats(
     clang_style_args: &[String],
     native_roots: bool,
     stats: Option<&mut UnitCodegenStats>,
-) -> Result<Vec<u8>> {
+) -> Result<Vec<Vec<u8>>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     optimize_and_emit(
         module,
@@ -398,18 +404,32 @@ fn module_instruction_census(
 /// Per-function instruction ceiling for LLVM's optimized machine pipeline.
 ///
 /// This budget is checked *after* the requested `default<O*>` IR pipeline has
-/// completed. It changes neither JS lowering nor middle-end optimization; it
-/// only asks the target machine to use its O0 instruction-selection,
-/// live-interval and register-allocation pipeline for a unit containing an
-/// extreme generated function.
+/// completed. It changes neither JS lowering nor middle-end optimization. A
+/// function over it takes, in order (see `crate::machine_tiers`):
 ///
-/// **The demotion is a whole-unit act, so the budget must not be set where
-/// ordinary functions pay for it.** A `TargetMachine`'s optimization level is
-/// a per-module property: LLVM has no per-function escape from the optimized
-/// machine pipeline (`optnone` reaches instruction selection and the optional
-/// machine passes, but *not* LiveIntervals or the greedy register allocator —
-/// measured below), so every ordinary function sharing the unit with one
-/// extreme function is emitted through the O0 machine pipeline too.
+/// 1. **Re-lowered**: a statepoint function goes back to codegen, is lowered
+///    with its GC roots in a shadow frame, and its unit is compiled again at
+///    the same level through the *optimized* machine pipeline. Such a
+///    function's size is mostly RS4GC relocation fan-out (163,100 of the
+///    227,108 instructions in the `@babel/parser` closure below are
+///    `gc.relocate`), and that fan-out is what the machine pipeline is
+///    super-linear in.
+/// 2. **Contained**: a function still over the budget (or one that never had
+///    statepoints) is moved into a module of its own (`fast_emit_split`) and
+///    only it is emitted through LLVM's O0 machine pipeline. Every other
+///    function of its unit keeps the optimized one.
+/// 3. **Whole unit**: only where the unit cannot be split — COFF, or a host
+///    that cannot partially link the target's objects — the whole unit takes
+///    the O0 machine pipeline, which is the behaviour before containment.
+///
+/// Why the budget exists at all: a `TargetMachine`'s optimization level is a
+/// per-module property, and LLVM has no per-function escape from the
+/// optimized machine pipeline (`optnone` reaches instruction selection and
+/// the optional machine passes, but *not* LiveIntervals or the greedy
+/// register allocator — measured below). Before containment (tier 2) every
+/// ordinary function sharing the unit with one extreme function was emitted
+/// through the O0 machine pipeline too, which is why the numbers below were
+/// taken per unit.
 ///
 /// Measured on `@babel/parser`'s unit 0, LLVM 22 / x86-64 / `-Os` IR pipeline:
 /// one 227,108-instruction closure (163,100 of those are `gc.relocate`) and
@@ -422,13 +442,15 @@ fn module_instruction_census(
 /// | `optnone` on the closure only | 2,070,326 B | 621,693 B | 1.382 MiB | 9.5 s | 518 MiB |
 /// | the same unit *without* the closure | 1,448,633 B | — | 1.382 MiB | 6.4 s | 208 MiB |
 ///
-/// So the siblings are pure loss: the fallback costs them 2.06 MiB of machine
-/// code (168 of 282 functions change) to save ~6 s, and their emitted code is
-/// byte-for-byte what a unit without the extreme function produces as soon as
-/// the unit keeps the optimized pipeline. The `optnone` row is why this is a
-/// budget and not a per-function demotion: it frees the siblings but bounds
-/// neither time (9.5 s of 10.0 s) nor memory (518 MiB — *above* the -O2 arm),
-/// because the greedy allocator still runs on the demoted function.
+/// So the siblings were pure loss: the whole-unit fallback cost them 2.06 MiB
+/// of machine code (168 of 282 functions change) to save ~6 s, and their
+/// emitted code is byte-for-byte what a unit without the extreme function
+/// produces as soon as the unit keeps the optimized pipeline — which is what
+/// containment now gives them. The `optnone` row is why containment moves
+/// the function into its own module instead of stamping it: `optnone` frees
+/// the siblings but bounds neither time (9.5 s of 10.0 s) nor memory
+/// (518 MiB — *above* the -O2 arm), because the greedy allocator still runs
+/// on the demoted function.
 ///
 /// On x86-64 the ceiling is therefore set above the whole measured
 /// population of extreme generated functions rather than immediately below
@@ -525,7 +547,7 @@ thread_local! {
 /// Thread-local budget seam; mutating the process environment would race the
 /// other LLVM tests in this binary.
 #[cfg(test)]
-fn with_test_fast_emit_budget<T>(cap: usize, run: impl FnOnce() -> T) -> T {
+pub(crate) fn with_test_fast_emit_budget<T>(cap: usize, run: impl FnOnce() -> T) -> T {
     with_test_fast_emit_budget_value(FastEmitBudget::Cap(cap), run)
 }
 
@@ -544,6 +566,61 @@ fn with_test_fast_emit_budget_value<T>(budget: FastEmitBudget, run: impl FnOnce(
     run()
 }
 
+/// How far past the budget a function may be and still keep the optimized
+/// machine pipeline with FastISel instruction selection ([`MachineTier`]).
+const FAST_ISEL_TIER_FACTOR: usize = 4;
+
+/// The bounded machine configuration an over-budget function is emitted with.
+///
+/// Measured on the Claude Code bundle's 975,886-instruction factory closure
+/// (#11179; 870,626 of those instructions are `gc.relocate`), `llc` 22 on the
+/// post-`default<Os>` IR, one sample each, `.text` of the function alone:
+///
+/// | machine configuration | x86-64 `.text` | x86-64 CPU | x86-64 RSS | arm64 `.text` | arm64 CPU | arm64 RSS |
+/// |---|---|---|---|---|---|---|
+/// | optimized (`-O2`) | 280,366 B | 93.8 s | 1.22 GB | 223,568 B | 59.8 s | 1.49 GB |
+/// | optimized + FastISel (this tier) | 287,654 B | 55.1 s | 1.21 GB | 226,512 B | 56.3 s | 1.49 GB |
+/// | O0 (the old fallback) | 6,584,974 B | 20.1 s | 1.28 GB | 10,952,192 B | 12.6 s | 1.65 GB |
+///
+/// On x86-64 95 % of the optimized pipeline's time on that function is
+/// SelectionDAG instruction selection (84.5 of 89.4 s under `-time-passes`;
+/// the greedy allocator took 0.4 s), and FastISel is exactly the part of the
+/// O0 pipeline that removes it. So this tier costs +2.6 % code where O0 costs
+/// ×23 (×48 on arm64), and it is a per-`TargetMachine` switch, so it needs
+/// no process-global `cl::opt`.
+///
+/// O0 stays as the backstop only for a function more than
+/// [`FAST_ISEL_TIER_FACTOR`] times over the budget, which is where the
+/// measurements stop: the degradation grows with the excess instead of
+/// stepping to ×23 at the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachineTier {
+    /// The requested optimization level with FastISel instruction selection:
+    /// the optimized register allocator and machine passes are kept.
+    FastIsel,
+    /// LLVM's O0 machine pipeline (FastISel + the fast register allocator).
+    O0,
+}
+
+impl MachineTier {
+    pub(crate) fn for_function(instructions: usize, cap: usize) -> Self {
+        if instructions <= cap.saturating_mul(FAST_ISEL_TIER_FACTOR) {
+            MachineTier::FastIsel
+        } else {
+            MachineTier::O0
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            MachineTier::FastIsel => {
+                "the optimized machine pipeline with FastISel instruction selection"
+            }
+            MachineTier::O0 => "LLVM's O0 machine pipeline",
+        }
+    }
+}
+
 /// One extreme function which selected bounded machine-code emission, and how
 /// many defined functions in its unit are demoted along with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -551,20 +628,39 @@ pub struct FastEmitFallback {
     pub name: String,
     pub instructions: usize,
     pub cap: usize,
-    /// Defined functions in the unit — the size of the collateral, since the
-    /// machine pipeline is selected per module and not per function.
+    /// Defined functions in the unit — the size of the collateral when the
+    /// unit could not be split, since the machine pipeline is selected per
+    /// module and not per function.
     pub unit_functions: usize,
+    /// Whether the over-budget functions were moved into a module of their
+    /// own (`fast_emit_split`), so only they took the bounded pipeline and
+    /// every other function in the unit kept the optimized one.
+    pub contained: bool,
+    /// The bounded machine configuration it was emitted with.
+    pub tier: MachineTier,
 }
 
 impl std::fmt::Display for FastEmitFallback {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let how = self.tier.describe();
+        if self.contained {
+            return write!(
+                f,
+                "`{}` has {} instructions after IR optimization, above the optimized \
+                 machine-pipeline budget {}; keeping the requested IR optimization, then \
+                 emitting this function alone through {how} to bound instruction selection. \
+                 Every function of its {}-function unit that is under the budget keeps the \
+                 optimized machine pipeline. Override with PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> \
+                 (raise) or =0 (disable).",
+                self.name, self.instructions, self.cap, self.unit_functions
+            );
+        }
         write!(
             f,
             "`{}` has {} instructions after IR optimization, above the optimized machine-pipeline \
              budget {}; keeping the requested IR optimization, then emitting this unit — all {} \
-             of its defined functions, not only this one — through LLVM's O0 machine pipeline to \
-             bound instruction selection, live intervals and register allocation. LLVM selects \
-             that pipeline per module, so the siblings are demoted too and grow: shrinking this \
+             of its defined functions, not only this one — through {how}. The unit could not \
+             be split for this target, so the siblings take that pipeline too: shrinking this \
              function is what lifts the whole unit back. Override with \
              PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or =0 (disable).",
             self.name, self.instructions, self.cap, self.unit_functions
@@ -610,6 +706,8 @@ fn fast_emit_fallbacks(
             instructions,
             cap,
             unit_functions: defined,
+            contained: false,
+            tier: MachineTier::for_function(instructions, cap),
         })
         .collect()
 }
@@ -652,6 +750,12 @@ pub(crate) enum Rs4gcBudgetCause {
     /// RS4GC finished, but its relocation fan-out made the rewritten body too
     /// large for the normal optimization pipeline.
     PostRewrite { post_instructions: usize },
+    /// The IR pipeline finished, but the optimized function is over the
+    /// machine-pipeline budget ([`DEFAULT_FAST_EMIT_MAX_INSTRS_X86_64`]).
+    /// Re-lowering it onto a shadow frame removes the statepoint relocations
+    /// that make up most of such a function, so it can keep the optimized
+    /// machine pipeline instead of the bounded one.
+    MachineBudget { instructions: usize },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -961,6 +1065,13 @@ fn rewrite_budget_message(violation: &Rs4gcBudgetViolation, retry: bool) -> Stri
                 violation.name, violation.cap
             )
         }
+        Rs4gcBudgetCause::MachineBudget { instructions } => format!(
+            "`{}` has {instructions} instructions after IR optimization, above the optimized \
+             machine-pipeline budget {}; most of a statepoint function this size is relocation \
+             fan-out, so {outcome}. Override with PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or \
+             =0 (disable).",
+            violation.name, violation.cap
+        ),
     }
 }
 
