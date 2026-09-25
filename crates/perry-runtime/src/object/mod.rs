@@ -129,6 +129,8 @@ mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
 mod instanceof;
+#[cfg(test)]
+mod keys_walk_accessor_tests;
 mod live_slots;
 mod null_stub;
 mod side_table_roots;
@@ -1123,7 +1125,14 @@ fn transition_edge_places_key(
         if (*keys).length <= slot_idx {
             return false;
         }
-        let stored = crate::array::js_array_get(keys, slot_idx);
+        // #10724: one raw dense-slot read, not the JS-facing element accessor
+        // (3.6 M `js_array_get_f64` calls on a native `tsc`). The cached address
+        // is not from a live descriptor, so resolve it (forwarding, validation).
+        let (slots, slot_len) = keys_array_dense_slots(keys);
+        if slot_idx as usize >= slot_len {
+            return false;
+        }
+        let stored = crate::JSValue::from_bits((*slots.add(slot_idx as usize)).to_bits());
         crate::string::js_string_key_matches(stored, key)
     }
 }

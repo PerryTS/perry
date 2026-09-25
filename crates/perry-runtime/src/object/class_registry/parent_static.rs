@@ -452,25 +452,18 @@ pub(crate) fn class_object_own_field_bytes(
         if keys.is_null() {
             return None;
         }
-        let len = keys_view.count();
-        for i in 0..len {
-            let k = crate::array::js_array_get_f64(keys, i);
-            let sp = crate::value::js_get_string_pointer_unified(k) as *const crate::StringHeader;
-            if sp.is_null() {
+        // #10724: raw dense slots (one resolve, not the JS-facing element
+        // accessor per key — 2.8 M `js_array_get_f64` calls on a native `tsc`),
+        // compared in place: the old `js_get_string_pointer_unified` heap-
+        // materialized every short-string key it passed, allocating while
+        // `keys` was held as a bare pointer.
+        let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
+        for i in 0..(keys_view.count() as usize).min(slot_len) {
+            let k = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+            if !crate::string::js_string_key_matches_bytes(k, want) {
                 continue;
             }
-            let blen = (*sp).byte_len as usize;
-            if blen != want.len() {
-                continue;
-            }
-            let bytes = std::slice::from_raw_parts(
-                (sp as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-                blen,
-            );
-            if bytes != want {
-                continue;
-            }
-            let v = crate::object::js_object_get_field(obj, i);
+            let v = crate::object::js_object_get_field(obj, i as u32);
             if v.bits() == TAG_UNDEFINED {
                 return None;
             }

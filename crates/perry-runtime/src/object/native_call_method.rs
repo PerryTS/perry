@@ -31,6 +31,9 @@ mod probe_dispatch_tests;
 /// #8139: `toLocaleString` on an array / typed-array / buffer receiver.
 mod to_locale_string_tests;
 mod typed_array;
+#[cfg(test)]
+/// #10724: the vtable guard's own-key scan never uses the element accessor.
+mod vtable_guard_scan_tests;
 
 use bare_receiver::{
     canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
@@ -188,8 +191,18 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
         if key_count > 65536 {
             return None;
         }
-        for i in 0..key_count {
-            let key_val = crate::array::js_array_get(keys, i as u32);
+        // #10724: read the RAW dense slots, not `js_array_get` per key. That
+        // accessor re-runs the whole JS-facing element gauntlet (lazy-array
+        // strip, Map/Set/typed-array/subclass arms, `clean_arr_ptr`, descriptor
+        // gate, hole → prototype chain) on every key of every guarded call, and
+        // this loop was 75% of all `js_array_get_f64` calls on a natively
+        // compiled `tsc --noEmit` (26.4 M reads). `keys` came straight out of the
+        // live `descriptor` above with no allocation since, which is exactly the
+        // `_resolved` accessor's contract. A keys array is dense and holds only
+        // strings, so a hole or non-string slot simply fails the byte compare.
+        let (slots, slot_len) = crate::object::keys_array_dense_slots_resolved(keys);
+        for i in 0..key_count.min(slot_len) {
+            let key_val = crate::JSValue::from_bits((*slots.add(i)).to_bits());
             if crate::string::js_string_key_matches_bytes(key_val, method_bytes) {
                 return None;
             }
