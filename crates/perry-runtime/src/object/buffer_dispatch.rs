@@ -13,11 +13,6 @@ fn throw_buffer_type_error_with_code(message: &'static str, code: &'static str) 
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn is_buffer_dispatch_number(value: f64) -> bool {
-    let jsval = JSValue::from_bits(value.to_bits());
-    jsval.is_number() || jsval.is_int32()
-}
-
 fn is_buffer_dispatch_string(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     jsval.is_string() || jsval.is_short_string()
@@ -32,14 +27,67 @@ fn buffer_dispatch_i32(value: f64) -> i32 {
     }
 }
 
-fn buffer_write_encoding_tag_or_throw(value: f64) -> i32 {
-    if !is_buffer_dispatch_string(value) {
-        throw_buffer_type_error_with_code("Invalid Buffer encoding", "ERR_INVALID_ARG_TYPE");
+/// `buf.write(string, offset?, length?, encoding?)` argument handling,
+/// following Node's `Buffer.prototype.write` (lib/buffer.js) exactly
+/// (#11291): an explicit `undefined` is the same as an omitted argument.
+///
+/// - `offset === undefined`: utf8 over the whole buffer. The later
+///   arguments are ignored, including the encoding.
+/// - `write(s, enc)`: a string offset with `length === undefined` is the
+///   encoding.
+/// - Otherwise `offset` must be an integer in `[0, len]`. `length` is
+///   `undefined` (the remaining bytes), a string (the encoding, with the
+///   remaining bytes), or an integer in `[0, len]` clamped to the remaining
+///   bytes.
+/// - A falsy encoding means utf8.
+///
+/// `rest` is the argument list after the string. Returns
+/// `(offset, max_len, encoding_tag)`; throws Node's `ERR_INVALID_ARG_TYPE` /
+/// `ERR_OUT_OF_RANGE` / `ERR_UNKNOWN_ENCODING` otherwise.
+fn buffer_write_args(buf_len: i32, rest: &[f64]) -> (i32, i32, i32) {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg = |i: usize| rest.get(i).copied().unwrap_or(undefined);
+    let is_undefined = |v: f64| v.to_bits() == crate::value::TAG_UNDEFINED;
+    let (offset, length, encoding) = (arg(0), arg(1), arg(2));
+    if is_undefined(offset) {
+        return (0, buf_len, 0);
     }
-    if crate::buffer::js_buffer_is_encoding(value) == 0 {
-        throw_unknown_encoding(value);
+    let (offset, max_len, encoding) = if is_undefined(length) && is_buffer_dispatch_string(offset) {
+        (0, buf_len, offset)
+    } else {
+        crate::fs::validate::validate_int32(offset, "offset", 0, buf_len as i64);
+        let offset = buffer_dispatch_i32(offset);
+        let remaining = buf_len - offset;
+        if is_undefined(length) {
+            (offset, remaining, encoding)
+        } else if is_buffer_dispatch_string(length) {
+            (offset, remaining, length)
+        } else {
+            crate::fs::validate::validate_int32(length, "length", 0, buf_len as i64);
+            (offset, buffer_dispatch_i32(length).min(remaining), encoding)
+        }
+    };
+    (offset, max_len, buffer_write_encoding_tag(encoding))
+}
+
+/// Node's encoding step for `write`: a falsy encoding is utf8, and anything
+/// else is coerced to a string and looked up. It fails with
+/// `ERR_UNKNOWN_ENCODING`, never a type error (`write(s, 0, 1, 5)` is
+/// "Unknown encoding: 5").
+fn buffer_write_encoding_tag(encoding: f64) -> i32 {
+    if crate::value::js_is_truthy(encoding) == 0 {
+        return 0;
     }
-    crate::buffer::js_encoding_tag_from_value(value)
+    let encoding = if is_buffer_dispatch_string(encoding) {
+        encoding
+    } else {
+        let s = crate::value::js_jsvalue_to_string(encoding);
+        f64::from_bits(JSValue::string_ptr(s).bits())
+    };
+    if crate::buffer::js_buffer_is_encoding(encoding) == 0 {
+        throw_unknown_encoding(encoding);
+    }
+    crate::buffer::js_encoding_tag_from_value(encoding)
 }
 
 /// Throw `TypeError [ERR_UNKNOWN_ENCODING]: Unknown encoding: <name>` with
@@ -805,46 +853,7 @@ pub unsafe fn dispatch_buffer_method(
                 str_bits
             };
             let str_ptr = str_addr as *const crate::string::StringHeader;
-            let mut offset = 0;
-            let mut arg_index = 1;
-            let mut enc = 0;
-            if args.len() >= 2 {
-                if args.len() == 2 && is_buffer_dispatch_string(args[1]) {
-                    enc = buffer_write_encoding_tag_or_throw(args[1]);
-                    arg_index = 2;
-                } else if is_buffer_dispatch_number(args[1]) {
-                    offset = buffer_dispatch_i32(args[1]);
-                    arg_index = 2;
-                } else {
-                    throw_buffer_type_error_with_code(
-                        "Invalid Buffer offset",
-                        "ERR_INVALID_ARG_TYPE",
-                    );
-                }
-            }
-            // Detect trailing encoding arg (string) vs length arg (number).
-            // Common forms: write(str), write(str, offset), write(str, offset, enc),
-            // write(str, offset, length, enc).
-            let max_len = if arg_index < args.len() {
-                if is_buffer_dispatch_string(args[arg_index]) {
-                    enc = buffer_write_encoding_tag_or_throw(args[arg_index]);
-                    (*buf_ptr).length as i32 - offset
-                } else if is_buffer_dispatch_number(args[arg_index]) {
-                    let len = buffer_dispatch_i32(args[arg_index]);
-                    arg_index += 1;
-                    if arg_index < args.len() {
-                        enc = buffer_write_encoding_tag_or_throw(args[arg_index]);
-                    }
-                    len
-                } else {
-                    throw_buffer_type_error_with_code(
-                        "Invalid Buffer length",
-                        "ERR_INVALID_ARG_TYPE",
-                    );
-                }
-            } else {
-                (*buf_ptr).length as i32 - offset
-            };
+            let (offset, max_len, enc) = buffer_write_args((*buf_ptr).length as i32, &args[1..]);
             crate::buffer::js_buffer_write_len(buf_ptr, str_ptr, offset, max_len, enc) as f64
         }
         "export" if crate::buffer::is_secret_key(addr) => {
@@ -1333,3 +1342,7 @@ pub unsafe fn dispatch_buffer_method(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "buffer_dispatch_write_args_tests.rs"]
+mod write_args_tests;
