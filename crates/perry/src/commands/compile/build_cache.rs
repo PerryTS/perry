@@ -248,6 +248,9 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // Human-facing telemetry only; never changes IR or object bytes.
     "PERRY_CODEGEN_PROGRESS",
     "PERRY_CODEGEN_UNIT_TIMINGS",
+    // Writes the contained over-budget module's bitcode next to the build for
+    // `llc` study; the emitted objects are the same with it on and off.
+    "PERRY_LL_FAST_EMIT_DUMP",
     // `packed_loop_reject` prints the admission chain's declining condition and
     // returns `None` either way — the rejection is what the caller already got
     // without the flag, so the emitted code is identical. An input, rather than

@@ -435,7 +435,7 @@ fn the_clone_entry_is_shrink_wrapped_frameless() {
         crate::codegen::helpers::native_stack_roots_enabled(),
     )
     .expect("in-process -O3 -S pipeline");
-    let asm = String::from_utf8(asm_bytes).expect("assembly is UTF-8");
+    let asm = String::from_utf8(asm_bytes.concat()).expect("assembly is UTF-8");
 
     // The label line for the clone (Mach-O prefixes `_`; ELF does not).
     let mut lines = asm.lines();

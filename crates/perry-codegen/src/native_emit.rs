@@ -238,6 +238,14 @@ pub(crate) fn apply_budget_spill_retry<'a>(
                     estimated_relocations,
                     violation.cap,
                 ),
+                crate::inprocess::Rs4gcBudgetCause::MachineBudget { instructions } => {
+                    eprintln!(
+                        "perry: `{}` has {} instructions after IR optimization, above the \
+                         optimized machine-pipeline budget {}; retrying it with precise GC roots \
+                         in a shadow frame so it keeps the optimized machine pipeline",
+                        violation.name, instructions, violation.cap,
+                    );
+                }
                 crate::inprocess::Rs4gcBudgetCause::PostRewrite { post_instructions } => {
                     eprintln!(
                         "perry: `{}` exceeded the post-RS4GC instruction budget ({} -> {} \
@@ -1388,6 +1396,34 @@ mod tests {
         assert!(after.contains("@js_shadow_frame_pop"), "{after}");
     }
 
+    /// The machine-pipeline budget's first tier: a statepoint function over
+    /// it after IR optimization is re-lowered onto a shadow frame and the
+    /// unit is compiled again, instead of being sent to the bounded (O0)
+    /// machine pipeline with its relocations. A one-instruction cap keeps
+    /// the fixture small; the shadow-frame IR proves the retry happened.
+    #[test]
+    fn machine_budget_relowers_a_statepoint_function_onto_a_shadow_frame() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let mut module = precise_root_fixture(false);
+        let object = crate::inprocess::with_test_fast_emit_budget(1, || {
+            compile_module_native(&mut module, None, "machine_budget_retry_fixture")
+        })
+        .expect("a machine-budget miss must re-lower and finish emission");
+        assert!(!object.is_empty());
+        let retried = module
+            .deduped_function_refs()
+            .into_iter()
+            .find(|function| function.name == "native_root_diff_fixture")
+            .expect("fixture function survives the retry");
+        assert!(
+            retried.spills_roots_to_shadow_frame(),
+            "the over-budget statepoint function must be re-lowered, not demoted as it is"
+        );
+        let after = retried.to_ir();
+        assert!(!after.contains("gc \"statepoint-example\""), "{after}");
+        assert!(after.contains("@js_shadow_frame_enter"), "{after}");
+    }
+
     /// The reported Claude bundle takes the split-unit worker path. Its retry
     /// source must stay on the producer thread (the `LlFunction` graph is not
     /// `Send`) while LLVM reports the typed violation from a worker. A compact
@@ -1619,25 +1655,28 @@ fn compile_module_diff_once(
                 &args,
                 native_roots,
             )?;
+            // One part normally, two under fast-emit containment; the verdict
+            // and the dump are over their concatenation.
+            let flat = |parts: &[Vec<u8>]| parts.concat();
             if bytes_text == bytes_native {
                 eprintln!(
                     "perry: [ir-diff] OK — native and text arms emit byte-identical objects \
                      ({} bytes)",
-                    bytes_text.len()
+                    flat(&bytes_text).len()
                 );
             } else {
                 eprintln!(
                     "perry: [ir-diff] MISMATCH — object bytes differ (text {} vs native {}); \
                      set PERRY_LLVM_DIFF_DIR to dump both arms' pre-opt IR",
-                    bytes_text.len(),
-                    bytes_native.len()
+                    flat(&bytes_text).len(),
+                    flat(&bytes_native).len()
                 );
                 if let Some(dir) = &dump_dir {
                     let _ = std::fs::create_dir_all(dir);
                     let _ = std::fs::write(format!("{dir}/text_arm.ll"), &pre_text);
                     let _ = std::fs::write(format!("{dir}/native_arm.ll"), &pre_native);
-                    let _ = std::fs::write(format!("{dir}/text_arm.o"), &bytes_text);
-                    let _ = std::fs::write(format!("{dir}/native_arm.o"), &bytes_native);
+                    let _ = std::fs::write(format!("{dir}/text_arm.o"), flat(&bytes_text));
+                    let _ = std::fs::write(format!("{dir}/native_arm.o"), flat(&bytes_native));
                     eprintln!("perry: [ir-diff] arms dumped under {dir}");
                 }
             }

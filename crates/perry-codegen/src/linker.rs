@@ -691,8 +691,33 @@ pub(crate) fn native_plan_args(
 ///
 /// A plan without `-S` (the non-statepoint backends) passes its bytes through
 /// untouched.
+///
+/// `parts` is what `optimize_and_emit_module` returned: one emission, or two
+/// when fast-emit containment moved over-budget functions into a module of
+/// their own. Each part is finished on its own (each carries its own stack
+/// map) and two parts are joined the way codegen units are.
 #[cfg(feature = "llvm-inprocess")]
 pub(crate) fn finish_native_emission(
+    parts: Vec<Vec<u8>>,
+    effective_target: &str,
+    clang_args: &[String],
+) -> Result<Vec<u8>> {
+    let mut objects = Vec::with_capacity(parts.len());
+    for part in parts {
+        objects.push(finish_native_emission_part(
+            part,
+            effective_target,
+            clang_args,
+        )?);
+    }
+    if objects.len() == 1 {
+        return Ok(objects.pop().expect("one part"));
+    }
+    merge_unit_objects(&objects)
+}
+
+#[cfg(feature = "llvm-inprocess")]
+fn finish_native_emission_part(
     bytes: Vec<u8>,
     effective_target: &str,
     clang_args: &[String],
@@ -812,13 +837,29 @@ fn compile_ll_inprocess_in(
             metadata_path.display()
         );
     }
-    match crate::inprocess::compile_ll_to_object_inprocess(
+    let emitted = crate::inprocess::compile_ll_to_object_inprocess(
         ll_text,
         &plan.effective_target,
         &plan.clang_args,
         &module_name,
         native_roots,
-    ) {
+    );
+    // Fast-emit containment split the module (see `inprocess::fast_emit_split`):
+    // finish and join the parts like codegen units. The single-part arms below
+    // keep their scratch-file and PERRY_LLVM_KEEP_IR behaviour.
+    let emitted = match emitted {
+        Ok(parts) if parts.len() > 1 => {
+            let object = finish_native_emission(parts, &plan.effective_target, &plan.clang_args)
+                .map_err(|error| failed_scratch.finish_with_ir(error, ll_text))?;
+            if !policy.keep {
+                let _ = fs::remove_dir_all(&paths.scratch_dir);
+            }
+            return Ok(object);
+        }
+        Ok(mut parts) => Ok(parts.pop().expect("an emission has at least one part")),
+        Err(error) => Err(error),
+    };
+    match emitted {
         // Statepoint plans ask for `-S`: #7314's compact-map rewriter operates
         // on assembly. Rewrite and assemble those bytes before returning them.
         Ok(bytes) if plan.asm_path.is_some() => {
