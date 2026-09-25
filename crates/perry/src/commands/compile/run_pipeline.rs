@@ -2554,7 +2554,10 @@ pub fn run_with_parse_cache(
     // perry_ffi_* symbols then surfacing as `Undefined symbols for
     // architecture arm64` at the final ld step. Force-enable stdlib
     // linkage whenever any nativeLibrary manifest is loaded.
-    if !ctx.native_libraries.is_empty() {
+    // Android UI also calls the perry-ffi async shims, even when the TS
+    // program imports only perry/ui. Decide this before optimized-library
+    // selection and the undefined-symbol scan, not just at the final link.
+    if !ctx.native_libraries.is_empty() || (ctx.needs_ui && is_android_target(target.as_deref())) {
         ctx.needs_stdlib = true;
     }
 
