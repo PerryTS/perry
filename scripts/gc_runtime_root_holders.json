@@ -1575,12 +1575,6 @@
       "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
     },
     {
-      "file": "crates/perry-ui-android/src/widgets/tabbar.rs",
-      "name": "TABBAR_STATE",
-      "verdict": "not_a_gc_pointer",
-      "why": "A field-by-field audit of widgets/tabbar.rs:TABBAR_STATE (RefCell<HashMap<i64, TabBarState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
-    },
-    {
       "file": "crates/perry-ui-android/src/widgets/text_registry.rs",
       "name": "TEXT_IDS",
       "verdict": "not_a_gc_pointer",
