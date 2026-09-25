@@ -399,13 +399,14 @@ mod tests {
     #[test]
     fn shared_tokio_stems_cover_the_wrappers_that_own_sockets() {
         let stems = shared_tokio_lib_stems();
-        // The archive #7629's witnesses abort in, which still bundles tokio.
-        assert!(stems.contains("perry_ext_http"), "{stems:?}");
+        // The one wrapper that still bundles tokio. perry-ext-http, the
+        // archive #7629's witnesses aborted in, left the set with tokio lane D.
         assert!(stems.contains("perry_ext_mongodb"), "{stems:?}");
         // A wrapper with no tokio must NOT be in the set: it never enters a
         // tokio runtime context, so requiring a shared compilation would fail
         // links that work. perry-ext-net (#11105) and perry-ext-ws run on
         // turnloop since tokio lanes A/L; bcrypt is CPU-only.
+        assert!(!stems.contains("perry_ext_http"), "{stems:?}");
         assert!(!stems.contains("perry_ext_net"), "{stems:?}");
         assert!(!stems.contains("perry_ext_ws"), "{stems:?}");
         assert!(!stems.contains("perry_ext_bcrypt"), "{stems:?}");
@@ -415,11 +416,11 @@ mod tests {
     fn link_line_paths_are_matched_on_both_platform_spellings() {
         let stems = shared_tokio_lib_stems();
         assert!(is_shared_tokio_archive(
-            Path::new("/x/target/release/libperry_ext_http.a"),
+            Path::new("/x/target/release/libperry_ext_mongodb.a"),
             &stems
         ));
         assert!(is_shared_tokio_archive(
-            Path::new(r"C:\x\target\release\perry_ext_http.lib"),
+            Path::new(r"C:\x\target\release\perry_ext_mongodb.lib"),
             &stems
         ));
         assert!(!is_shared_tokio_archive(

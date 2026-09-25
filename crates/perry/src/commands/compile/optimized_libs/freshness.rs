@@ -824,15 +824,11 @@ pub(crate) fn binding_needs_shared_tokio(module: &str) -> bool {
 pub(crate) fn binding_bundles_tokio(module: &str) -> bool {
     matches!(
         module,
-        // perry-ext-http: its servers (#11144) and client (#11205) run on
-        // turnloop, but the crate still depends on tokio. When tokio lane D
-        // drops that edge, remove these three and move perry-stdlib's
-        // `external-http-*-pump` features to `async-bridge`.
-        "http"
-        | "https"
-        | "http2"
         // perry-ext-mongodb: `Handle::current().block_on` inside
-        // `perry_ffi_spawn_blocking` (group B/J).
-        | "mongodb"
+        // `perry_ffi_spawn_blocking` (group B/J). perry-ext-http left this
+        // set when tokio lane D dropped its last tokio edge (#11265): its
+        // servers (#11144), client (#11205) and `createConnection` all run on
+        // turnloop.
+        "mongodb"
     )
 }

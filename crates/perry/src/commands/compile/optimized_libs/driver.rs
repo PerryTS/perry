@@ -583,11 +583,12 @@ pub(crate) fn build_optimized_libs(
     // turnloop P8 lane L: this force used to be `async-runtime`, i.e. tokio,
     // so tokio was in every stdlib-linking binary. The bridge is tokio-free
     // now, and `async-runtime` is selected only by a feature that hands tokio
-    // a future (Cargo implies it: bundled net / ws, the external http pumps)
-    // or by a wrapper that bundles tokio (`binding_bundles_tokio`, above). A
-    // program that needs none of those links no tokio — which, since lane L's
-    // second slice, includes one whose only network imports are `fetch`,
-    // `net`, `tls` and `ws` (the TLS server included).
+    // a future (Cargo implies it: bundled net / ws) or by a wrapper that
+    // bundles tokio (`binding_bundles_tokio`, above: mongodb) or by the pg /
+    // mysql2 / mongodb decline paths. A program that needs none of those links
+    // no tokio — which, since lane L's second slice, includes one whose only
+    // network imports are `fetch`, `net`, `tls`, `ws` and `http` / `https` /
+    // `http2`.
     features.insert("async-bridge");
     let feature_arg = features_to_cargo_arg(&features);
 

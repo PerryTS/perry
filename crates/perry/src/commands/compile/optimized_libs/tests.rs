@@ -488,10 +488,20 @@ fn net_needs_shared_tokio() {
 /// so a program importing only `net` / `ws` must link no tokio.
 #[test]
 fn only_tokio_bundling_wrappers_select_async_runtime() {
-    for module in ["http", "https", "http2", "mongodb"] {
+    for module in ["mongodb"] {
         assert!(binding_bundles_tokio(module), "{module} bundles tokio");
     }
-    for module in ["net", "ws", "undici", "nodemailer", "bcrypt", "zlib"] {
+    for module in [
+        "net",
+        "ws",
+        "http",
+        "https",
+        "http2",
+        "undici",
+        "nodemailer",
+        "bcrypt",
+        "zlib",
+    ] {
         assert!(!binding_bundles_tokio(module), "{module} carries no tokio");
     }
 }

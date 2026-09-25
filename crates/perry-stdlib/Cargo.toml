@@ -134,15 +134,17 @@ external-zlib-pump = ["async-bridge"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`
-# to perry-ext-http. Selects the HTTP server dispatch adapters and shared async
-# runtime; perry-ext-http registers its pump and keepalive contributor.
-external-http-server-pump = ["async-runtime"]
+# to perry-ext-http. Selects the HTTP server dispatch adapters;
+# perry-ext-http registers its pump and keepalive contributor. perry-ext-http
+# carries no tokio since tokio lane D (#11265), so this needs only the promise
+# bridge (turnloop P8 lane L).
+external-http-server-pump = ["async-bridge"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the well-known
 # flip routes `node:http` / `node:https` to perry-ext-http and the user
-# code calls `http.request` / `http.get`. Selects client dispatch adapters
-# and the shared async runtime; perry-ext-http registers its own callbacks.
-external-http-client-pump = ["async-runtime"]
+# code calls `http.request` / `http.get`. Selects client dispatch adapters;
+# perry-ext-http registers its own callbacks. Promise bridge only, as above.
+external-http-client-pump = ["async-bridge"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the well-known
 # flip routes `node:events` to perry-ext-events. Makes
