@@ -200,6 +200,24 @@ pub(crate) unsafe fn dispatch_event_emitter_method(
     method: &str,
     args: &[f64],
 ) -> Option<f64> {
+    // #11270: with `bundled-events` compiled in, the `extern "C"` calls below
+    // bind to THIS crate's copies, whose registry is empty when perry-ext-events
+    // is the linked implementation. Let the implementation that owns the
+    // handle answer first, through the hook it registers with the runtime.
+    if let Some(dispatch) = perry_runtime::object::event_emitter_method_dispatch() {
+        let mut out = TAG_UNDEFINED_F64;
+        if dispatch(
+            handle,
+            method.as_ptr(),
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+            &mut out,
+        ) != 0
+        {
+            return Some(out);
+        }
+    }
     if !js_event_emitter_is_handle(handle) {
         return None;
     }
@@ -289,6 +307,13 @@ pub(crate) unsafe fn dispatch_event_emitter_method(
 
 #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 pub(crate) unsafe fn dispatch_event_emitter_property(handle: i64, property: &str) -> Option<f64> {
+    // #11270: see `dispatch_event_emitter_method`.
+    if let Some(dispatch) = perry_runtime::object::event_emitter_property_dispatch() {
+        let mut out = TAG_UNDEFINED_F64;
+        if dispatch(handle, property.as_ptr(), property.len(), &mut out) != 0 {
+            return Some(out);
+        }
+    }
     if !js_event_emitter_is_handle(handle) {
         return None;
     }
@@ -387,5 +412,71 @@ mod static_method_name_tests {
                 "getMaxListeners",
             ],
         );
+    }
+}
+
+/// #11270: an EventEmitter implementation other than this crate's (the default
+/// perry-ext-events) owns handles this crate's registry has never seen. The
+/// dispatchers must let its registered hooks answer for them.
+#[cfg(all(
+    test,
+    any(feature = "bundled-events", feature = "external-events-construct")
+))]
+mod external_emitter_hook_tests {
+    use super::*;
+
+    /// Outside the stdlib emitter band, standing in for a perry-ext-events id.
+    const FOREIGN_EMITTER: i64 = 0x3_8123;
+
+    unsafe extern "C" fn method_hook(
+        handle: i64,
+        name: *const u8,
+        name_len: usize,
+        _args: *const f64,
+        argc: usize,
+        out: *mut f64,
+    ) -> i32 {
+        if handle != FOREIGN_EMITTER {
+            return 0;
+        }
+        let name = std::slice::from_raw_parts(name, name_len);
+        *out = if name == b"listenerCount" {
+            7.0 + argc as f64
+        } else {
+            -1.0
+        };
+        1
+    }
+
+    unsafe extern "C" fn property_hook(
+        handle: i64,
+        _name: *const u8,
+        _name_len: usize,
+        out: *mut f64,
+    ) -> i32 {
+        if handle != FOREIGN_EMITTER {
+            return 0;
+        }
+        *out = 42.0;
+        1
+    }
+
+    #[test]
+    fn registered_implementation_answers_for_its_own_handles() {
+        unsafe {
+            perry_runtime::object::js_register_event_emitter_method_dispatch(method_hook);
+            perry_runtime::object::js_register_event_emitter_property_dispatch(property_hook);
+            let got = dispatch_event_emitter_method(FOREIGN_EMITTER, "listenerCount", &[1.0]);
+            assert_eq!(got, Some(8.0));
+            assert_eq!(
+                dispatch_event_emitter_property(FOREIGN_EMITTER, "on"),
+                Some(42.0)
+            );
+            // Handles the hook does not own still get this crate's answer.
+            assert_eq!(
+                dispatch_event_emitter_method(FOREIGN_EMITTER + 1, "emit", &[]),
+                None
+            );
+        }
     }
 }

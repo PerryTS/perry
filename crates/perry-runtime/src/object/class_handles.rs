@@ -171,6 +171,8 @@ static HTTP_AGENT_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut
 static TLS_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_METHOD_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_PROPERTY_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
@@ -634,6 +636,48 @@ pub fn event_emitter_on() -> Option<EventEmitterOnFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_event_emitter_on(f: EventEmitterOnFn) {
     EVENT_EMITTER_ON_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// #11270: the EventEmitter implementation's own method dispatcher, for
+/// receivers codegen could not type (`arr[i].on(...)`, `new ns.EventEmitter()`).
+/// perry-stdlib's handle dispatcher consults it before its own name mapping,
+/// whose `extern "C"` calls bind to perry-stdlib's in-crate `bundled-events`
+/// copies — an empty registry whenever perry-ext-events is the linked
+/// implementation. Same contract as the handle-dispatch extensions: return 1
+/// and write `out` when the handle is the implementation's own, 0 otherwise.
+#[inline]
+pub fn event_emitter_method_dispatch() -> Option<HandleMethodDispatchExtensionFn> {
+    let p = EVENT_EMITTER_METHOD_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandleMethodDispatchExtensionFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_method_dispatch(
+    f: HandleMethodDispatchExtensionFn,
+) {
+    EVENT_EMITTER_METHOD_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
+}
+
+/// Property-read (method-value) counterpart of `event_emitter_method_dispatch`.
+#[inline]
+pub fn event_emitter_property_dispatch() -> Option<HandlePropertyDispatchExtensionFn> {
+    let p = EVENT_EMITTER_PROPERTY_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HandlePropertyDispatchExtensionFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_property_dispatch(
+    f: HandlePropertyDispatchExtensionFn,
+) {
+    EVENT_EMITTER_PROPERTY_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// Register a function to handle property access on handle-based objects.

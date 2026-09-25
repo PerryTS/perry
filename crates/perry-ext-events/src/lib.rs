@@ -32,6 +32,7 @@ use std::sync::Once;
 
 mod error_monitor;
 use error_monitor::dispatch_error_monitor;
+mod dispatch_ext;
 mod emit_scope;
 use emit_scope::{
     event_emitter_emit0_thunk, event_emitter_emit_thunk, EventEmitterEmit0Call,
@@ -498,6 +499,8 @@ fn ensure_runtime_hooks_registered() {
         js_register_event_emitter_on(event_emitter_on_hook);
         js_set_native_events_construct(events_native_construct);
         js_set_native_events_dispatch(js_events_native_dispatch);
+        // #11270: answer dynamic `.on`/`.emit` on our handles from this crate.
+        dispatch_ext::register_dispatch_hooks();
     });
 }
 

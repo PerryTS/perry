@@ -33,3 +33,17 @@ pub extern "C" fn perry_ffi_promise_reject_deferred(
 ) {
     perry_ffi_promise_reject_bits(promise, invoke(ctx));
 }
+
+/// `domain` lives in perry-stdlib, which unit-test binaries do not link. Emit
+/// reaches it only for an emitter bound to a domain, which no unit test builds;
+/// the symbol must still resolve now that the runtime dispatch extension makes
+/// `js_event_emitter_emit` reachable from every test binary (#11270).
+#[no_mangle]
+pub extern "C" fn js_domain_emit_error(
+    _handle: i64,
+    _error: f64,
+    _emitter: f64,
+    _domain_thrown: bool,
+) -> bool {
+    false
+}
