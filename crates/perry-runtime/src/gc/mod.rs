@@ -1073,6 +1073,9 @@ pub fn gc_init() {
     // key and the receiver's recorded prototype, and compares them on every
     // use, so both are STRONG roots (`object::chain_store`).
     reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
+    // #10498: the class-accessor cache's keys, marked and rewritten for the
+    // same reason as the inherited-read cache's.
+    reg_scanner!(crate::object::class_accessor_cache::scan_class_accessor_cache_roots_mut);
     reg_scanner!(crate::map::scan_map_iterator_array_roots_mut);
     reg_scanner!(crate::set::scan_set_iterator_array_roots_mut);
     reg_scanner!(crate::perf_hooks::scan_perf_entries_roots_mut);

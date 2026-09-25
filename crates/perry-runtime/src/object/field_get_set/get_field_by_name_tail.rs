@@ -1284,6 +1284,10 @@ pub(crate) fn get_field_by_name_object_tail(
                             while depth < 32 {
                                 if let Some(vtable) = reg.get(&cid) {
                                     if let Some(&getter_ptr) = vtable.getters.get(name) {
+                                        // #10498: see `class_accessor_cache`.
+                                        super::super::class_accessor_cache::note_class_getter(
+                                            obj, key, getter_ptr,
+                                        );
                                         let v = call_class_getter(getter_ptr, obj);
                                         return JSValue::from_bits(v.to_bits());
                                     }
@@ -1653,6 +1657,10 @@ pub(crate) fn get_field_by_name_object_tail(
                                     // Getters take `this` as f64 (NaN-boxed
                                     // POINTER_TAG), matching the codegen
                                     // calling convention for class methods.
+                                    // #10498: see `class_accessor_cache`.
+                                    super::super::class_accessor_cache::note_class_getter(
+                                        obj, key, getter_ptr,
+                                    );
                                     let v = call_class_getter(getter_ptr, obj);
                                     return JSValue::from_bits(v.to_bits());
                                 }

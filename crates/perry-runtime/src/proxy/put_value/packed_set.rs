@@ -164,6 +164,14 @@ pub extern "C" fn js_put_value_set_packed_miss(
                 return stored;
             }
         }
+        // #10498: a class accessor this site's key resolves to for the
+        // receiver's shape — ahead of the rooting and re-priming below, which
+        // it would pay for nothing (an accessor key never primes a way).
+        if let Some(stored) =
+            crate::object::class_accessor_cache::class_setter_hit_value(target, key, value)
+        {
+            return stored;
+        }
     }
 
     // Inherited-access lane: a key-adding store whose chain this site has

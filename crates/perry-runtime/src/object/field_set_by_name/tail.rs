@@ -382,6 +382,10 @@ pub(crate) fn set_field_by_name_object_tail(
                                         );
                                         let f: extern "C" fn(f64, f64) -> f64 =
                                             std::mem::transmute(setter_ptr);
+                                        // #10498: see `class_accessor_cache`.
+                                        super::class_accessor_cache::note_class_setter(
+                                            obj, key, setter_ptr,
+                                        );
                                         let _ = f(this_f64, value);
                                         return;
                                     }

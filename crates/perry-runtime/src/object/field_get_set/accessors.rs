@@ -445,6 +445,14 @@ pub(crate) fn accessor_receiver_override_end(prev: Option<f64>) {
     ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.set(prev));
 }
 
+/// Whether an inherited walk has armed a receiver that the next class getter
+/// would take as `this` (#10498: the class-accessor cache neither records nor
+/// serves under one).
+#[inline]
+pub(crate) fn accessor_receiver_override_armed() -> bool {
+    ACCESSOR_RECEIVER_OVERRIDE.with(|c| c.get().is_some())
+}
+
 /// `this` to pass to a class getter (vtable `getters`) found while resolving a
 /// property. When the getter was reached by walking a prototype chain, `obj` is
 /// the PROTOTYPE the getter lives on — bind the original instance stashed by
