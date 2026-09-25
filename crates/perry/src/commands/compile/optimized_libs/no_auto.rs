@@ -48,36 +48,18 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     } else {
         Vec::new()
     };
-    // #10458: every archive containing runtime code must share the host
-    // feature. Otherwise the stdlib-first link can select its dlopen stub,
-    // and separately rebuilt wrappers can retain different global registries.
+    // #10458: native addons need every runtime-bearing archive rebuilt
+    // together with the host feature.
     if !ctx.native_addons.is_empty() {
-        let http_pump = iteration_set.iter().any(|m| {
-            matches!(
-                m.strip_prefix("node:").unwrap_or(m.as_str()),
-                "http" | "https"
-            )
-        });
-        let mut features = vec!["perry-runtime/node-api-host"];
-        if ctx.needs_wasm_runtime {
-            features.push("perry-runtime/wasm-host");
-        }
-        let ext_crates = linked_ext_crates(&iteration_set, target);
-        let built =
-            build_coherent_stdlib(&ext_crates, target, format, verbose, http_pump, &features);
-        let (runtime, stdlib) = if let Some(built) = built {
-            replace_rebuilt_wrappers(&mut well_known_libs, built.ext_libs);
-            (Some(built.runtime), Some(built.stdlib))
-        } else {
-            (None, None)
-        };
-        return OptimizedLibs {
-            runtime,
-            stdlib,
-            prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
+        return resolve_native_addon_libs(
+            ctx,
+            &iteration_set,
             well_known_libs,
-            ..OptimizedLibs::empty()
-        };
+            find_perry_workspace_root(),
+            target,
+            format,
+            verbose,
+        );
     }
     // Issue #76 — the prebuilt runtime is built WITHOUT `wasm-host` (kept
     // out of `default` to avoid wasmi bloat on non-wasm programs). When the
@@ -142,6 +124,60 @@ pub(crate) fn resolve_no_auto_optimized_libs(
         }
         Some(built.stdlib)
     });
+    OptimizedLibs {
+        runtime,
+        stdlib,
+        prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
+        well_known_libs,
+        ..OptimizedLibs::empty()
+    }
+}
+
+/// #10458: every archive containing runtime code must share the host
+/// feature. Otherwise the stdlib-first link can select its dlopen stub, and
+/// separately rebuilt wrappers can retain different global registries.
+///
+/// `well_known_libs` (the prebuilt wrappers found on disk) and
+/// `workspace_root` are inputs rather than environment reads so tests can
+/// drive this against a fake workspace without mutating process-global env
+/// that concurrently running tests read.
+pub(super) fn resolve_native_addon_libs(
+    ctx: &CompilationContext,
+    iteration_set: &std::collections::BTreeSet<String>,
+    mut well_known_libs: Vec<PathBuf>,
+    workspace_root: Option<PathBuf>,
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+) -> OptimizedLibs {
+    let http_pump = iteration_set.iter().any(|m| {
+        matches!(
+            m.strip_prefix("node:").unwrap_or(m.as_str()),
+            "http" | "https"
+        )
+    });
+    let mut features = vec!["perry-runtime/node-api-host"];
+    if ctx.needs_wasm_runtime {
+        features.push("perry-runtime/wasm-host");
+    }
+    let ext_crates = linked_ext_crates(iteration_set, target);
+    let built = workspace_root.and_then(|root| {
+        build_coherent_stdlib(
+            root,
+            &ext_crates,
+            target,
+            format,
+            verbose,
+            http_pump,
+            &features,
+        )
+    });
+    let (runtime, stdlib) = if let Some(built) = built {
+        replace_rebuilt_wrappers(&mut well_known_libs, built.ext_libs);
+        (Some(built.runtime), Some(built.stdlib))
+    } else {
+        (None, None)
+    };
     OptimizedLibs {
         runtime,
         stdlib,
@@ -218,12 +254,21 @@ pub(super) fn build_http_client_pump_stdlib(
     format: OutputFormat,
     verbose: u8,
 ) -> Option<CoherentLibraryBuild> {
-    build_coherent_stdlib(ext_crates, target, format, verbose, true, &[])
+    build_coherent_stdlib(
+        find_perry_workspace_root()?,
+        ext_crates,
+        target,
+        format,
+        verbose,
+        true,
+        &[],
+    )
 }
 
 /// Build the runtime, stdlib and every linked wrapper from one Cargo graph.
 /// Optional runtime features must reach the runtime bundled into ALL archives.
 fn build_coherent_stdlib(
+    workspace_root: PathBuf,
     ext_crates: &[(String, String)],
     target: Option<&str>,
     format: OutputFormat,
@@ -231,7 +276,7 @@ fn build_coherent_stdlib(
     http_pump: bool,
     runtime_features: &[&str],
 ) -> Option<CoherentLibraryBuild> {
-    let workspace_root = cargo_target_dir_path(find_perry_workspace_root()?);
+    let workspace_root = cargo_target_dir_path(workspace_root);
     let stdlib_crate_dir = workspace_root.join("crates").join("perry-stdlib-static");
     let ext_http_crate_dir = workspace_root.join("crates").join("perry-ext-http");
     if !stdlib_crate_dir.is_dir() || (http_pump && !ext_http_crate_dir.is_dir()) {

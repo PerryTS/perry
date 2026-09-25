@@ -1,35 +1,12 @@
 //! Exercise the real no-auto resolver against a tiny Cargo workspace. Each
 //! linked archive must see Node-API, optional Wasm, and the HTTP pump together.
+//! The fake workspace root and prebuilt wrappers are passed to
+//! `resolve_native_addon_libs` directly: setting PERRY_WORKSPACE_ROOT /
+//! PERRY_LIB_DIR here would leak into concurrently running tests that call
+//! `find_perry_workspace_root()` without the env lock.
 use super::*;
 use crate::commands::compile::NativeAddonModule;
-use std::ffi::OsString;
 
-struct SavedEnv(Vec<(&'static str, Option<OsString>)>);
-impl SavedEnv {
-    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
-        let saved = values
-            .iter()
-            .map(|(key, _)| (*key, std::env::var_os(key)))
-            .collect();
-        for (key, value) in values {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-        Self(saved)
-    }
-}
-impl Drop for SavedEnv {
-    fn drop(&mut self) {
-        for (key, value) in &self.0 {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
-}
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -45,7 +22,6 @@ fn krate(root: &Path, name: &str, options: &str, source: &str) {
 
 #[cfg(unix)]
 fn check_addon_graph(http: bool, wasm: bool) {
-    let _lock = crate::test_env_lock::env_lock();
     let workspace = tempfile::tempdir().unwrap();
     let root = workspace.path();
     std::fs::create_dir_all(root.join("crates/perry-ui-geisterhand")).unwrap();
@@ -90,13 +66,6 @@ pub const WASM: bool = cfg!(feature = "wasm-host");
             path
         })
         .collect();
-    let _env = SavedEnv::set(&[
-        ("PERRY_WORKSPACE_ROOT", Some(root.as_os_str())),
-        ("PERRY_LIB_DIR", Some(prebuilt.path().as_os_str())),
-        ("PERRY_RUNTIME_DIR", None),
-        ("PERRY_DISABLE_WELL_KNOWN", None),
-        ("CARGO_TARGET_DIR", None),
-    ]);
     let mut ctx = CompilationContext::new(root.to_path_buf());
     ctx.needs_stdlib = true;
     ctx.needs_wasm_runtime = wasm;
@@ -114,7 +83,16 @@ pub const WASM: bool = cfg!(feature = "wasm-host");
             ship_package_payload: false,
         },
     );
-    let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
+    let iteration_set = well_known_iteration_set(&ctx);
+    let libs = resolve_native_addon_libs(
+        &ctx,
+        &iteration_set,
+        decoys.clone(),
+        Some(root.to_path_buf()),
+        None,
+        OutputFormat::Json,
+        0,
+    );
     let stdlib = libs
         .stdlib
         .expect("addon rebuild must supply its feature-matched stdlib");
