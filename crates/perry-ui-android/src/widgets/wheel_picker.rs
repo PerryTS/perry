@@ -3,12 +3,13 @@
 use crate::{callback, jni_bridge};
 use jni::objects::JObject;
 use jni::JValue;
-use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
-thread_local! {
-    static ITEMS: RefCell<HashMap<i64, Vec<String>>> = RefCell::new(HashMap::new());
-}
+// Native startup builds the items, while Android callbacks run on the UI thread.
+// Keep their metadata shared, like the widget registry; never hold this lock in JNI.
+static ITEMS: LazyLock<Mutex<HashMap<i64, Vec<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -47,7 +48,7 @@ pub fn create(on_change: f64) -> i64 {
         let global = jni_bridge::new_global_ref(env, picker)
             .expect("Failed to create NumberPicker global ref");
         let handle = super::register_widget(global);
-        ITEMS.with(|m| m.borrow_mut().insert(handle, Vec::new()));
+        ITEMS.lock().unwrap().insert(handle, Vec::new());
         unsafe {
             let _ = jni_bridge::pop_local_frame(env, &JObject::null());
         }
@@ -57,14 +58,14 @@ pub fn create(on_change: f64) -> i64 {
 
 pub fn add_item(handle: i64, title_ptr: *const u8) {
     let title = unsafe { str_from_header(title_ptr) }.to_string();
-    let items = ITEMS.with(|m| {
-        let mut all = m.borrow_mut();
+    let items = {
+        let mut all = ITEMS.lock().unwrap();
         let Some(items) = all.get_mut(&handle) else {
-            return Vec::new();
+            return;
         };
         items.push(title);
         items.clone()
-    });
+    };
     if !items.is_empty() {
         refresh_items(handle, &items);
     }
@@ -134,11 +135,11 @@ fn refresh_items(handle: i64, items: &[String]) {
 }
 
 pub fn set_selected(handle: i64, index: i64) {
-    let valid = ITEMS.with(|m| {
-        m.borrow()
-            .get(&handle)
-            .is_some_and(|items| index >= 0 && (index as usize) < items.len())
-    });
+    let valid = ITEMS
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .is_some_and(|items| index >= 0 && (index as usize) < items.len());
     if !valid {
         return;
     }
@@ -155,11 +156,11 @@ pub fn set_selected(handle: i64, index: i64) {
 }
 
 pub fn get_selected(handle: i64) -> i64 {
-    let has_items = ITEMS.with(|m| {
-        m.borrow()
-            .get(&handle)
-            .is_some_and(|items| !items.is_empty())
-    });
+    let has_items = ITEMS
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .is_some_and(|items| !items.is_empty());
     if !has_items {
         return -1;
     }
