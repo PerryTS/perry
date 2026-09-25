@@ -18,7 +18,7 @@
 //! name-keyed `RegisterClassCaptures` snapshot has no per-evaluation slot to
 //! re-read and is dropped; the per-object refresh is authoritative over it.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::ir::{Expr, Stmt};
 use crate::types::LocalId;
@@ -35,6 +35,7 @@ pub(crate) fn prune_out_of_scope_capture_refreshes(stmts: &mut Vec<Stmt>) {
     let mut pruner = Pruner {
         heads,
         enclosing: Vec::new(),
+        owners: HashMap::new(),
     };
     pruner.stmts(stmts);
 }
@@ -99,6 +100,8 @@ struct Pruner {
     heads: HashSet<LocalId>,
     /// Heads whose loop body encloses the current position.
     enclosing: Vec<LocalId>,
+    /// Per in-scope head: the class-owner locals of refreshes that capture it.
+    owners: HashMap<LocalId, BTreeSet<LocalId>>,
 }
 
 impl Pruner {
@@ -109,7 +112,7 @@ impl Pruner {
 
     /// Whether `expr` is a refresh to drop outright. A per-object refresh
     /// reading an expired head is rewritten in place and kept.
-    fn rewrite_refresh(&self, expr: &mut Expr) -> bool {
+    fn rewrite_refresh(&mut self, expr: &mut Expr) -> bool {
         match expr {
             Expr::RegisterClassCaptures { captures, .. } => {
                 captures.iter().any(|capture| self.expired(capture))
@@ -121,6 +124,12 @@ impl Pruner {
                 for (index, capture) in captures.iter_mut().enumerate() {
                     if self.expired(capture) {
                         *capture = current_capture_slot(class_value, index);
+                    } else if let (Expr::LocalGet(head), Expr::LocalGet(owner)) =
+                        (&*capture, class_value.as_ref())
+                    {
+                        if self.enclosing.contains(head) {
+                            self.owners.entry(*head).or_default().insert(*owner);
+                        }
                     }
                 }
                 false
@@ -182,8 +191,20 @@ impl Pruner {
                 let head = for_head(init);
                 self.enclosing.extend(head);
                 self.stmts(body);
-                if head.is_some() {
+                if let Some(head) = head {
                     self.enclosing.pop();
+                    // The owner still holds the previous iteration's class
+                    // until this iteration evaluates its own, so an in-body
+                    // refresh before that point would write this iteration's
+                    // `i` into the previous class. Clearing the owner at the
+                    // top of each iteration makes such a refresh a no-op.
+                    let resets = self.owners.remove(&head).unwrap_or_default();
+                    body.splice(
+                        0..0,
+                        resets.into_iter().map(|owner| {
+                            Stmt::Expr(Expr::LocalSet(owner, Box::new(Expr::Undefined)))
+                        }),
+                    );
                 }
             }
             Stmt::Labeled { body, .. } => self.stmt(body),

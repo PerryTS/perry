@@ -100,6 +100,28 @@ function forwardCapture(): string {
 }
 console.log("forward capture, last class:", forwardCapture());
 
+// A write to another capture EARLY in the body refreshes before this
+// iteration's class exists; it must not reach the previous iteration's class.
+function earlyBodyWrite(): string {
+  const classes: Array<new () => { get(): number; x(): number }> = [];
+  let x = 0;
+  for (let i = 0; i < 3; i++) {
+    x++;
+    classes.push(
+      class {
+        get(): number {
+          return i;
+        }
+        x(): number {
+          return x;
+        }
+      },
+    );
+  }
+  return classes.map((C) => new C().get()).join(",");
+}
+console.log("early body write:", earlyBodyWrite());
+
 // A head write to ANOTHER captured variable must not re-read `i` either: the
 // refresh it would trigger reads the next iteration's slot.
 function headWritesOther(): string {
