@@ -1681,11 +1681,15 @@ fn insert_class_capture_refresh_inside_expressions(
                 if let Some(init) = init {
                     visit_stmt(init, regs);
                 }
+                // #11250: the head's own assignments to its per-iteration
+                // `let` must not refresh a class evaluated in the previous
+                // iteration's body — that class closed over the old binding.
+                let head_regs = without_for_head_lexicals(init.as_deref(), regs);
                 if let Some(condition) = condition {
-                    visit_expr(condition, regs);
+                    visit_expr(condition, &head_regs);
                 }
                 if let Some(update) = update {
-                    visit_expr(update, regs);
+                    visit_expr(update, &head_regs);
                 }
                 insert_class_capture_refresh_inside_expressions(body, regs);
             }
@@ -1722,6 +1726,25 @@ fn insert_class_capture_refresh_inside_expressions(
     for stmt in stmts {
         visit_stmt(stmt, regs);
     }
+}
+
+/// `regs` with a lexical `for`-head binding removed from every capset. A
+/// `var` head is hoisted out of `For::init` during lowering, so a `Let` here
+/// is always a per-iteration `let`/`const` binding.
+fn without_for_head_lexicals(
+    init: Option<&Stmt>,
+    regs: &[(Stmt, std::collections::HashSet<LocalId>)],
+) -> Vec<(Stmt, std::collections::HashSet<LocalId>)> {
+    let Some(Stmt::Let { id, .. }) = init else {
+        return regs.to_vec();
+    };
+    regs.iter()
+        .map(|(refresh, capset)| {
+            let mut capset = capset.clone();
+            capset.remove(id);
+            (refresh.clone(), capset)
+        })
+        .collect()
 }
 
 /// Insert a class-capture refresh immediately AFTER every statement that
@@ -1790,6 +1813,18 @@ pub(crate) fn insert_class_capture_refresh_after_assignments(
         // collector) assign any watched capture?
         let mut assigned = Vec::new();
         collect_assigned_locals_stmt(&stmts[i], &mut assigned);
+        // #11250: a `for (let i …)` head binding is per-iteration and out of
+        // scope after the loop, so the loop's writes to it (`i++`) must not
+        // refresh the last iteration's class with the post-increment value.
+        // In-body writes still refresh via the recursion above.
+        if let Stmt::For {
+            init: Some(init), ..
+        } = &stmts[i]
+        {
+            if let Stmt::Let { id, .. } = init.as_ref() {
+                assigned.retain(|a| a != id);
+            }
+        }
         // #6037: a forward-captured `var`/`let` re-bound later in the same body
         // — including a DESTRUCTURING leaf (`var { t: dSq } = f()`) — lowers to
         // a `Stmt::Let` that REUSES the pre-registered forward-decl id (see the
