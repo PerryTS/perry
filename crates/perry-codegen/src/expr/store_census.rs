@@ -38,6 +38,8 @@ pub(crate) const CFIELD_SLOPPY: usize = 10;
 pub(crate) const BY_NAME_RUNTIME: usize = 11;
 /// The PutValue by-name lowering.
 pub(crate) const BY_NAME_PUT_VALUE: usize = 12;
+/// Key-add inline hit that first retired the receiver's layout record.
+pub(crate) const ADD_LAYOUT_FORGET: usize = 13;
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();

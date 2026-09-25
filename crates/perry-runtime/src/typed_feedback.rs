@@ -2953,9 +2953,16 @@ pub(crate) fn invalidate_representation_change(obj_addr: usize) {
     if obj_addr == 0 {
         return;
     }
-    let (shape_addr, class_id, heap_type) = object_shape(obj_addr);
     let mut reg = registry();
     reg.representation_invalidations = reg.representation_invalidations.saturating_add(1);
+    // Nothing observed: no site can be affected, so the receiver's shape is
+    // not needed. Every key-add on a typed-layout receiver (an object literal,
+    // even `{}`) retires its layout record through here, and resolving the
+    // shape first cost more than the store itself (~8% of a key-add loop).
+    if reg.sites.is_empty() {
+        return;
+    }
+    let (shape_addr, class_id, heap_type) = object_shape(obj_addr);
     // `representation_invalidations * sites` upper-bounds the cumulative scan
     // work; past the budget, skip the scan (see the const docs above).
     if reg

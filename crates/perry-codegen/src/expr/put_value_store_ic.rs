@@ -553,6 +553,7 @@ fn emit_key_add_hit(
         .cond_br(&layout_plain, &store_label, &forget_label);
 
     ctx.current_block = forget_idx;
+    super::store_census::bump(ctx, super::store_census::ADD_LAYOUT_FORGET);
     ctx.block()
         .call_void("js_gc_key_add_layout_unknown", &[(I64, handle)]);
     ctx.block().br(&store_label);

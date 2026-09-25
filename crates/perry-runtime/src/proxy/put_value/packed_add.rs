@@ -264,7 +264,7 @@ const CENSUS_NAMES: [&str; 32] = [
     "emit.cfield.sloppy",
     "emit.by_name.runtime",
     "emit.by_name.put_value",
-    "emit.13",
+    "emit.add.layout_forget",
     "emit.14",
     "emit.15",
     "rt.add.memo_inline",
