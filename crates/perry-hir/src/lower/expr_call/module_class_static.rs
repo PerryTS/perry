@@ -186,6 +186,25 @@ pub(super) fn try_module_class_static(
                                         byte_offset: 0,
                                     }));
                                 }
+                                // #11268: `zlib.inflate.bind(zlib)`, `path.join.call(path, …)`,
+                                // `util.format.apply(null, […])` read an inherited
+                                // `Function.prototype` method off a module-export
+                                // function VALUE. They are not `inflate`-class
+                                // statics: the NativeMethodCall below has no table
+                                // entry for them, so it evaluated to `undefined`.
+                                // Fall through to the generic call path, which reads
+                                // `zlib.inflate` as a real function value and
+                                // dispatches `.bind/.call/.apply` on it. Genuine
+                                // native statics of those names
+                                // (`AsyncLocalStorage.bind`, `AsyncResource.bind`)
+                                // are registered in the manifest and keep routing here.
+                                if is_inherited_function_method_on_module_export(
+                                    module_name,
+                                    &class_name,
+                                    &method_name,
+                                ) {
+                                    return Ok(Err(args));
+                                }
                                 return Ok(Ok(Expr::NativeMethodCall {
                                     module: module_name.to_string(),
                                     class_name: Some(class_name),
@@ -317,4 +336,27 @@ pub(super) fn try_module_class_static(
     }
 
     Ok(Err(args))
+}
+
+/// True when `<module>.<export>.<method>(…)` is an inherited
+/// `Function.prototype.{bind,call,apply}` call on a module-export value rather
+/// than a native class static registered under that name (#11268).
+fn is_inherited_function_method_on_module_export(
+    module_name: &str,
+    export_name: &str,
+    method_name: &str,
+) -> bool {
+    if !matches!(method_name, "bind" | "call" | "apply") {
+        return false;
+    }
+    !perry_api_manifest::entries_for_module(module_name).any(|e| {
+        e.name == method_name
+            && matches!(
+                e.kind,
+                perry_api_manifest::ApiKind::Method {
+                    has_receiver: false,
+                    class_filter: Some(c),
+                } if c == export_name
+            )
+    })
 }
