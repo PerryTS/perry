@@ -172,6 +172,14 @@ per_test_global! {
 
 const ASYNC_RESOURCE_SUBCLASS_KEY: &[u8] = b"__perryAsyncResourceBacking";
 
+/// #11258: hidden own property of the public `AsyncResource` object that holds
+/// a heap-allocated `eventEmitter` (an `EventEmitterAsyncResource` subclass's
+/// `this`). As an ordinary field it is traced and rewritten with its owner and
+/// lives exactly as long as the resource object -- unlike the never-freed
+/// backing `Box`, whose raw word no collector sees. Listed in
+/// `is_internal_runtime_key_bytes`, so reflection never reports it.
+pub(crate) const ASYNC_RESOURCE_EVENT_EMITTER_KEY: &[u8] = b"__perryAsyncResourceEventEmitter";
+
 /// Live `AsyncResource` handles. Handles are raw `Box::into_raw` pointers
 /// (never freed → membership is monotonic), NaN-boxed with POINTER_TAG like
 /// heap objects — so the dynamic method path needs this registry to recognize
@@ -201,17 +209,6 @@ thread_local! {
     // callback is on the stack, then commit the batch at depth zero.
     static HOOK_CALLBACK_DEPTH: Cell<usize> = const { Cell::new(0) };
     static PENDING_HOOK_STATES: RefCell<HashMap<usize, bool>> = RefCell::new(HashMap::new());
-}
-
-crate::perry_thread_local! {
-    /// #11258: backings whose `event_emitter` holds a movable heap object (an
-    /// `EventEmitterAsyncResource` subclass's `this`). The field is a raw
-    /// address, so without a root it keeps the from-space copy after a moving
-    /// collection and `sub.asyncResource.eventEmitter === sub` breaks.
-    /// `scan_async_hooks_roots_mut` visits (marks AND rewrites) each one.
-    /// Per-thread because the emitter lives in the linking thread's arena;
-    /// backings are never freed, so the addresses stay dereferenceable.
-    static EVENT_EMITTER_LINKED_BACKINGS: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
 }
 
 pub struct AsyncHookHandle {
@@ -1270,28 +1267,57 @@ pub extern "C" fn js_async_resource_subclass_init(
 
 /// Link the backing AsyncResource owned by EventEmitterAsyncResource to its
 /// public emitter. Node exposes this as `emitter.asyncResource.eventEmitter`.
-/// The stdlib emitter is a stable numeric handle, but a source-compiled
-/// subclass links its own `this` -- a movable heap object -- so that link is
-/// registered as a GC root (#11258).
-pub fn set_async_resource_event_emitter(handle: i64, event_emitter: i64) {
+///
+/// The stdlib emitter is a stable numeric handle, kept in the backing word. A
+/// source-compiled subclass links its own `this`, a movable heap object: that
+/// goes in a hidden field of the public resource object, so the collector
+/// traces it from the live resource and rewrites it on evacuation (#11258).
+pub fn set_async_resource_event_emitter(resource: i64, event_emitter: i64) {
     // #10926: callers hold what `js_async_resource_new` returned, which is the
     // handle OBJECT now, not the backing. Resolve it like every other entry
     // point; an exact-membership check here silently dropped the link, so
     // `eear.asyncResource.eventEmitter` answered `undefined`.
-    let Some(handle) = resolve_async_resource_handle(handle) else {
+    let Some(backing) = resolve_async_resource_handle(resource) else {
         return;
     };
-    unsafe { (*(handle as *mut AsyncResourceHandle)).event_emitter = event_emitter };
     let heap_emitter =
         event_emitter > 0 && !crate::value::addr_class::is_handle_band(event_emitter as usize);
-    EVENT_EMITTER_LINKED_BACKINGS.with(|linked| {
-        let mut linked = linked.borrow_mut();
-        if heap_emitter {
-            linked.insert(handle);
-        } else {
-            linked.remove(&handle);
-        }
+    if !heap_emitter || backing == resource {
+        unsafe { (*(backing as *mut AsyncResourceHandle)).event_emitter = event_emitter };
+        return;
+    }
+    unsafe { (*(backing as *mut AsyncResourceHandle)).event_emitter = 0 };
+    // The key allocation can move both objects; re-read them through handles.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let resource = scope.root_raw_mut_ptr(resource as *mut ObjectHeader);
+    let emitter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(event_emitter));
+    let key = scope.root_string_ptr(js_string_from_bytes(
+        ASYNC_RESOURCE_EVENT_EMITTER_KEY.as_ptr(),
+        ASYNC_RESOURCE_EVENT_EMITTER_KEY.len() as u32,
+    ));
+    key.with_const_ptr::<StringHeader, _>(|key| {
+        resource.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            crate::object::js_object_set_field_by_name(obj, key, emitter.get_nanbox_f64())
+        })
     });
+}
+
+/// The heap emitter a subclass linked into `resource`'s hidden field, if any.
+fn linked_heap_event_emitter(resource: i64) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let resource = scope.root_raw_mut_ptr(resource as *mut ObjectHeader);
+    let key = scope.root_string_ptr(js_string_from_bytes(
+        ASYNC_RESOURCE_EVENT_EMITTER_KEY.as_ptr(),
+        ASYNC_RESOURCE_EVENT_EMITTER_KEY.len() as u32,
+    ));
+    let value = key.with_const_ptr::<StringHeader, _>(|key| {
+        resource.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            crate::object::js_object_get_field_by_name_f64(obj, key)
+        })
+    });
+    JSValue::from_bits(value.to_bits())
+        .is_pointer()
+        .then_some(value)
 }
 
 #[no_mangle]
@@ -1390,6 +1416,11 @@ pub fn try_async_resource_property_dispatch(receiver: i64, property: &str) -> Op
     }
     if property != "eventEmitter" {
         return None;
+    }
+    if receiver != handle {
+        if let Some(emitter) = linked_heap_event_emitter(receiver) {
+            return Some(emitter);
+        }
     }
     let emitter = unsafe { (*(handle as *const AsyncResourceHandle)).event_emitter };
     Some(if emitter == 0 {
@@ -1923,15 +1954,6 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
         visitor.visit_nanbox_u64_slot(&mut providers_bits);
         ASYNC_WRAP_PROVIDERS.store(providers_bits, Ordering::Relaxed);
     }
-
-    // #11258: a strong root, like Node's `asyncResource.eventEmitter` edge.
-    // `try_with`: the scanner can run during thread teardown.
-    let _ = EVENT_EMITTER_LINKED_BACKINGS.try_with(|linked| {
-        for &backing in linked.borrow().iter() {
-            let slot = unsafe { &mut (*(backing as *mut AsyncResourceHandle)).event_emitter };
-            visitor.visit_i64_slot(slot);
-        }
-    });
 
     let mut top_level_bits = TOP_LEVEL_RESOURCE.load(Ordering::Relaxed);
     if top_level_bits != 0 {

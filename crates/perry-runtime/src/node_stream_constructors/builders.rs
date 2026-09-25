@@ -180,7 +180,7 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
         crate::value::js_nanbox_pointer(resource).to_bits(),
     ));
     crate::async_hooks::js_async_resource_set_event_emitter(
-        resource,
+        raw_ptr_from_value(resource_handle.get_nanbox_f64()) as i64,
         raw_ptr_from_value(this_handle.get_nanbox_f64()) as i64,
     );
     let key = scope.root_string_ptr(hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY));

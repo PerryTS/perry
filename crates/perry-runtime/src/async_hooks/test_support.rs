@@ -14,7 +14,6 @@ pub fn reset_for_tests() {
     CURRENT_EXECUTION_ID.with(|c| c.set(0));
     CURRENT_TRIGGER_ID.with(|c| c.set(0));
     EXECUTION_STACK.with(|s| s.borrow_mut().clear());
-    EVENT_EMITTER_LINKED_BACKINGS.with(|s| s.borrow_mut().clear());
 }
 
 pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader, resource: f64) {

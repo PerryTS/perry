@@ -520,12 +520,13 @@ fn test_set_materializers_runtime_handles_survive_copied_minor_gc() {
     }
 }
 
-/// #11258: an `EventEmitterAsyncResource` subclass links its own `this` into
-/// the native backing's `event_emitter` word. That link is the emitter's only
-/// root here, so the collection must both keep it alive and rewrite the word
-/// to the moved copy -- otherwise `asyncResource.eventEmitter` answers the
-/// stale from-space address and `sub.asyncResource.eventEmitter === sub` is
-/// false.
+/// #11258: an `EventEmitterAsyncResource` subclass links its own `this` to its
+/// resource. It used to sit in the never-freed native backing as a raw word no
+/// scanner visited, so a moving collection left `asyncResource.eventEmitter`
+/// naming the stale from-space copy. The link is now a hidden field of the
+/// public resource object and the emitter's only referent here, so the
+/// collection must keep it alive through the live resource and rewrite it to
+/// the moved copy -- without the field ever becoming reflectable.
 #[test]
 fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
     const EMITTER_CLASS_ID: u32 = 0x7A11;
@@ -536,7 +537,6 @@ fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
     let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
     let _verify_evacuation = crate::gc::knob_overrides::VerifyEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
-    gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
 
     let scope = RuntimeHandleScope::new();
     let resource_type = test_string_value(b"EventEmitterAsyncResource");
@@ -572,5 +572,11 @@ fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
         unsafe { (*(emitter_after as *const crate::object::ObjectHeader)).class_id },
         EMITTER_CLASS_ID,
         "the rewritten link must name the moved emitter"
+    );
+    let keys = crate::object::js_object_keys(resource_now as *const crate::object::ObjectHeader);
+    assert_eq!(
+        crate::array::js_array_length(keys),
+        0,
+        "the hidden link must not be an enumerable own key"
     );
 }
