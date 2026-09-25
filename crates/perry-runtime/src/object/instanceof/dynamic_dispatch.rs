@@ -75,6 +75,20 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             }
         }
     }
+    // OrdinaryHasInstance step 3 (#11261): a primitive is never an instance.
+    // Only once the RHS is known callable — a non-callable RHS must still
+    // reach the `TypeError` below (InstanceofOperator step 4 precedes
+    // OrdinaryHasInstance). A class reference or class object RHS still
+    // forwards to `js_instanceof`, which applies the same rule only after the
+    // class's own static `@@hasInstance` hook (lifted per class id) has had
+    // its turn.
+    if instanceof_lhs_is_primitive(value)
+        && value_is_callable(type_ref)
+        && class_ref_id(type_ref).is_none()
+        && !is_class_object_value(type_ref)
+    {
+        return f64::from_bits(TAG_FALSE);
+    }
     // Native http(s).Agent handles have no heap prototype chain. After any own
     // override above has had first refusal, retain their native brand check.
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {

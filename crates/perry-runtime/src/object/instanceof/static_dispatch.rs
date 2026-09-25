@@ -79,6 +79,12 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         }
     }
 
+    // OrdinaryHasInstance step 3: once no user `@@hasInstance` answered, a
+    // primitive is never an instance of anything (#11261). Without this a
+    // plain number reached the native brand probes below as a handle id.
+    if instanceof_lhs_is_primitive(value) {
+        return false_val;
+    }
     // Subclass-of-built-in: see `subclass_of_builtin_reaches`.
     if subclass_of_builtin_reaches(value, class_id) {
         return true_val;

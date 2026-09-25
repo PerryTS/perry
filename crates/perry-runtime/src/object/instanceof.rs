@@ -73,6 +73,43 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
     None
 }
 
+/// OrdinaryHasInstance step 3 (ECMA-262 7.3.21) for the `instanceof` entry
+/// points: "If Type(O) is not Object, return false." Checked AFTER a
+/// user-defined `@@hasInstance` has had its turn (that hook may legitimately
+/// answer `true` for a primitive) and BEFORE any native brand probe.
+///
+/// #11261: the native probes resolve their operand through
+/// `small_native_handle_id`, which also accepts a plain positive integral
+/// number as a registry handle id. So `3 instanceof EventEmitter` answered
+/// `true` whenever a live emitter happened to hold handle id 3 — the
+/// perry-stdlib-bundled emitter mints ids from 1 (the shared FFI pool), so
+/// the first few emitters in a program made small numbers "emitters".
+///
+/// Decided from the tag alone, without dereferencing: `undefined`, `null`,
+/// booleans, strings (heap and inline), bigints, INT32 numbers that are not
+/// registered class references (a class ref is a callable constructor), and
+/// IEEE doubles. The raw-bitcast band (top 16 bits zero, non-zero bits) is
+/// deliberately NOT classified here: legacy raw heap pointers and raw handle
+/// ids share it with subnormal numbers, and the downstream probes already
+/// decode it. Symbols are POINTER-tagged heap cells; classifying them needs a
+/// registry lookup that would tax every object operand, and no native probe
+/// matches a symbol cell, so they are left to the existing paths.
+#[inline]
+fn instanceof_lhs_is_primitive(value: f64) -> bool {
+    let bits = value.to_bits();
+    if (bits >> 48) == 0 && bits != 0 {
+        return false;
+    }
+    let jv = crate::JSValue::from_bits(bits);
+    jv.is_undefined()
+        || jv.is_null()
+        || jv.is_bool()
+        || jv.is_any_string()
+        || jv.is_bigint()
+        || jv.is_number()
+        || (jv.is_int32() && class_ref_id(value).is_none())
+}
+
 /// Candidate heap address of an `instanceof` operand; 0 for every primitive.
 /// #10479: this used to treat every tag band `>= 0x7FF8` as a pointer, so a
 /// 1-5 byte inline string (or an INT32 class ref) reached
@@ -904,5 +941,95 @@ mod generic_origin_chain_tests {
         js_register_class_parent(0x0757_50FE, 0x0757_50FE); // self parent
         assert!(!class_chain_reaches(0x0757_50FE, GENERIC));
         assert!(class_chain_reaches(0x0757_50FE, 0x0757_50FE));
+    }
+}
+
+#[cfg(test)]
+mod primitive_lhs_native_brand_tests_11261 {
+    use super::*;
+
+    /// A handle id no other runtime unit test mints. The probe below answers
+    /// `true` for exactly this id, so leaving it registered after the test
+    /// cannot change another test's verdict.
+    const PROBE_HANDLE: i64 = 0x3_1261;
+
+    unsafe extern "C" fn probe_answers_for_one_handle(handle: i64) -> bool {
+        handle == PROBE_HANDLE
+    }
+
+    fn truthy(v: f64) -> bool {
+        v.to_bits() == crate::value::TAG_TRUE
+    }
+
+    #[test]
+    fn lhs_primitive_classification_is_tag_only() {
+        let primitives = [
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_FALSE),
+            f64::from_bits(crate::value::STRING_TAG | 0x1000),
+            f64::from_bits(crate::value::SHORT_STRING_TAG | 0x0300_0069_7275),
+            f64::from_bits(crate::value::BIGINT_TAG | 0x1000),
+            // An INT32 payload that is not a registered class id.
+            f64::from_bits(crate::value::INT32_TAG | 0x7654_3210),
+            0.0,
+            -0.0,
+            3.0,
+            PROBE_HANDLE as f64,
+            1.5,
+            -7.0,
+            f64::NAN,
+            f64::INFINITY,
+        ];
+        for v in primitives {
+            assert!(
+                instanceof_lhs_is_primitive(v),
+                "{:#018x} must classify as a primitive instanceof operand",
+                v.to_bits()
+            );
+        }
+        let not_primitive = [
+            // A POINTER-tagged registry handle and a heap address.
+            f64::from_bits(crate::value::POINTER_TAG | PROBE_HANDLE as u64),
+            f64::from_bits(crate::value::POINTER_TAG | 0x7F12_3456_7890),
+            // The raw-bitcast band is left to the downstream decoders.
+            f64::from_bits(PROBE_HANDLE as u64),
+        ];
+        for v in not_primitive {
+            assert!(
+                !instanceof_lhs_is_primitive(v),
+                "{:#018x} must not classify as a primitive",
+                v.to_bits()
+            );
+        }
+    }
+
+    /// #11261: a plain number equal to a live emitter's handle id answered
+    /// `true` for `n instanceof EventEmitter`. The probe is live for the
+    /// POINTER-tagged handle (witness), and must not be consulted for the
+    /// number with the same value.
+    #[test]
+    fn number_equal_to_a_live_emitter_handle_is_not_an_emitter() {
+        let previous = crate::object::event_emitter_handle_probe();
+        unsafe {
+            crate::object::js_register_event_emitter_handle_probe(probe_answers_for_one_handle)
+        };
+
+        let handle = f64::from_bits(crate::value::POINTER_TAG | PROBE_HANDLE as u64);
+        let witness = truthy(js_instanceof(handle, CLASS_ID_EVENT_EMITTER));
+        let number = truthy(js_instanceof(PROBE_HANDLE as f64, CLASS_ID_EVENT_EMITTER));
+
+        if let Some(prev) = previous {
+            unsafe { crate::object::js_register_event_emitter_handle_probe(prev) };
+        }
+        assert!(
+            witness,
+            "the probe must be live: the handle itself is an emitter"
+        );
+        assert!(
+            !number,
+            "a number is never instanceof EventEmitter (#11261)"
+        );
     }
 }
