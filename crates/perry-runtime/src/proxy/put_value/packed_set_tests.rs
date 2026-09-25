@@ -430,10 +430,10 @@ fn a_key_adding_static_store_is_served_by_the_chain_verdict() {
     let added = interned(b"chainPackedAdded");
     let mut first_cache: PackedSetWays = packed_set_cache_empty();
     let mut first_slot: PackedSetWaysSlot = &mut first_cache;
-    let first_packed = AtomicU64::new(PACKED_SET_EMPTY);
     let mut cache: PackedSetWays = packed_set_cache_empty();
     let mut cache_slot: PackedSetWaysSlot = &mut cache;
-    let packed = AtomicU64::new(PACKED_SET_EMPTY);
+    // A full-outline site (null compact word): no key-add memo, so the
+    // chain verdict is the lane that serves the adds this test counts.
     // A class with a prototype object, as a compiled class has: the verdict
     // walks (and marks) the chain it proves clear, so a class with no
     // prototype to walk is refused.
@@ -446,8 +446,15 @@ fn a_key_adding_static_store_is_served_by_the_chain_verdict() {
         let target = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
         // One key first, so the receiver the chain-verdict site sees carries a
         // real ShapeId, as a constructor's receiver does.
-        js_put_value_set_packed_miss(target, first, 1.0, 0, &mut first_slot, &first_packed);
-        js_put_value_set_packed_miss(target, added, i as f64, 0, &mut cache_slot, &packed);
+        js_put_value_set_packed_miss(target, first, 1.0, 0, &mut first_slot, std::ptr::null());
+        js_put_value_set_packed_miss(
+            target,
+            added,
+            i as f64,
+            0,
+            &mut cache_slot,
+            std::ptr::null(),
+        );
         let read = crate::object::js_object_get_field_by_name_f64(obj, added);
         assert_eq!(read, i as f64, "the added key holds the stored value");
     }
