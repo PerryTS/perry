@@ -1,0 +1,3 @@
+Fix HTTPS server `upgrade` listeners being skipped by resolving their embedded HTTP base server during event delivery. Preserve once-listener semantics and binary Buffer heads. Raw upgrades left without a listener now destroy their adopted socket and release their request handle; native attached WebSocket acceptance keeps its existing ownership.
+
+Regression tests cover HTTPS and HTTP delivery, callback arguments, and cleanup after listeners or servers disappear. All 180 HTTP crate unit tests pass; the three new regressions fail against the original dispatch and cleanup behavior. No version bump.
