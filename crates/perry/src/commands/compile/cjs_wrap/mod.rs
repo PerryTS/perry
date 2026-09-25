@@ -80,7 +80,9 @@ use hoist_classes::{
 
 // Public API consumed by `compile.rs` / `collect_modules.rs`.
 pub(super) use detect::is_commonjs;
-pub(super) use wrap::{wrap_commonjs_for_target, wrap_commonjs_with_body_offset};
+#[cfg(test)]
+use wrap::wrap_commonjs_for_target;
+pub(super) use wrap::wrap_commonjs_with_addon_paths;
 
 #[cfg(test)]
 mod tests;

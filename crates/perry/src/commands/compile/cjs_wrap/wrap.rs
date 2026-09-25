@@ -35,10 +35,16 @@ fn relative_import_specifier(from: &Path, to: &Path) -> Option<String> {
 fn resolved_native_addon(
     source_path: &Path,
     specifier: &str,
+    native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
 ) -> Option<(std::path::PathBuf, String)> {
     let target = super::super::resolve::resolve_relative_import_path(specifier, source_path)?;
     if target.extension().and_then(|extension| extension.to_str()) != Some("node") {
         return None;
+    }
+    // Use the collector's authorized project-relative path, even without a
+    // package name or when the addon has a nearer, nested package.json.
+    if let Some(project_path) = native_addon_paths.and_then(|paths| paths.get(&target)) {
+        return Some((target, format!("$project/{project_path}")));
     }
     let package_root = target
         .ancestors()
@@ -135,6 +141,7 @@ pub(in crate::commands::compile) fn wrap_commonjs(source: &str, source_path: &Pa
     wrap_commonjs_for_target(source, source_path, None, false, None)
 }
 
+#[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs_for_target(
     source: &str,
     source_path: &Path,
@@ -159,12 +166,33 @@ pub(in crate::commands::compile) fn wrap_commonjs_for_target(
 /// a wrapped-coordinate `byte_offset` back to original-source coordinates.
 /// `None` when the body could not be located in the wrapped output (a
 /// special-case early rewrite changed it); callers then skip the mapping.
+#[cfg(test)]
 pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     source: &str,
     source_path: &Path,
     target: Option<&str>,
     is_entry_module: bool,
     compile_packages: Option<&HashSet<String>>,
+) -> (String, Option<usize>) {
+    wrap_commonjs_with_addon_paths(
+        source,
+        source_path,
+        target,
+        is_entry_module,
+        compile_packages,
+        None,
+    )
+}
+
+/// Wrap CommonJS using the project's canonical addon-path authorization map.
+/// The graph collector and generated loader calls must use the same logical id.
+pub(in crate::commands::compile) fn wrap_commonjs_with_addon_paths(
+    source: &str,
+    source_path: &Path,
+    target: Option<&str>,
+    is_entry_module: bool,
+    compile_packages: Option<&HashSet<String>>,
+    native_addon_paths: Option<&std::collections::BTreeMap<PathBuf, String>>,
 ) -> (String, Option<usize>) {
     let mut source_cow = Cow::Borrowed(source);
 
@@ -373,7 +401,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     let mut chosen_alias_per_spec: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for (alias, spec, _) in &raw_aliases {
-        if resolved_native_addon(source_path, spec).is_some() {
+        if resolved_native_addon(source_path, spec, native_addon_paths).is_some() {
             continue;
         }
         if !alias_is_safe(alias) {
@@ -448,7 +476,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // synthetic require's `createRequire` arm instead (see `require_cases`),
         // which never references the import local.
         .filter(|(spec, _)| !builtin_requires.contains(spec))
-        .filter(|(spec, _)| resolved_native_addon(source_path, spec).is_none())
+        .filter(|(spec, _)| resolved_native_addon(source_path, spec, native_addon_paths).is_none())
         .map(|(spec, local)| {
             // #4904: Node's underscore-prefixed internal http modules are
             // require-only re-exports of the public `http` surface
@@ -542,7 +570,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .iter()
         .zip(import_local_names.iter())
         .map(|(spec, local)| {
-            if let Some((_target, logical_id)) = resolved_native_addon(source_path, spec) {
+            if let Some((_target, logical_id)) = resolved_native_addon(source_path, spec, native_addon_paths) {
                 let specifier =
                     serde_json::to_string(spec).expect("native addon specifier is JSON encodable");
                 let logical_id = serde_json::to_string(&logical_id)
@@ -762,7 +790,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             let resolved = if builtin_requires.contains(spec) || is_watcher_facade(spec) {
                 Some(spec.clone())
             } else {
-                resolved_native_addon(source_path, spec)
+                resolved_native_addon(source_path, spec, native_addon_paths)
                     .map(|(_, logical_id)| logical_id)
                     .or_else(|| {
                         source_path.parent().and_then(|module_dir| {
@@ -1859,3 +1887,7 @@ fn rewrite_safe_buffer_slow_buffer_fallback(source: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "cache_invalidation_tests.rs"]
 mod cache_invalidation_tests;
+
+#[cfg(test)]
+#[path = "native_addon_tests.rs"]
+mod native_addon_tests;

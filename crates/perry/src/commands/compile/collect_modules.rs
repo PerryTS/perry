@@ -417,34 +417,24 @@ fn collect_module_one(
     // original-source line. The default build does no extra work.
     let mut cjs_wrap_body_prefix_lines: Option<u32> = None;
     let source = if was_cjs_wrapped {
+        let (wrapped, body_off) = super::cjs_wrap::wrap_commonjs_with_addon_paths(
+            &raw_source,
+            &canonical,
+            target,
+            cjs_is_entry_module,
+            Some(&ctx.compile_packages),
+            Some(&ctx.native_addon_paths),
+        );
         if ctx.debug_symbols {
-            let (wrapped, body_off) = super::cjs_wrap::wrap_commonjs_with_body_offset(
-                &raw_source,
-                &canonical,
-                target,
-                cjs_is_entry_module,
-                Some(&ctx.compile_packages),
-            );
-            // Newlines before the original body in the wrapped output = the
-            // wrapper prefix line count. Recorded only when the body was
-            // located; otherwise we skip the skew correction (graceful
-            // degrade to the uncorrected line rather than a wrong one).
+            // Preserve original-source locations after injecting the wrapper.
             cjs_wrap_body_prefix_lines = body_off.map(|off| {
                 wrapped.as_bytes()[..off]
                     .iter()
                     .filter(|&&b| b == b'\n')
                     .count() as u32
             });
-            wrapped
-        } else {
-            super::cjs_wrap::wrap_commonjs_for_target(
-                &raw_source,
-                &canonical,
-                target,
-                cjs_is_entry_module,
-                Some(&ctx.compile_packages),
-            )
         }
+        wrapped
     } else {
         raw_source
     };
