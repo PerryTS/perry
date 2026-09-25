@@ -380,7 +380,7 @@ pub(crate) fn verdict_generation() -> u64 {
 /// Mark `class_id`'s class chain as walked by a verdict, before the verdict's
 /// generation is read (see `class_registry::mark_class_chain_for_verdicts`).
 pub(crate) fn mark_verdict_class_chain(class_id: u32) {
-    crate::object::class_registry::parent_static::mark_class_chain_for_verdicts(class_id);
+    crate::object::class_registry::verdict_classes::mark_class_chain_for_verdicts(class_id);
 }
 
 /// Count a store the lane served.

@@ -257,19 +257,21 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     let object = obj as *mut crate::object::ObjectHeader;
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
-    let (meta, _obj) = handle
+    let (meta, object) = handle
         .across_mut::<crate::object::ObjectHeader, _>(|| crate::object::object_meta_ensure(object));
     if meta.is_null() {
         return None;
     }
     if (*meta).flags & flag == 0 {
-        handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-            let current = handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
-            crate::object::shapes::transition_object_shape_semantics(current)
+        // The transition may allocate a descriptor, and so move the owner;
+        // the meta record is reached through the owner again afterwards.
+        let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            crate::object::shapes::transition_object_shape_semantics(object)
         });
+        let meta = (*object).meta;
+        return (!meta.is_null()).then_some(meta);
     }
-    // The meta record is owned by the object and does not move with it.
-    Some((*handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()).meta)
+    Some(meta)
 }
 
 /// # Safety

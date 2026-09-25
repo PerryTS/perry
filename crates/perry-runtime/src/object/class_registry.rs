@@ -64,6 +64,7 @@ mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
 mod state;
+pub(crate) mod verdict_classes;
 mod vm_brand;
 
 // ── accessor_attrs.rs ───────────────────────────────────────────────────────
