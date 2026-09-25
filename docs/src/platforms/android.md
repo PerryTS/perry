@@ -17,6 +17,11 @@ Perry compiles TypeScript apps for Android using JNI (Java Native Interface).
 perry app.ts -o app --target android
 ```
 
+Local Android and Wear OS runs extract the Gradle project and Kotlin/Java bridge
+from the Perry executable. Release installs do not need a Perry source checkout
+or `PERRY_WORKSPACE_ROOT` to obtain this template. The local build still requires
+the Android SDK, Gradle, and Java toolchain.
+
 ## UI Toolkit
 
 Perry maps UI widgets to Android views via JNI:

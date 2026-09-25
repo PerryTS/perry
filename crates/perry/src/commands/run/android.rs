@@ -5,7 +5,7 @@ use super::*;
 /// Build an Android APK from the compiled .so and install/launch on a device.
 ///
 /// Steps:
-/// 1. Copy the Gradle template from perry-ui-android/template/ to a temp dir
+/// 1. Extract the bundled Gradle template into the build directory
 /// 2. Place the compiled .so in app/src/main/jniLibs/arm64-v8a/
 /// 3. Update the applicationId in build.gradle.kts
 /// 4. Run ./gradlew assembleDebug
@@ -41,14 +41,6 @@ fn build_and_run_android_impl(
     format: OutputFormat,
     wear: bool,
 ) -> Result<()> {
-    // Find the perry workspace root to locate the Android template
-    let workspace_root = super::super::compile::find_perry_workspace_root()
-        .ok_or_else(|| anyhow!("Cannot find Perry workspace root — needed for Android template"))?;
-    let template_dir = workspace_root.join("crates/perry-ui-android/template");
-    if !template_dir.exists() {
-        bail!("Android template not found at {}", template_dir.display());
-    }
-
     // Create a build directory alongside the .so
     let build_dir = so_path
         .parent()
@@ -63,9 +55,10 @@ fn build_and_run_android_impl(
         println!("Building Android APK...");
     }
 
-    // Copy template to build directory
-    copy_dir_recursive(&template_dir, &build_dir)
-        .map_err(|e| anyhow!("Failed to copy Android template: {}", e))?;
+    // The release binary carries the matching Kotlin bridge and resources.
+    // This path must work without a Perry checkout on the user's machine.
+    super::android_template::extract(&build_dir)
+        .map_err(|e| anyhow!("Failed to extract Android template: {}", e))?;
 
     // Wear OS: overlay the watch form-factor onto the copied phone template
     // (manifest feature + standalone meta-data, Wear minSdk, androidx.wear dep).
@@ -1083,6 +1076,23 @@ pub fn get_android_pid(serial: &str, bundle_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wear_overlay_applies_to_bundled_android_template() {
+        let temp = tempfile::tempdir().unwrap();
+        super::super::android_template::extract(temp.path()).unwrap();
+        apply_wear_overlay(temp.path(), OutputFormat::Json).unwrap();
+        let manifest =
+            std::fs::read_to_string(temp.path().join("app/src/main/AndroidManifest.xml")).unwrap();
+        let gradle = std::fs::read_to_string(temp.path().join("app/build.gradle.kts")).unwrap();
+        assert!(manifest.contains("android.hardware.type.watch"));
+        assert!(manifest.contains("com.google.android.wearable.standalone"));
+        assert!(gradle.contains("minSdk = 30"));
+        assert!(temp
+            .path()
+            .join("app/src/main/java/com/perry/app/PerryBridge.kt")
+            .is_file());
+    }
 
     /// `apply_wear_overlay` must transform a copy of the *real* Android template
     /// into a Wear OS project: watch feature + standalone meta-data in the
