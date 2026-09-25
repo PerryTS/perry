@@ -604,7 +604,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                         // the import binding is the value this arm returned
                         // before the target was deferred at all.
                         format!(
-                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} if (required === undefined && !__perry_has_path_module({path:?})) required = {local}; {warnings}{link_child}const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
+                            "const childBefore = require.cache[{path:?}]; globalThis.__perry_cjs_pending_parent = module; let required; try {{ required = __perry_require_path_module({path:?}); required = __perry_cjs_refresh_path({path:?}, required); }} finally {{ globalThis.__perry_cjs_pending_parent = undefined; }} if (required === undefined && !__perry_has_path_module({path:?})) required = {local}; {warnings}{link_child}const __perry_rec = require.cache[{path:?}]; if (__perry_rec !== undefined && __perry_rec.loaded === true) {local}__rec = __perry_rec; return required;",
                             path = target.to_string_lossy(),
                             local = local,
                         )
@@ -624,6 +624,14 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 )
             } else if needs_runtime_record {
                 runtime_require.clone().unwrap_or_else(|| format!("return {local};"))
+            } else if let Some(target) = resolved_target.as_ref() {
+                // #11249: an eager import binding outlives require.cache
+                // deletion and replacement. Read the live record, and use
+                // the same cold re-evaluation path as a deferred require.
+                format!(
+                    "const __perry_cached = require.cache[{path:?}]; if (__perry_cached !== undefined) {{ {link_child}return __perry_cached.exports; }} return __perry_cjs_refresh_path({path:?}, {local});",
+                    path = target.to_string_lossy(),
+                )
             } else {
                 format!("{link_child}return {local};")
             };
@@ -654,8 +662,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     // `module.exports` after evaluation still reads through
                     // (matching Node), and a cyclic target mid-initialisation
                     // keeps going through the registry until it completes.
+                    // Validate identity against the public cache on every hit:
+                    // deletion and replacement revoke this saved record.
                     format!(
-                        "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined) return {local}__rec.exports; {required_value} }}"
+                        "        if (specifier === '{spec}') {{ if ({local}__rec !== undefined && require.cache[{path:?}] === {local}__rec) return {local}__rec.exports; {required_value} }}",
+                        path = resolved_target.as_ref().unwrap().to_string_lossy(),
                     )
                 } else if link_child.is_empty() {
                     format!("        if (specifier === '{spec}') return {local};")
@@ -670,8 +681,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .join("\n");
     // One memo slot per deferred specifier, declared in the factory so each
     // module INSTANCE gets its own (they are per-module state, not global).
-    // A plain local is deliberate: an object keyed by specifier would put a
-    // property read on the hot require path, which is what this is removing.
+    // Keep the loaded-record memo local; its hot path validates the record
+    // against require.cache instead of re-entering the path registry.
     let lazy_cache_decls = require_specs
         .iter()
         .zip(import_local_names.iter())
@@ -1268,6 +1279,18 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     // accepted the bare spelling too. The runtime predicate agrees with Node
     // 26 on all 58 names in both spellings.
 {lazy_cache_decls}
+    // A path-registry initializer runs once, while deleting require.cache
+    // requests another execution of a loaded CommonJS factory. Allocate this
+    // module-bound loader only on that cold path; ordinary loads keep the
+    // registry and live-record fast paths above.
+    let __perry_cjs_reload_require;
+    function __perry_cjs_refresh_path(path, value) {{
+        const cached = __perry_cjs_base_require.cache[path];
+        if (cached !== undefined) return cached.exports;
+        if (!__perry_has_path_module(path)) return value;
+        if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require({module_filename_literal});
+        return __perry_cjs_reload_require(path);
+    }}
     function require(specifier) {{
         if (typeof specifier !== 'string') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_TYPE', 'The "id" argument must be of type string.');
         if (specifier === '') throw __perry_cjs_require_error('type', 'ERR_INVALID_ARG_VALUE', 'The argument "id" must be a non-empty string.');
@@ -1320,7 +1343,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                 }}
             }}
             const __perry_path_mod = __perry_require_path_module(__perry_path_spec);
-            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)) return __perry_path_mod;
+            if (__perry_path_mod !== undefined || __perry_has_path_module(__perry_path_spec)) return __perry_cjs_refresh_path(__perry_path_spec, __perry_path_mod);
         }}
         // Runtime `require(absolutePath)` of a `.json` file (Next.js loads
         // manifests this way: `require(this.middlewareManifestPath)`). Node's
@@ -1820,3 +1843,7 @@ fn rewrite_safe_buffer_slow_buffer_fallback(source: &str) -> Option<String> {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "cache_invalidation_tests.rs"]
+mod cache_invalidation_tests;

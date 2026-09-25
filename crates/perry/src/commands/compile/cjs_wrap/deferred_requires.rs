@@ -282,7 +282,7 @@ module.exports = { get };
         for (needle, why) in [
             ("__rec;", "the per-site memo slot declaration"),
             (
-                "__rec !== undefined) return ",
+                "__rec !== undefined && require.cache[",
                 "the short-circuit that skips the registry",
             ),
             (

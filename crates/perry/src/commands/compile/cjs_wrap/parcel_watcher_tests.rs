@@ -53,7 +53,14 @@ fn explicit_and_wildcard_compile_packages_preserve_watcher_facades() {
                     || wrapped.contains(&format!("from \"{package}\"")),
                 "{package} under {selection} must retain its facade import:\n{wrapped}"
             );
-            assert!(!wrapped.contains("/watcher.node"), "{wrapped}");
+            // require.resolve may expose the on-disk .node path as metadata.
+            // The facade contract forbids importing that file as compiled JS.
+            assert!(
+                !wrapped
+                    .lines()
+                    .any(|line| line.starts_with("import ") && line.contains("/watcher.node")),
+                "{wrapped}"
+            );
         }
     }
 }
