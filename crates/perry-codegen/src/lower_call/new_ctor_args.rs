@@ -74,7 +74,7 @@ pub(crate) fn bind_inline_constructor_params(
         })
         .collect();
 
-    crate::codegen::arguments::add_arguments_mapped_boxes(params, &mut ctx.boxed_vars);
+    crate::codegen::arguments::add_arguments_mapped_boxes(params, None, &mut ctx.boxed_vars);
     let mapped_param_ids = crate::codegen::arguments::mapped_parameter_ids(params);
     let values =
         inline_constructor_param_values_with_class(ctx, params, lowered_args, capture_fill);

@@ -672,6 +672,11 @@ fn reduction_add_is_reassociable(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> 
 }
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    // #10509: an elided `arguments[k]` reads the raw bundle through its own
+    // lowering; none of the receiver-proof tiers below may claim it.
+    if crate::codegen::arguments::is_elided_arguments_index_get(ctx, expr) {
+        return Ok((lower_expr(ctx, expr)?, false));
+    }
     // #10185: the element-shape fast clone's two NON-numeric reads —
     // `arr[i].name.length` and `arr[i].active ? 1 : 0`. Both are numbers by the
     // time they get here, each proven from the loaded word's own NaN-box tag

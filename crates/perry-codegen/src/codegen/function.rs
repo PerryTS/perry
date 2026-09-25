@@ -777,7 +777,7 @@ pub(super) fn compile_function(
     let _ = lf.create_block("entry");
 
     let mut boxed_vars = module_boxed_vars.clone();
-    super::arguments::add_arguments_mapped_boxes(&f.params, &mut boxed_vars);
+    super::arguments::add_arguments_mapped_boxes(&f.params, Some(&f.body), &mut boxed_vars);
 
     // Store each param into an alloca slot, collecting LocalId → slot
     // mappings. We release the &mut LlBlock at scope end before handing
@@ -1379,6 +1379,7 @@ pub(super) fn compile_function(
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
+        elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,

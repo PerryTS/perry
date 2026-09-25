@@ -1650,6 +1650,12 @@ pub(crate) struct FnCtx<'a> {
     /// Mutable locals known to be non-negative at the current point. While
     /// guards provide the upper bound; this set supplies the lower bound.
     pub nonnegative_integer_locals: std::collections::HashSet<u32>,
+    /// #10509: synthesized `arguments` locals whose slot holds the caller's
+    /// raw argument bundle because the prologue proved the Arguments object
+    /// unobservable (`codegen::arguments::arguments_elision`). Their
+    /// `.length` and `[k]` reads lower through `codegen::arguments`.
+    pub elided_arguments:
+        std::collections::HashMap<u32, crate::codegen::arguments::ElidedArguments>,
     /// Native representation records drained into `LlModule` after this
     /// function/method/closure/module-init body has been lowered.
     pub native_rep_records: Vec<NativeRepRecord>,

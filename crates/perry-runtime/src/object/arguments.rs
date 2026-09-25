@@ -145,9 +145,25 @@ extern "C" fn arguments_throw_type_error(_closure: *const crate::closure::Closur
     );
 }
 
-fn thrower_closure_value() -> f64 {
+pub(super) const THROWER_FROZEN_FLAGS: u16 =
+    crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+
+pub(super) fn thrower_closure_value() -> f64 {
     let closure =
         crate::closure::js_closure_alloc_singleton(arguments_throw_type_error as *const u8);
+    // #10509: configure the per-thread singleton once, not per strict call.
+    // The frozen bits are the last step below and live in the closure's own
+    // header; every side table the earlier steps write (closure props,
+    // descriptor attrs, builtin-closure metadata) is rekeyed when the closure
+    // moves, so a set bit means the whole configuration is still in place.
+    if !closure.is_null()
+        && unsafe { crate::value::addr_class::try_read_tracked_gc_header(closure as usize) }
+            .is_some_and(|gc| unsafe {
+                (*gc.as_ptr())._reserved & THROWER_FROZEN_FLAGS == THROWER_FROZEN_FLAGS
+            })
+    {
+        return crate::value::js_nanbox_pointer(closure as i64);
+    }
     crate::closure::js_register_closure_arity(arguments_throw_type_error as *const u8, 0);
     super::native_module::set_bound_native_closure_name(closure, "");
     super::native_module::set_builtin_closure_length(closure as usize, 0);
@@ -159,9 +175,7 @@ fn thrower_closure_value() -> f64 {
         unsafe {
             if let Some(gc) = crate::value::addr_class::try_read_tracked_gc_header(closure as usize)
             {
-                (*gc.as_ptr())._reserved |= crate::gc::OBJ_FLAG_FROZEN
-                    | crate::gc::OBJ_FLAG_SEALED
-                    | crate::gc::OBJ_FLAG_NO_EXTEND;
+                (*gc.as_ptr())._reserved |= THROWER_FROZEN_FLAGS;
             }
         }
     }
@@ -314,6 +328,87 @@ pub extern "C" fn js_arguments_object_alloc(
         });
         obj
     })
+}
+
+/// #10509: `arguments[key]` in a function whose Arguments object codegen
+/// elided (`perry-codegen` `codegen/arguments.rs`, `ArgumentsElision::Reads`).
+///
+/// `raw_args` is the marked Array the caller bundled — the exact input
+/// [`js_arguments_object_alloc`] would have copied. An own element (a
+/// canonical array index below the bundle's length) reads through the same
+/// `clean_arr_ptr` / `js_array_length` / `js_array_get` sequence that alloc
+/// uses, so it is the value the object's field would have held. Every other
+/// key — `"callee"`, a symbol, a string, a fractional, negative or
+/// out-of-range number, an INT32-tagged value, or a hole element — answers
+/// `TAG_HOLE`, which no JS read produces, and the caller takes
+/// [`js_arguments_bundle_get_slow`]. Cannot allocate, throw, or run user code.
+#[no_mangle]
+pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 {
+    let not_own_element = f64::from_bits(crate::value::TAG_HOLE);
+    // Only an exact non-negative integer below 2^32 - 1 is an array index. A
+    // NaN-boxed key is a NaN, so it fails the range test; -0 names index 0.
+    if !(key >= 0.0 && key < u32::MAX as f64) {
+        return not_own_element;
+    }
+    let index = key as u32;
+    if index as f64 != key {
+        return not_own_element;
+    }
+    let arr = crate::array::clean_arr_ptr(
+        crate::value::js_nanbox_get_pointer(raw_args) as *const ArrayHeader
+    );
+    if arr.is_null() {
+        return not_own_element;
+    }
+    // A plain array without per-index descriptors holds each own element in
+    // its slot, which is what `js_array_get` returns for it. Anything else
+    // takes the accessors alloc itself uses.
+    let (obj_type, flags) = crate::array::array_receiver_gc_tag(arr);
+    if obj_type == crate::gc::GC_TYPE_ARRAY && flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0 {
+        // SAFETY: `clean_arr_ptr` resolved a live, non-forwarded array whose
+        // length it validated against its capacity.
+        unsafe {
+            if index >= (*arr).length {
+                return not_own_element;
+            }
+            return *(crate::array::array_elements_ptr(arr) as *const f64).add(index as usize);
+        }
+    }
+    if index >= crate::array::js_array_length(arr) {
+        return not_own_element;
+    }
+    f64::from_bits(crate::array::js_array_get(arr, index).bits())
+}
+
+/// #10509: the cold half of [`js_arguments_bundle_index_get`]. Builds the
+/// Arguments object the prologue would have built (`callee_wrapper`, when
+/// non-null, names the function whose singleton closure is `callee`) and
+/// performs an ordinary `obj[key]` on it, so a non-element key sees the real
+/// object's `callee`, `length`, `Symbol.iterator` and `Object.prototype`
+/// surface. The object is not kept: codegen only takes this path for a
+/// function that never observes the object's identity.
+#[no_mangle]
+pub extern "C" fn js_arguments_bundle_get_slow(
+    raw_args: f64,
+    key: f64,
+    callee: f64,
+    callee_wrapper: *const u8,
+    restricted_callee: i32,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let raw_args = scope.root_nanbox_f64(raw_args);
+    let key = scope.root_nanbox_f64(key);
+    let callee = if callee_wrapper.is_null() {
+        callee
+    } else {
+        let closure = crate::closure::js_closure_alloc_singleton(callee_wrapper);
+        crate::value::js_nanbox_pointer(closure as i64)
+    };
+    let obj = js_arguments_object_alloc(raw_args.get_nanbox_f64(), callee, restricted_callee);
+    crate::value::js_dyn_index_get(
+        crate::value::js_nanbox_pointer(obj as i64),
+        key.get_nanbox_f64(),
+    )
 }
 
 #[no_mangle]

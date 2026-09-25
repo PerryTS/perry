@@ -137,7 +137,7 @@ pub(crate) use shadow_slots::{
 };
 pub(crate) use spec_abi_sites::{
     collect_spec_abi_facts, guarded_number_array_param_eligible, reassigned_locals,
-    reassigned_locals_in_module, SpecParamRep, SpecTaBinding,
+    reassigned_locals_in_module, rebound_locals, SpecParamRep, SpecTaBinding,
 };
 pub(crate) use this_as_value::{
     class_chain_extends_builtin_error, class_chain_has_unmodeled_base, class_uses_this_as_value,

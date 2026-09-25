@@ -70,6 +70,8 @@ pub(crate) use json_construction::{
 };
 mod arguments;
 #[cfg(test)]
+mod arguments_bundle_tests;
+#[cfg(test)]
 mod arguments_latch_tests;
 mod array_object_ops;
 mod assert;

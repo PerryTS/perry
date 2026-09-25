@@ -1112,6 +1112,12 @@ fn lower_bounded_array_index_get_checked(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexGet { object, index } => {
+            // #10509: must precede every receiver-proof tier below.
+            if let Some(v) =
+                crate::codegen::arguments::try_lower_elided_arguments_index_get(ctx, object, index)?
+            {
+                return Ok(v);
+            }
             if let Some(value) =
                 crate::stmt::stable_packed_loop::try_lower_index_get(ctx, object, index)
             {

@@ -26,7 +26,18 @@ pub(crate) enum ArgumentsCallee<'a> {
     CurrentClosure,
 }
 
-pub(crate) fn add_arguments_mapped_boxes(params: &[Param], boxed_vars: &mut HashSet<u32>) {
+/// A mapped parameter is boxed so the sloppy-mode object and the parameter
+/// share one cell. An elided object aliases nothing, so its parameters keep
+/// ordinary slots — `body` is the same proof input
+/// [`materialize_arguments_object`] receives (`None` never elides).
+pub(crate) fn add_arguments_mapped_boxes(
+    params: &[Param],
+    body: Option<&[Stmt]>,
+    boxed_vars: &mut HashSet<u32>,
+) {
+    if body.is_some_and(|body| arguments_elision(params, body).is_some()) {
+        return;
+    }
     for (_, param_id) in mapped_arguments_params(params) {
         boxed_vars.insert(param_id);
     }
@@ -87,18 +98,55 @@ pub(crate) fn materialize_arguments_object(
     let Some(synth_param) = params.iter().find(|p| p.arguments_object.is_some()) else {
         return;
     };
-    // Call lowering has already bundled every supplied argument into the
-    // synthesized slot as a marked Array. When the only observable operation
-    // is `arguments.length`, that bundle has exactly the required value and a
-    // full ECMAScript Arguments object would only add allocation, mapped-index
-    // setup, and GC pressure. Keep the existing conservative materialization
-    // path for every other use (including callers that cannot provide a body).
-    if body.is_some_and(|body| arguments_used_only_for_length(body, synth_param.id)) {
-        return;
-    }
     let Some(meta) = synth_param.arguments_object.as_ref() else {
         return;
     };
+    // Call lowering has already bundled every supplied argument into the
+    // synthesized slot as a marked Array. When the body only reads
+    // `arguments.length` and `arguments[k]`, that bundle answers both and a
+    // full ECMAScript Arguments object would only add allocation, descriptor
+    // and registry bookkeeping, and GC pressure (#8807, #10509). Keep the
+    // existing conservative materialization path for every other use
+    // (including callers that cannot provide a body).
+    if body.is_some_and(|body| arguments_elision(params, body).is_some()) {
+        // The direct-call clone's slot already carries the scalar count, and
+        // property lowering reads it straight off that slot.
+        if matches!(
+            &synth_param.ty,
+            perry_hir::types::Type::Named(name) if name == SYNTHETIC_ARGUMENTS_LENGTH_TYPE
+        ) {
+            return;
+        }
+        let Some(arguments_slot) = ctx.locals.get(&synth_param.id).cloned() else {
+            return;
+        };
+        // The bundle is private to this call and nothing below can write it
+        // (that is the proof), so its length is read once, here.
+        let raw_args = ctx.block().load(DOUBLE, &arguments_slot);
+        let raw_bits = ctx.block().bitcast_double_to_i64(&raw_args);
+        let len = ctx
+            .block()
+            .call(I32, "js_array_length", &[(I64, &raw_bits)]);
+        let len = ctx.block().uitofp(I32, &len, DOUBLE);
+        let length_slot = ctx.func.alloca_entry(DOUBLE);
+        ctx.block().store(DOUBLE, &len, &length_slot);
+        let callee = match callee {
+            ArgumentsCallee::Undefined => ElidedArgumentsCallee::Undefined,
+            ArgumentsCallee::FunctionWrapper(wrapper) => {
+                ElidedArgumentsCallee::FunctionWrapper(wrapper.to_string())
+            }
+            ArgumentsCallee::CurrentClosure => ElidedArgumentsCallee::CurrentClosure,
+        };
+        ctx.elided_arguments.insert(
+            synth_param.id,
+            ElidedArguments {
+                restricted_callee: meta.restricted_callee,
+                callee,
+                length_slot,
+            },
+        );
+        return;
+    }
     let Some(arguments_slot) = ctx.locals.get(&synth_param.id).cloned() else {
         return;
     };
@@ -155,35 +203,259 @@ pub(crate) fn materialize_arguments_object(
     ctx.block().store(DOUBLE, &boxed_args, &arguments_slot);
 }
 
+/// How far the synthesized Arguments object can be replaced by the raw
+/// argument bundle call lowering already stores in its slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ArgumentsElision {
+    /// Every use is an exact `arguments.length` read (#8807).
+    LengthOnly,
+    /// Every use is an `arguments.length` read or an `arguments[k]` value read
+    /// (#10509), no closure captures the binding, and no parameter a sloppy
+    /// mapped object would alias can change. Reads lower through
+    /// [`try_lower_elided_arguments_index_get`].
+    Reads,
+}
+
+/// The callee a cold `arguments[k]` read rebuilds the object with — the
+/// owned form of [`ArgumentsCallee`] the prologue was handed.
+#[derive(Clone, Debug)]
+pub(crate) enum ElidedArgumentsCallee {
+    Undefined,
+    FunctionWrapper(String),
+    CurrentClosure,
+}
+
+/// A function-local `arguments` binding whose slot holds the raw bundle
+/// instead of an Arguments object (either [`ArgumentsElision`]).
+#[derive(Clone, Debug)]
+pub(crate) struct ElidedArguments {
+    pub(crate) restricted_callee: bool,
+    pub(crate) callee: ElidedArgumentsCallee,
+    /// Entry-block `double` slot holding the bundle's length, stored once by
+    /// the prologue.
+    pub(crate) length_slot: String,
+}
+
 /// Prove that replacing the synthesized Arguments object with its raw argument
-/// bundle cannot be observed. The proof is deliberately fail-closed: HIR's
-/// canonical local-reference collector counts every use of the synthetic local,
-/// including specialized local-bearing expressions such as `ArrayPop(id)`.
-/// Every one of those uses must correspond to an exact `arguments.length` read
-/// found by the generic expression traversal.
-fn arguments_used_only_for_length(body: &[Stmt], arguments_id: u32) -> bool {
-    let mut refs = Vec::new();
-    let mut visited_closures = HashSet::new();
-    for stmt in body {
-        perry_hir::collect_local_refs_stmt(stmt, &mut refs, &mut visited_closures);
+/// bundle cannot be observed. The proof is deliberately fail-closed:
+///
+/// * HIR's canonical local-reference collector counts every use of the
+///   synthetic local, including specialized local-bearing expressions such as
+///   `ArrayPop(id)`, and that count must equal the `LocalGet`s the generic
+///   expression traversal meets — so no use hides in a form this proof does
+///   not model, and a traversal blind spot rejects rather than admits.
+/// * Every one of those `LocalGet`s must be the receiver of an exact
+///   `arguments.length` read or an `arguments[k]` read in value position. A
+///   read in reference position — `delete arguments[k]`, or a call whose
+///   callee is `arguments[k]` and so receives the object as `this` — rejects.
+/// * Index reads additionally need the binding uncaptured (a closure body is
+///   lowered without this function's elision state) and, for a sloppy mapped
+///   object, every aliased parameter provably still holding its incoming value.
+///
+/// Parameter defaults are scanned with the body: they evaluate in the
+/// function's scope and see the same binding.
+pub(crate) fn arguments_elision(params: &[Param], body: &[Stmt]) -> Option<ArgumentsElision> {
+    let synth_param = params.iter().find(|p| p.arguments_object.is_some())?;
+    let meta = synth_param.arguments_object.as_ref()?;
+    let uses = LocalUses::scan(body, params, synth_param.id);
+    if !uses.only_value_reads() {
+        return None;
+    }
+    if uses.index_reads == 0 {
+        return Some(ArgumentsElision::LengthOnly);
+    }
+    if uses.captured {
+        return None;
+    }
+    if !meta.mapped_parameter_ids.is_empty() {
+        let rebound = crate::collectors::rebound_locals(body);
+        for (_, param_id) in &meta.mapped_parameter_ids {
+            let param_uses = LocalUses::scan(body, params, *param_id);
+            if rebound.contains(param_id) || param_uses.refs != param_uses.local_gets {
+                return None;
+            }
+        }
+    }
+    Some(ArgumentsElision::Reads)
+}
+
+/// Syntactic uses of one local, as [`arguments_elision`] classifies them.
+#[derive(Default)]
+struct LocalUses {
+    /// Every reference the canonical collector sees, including id-bearing
+    /// forms (`LocalSet`, `Update`, `ArrayPop`, …) that are not `LocalGet`s.
+    refs: usize,
+    /// `LocalGet(id)` nodes met by the expression traversal.
+    local_gets: usize,
+    /// `id.length` reads.
+    length_reads: usize,
+    /// `id[k]` reads.
+    index_reads: usize,
+    /// `delete id[k]` / `delete id.p`, or a call whose callee is `id[k]` /
+    /// `id.p` (the object becomes `this`).
+    reference_uses: usize,
+    /// A closure captures or references the local.
+    captured: bool,
+}
+
+impl LocalUses {
+    fn scan(body: &[Stmt], params: &[Param], id: u32) -> Self {
+        let defaults: Vec<Stmt> = params
+            .iter()
+            .filter_map(|p| p.default.clone().map(Stmt::Expr))
+            .collect();
+        let mut uses = Self::default();
+        let mut refs = Vec::new();
+        let mut visited_closures = HashSet::new();
+        for stmt in body.iter().chain(&defaults) {
+            perry_hir::collect_local_refs_stmt(stmt, &mut refs, &mut visited_closures);
+        }
+        uses.refs = refs.iter().filter(|r| **r == id).count();
+        let mut note = |expr: &Expr| uses.note(expr, id);
+        crate::collectors::for_each_expr_in_stmts(body, &mut note);
+        crate::collectors::for_each_expr_in_stmts(&defaults, &mut note);
+        uses
     }
 
-    let total_uses = refs.iter().filter(|id| **id == arguments_id).count();
-    let mut length_reads = 0usize;
-    crate::collectors::for_each_expr_in_stmts(body, &mut |expr| {
-        if matches!(
-            expr,
+    fn note(&mut self, expr: &Expr, id: u32) {
+        let is_local = |e: &Expr| matches!(e, Expr::LocalGet(l) if *l == id);
+        let is_member = |e: &Expr| {
+            matches!(
+                e,
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                    if is_local(object)
+            )
+        };
+        match expr {
+            Expr::LocalGet(l) if *l == id => self.local_gets += 1,
             Expr::PropertyGet {
-                object,
-                property,
-                ..
-            } if property == "length"
-                && matches!(object.as_ref(), Expr::LocalGet(id) if *id == arguments_id)
-        ) {
-            length_reads += 1;
+                object, property, ..
+            } if property == "length" && is_local(object) => self.length_reads += 1,
+            Expr::IndexGet { object, .. } if is_local(object) => self.index_reads += 1,
+            Expr::Delete(target) if is_member(target) => self.reference_uses += 1,
+            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } if is_member(callee) => {
+                self.reference_uses += 1
+            }
+            Expr::Closure { captures, body, .. } => {
+                let mut refs = Vec::new();
+                let mut visited_closures = HashSet::new();
+                for stmt in body {
+                    perry_hir::collect_local_refs_stmt(stmt, &mut refs, &mut visited_closures);
+                }
+                self.captured |= captures.contains(&id) || refs.contains(&id);
+            }
+            _ => {}
         }
-    });
-    length_reads > 0 && total_uses == length_reads
+    }
+
+    fn only_value_reads(&self) -> bool {
+        let reads = self.length_reads + self.index_reads;
+        reads > 0
+            && self.refs == self.local_gets
+            && self.local_gets == reads
+            && self.reference_uses == 0
+    }
+}
+
+fn arguments_used_only_for_length(body: &[Stmt], arguments_id: u32) -> bool {
+    let uses = LocalUses::scan(body, &[], arguments_id);
+    uses.only_value_reads() && uses.index_reads == 0
+}
+
+/// `arguments.length` on an elided binding: the bundle length the prologue
+/// stored, instead of the property-IC miss a dynamic `.length` would take.
+pub(crate) fn lower_elided_arguments_length(ctx: &mut FnCtx<'_>, id: u32) -> Option<String> {
+    let slot = ctx.elided_arguments.get(&id)?.length_slot.clone();
+    Some(ctx.block().load(DOUBLE, &slot))
+}
+
+/// Whether `expr` is an `arguments[k]` read [`try_lower_elided_arguments_index_get`]
+/// owns — number-context tiers that would otherwise claim an untyped local's
+/// element read must defer to it.
+pub(crate) fn is_elided_arguments_index_get(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::IndexGet { object, .. }
+            if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.elided_arguments.contains_key(id))
+    )
+}
+
+/// #10509: `arguments[k]` against an elided Arguments object
+/// ([`ArgumentsElision::Reads`]). The slot holds the caller's marked Array, so
+/// an own element is one runtime read. Any other key — `"callee"`, a symbol,
+/// an inherited name, an out-of-range or fractional number — answers
+/// `TAG_HOLE` and takes a cold call that builds the object the prologue would
+/// have built and performs an ordinary `[[Get]]` on it, so the result is the
+/// same value the materialized object would have produced.
+pub(crate) fn try_lower_elided_arguments_index_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> anyhow::Result<Option<String>> {
+    let Expr::LocalGet(id) = object else {
+        return Ok(None);
+    };
+    let Some(elided) = ctx.elided_arguments.get(id).cloned() else {
+        return Ok(None);
+    };
+    crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+        let (raw_args, key) = (vals[0].clone(), vals[1].clone());
+        let own = ctx.block().call(
+            DOUBLE,
+            "js_arguments_bundle_index_get",
+            &[(DOUBLE, &raw_args), (DOUBLE, &key)],
+        );
+        let own_bits = ctx.block().bitcast_double_to_i64(&own);
+        let not_own = ctx
+            .block()
+            .icmp_eq(I64, &own_bits, crate::nanbox::TAG_HOLE_I64);
+        let slow_idx = ctx.new_block("arguments_bundle.slow");
+        let merge_idx = ctx.new_block("arguments_bundle.merge");
+        let slow_label = ctx.block_label(slow_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        let own_end = ctx.block().label.clone();
+        ctx.block().cond_br(&not_own, &slow_label, &merge_label);
+
+        ctx.current_block = slow_idx;
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let (callee, wrapper) = if elided.restricted_callee {
+            (undefined, "null".to_string())
+        } else {
+            match &elided.callee {
+                ElidedArgumentsCallee::Undefined => (undefined, "null".to_string()),
+                // The runtime materializes the singleton after rooting its
+                // operands, so no allocation sits between `key` and the call.
+                ElidedArgumentsCallee::FunctionWrapper(wrapper) => {
+                    (undefined, format!("@{wrapper}"))
+                }
+                ElidedArgumentsCallee::CurrentClosure => {
+                    let ptr = crate::expr::try_current_closure_ptr_value(ctx)
+                        .unwrap_or_else(|| "%this_closure".to_string());
+                    (nanbox_pointer_inline(ctx.block(), &ptr), "null".to_string())
+                }
+            }
+        };
+        let restricted = if elided.restricted_callee { "1" } else { "0" };
+        let slow = ctx.block().call(
+            DOUBLE,
+            "js_arguments_bundle_get_slow",
+            &[
+                (DOUBLE, &raw_args),
+                (DOUBLE, &key),
+                (DOUBLE, &callee),
+                (PTR, &wrapper),
+                (I32, restricted),
+            ],
+        );
+        let slow_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = merge_idx;
+        Ok(Some(
+            ctx.block()
+                .phi(DOUBLE, &[(&own, &own_end), (&slow, &slow_end)]),
+        ))
+    })
 }
 
 /// Whether a method may expose the scalar-count direct-call clone.
@@ -278,6 +550,162 @@ mod length_only_tests {
             Stmt::Return(Some(Expr::ArrayPop(ARGUMENTS))),
         ];
         assert!(!arguments_used_only_for_length(&body, ARGUMENTS));
+    }
+}
+
+#[cfg(test)]
+mod elision_tests {
+    use super::{arguments_elision, ArgumentsElision};
+    use perry_hir::types::Type;
+    use perry_hir::{ArgumentsObjectMeta, Expr, Param, Stmt};
+
+    const A: u32 = 3;
+    const ARGUMENTS: u32 = 17;
+
+    fn param(id: u32, name: &str) -> Param {
+        Param {
+            id,
+            name: name.to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }
+    }
+
+    /// `(a, arguments)`; `mapped` makes it the sloppy simple-list shape whose
+    /// object aliases `a`.
+    fn params(mapped: bool) -> Vec<Param> {
+        let mut synth = param(ARGUMENTS, "arguments");
+        synth.is_rest = true;
+        synth.arguments_object = Some(ArgumentsObjectMeta {
+            strict: !mapped,
+            simple_parameters: true,
+            mapped_parameter_ids: if mapped { vec![(0, A)] } else { Vec::new() },
+            restricted_callee: !mapped,
+        });
+        vec![param(A, "a"), synth]
+    }
+
+    fn args() -> Box<Expr> {
+        Box::new(Expr::LocalGet(ARGUMENTS))
+    }
+
+    fn index(i: i64) -> Expr {
+        Expr::IndexGet {
+            object: args(),
+            index: Box::new(Expr::Integer(i)),
+        }
+    }
+
+    fn length() -> Expr {
+        Expr::PropertyGet {
+            object: args(),
+            property: "length".to_string(),
+            byte_offset: 0,
+        }
+    }
+
+    fn reads() -> Vec<Stmt> {
+        vec![
+            Stmt::Expr(length()),
+            Stmt::Return(Some(Expr::IndexGet {
+                object: args(),
+                index: Box::new(Expr::Binary {
+                    op: perry_hir::BinaryOp::Sub,
+                    left: Box::new(length()),
+                    right: Box::new(index(0)),
+                }),
+            })),
+        ]
+    }
+
+    #[test]
+    fn length_and_index_reads_elide() {
+        assert_eq!(
+            arguments_elision(&params(false), &[Stmt::Return(Some(length()))]),
+            Some(ArgumentsElision::LengthOnly)
+        );
+        assert_eq!(
+            arguments_elision(&params(false), &reads()),
+            Some(ArgumentsElision::Reads)
+        );
+    }
+
+    #[test]
+    fn reference_positions_keep_the_object() {
+        // `delete arguments[0]`, `delete arguments.length`: the raw bundle has
+        // different own-property attributes.
+        for target in [index(0), length()] {
+            let mut body = reads();
+            body.push(Stmt::Expr(Expr::Delete(Box::new(target))));
+            assert_eq!(arguments_elision(&params(false), &body), None);
+        }
+        // `arguments[0]()`: the object is the callee's `this`.
+        let mut body = reads();
+        body.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(index(0)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }));
+        assert_eq!(arguments_elision(&params(false), &body), None);
+        // Identity escapes.
+        let mut body = reads();
+        body.push(Stmt::Expr(Expr::LocalGet(ARGUMENTS)));
+        assert_eq!(arguments_elision(&params(false), &body), None);
+    }
+
+    #[test]
+    fn a_parameter_default_is_part_of_the_proof() {
+        let mut params = params(false);
+        params[0].default = Some(Expr::LocalGet(ARGUMENTS));
+        assert_eq!(arguments_elision(&params, &reads()), None);
+        params[0].default = Some(index(1));
+        assert_eq!(
+            arguments_elision(&params, &reads()),
+            Some(ArgumentsElision::Reads)
+        );
+    }
+
+    #[test]
+    fn a_mapped_parameter_must_keep_its_incoming_value() {
+        let with = |extra: Stmt| {
+            let mut body = vec![extra];
+            body.extend(reads());
+            arguments_elision(&params(true), &body)
+        };
+        assert_eq!(
+            with(Stmt::Expr(Expr::LocalGet(A))),
+            Some(ArgumentsElision::Reads)
+        );
+        assert_eq!(
+            with(Stmt::Expr(Expr::LocalSet(A, Box::new(Expr::Integer(9))))),
+            None
+        );
+        // `var a = 5` re-declaring the parameter reuses its id.
+        assert_eq!(
+            with(Stmt::Let {
+                id: A,
+                name: "a".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Integer(5)),
+            }),
+            None
+        );
+        // Length reads never observe the aliasing.
+        assert_eq!(
+            arguments_elision(
+                &params(true),
+                &[
+                    Stmt::Expr(Expr::LocalSet(A, Box::new(Expr::Integer(9)))),
+                    Stmt::Return(Some(length())),
+                ]
+            ),
+            Some(ArgumentsElision::LengthOnly)
+        );
     }
 }
 

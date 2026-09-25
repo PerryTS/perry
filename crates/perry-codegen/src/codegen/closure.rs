@@ -645,7 +645,7 @@ pub(super) fn compile_closure(
         .filter(|id| module_boxed_vars.contains(id))
         .copied()
         .collect();
-    super::arguments::add_arguments_mapped_boxes(params, &mut closure_boxed_vars);
+    super::arguments::add_arguments_mapped_boxes(params, Some(body), &mut closure_boxed_vars);
 
     // Allocate slots for the closure's own params (captures don't get
     // alloca slots — they're accessed via the runtime).
@@ -1313,6 +1313,7 @@ pub(super) fn compile_closure(
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
+        elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,

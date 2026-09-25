@@ -1140,6 +1140,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
     module.declare_function("js_arguments_object_alloc", I64, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_arguments_object_map_index", VOID, &[I64, I32, I64]);
+    // #10509: `arguments[k]` against an elided Arguments object.
+    module.declare_function("js_arguments_bundle_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_arguments_bundle_get_slow",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, PTR, I32],
+    );
     module.declare_function("js_array_like_to_array", I64, &[DOUBLE]);
     module.declare_function("js_object_get_class_id", I32, &[I64]);
     module.declare_function("js_object_alloc_with_parent", I64, &[I32, I32, I32]);

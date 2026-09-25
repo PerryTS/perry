@@ -132,6 +132,21 @@ pub(crate) fn reassigned_locals(stmts: &[Stmt]) -> HashSet<u32> {
     scan.writes
 }
 
+/// Every local whose slot `stmts` can make hold anything other than the value
+/// it entered with, at any depth: the [`reassigned_locals`] writes plus every
+/// other binding form — `Stmt::Let` (a `var` re-declaring a parameter reuses
+/// the parameter's id), `catch` and closure-parameter bindings, and box
+/// pre-allocation/release.
+pub(crate) fn rebound_locals(stmts: &[Stmt]) -> HashSet<u32> {
+    let mut scan = ModuleScan::default();
+    walk_stmts(stmts, 0, &mut scan);
+    let mut ids = scan.writes;
+    ids.extend(scan.let_counts.into_keys());
+    ids.extend(scan.other_bindings);
+    ids.extend(scan.boxed_prealloc);
+    ids
+}
+
 /// Every local reassigned in any executable body in `hir`.
 ///
 /// Closure codegen seeds receiver types from module-wide declarations, so it

@@ -104,7 +104,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             index: symbol,
         } = object.as_ref()
         {
-            if super::compare::is_proven_symbol_expr(ctx, symbol) {
+            // #10509: an elided `arguments[sym]` must see the object's own
+            // symbol surface, not the raw bundle Array's.
+            if super::compare::is_proven_symbol_expr(ctx, symbol)
+                && !crate::codegen::arguments::is_elided_arguments_index_get(ctx, object)
+            {
                 return lower_symbol_then_named_property_ic(
                     ctx,
                     base,
@@ -130,6 +134,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             )
         {
             return lower_expr(ctx, object);
+        }
+        // #10509: an elided `arguments` binding's length was read once.
+        if let (true, Expr::LocalGet(id)) = (property == "length", object.as_ref()) {
+            if let Some(len) = crate::codegen::arguments::lower_elided_arguments_length(ctx, *id) {
+                return Ok(len);
+            }
         }
         if property == "buffer" {
             if let Expr::LocalGet(id) = object.as_ref() {

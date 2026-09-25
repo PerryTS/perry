@@ -381,7 +381,11 @@ pub(super) fn compile_method(
     let _ = lf.create_block("entry");
 
     let mut method_boxed_vars = module_boxed_vars.clone();
-    super::arguments::add_arguments_mapped_boxes(&method.params, &mut method_boxed_vars);
+    super::arguments::add_arguments_mapped_boxes(
+        &method.params,
+        Some(method_body),
+        &mut method_boxed_vars,
+    );
 
     // Allocate slots for `this` and each parameter; pre-populate with
     // the incoming values.
@@ -790,6 +794,7 @@ pub(super) fn compile_method(
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: index_param_ids,
+        elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
