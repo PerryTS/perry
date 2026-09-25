@@ -223,6 +223,10 @@ pub(crate) fn test_alloc_synthetic_class_id() -> u32 {
     alloc_synthetic_class_id()
 }
 
+#[cfg(test)]
+#[path = "prototype_objects/parent_class_object_tests.rs"]
+mod parent_class_object_tests;
+
 /// The `[[Prototype]]` object recorded for a SYNTHETIC class id — one of the
 /// ids `Object.create(proto)` (#809) and `F.prototype = obj` (#711) allocate
 /// from [`NEXT_SYNTHETIC_CLASS_ID`]. That link is the authoritative prototype
@@ -238,6 +242,34 @@ pub(crate) fn synthetic_class_prototype_object(class_id: u32) -> *mut ObjectHead
         return std::ptr::null_mut();
     }
     class_prototype_object(class_id)
+}
+
+/// `proto_obj` (the [`class_prototype_object`] entry for `class_id`) when it
+/// is the parent CLASS OBJECT of a class-expression subclass (#1788/#6552)
+/// rather than a prototype. A synthetic id's entry is a real prototype even
+/// when that prototype is itself a class object (`Object.create(C)`).
+fn declared_parent_class_object(
+    class_id: u32,
+    proto_obj: *mut ObjectHeader,
+) -> Option<*mut ObjectHeader> {
+    if proto_obj.is_null()
+        || (SYNTHETIC_CLASS_ID_BASE..SYNTHETIC_CLASS_ID_END).contains(&class_id)
+        || !is_class_object_ptr(proto_obj as *const u8)
+    {
+        return None;
+    }
+    Some(proto_obj)
+}
+
+/// [`class_prototype_object`] for a walk that serves an INSTANCE. Null where
+/// that entry is a declared class's parent class object: its statics are not
+/// on the instance's prototype chain (#10890).
+pub(crate) fn instance_class_prototype_object(class_id: u32) -> *mut ObjectHeader {
+    let proto_obj = class_prototype_object(class_id);
+    if declared_parent_class_object(class_id, proto_obj).is_some() {
+        return std::ptr::null_mut();
+    }
+    proto_obj
 }
 
 /// Perform ordinary `.prototype` assignment, then synchronize the synthetic
@@ -767,7 +799,26 @@ unsafe fn resolve_proto_chain_field_inner(
                 }
             }
         }
-        let proto_obj = class_prototype_object(cid);
+        let mut proto_obj = class_prototype_object(cid);
+        if let Some(receiver) = receiver {
+            if let Some(parent_class) = declared_parent_class_object(cid, proto_obj) {
+                // #10890: for a DECLARED class id this entry is the parent
+                // CLASS OBJECT (#1788), which is on the constructor's static
+                // chain and never on an instance's. Reading it for an instance
+                // returned the parent's statics, and `name` returned the
+                // class binding's own name (Effect's `out` / `Base`) instead
+                // of the `name` written to that class's `prototype`. An
+                // instance read goes to that evaluation's prototype object.
+                if let Some(evaluated) =
+                    super::super::field_get_set::class_object_materialized_prototype(parent_class)
+                {
+                    if let Some(value) = evaluated_parent_instance_field(evaluated, key, receiver) {
+                        return Some(value);
+                    }
+                }
+                proto_obj = std::ptr::null_mut();
+            }
+        }
         if !proto_obj.is_null() {
             if let Some(receiver) = receiver {
                 if let Some(value) = inherited_proto_accessor_value(proto_obj, key, receiver) {
@@ -845,6 +896,29 @@ pub(crate) unsafe fn proto_chain_symbol_slot(
     class_id: u32,
     sym_f64: f64,
 ) -> Option<crate::symbol::OwnSymbolSlot> {
+    proto_chain_symbol_slot_inner(class_id, sym_f64, false)
+}
+
+/// [`proto_chain_symbol_slot`] for a read on `obj` itself. A class object
+/// inherits its parent class object's statics. Any other object (an instance
+/// or a prototype) reads that parent's evaluated prototype instead (#10890).
+pub(crate) unsafe fn object_proto_chain_symbol_slot(
+    obj: *const ObjectHeader,
+    sym_f64: f64,
+) -> Option<crate::symbol::OwnSymbolSlot> {
+    let class_id = crate::object::js_object_get_class_id(obj);
+    if class_id == 0 {
+        return None;
+    }
+    let instance = !is_class_object_ptr(obj as *const u8);
+    proto_chain_symbol_slot_inner(class_id, sym_f64, instance)
+}
+
+unsafe fn proto_chain_symbol_slot_inner(
+    class_id: u32,
+    sym_f64: f64,
+    instance: bool,
+) -> Option<crate::symbol::OwnSymbolSlot> {
     let mut cid = class_id;
     let mut depth = 0usize;
     let mut visited: [u32; 32] = [0; 32];
@@ -853,8 +927,22 @@ pub(crate) unsafe fn proto_chain_symbol_slot(
             break;
         }
         visited[depth] = cid;
-        let proto_obj = class_prototype_object(cid);
+        let mut proto_obj = class_prototype_object(cid);
         let mut next_cid: u32 = 0;
+        if instance {
+            if let Some(parent_class) = declared_parent_class_object(cid, proto_obj) {
+                if let Some(evaluated) =
+                    super::super::field_get_set::class_object_materialized_prototype(parent_class)
+                {
+                    let evaluated = f64::from_bits(JSValue::pointer(evaluated as *const u8).bits());
+                    if let Some(slot) = crate::symbol::own_symbol_slot(evaluated, sym_f64) {
+                        return Some(slot);
+                    }
+                }
+                // The `extends` axis below reaches the parent's template.
+                proto_obj = std::ptr::null_mut();
+            }
+        }
         if !proto_obj.is_null() {
             let proto_f64 = f64::from_bits(JSValue::pointer(proto_obj as *const u8).bits());
             // OWN lookup only — this fn IS the chain walk, so recursing into

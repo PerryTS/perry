@@ -1124,7 +1124,8 @@ pub(super) unsafe fn dispatch_handle(
                             let proto_obj = if deleted {
                                 std::ptr::null_mut()
                             } else {
-                                class_prototype_object(cur_cid)
+                                // #10890: never a parent class object's statics.
+                                instance_class_prototype_object(cur_cid)
                             };
                             if !proto_obj.is_null() {
                                 let method_key = crate::string::js_string_from_bytes(

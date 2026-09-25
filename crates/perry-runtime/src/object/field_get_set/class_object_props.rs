@@ -199,6 +199,29 @@ pub(crate) unsafe fn class_object_prototype_value(obj: *const ObjectHeader) -> J
     JSValue::from_bits(class_evaluation_prototype_value(obj).to_bits())
 }
 
+/// #10890: the prototype object [`class_evaluation_prototype_value`] already
+/// materialized for this evaluation of a heap class object, or `None` when
+/// nothing has read `C.prototype` yet.
+///
+/// Never allocates, so an instance-read walk that holds raw pointers can call
+/// it. An unmaterialized prototype cannot hold a user write (writing one
+/// needs the `C.prototype` read that materializes it). Its declared methods
+/// are served by the template walk that the caller continues with.
+pub(crate) fn class_object_materialized_prototype(
+    obj: *const ObjectHeader,
+) -> Option<*mut ObjectHeader> {
+    let value = super::super::class_registry::class_object_own_field_bytes(
+        obj,
+        CLASS_EVALUATION_PROTOTYPE_KEY,
+    )?;
+    let value = JSValue::from_bits(value.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let proto = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    (!proto.is_null()).then_some(proto)
+}
+
 /// Resolve `.name` for an `OBJECT_TYPE_CLASS` heap object. An explicit
 /// `static name` member (an own field on the class object) wins; a deleted
 /// key still reads `undefined` (returns `None`).

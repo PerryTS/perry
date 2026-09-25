@@ -499,11 +499,8 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
             set.insert(owner);
         }
         let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
-        let cid = crate::object::js_object_get_class_id(proto_obj);
-        if cid != 0 {
-            if let Some(slot) = crate::object::proto_chain_symbol_slot(cid, sym_f64) {
-                return Some(slot);
-            }
+        if let Some(slot) = crate::object::object_proto_chain_symbol_slot(proto_obj, sym_f64) {
+            return Some(slot);
         }
         owner = proto_ptr;
     }
@@ -1352,10 +1349,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         if !obj_ptr.is_null() {
             let cid = crate::object::js_object_get_class_id(obj_ptr);
             if cid != 0 {
-                if let Some(v) =
-                    crate::object::resolve_proto_chain_symbol(cid, sym_f64, receiver_f64)
+                if let Some(slot) = crate::object::object_proto_chain_symbol_slot(obj_ptr, sym_f64)
                 {
-                    return v;
+                    return slot.read(receiver_f64);
                 }
                 // A symbol-keyed property added to a DECLARED class's
                 // `.prototype` after the declaration — `C.prototype[S] = f`,
@@ -1474,7 +1470,7 @@ unsafe fn inherited_symbol_slot(obj: f64, sym: f64) -> Option<OwnSymbolSlot> {
     if class_id == 0 {
         return None;
     }
-    if let Some(slot) = crate::object::proto_chain_symbol_slot(class_id, sym) {
+    if let Some(slot) = crate::object::object_proto_chain_symbol_slot(ptr as *const _, sym) {
         return Some(slot);
     }
     own_symbol_slot(declared_prototype_symbol_holder(obj, sym, class_id)?, sym)

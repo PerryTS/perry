@@ -108,8 +108,8 @@ pub use state::{
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
     class_prototype_object, ensure_function_prototype_object, function_class_id,
-    function_value_for_class_id, proto_chain_symbol_slot, resolve_proto_chain_field,
-    resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
+    function_value_for_class_id, instance_class_prototype_object, object_proto_chain_symbol_slot,
+    resolve_proto_chain_field, resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
     synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
 pub use prototype_objects::{

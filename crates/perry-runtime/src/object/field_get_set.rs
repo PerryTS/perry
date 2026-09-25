@@ -270,7 +270,8 @@ pub(crate) use accessors::{
     primitive_tagged_prototype_property, string_index_value,
 };
 pub(crate) use class_object_props::{
-    class_evaluation_prototype_class_id, class_object_prototype_value,
+    class_evaluation_prototype_class_id, class_object_materialized_prototype,
+    class_object_prototype_value,
 };
 pub(crate) use crypto_key::{
     crypto_key_property_value, CLASS_ID_BOXED_BIGINT, CLASS_ID_BOXED_BOOLEAN,
