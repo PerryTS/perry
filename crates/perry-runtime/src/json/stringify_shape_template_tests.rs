@@ -8,15 +8,15 @@ fn shape_template_declines_element_descriptors_before_output() {
         let value = crate::json::test_json_parse_direct(source);
         let obj = value.as_pointer::<crate::ObjectHeader>() as *mut crate::ObjectHeader;
         let template = build_shape_prefix_template(value.bits()).unwrap();
-        // The descriptor bit travels with this receiver, independently of
-        // the shared keys array. Marking it must invalidate raw-slot emission
-        // even when a template was already built for the same shape.
+        // Charter step 3: the attribute lives with the keys, so the receiver
+        // moves to a different key list; raw-slot emission from the template
+        // built for the old one must decline.
         crate::object::set_property_attrs(
             obj as usize,
             "id".into(),
             crate::object::PropertyAttrs::new(true, false, true),
         );
-        assert_eq!(
+        assert_ne!(
             crate::object::object_keys(obj).arr(),
             template.keys_arr.get()
         );

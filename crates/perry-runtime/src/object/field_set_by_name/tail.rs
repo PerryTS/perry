@@ -866,6 +866,9 @@ pub(crate) fn set_field_by_name_object_tail(
                     let grown =
                         crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
                     let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
+                    // Its attributes, if it carries any, grow with it.
+                    let grown =
+                        crate::object::key_attrs::owned_note_append(grown, key_count as u32, 0);
                     crate::object::ObjectKeys::owned(grown)
                 }
             };
@@ -1053,6 +1056,8 @@ pub(crate) fn set_field_by_name_object_tail(
                 let owned = scope.root_raw_mut_ptr(keys);
                 let grown = crate::array::js_array_push(keys, JSValue::string_ptr(key as *mut _));
                 let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
+                // Its attributes, if it carries any, grow with it.
+                let grown = crate::object::key_attrs::owned_note_append(grown, key_count as u32, 0);
                 crate::object::ObjectKeys::owned(grown)
             }
         };

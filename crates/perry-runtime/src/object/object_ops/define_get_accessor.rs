@@ -156,13 +156,20 @@ unsafe fn try_fast_install(
     // ---- Committed: mirror the generic ordinary-object accessor arm. ----
     super::super::mark_object_dynamic_shape_unknown(obj);
     // Make the key discoverable (hasOwn / keys / getOwnPropertyNames) — the
-    // accessor itself lives in the side table, not in a value slot. The entry
-    // point roots both arguments before its first possible allocation.
+    // accessor itself lives in the side table, not in a value slot. The key
+    // is claimed WITH the attributes installed below (charter step 3), so an
+    // `exports` object gaining one getter per re-export appends each one in
+    // place instead of copying its key list per getter. The entry point roots
+    // both arguments before its first possible allocation.
+    let has_getter =
+        !crate::JSValue::from_bits(getter_handle.get_nanbox_f64().to_bits()).is_undefined();
+    let entry = crate::object::key_attrs::AttrsEdit::Data(&[], FAST_ARM_ATTRS.bits)
+        .apply(crate::object::key_attrs::AttrsEdit::Accessor(&[], has_getter, false).apply(0));
     if let Some(key_str) = refreshed_key_str {
-        ensure_key_in_keys_array(obj, key_str);
+        ensure_key_in_keys_array_with_entry(obj, key_str, entry);
     } else {
         key_str_handle.with_const_ptr(|key_str: *const crate::StringHeader| {
-            ensure_key_in_keys_array(obj, key_str)
+            ensure_key_in_keys_array_with_entry(obj, key_str, entry)
         });
     }
     obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
@@ -204,10 +211,15 @@ unsafe fn try_fast_install(
             get: get_bits,
             set: 0,
         },
-        PropertyAttrs::new(true, true, false),
+        FAST_ARM_ATTRS,
     );
     Some(f64::from_bits(obj_handle.get_heap_word_u64()))
 }
+
+/// The attributes of the fast arm's brand-new `{ get, enumerable: true }`
+/// accessor: `enumerable` explicit, omitted `configurable` false, and the
+/// internal writable bit true (see the install site).
+const FAST_ARM_ATTRS: PropertyAttrs = PropertyAttrs::new(true, true, false);
 
 /// `Object.defineProperty(obj, key, { get: getter, enumerable: true })`,
 /// without the descriptor allocation on the admissible path. Returns the

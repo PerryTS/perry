@@ -674,9 +674,10 @@ pub(crate) fn install_global_webcrypto(singleton: *mut ObjectHeader) {
 pub(crate) fn install_webcrypto_constructor_proto(proto_obj: *mut ObjectHeader, ctor_value: f64) {
     let constructor = "constructor";
     let key = crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    js_object_set_field_by_name(proto_obj, key, ctor_value);
-    super::set_builtin_property_attrs(
-        proto_obj as usize,
+    super::define_builtin_data_property(
+        proto_obj,
+        key,
+        ctor_value,
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );

@@ -479,9 +479,10 @@ fn install_temporal_proto_method(proto: *mut ObjectHeader, kind: u8, name: &str,
     super::super::native_module::set_builtin_closure_length(cl, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(cl);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(proto, key, crate::value::js_nanbox_pointer(c as i64));
-    super::super::set_builtin_property_attrs(
-        proto as usize,
+    super::super::define_builtin_data_property(
+        proto,
+        key,
+        crate::value::js_nanbox_pointer(c as i64),
         name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -523,18 +524,20 @@ fn install_temporal_prototype(
     // ctor.prototype = proto  ({ writable:false, enumerable:false, configurable:false })
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
-    super::super::set_builtin_property_attrs(
-        ctor as usize,
+    super::super::define_builtin_data_property(
+        ctor as *mut ObjectHeader,
+        proto_key,
+        proto_value,
         "prototype".to_string(),
         super::super::PropertyAttrs::new(false, false, false),
     );
     // proto.constructor = ctor  ({ writable:true, enumerable:false, configurable:true })
     let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
     let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    js_object_set_field_by_name(proto, ctor_key, ctor_value);
-    super::super::set_builtin_property_attrs(
-        proto as usize,
+    super::super::define_builtin_data_property(
+        proto,
+        ctor_key,
+        ctor_value,
         "constructor".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -556,9 +559,10 @@ fn install_temporal_constructor(
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(ns_obj, key, value);
-    super::super::set_builtin_property_attrs(
-        ns_obj as usize,
+    super::super::define_builtin_data_property(
+        ns_obj,
+        key,
+        value,
         name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -1465,9 +1469,10 @@ pub(crate) fn install_temporal_namespace(ns_obj: *mut ObjectHeader) {
     // Temporal.Now namespace (#4689)
     let now_value = build_temporal_now_namespace();
     let now_key = crate::string::js_string_from_bytes(b"Now".as_ptr(), 3);
-    js_object_set_field_by_name(ns_obj, now_key, now_value);
-    super::super::set_builtin_property_attrs(
-        ns_obj as usize,
+    super::super::define_builtin_data_property(
+        ns_obj,
+        now_key,
+        now_value,
         "Now".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );

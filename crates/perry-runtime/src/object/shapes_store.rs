@@ -64,7 +64,9 @@ pub(crate) struct ShapeRecord {
     pub(super) live_inline_slot_count: u32,
     pub(super) hole_count: u32,
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-9: the `ShapeObjectKind`
-    /// discriminant. Bits 10-31: reserved.
+    /// discriminant. Bits 16-23: the attribute SUMMARY byte
+    /// (`key_attrs::SUMMARY_*`), an identity fact. Bits 10-15 and 24-31:
+    /// reserved.
     ///
     /// This word replaces the old `flags: u8` plus `_pad: [u8; 3]`. It is the
     /// same four bytes in the same place, so the record stays 32 bytes and
@@ -75,6 +77,15 @@ pub(crate) struct ShapeRecord {
 
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b11 << RECORD_KIND_SHIFT;
+/// Charter step 3: the summary of the attributes the shape's keys carry —
+/// what the chain store check and every per-key reader ask FIRST, so a shape
+/// whose keys are all default answers without touching its keys. Derived
+/// from `(keys, logical_key_count)` for a shape that publishes keys, which is
+/// why folding it into identity costs no precision; a dictionary receiver's
+/// shape publishes no keys and carries its private list's conservative
+/// summary here instead.
+const RECORD_SUMMARY_SHIFT: u32 = 16;
+const RECORD_SUMMARY_MASK: u32 = 0xFF << RECORD_SUMMARY_SHIFT;
 
 const _: () = assert!(std::mem::size_of::<ShapeRecord>() == 40);
 const _: () = assert!(std::mem::align_of::<ShapeRecord>() == 8);
@@ -120,6 +131,20 @@ impl ShapeRecord {
     #[inline]
     pub(super) fn cache_carrier(&self) -> bool {
         self.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
+    }
+
+    /// The attribute summary byte (see [`RECORD_SUMMARY_SHIFT`]).
+    #[inline]
+    pub(super) fn summary(&self) -> u8 {
+        ((self.flags_and_kind & RECORD_SUMMARY_MASK) >> RECORD_SUMMARY_SHIFT) as u8
+    }
+
+    /// The same record carrying attribute summary `summary`.
+    #[inline]
+    pub(super) fn with_summary(mut self, summary: u8) -> ShapeRecord {
+        self.flags_and_kind = (self.flags_and_kind & !RECORD_SUMMARY_MASK)
+            | (u32::from(summary) << RECORD_SUMMARY_SHIFT);
+        self
     }
 
     #[inline]
@@ -178,8 +203,10 @@ impl ShapeRecord {
         object_kind: ShapeObjectKind,
         hole_count: u32,
         proto_id: u64,
+        summary: u8,
     ) -> bool {
         self.proto_id == proto_id
+            && self.summary() == summary
             && self.facts_match(
                 keys,
                 logical_key_count,
@@ -226,6 +253,7 @@ impl ShapeRecord {
             self.object_kind(),
             self.hole_count,
             self.proto_id,
+            self.summary(),
         )
     }
 
@@ -245,6 +273,7 @@ impl ShapeRecord {
             proto_id: self.proto_id,
             object_kind: self.object_kind(),
             hole_count: self.hole_count,
+            summary: self.summary(),
         }
     }
 }
@@ -274,6 +303,7 @@ pub(super) fn facts_key(
         object_kind,
         hole_count,
         0,
+        0,
     )
 }
 
@@ -287,6 +317,7 @@ pub(super) fn facts_key_proto(
     object_kind: ShapeObjectKind,
     hole_count: u32,
     proto_id: u64,
+    summary: u8,
 ) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -302,6 +333,11 @@ pub(super) fn facts_key_proto(
     // silent hash-quality loss, and the two kinds differ in every consumer.
     h = fold(h, object_kind.code());
     h = fold(h, proto_id);
+    // Folded only when nonzero, so every attribute-free shape keeps the key
+    // it had before the summary existed.
+    if summary != 0 {
+        h = fold(h, 0x5_0000 | u64::from(summary));
+    }
     // Final avalanche: FNV keeps most of its entropy in the high bits and
     // hashbrown's probe sequence starts from the LOW bits.
     h ^ (h >> 32)

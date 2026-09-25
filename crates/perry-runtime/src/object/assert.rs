@@ -1270,9 +1270,10 @@ pub extern "C" fn js_assert_assert_ctor(options: f64) -> f64 {
                 b"constructor".as_ptr(),
                 "constructor".len() as u32,
             );
-            js_object_set_field_by_name(obj, key, ctor);
-            super::set_builtin_property_attrs(
-                obj as usize,
+            super::define_builtin_data_property(
+                obj,
+                key,
+                ctor,
                 "constructor".to_string(),
                 super::PropertyAttrs::new(true, false, true),
             );

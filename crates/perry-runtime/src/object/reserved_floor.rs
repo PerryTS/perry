@@ -143,7 +143,14 @@ unsafe fn stamp_reserved_floor_shape(
     };
     crate::array::clear_array_subclass_named_prefix_token(obj);
     let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_holes(
-        keys, floor, live, generation, kind, floor, proto_id,
+        keys,
+        floor,
+        live,
+        generation,
+        kind,
+        floor,
+        proto_id,
+        shapes::receiver_extra_summary(obj),
     ));
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     shapes::debug_assert_object_shape_parity_for_keys(

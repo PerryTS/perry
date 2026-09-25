@@ -490,6 +490,16 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
     if current.keys != keys as u64 || current.object_kind() != super::ShapeObjectKind::Ordinary {
         return None;
     }
+    // Only a PRIVATE list's epoch may be updated in place. A receiver that
+    // entered stable-tombstone mode and was later moved onto a shared,
+    // canonical list (an attribute install rebuilds its keys canonically)
+    // still carries the object flag, but the record it names is a shared
+    // layout: a tip append on that backing keeps the address and must mint,
+    // or every carrier of the record would see this receiver's count — and
+    // none would see the appended key's attributes in the summary.
+    if keys_array_is_shape_shared(keys) {
+        return None;
+    }
     if current.logical_key_count == logical_key_count
         && current.live_inline_slot_count == live_inline_slot_count
         && current.hole_count == hole_count
@@ -509,10 +519,13 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         let mut inner = table.inner.borrow_mut();
         inner.facts_remove(current.facts_key_with_keys(keys as u64), id);
     }
+    // The summary is derived from the keys like every other mint's.
+    let summary = unsafe { crate::object::key_attrs::keys_summary(keys, logical_key_count) };
     unsafe {
         (*record).logical_key_count = logical_key_count;
         (*record).live_inline_slot_count = live_inline_slot_count;
         (*record).hole_count = hole_count;
+        *record = (*record).with_summary(summary);
         (*record).set(RECORD_FLAG_FACTS_INDEXED, false);
     }
     super::debug_assert_object_shape_parity(obj);
@@ -706,6 +719,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         current.object_kind,
         hole_count,
         current.proto_id,
+        super::receiver_extra_summary(obj),
     ));
     // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
     // the one that minted a fresh (old_carrier=false) descriptor for an
@@ -1115,6 +1129,9 @@ pub(super) fn install_external_shape_id(
     if !super::is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
         return false;
     }
+    // SAFETY: a live keys array or null; derived exactly as every mint does.
+    let summary =
+        unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) };
     let keys = keys as usize as u64;
     let mut record = ShapeRecord::new(
         keys,
@@ -1124,7 +1141,8 @@ pub(super) fn install_external_shape_id(
         super::ShapeObjectKind::Ordinary,
         0,
     )
-    .with_proto_id(proto_id);
+    .with_proto_id(proto_id)
+    .with_summary(summary);
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -1138,6 +1156,7 @@ pub(super) fn install_external_shape_id(
             super::ShapeObjectKind::Ordinary,
             0,
             proto_id,
+            summary,
         );
         if matches {
             // SAFETY: same record and agent discipline as above.

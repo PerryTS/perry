@@ -56,7 +56,13 @@ use proxy_reflect_write_ic::StableTombstoneSlotCheck;
 // unconditional layout note retires the proof even for pointer-free tagged
 // values such as SSO strings and booleans. After that miss, the PIC is eligible
 // again. This keeps proof retirement out of every ordinary-object hit.
-const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1987;
+//
+// Charter step 3 (#10871): FROZEN/SEALED/NO_EXTEND (0x7) and HAS_DESCRIPTORS
+// (0x800) are NOT here. The prime that publishes this cache's tokens checks,
+// per KEY, that the receiver's keys record the key as a plain writable data
+// property (`key_attrs::entry_is_plain_writable_data`), and every attribute or
+// integrity change moves the ShapeId, so the token compare proves it.
+const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1180;
 
 /// #8098: `GcHeader::_reserved` bit 9 — the runtime birth-marked this
 /// class-less receiver an ORDINARY plain object (`JSON.parse` output), so it is
@@ -457,7 +463,7 @@ fn guarded_declared_class_property_candidate(ctx: &FnCtx<'_>, target: &Expr) -> 
 /// Registers arrive in k → v → t evaluation order (see the call site); from
 /// the target register onward the path is call-free until the store or the
 /// outlined slow call. Guards are byte-for-byte the static write PIC's
-/// (GcHeader -8/-7/-6 with BLOCKING 0x1987 incl. typed-intact and the packed
+/// (GcHeader -8/-7/-6 with BLOCKING 0x1180 incl. typed-intact and the packed
 /// numeric-proof authority, ObjectHeader
 /// regular/class/token via the #6804 discriminated shape-token select).
 /// The raw store fires only for non-reference VALUE tags (not pointer/

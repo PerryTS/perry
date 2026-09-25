@@ -89,8 +89,11 @@ pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]
 pub(crate) use class_registry::construct_two_rooted;
 pub(crate) use class_registry::{construct_rooted_arguments, scan_current_new_target_root_mut};
+#[cfg(feature = "attr-census")]
+pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+pub(crate) mod key_attrs;
 pub(crate) use census::object_tables_census;
 #[cfg(test)]
 mod bound_method_receiver_tests;
@@ -334,16 +337,16 @@ pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
     class_instance_set_may_intercept, clear_accessor_descriptor, clear_property_attrs,
-    constructor_accessor_ever_installed, descriptors_in_use, disable_class_field_inline_guard,
-    get_accessor_descriptor, get_property_attrs, install_fresh_accessor_property,
-    json_object_getter_value, mark_all_keys, object_has_descriptors,
-    object_proto_may_intercept_key, own_descriptors_skip_key, owner_has_property_descriptors,
-    owner_may_have_descriptor_entries, plain_custom_prototype_may_intercept,
-    plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
-    prune_dead_descriptor_owner_entries_young, reflect_getter_closure_bits,
-    set_accessor_descriptor, set_builtin_accessor_descriptor, set_builtin_property_attrs,
-    set_property_attrs, transfer_descriptor_owner, AccessorDescriptor, DescriptorTables,
-    PropertyAttrs,
+    constructor_accessor_ever_installed, define_builtin_data_property, descriptors_in_use,
+    disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
+    install_fresh_accessor_property, json_object_getter_value, mark_all_keys,
+    object_has_descriptors, object_proto_may_intercept_key, own_descriptors_skip_key,
+    owner_has_property_descriptors, owner_may_have_descriptor_entries,
+    plain_custom_prototype_may_intercept, plain_data_write_may_intercept,
+    prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
+    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
+    set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
+    DescriptorTables, PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -1749,7 +1752,9 @@ const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 8);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 pub(crate) mod cell_meta;
-pub(crate) use cell_meta::cell_meta_slot;
+pub(crate) use cell_meta::{
+    cell_expando_ensure, cell_expando_get, cell_meta_slot, cell_meta_slot_for_header,
+};
 // `cell_has_meta_edge` is `#[cfg(test)]` in `cell_meta`, so its re-export
 // must be too or the import is unresolved in a non-test build.
 #[cfg(test)]
@@ -1936,63 +1941,3 @@ mod transition_ic_tests;
 mod wide_field_read_tests;
 #[cfg(test)]
 mod wide_object_membership_tests;
-
-/// The named-property bag for a cell that has no inline slot layout of its own,
-/// creating it on first write.
-///
-/// #6759 phase 1. An `ErrorHeader` (and the other exotic cells) cannot hold
-/// named properties inline, so they lived in tables keyed by the owner's
-/// ADDRESS — `ERROR_USER_PROPS` and friends — which cost four GC hooks
-/// (rekey-on-evacuation, finalize, dead-sweep, root scanner) and carried a
-/// standing hazard: a recycled address inherits the previous tenant's
-/// properties.
-///
-/// The bag is an ordinary object hanging off `ObjectMeta.expando`, so it is an
-/// ordinary child edge — it moves with its owner, dies with its owner, and
-/// keeps ECMA-262 insertion order for free because that is what an object's
-/// `keys_array` already does.
-pub(crate) unsafe fn cell_expando_ensure(user_ptr: usize) -> Option<*mut ObjectHeader> {
-    let meta = object_meta_ensure_for_cell(user_ptr)?;
-    if (*meta).expando != 0 {
-        return Some(
-            crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
-                as *mut ObjectHeader,
-        );
-    }
-    // `js_object_alloc` allocates and can move the owner, so re-resolve the
-    // meta record from the rooted address afterwards.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let owner = scope.root_raw_mut_ptr(user_ptr as *mut u8);
-    let bag = js_object_alloc(0, 0);
-    let user_ptr = owner.get_raw_mut_ptr::<u8>() as usize;
-    let meta = object_meta_ensure_for_cell(user_ptr)?;
-    if (*meta).expando != 0 {
-        return Some(
-            crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
-                as *mut ObjectHeader,
-        );
-    }
-    let boxed = crate::value::js_nanbox_pointer(bag as i64).to_bits();
-    // GC_STORE_AUDIT(BARRIERED): metadata-record slot store + object barrier.
-    (*meta).expando = boxed;
-    crate::gc::runtime_write_barrier_slot(
-        meta as usize,
-        &(*meta).expando as *const _ as usize,
-        boxed,
-    );
-    Some(bag)
-}
-
-/// The existing bag, or `None` when the owner never took one. Never allocates,
-/// so it is safe on read paths.
-pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHeader> {
-    let slot = cell_meta_slot(user_ptr)?;
-    let meta = *slot;
-    if meta.is_null() || (*meta).expando == 0 {
-        return None;
-    }
-    Some(
-        crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
-            as *mut ObjectHeader,
-    )
-}

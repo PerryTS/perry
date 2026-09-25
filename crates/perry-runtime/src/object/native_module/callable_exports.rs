@@ -726,9 +726,10 @@ fn attach_assert_prototype(constructor_value: f64) {
     let constructor = "constructor";
     let constructor_key =
         crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    super::set_builtin_property_attrs(
-        proto as usize,
+    super::define_builtin_data_property(
+        proto,
+        constructor_key,
+        constructor_value,
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
@@ -736,9 +737,10 @@ fn attach_assert_prototype(constructor_value: f64) {
     for method in ASSERT_PROTOTYPE_METHODS {
         let method_value = bound_native_callable_export_value("assert", method);
         let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-        js_object_set_field_by_name(proto, key, method_value);
-        super::set_builtin_property_attrs(
-            proto as usize,
+        super::define_builtin_data_property(
+            proto,
+            key,
+            method_value,
             (*method).to_string(),
             super::PropertyAttrs::new(true, false, true),
         );
@@ -792,9 +794,10 @@ fn attach_sqlite_database_sync_prototype(constructor_value: f64) {
     let constructor = "constructor";
     let constructor_key =
         crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    super::set_builtin_property_attrs(
-        proto as usize,
+    super::define_builtin_data_property(
+        proto,
+        constructor_key,
+        constructor_value,
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
@@ -813,9 +816,10 @@ fn attach_sqlite_database_sync_prototype(constructor_value: f64) {
         set_builtin_closure_length(method_closure as usize, 0);
         let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
         let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
-        js_object_set_field_by_name(proto, key, method_value);
-        super::set_builtin_property_attrs(
-            proto as usize,
+        super::define_builtin_data_property(
+            proto,
+            key,
+            method_value,
             (*method).to_string(),
             super::PropertyAttrs::new(true, false, true),
         );
@@ -859,9 +863,10 @@ fn attach_sqlite_session_prototype(constructor_value: f64) {
         set_builtin_closure_length(method_closure as usize, 0);
         let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
         let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
-        js_object_set_field_by_name(proto, key, method_value);
-        super::set_builtin_property_attrs(
-            proto as usize,
+        super::define_builtin_data_property(
+            proto,
+            key,
+            method_value,
             (*method).to_string(),
             super::PropertyAttrs::new(true, true, true),
         );
@@ -896,9 +901,10 @@ fn attach_sqlite_session_prototype(constructor_value: f64) {
     let constructor = "constructor";
     let constructor_key =
         crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    super::set_builtin_property_attrs(
-        proto as usize,
+    super::define_builtin_data_property(
+        proto,
+        constructor_key,
+        constructor_value,
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
@@ -1079,9 +1085,10 @@ fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
     let constructor = "constructor";
     let constructor_key =
         crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    super::set_builtin_property_attrs(
-        proto as usize,
+    super::define_builtin_data_property(
+        proto,
+        constructor_key,
+        constructor_value,
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );
@@ -1109,9 +1116,10 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
     let constructor = "constructor";
     let constructor_key =
         crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    super::set_builtin_property_attrs(
-        proto as usize,
+    super::define_builtin_data_property(
+        proto,
+        constructor_key,
+        constructor_value,
         constructor.to_string(),
         super::PropertyAttrs::new(true, false, true),
     );

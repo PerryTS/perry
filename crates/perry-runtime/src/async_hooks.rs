@@ -1251,13 +1251,10 @@ pub extern "C" fn js_async_resource_subclass_init(
             let current_this = this_handle.get_nanbox_f64();
             let current_raw =
                 crate::value::js_nanbox_get_pointer(current_this) as *mut ObjectHeader;
-            crate::object::js_object_set_field_by_name(
+            crate::object::define_builtin_data_property(
                 current_raw,
                 method_key,
                 method_handle.get_nanbox_f64(),
-            );
-            crate::object::set_builtin_property_attrs(
-                current_raw as usize,
                 name.to_string(),
                 crate::object::PropertyAttrs::new(true, false, true),
             );

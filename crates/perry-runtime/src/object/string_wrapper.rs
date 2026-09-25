@@ -198,8 +198,9 @@ mod tests {
                         .keys()
                         .filter(|(ptr, _)| *ptr == owner)
                         .count(),
-                    1,
-                    "indices must not populate descriptor_state",
+                    0,
+                    "indices must not populate descriptor_state (and `length`'s \
+                     attributes live with the keys, charter step 3)",
                 );
                 assert!(has_index(owner, "4095"));
                 assert!(!has_index(owner, "4096"));

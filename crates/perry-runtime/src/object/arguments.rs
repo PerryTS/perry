@@ -15,10 +15,14 @@ struct ArgumentsMeta {
 crate::perry_thread_local! {
     static ARGUMENTS_OBJECTS: RefCell<crate::fast_hash::PtrHashMap<usize, ArgumentsMeta>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
-    // Bounded, agent-local cache of immutable ordered keys. Values, descriptors,
-    // and mapped boxes still belong to each individual arguments object.
-    static ARGUMENTS_KEYS: RefCell<[*mut ArrayHeader; 65]> =
-        RefCell::new([std::ptr::null_mut(); 65]);
+    // Bounded, agent-local cache of immutable ordered keys, one per arity and
+    // `callee` kind (index `len` for a mapped/sloppy `callee`, `65 + len` for a
+    // restricted one). The attributes of `length` and `callee` are part of the
+    // list (charter step 3, `key_attrs.rs`), so an arguments object is born
+    // with its final layout. Values, accessor closures and mapped boxes still
+    // belong to each individual arguments object.
+    static ARGUMENTS_KEYS: RefCell<[*mut ArrayHeader; 130]> =
+        RefCell::new([std::ptr::null_mut(); 130]);
 }
 
 /// Latched by the one and only registry insert (`js_arguments_object_create`).
@@ -182,42 +186,70 @@ pub(super) fn thrower_closure_value() -> f64 {
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
-/// Build the complete own-key layout once for common arities. Larger calls use
-/// the same bulk construction without retaining an unbounded cache of keys.
-fn arguments_keys(len: u32) -> *mut ArrayHeader {
-    if let Some(keys) = ARGUMENTS_KEYS.with(|cache| cache.borrow().get(len as usize).copied()) {
-        if !keys.is_null() {
-            return keys;
+/// The attribute entry of a mapped/sloppy arguments object's `length` and
+/// `callee`: `{ writable: true, enumerable: false, configurable: true }`.
+const HIDDEN_DATA_ENTRY: u8 = super::key_attrs::ENTRY_NON_ENUMERABLE;
+
+/// The entry of a restricted `callee`: a getter/setter pair (the thrower),
+/// `{ enumerable: false, configurable: false }`.
+const RESTRICTED_CALLEE_ENTRY: u8 = super::key_attrs::ENTRY_ACCESSOR
+    | super::key_attrs::ENTRY_HAS_GET
+    | super::key_attrs::ENTRY_HAS_SET
+    | super::key_attrs::ENTRY_NON_WRITABLE
+    | super::key_attrs::ENTRY_NON_ENUMERABLE
+    | super::key_attrs::ENTRY_NON_CONFIGURABLE;
+
+/// Build the complete own-key layout — the indices, then `length` and
+/// `callee` WITH their attributes — once per arity and callee kind for common
+/// arities. It is a canonical list (`canonical_keys.rs`), so every arguments
+/// object of one arity shares it and nothing is copied per call. Larger calls
+/// find the same canonical list without retaining a cache slot.
+fn arguments_keys(len: u32, restricted_callee: bool) -> *mut ArrayHeader {
+    let slot_index = len as usize + if restricted_callee { 65 } else { 0 };
+    let cacheable = len <= 64;
+    if cacheable {
+        if let Some(keys) = ARGUMENTS_KEYS.with(|cache| cache.borrow().get(slot_index).copied()) {
+            if !keys.is_null() {
+                return keys;
+            }
         }
     }
+    let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let keys = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len.saturating_add(2)));
-    for i in 0..len {
-        let key = intern_key(&i.to_string());
-        let array = keys.with_mut_ptr(|array| {
-            crate::array::js_array_push_f64(array, crate::value::js_nanbox_string(key as i64))
-        });
-        keys.set_raw_mut_ptr(array);
-    }
-    for name in ["length", "callee"] {
+    let list = scope.root_raw_mut_ptr::<ArrayHeader>(std::ptr::null_mut());
+    let mut count = 0u32;
+    let mut append = |name: &str, entry: u8| {
         let key = intern_key(name);
-        let array = keys.with_mut_ptr(|array| {
-            crate::array::js_array_push_f64(array, crate::value::js_nanbox_string(key as i64))
+        // SAFETY: the parent is rooted in `list`; the key is live and
+        // `extend_key_with_entry` roots both across its allocation.
+        let next = list.with_mut_ptr(|arr: *mut ArrayHeader| unsafe {
+            let parent = super::canonical_keys::CanonicalKeys::from_rooted(arr, count);
+            super::canonical_keys::extend_key_with_entry(&proof, parent, key, entry)
         });
-        keys.set_raw_mut_ptr(array);
+        list.set_raw_mut_ptr(next.as_ptr());
+        count = next.len();
+    };
+    for i in 0..len {
+        append(&i.to_string(), 0);
     }
-    keys.with_mut_ptr(|keys| unsafe {
-        // Every receiver must copy before adding/deleting keys, including the
-        // first receiver: later calls can reuse the cached layout after it dies.
-        let header = crate::value::addr_class::try_read_tracked_gc_header(keys as usize)
-            .expect("arguments keys have a tracked array header");
-        (*header.as_ptr()).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
-        ARGUMENTS_KEYS.with(|cache| {
-            if let Some(slot) = cache.borrow_mut().get_mut(len as usize) {
-                // GC_STORE_AUDIT(ROOT): the arguments scanner traces and rewrites this slot.
-                crate::gc::runtime_store_root_raw_mut_ptr_slot(slot, keys);
-            }
-        });
+    append("length", HIDDEN_DATA_ENTRY);
+    append(
+        "callee",
+        if restricted_callee {
+            RESTRICTED_CALLEE_ENTRY
+        } else {
+            HIDDEN_DATA_ENTRY
+        },
+    );
+    list.with_mut_ptr(|keys: *mut ArrayHeader| {
+        if cacheable {
+            ARGUMENTS_KEYS.with(|cache| {
+                if let Some(slot) = cache.borrow_mut().get_mut(slot_index) {
+                    // GC_STORE_AUDIT(ROOT): the arguments scanner traces and rewrites this slot.
+                    unsafe { crate::gc::runtime_store_root_raw_mut_ptr_slot(slot, keys) };
+                }
+            });
+        }
         keys
     })
 }
@@ -240,14 +272,15 @@ pub extern "C" fn js_arguments_object_alloc(
         crate::array::js_array_length(arr_ptr)
     };
 
-    let keys = scope.root_raw_mut_ptr(arguments_keys(len));
+    let keys = scope.root_raw_mut_ptr(arguments_keys(len, restricted_callee != 0));
     let obj = scope.root_raw_mut_ptr(js_object_alloc(0, len.saturating_add(2)));
     obj.with_mut_ptr(|obj| {
         keys.with_mut_ptr(|keys| unsafe {
-            // The cached per-length list is exact and never grows.
+            // The cached list is canonical: its own count is `len + 2`, and a
+            // longer list may share its backing, so the count is stated.
             set_object_keys_with_live(
                 obj,
-                crate::object::ObjectKeys::owned(keys),
+                crate::object::ObjectKeys::new(keys, len.saturating_add(2)),
                 len.saturating_add(2),
             );
         });
@@ -294,13 +327,10 @@ pub extern "C" fn js_arguments_object_alloc(
                 len + 1,
                 JSValue::from_bits(callee.get_nanbox_f64().to_bits()),
             );
-            super::descriptor_state::set_property_attrs_batch(
-                obj as usize,
-                &[
-                    ("length", PropertyAttrs::new(true, false, true)),
-                    ("callee", PropertyAttrs::new(true, false, true)),
-                ],
-            );
+            // `length` and `callee` were born non-enumerable: their attributes
+            // are part of the cached layout. What remains of an install is the
+            // receiver-level bookkeeping every descriptor install performs.
+            super::descriptor_state::note_attrs_born_with_keys(obj as usize);
         });
     }
 

@@ -414,7 +414,13 @@ pub extern "C" fn js_object_delete_field(
         // Keep this below 16 slots, matching the small-object threshold. Wide
         // populated receivers retain the existing clone+compact ownership
         // transfer and its index migration (#9064 is their separate lane).
-        if !keys_owned && key_count < 16 && object_tombstone_deletes_enabled() {
+        // A list that carries attributes (`key_attrs.rs`) is never forked into
+        // a private copy: an owned list with attributes belongs to a
+        // dictionary receiver only, and the canonical compaction below keeps
+        // this one shared.
+        let keys_carry_attrs = !crate::object::key_attrs::keys_attrs(keys).is_null();
+        if !keys_owned && key_count < 16 && object_tombstone_deletes_enabled() && !keys_carry_attrs
+        {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
             let (keys_cloned, reloaded_obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
@@ -535,6 +541,8 @@ pub extern "C" fn js_object_delete_field(
                         elements.add(i) as usize,
                         crate::value::TAG_HOLE,
                     );
+                    // A hole has no attributes.
+                    crate::object::key_attrs::owned_note_hole(keys, i as u32);
                     if i < alloc_limit {
                         let fields_ptr =
                             (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
@@ -607,6 +615,9 @@ pub extern "C" fn js_object_delete_field(
                 std::ptr::copy(elements.add(i + 1), elements.add(i), new_count - i);
             }
             (*keys).length = new_count as u32;
+            // The attributes shift with their keys (a dictionary receiver's
+            // private list is the one owned list that carries them).
+            crate::object::key_attrs::owned_note_remove(keys, i as u32);
             super::rebuild_array_layout_from_slots(keys);
             // Re-publish the shape for the SAME array at its new key count.
             // Without this the object keeps a stamped ShapeId whose descriptor
@@ -618,6 +629,24 @@ pub extern "C" fn js_object_delete_field(
             // An owned (unshared) list: its header length is its count.
             set_object_keys(obj, crate::object::ObjectKeys::owned(keys));
             super::shapes::shape_index_shift_in_place(keys as usize, i as u32, key_count as u32)
+        } else if keys_carry_attrs {
+            // A shared list with attributes: its successor is the canonical
+            // list without key `i`, attributes carried (`key_attrs.rs`), so
+            // no private copy ever holds attributes outside a dictionary.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let (successor, reloaded) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+                let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
+                    .expect("a shared keys list belongs to a non-dictionary receiver");
+                crate::object::canonical_keys::rebuild_removing(
+                    &proof,
+                    crate::object::object_keys(obj),
+                    i as u32,
+                )
+            });
+            obj = reloaded;
+            set_object_keys(obj, successor.view());
+            false
         } else {
             let keys_cloned = crate::array::js_array_alloc(new_count.max(1) as u32 + 4);
             let src_elements =
@@ -1819,10 +1848,17 @@ unsafe fn squeeze_holes_and_delete(
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     let floor = reserved_floor.min(key_count);
     let mut out = floor;
+    // Attributes move with their keys; only a list that carries them pays for
+    // the position map.
+    let mut kept: Option<Vec<u32>> = (!crate::object::key_attrs::keys_attrs(keys).is_null())
+        .then(|| (0..floor as u32).collect());
     for s in floor..key_count {
         let kv = std::ptr::read(elements.add(s));
         if s == delete_slot || kv.to_bits() == crate::value::TAG_HOLE {
             continue;
+        }
+        if let Some(kept) = kept.as_mut() {
+            kept.push(s as u32);
         }
         if out != s {
             // Keys move DOWN within one buffer (out < s always) — same
@@ -1850,6 +1886,9 @@ unsafe fn squeeze_holes_and_delete(
         out += 1;
     }
     (*keys).length = out as u32;
+    if let Some(kept) = kept {
+        crate::object::key_attrs::owned_note_compaction(keys, &kept);
+    }
     if out > 0 {
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): dirty-span barrier over the
         // compacted key slots, mirroring compact_map_entries.

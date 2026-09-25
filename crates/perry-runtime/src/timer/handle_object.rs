@@ -374,15 +374,12 @@ fn install_timer_constructor(proto: *mut crate::object::ObjectHeader, name: &str
     crate::object::native_module::set_bound_native_closure_name(closure, name);
     crate::object::native_module::set_builtin_closure_length(closure as usize, 0);
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    crate::object::js_object_set_field_by_name(
+    // Spec shape for a `constructor` property: writable, NOT enumerable,
+    // configurable — so it stays out of `Object.keys(proto)` and `for...in`.
+    crate::object::define_builtin_data_property(
         proto,
         key,
         crate::value::js_nanbox_pointer(closure as i64),
-    );
-    // Spec shape for a `constructor` property: writable, NOT enumerable,
-    // configurable — so it stays out of `Object.keys(proto)` and `for...in`.
-    crate::object::set_builtin_property_attrs(
-        proto as usize,
         "constructor".to_string(),
         crate::object::PropertyAttrs::new(true, false, true),
     );

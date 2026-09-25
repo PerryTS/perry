@@ -160,9 +160,10 @@ unsafe fn install_perf_method(
     enumerable: bool,
 ) {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(proto, key, value);
-    crate::object::set_builtin_property_attrs(
-        proto as usize,
+    crate::object::define_builtin_data_property(
+        proto,
+        key,
+        value,
         name.to_string(),
         crate::object::PropertyAttrs::new(true, enumerable, true),
     );
@@ -294,9 +295,10 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
     }
 
     let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    js_object_set_field_by_name(proto, constructor_key, constructor_value);
-    crate::object::set_builtin_property_attrs(
-        proto as usize,
+    crate::object::define_builtin_data_property(
+        proto,
+        constructor_key,
+        constructor_value,
         "constructor".to_string(),
         crate::object::PropertyAttrs::new(true, false, true),
     );

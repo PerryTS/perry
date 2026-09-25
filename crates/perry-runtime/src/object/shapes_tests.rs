@@ -425,7 +425,12 @@ mod descriptor_tests_8067 {
             let described = object_shape_id(obj);
             assert_ne!(described, structural);
             let described_facts = object_shape_descriptor(obj).unwrap();
-            assert_ne!(described_facts.semantic_generation, 0);
+            // Charter step 3: the attribute is a fact the shape REPORTS — its
+            // keys carry it, and the summary says so.
+            assert_ne!(
+                described_facts.summary & crate::object::key_attrs::SUMMARY_NON_WRITABLE,
+                0
+            );
 
             crate::object::prototype_chain::object_set_static_prototype(
                 obj as usize,
@@ -1234,6 +1239,7 @@ mod prototype_identity_tests {
             ShapeObjectKind::Ordinary,
             0,
             proto_id,
+            0,
         ))
     }
 

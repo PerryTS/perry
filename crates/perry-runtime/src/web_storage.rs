@@ -210,9 +210,10 @@ pub(crate) fn install_storage_globals(
     install_storage_length_accessor(storage_proto);
 
     let constructor_key = string("constructor");
-    crate::object::js_object_set_field_by_name(storage_proto, constructor_key, ctor_value);
-    crate::object::set_builtin_property_attrs(
-        storage_proto as usize,
+    crate::object::define_builtin_data_property(
+        storage_proto,
+        constructor_key,
+        ctor_value,
         "constructor".to_string(),
         PropertyAttrs::new(true, false, true),
     );
@@ -238,13 +239,10 @@ fn install_method(proto: *mut ObjectHeader, name: &str, func_ptr: *const u8, ari
     crate::closure::js_register_closure_arity(func_ptr, arity);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, 0);
-    crate::object::js_object_set_field_by_name(
+    crate::object::define_builtin_data_property(
         proto,
         string(name),
         crate::value::js_nanbox_pointer(closure as i64),
-    );
-    crate::object::set_builtin_property_attrs(
-        proto as usize,
         name.to_string(),
         PropertyAttrs::new(true, true, true),
     );
@@ -310,13 +308,10 @@ fn make_storage_object(kind: StorageKind, proto: *mut ObjectHeader) -> *mut Obje
             crate::closure::js_register_closure_arity(func_ptr, arity);
             crate::object::set_bound_native_closure_name(closure, name);
             crate::object::set_builtin_closure_length(closure as usize, 0);
-            crate::object::js_object_set_field_by_name(
+            crate::object::define_builtin_data_property(
                 obj,
                 string(name),
                 crate::value::js_nanbox_pointer(closure as i64),
-            );
-            crate::object::set_builtin_property_attrs(
-                obj as usize,
                 name.to_string(),
                 PropertyAttrs::new(true, false, true),
             );
@@ -330,13 +325,10 @@ fn make_storage_object(kind: StorageKind, proto: *mut ObjectHeader) -> *mut Obje
 }
 
 fn set_global_storage_property(global: *mut ObjectHeader, name: &str, value: *mut ObjectHeader) {
-    crate::object::js_object_set_field_by_name(
+    crate::object::define_builtin_data_property(
         global,
         string(name),
         crate::value::js_nanbox_pointer(value as i64),
-    );
-    crate::object::set_builtin_property_attrs(
-        global as usize,
         name.to_string(),
         PropertyAttrs::new(true, true, true),
     );
@@ -436,9 +428,10 @@ fn update_length(kind: StorageKind, len: usize) {
 
 fn update_length_on_obj(obj: *mut ObjectHeader, len: usize) {
     crate::object::clear_property_attrs(obj as usize, "length");
-    crate::object::js_object_set_field_by_name(obj, string("length"), len as f64);
-    crate::object::set_builtin_property_attrs(
-        obj as usize,
+    crate::object::define_builtin_data_property(
+        obj,
+        string("length"),
+        len as f64,
         "length".to_string(),
         PropertyAttrs::new(false, false, true),
     );

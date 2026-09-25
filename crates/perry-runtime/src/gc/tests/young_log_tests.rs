@@ -317,8 +317,16 @@ fn old_descriptor_owners_are_skipped_by_a_minor() {
 
     let _ = gc_collect_minor();
 
+    // The TABLE entry, read directly: the owner's attributes (which say that
+    // `g` is an accessor) live with its keys since charter step 3, and this
+    // harness registers only the descriptor scanner, not the shape table's.
     assert_eq!(
-        crate::object::get_accessor_descriptor(owner, "g").map(|acc| acc.get),
+        crate::state::state()
+            .descriptors
+            .accessor_descriptors
+            .borrow()
+            .get(&(owner, "g".to_string()))
+            .map(|acc| acc.get),
         Some(ptr_bits(getter))
     );
     let row = walk("object.descriptors");

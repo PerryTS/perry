@@ -1105,18 +1105,20 @@ fn install_webassembly_constructor(
     if !proto_obj.is_null() {
         let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
         let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
-        js_object_set_field_by_name(closure as *mut ObjectHeader, proto_key, proto_value);
-        super::super::set_builtin_property_attrs(
-            closure as usize,
+        super::super::define_builtin_data_property(
+            closure as *mut ObjectHeader,
+            proto_key,
+            proto_value,
             "prototype".to_string(),
             super::super::PropertyAttrs::new(false, false, false),
         );
 
         let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
         let ctor_value = crate::value::js_nanbox_pointer(closure as i64);
-        js_object_set_field_by_name(proto_obj, ctor_key, ctor_value);
-        super::super::set_builtin_property_attrs(
-            proto_obj as usize,
+        super::super::define_builtin_data_property(
+            proto_obj,
+            ctor_key,
+            ctor_value,
             "constructor".to_string(),
             super::super::PropertyAttrs::new(true, false, true),
         );
@@ -1124,9 +1126,10 @@ fn install_webassembly_constructor(
 
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(ns_obj, key, value);
-    super::super::set_builtin_property_attrs(
-        ns_obj as usize,
+    super::super::define_builtin_data_property(
+        ns_obj,
+        key,
+        value,
         name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -1162,14 +1165,15 @@ fn install_webassembly_static_fn(
     );
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(obj, key, value);
     // Node (v26) descriptor for the namespace FUNCTION members and the
     // `Module.*` metadata statics: { writable: true, enumerable: true,
     // configurable: true } — while the CONSTRUCTOR members are installed
     // non-enumerable (see `install_webassembly_constructor`). Verified
     // against the webassembly-namespace.ts node-suite fixture.
-    super::super::set_builtin_property_attrs(
-        obj as usize,
+    super::super::define_builtin_data_property(
+        obj,
+        key,
+        value,
         name.to_string(),
         super::super::PropertyAttrs::new(true, enumerable, true),
     );
@@ -1224,9 +1228,10 @@ fn install_webassembly_proto_data(
         return;
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(proto, key, value);
-    super::super::set_builtin_property_attrs(
-        proto as usize,
+    super::super::define_builtin_data_property(
+        proto,
+        key,
+        value,
         name.to_string(),
         super::super::PropertyAttrs::new(false, false, true),
     );
@@ -1239,26 +1244,20 @@ fn install_webassembly_error_proto_data(ctor: *mut crate::closure::ClosureHeader
     }
     let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
     let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(
+    super::super::define_builtin_data_property(
         proto,
         name_key,
         crate::value::js_nanbox_string(name_string as i64),
-    );
-    super::super::set_builtin_property_attrs(
-        proto as usize,
         "name".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
 
     let message_key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
     let message_string = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
-    js_object_set_field_by_name(
+    super::super::define_builtin_data_property(
         proto,
         message_key,
         crate::value::js_nanbox_string(message_string as i64),
-    );
-    super::super::set_builtin_property_attrs(
-        proto as usize,
         "message".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -1278,8 +1277,7 @@ fn install_webassembly_object_property(
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(obj as i64);
-    js_object_set_field_by_name(ns_obj, key, value);
-    super::super::set_builtin_property_attrs(ns_obj as usize, name.to_string(), attrs);
+    super::super::define_builtin_data_property(ns_obj, key, value, name.to_string(), attrs);
 }
 
 // ────────────────────────────────────────────────────────────────────────

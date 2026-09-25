@@ -670,20 +670,18 @@ pub(crate) fn ensure_typed_array_intrinsic(
     let proto_key =
         crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    js_object_set_field_by_name(ctor as *mut ObjectHeader, proto_key, proto_value);
-    super::super::set_builtin_property_attrs(
-        ctor as usize,
+    super::super::define_builtin_data_property(
+        ctor as *mut ObjectHeader,
+        proto_key,
+        proto_value,
         "prototype".to_string(),
         super::super::PropertyAttrs::new(false, false, false),
     );
     let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    js_object_set_field_by_name(
+    super::super::define_builtin_data_property(
         proto,
         constructor_key,
         crate::value::js_nanbox_pointer(ctor as i64),
-    );
-    super::super::set_builtin_property_attrs(
-        proto as usize,
         "constructor".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );

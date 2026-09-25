@@ -491,11 +491,12 @@ pub extern "C" fn js_put_value_set_ic_miss(
         let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
             return result;
         };
-        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
-            | crate::gc::OBJ_FLAG_SEALED
-            | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
-            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        // Charter step 3 (#10871): no integrity or descriptor bit. Whether
+        // THIS key may be overwritten is a fact of the receiver's keys (its
+        // attribute entry, `key_attrs.rs`), checked per key below before
+        // anything is primed; every attribute or integrity change moves the
+        // ShapeId, so the primed token pins it.
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
             // A generated hit cannot update/downgrade a typed layout without
             // calling the runtime. The miss store clears this bit; prime only
             // once that per-object downgrade is visible.
@@ -560,6 +561,15 @@ pub extern "C" fn js_put_value_set_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
+        // Charter step 3: an accessor or a non-writable key (a frozen
+        // object's keys are all non-writable) is never primed.
+        if !crate::object::key_attrs::entry_is_plain_writable_data(
+            crate::object::key_attrs::keys_entry(keys, idx),
+        ) {
+            #[cfg(feature = "attr-census")]
+            crate::object::attr_census::note_global("ic.write_prime_declined.not_plain_key");
+            return result;
+        }
         // #9287: a slot past the inline region primes too, carrying
         // IC_SLOT_OVERFLOW_BIT exactly like the dynamic-key IC's stub entries.
         // A way hit on such a slot is served by `dyn_ic_try_store` —

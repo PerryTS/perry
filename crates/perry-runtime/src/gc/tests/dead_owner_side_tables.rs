@@ -284,10 +284,12 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     let _guard = GcTestIsolationGuard::new();
     let (obj, _) = unsafe { alloc_old_test_object(0) };
     let addr = obj as usize;
-    crate::object::set_property_attrs(
+    // An accessor: an ordinary object's DATA attributes live with its keys
+    // (charter step 3); its accessor closures are still owner-keyed.
+    crate::object::set_accessor_descriptor(
         addr,
         "oldKey".to_string(),
-        crate::object::PropertyAttrs::new(false, true, true),
+        crate::object::AccessorDescriptor::default(),
     );
 
     // MINOR traces never mark the old generation — an unmarked old-gen
@@ -296,7 +298,11 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     let _ = gc_collect_minor();
 
     assert!(
-        crate::object::get_property_attrs(addr, "oldKey").is_some(),
+        crate::state::state()
+            .descriptors
+            .accessor_descriptors
+            .borrow()
+            .contains_key(&(addr, "oldKey".to_string())),
         "an old-gen owner's descriptor entry must survive a minor GC — \
          minor-trace deadness is not trustworthy for tenured objects"
     );

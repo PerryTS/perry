@@ -192,9 +192,10 @@ pub(super) fn populate_prototype(
     // `constructor` — `{ writable: true, enumerable: false, configurable: true }`.
     let ctor_val = crate::value::js_nanbox_pointer(ctor as i64);
     let ckey = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-    js_object_set_field_by_name(proto, ckey, ctor_val);
-    super::set_builtin_property_attrs(
-        proto as usize,
+    super::define_builtin_data_property(
+        proto,
+        ckey,
+        ctor_val,
         "constructor".to_string(),
         super::PropertyAttrs::new(true, false, true),
     );

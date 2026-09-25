@@ -89,8 +89,8 @@ mod tests;
 mod typed_array_receiver_tests;
 
 pub(crate) use self::alloc::{
-    array_length_range_error, js_array_alloc_key_list, js_array_alloc_pointer_elements,
-    js_array_alloc_with_length_exact,
+    array_length_range_error, js_array_alloc_key_list, js_array_alloc_key_list_reserved,
+    js_array_alloc_pointer_elements, js_array_alloc_with_length_exact,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
@@ -307,9 +307,10 @@ pub(crate) use self::named_props::{
     array_has_named_properties_resolved, array_has_sparse_index_properties_resolved,
     array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_named_props_reserve, carry_named_props_reserve,
-    prune_dead_full_array_named_property_owners, transfer_full_array_named_props_owner,
-    visit_array_named_props_slots,
+    array_named_property_set, array_named_props_reserve, array_named_props_slot,
+    carry_named_props_reserve, ensure_named_props_slot,
+    prune_dead_full_array_named_property_owners, store_named_props_word,
+    transfer_full_array_named_props_owner, visit_array_named_props_slots,
 };
 
 // Sole caller is the regex-engine-gated `regex::perex_results`, so the helpers

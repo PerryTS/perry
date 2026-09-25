@@ -36,6 +36,9 @@ crate-type = ["rlib"]
 # they look gets this backwards, so every call site is gated rather than
 # argued about.
 shape-mint-diag = []
+# Charter step 3: default-off `PERRY_ATTR_DIAG` census of the attribute
+# machinery (where attributes are written, read, and which key-list paths run).
+attr-census = []
 
 # `default` keeps the shipped prebuilt libperry_runtime.a and plain
 # `cargo build`/test full-featured. The auto-optimize path builds with

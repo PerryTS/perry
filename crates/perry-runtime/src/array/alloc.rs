@@ -185,6 +185,40 @@ pub(crate) fn js_array_alloc_key_list(capacity: u32, all_ptr: bool) -> *mut Arra
     ptr
 }
 
+/// [`js_array_alloc_key_list`] for a key list that carries ATTRIBUTES
+/// (`object/key_attrs.rs`): one physical slot in front of logical element 0
+/// is reserved for the attributes pointer, under `GC_ARRAY_NAMED_PROPS`, so
+/// `array_front_offset` is 1 from birth and every element reader (which goes
+/// through `array_elements_ptr`) sees the same logical layout as an
+/// attribute-free list. The reserve word starts as `TAG_HOLE`, a non-pointer,
+/// so a collection before the attributes are attached traces nothing there.
+pub(crate) fn js_array_alloc_key_list_reserved(capacity: u32, all_ptr: bool) -> *mut ArrayHeader {
+    let capacity = array_capacity_or_throw(capacity);
+    let reserve = crate::object::key_attrs::KEYS_ATTRS_FRONT_SLOTS;
+    let ptr = arena_alloc_gc(
+        array_byte_size(capacity as usize + reserve),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = capacity;
+        // GC_STORE_AUDIT(INIT): the reserve word of a just-allocated array
+        // nothing references yet; a non-pointer, so no edge and no barrier.
+        std::ptr::write(ptr.add(1) as *mut u64, crate::value::TAG_HOLE);
+        clear_array_numeric_layout(ptr);
+        if all_ptr {
+            crate::gc::layout_init_all_pointer_slots(ptr as *mut u8);
+        } else {
+            crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        }
+        let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
+        (*header)._reserved |= crate::gc::GC_ARRAY_NAMED_PROPS;
+        debug_assert_eq!(crate::array::array_front_offset(ptr), reserve);
+    }
+    ptr
+}
+
 /// Create a new empty array (convenience alias for `js_array_alloc(0)`).
 /// Used by perry-ui audio code.
 #[no_mangle]

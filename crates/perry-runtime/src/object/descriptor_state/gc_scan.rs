@@ -258,7 +258,9 @@ mod owner_index_tests {
     #[test]
     fn index_mirrors_tables_across_install_redefine_and_delete() {
         let _lock = crate::gc::global_side_table_test_lock();
-        let obj = crate::object::js_object_alloc(0, 0);
+        // An array owner: its attributes still live in these tables (an
+        // ordinary object's live with its keys, charter step 3).
+        let obj = crate::array::js_array_alloc(0);
         let addr = obj as usize;
 
         set_property_attrs(addr, "a".to_string(), PropertyAttrs::new(true, true, true));
@@ -504,8 +506,9 @@ mod string_wrapper_index_attrs_tests {
         }
         assert_eq!(
             test_property_descriptor_entry_count(obj),
-            1,
-            "only `length` is stored; the 11 index descriptors are synthesized"
+            0,
+            "nothing is stored: the 11 index descriptors are synthesized, and \
+             `length`'s attributes live with the wrapper's keys (charter step 3)"
         );
     }
 

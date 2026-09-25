@@ -138,6 +138,7 @@ fn a_fork_and_a_full_backing_start_a_new_backing() {
             &proof,
             fifth,
             Appended::Slot(JSValue::from_bits(crate::value::TAG_HOLE)),
+            0,
         );
         assert_ne!(hole.as_ptr(), fifth.as_ptr());
         assert_eq!(

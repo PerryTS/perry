@@ -1076,8 +1076,6 @@ pub(super) fn get_field_ic_miss_impl(
         // `>= GC_HEADER_SIZE + 0x1000 && is_valid_obj_ptr` pair this used to
         // re-derive).
         let is_object = gc_kind == Some(crate::gc::GC_TYPE_OBJECT);
-        let has_own_descriptors = is_object
-            && gc_header.is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0);
         // #8122: ONE shape-table probe. `object_is_regular` is `GC_TYPE_OBJECT
         // && !FORWARDED && descriptor.object_kind == Ordinary`; the kind test
         // was already `GC_TYPE_OBJECT` above, so read the descriptor once and
@@ -1183,7 +1181,15 @@ pub(super) fn get_field_ic_miss_impl(
                         // accessors), and the value must be readable through
                         // `overflow_get` right now — if it is not, priming
                         // would cache a lie.
-                        if !has_own_descriptors && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT {
+                        // Charter step 3: the receiver's keys say whether THIS
+                        // key is an accessor; an attribute on another key
+                        // changes nothing a read of this slot depends on.
+                        let key_is_accessor =
+                            shape.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+                                && crate::object::key_attrs::keys_entry(keys, i as u32)
+                                    & crate::object::key_attrs::ENTRY_ACCESSOR
+                                    != 0;
+                        if !key_is_accessor && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT {
                             if let Some(bits) = crate::object::overflow_get(obj as usize, i) {
                                 if bits != crate::value::TAG_HOLE {
                                     let stamp = crate::object::shapes::object_shape_stamp(obj);
@@ -1229,23 +1235,33 @@ pub(super) fn get_field_ic_miss_impl(
                     // shape id — no second probe.
                     let stamp = crate::object::shapes::object_shape_stamp(obj);
                     let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
-                    // A descriptor-bearing receiver primes only when the key is
-                    // proved a plain data slot. The one proof that exists is
-                    // the object-backed Array subclass's named-prefix proof
-                    // (every declared key accessor-free on THIS receiver; its
-                    // unrelated `length` descriptor must not make `arch.sset`
-                    // permanently generic). It is a PRIME-TIME proof only: the
-                    // site stores nothing but `(ShapeId, slot)`, and a ShapeId
-                    // implies its descriptor semantics (every descriptor event
-                    // mints a new generation, #10824/#10287), so the pair is a
-                    // fact about this one shape for as long as the id lives.
-                    // The proof builder is gated by an existing ObjectMeta
-                    // pointer so ordinary objects retain the old miss cost. It
-                    // runs whenever it ran before (it also publishes the token
-                    // on the object's meta, which `element_shape` consumes).
+                    // An accessor key primes only when the key is proved a
+                    // plain data slot by the object-backed Array subclass's
+                    // named-prefix proof (every declared key accessor-free on
+                    // THIS receiver). It is a PRIME-TIME proof only: the site
+                    // stores nothing but `(ShapeId, slot)`, and a ShapeId
+                    // implies its attributes (charter step 3: they live with
+                    // the keys), so the pair is a fact about this one shape for
+                    // as long as the id lives. The proof builder is gated by an
+                    // existing ObjectMeta pointer so ordinary objects retain the
+                    // old miss cost. It runs whenever it ran before (it also
+                    // publishes the token on the object's meta, which
+                    // `element_shape` consumes).
                     let named_prefix_proved = !(*obj).meta.is_null()
                         && crate::array::array_subclass_named_prefix_token_for_slot(obj, i) != 0;
-                    if has_own_descriptors && !named_prefix_proved {
+                    // Charter step 3 (#10871): the SHAPE says whether THIS key
+                    // is an accessor. A descriptor on another key of the
+                    // object changes nothing a read of this slot depends on.
+                    let key_is_accessor =
+                        shape.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+                            && crate::object::key_attrs::keys_entry(keys, i as u32)
+                                & crate::object::key_attrs::ENTRY_ACCESSOR
+                                != 0;
+                    if key_is_accessor && !named_prefix_proved {
+                        #[cfg(feature = "attr-census")]
+                        crate::object::attr_census::note_global(
+                            "ic.read_prime_declined.accessor_key",
+                        );
                         miss_reason = R::OwnDescriptorFallthrough;
                         break;
                     }

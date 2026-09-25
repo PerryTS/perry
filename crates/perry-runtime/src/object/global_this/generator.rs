@@ -260,8 +260,7 @@ pub(crate) fn set_intrinsic_data_prop(
     attrs: super::super::PropertyAttrs,
 ) {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(obj, key, value);
-    super::super::set_builtin_property_attrs(obj as usize, name.to_string(), attrs);
+    super::super::define_builtin_data_property(obj, key, value, name.to_string(), attrs);
 }
 
 /// Set `obj[Symbol.toStringTag] = tag` (the descriptor is the spec default

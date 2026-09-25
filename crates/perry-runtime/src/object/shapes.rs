@@ -135,6 +135,10 @@ pub(crate) struct ShapeDescriptor {
     /// updates this count in place while per-slot IC validation protects the
     /// stable id (#9064).
     pub(crate) hole_count: u32,
+    /// Charter step 3: the attribute summary (`key_attrs::SUMMARY_*`) of the
+    /// keys this shape names — what may be an accessor, non-writable,
+    /// non-enumerable or non-configurable. Zero for an all-default shape.
+    pub(crate) summary: u8,
 }
 
 /// Shape identity is the FACTS, never the storage address. A descriptor value
@@ -193,6 +197,14 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).live_inline_slot_count }
     }
 
+    /// The record's attribute summary (`key_attrs::SUMMARY_*`): one load,
+    /// asked before any per-key attribute lookup.
+    #[inline]
+    pub(crate) fn summary(self) -> u8 {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).summary() }
+    }
+
     /// The record's current `keys` word (0 for a keyless shape).
     #[inline]
     pub(crate) fn keys(self) -> u64 {
@@ -218,6 +230,7 @@ impl PartialEq for ShapeDescriptor {
             && self.proto_id == other.proto_id
             && self.object_kind == other.object_kind
             && self.hole_count == other.hole_count
+            && self.summary == other.summary
     }
 }
 
@@ -700,6 +713,7 @@ fn shape_descriptor_ensure_with_generation(
     semantic_generation: u64,
     object_kind: ShapeObjectKind,
     proto_id: u64,
+    extra_summary: u8,
 ) -> Result<u32, ShapeDescriptorError> {
     shape_descriptor_ensure_with_holes(
         keys,
@@ -709,6 +723,7 @@ fn shape_descriptor_ensure_with_generation(
         object_kind,
         0,
         proto_id,
+        extra_summary,
     )
 }
 
@@ -717,6 +732,12 @@ fn shape_descriptor_ensure_with_generation(
 /// identity distinct from every hole state of the same array. Also the mint
 /// for #9019's reserved-floor seed (`object/reserved_floor.rs`), whose keys
 /// array is BORN with `floor` leading holes.
+///
+/// `extra_summary` is attribute summary the keys do not carry themselves: a
+/// dictionary receiver's private list ([`receiver_extra_summary`]). The
+/// summary of the published keys is derived here, from the keys, so no
+/// caller can publish a shape that under-reports its attributes.
+#[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
     keys: *const ArrayHeader,
@@ -726,11 +747,21 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     object_kind: ShapeObjectKind,
     hole_count: u32,
     proto_id: u64,
+    extra_summary: u8,
 ) -> Result<u32, ShapeDescriptorError> {
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
+    // SAFETY: a live keys array or 0 (`keys_attrs` resolves through the
+    // ownership-checking array resolver, so a test's synthetic address
+    // reads as attribute-free).
+    let summary = extra_summary
+        | if keys_id == 0 {
+            0
+        } else {
+            unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) }
+        };
     // #10868 attribution, compiled out entirely without `shape-mint-diag`.
     // When it IS compiled in, both halves are gated on one relaxed atomic
     // load, and the key-list hash is resolved BEFORE the table borrow because
@@ -762,6 +793,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         object_kind,
         hole_count,
         proto_id,
+        summary,
     );
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
@@ -783,6 +815,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
                     object_kind,
                     hole_count,
                     proto_id,
+                    summary,
                 )
             {
                 #[cfg(feature = "shape-mint-diag")]
@@ -834,7 +867,8 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
         object_kind,
         hole_count,
     )
-    .with_proto_id(proto_id);
+    .with_proto_id(proto_id)
+    .with_summary(summary);
     // Publish by-id first, then the reverse accelerators. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.
@@ -862,6 +896,7 @@ pub(crate) fn shape_descriptor_ensure(
         0,
         ShapeObjectKind::Ordinary,
         PROTO_ID_DEFAULT,
+        0,
     )
 }
 
@@ -885,7 +920,25 @@ pub(crate) unsafe fn shape_descriptor_ensure_for_object(
         0,
         ShapeObjectKind::Ordinary,
         object_proto_id(obj),
+        receiver_extra_summary(obj),
     )
+}
+
+/// Attribute summary `obj`'s shape must carry beyond what its published keys
+/// report. A DICTIONARY receiver publishes no keys (`object/dictionary.rs`),
+/// so the attributes of its private list are summarized here —
+/// conservatively, every per-key bit, whenever that list carries any: the
+/// list is edited in place and a dictionary shape is never shared, so an
+/// exact summary would buy nothing a per-key lookup does not.
+///
+/// # Safety
+/// `obj` is null or a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn receiver_extra_summary(obj: *const crate::object::ObjectHeader) -> u8 {
+    if obj.is_null() || !crate::object::dictionary::is_dictionary(obj) {
+        return 0;
+    }
+    crate::object::dictionary::private_list_summary(obj)
 }
 
 #[cold]
@@ -940,6 +993,7 @@ pub(crate) fn shape_id_for_class_keys_ensure(
         0,
         ShapeObjectKind::Ordinary,
         class_proto_id(class_id),
+        0,
     ))
 }
 
@@ -1199,6 +1253,7 @@ pub extern "C" fn js_object_shape_id_for_class_keys_live(
         0,
         ShapeObjectKind::Ordinary,
         class_proto_id(class_id),
+        0,
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
     unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
@@ -1648,6 +1703,7 @@ pub(crate) unsafe fn stamp_object_shape(
         // (see the lineage publish below for the churn-growth rationale).
         lineage.hole_count,
         lineage.proto_id,
+        receiver_extra_summary(obj),
     ));
     if id != (*obj).parent_class_id {
         // Read-side lookup_ways also calls `stamp_object_shape` to populate its
@@ -1964,6 +2020,7 @@ pub(crate) unsafe fn publish_object_shape_from(
         object_kind,
         hole_count,
         proto_id,
+        receiver_extra_summary(obj),
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     if retire_owned_history {
@@ -2014,6 +2071,60 @@ fn retire_owned_shape_siblings(keys: u64, keep: u32) {
     }
 }
 
+/// RULE 1 for an accessor whose FUNCTION was replaced while its attributes
+/// did not change (`Object.defineProperty(o, k, { get: other })` over an
+/// accessor `k`). The attributes live with the keys and are unchanged, so
+/// the key list — and with it every other identity fact — is the same; but
+/// the getter/setter lives with the receiver, not the shape, and a cache
+/// keyed on the ShapeId may have captured the old one. The successor's
+/// generation is a pure function of (predecessor ShapeId, key), so receivers
+/// replacing the same accessor from the same predecessor keep sharing a
+/// shape (#10287: zod replaces a lazily installed accessor per schema).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`, or null.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn transition_object_shape_accessor_replaced(
+    obj: *mut crate::object::ObjectHeader,
+    key_bytes: &[u8],
+) -> u32 {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return 0;
+    }
+    if crate::object::dictionary::is_dictionary(obj) {
+        return transition_object_shape_semantics(obj);
+    }
+    let prev = object_shape_stamp(obj);
+    let Some(current) = object_shape_descriptor(obj) else {
+        return transition_object_shape_semantics(obj);
+    };
+    crate::array::clear_array_subclass_named_prefix_token(obj);
+    let key_hash = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    // SplitMix64 over (predecessor, key, a tag no other transition uses).
+    // Bit 63 keeps it disjoint from the counter namespace (which aborts far
+    // below 2^62) and from the dictionary namespace (bit 62 alone).
+    let mut x = key_hash ^ (u64::from(prev) << 32 | u64::from(prev)) ^ 0xACCE_5500_0000_0000;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    let generation = x | (1 << 63);
+    let id = publish_shape_result(shape_descriptor_ensure_with_holes(
+        current.keys as usize as *mut ArrayHeader,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        generation,
+        current.object_kind,
+        current.hole_count,
+        current.proto_id,
+        receiver_extra_summary(obj),
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+    id
+}
+
 /// Mint an exact successor for a descriptor/prototype semantic transition.
 /// The structural facts remain unchanged, but the process-unique generation
 /// prevents a cache trained before the transition from comparing equal after
@@ -2049,65 +2160,11 @@ pub(crate) unsafe fn transition_object_shape_semantics(
         generation,
         current.object_kind,
         current.proto_id,
+        receiver_extra_summary(obj),
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id
-}
-
-/// #10287: a DATA-descriptor install reuses one generation per
-/// `(predecessor facts, key, attributes)`, so two receivers built the same way
-/// keep sharing shapes — and therefore transition edges, keys arrays and every
-/// shape-keyed cache — instead of each getting a private lineage.
-///
-/// Soundness rests on the same invariant the unique counter provides: a shape's
-/// identity must imply its descriptor semantics. Every semantic event
-/// (descriptor install, clear, accessor install, prototype change) mints a new
-/// generation, so two receivers can only reach the same generation by applying
-/// the same event to the same predecessor facts — which makes their descriptor
-/// state identical by induction. Accessor installs keep minting unique
-/// generations: their getter/setter identities differ per receiver, and nothing
-/// in the shape records which closure a key resolves to.
-/// Semantic generation for a descriptor transition, as a PURE function of the
-/// transition itself: the predecessor shape, the key, and what is being
-/// installed or removed. Two receivers that perform the same descriptor
-/// operation over the same predecessor therefore land on the SAME successor
-/// shape, which is what lets them keep sharing a transition chain.
-///
-/// This replaced a per-thread memo table (#10287). The table was correct but
-/// capacity-bound: it cleared wholesale at 8192 live entries, and a real zod
-/// workload cleared it seven times, re-minting ~57k generations that had
-/// already been agreed on and re-forking every receiver that depended on them.
-/// A pure mix has no capacity, so an agreement reached once holds for the life
-/// of the process.
-///
-/// Bit 63 is set so these can never alias a counter-allocated generation from
-/// [`transition_object_shape_semantics`] (that counter starts at 1 and aborts
-/// long before it could reach 2^63). Distinct transitions collide only on a
-/// full 64-bit hash collision, and a collision is only observable at all when
-/// the structural facts (keys array, key count, live slots, kind) are also
-/// identical.
-fn deterministic_semantic_generation(
-    prev_shape_id: u32,
-    key_bytes: &[u8],
-    attrs: u8,
-) -> Option<u64> {
-    if prev_shape_id == 0 {
-        // No predecessor identity to key on: keep the unique generation.
-        return None;
-    }
-    let key_hash = crate::object::key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
-    // SplitMix64 finalizer over the three components, so nearby shape ids and
-    // one-byte key differences land far apart.
-    let mut x = key_hash
-        ^ (u64::from(prev_shape_id) << 32 | u64::from(prev_shape_id))
-        ^ (u64::from(attrs) << 24);
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
-    x ^= x >> 31;
-    Some(x | (1 << 63))
 }
 
 /// [`transition_object_shape_semantics`] for a PROTOTYPE divergence whose
@@ -2155,6 +2212,7 @@ pub(crate) unsafe fn transition_object_shape_prototype(
         current.object_kind,
         current.hole_count,
         proto_id,
+        receiver_extra_summary(obj),
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
@@ -2324,63 +2382,6 @@ pub(crate) fn shape_proto_id(id: u32) -> Option<u64> {
     Some(unsafe { (*record).proto_id })
 }
 
-/// [`transition_object_shape_semantics`] for a DATA-descriptor install, whose
-/// successor is shared by every receiver that performs the same install over
-/// the same predecessor facts (#10287).
-/// [`transition_object_shape_semantics`] for a descriptor REMOVAL. A removal is
-/// as repeatable as an install — every receiver that drops the same key from
-/// the same predecessor reaches the same descriptor state — so it earns a
-/// shared successor for the same reason (#10287). `attrs` is a tag here, not a
-/// descriptor: `0xFE` for an attribute entry, `0xFF` for an accessor entry, so
-/// a removal can never alias an install of the same key.
-pub(crate) unsafe fn transition_object_shape_semantics_for_descriptor_removal(
-    obj: *mut crate::object::ObjectHeader,
-    key_bytes: &[u8],
-    accessor: bool,
-) -> u32 {
-    let tag = if accessor { 0xFFu8 } else { 0xFEu8 };
-    transition_object_shape_semantics_for_data_descriptor(obj, key_bytes, tag)
-}
-
-#[cfg_attr(feature = "shape-mint-diag", track_caller)]
-pub(crate) unsafe fn transition_object_shape_semantics_for_data_descriptor(
-    obj: *mut crate::object::ObjectHeader,
-    key_bytes: &[u8],
-    attrs: u8,
-) -> u32 {
-    if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
-    }
-    crate::array::clear_array_subclass_named_prefix_token(obj);
-    let current = object_shape_descriptor(obj).unwrap_or_else(|| {
-        synchronize_object_shape_descriptor(obj);
-        object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
-    });
-    // As for a prototype divergence: a dictionary receiver's shape is its
-    // own, and its generation stays in the dictionary namespace.
-    if crate::object::dictionary::is_dictionary(obj) {
-        return transition_object_shape_semantics(obj);
-    }
-    let Some(generation) =
-        deterministic_semantic_generation(object_shape_stamp(obj), key_bytes, attrs)
-    else {
-        // Table unavailable (teardown) or the counter wrapped: fall back to the
-        // unique-generation transition, which is always correct.
-        return transition_object_shape_semantics(obj);
-    };
-    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
-        current.keys as usize as *mut ArrayHeader,
-        current.logical_key_count,
-        current.live_inline_slot_count,
-        generation,
-        current.object_kind,
-        current.proto_id,
-    ));
-    stamp_object_shape_id_with_carrier_note(obj, id);
-    debug_assert_object_shape_parity(obj);
-    id
-}
-
 /// Turn a class-expression object into a class receiver. The kind is part of
 /// the exact immutable descriptor, so it cannot alias GC layout bits and every
 /// pre-mark ShapeId guard permanently misses afterward.
@@ -2413,6 +2414,7 @@ pub(crate) unsafe fn transition_object_shape_to_class(
         current.semantic_generation,
         ShapeObjectKind::Class,
         current.proto_id,
+        receiver_extra_summary(obj),
     ));
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);

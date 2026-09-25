@@ -105,6 +105,7 @@
 31 crates/perry-runtime/src/object/alloc.rs
 2 crates/perry-runtime/src/object/array_object_ops.rs
 2 crates/perry-runtime/src/object/bigint_dispatch.rs
+1 crates/perry-runtime/src/object/cell_meta.rs  # moved-from: crates/perry-runtime/src/object/mod.rs
 3 crates/perry-runtime/src/object/class_registry/construct.rs
 2 crates/perry-runtime/src/object/delete_rest.rs
 12 crates/perry-runtime/src/object/descriptors.rs
@@ -112,10 +113,9 @@
 2 crates/perry-runtime/src/object/field_get_set/get_field_by_name.rs
 8 crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs
 9 crates/perry-runtime/src/object/field_set_by_name/tail.rs
-9 crates/perry-runtime/src/object/global_this/populate.rs
+8 crates/perry-runtime/src/object/global_this/populate.rs
 5 crates/perry-runtime/src/object/global_this_webassembly.rs
 2 crates/perry-runtime/src/object/meta_accessors.rs
-1 crates/perry-runtime/src/object/mod.rs
 3 crates/perry-runtime/src/object/namespace_create.rs
 1 crates/perry-runtime/src/object/native_call_method/object_proto.rs
 4 crates/perry-runtime/src/object/native_call_method/primitive_methods.rs

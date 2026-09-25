@@ -647,25 +647,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // the built-in-function property order Test262 checks.
             {
                 let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-                js_object_set_field_by_name(
+                super::super::define_builtin_data_property(
                     proto_obj,
                     len_key,
                     f64::from_bits(JSValue::number(0.0).bits()),
-                );
-                super::super::set_builtin_property_attrs(
-                    proto_obj as usize,
                     "length".to_string(),
                     super::super::PropertyAttrs::new(false, false, true),
                 );
                 let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
                 let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
-                js_object_set_field_by_name(
+                super::super::define_builtin_data_property(
                     proto_obj,
                     name_key,
                     f64::from_bits(JSValue::string_ptr(empty).bits()),
-                );
-                super::super::set_builtin_property_attrs(
-                    proto_obj as usize,
                     "name".to_string(),
                     super::super::PropertyAttrs::new(false, false, true),
                 );
@@ -926,13 +920,10 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 "username",
             ] {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                js_object_set_field_by_name(
+                super::super::define_builtin_data_property(
                     proto_obj,
                     key,
                     f64::from_bits(crate::value::TAG_UNDEFINED),
-                );
-                super::super::set_builtin_property_attrs(
-                    proto_obj as usize,
                     name.to_string(),
                     super::super::PropertyAttrs::new(false, false, true),
                 );
@@ -1459,26 +1450,20 @@ pub(crate) fn install_error_prototype_data_properties(
     let name_key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
     let name_value =
         crate::string::js_string_from_bytes(name.as_bytes().as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(
+    super::super::define_builtin_data_property(
         proto_obj,
         name_key,
         crate::value::js_nanbox_string(name_value as i64),
-    );
-    super::super::set_builtin_property_attrs(
-        proto_obj as usize,
         "name".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
 
     let message_key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
     let message_value = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
-    js_object_set_field_by_name(
+    super::super::define_builtin_data_property(
         proto_obj,
         message_key,
         crate::value::js_nanbox_string(message_value as i64),
-    );
-    super::super::set_builtin_property_attrs(
-        proto_obj as usize,
         "message".to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );

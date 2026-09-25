@@ -165,10 +165,22 @@ fn integrity_operations_leave_the_published_shape() {
             "{what} must move the receiver off the published ShapeId"
         );
         let (_, restricted_word) = store_fresh(sibling, key, 2.0);
-        assert_eq!(
-            restricted_word, PACKED_SET_EMPTY,
-            "a receiver after {what} must not publish"
-        );
+        if what == "freeze" {
+            // Every key of a frozen object is non-writable: a fact of its keys.
+            assert_eq!(
+                restricted_word, PACKED_SET_EMPTY,
+                "a receiver after {what} must not publish"
+            );
+        } else {
+            // A sealed or non-extensible object's existing keys stay writable
+            // (charter step 3: the prime asks the key's attributes), so the
+            // receiver's OWN ShapeId may be published — never the primer's.
+            assert_eq!(
+                restricted_word as u32,
+                stamp(sibling),
+                "a receiver after {what} publishes its own ShapeId"
+            );
+        }
     }
 }
 

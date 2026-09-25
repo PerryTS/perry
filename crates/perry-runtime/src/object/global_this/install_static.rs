@@ -248,9 +248,10 @@ pub(crate) fn install_constructor_static_with_call_arity(
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
-    super::super::set_builtin_property_attrs(
-        ctor as usize,
+    super::super::define_builtin_data_property(
+        ctor as *mut ObjectHeader,
+        key,
+        value,
         name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -274,9 +275,10 @@ pub(crate) fn install_number_static_data_properties(ctor: *mut crate::closure::C
     ];
     for (name, value) in props {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        js_object_set_field_by_name(ctor as *mut ObjectHeader, key, value);
-        super::super::set_builtin_property_attrs(
-            ctor as usize,
+        super::super::define_builtin_data_property(
+            ctor as *mut ObjectHeader,
+            key,
+            value,
             name.to_string(),
             super::super::PropertyAttrs::new(false, false, false),
         );
@@ -752,14 +754,15 @@ pub(crate) fn install_proto_method(
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(proto_obj, key, value);
     // Built-in prototype methods are `{ writable: true, enumerable: false,
     // configurable: true }` per spec. Record that descriptor (reflection-only,
     // no hot-path gate flip) so `Object.getOwnPropertyDescriptor`, `Object.keys`
     // and `for-in` all observe them as non-enumerable — Test262's `verifyProperty`
     // checks every built-in method this way. See `set_builtin_property_attrs`.
-    super::super::set_builtin_property_attrs(
-        proto_obj as usize,
+    super::super::define_builtin_data_property(
+        proto_obj,
+        key,
+        value,
         method_name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -796,9 +799,10 @@ pub(crate) fn install_proto_method_alias(
     value: f64,
 ) {
     let key = crate::string::js_string_from_bytes(alias_name.as_ptr(), alias_name.len() as u32);
-    js_object_set_field_by_name(proto_obj, key, value);
-    super::super::set_builtin_property_attrs(
-        proto_obj as usize,
+    super::super::define_builtin_data_property(
+        proto_obj,
+        key,
+        value,
         alias_name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );
@@ -836,9 +840,10 @@ pub(crate) fn install_proto_method_rest_with_length(
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
-    js_object_set_field_by_name(proto_obj, key, value);
-    super::super::set_builtin_property_attrs(
-        proto_obj as usize,
+    super::super::define_builtin_data_property(
+        proto_obj,
+        key,
+        value,
         method_name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
     );

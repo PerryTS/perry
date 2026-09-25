@@ -1099,13 +1099,10 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
 
     let constructor_key =
         crate::string::js_string_from_bytes(b"constructor".as_ptr(), "constructor".len() as u32);
-    js_object_set_field_by_name(
+    define_builtin_data_property(
         proto,
         constructor_key,
         class_constructor_ref_value(class_id),
-    );
-    set_builtin_property_attrs(
-        proto as usize,
         "constructor".to_string(),
         PropertyAttrs::new(true, false, true),
     );

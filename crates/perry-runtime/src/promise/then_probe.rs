@@ -210,7 +210,12 @@ unsafe fn proto_signature(proto_addr: usize) -> Option<(usize, u32, u16, u32)> {
         if len > cap {
             return None;
         }
-        len
+        // The RECEIVER's key count, from its shape — never the array's header
+        // length. A canonical backing serves every list on its growth chain,
+        // so a delete can return `Object.prototype` to a prefix of the same
+        // backing and a re-add to the longer list, with the address and the
+        // header length both unchanged (`ObjectKeys`).
+        keys_view.count()
     };
     Some((keys_addr, keys_len, header._reserved, (*obj).class_id))
 }

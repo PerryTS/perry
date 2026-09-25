@@ -161,28 +161,34 @@ fn a_tombstone_position_is_part_of_the_identity() {
             &p,
             extend_slot(
                 &p,
-                extend_slot(&p, CanonicalKeys::EMPTY, Appended::Slot(hole)),
+                extend_slot(&p, CanonicalKeys::EMPTY, Appended::Slot(hole), 0),
                 Appended::Key(a),
+                0,
             ),
             Appended::Key(b),
+            0,
         );
         let hole_middle = extend_slot(
             &p,
             extend_slot(
                 &p,
-                extend_slot(&p, CanonicalKeys::EMPTY, Appended::Key(a)),
+                extend_slot(&p, CanonicalKeys::EMPTY, Appended::Key(a), 0),
                 Appended::Slot(hole),
+                0,
             ),
             Appended::Key(b),
+            0,
         );
         let hole_first_again = extend_slot(
             &p,
             extend_slot(
                 &p,
-                extend_slot(&p, CanonicalKeys::EMPTY, Appended::Slot(hole)),
+                extend_slot(&p, CanonicalKeys::EMPTY, Appended::Slot(hole), 0),
                 Appended::Key(a),
+                0,
             ),
             Appended::Key(b),
+            0,
         );
         assert_eq!(
             hole_first.addr(),

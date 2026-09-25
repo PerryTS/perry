@@ -26,15 +26,15 @@
 //!   list below its logical count, at an index below `live_inline_slot_count`.
 //!   Spill-located keys are never published to the word (they keep the
 //!   runtime-validated ways below).
-//! * **a data property, writable** — rule 1 (#10824/#10287): every descriptor
-//!   install, removal or bulk clear transitions the ShapeId, and a data
-//!   descriptor's generation is a pure function of (predecessor, key,
-//!   attributes). So the receiver's per-key descriptor summary, vetted here
-//!   (`own_descriptors_skip_key`), holds for every carrier of `S`.
-//! * **not frozen / sealed / non-extensible** — `set_integrity_flags` mints a
-//!   counter-unique semantic generation when it sets any of the three flags,
-//!   so an integrity-restricted receiver carries a private lineage that this
-//!   entry refuses to publish.
+//! * **a data property, writable** — charter step 3: a key's attributes live
+//!   with the key, in the keys array the shape names (`key_attrs.rs`), so
+//!   the key's entry, vetted here, holds for every carrier of `S`. Every
+//!   descriptor install, removal or bulk clear changes the keys and with them
+//!   the ShapeId.
+//! * **integrity** — `Object.freeze` makes every key non-writable (refused
+//!   above per key), and every integrity change mints a counter-unique
+//!   semantic generation, so a sealed or non-extensible receiver's writable
+//!   key may be published: an overwrite is not an add.
 //! * **not a class object, not a dictionary** — both are the shape's
 //!   `object_kind` (`object_is_regular`).
 //!
@@ -122,11 +122,11 @@ const SPILL_FLIP: u32 = crate::object::field_get_set::PACKED_SPILL_FLIP;
 /// typed-array-prototype flag and the numeric proof are per-object facts the
 /// hit path re-tests; refusing them here keeps the word's first carrier one the
 /// hit path admits.
-const PACKED_SET_PRIME_BLOCKING: u16 = crate::gc::OBJ_FLAG_FROZEN
-    | crate::gc::OBJ_FLAG_SEALED
-    | crate::gc::OBJ_FLAG_NO_EXTEND
-    | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
-    | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+// Charter step 3: no integrity bit. An overwrite is refused only by a key that
+// is an accessor or non-writable (a frozen object's keys all are), which the
+// receiver's keys record per key and the prime checks below.
+const PACKED_SET_PRIME_BLOCKING: u16 =
+    crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
 
 /// Miss entry for the generated static-key store. Performs the full
 /// strict-aware `[[Set]]` (or a validated way store) and publishes what it
@@ -358,20 +358,21 @@ unsafe fn prime_packed_set(
         return;
     }
     let key_interned = key_gc.gc_flags & crate::gc::GC_FLAG_INTERNED != 0;
-    // #10287 / rule 1: a descriptor on THIS key is a shape fact only through
-    // the per-key summary; a descriptor on another key leaves `key` plain data
-    // for every carrier of the same (deterministically minted) ShapeId.
-    if gc_header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-        && !crate::object::own_descriptors_skip_key(
-            obj_addr,
-            f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits()),
-        )
-    {
-        return;
-    }
     let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
         return;
     };
+    // Charter step 3: whether THIS key may be overwritten is a fact of the
+    // shape the site is primed with — its keys record each key's attributes,
+    // and a descriptor on another key leaves this one plain writable data.
+    if shape.summary & crate::object::key_attrs::SUMMARY_BLOCKS_STORE != 0
+        && !crate::object::key_attrs::entry_is_plain_writable_data(
+            crate::object::key_attrs::object_key_entry_for_string(obj, key),
+        )
+    {
+        #[cfg(feature = "attr-census")]
+        crate::object::attr_census::note_global("ic.packed_prime_declined.not_plain_key");
+        return;
+    }
     // #10969 (step 2.5): the shape owns the key COUNT; the keys array may be a
     // canonical backing shared along a growth chain, whose header length is
     // the longest list's. Every lookup is bounded by the shape's count.

@@ -481,8 +481,19 @@ unsafe fn lookup(
 /// `arr` must be a live, forwarding-resolved head with a reserve, `pairs` a
 /// live pairs array. Nothing may allocate between the write and the barrier.
 unsafe fn store_pairs_pointer(arr: *mut ArrayHeader, pairs: *mut ArrayHeader) {
+    store_named_props_word(arr, crate::value::js_nanbox_pointer(pairs as i64).to_bits());
+}
+
+/// Store `bits` into the reserve header word of a flagged head, barriered.
+/// The pairs pointer's store, shared with the keys-array attributes pointer
+/// (`object/key_attrs.rs`), which reuses this reserve on internal key lists.
+///
+/// # Safety
+/// `arr` must be a live, forwarding-resolved head carrying
+/// `GC_ARRAY_NAMED_PROPS`.
+#[inline]
+pub(crate) unsafe fn store_named_props_word(arr: *mut ArrayHeader, bits: u64) {
     let slot = array_named_props_slot(arr);
-    let bits = crate::value::js_nanbox_pointer(pairs as i64).to_bits();
     // GC_STORE_AUDIT(BARRIERED): the reserved-slot edge is recorded by the
     // slot barrier below; the collector enumerates this exact word as a fixed
     // child slot of the array.
@@ -617,7 +628,7 @@ unsafe fn materialize_inline(arr: *mut ArrayHeader) -> *mut ArrayHeader {
 /// # Safety
 /// `arr` must be a live, forwarding-resolved `GC_TYPE_ARRAY` head that
 /// `resolved_flags` reported as a real array. May allocate (via `js_array_grow`).
-unsafe fn ensure_named_props_slot(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+pub(crate) unsafe fn ensure_named_props_slot(arr: *mut ArrayHeader) -> *mut ArrayHeader {
     if array_named_props_flagged_resolved(arr) {
         return arr;
     }

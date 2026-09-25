@@ -414,6 +414,36 @@ unsafe fn meta_of(obj: *const ObjectHeader) -> Option<*mut ObjectMeta> {
     }
 }
 
+/// The attribute summary a dictionary receiver's shape carries for its
+/// PRIVATE key list: every per-key bit when the list carries attributes
+/// (`key_attrs.rs`), else none. Conservative by design — see
+/// `shapes::receiver_extra_summary`.
+///
+/// # Safety
+/// `obj` is null or a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn private_list_summary(obj: *const ObjectHeader) -> u8 {
+    if crate::object::key_attrs::keys_attrs(keys_array(obj)).is_null() {
+        0
+    } else {
+        crate::object::key_attrs::SUMMARY_KEY_BITS
+    }
+}
+
+/// Point a dictionary receiver's record at `keys`, the live head of its
+/// private list after an in-place edit that may have moved it (taking the
+/// attributes reserve can grow the array). Never allocates.
+///
+/// # Safety
+/// `obj` is a live dictionary receiver and `keys` its private list's head.
+pub(crate) unsafe fn replace_private_keys(obj: *const ObjectHeader, keys: *mut ArrayHeader) {
+    if let Some(meta) = meta_of(obj) {
+        if (*meta).dictionary_keys != keys as usize as u64 {
+            store_keys_array(meta, keys);
+        }
+    }
+}
+
 /// Is this receiver in dictionary mode?
 ///
 /// The discriminator is a SHAPE fact first — "my shape publishes no keys" —
@@ -476,6 +506,9 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
         Some(d) => d.proto_id,
         None => shapes::object_proto_id(obj),
     };
+    // Read from the PRIVATE list, not through `is_dictionary`: at the latch
+    // the shape still publishes the old keys when this runs.
+    let extra_summary = private_list_summary(obj);
     let handle = scope.root_raw_mut_ptr(obj);
     // The mint is the allocating half; the receiver is never nameable across
     // it (#7341), so there is no pre-call address left to stamp.
@@ -488,6 +521,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
             shapes::ShapeObjectKind::Ordinary,
             0,
             proto_id,
+            extra_summary,
         ))
     });
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);
@@ -548,8 +582,18 @@ pub(crate) unsafe fn latch_object_to_dictionary(obj: *mut ObjectHeader) -> bool 
     //    a dictionary receiver mutates its array in place, so the copy is
     //    unconditional rather than conditional on the flag: after the latch
     //    the array has exactly one owner by construction.
+    //    Attributes travel with their keys (`key_attrs.rs`): a source that
+    //    carries any gives the copy its own attributes array.
+    let with_attrs = crate::object::key_attrs::keys_have_entries(
+        descriptor.keys as usize as *const ArrayHeader,
+        key_count,
+    );
     let (cloned, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
-        crate::array::js_array_alloc_pointer_elements(key_count + 4)
+        if with_attrs {
+            crate::object::key_attrs::alloc_key_list(key_count + 4, true, true)
+        } else {
+            crate::array::js_array_alloc_pointer_elements(key_count + 4)
+        }
     });
     if cloned.is_null() {
         return false;
@@ -613,6 +657,10 @@ unsafe fn copy_key_list_into(obj: *const ObjectHeader, dst: *mut ArrayHeader, ke
         // GC_STORE_AUDIT(INIT): the clone is unpublished and its all-pointer
         // layout covers only the prefix `length` exposes, which is set below.
         *out.add(i) = (*src.add(i)).to_bits();
+    }
+    let dst_attrs = crate::object::key_attrs::keys_attrs(dst);
+    if !dst_attrs.is_null() {
+        crate::object::key_attrs::copy_entries(source, 0, dst_attrs, count as u32);
     }
     (*dst).length = count as u32;
 }

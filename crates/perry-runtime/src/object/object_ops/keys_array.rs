@@ -15,7 +15,28 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) {
-    ensure_key_in_keys_array_inner(obj, key, false)
+    ensure_key_in_keys_array_inner(obj, key, false, 0)
+}
+
+/// Claim a keys slot for `key` together with its ATTRIBUTES
+/// (`key_attrs.rs` entry, nonzero): an accessor install, a literal
+/// `get`/`set`, `defineProperty` of a new key. One trie edge
+/// (`canonical_keys::extend_key_with_entry`) — on the tip of an attribute
+/// backing an in-place append, where adding the key and then changing its
+/// attributes would copy the list once per key. The learned transition cache
+/// is a default-attribute lattice, so this claim neither consults nor
+/// teaches it.
+///
+/// # Safety
+/// As [`ensure_key_in_keys_array`].
+pub(crate) unsafe fn ensure_key_in_keys_array_with_entry(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    entry: u8,
+) {
+    #[cfg(feature = "attr-census")]
+    crate::object::attr_census::note_global("claim.with_entry");
+    ensure_key_in_keys_array_inner(obj, key, false, entry)
 }
 
 /// [`ensure_key_in_keys_array`] for a claim the caller will follow with a value
@@ -43,7 +64,7 @@ pub(crate) unsafe fn ensure_key_in_keys_array_for_value(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) {
-    ensure_key_in_keys_array_inner(obj, key, true)
+    ensure_key_in_keys_array_inner(obj, key, true, 0)
 }
 
 /// `refresh_define_property_roots!` re-reads BOTH roots at every allocation
@@ -55,6 +76,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
     writes_value: bool,
+    entry: u8,
 ) {
     if obj.is_null() || (obj as usize) < 0x10000 || key.is_null() {
         return;
@@ -93,7 +115,8 @@ unsafe fn ensure_key_in_keys_array_inner(
             // object has any key at all), and the `[[Set]]` tail already
             // learns these keyless→one-key edges. Try the shared edge before
             // minting a private array, and teach it otherwise.
-            let transition_eligible_first = define_append_transition_eligible(obj, keys.arr());
+            let transition_eligible_first =
+                entry == 0 && define_append_transition_eligible(obj, keys.arr());
             let prev_shape_id = if transition_eligible_first {
                 super::super::shapes::object_shape_stamp(obj)
             } else {
@@ -133,6 +156,24 @@ unsafe fn ensure_key_in_keys_array_inner(
                         return;
                     }
                 }
+            }
+            if entry != 0 {
+                // A first key WITH attributes: its canonical one-key list.
+                // (A keyless receiver is never a dictionary.)
+                if let Some(proof) = crate::object::canonical_keys::SharedLayout::of_receiver(obj) {
+                    let list = crate::object::canonical_keys::extend_key_with_entry(
+                        &proof,
+                        crate::object::canonical_keys::CanonicalKeys::EMPTY,
+                        key,
+                        entry,
+                    );
+                    refresh_define_property_roots!();
+                    set_object_keys(obj, list.view());
+                    if crate::object::object_live_slot_count(obj) == 0 {
+                        set_object_live_slot_count(obj, 1);
+                    }
+                }
+                return;
             }
             let new_keys = crate::array::js_array_alloc(4);
             refresh_define_property_roots!();
@@ -226,7 +267,7 @@ unsafe fn ensure_key_in_keys_array_inner(
     // separately by the caller's `set_property_attrs`, whose keyed semantic
     // transition gives every receiver performing the same install the same
     // successor shape.
-    let transition_eligible = define_append_transition_eligible(obj, keys.arr());
+    let transition_eligible = entry == 0 && define_append_transition_eligible(obj, keys.arr());
     let mut interned_handle = None;
     let mut prev_shape_id = 0u32;
     if transition_eligible {
@@ -293,13 +334,21 @@ unsafe fn ensure_key_in_keys_array_inner(
             let canonical_parent =
                 crate::object::canonical_keys::canonicalize(&proof, keys.arr(), key_count as u32);
             refresh_define_property_roots!();
-            crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view()
+            crate::object::canonical_keys::extend_key_with_entry(
+                &proof,
+                canonical_parent,
+                key,
+                entry,
+            )
+            .view()
         }
         None => {
-            // A dictionary receiver's list is its own: it grows in place.
+            // A dictionary receiver's list is its own: it grows in place, and
+            // its attributes with it.
             let owned = scope.root_raw_mut_ptr(keys.arr());
             let grown = crate::array::js_array_push(keys.arr(), JSValue::string_ptr(key as *mut _));
             let _ = owned.get_raw_mut_ptr::<ArrayHeader>();
+            let grown = crate::object::key_attrs::owned_note_append(grown, key_count as u32, entry);
             crate::object::ObjectKeys::owned(grown)
         }
     };
@@ -624,8 +673,15 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     if key_str.is_null() {
         return;
     }
-    // Make the key discoverable by `own_key_present` / `getOwnPropertyNames`.
-    ensure_key_in_keys_array(proto, key_str);
+    // Make the key discoverable by `own_key_present` / `getOwnPropertyNames`,
+    // claimed WITH the accessor's attributes (charter step 3): the key arrives
+    // as one edge of the prototype's list instead of arriving default and being
+    // rewritten. Mirrors `set_builtin_accessor_descriptor` below, which then
+    // finds the entry already in place.
+    let entry = crate::object::key_attrs::AttrsEdit::Data(&[], BUILTIN_GETTER_ATTRS.bits).apply(
+        crate::object::key_attrs::AttrsEdit::Accessor(&[], getter_bits != 0, false).apply(0),
+    );
+    ensure_key_in_keys_array_with_entry(proto, key_str, entry);
     // Spec: an accessor getter's `.name` is `"get " + key` (e.g.
     // `Object.getOwnPropertyDescriptor(ArrayBuffer.prototype,"byteLength").get.name
     // === "get byteLength"`). Register it against the getter closure's func_ptr;
@@ -642,10 +698,13 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
             get: getter_bits,
             set: 0,
         },
-        // writable is N/A for an accessor; enumerable=false, configurable=true.
-        PropertyAttrs::new(true, false, true),
+        BUILTIN_GETTER_ATTRS,
     );
 }
+
+/// A builtin getter's attributes: writable is N/A for an accessor;
+/// enumerable=false, configurable=true.
+const BUILTIN_GETTER_ATTRS: PropertyAttrs = PropertyAttrs::new(true, false, true);
 
 /// O(1) own-key presence via the [[Set]]-path sidecar, for the
 /// `Object.defineProperty` flow (#6743). Returns `Some(present)` when the

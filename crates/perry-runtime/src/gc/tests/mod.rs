@@ -53,6 +53,7 @@ mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
 mod json_parse_scalar;
 mod json_stringify_output;
+mod keys_attrs;
 mod layout_inline_mask;
 mod layout_pointer_free_hazard;
 mod layout_residue_histogram;
