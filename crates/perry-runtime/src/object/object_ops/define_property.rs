@@ -1065,11 +1065,25 @@ pub extern "C" fn js_object_define_property(
 
             // Spec retention: redefining an existing own property keeps the
             // attributes the descriptor omits (see the object-path comment).
+            // An entry-less `name`/`length` is the intrinsic slot, whose
+            // attributes are `{writable: false, enumerable: false,
+            // configurable: true}` — what every reader of those keys already
+            // reports. Assuming a plain data property here turned
+            // `defineProperty(fn, "name", {value})` into a writable,
+            // enumerable key (#10521: the promise resolving functions no
+            // longer carry an attrs entry that used to mask this).
             let existing_attrs: Option<PropertyAttrs> =
                 if super::super::has_own_helpers::closure_own_key_present(closure_ptr, &key_rust) {
                     Some(
-                        super::super::get_property_attrs(closure_ptr, &key_rust)
-                            .unwrap_or_else(|| PropertyAttrs::new(true, true, true)),
+                        super::super::get_property_attrs(closure_ptr, &key_rust).unwrap_or_else(
+                            || {
+                                if matches!(key_rust.as_str(), "name" | "length") {
+                                    PropertyAttrs::new(false, false, true)
+                                } else {
+                                    PropertyAttrs::new(true, true, true)
+                                }
+                            },
+                        ),
                     )
                 } else {
                     None

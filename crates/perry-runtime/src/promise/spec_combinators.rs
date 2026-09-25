@@ -82,6 +82,11 @@ pub(super) struct Capability {
 // ---------------------------------------------------------------------------
 // Arity registration so closures invoked with fewer args than declared pad the
 // missing slots with `undefined` (rather than reading uninitialised registers).
+//
+// #10521: it also carries the functions' spec-visible facts by KIND. Each is
+// an anonymous built-in non-constructor whose `length` is that arity
+// (GetCapabilitiesExecutor 2, every element function 1), so no closure needs
+// a per-instance `length` or non-constructable entry.
 // ---------------------------------------------------------------------------
 
 crate::perry_thread_local! {
@@ -94,11 +99,16 @@ fn ensure_arity_registered() {
             return;
         }
         done.set(true);
-        crate::closure::js_register_closure_arity(capability_executor_fn as *const u8, 2);
-        crate::closure::js_register_closure_arity(all_resolve_element_fn as *const u8, 1);
-        crate::closure::js_register_closure_arity(settled_fulfill_element_fn as *const u8, 1);
-        crate::closure::js_register_closure_arity(settled_reject_element_fn as *const u8, 1);
-        crate::closure::js_register_closure_arity(any_reject_element_fn as *const u8, 1);
+        for (f, arity) in [
+            (capability_executor_fn as *const u8, 2),
+            (all_resolve_element_fn as *const u8, 1),
+            (settled_fulfill_element_fn as *const u8, 1),
+            (settled_reject_element_fn as *const u8, 1),
+            (any_reject_element_fn as *const u8, 1),
+        ] {
+            crate::closure::js_register_closure_arity(f, arity);
+            crate::closure::register_closure_body_non_constructor(f);
+        }
     });
 }
 
@@ -187,6 +197,9 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
     // helper and re-read every address at its point of use.
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor_h = scope.root_nanbox_f64(c);
+    // The generic path's executor takes its `length` and non-constructor bit
+    // from this registration (#10521), whichever entry point got here.
+    ensure_arity_registered();
 
     if !crate::object::js_value_is_constructor(ctor_h.get_nanbox_f64()) {
         throw_type_error("Promise.all called on non-constructor");
@@ -196,19 +209,12 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
     // directly (the generic construct path does not model `new Promise`).
     if is_default_promise_constructor(ctor_h.get_nanbox_f64()) {
         let promise_h = scope.root_nanbox_f64(boxed_ptr(js_promise_new()));
-        // `make_resolving_functions` allocates a guard array and two closures.
+        // `make_resolving_functions` allocates a guard array and two closures,
+        // and their `length` 1 comes with the function kind (#10521).
         let (resolve, reject) =
             super::combinators::make_resolving_functions(unboxed_ptr(promise_h.get_nanbox_f64()));
         let resolve_h = scope.root_nanbox_f64(boxed_ptr(resolve));
         let reject_h = scope.root_nanbox_f64(boxed_ptr(reject));
-        crate::object::set_builtin_closure_length(
-            unboxed_ptr::<u8>(resolve_h.get_nanbox_f64()) as usize,
-            1,
-        );
-        crate::object::set_builtin_closure_length(
-            unboxed_ptr::<u8>(reject_h.get_nanbox_f64()) as usize,
-            1,
-        );
         return Capability {
             promise: promise_h.get_nanbox_f64(),
             resolve: resolve_h.get_nanbox_f64(),
@@ -233,10 +239,6 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
         unboxed_ptr(executor_h.get_nanbox_f64()),
         0,
         unboxed_ptr::<u8>(storage_h.get_nanbox_f64()) as i64,
-    );
-    crate::object::set_builtin_closure_length(
-        unboxed_ptr::<u8>(executor_h.get_nanbox_f64()) as usize,
-        2,
     );
 
     let args = [executor_h.get_nanbox_f64()];
@@ -372,11 +374,10 @@ fn build_element_closure(
     js_closure_set_capture_ptr(c, 3, unboxed_ptr::<u8>(state_h.get_nanbox_f64()) as i64);
     js_closure_set_capture_f64(c, 4, cap_resolve_h.get_nanbox_f64());
     js_closure_set_capture_f64(c, 5, cap_reject_h.get_nanbox_f64());
-    crate::object::set_builtin_closure_length(c as usize, 1);
     // Spec: the resolve/reject element functions are anonymous built-in
-    // functions and are NOT constructors — `new resolveElement()` throws.
-    let c: *mut crate::closure::ClosureHeader = unboxed_ptr(closure_h.get_nanbox_f64());
-    crate::object::set_builtin_closure_non_constructable(c as usize);
+    // functions with `length` 1 and are NOT constructors, so
+    // `new resolveElement()` throws. Both facts come with the function kind
+    // (`ensure_arity_registered`, #10521), not a per-element entry.
     unboxed_ptr(closure_h.get_nanbox_f64())
 }
 

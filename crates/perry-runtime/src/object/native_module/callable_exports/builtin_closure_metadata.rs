@@ -50,8 +50,14 @@ pub(crate) fn set_builtin_closure_non_constructable(closure: usize) {
     });
 }
 
+/// Per-instance entries first, then the function-KIND bit (#10521): a closure
+/// whose body is a registered built-in non-constructor answers without an
+/// entry of its own.
 pub(crate) fn builtin_closure_is_non_constructable(closure: usize) -> bool {
     BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&closure))
+        || crate::closure::closure_body_is_non_constructor(
+            closure as *const crate::closure::ClosureHeader,
+        )
 }
 
 #[cfg(any(debug_assertions, test))]

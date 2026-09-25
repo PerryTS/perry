@@ -29,6 +29,8 @@ pub mod microtasks;
 pub mod native_async;
 pub mod reactions;
 pub mod rejection;
+#[cfg(test)]
+mod resolving_function_kind_tests;
 pub mod scanners;
 pub mod spec_combinators;
 pub mod subclass;

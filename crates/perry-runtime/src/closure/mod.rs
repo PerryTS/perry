@@ -53,6 +53,7 @@ pub use registry::{
     real_capture_count, resolve_strategy, DispatchStrategy, BOUND_FUNCTION_FUNC_PTR,
     BOUND_METHOD_FUNC_PTR, CAPTURES_THIS_FLAG, CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
 };
+pub(crate) use registry::{closure_body_is_non_constructor, register_closure_body_non_constructor};
 
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,

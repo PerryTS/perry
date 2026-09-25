@@ -761,6 +761,14 @@ fn take_already_resolved(guard: *mut crate::array::ArrayHeader) -> bool {
 /// zero-arg direct-call arm and the function reads a GARBAGE second register
 /// (observed as the denormal `5e-324`, i.e. bits = 1), corrupting the
 /// resolution value. (test262 exception-after-resolve-in-{executor,thenable-job}.)
+///
+/// #10521: the same registration carries every spec-visible fact of these
+/// anonymous built-in functions (27.2.1.3), keyed by function KIND rather than
+/// by closure. The registered arity is the own `length` 1 (`closure_length`
+/// falls back to it), the unregistered func-ptr name reads back as the own
+/// `name` `""`, and the non-constructor bit makes `new resolve()` throw. The
+/// descriptor defaults for an entry-less closure are already
+/// `{writable: false, enumerable: false, configurable: true}` for both keys.
 pub(super) fn ensure_native_resolving_arity_registered() {
     crate::perry_thread_local! {
         static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -777,6 +785,7 @@ pub(super) fn ensure_native_resolving_arity_registered() {
             thenable_job_reject_fn as *const u8,
         ] {
             crate::closure::js_register_closure_arity(f, 1);
+            crate::closure::register_closure_body_non_constructor(f);
         }
     });
 }
@@ -825,14 +834,15 @@ pub(super) fn make_resolving_functions(
     // with own `length` = 1, `name` = "" (both non-writable, non-enumerable,
     // configurable), and NO `[[Construct]]` (`new resolve()` throws). test262
     // `resolve-function-*` / `reject-function-*` assert all four.
-    for handle in [&resolve_h, &reject_h] {
-        crate::object::set_builtin_closure_length(ptr_of(handle) as usize, 1);
-        crate::object::set_bound_native_closure_name(
-            ptr_of(handle) as *mut crate::closure::ClosureHeader,
-            "",
-        );
-        crate::object::set_builtin_closure_non_constructable(ptr_of(handle) as usize);
-    }
+    //
+    // #10521: all four come from the function kind registered by
+    // `ensure_native_resolving_arity_registered` above, so nothing is
+    // installed per closure. Each pair used to get a `name` string, a closure
+    // dynamic-prop entry, a descriptor-table entry (whose install bumped the
+    // global property-plan epoch, invalidating the `then`-probe verdict and
+    // every inherited-read cache), a `length` entry and a non-constructable
+    // entry, and the collector pruned all of it when the pair died: ~33k of
+    // the ~47k instructions an awaited `new Promise(executor)` cost.
     (
         ptr_of(&resolve_h) as *mut crate::closure::ClosureHeader,
         ptr_of(&reject_h) as *mut crate::closure::ClosureHeader,

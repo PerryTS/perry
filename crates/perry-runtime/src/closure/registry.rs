@@ -72,7 +72,8 @@ pub(crate) struct ClosureBodyRecord {
     /// site, which is faster — the registry is consulted only when needed.
     rest_arity: u16,
     /// `HAS_*` presence bits plus the boolean attributes (`ARROW`, `STRICT`,
-    /// `ASYNC`, `GENERATOR`, `ASYNC_GENERATOR`) and the 2-bit rest kind.
+    /// `ASYNC`, `GENERATOR`, `ASYNC_GENERATOR`, `NON_CONSTRUCTOR`) and the
+    /// 2-bit rest kind.
     flags: u16,
     /// 1-based index into `TRUSTED_TARGETS`; 0 = this body has no
     /// compiler-private direct-call bodies. Only ever non-zero on an arrow.
@@ -118,6 +119,13 @@ mod body_flags {
     /// two — it drives `%AsyncGeneratorFunction%` vs `%GeneratorFunction%`
     /// intrinsic resolution.
     pub(super) const ASYNC_GENERATOR: u16 = 1 << 9;
+    /// #10521: the body is a runtime-native built-in function KIND with no
+    /// `[[Construct]]` — `new f()` throws. A property of the function kind,
+    /// so it is recorded once per body instead of once per closure in the
+    /// per-instance `BUILTIN_CLOSURE_NON_CONSTRUCTABLE` table, which every
+    /// such closure had to populate at allocation and the collector had to
+    /// prune when it died.
+    pub(super) const NON_CONSTRUCTOR: u16 = 1 << 10;
 }
 
 impl ClosureBodyRecord {
@@ -735,6 +743,34 @@ pub fn is_registered_arrow_function(func_ptr: *const u8) -> bool {
         return false;
     }
     body_record(func_ptr).is_some_and(|record| record.has(body_flags::ARROW))
+}
+
+/// #10521: mark every closure whose body is `func_ptr` as a built-in
+/// non-constructor. Meant for runtime-native thunks (the promise resolving
+/// functions, the combinator element functions) whose spec-visible facts are
+/// all properties of the KIND: `length` from the registered arity, `name` `""`
+/// from the absent func-ptr name, and no `[[Construct]]` from this bit. None
+/// of their closures then needs a per-instance side-table entry.
+///
+/// Does not touch the dispatch strategy, which never reads this bit.
+pub(crate) fn register_closure_body_non_constructor(func_ptr: *const u8) {
+    if func_ptr.is_null() {
+        return;
+    }
+    update_body_record(func_ptr, |record| {
+        record.flags |= body_flags::NON_CONSTRUCTOR;
+    });
+}
+
+/// True when `closure` is a closure whose body was registered through
+/// [`register_closure_body_non_constructor`]. Any other address (a
+/// non-closure object, a handle-band id) answers `false`.
+pub(crate) fn closure_body_is_non_constructor(closure: *const ClosureHeader) -> bool {
+    let func_ptr = get_valid_func_ptr(closure);
+    if func_ptr.is_null() {
+        return false;
+    }
+    body_record(func_ptr).is_some_and(|record| record.has(body_flags::NON_CONSTRUCTOR))
 }
 
 /// Attach one of the compiler-private direct-call bodies to the arrow at
