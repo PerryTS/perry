@@ -2929,9 +2929,8 @@ pub fn run_with_parse_cache(
                 .map(|m| sanitize_module_name(&m.name))
                 .unwrap_or_else(|| sanitize_module_name(&fe.source_module));
             let kind = if let Some(nested) = &fe.nested_namespace_of {
-                let native_name = nested.strip_prefix("node:").unwrap_or(nested);
                 if !module_name_to_module.contains_key(nested)
-                    && perry_hir::NATIVE_MODULES.contains(&native_name)
+                    && perry_hir::is_native_module_specifier(nested)
                 {
                     perry_codegen::NamespaceEntryKind::NativeNamespace {
                         specifier: nested.clone(),
@@ -4358,9 +4357,7 @@ pub fn run_with_parse_cache(
                             // declaring module emits a zero-arg namespace
                             // getter; classify this named import as a var so
                             // consumer code calls that getter.
-                            if perry_hir::NATIVE_MODULES
-                                .contains(&ns_src.strip_prefix("node:").unwrap_or(ns_src))
-                            {
+                            if perry_hir::is_native_module_specifier(ns_src) {
                                 let declaring_prefix =
                                     compute_module_prefix(&ns_scan_path, &ctx.project_root);
                                 import_function_prefixes

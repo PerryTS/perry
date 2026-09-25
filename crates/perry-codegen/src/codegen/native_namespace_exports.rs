@@ -25,7 +25,7 @@ pub(super) fn emit_native_namespace_reexport_getters(
         let perry_hir::Export::NamespaceReExport { source, name } = export else {
             continue;
         };
-        if !perry_hir::NATIVE_MODULES.contains(&source.strip_prefix("node:").unwrap_or(source)) {
+        if !perry_hir::is_native_module_specifier(source) {
             continue;
         }
         let getter_name = format!("perry_fn_{}__{}", module_prefix, name);

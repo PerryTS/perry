@@ -244,6 +244,9 @@ fn source_visible_resolved_path(
 /// every named/namespace import from these specifiers through the
 /// runtime singleton getters in that module.
 pub(in crate::commands::compile) fn known_node_submodule_key(source: &str) -> Option<&'static str> {
+    if perry_hir::is_bare_prefix_only_builtin(source) {
+        return None;
+    }
     let normalized = source.strip_prefix("node:").unwrap_or(source);
     match normalized {
         // node:timers — only the `import * as timers` namespace shape routes

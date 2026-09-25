@@ -150,7 +150,8 @@ pub(crate) fn lower_module_decl(
             }
 
             // Check if this is a native module import
-            let is_native = is_native_module(&source);
+            let bare_prefix_only = is_bare_prefix_only_builtin(&raw_source);
+            let is_native = is_native_module_specifier(&raw_source);
 
             // #3925: a `node:`-prefixed specifier must name a real Node
             // built-in module. Node throws `ERR_UNKNOWN_BUILTIN_MODULE` for
@@ -349,7 +350,7 @@ pub(crate) fn lower_module_decl(
                                 ctx, module, &source, &local, &imported,
                             );
                         } else {
-                            if is_node_builtin_module(&source) {
+                            if !bare_prefix_only && is_node_builtin_module(&source) {
                                 ctx.register_builtin_named_import(
                                     local.clone(),
                                     source.clone(),
@@ -424,11 +425,13 @@ pub(crate) fn lower_module_decl(
                             if source == "process" || is_cjs_style_native_default_import(&source) {
                                 ctx.register_builtin_module_alias(local.clone(), source.clone());
                             }
-                        } else if node_submodule_default_export_key(&source).is_some() {
+                        } else if !bare_prefix_only
+                            && node_submodule_default_export_key(&source).is_some()
+                        {
                             ctx.register_imported_func(local.clone(), local.clone());
                             specifiers.push(ImportSpecifier::Default { local });
                             continue;
-                        } else if is_node_builtin_module(&source) {
+                        } else if !bare_prefix_only && is_node_builtin_module(&source) {
                             if source == "diagnostics_channel" {
                                 ctx.register_imported_func(local.clone(), local.clone());
                                 specifiers.push(ImportSpecifier::Default { local });
@@ -543,7 +546,11 @@ pub(crate) fn lower_module_decl(
             };
 
             module.imports.push(Import {
-                source,
+                source: if is_bare_prefix_only_builtin(&source) && !bare_prefix_only {
+                    raw_source
+                } else {
+                    source
+                },
                 specifiers,
                 is_native,
                 module_kind,
@@ -1475,7 +1482,7 @@ pub(crate) fn lower_module_decl(
                             // never emitted, and the link failed on
                             // `__perry_wrap_perry_fn_<mod>__<name>`.
                             let native_source = canonicalize_native_import_source(&source);
-                            if is_native_module(&native_source) {
+                            if is_native_module_specifier(&source) {
                                 let is_node_core =
                                     perry_api_manifest::is_node_core_module(&native_source);
                                 if is_node_core
@@ -1495,7 +1502,11 @@ pub(crate) fn lower_module_decl(
                                     format!("__perry_builtin_reexport_{}", ctx.fresh_local());
                                 init_named_cell(module, &native_source, &local, Some(&local));
                                 module.imports.push(Import {
-                                    source: native_source,
+                                    source: if is_bare_prefix_only_builtin(&native_source) {
+                                        source.clone()
+                                    } else {
+                                        native_source
+                                    },
                                     specifiers: vec![ImportSpecifier::Named {
                                         imported: local,
                                         local: synthetic_local.clone(),

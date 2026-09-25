@@ -36,6 +36,7 @@ pub use constants::{
     TYPED_ARRAY_KIND_INT32, TYPED_ARRAY_KIND_INT8, TYPED_ARRAY_KIND_UINT16,
     TYPED_ARRAY_KIND_UINT32, TYPED_ARRAY_KIND_UINT8, TYPED_ARRAY_KIND_UINT8_CLAMPED,
 };
+pub use constants::{is_bare_prefix_only_builtin, is_native_module_specifier};
 // Its own statement so adding it did not reflow the list above (#10894).
 pub use constants::is_buffer_backed_builtin_name;
 

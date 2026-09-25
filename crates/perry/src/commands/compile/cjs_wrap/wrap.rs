@@ -239,7 +239,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // than being routed to `createRequire`. Every valid built-in
             // subpath is already an entry in `NODE_BUILTIN_MODULES`.
             let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-            perry_hir::is_node_builtin_module(normalized)
+            !perry_hir::is_bare_prefix_only_builtin(spec)
+                && perry_hir::is_node_builtin_module(normalized)
         })
         .cloned()
         .collect();
@@ -390,7 +391,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // in the IIFE body and `require("process")` goes through the
         // synthetic require, which resolves builtins via createRequire.
         let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-        if perry_hir::is_node_builtin_module(normalized) {
+        if !perry_hir::is_bare_prefix_only_builtin(spec)
+            && perry_hir::is_node_builtin_module(normalized)
+        {
             continue;
         }
         if import_local_names.iter().any(|n| n == alias) {
@@ -549,6 +552,19 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                     .expect("native addon logical id is JSON encodable");
                 return format!(
                     "        if (specifier === {specifier}) {{ const nativeModule = {{ exports: {{}} }}; process.dlopen(nativeModule, {logical_id}); return nativeModule.exports; }}"
+                );
+            }
+            // Missing prefix-only packages must not read the unresolved import
+            // placeholder: its canonical native name can still yield a namespace.
+            if perry_hir::is_bare_prefix_only_builtin(spec)
+                && source_path.parent().and_then(|dir| {
+                    super::super::collect_modules::static_require_transform::resolve_static_require(
+                        dir, spec, None,
+                    )
+                }).is_none()
+            {
+                return format!(
+                    "        if (specifier === '{spec}') throw __perry_cjs_require_error('error', 'MODULE_NOT_FOUND', \"Cannot find module '{spec}'\");"
                 );
             }
             let resolved_target =
@@ -771,7 +787,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
                             )
                         }).map(|path| path.to_string_lossy().into_owned())
                     })
-                    .or_else(|| perry_hir::is_native_module(spec).then(|| spec.clone()))
+                    .or_else(|| perry_hir::is_native_module_specifier(spec).then(|| spec.clone()))
             }?;
             Some(format!(
                 "        if (specifier === {}) return {};",
@@ -1045,7 +1061,8 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // the synthetic require (which uses createRequire for builtins).
             .filter(|(_, spec, _)| {
                 let normalized = spec.strip_prefix("node:").unwrap_or(spec);
-                !perry_hir::is_node_builtin_module(normalized)
+                perry_hir::is_bare_prefix_only_builtin(spec)
+                    || !perry_hir::is_node_builtin_module(normalized)
             })
             .map(|(_, _, range)| range)
             .collect::<Vec<_>>();
@@ -1134,15 +1151,6 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     } else {
         "__perry_cjs_factory"
     };
-    // Generate the `__perry_cjs_require_is_builtin` switch cases from the
-    // shared `NODE_BUILTIN_MODULES` table so the dynamic/computed `require`
-    // arm stays in sync with `perry_hir::is_node_builtin_module`. The
-    // hardcoded list previously omitted 16 entries (`tls`, `dgram`,
-    // `diagnostics_channel`, `fs/promises`, `inspector`, `repl`,
-    // `stream/web`, `v8`, `vm`, `wasi`, …), so a computed
-    // `require(specifier)` for one of those fell through to compiled-module
-    // resolution and raised `MODULE_NOT_FOUND` instead of routing through
-    // `createRequire`. Each entry emits both the bare and `node:` spelling.
     // #10735: `require.main` must be the process ENTRY module only —
     // `module` there, unequal (or `undefined`, for an ESM entry) everywhere
     // else. `codegen::entry::compile_module_entry` already published a
@@ -1257,21 +1265,10 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         err.code = code;
         return err;
     }}
-    // Accepts BOTH spellings of every builtin, which is what the switch this
-    // replaced did. `isBuiltin` alone is stricter than the switch: `sea`,
-    // `sqlite`, `test` and `test/reporters` are builtins only in their `node:`
-    // form, so bare `require("sqlite")` stopped resolving — and OpenCode's
-    // dependency graph contains exactly that. wrangler does
-    // `DatabaseSync = __require("sqlite").DatabaseSync` and then
-    // `new DatabaseSync(...)`, which became `new undefined()`.
-    //
-    // Whether Perry should accept the bare spellings at all is a real question,
-    // but it is a SEMANTIC one and does not belong in a performance change.
-    // Behaviour here is byte-for-byte what the switch did; the divergence is
-    // filed separately.
+    // Keep the original spelling: prefix-only builtins are packages when
+    // requested without `node:` (#10410).
     function __perry_cjs_require_is_builtin(specifier) {{
-        return __perry_cjs_is_builtin(specifier)
-            || __perry_cjs_is_builtin('node:' + specifier);
+        return __perry_cjs_is_builtin(specifier);
     }}
     // `isBuiltin` comes from `node:module` instead of a switch emitted into
     // EVERY CommonJS module. The switch carried both spellings of all 58

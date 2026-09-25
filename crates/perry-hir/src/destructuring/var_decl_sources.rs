@@ -89,11 +89,14 @@ pub(crate) fn require_is_shadowed_by_local(ctx: &LoweringContext) -> bool {
 /// builtin (parity with the ESM import path, which bails on
 /// `node:<not-a-builtin>`).
 pub(crate) fn resolvable_native_module_for_spec(raw: &str) -> Option<String> {
+    if crate::ir::is_bare_prefix_only_builtin(raw) {
+        return None;
+    }
     let normalized = raw.strip_prefix("node:").unwrap_or(raw).to_string();
     if raw.starts_with("node:") && !is_node_builtin_module(&normalized) {
         return None;
     }
-    if is_native_module(&normalized) {
+    if crate::ir::is_native_module_specifier(raw) {
         Some(normalized)
     } else {
         None

@@ -54,9 +54,10 @@ pub(crate) fn pre_register_static_import_bindings(
         // Native imports need their module/method-specific registration, which
         // the ordinary declaration pass performs. This pass fixes source
         // modules, whose value bindings all share the imported-function path.
-        if is_native_module(&source)
-            || is_node_builtin_module(&source)
-            || source == "reflect-metadata"
+        if !is_bare_prefix_only_builtin(&raw_source)
+            && (is_native_module_specifier(&raw_source)
+                || is_node_builtin_module(&source)
+                || source == "reflect-metadata")
         {
             continue;
         }

@@ -445,6 +445,24 @@ fn package_name_of(path: &str) -> &str {
     }
 }
 
+/// These bare specifiers name packages, not Node builtins. Check the original
+/// spelling before canonicalizing it; internal native-module keys deliberately
+/// remain prefixless.
+pub fn is_bare_prefix_only_builtin(specifier: &str) -> bool {
+    matches!(specifier, "sea" | "sqlite" | "test" | "test/reporters")
+}
+
+/// Classify an original import/require spelling rather than an internal key.
+/// Explicit prefix-only builtins cannot be overridden by a same-named package.
+pub fn is_native_module_specifier(specifier: &str) -> bool {
+    if let Some(name) = specifier.strip_prefix("node:") {
+        if is_bare_prefix_only_builtin(name) {
+            return NATIVE_MODULES.contains(&name);
+        }
+    }
+    !is_bare_prefix_only_builtin(specifier) && is_native_module(specifier)
+}
+
 /// Check if a module path refers to a native stdlib module.
 ///
 /// Refs #665: when the user has opted the package into

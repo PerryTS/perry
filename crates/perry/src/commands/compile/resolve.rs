@@ -1443,7 +1443,9 @@ pub(super) fn resolve_import_with_bunfs(
     // The opt-in is package-scoped: bare `rate-limiter-flexible` and any
     // subpath under it both fall through to file resolution.
     let (native_check_pkg, _) = parse_package_specifier(import_source);
-    if perry_hir::is_native_module(import_source) && !compile_packages.contains(&native_check_pkg) {
+    if perry_hir::is_native_module_specifier(import_source)
+        && !compile_packages.contains(&native_check_pkg)
+    {
         return None; // Native modules are handled by stdlib, not file imports
     }
 
