@@ -27,3 +27,21 @@ still `undefined` for user subclasses, as it was before this change.
 
 test262 species subset (395 cases, `--all-features`): 268 → 298 passes, no
 regressions. Covered by `test-files/test_gap_11193_builtin_species_accessor.ts`.
+
+Also fixes an intermittent SIGSEGV this change exposed in
+`test_gap_11258_eventemitter_async_resource_subclass_gc` (and a debug
+"misaligned pointer dereference" abort in the #11258 runtime unit test). An
+`AsyncResource`'s backing is a native `Box`, and `resource.eventEmitter` reads
+its expandos through `handle_expando`, which keys the descriptor tables by
+that address. The descriptor probes first consulted the per-cell meta summary,
+which reads `owner - 8` as a `GcHeader` behind only a magnitude check. A `Box`
+address passes that check, so whenever the allocator bytes in front of the
+`Box` looked like an object header, a word past the `Box`'s end was
+dereferenced as its `ObjectMeta`. Main has the same latent read; the extra
+startup allocations here changed the malloc layout enough to hit it (about 1
+run in 6 on macOS, 0 of 80 on main). Handle owners now probe the descriptor
+tables directly (`get_handle_accessor_descriptor`,
+`get_handle_property_attrs`, `handle_accessor_descriptor_keys` in
+`object/descriptor_state.rs`) and never read the owner's memory. Covered by
+`handle_expando::tests::box_owner_probes_never_read_a_spoofed_cell_header`,
+which SIGSEGVs against the old probe.

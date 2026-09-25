@@ -1318,6 +1318,56 @@ pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorD
         .copied()
 }
 
+/// Descriptor lookups for a native HANDLE owner (`handle_expando`): a
+/// small-band id OR a never-freed native `Box` backing such as an
+/// `AsyncResource`'s (#10926). Neither is a GC cell, so these probe the tables
+/// directly and never consult the per-cell meta summary. That summary reads
+/// `owner - 8` as a `GcHeader` behind only a magnitude check, and a `Box`
+/// address passes it: the preceding allocator slot's bytes were classified as
+/// an object header and a field past the `Box`'s end dereferenced as its
+/// `ObjectMeta` -- an intermittent SIGSEGV (or, in a debug build, a
+/// "misaligned pointer dereference" of string bytes) on every
+/// `resource.eventEmitter` read that happened to sit behind a matching byte.
+/// For a small-band id the summary already answered "probe" without reading
+/// memory, so the verdicts are unchanged there.
+pub(crate) fn get_handle_accessor_descriptor(
+    handle: usize,
+    key: &str,
+) -> Option<AccessorDescriptor> {
+    state()
+        .descriptors
+        .accessor_descriptors
+        .borrow()
+        .get(&(handle, key.to_string()))
+        .copied()
+}
+
+/// Handle-owner twin of [`get_property_attrs`]; see
+/// [`get_handle_accessor_descriptor`]. No `String`-wrapper index synthesis: a
+/// handle is never a boxed string, and that probe reads the owner's header too.
+pub(crate) fn get_handle_property_attrs(handle: usize, key: &str) -> Option<PropertyAttrs> {
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow()
+        .get(&(handle, key.to_string()))
+        .copied()
+}
+
+/// Handle-owner twin of [`accessor_descriptor_keys_for_obj`]; see
+/// [`get_handle_accessor_descriptor`].
+pub(crate) fn handle_accessor_descriptor_keys(handle: usize) -> Vec<String> {
+    let mut keys = state()
+        .descriptors
+        .accessor_keys_by_owner
+        .borrow()
+        .get(&handle)
+        .cloned()
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
 /// Does `owner` hold ANY property (data) descriptor?
 ///
 /// O(1) via the owner index. Callers on the `Object.keys` / `for…in` array

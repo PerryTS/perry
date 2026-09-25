@@ -33,7 +33,9 @@
 //! every phase (keeping e.g. a stored array and its elements alive) and rewrites
 //! the stored bits when a copying collection moves the value.
 
-use super::descriptor_state::{get_accessor_descriptor, get_property_attrs, PropertyAttrs};
+use super::descriptor_state::{
+    get_handle_accessor_descriptor, get_handle_property_attrs, PropertyAttrs,
+};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -155,14 +157,14 @@ pub(crate) fn handle_expando_accessor(
     if handle == 0 {
         return None;
     }
-    get_accessor_descriptor(handle as usize, name)
+    get_handle_accessor_descriptor(handle as usize, name)
 }
 
 /// The attributes of the own expando `(handle, name)`. A plain
 /// `handle.foo = v` write records no entry, so it defaults — like any ordinary
 /// JS assignment — to `{writable, enumerable, configurable}: true`.
 pub(crate) fn handle_expando_attrs(handle: i64, name: &str) -> PropertyAttrs {
-    get_property_attrs(handle as usize, name).unwrap_or(PropertyAttrs::new(true, true, true))
+    get_handle_property_attrs(handle as usize, name).unwrap_or(PropertyAttrs::new(true, true, true))
 }
 
 /// True when `name` is an own expando property of `handle` (data OR accessor).
@@ -198,7 +200,7 @@ pub(crate) fn handle_expando_own_keys(handle: i64, enumerable_only: bool) -> Vec
     // A pure accessor define stores no data slot, so pick those up from the
     // accessor table (appended after the data keys — close enough to insertion
     // order for the mixed case, and exact for the common all-data one).
-    for k in super::descriptor_state::accessor_descriptor_keys_for_obj(handle as usize) {
+    for k in super::descriptor_state::handle_accessor_descriptor_keys(handle as usize) {
         if !keys.contains(&k) {
             keys.push(k);
         }
@@ -433,5 +435,35 @@ mod tests {
             cell.borrow_mut().remove(&h);
         });
         crate::object::descriptor_state::clear_property_attrs(h as usize, "hid");
+    }
+
+    /// #11338: an `AsyncResource` backing is a native `Box` used as a handle
+    /// owner. The descriptor probes must not read `owner - 8` as a `GcHeader`
+    /// and follow the "meta" word after it: whatever the allocator placed in
+    /// front of the `Box` can pass that check, and the word past it is not a
+    /// pointer (the CI abort dereferenced the string bytes `0x3630312030203933`).
+    /// The fixture spoofs exactly that shape; every probe must answer from the
+    /// tables alone.
+    #[test]
+    fn box_owner_probes_never_read_a_spoofed_cell_header() {
+        let mut words = Box::new([0x3630_3120_3020_3933u64; 16]);
+        words[0] = crate::gc::GC_TYPE_OBJECT as u64 | ((16 * 8) << 32);
+        let owner = &words[1] as *const u64 as usize;
+        // Precondition: the old meta-summary path WOULD classify this owner
+        // as an object cell and dereference its `meta` field. Without it the
+        // test proves nothing.
+        let hdr = unsafe { crate::value::addr_class::try_read_gc_header(owner) };
+        assert_eq!(
+            hdr.map(|h| h.obj_type),
+            Some(crate::gc::GC_TYPE_OBJECT),
+            "fixture must look like an object cell to the magnitude-checked reader"
+        );
+        let h = owner as i64;
+        assert_eq!(handle_expando_get(h, "eventEmitter"), None);
+        assert!(handle_expando_accessor(h, "eventEmitter").is_none());
+        assert!(!handle_expando_has(h, "eventEmitter"));
+        assert!(handle_expando_attrs(h, "eventEmitter").enumerable());
+        assert!(handle_expando_own_keys(h, true).is_empty());
+        drop(words);
     }
 }
