@@ -275,3 +275,84 @@ fn deferred_connect_reaches_the_loop_on_every_route() {
         assert_eq!(handles_after, handles_before);
     }
 }
+
+/// #11155: `adopt_upgraded_tcp_stream` adopts on the calling thread's own loop
+/// or refuses outright. It used to park the stream in a process-wide map and
+/// post the adoption with no agent named, so a caller that did not own the
+/// loop reached whichever agent the runtime defaulted to, and the socket id it
+/// returned could be adopted onto another agent's loop.
+///
+/// Both halves are observed. A thread that is not the owner — a fresh thread,
+/// spawned after this one has asked, so the route is already settled either
+/// way — must get `INVALID_HANDLE`, register nothing, and close the stream
+/// (the peer reads EOF, the witness that nothing kept it parked). When this
+/// thread owns the loop, the adoption must land here: the driver holds one
+/// more handle before the call returns, with no turn run in between.
+#[test]
+fn upgraded_stream_adoption_is_on_the_callers_loop_or_refused() {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
+    let _lock = GC_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let owns_loop = turnloop_io::enabled();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("an ephemeral port");
+    let port = listener.local_addr().expect("a bound address").port();
+    let connect = move || TcpStream::connect(("127.0.0.1", port)).expect("loopback connects");
+    let accept = |listener: &TcpListener| {
+        let (peer, _) = listener.accept().expect("the connection is accepted");
+        peer.set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("a read timeout");
+        peer
+    };
+
+    // Off the owner.
+    let sockets_before = statics::sockets().lock().unwrap().len();
+    let refused = std::thread::spawn(move || adopt_upgraded_tcp_stream(connect()))
+        .join()
+        .expect("the adopting thread does not panic");
+    let mut peer = accept(&listener);
+    assert_eq!(
+        refused,
+        perry_ffi::INVALID_HANDLE,
+        "a thread that does not own the loop must not get a socket id"
+    );
+    assert_eq!(
+        statics::sockets().lock().unwrap().len(),
+        sockets_before,
+        "a refused adoption must leave no socket registered"
+    );
+    let mut byte = [0u8; 1];
+    assert_eq!(
+        peer.read(&mut byte)
+            .expect("the peer reads EOF, not a timeout"),
+        0,
+        "a refused adoption must close the stream, not park it"
+    );
+
+    // On this thread.
+    let handles_before = perry_ffi::turnloop_net::live_handles();
+    let id = adopt_upgraded_tcp_stream(connect());
+    let _peer = accept(&listener);
+    let _cleanup = NetHandleCleanup::new(vec![id]);
+    if owns_loop {
+        assert_ne!(id, perry_ffi::INVALID_HANDLE, "the owner adopts");
+        assert_eq!(
+            perry_ffi::turnloop_net::live_handles(),
+            handles_before + 1,
+            "the adoption must be on this thread's loop when the call returns"
+        );
+        crate::lifecycle::js_ext_net_destroy_socket(id);
+        let _ = unsafe { js_net_process_pending() };
+    } else {
+        assert_eq!(
+            id,
+            perry_ffi::INVALID_HANDLE,
+            "a thread that does not own the loop must not get a socket id"
+        );
+        assert_eq!(perry_ffi::turnloop_net::live_handles(), handles_before);
+    }
+}

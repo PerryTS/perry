@@ -572,7 +572,7 @@ fn a_create_connection_socket_is_read_when_net_says_it_is_ready() {
         perry_ffi::INVALID_HANDLE,
         "ext-net adopted the socket"
     );
-    // On the loop owner: finish the adoption and publish the raw-net vtable.
+    // Publish the raw-net vtable (the adoption itself already ran, here).
     perry_ext_net::ensure_adopted_socket_dispatch();
     assert!(
         perry_ffi::raw_net().is_some(),

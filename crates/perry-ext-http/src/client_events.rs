@@ -402,7 +402,7 @@ pub(crate) unsafe fn handle_response_event(
 /// and fire `req.on('upgrade', (res, socket, head) => ...)` with
 /// `(res, socket, head)`, Node's exact argument shape. `socket` is the
 /// `net.Socket` id the client transport already
-/// adopted via `perry_ext_net::adopt_upgraded_tcp_stream`; `head` is any
+/// adopted via `perry_ext_net::adopt_turnloop_upgrade`; `head` is any
 /// bytes the peer sent past the header block, as a `Buffer` (never a lossy
 /// string — the write side of #10471 stays server-only, this is a fresh
 /// client-side implementation).
@@ -429,8 +429,8 @@ pub(crate) unsafe fn handle_upgrade_event(
     }
     client_abort::cleanup_request_signal(request_handle);
 
-    // Main-thread companion of `adopt_upgraded_tcp_stream` (#4973) — must
-    // run before user code touches the socket.
+    // Main-thread companion of the net adoption (#4973) — must run before
+    // user code touches the socket.
     if socket_handle != 0 {
         perry_ext_net::ensure_adopted_socket_dispatch();
     }

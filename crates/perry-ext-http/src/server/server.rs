@@ -1193,7 +1193,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
 
     // #5010 — drain perry-ext-net's own pending-event queue. A raw
     // `'upgrade'` (#4973) hands the listener a real `net.Socket` adopted into
-    // perry-ext-net (`adopt_upgraded_tcp_stream`); when user code destroys it,
+    // perry-ext-net (`adopt_turnloop_upgrade`); when user code destroys it,
     // the socket task queues a `Close` event in perry-ext-net's queue. For an
     // http-only program perry-stdlib runs with its OWN bundled net (so its
     // `external-net-pump` arm is OFF and never touches ext-net's queue), and

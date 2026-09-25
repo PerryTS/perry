@@ -259,8 +259,8 @@ pub(crate) fn on_loop(op: impl FnOnce() + Send + 'static) -> bool {
 /// Post `op` to the owner without first asking whether this thread owns the
 /// loop.
 ///
-/// For callers that are not JS threads at all — a tokio worker in another
-/// binding handing over an upgraded connection. [`enabled`] must not be asked
+/// For callers that may not be the loop's owner and must not become it by
+/// asking. [`enabled`] must not be asked
 /// there: the first thread to ask *claims* its agent's route for life, and a
 /// foreign thread that won that race would own a loop nobody turns.
 pub(crate) fn post_to_owner(op: Box<dyn FnOnce() + Send>) -> bool {
