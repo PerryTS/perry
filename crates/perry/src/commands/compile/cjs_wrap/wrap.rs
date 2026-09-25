@@ -474,8 +474,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // These registered facade entry points stay native even under an
             // explicit compilePackages opt-in. Resolving them to watcher.node
             // creates a compiled-module import whose body is intentionally absent.
-            let watcher_facade = perry_hir::is_native_module(spec)
-                && (spec == "@parcel/watcher" || spec.starts_with("@parcel/watcher-"));
+            let watcher_facade = is_watcher_facade(spec);
             let resolved_require_spec = if !watcher_facade && import_spec == spec
                 && !spec.starts_with("./")
                 && !spec.starts_with("../")
@@ -745,7 +744,11 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
             // A loaded file's identity is its resolved filename, not the
             // original require spelling. Keep builtin and hosted-addon IDs,
             // but never claim that a missing optional file resolved.
-            let resolved = if builtin_requires.contains(spec) {
+            // The @parcel/watcher facade entry points stay native, so their
+            // identity is the package id, as for their import above: resolving
+            // them to watcher.node names a module whose body is intentionally
+            // absent (#11252).
+            let resolved = if builtin_requires.contains(spec) || is_watcher_facade(spec) {
                 Some(spec.clone())
             } else {
                 resolved_native_addon(source_path, spec)
@@ -1519,6 +1522,15 @@ fn host_node_arch() -> Option<&'static str> {
     {
         None
     }
+}
+
+/// The registered `@parcel/watcher` facade entry points. They stay native even
+/// under an explicit `compilePackages` opt-in, so both the generated import and
+/// the generated `require.resolve` identity keep the package specifier instead
+/// of resolving it to `watcher.node`.
+fn is_watcher_facade(spec: &str) -> bool {
+    perry_hir::is_native_module(spec)
+        && (spec == "@parcel/watcher" || spec.starts_with("@parcel/watcher-"))
 }
 
 /// Fold OpenCode's target-dependent @parcel/watcher sidecar require before
