@@ -76,7 +76,8 @@
 3 crates/perry-runtime/src/child_process/v8_serde.rs
 5 crates/perry-runtime/src/dns.rs
 6 crates/perry-runtime/src/embedded.rs
-7 crates/perry-runtime/src/error.rs
+3 crates/perry-runtime/src/error.rs
+4 crates/perry-runtime/src/error/global_ref.rs  # moved-from: crates/perry-runtime/src/error.rs
 16 crates/perry-runtime/src/event_target.rs
 3 crates/perry-runtime/src/frame.rs
 3 crates/perry-runtime/src/fs/dir_glob_watch/watch.rs

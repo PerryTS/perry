@@ -33,6 +33,7 @@ mod element_shape_native;
 mod if_stmt;
 mod let_buffer_views;
 mod let_object_facts;
+mod let_scalar_new;
 mod let_stmt;
 mod let_stmt_facts;
 #[cfg(test)]
