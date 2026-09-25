@@ -858,6 +858,27 @@ pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
     }
 }
 
+/// Fire a one-arg event (`server.on('connection', socket)`).
+pub(crate) fn emit_one_arg_to_listeners(listeners: &[i64], arg: f64) {
+    // #8082: the snapshot AND the arg cross every callback — root both.
+    let scope = perry_ffi::TransientRootScope::enter();
+    let rooted = scope.root_addrs(listeners);
+    let arg = scope.root_nanbox(arg);
+    for cb in &rooted {
+        let addr = cb.get();
+        if addr == 0 {
+            continue;
+        }
+        unsafe {
+            let raw = addr as *const RawClosureHeader;
+            let closure = JsClosure::from_raw(raw);
+            if !closure.is_null() {
+                let _ = closure.call1(arg.get());
+            }
+        }
+    }
+}
+
 /// Mark the request as closed, abort `req.signal`, and fire `'close'` once.
 pub(crate) fn close_incoming_message(handle: i64) {
     let close_listeners;
@@ -884,6 +905,32 @@ pub(crate) fn close_incoming_message(handle: i64) {
 /// Allocate a fresh `IncomingMessage` and return its handle id.
 pub(crate) fn alloc_incoming_message(im: IncomingMessage) -> i64 {
     register_handle(im)
+}
+
+/// Build the JS-visible object exposed to `'connection'` listeners and, for
+/// every request on this connection, as `req.socket`/`req.connection`. One
+/// per accepted connection, shared by every request that connection carries.
+///
+/// Deliberately reuses `IncomingMessage` rather than a new type: it already
+/// has `remoteAddress`/`remotePort`, an `on`/`once`/`destroy` dispatch
+/// surface, and a `'close'` emit (`close_incoming_message`) — exactly the
+/// net.Socket-shaped surface Node exposes here, with no request-specific
+/// state ever populated on it (`method`/`url`/`headers` stay at their
+/// `IncomingMessage::new` defaults and are never Node-accurate for this
+/// object; nothing reads them, since real `net.Socket` has no such
+/// properties either).
+pub(crate) fn alloc_connection_socket(remote_address: String, remote_port: u16) -> i64 {
+    let mut socket = IncomingMessage::new(
+        String::new(),
+        String::new(),
+        HashMap::new(),
+        Vec::new(),
+        Vec::new(),
+        remote_address,
+        remote_port,
+    );
+    socket.complete = true;
+    register_handle(socket)
 }
 
 /// Record only that the response wrote at least one byte. The req/res facade

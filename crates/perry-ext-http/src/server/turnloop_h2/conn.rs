@@ -494,7 +494,16 @@ fn on_accept(listener_id: i64, conn_id: i64) {
         }
     }
     insert(conn);
-    crate::server::server::queue_turnloop_connection_event(server_handle);
+    // Give HTTP/2's `'connection'` listener a
+    // real socket argument too, same shared drain path as HTTP/1.1. Not
+    // stored on `H2Conn` — HTTP/2 streams don't wire `req.socket` from it
+    // (out of scope here; Node's own `Http2ServerRequest` has no `.socket`
+    // alias to a per-connection object the way `http`'s does).
+    let connection_socket = crate::server::request::alloc_connection_socket(
+        peer.as_ref().map(|e| e.address.clone()).unwrap_or_default(),
+        peer.as_ref().map(|e| e.port).unwrap_or(0),
+    );
+    crate::server::server::queue_turnloop_connection_event(server_handle, connection_socket);
     if let Err(_err) = tl::read_start(conn_id) {
         destroy_connection(conn_id);
         return;

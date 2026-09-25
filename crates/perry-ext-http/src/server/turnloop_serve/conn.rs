@@ -19,7 +19,10 @@ use perry_ffi::turnloop_net as tl;
 use turnloop_http::http1;
 
 use super::wire::{self, Framing};
-use crate::server::request::{alloc_incoming_message, IncomingMessage};
+use crate::server::request::{
+    alloc_connection_socket, alloc_incoming_message, handle_to_pointer_f64, incoming_socket_assign,
+    IncomingMessage,
+};
 use crate::server::response::{alloc_server_response_for_turnloop, ResponseShape};
 use crate::server::server::{with_base_server, HttpPendingRequest};
 
@@ -72,6 +75,11 @@ pub(crate) struct Conn {
     server_handle: i64,
     peer_address: String,
     peer_port: u16,
+    /// The `IncomingMessage`-shaped object
+    /// handed to `server.on('connection', ...)` and shared as `req.socket`
+    /// by every request this connection carries. One per connection, built
+    /// once in `start_connection`/`adopt_alpn_http1`.
+    socket_handle: i64,
     decoder: http1::Decoder,
     input: Vec<u8>,
     building: Option<Building>,
@@ -140,6 +148,28 @@ pub(crate) fn note_aborted_handle(handle: i64) {
 /// Take the `IncomingMessage` handles whose connection died mid-request.
 pub(crate) fn take_aborted() -> Vec<i64> {
     let mut queue = aborted().lock().unwrap_or_else(|e| e.into_inner());
+    std::mem::take(&mut *queue)
+}
+
+/// Connection-socket handles (`alloc_connection_socket`) whose TCP connection
+/// has fully closed. Same pattern as `aborted()`: the completion sink cannot
+/// run JS, so the pump drains this and fires the socket's `'close'`
+/// listeners on its own tick.
+fn closed_sockets() -> &'static Mutex<Vec<i64>> {
+    static CLOSED: OnceLock<Mutex<Vec<i64>>> = OnceLock::new();
+    CLOSED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn note_closed_socket(socket_handle: i64) {
+    closed_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(socket_handle);
+}
+
+/// Take the connection-socket handles due a `'close'` emit.
+pub(crate) fn take_closed_sockets() -> Vec<i64> {
+    let mut queue = closed_sockets().lock().unwrap_or_else(|e| e.into_inner());
     std::mem::take(&mut *queue)
 }
 
@@ -267,15 +297,19 @@ pub(crate) fn start_connection(
         }
     }
     let peer = tl::peer_address(conn_id);
+    let peer_address = peer.as_ref().map(|e| e.address.clone()).unwrap_or_default();
+    let peer_port = peer.as_ref().map(|e| e.port).unwrap_or(0);
     let keep_alive_timeout_ms =
         with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
+    let socket_handle = alloc_connection_socket(peer_address.clone(), peer_port);
     conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
         conn_id,
         Conn {
             id: conn_id,
             server_handle,
-            peer_address: peer.as_ref().map(|e| e.address.clone()).unwrap_or_default(),
-            peer_port: peer.as_ref().map(|e| e.port).unwrap_or(0),
+            peer_address,
+            peer_port,
+            socket_handle,
             decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
             input: Vec::with_capacity(8 * 1024),
             building: None,
@@ -293,7 +327,7 @@ pub(crate) fn start_connection(
             websocket: false,
         },
     );
-    crate::server::server::queue_turnloop_connection_event(server_handle);
+    crate::server::server::queue_turnloop_connection_event(server_handle, socket_handle);
     arm_idle(conn_id);
     if let Err(_err) = tl::read_start(conn_id) {
         destroy_connection(conn_id);
@@ -327,6 +361,11 @@ pub(crate) fn adopt_alpn_http1(
         with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
     let mut input = Vec::with_capacity(8 * 1024);
     input.extend_from_slice(&leftover);
+    // Pre-existing gap, not this fix's scope: this ALPN handoff never queued
+    // `'connection'` (no `queue_turnloop_connection_event` call below) even
+    // before connection sockets existed. `req.socket` on it is still wired so a
+    // request landing here is consistent with the ordinary accept path.
+    let socket_handle = alloc_connection_socket(peer_address.clone(), peer_port);
     conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
         id,
         Conn {
@@ -334,6 +373,7 @@ pub(crate) fn adopt_alpn_http1(
             server_handle,
             peer_address,
             peer_port,
+            socket_handle,
             decoder: http1::Decoder::new(http1::Mode::Request, Default::default()),
             input,
             building: None,
@@ -621,6 +661,10 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
         "1.1".to_string()
     };
     let im_handle = alloc_incoming_message(im);
+    // `req.socket === conn` for the
+    // `'connection'` listener's argument — same handle, every request on
+    // this connection.
+    incoming_socket_assign(im_handle, handle_to_pointer_f64(c.socket_handle));
     let sr_handle = alloc_server_response_for_turnloop(c.id, c.seq, im_handle);
 
     let is_check_continue = building.expects_continue
@@ -1057,11 +1101,21 @@ fn on_closed(id: i64) {
     // ever passing through `destroy_connection`.
     note_aborted(id);
     cancel_idle(id);
-    let owned = conns()
+    let removed = conns()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .remove(&id)
-        .is_some();
+        .remove(&id);
+    let owned = removed.is_some();
+    // The connection is fully gone — queue its
+    // socket's `'close'` for the pump's next tick. This sink runs inside
+    // `dispatch_staged` and must not run JS (same rule as `note_aborted`
+    // above), so `js_node_http_server_process_pending` (via
+    // `take_closed_sockets`) fires the listeners instead.
+    if let Some(conn) = removed {
+        if conn.socket_handle != 0 {
+            note_closed_socket(conn.socket_handle);
+        }
+    }
     crate::server::server::turnloop_connection_closed(id);
     if owned {
         // The rustls session has to go BEFORE the id does. `turnloop_tls_io`

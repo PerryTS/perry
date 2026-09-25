@@ -14,7 +14,7 @@ use perry_ffi::{
 };
 
 use crate::server::ensure_gc_scanner_registered;
-use crate::server::request::{emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this};
+use crate::server::request::{handle_to_pointer_f64, with_implicit_this};
 use crate::server::response::{ResponseShape, ServerResponse};
 use crate::server::types::{
     extract_host, extract_port, js_handle_clear_side_tables, js_promise_run_microtasks,
@@ -233,13 +233,14 @@ pub struct HttpPendingUpgrade {
     pub head: Vec<u8>,
 }
 
-/// Server handles whose accept loop saw a new connection since the last
-/// pump tick. Drained by `js_node_http_server_process_pending` to fire
-/// `'connection'` listeners on the main thread (#4905). Node passes the
-/// socket as the listener argument; we don't model a net.Socket for
-/// these connections yet, so listeners fire with no args — enough for
-/// the canonical connection-counting idiom.
-pub(crate) static PENDING_CONNECTION_EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+/// `(server_handle, socket_handle)` pairs whose accept loop saw a new
+/// connection since the last pump tick. Drained by
+/// `js_node_http_server_process_pending` to fire `'connection'` listeners on
+/// the main thread (#4905). `socket_handle` is the connection's identity
+/// (`crate::server::request::alloc_connection_socket`): the `IncomingMessage`-shaped object Node passes as the
+/// listener's argument and that every request on the connection shares as
+/// `req.socket`.
+pub(crate) static PENDING_CONNECTION_EVENTS: Mutex<Vec<(i64, i64)>> = Mutex::new(Vec::new());
 
 /// Read the `HttpServer` behind a JS server handle, whichever flavour it is.
 ///
@@ -1098,11 +1099,11 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // #4905 — fire `'connection'` listeners for connections accepted since
     // the last tick, before their requests are dispatched (Node fires
     // `'connection'` ahead of `'request'`).
-    let connection_events: Vec<i64> = PENDING_CONNECTION_EVENTS
+    let connection_events: Vec<(i64, i64)> = PENDING_CONNECTION_EVENTS
         .lock()
         .map(|mut q| q.drain(..).collect())
         .unwrap_or_default();
-    for server_handle in connection_events {
+    for (server_handle, socket_handle) in connection_events {
         // The handle may back an HttpServer or an HttpsServer (whose
         // accept loop pushes here too since #4971) — probe both.
         let listeners = get_handle_mut::<HttpServer>(server_handle)
@@ -1116,7 +1117,19 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
             continue;
         }
         let this_val = handle_to_pointer_f64(server_handle);
-        with_implicit_this(this_val, || emit_no_arg_to_listeners(&listeners));
+        let socket_val = handle_to_pointer_f64(socket_handle);
+        with_implicit_this(this_val, || {
+            crate::server::request::emit_one_arg_to_listeners(&listeners, socket_val)
+        });
+        count += 1;
+    }
+
+    // Fire `'close'` on every connection
+    // socket whose TCP connection fully closed since the last tick — before
+    // this tick's server `'close'` callback below (`drain_deferred_close_for`),
+    // matching Node's ordering.
+    for socket_handle in crate::server::turnloop_serve::take_closed_sockets() {
+        crate::server::request::close_incoming_message(socket_handle);
         count += 1;
     }
 

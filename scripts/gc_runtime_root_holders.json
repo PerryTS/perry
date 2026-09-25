@@ -43,7 +43,7 @@
       "file": "crates/perry-ext-http/src/server/server.rs",
       "name": "PENDING_CONNECTION_EVENTS",
       "verdict": "not_a_gc_pointer",
-      "why": "Vec of server-handle registry ids drained by js_node_http_server_process_pending to fire 'connection' listeners; the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots."
+      "why": "Vec of (server_handle, socket_handle) registry-id pairs drained by js_node_http_server_process_pending to fire 'connection' listeners; socket_handle is a connection-socket IncomingMessage handle (alloc_connection_socket). Both are perry-ffi registry ids, not NaN-boxed values — the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots, and the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage>."
     },
     {
       "file": "crates/perry-ext-http/src/server/server.rs",
@@ -2701,6 +2701,12 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
+      "name": "CLOSED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Vec<i64> of connection-socket handle ids (alloc_connection_socket) whose TCP connection fully closed, queued by note_closed_socket/on_closed and drained by the pump — same shape and same file as the pre-existing ABORTED/aborted() request-handle queue this crate already uses for 'aborted'. A registry id, not a NaN-boxed value: the socket's own listeners/signal fields are scanned via iter_handles_of_mut::<IncomingMessage> in server/mod.rs's scan_http_server_roots."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

@@ -40,10 +40,12 @@ pub(crate) fn note_turnloop_request_aborted(request_handle: i64) {
 
 /// Queue the `'connection'` event for a turnloop-accepted connection (P5).
 ///
-/// Drained by the pump, whose listeners fire with no args.
-pub(crate) fn queue_turnloop_connection_event(server_handle: i64) {
+/// Drained by the pump, whose listeners fire with `socket_handle` — the
+/// connection's socket object — as the sole
+/// argument.
+pub(crate) fn queue_turnloop_connection_event(server_handle: i64, socket_handle: i64) {
     if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
-        q.push(server_handle);
+        q.push((server_handle, socket_handle));
     }
 }
 
