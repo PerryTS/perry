@@ -1183,6 +1183,11 @@ fn compute_object_cache_key_with_env(
         "env_concat_site_cache",
         env_var("PERRY_CONCAT_SITE_CACHE").as_deref().unwrap_or(""),
     );
+    // #11354: a `=1` build emits a route-count call per fused receiver compare.
+    h.field(
+        "env_recv_route_count",
+        env_var("PERRY_RECV_ROUTE_COUNT").as_deref().unwrap_or(""),
+    );
     h.field(
         "env_full_outline_ic",
         env_var("PERRY_FULL_OUTLINE_IC").as_deref().unwrap_or(""),

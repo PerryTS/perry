@@ -118,6 +118,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // site lowers to a different sequence with it on and off and a cached
     // object from one setting must not serve the other.
     "PERRY_CONCAT_SITE_CACHE",
+    // #11354: a `PERRY_RECV_ROUTE_COUNT=1` build emits a route-count call at
+    // every fused receiver compare, so it changes the emitted IR.
+    "PERRY_RECV_ROUTE_COUNT",
     // The guarded-preinline IR-size ceiling: functions on either side of the
     // budget inline differently, so a run with a raised ceiling must not be
     // served objects a default run produced (same rule as the RS4GC budget
