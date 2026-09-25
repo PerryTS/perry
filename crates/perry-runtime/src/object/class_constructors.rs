@@ -94,7 +94,7 @@ pub extern "C" fn js_class_capture_value_for_receiver(
 /// heritage, the same order `instanceof`'s `class_chain_reaches_dynamic` walks.
 /// A ClassRef of `class_id` itself answers `None`: a declaration's captures
 /// live in its decl-site snapshot, not on an object.
-fn capture_owner_for_template(start: f64, class_id: u32) -> Option<f64> {
+pub(crate) fn capture_owner_for_template(start: f64, class_id: u32) -> Option<f64> {
     let mut current = start;
     for _ in 0..64 {
         let cid = if super::class_registry::is_class_object_value(current) {

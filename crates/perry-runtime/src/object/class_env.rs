@@ -140,12 +140,32 @@ pub unsafe extern "C" fn js_class_env_refresh(cid: u32, class_value: f64, caps: 
     }
 }
 
-/// The evaluation a member of class `cid` runs in: the method value's own
-/// evaluation (extracted-method dispatch), else the receiver's.
+/// The evaluation a member of class `cid` runs in. The candidates, in order,
+/// are the ones `js_class_capture_value_for_receiver` uses: the method value's
+/// own evaluation (extracted-method dispatch), the class object an ordinary
+/// static dispatch found the member on, and the receiver. A class value (or
+/// class ref) candidate is walked up its heritage to `cid`'s evaluation, so an
+/// inherited static runs in its defining evaluation; an instance answers with
+/// its recorded brand's ancestor for `cid`.
 fn member_evaluation(receiver: f64, cid: u32) -> Option<u64> {
-    super::field_get_set::current_private_lexical_brand_value(cid)
-        .or_else(|| super::field_get_set::class_evaluation_of(receiver, cid))
-        .map(f64::to_bits)
+    let candidates = [
+        super::field_get_set::current_private_lexical_brand_value(cid),
+        super::static_private_owner_current(),
+        Some(receiver),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        let found = if super::class_registry::is_class_object_value(candidate)
+            || super::class_ref_id(candidate).is_some()
+        {
+            super::capture_owner_for_template(candidate, cid)
+        } else {
+            super::field_get_set::class_evaluation_of(candidate, cid)
+        };
+        if let Some(evaluation) = found {
+            return Some(evaluation.to_bits());
+        }
+    }
+    None
 }
 
 /// The capture array of a non-owner evaluation, or `None` for the owner.

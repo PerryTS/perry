@@ -154,6 +154,24 @@ fn branch_on_state(
         .phi(DOUBLE, &[(&fast_v, &fast_end), (&slow_v, &slow_end)])
 }
 
+/// Store `v` into `slot` unless it is `undefined` (see the publish arm of
+/// `Expr::ClassEnvSet`).
+fn publish_unless_undefined(ctx: &mut FnCtx<'_>, v: &str, slot: &str, value: &Expr) {
+    let bits = ctx.block().bitcast_double_to_i64(v);
+    let undefined = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
+    let present = ctx.block().icmp_ne(crate::types::I64, &bits, &undefined);
+    let store_idx = ctx.new_block("classenv.publish");
+    let done_idx = ctx.new_block("classenv.publish.done");
+    let store_label = ctx.block_label(store_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block().cond_br(&present, &store_label, &done_label);
+    ctx.current_block = store_idx;
+    // GC_STORE_AUDIT(ROOT): registered mutable root slot.
+    emit_root_nanbox_store_for_expr(ctx, v, slot, value);
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+}
+
 fn receiver(ctx: &mut FnCtx<'_>) -> String {
     if let Some(this_slot) = ctx.this_stack.last().cloned() {
         ctx.block().load(DOUBLE, &this_slot)
@@ -250,7 +268,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let Some(slot) = class_env_global(ctx, class_name, *index) else {
                 return Ok(v);
             };
-            let Some(state) = class_env_state_global(ctx, class_name) else {
+            let state = class_env_state_global(ctx, class_name);
+            if *publish {
+                // The constructor's capture params are not always filled from
+                // the class's evaluation: `super(...args)` reaching an
+                // ancestor constructor through the runtime fills them from the
+                // decl-site snapshot, which a class expression does not have,
+                // so they arrive `undefined`. The evaluation itself (and every
+                // refresh) publishes the real values, so a publish must never
+                // overwrite them with a missing param. A guarded class is
+                // always a fresh class expression whose evaluation publishes,
+                // so its publish is dropped entirely.
+                if state.is_none() {
+                    publish_unless_undefined(ctx, &v, &slot, value);
+                }
+                return Ok(v);
+            }
+            let Some(state) = state else {
                 // GC_STORE_AUDIT(ROOT): registered mutable root slot.
                 emit_root_nanbox_store_for_expr(ctx, &v, &slot, value);
                 return Ok(v);
@@ -262,7 +296,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .unwrap_or(0)
                 .to_string();
             let idx = index.to_string();
-            let publish = *publish;
             branch_on_state(
                 ctx,
                 &state,
@@ -272,15 +305,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     v.clone()
                 },
                 |ctx| {
-                    // A publish after a second evaluation carries that
-                    // evaluation's params, which its own array already holds.
-                    if !publish {
-                        let recv = receiver(ctx);
-                        ctx.block().call_void(
-                            "js_class_env_set",
-                            &[(DOUBLE, &recv), (I32, &cid), (I32, &idx), (DOUBLE, &v)],
-                        );
-                    }
+                    let recv = receiver(ctx);
+                    ctx.block().call_void(
+                        "js_class_env_set",
+                        &[(DOUBLE, &recv), (I32, &cid), (I32, &idx), (DOUBLE, &v)],
+                    );
                     v.clone()
                 },
             );

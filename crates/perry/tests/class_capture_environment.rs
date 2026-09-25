@@ -388,3 +388,28 @@ fn a_self_construction_after_re_evaluation_keeps_the_members_evaluation() {
         &[("Inner", "env-guarded")],
     );
 }
+
+#[test]
+fn inherited_members_run_in_their_defining_evaluation() {
+    // A subclass constructed through `super(...args)` must not overwrite the
+    // base class environment with a missing capture param, an inherited
+    // static runs in the evaluation it was found on, and an extracted static
+    // keeps its own evaluation whatever `this` is.
+    check(
+        "(function () {
+  const baseCap = \"base-capture\";
+  const Base1 = class { m() { return baseCap; } };
+  const Sub1 = class extends Base1 {};
+  console.log(new Base1().m(), new Sub1().m());
+})();
+function fCapM(tag: string) { return class Out { static tagv() { return tag; } }; }
+class A3 extends fCapM(\"a\") {}
+class B3 extends fCapM(\"b\") {}
+const mk = (seed: string) => class c { static v = seed; static get() { return c.v; } };
+const P = mk(\"P\"), Q = mk(\"Q\");
+console.log((A3 as any).tagv(), (B3 as any).tagv(), P.get.call(Q));
+",
+        "base-capture base-capture\na b P\n",
+        &[("Out", "env-guarded")],
+    );
+}
