@@ -201,13 +201,16 @@ thread_local! {
     // callback is on the stack, then commit the batch at depth zero.
     static HOOK_CALLBACK_DEPTH: Cell<usize> = const { Cell::new(0) };
     static PENDING_HOOK_STATES: RefCell<HashMap<usize, bool>> = RefCell::new(HashMap::new());
-    // #11258: backings whose `event_emitter` holds a movable heap object (an
-    // `EventEmitterAsyncResource` subclass's `this`). The field is a raw
-    // address, so without a root it keeps the from-space copy after a moving
-    // collection and `sub.asyncResource.eventEmitter === sub` breaks.
-    // `scan_async_hooks_roots_mut` visits (marks AND rewrites) each one.
-    // Per-thread because the emitter lives in the linking thread's arena;
-    // backings are never freed, so the addresses stay dereferenceable.
+}
+
+crate::perry_thread_local! {
+    /// #11258: backings whose `event_emitter` holds a movable heap object (an
+    /// `EventEmitterAsyncResource` subclass's `this`). The field is a raw
+    /// address, so without a root it keeps the from-space copy after a moving
+    /// collection and `sub.asyncResource.eventEmitter === sub` breaks.
+    /// `scan_async_hooks_roots_mut` visits (marks AND rewrites) each one.
+    /// Per-thread because the emitter lives in the linking thread's arena;
+    /// backings are never freed, so the addresses stay dereferenceable.
     static EVENT_EMITTER_LINKED_BACKINGS: RefCell<HashSet<i64>> = RefCell::new(HashSet::new());
 }
 
