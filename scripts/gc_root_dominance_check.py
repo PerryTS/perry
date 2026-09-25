@@ -645,6 +645,13 @@ ALLOC_RE = re.compile(
     # its coerced pointer across the lowering of `base`. Verified to exist
     # before being added, per the extrapolated-suffix warning below.
     r"url_coerce_string|"
+    # #10762's `_box` twins of the two coercions: the `String(x)` / `${x}`
+    # lowerings now call these instead of `js_string_coerce` /
+    # `js_template_string_coerce`, and return the NaN-boxed result -- a heap
+    # string whenever the text does not fit an SSO immediate. Named exactly,
+    # not `string_coerce\w*`, so `js_string_coerce_method_this` is not swept
+    # in as an unmeasured coverage change.
+    r"string_coerce_box|template_string_coerce_box|"
     r"string_concat\w*|string_coerce|string_from\w*|string_append|"
     r"jsvalue_to_string\w*|value_to_string\w*|number_to_string\w*|"
     r"string_repeat|string_slice|string_substring|string_substr|"
@@ -1534,6 +1541,12 @@ POLL_CAPABLE_RUNTIME = {
     "js_jsvalue_to_string_method", "js_jsvalue_to_string_radix",
     "js_string_coerce", "js_string_coerce_method_this",
     "js_number_coerce", "js_object_coerce",
+    # #10762: the NaN-box-returning twins the `String(x)`, `${x}` and
+    # `x.toString()` lowerings call instead. Each forwards every non-number,
+    # non-string argument to its pointer-returning original above, so each can
+    # run the same user `toString` / `valueOf`.
+    "js_string_coerce_box", "js_template_string_coerce_box",
+    "js_jsvalue_to_string_method_box",
     # ---------------------------------------------------------------- #7616
     #
     # The 52 symbols `--audit-poll-reach` found, and the reason they are one

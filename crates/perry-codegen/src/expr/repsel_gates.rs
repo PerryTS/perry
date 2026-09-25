@@ -74,7 +74,8 @@ use super::slot_rep::{
 ///   null-handle case kept in a cold `js_nanbox_string` arm;
 /// * `lower_string_method::str_operand_handle_tag_dispatched`'s
 ///   `proven_heap_string_operand` arm — inline `bitcast; and POINTER_MASK` for
-///   a literal / `String(x)` operand;
+///   a literal operand — and its two-arm heap/SSO dispatch for a `String(x)` /
+///   `${x}` operand (which may be SSO since #10762);
 /// * `expr::property_get`'s tag-dispatched `.length` on any `is_string_expr`
 ///   receiver.
 ///

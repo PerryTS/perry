@@ -208,8 +208,9 @@ fn a_string_literal_operand_keeps_the_fused_concat() {
 
 #[test]
 fn a_coerced_operand_keeps_the_fused_concat() {
-    // `String(x) + n` — `js_string_coerce` always allocates a heap
-    // `StringHeader`, so this is a proof exactly like a literal.
+    // `String(x) + n` — `String(x)` always produces a string (heap, or SSO
+    // for a short number since #10762), so this is a proof exactly like a
+    // literal.
     let ir = ir(
         vec![param(1, "n", Type::Number)],
         add(

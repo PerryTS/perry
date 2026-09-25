@@ -118,16 +118,17 @@ fn throw_if_bigint_digits(arg: f64) {
 pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
     // Fast path: small non-negative integers use a cached string table.
     //
-    // The admission test is `fract() == 0.0` plus an in-range check written so
-    // LLVM can prove the `as u32` cannot overflow and emit a bare
-    // `cvttsd2si`. The old `value as usize` — on a value the same condition
-    // had already proven to be in `0..256` — lowered to Rust's full SATURATING
-    // `f64 -> u64` sequence: 14 instructions of `cmov` fixup, a quarter of
-    // what a cache hit cost. `-0.0` passes (`-0.0 >= 0.0`), converts to 0 and
-    // returns "0", which is the spec answer for `String(-0)`. NaN and
-    // +-Infinity fail `fract() == 0.0` (`fract` is `self - self.trunc()`,
-    // which is NaN for both).
-    if value.fract() == 0.0 && value >= 0.0 && value < SMALL_INT_CACHE_SIZE as f64 {
+    // The admission test is an in-range check written so LLVM can prove the
+    // `as u32` cannot overflow and emit a bare `cvttsd2si`, then a round trip
+    // that rejects a fraction. The old `value as usize` — on a value the same
+    // condition had already proven to be in `0..256` — lowered to Rust's full
+    // SATURATING `f64 -> u64` sequence: 14 instructions of `cmov` fixup, a
+    // quarter of what a cache hit cost. The round trip replaced
+    // `fract() == 0.0`, which on the baseline x86-64 target is a libm `trunc`
+    // call, 15 instructions per conversion (#10762). `-0.0` passes
+    // (`-0.0 >= 0.0`), converts to 0 and returns "0", which is the spec answer
+    // for `String(-0)`. NaN fails both comparisons; +-Infinity fails the range.
+    if value >= 0.0 && value < SMALL_INT_CACHE_SIZE as f64 && (value as u32) as f64 == value {
         let idx = value as u32 as usize;
         // SAFETY: the range test above proves `idx < SMALL_INT_CACHE_SIZE`.
         let cached = SMALL_INT_CACHE.with(|c| unsafe { *(*c.get()).get_unchecked(idx) });
@@ -141,6 +142,119 @@ pub extern "C" fn js_number_to_string(value: f64) -> *mut StringHeader {
     let mut buf = [0u8; 32];
     let len = super::concat::format_number_into(value, &mut buf);
     js_string_from_bytes(buf.as_ptr(), len as u32)
+}
+
+/// NaN-box-returning twin of [`js_number_to_string`] (#10762).
+///
+/// `String(n)`, `` `${n}` `` and `n.toString()` all box their result the
+/// moment it comes back, so a `*mut StringHeader` return made every one of
+/// them pay for a heap string even for a three-byte answer — or, inside
+/// 0..256, a thread-local cache probe. `"" + n` never did: its
+/// `js_string_concat_value_box` packs a result of at most
+/// `SHORT_STRING_MAX_LEN` bytes into an SSO immediate. This gives the other
+/// three spellings the same arm: every integer in `-9999..=99999`, `NaN`, and
+/// short fractions like `"0.5"` / `"-1.5"` come back as SSO bits with no
+/// allocation and no thread-local access, and the bits are content-stable, so
+/// a converted number used as a property key hits the same key caches `"k" + i`
+/// already does.
+///
+/// Every byte `format_number_into` writes is ASCII (digits, `-`, `.`, `e`,
+/// `+`, `NaN`, `Infinity`), which is the SSO arm's precondition: a short
+/// string's UTF-16 length is read as its byte length. Longer results take the
+/// exact heap path `js_number_to_string` takes, so the text is identical on
+/// every input — both sides format through the same `format_number_into`.
+#[no_mangle]
+pub extern "C" fn js_number_to_string_box(value: f64) -> f64 {
+    number_to_string_box(value)
+}
+
+/// Body of [`js_number_to_string_box`], inlined into the three `_box`
+/// coercions so the integer arm costs them no second call.
+#[inline(always)]
+pub(crate) fn number_to_string_box(value: f64) -> f64 {
+    if let Some(bits) = small_integer_sso_bits(value) {
+        return f64::from_bits(bits);
+    }
+    number_to_string_box_general(value)
+}
+
+/// Every number the integer arm above declines: fractions, `NaN`, the
+/// infinities and integers of six or more characters.
+#[inline(never)]
+fn number_to_string_box_general(value: f64) -> f64 {
+    let mut buf = [0u8; 32];
+    let len = super::concat::format_number_into(value, &mut buf);
+    if len <= crate::value::SHORT_STRING_MAX_LEN {
+        return f64::from_bits(short_ascii_string_bits(&buf, len));
+    }
+    let ptr = js_string_from_bytes(buf.as_ptr(), len as u32);
+    f64::from_bits(crate::value::STRING_TAG | ptr as u64)
+}
+
+/// SSO bits for an integral `value` in `-9999..=99999` — exactly the integers
+/// whose text fits `SHORT_STRING_MAX_LEN` — or `None`.
+///
+/// This is the whole conversion for the common case, so it avoids the two
+/// things that dominated it through `format_number_into`: `f64::fract`, which
+/// is a libm `trunc` call on the baseline x86-64 target (no SSE4.1 `roundsd`),
+/// and a stack buffer. The range test comes first so the conversion to `i32`
+/// needs no saturation; it also rejects `NaN` and the infinities, since every
+/// comparison with `NaN` is false. The round trip then rejects a fraction.
+/// `-0.0` converts to `0` and compares equal to `0.0`, giving `"0"`, which is
+/// `Number::toString(-0)`.
+///
+/// Digits are produced least-significant first and each new one is shifted in
+/// at the BOTTOM, so the most significant digit ends in byte 0 — the SSO
+/// payload's first character — with no reversal step; the sign goes in last,
+/// below them all.
+#[inline(always)]
+pub(crate) fn small_integer_sso_bits(value: f64) -> Option<u64> {
+    if !(-9_999.0..=99_999.0).contains(&value) {
+        return None;
+    }
+    // SAFETY: the range test above admits only finite values in
+    // `-9999..=99999`, whose truncation is always representable as an `i32`.
+    // A plain `as i32` measured 5 instructions of saturation fixup here: LLVM
+    // does not carry the range proof through to the conversion.
+    let int: i32 = unsafe { value.to_int_unchecked() };
+    if int as f64 != value {
+        return None;
+    }
+    let mut rest = int.unsigned_abs();
+    let mut payload = 0u64;
+    let mut len = 0u64;
+    loop {
+        payload = (payload << 8) | u64::from(b'0' + (rest % 10) as u8);
+        len += 1;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    if int < 0 {
+        payload = (payload << 8) | u64::from(b'-');
+        len += 1;
+    }
+    Some(crate::value::SHORT_STRING_TAG | (len << crate::value::SHORT_STRING_LEN_SHIFT) | payload)
+}
+
+/// Pack the first `len` bytes of `buf` into SSO bits. One load and a mask
+/// rather than `JSValue::try_short_string`'s per-byte loop: `len` is only known
+/// at run time, so that loop cannot be unrolled away, and for a short number
+/// this is most of what the conversion costs. Byte 0 lands in the low byte,
+/// which is the SSO payload order.
+#[inline]
+fn short_ascii_string_bits(buf: &[u8; 32], len: usize) -> u64 {
+    debug_assert!((1..=crate::value::SHORT_STRING_MAX_LEN).contains(&len));
+    debug_assert!(buf[..len].is_ascii());
+    let word = u64::from_le_bytes([
+        buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ]);
+    // `len <= 5`, so the shift is at most 40 and never overflows.
+    let payload = word & ((1u64 << (len * 8)) - 1);
+    crate::value::SHORT_STRING_TAG
+        | ((len as u64) << crate::value::SHORT_STRING_LEN_SHIFT)
+        | payload
 }
 
 /// Mint, pin and publish the canonical string for a small-int cache index.

@@ -727,6 +727,61 @@ pub extern "C" fn js_template_string_coerce(value: f64) -> *mut StringHeader {
     js_string_coerce(value)
 }
 
+/// Box a `*mut StringHeader` exactly the way codegen's `nanbox_string_inline`
+/// boxes the pointer-returning helpers' results (an `or` of `STRING_TAG`), so
+/// the `_box` twins below hand back the same bits the call-then-box sequence
+/// they replace produced.
+#[inline]
+fn box_heap_string(ptr: *mut StringHeader) -> f64 {
+    f64::from_bits(crate::value::STRING_TAG | ptr as u64)
+}
+
+/// NaN-box-returning twin of [`js_string_coerce`] — the `String(x)` lowering
+/// (#10762).
+///
+/// Two arms differ from `js_string_coerce` followed by a box, and neither
+/// changes the string produced:
+///
+/// - a plain number formats through [`js_number_to_string_box`], so a result
+///   of at most `SHORT_STRING_MAX_LEN` bytes is an SSO immediate instead of a
+///   heap allocation (or a small-int cache probe);
+/// - an SSO argument is returned as-is instead of being materialized onto the
+///   heap: `String(s)` of a string is `s`, and the only reason the pointer
+///   variant copied it out was that its return type could not carry SSO bits.
+///   A heap string comes back with its bits unchanged, as before.
+///
+/// Everything else — including every arm that can run user code — is
+/// `js_string_coerce` itself.
+///
+/// [`js_number_to_string_box`]: crate::string::js_number_to_string_box
+#[no_mangle]
+pub extern "C" fn js_string_coerce_box(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_number() {
+        return crate::string::number_to_string_box(value);
+    }
+    if jsval.is_any_string() {
+        return value;
+    }
+    box_heap_string(js_string_coerce(value))
+}
+
+/// NaN-box-returning twin of [`js_template_string_coerce`] — the
+/// `` `${x}` `` substitution lowering (#10762). Same two short-circuits as
+/// [`js_string_coerce_box`]; neither admits a Symbol, which is a `POINTER_TAG`
+/// value and so still reaches the rejecting `js_template_string_coerce`.
+#[no_mangle]
+pub extern "C" fn js_template_string_coerce_box(value: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_number() {
+        return crate::string::number_to_string_box(value);
+    }
+    if jsval.is_any_string() {
+        return value;
+    }
+    box_heap_string(js_template_string_coerce(value))
+}
+
 /// True when [`js_string_coerce`] provably neither allocates nor calls back
 /// into user JS for `value`, so a caller may hold a raw receiver / stored value
 /// across it without a [`RuntimeHandleScope`] (#6943).

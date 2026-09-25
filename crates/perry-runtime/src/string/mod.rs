@@ -128,6 +128,8 @@ pub(crate) mod wtf8;
 #[cfg(test)]
 mod case_tests;
 #[cfg(test)]
+mod number_to_string_box_tests;
+#[cfg(test)]
 mod slice_tests;
 #[cfg(test)]
 mod tests;
@@ -219,8 +221,9 @@ pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
 pub use crate::regex::{js_string_split_js, js_string_split_n};
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
-    scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
+    js_number_to_string_box, scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
 };
+pub(crate) use format::{number_to_string_box, small_integer_sso_bits};
 pub use html::{
     js_string_anchor, js_string_big, js_string_blink, js_string_bold, js_string_fixed,
     js_string_fontcolor, js_string_fontsize, js_string_italics, js_string_link, js_string_small,

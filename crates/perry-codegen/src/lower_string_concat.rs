@@ -196,17 +196,16 @@ pub(crate) fn lower_string_self_append_chain(
 /// Repsel Phase 3a: is this expression PROVEN to lower to a heap-tagged
 /// (`STRING_TAG`) NaN-box — never SSO bits, never a non-string? String
 /// literals load the interned pool handle (`@.str.N.handle`, always a heap
-/// `StringHeader` from `js_string_from_bytes`); `String(x)` routes through
-/// `js_string_coerce`, which always allocates a heap header. Deliberately
-/// NOT included: `Binary Add` string results — the pairwise concat lowering
-/// returns `js_string_concat_box`, which assembles ≤5-byte ASCII results as
-/// SSO bits.
+/// `StringHeader` from `js_string_from_bytes`). Deliberately NOT included:
+/// `Binary Add` string results — the pairwise concat lowering returns
+/// `js_string_concat_box`, which assembles ≤5-byte ASCII results as SSO bits —
+/// and, since #10762, `String(x)` / `${x}` for the same reason: they lower to
+/// `js_string_coerce_box` / `js_template_string_coerce_box`, which return a
+/// short number's text as SSO bits. Those two are proven STRINGS, just not
+/// proven HEAP strings, so they take the two-arm dispatch below instead.
 fn proven_heap_string_operand(_ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
-        Expr::String(_)
-        | Expr::WtfString(_)
-        | Expr::StringCoerce(_)
-        | Expr::TemplateStringCoerce(_) => true,
+        Expr::String(_) | Expr::WtfString(_) => true,
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -224,10 +223,11 @@ fn proven_heap_string_operand(_ctx: &FnCtx<'_>, e: &Expr) -> bool {
 ///
 /// - proven heap-tagged operand (see `proven_heap_string_operand`) → inline
 ///   `bitcast; and POINTER_MASK` — zero calls;
-/// - canonical-Str `LocalGet` → 2-arm dispatch: heap `STRING_TAG` bits →
-///   bare `and POINTER_MASK` (hot arm, no call); anything else (SSO bits,
-///   annotation lie) → the legacy `js_get_string_pointer_unified` (which
-///   materializes SSO — cold);
+/// - canonical-Str `LocalGet`, or a `String(x)` / `${x}` coercion (a proven
+///   string that may be SSO, #10762) → 2-arm dispatch: heap `STRING_TAG`
+///   bits → bare `and POINTER_MASK` (hot arm, no call); anything else (SSO
+///   bits, annotation lie) → the legacy `js_get_string_pointer_unified` (which
+///   interns SSO — cold);
 /// - everything else (or flag off) → the legacy unified call, unchanged.
 ///
 /// #7128: the two arms are on separate knobs, because only the second one is
@@ -247,7 +247,12 @@ pub(crate) fn str_operand_handle_tag_dispatched(
         && matches!(
             object, Expr::LocalGet(id) if crate::expr::local_is_canonical_str(ctx, *id)
         );
-    if !canonical {
+    let coerced = crate::expr::static_string_lowering_enabled()
+        && matches!(
+            object,
+            Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_)
+        );
+    if !canonical && !coerced {
         return unbox_str_handle(ctx.block(), recv_box);
     }
     let bits = ctx.block().bitcast_double_to_i64(recv_box);

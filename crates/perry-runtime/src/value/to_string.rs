@@ -466,6 +466,24 @@ pub extern "C" fn js_jsvalue_to_string_method(value: f64) -> *mut crate::string:
     to_string_method_impl(value, /* skip_to_primitive */ true)
 }
 
+/// NaN-box-returning twin of [`js_jsvalue_to_string_method`] — the universal
+/// `x.toString()` lowering (#10762).
+///
+/// A plain number formats through `js_number_to_string_box`, so a result of at
+/// most `SHORT_STRING_MAX_LEN` bytes is an SSO immediate rather than a heap
+/// string; the pointer variant had to allocate one because its return type
+/// could not carry SSO bits. Every other receiver — nullish (which throws),
+/// strings, objects, regexes — takes `js_jsvalue_to_string_method` unchanged
+/// and is boxed the way codegen boxed it before.
+#[no_mangle]
+pub extern "C" fn js_jsvalue_to_string_method_box(value: f64) -> f64 {
+    if JSValue::from_bits(value.to_bits()).is_number() {
+        return crate::string::number_to_string_box(value);
+    }
+    let ptr = js_jsvalue_to_string_method(value);
+    f64::from_bits(STRING_TAG | ptr as u64)
+}
+
 /// Shared body of the `.toString()` method / ToString-coercion paths.
 ///
 /// `skip_to_primitive` distinguishes the two callers that reach the object

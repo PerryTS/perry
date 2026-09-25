@@ -1144,17 +1144,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- String(value) coercion --------
+        // The `_box` twins return the result NaN-boxed (#10762): a number whose
+        // text fits `SHORT_STRING_MAX_LEN` is an SSO immediate, so `String(i)`
+        // and `${i}` allocate nothing for it. The result is therefore
+        // SSO-or-heap, not heap — see `proven_heap_string_operand`.
         Expr::StringCoerce(operand) => {
             let v = lower_expr(ctx, operand)?;
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &v)]);
-            Ok(nanbox_string_inline(blk, &handle))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_string_coerce_box", &[(DOUBLE, &v)]))
         }
         Expr::TemplateStringCoerce(operand) => {
             let v = lower_expr(ctx, operand)?;
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_template_string_coerce", &[(DOUBLE, &v)]);
-            Ok(nanbox_string_inline(blk, &handle))
+            Ok(ctx
+                .block()
+                .call(DOUBLE, "js_template_string_coerce_box", &[(DOUBLE, &v)]))
         }
 
         // -------- Object(value) coercion (#3149) --------

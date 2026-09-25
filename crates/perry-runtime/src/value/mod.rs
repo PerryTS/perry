@@ -131,7 +131,7 @@ pub use dyn_index::{
 // ----- to-string conversion helpers -----
 pub use to_string::{
     js_ensure_string_ptr, js_jsvalue_to_string, js_jsvalue_to_string_coerce,
-    js_jsvalue_to_string_method, js_value_to_str_ptr_for_ffi,
+    js_jsvalue_to_string_method, js_jsvalue_to_string_method_box, js_value_to_str_ptr_for_ffi,
 };
 pub(crate) use to_string_array::{
     array_prototype_to_string, call_array_prototype_to_string_method,

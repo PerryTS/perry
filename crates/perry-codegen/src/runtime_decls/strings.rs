@@ -29,6 +29,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_jsvalue_to_string", I64, &[DOUBLE]);
     // #3146: nullish-guarded `.toString()` member-call variant.
     module.declare_function("js_jsvalue_to_string_method", I64, &[DOUBLE]);
+    // #10762: NaN-box-returning twin — an SSO immediate for a short number.
+    module.declare_function("js_jsvalue_to_string_method_box", DOUBLE, &[DOUBLE]);
     // ToString coercion (undefined→"undefined", null→"null", objects dispatch
     // toString) — used by RegExp exec/test arg + constructor coercion.
     module.declare_function("js_jsvalue_to_string_coerce", I64, &[DOUBLE]);
@@ -451,6 +453,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_math_max2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_string_coerce", I64, &[DOUBLE]);
     module.declare_function("js_template_string_coerce", I64, &[DOUBLE]);
+    // #10762: NaN-box-returning twins for the `String(x)` / `${x}` lowerings.
+    // A number whose text fits `SHORT_STRING_MAX_LEN` comes back as SSO bits
+    // with no allocation; a string argument comes back unchanged.
+    module.declare_function("js_string_coerce_box", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_template_string_coerce_box", DOUBLE, &[DOUBLE]);
     // RequireObjectCoercible + ToString for inline-lowered String.prototype
     // methods on a non-string receiver: a nullish `this` throws the V8
     // member-access TypeError instead of coercing undefined→"undefined".

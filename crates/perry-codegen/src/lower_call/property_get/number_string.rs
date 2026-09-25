@@ -217,9 +217,14 @@ pub(crate) fn try_lower_number_string_methods(
             // TypeError on a nullish receiver, unlike abstract ToString
             // (`String(x)` / templates). `js_jsvalue_to_string_method`
             // adds only that nullish guard and otherwise matches
-            // `js_jsvalue_to_string`.
-            let handle = blk.call(I64, "js_jsvalue_to_string_method", &[(DOUBLE, &v)]);
-            return Ok(Some(nanbox_string_inline(blk, &handle)));
+            // `js_jsvalue_to_string`. Its `_box` twin returns a short
+            // number's text as an SSO immediate instead of allocating a
+            // heap string for it (#10762).
+            return Ok(Some(blk.call(
+                DOUBLE,
+                "js_jsvalue_to_string_method_box",
+                &[(DOUBLE, &v)],
+            )));
         }
     }
     Ok(None)

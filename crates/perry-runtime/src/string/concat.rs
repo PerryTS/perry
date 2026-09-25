@@ -984,9 +984,29 @@ pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value:
     let bits = value.to_bits();
     let tag = bits >> 48;
     let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
+    // `"" + n` is `Number::toString(n)` exactly, so an integer whose text fits
+    // SSO is packed straight from the value, the way `String(n)` / `${n}` /
+    // `n.toString()` do it (#10762). The admission is `is_number()`, not
+    // `is_plain_f64`: that test reads a negative number's sign bit as a tag
+    // (`0x8000.. >= 0x7FF8`), so the arm below — and `js_string_concat_value`'s
+    // own fast path — send every negative number to `js_jsvalue_to_string` and
+    // a heap string. Anything this declines still falls through unchanged, so
+    // a longer result keeps the concat memo.
+    if crate::value::JSValue::from_bits(bits).is_number()
+        && is_valid_string_ptr(prefix)
+        && unsafe { (*prefix).byte_len } == 0
+    {
+        if let Some(sso) = crate::string::small_integer_sso_bits(value) {
+            return f64::from_bits(sso);
+        }
+    }
+    // The range test plus the `as u32` round trip replace `fract() == 0.0`,
+    // which on the baseline x86-64 target is a libm `trunc` call (#10762). NaN
+    // fails the range test, and the range test runs first, so the cast only
+    // ever sees a value it can represent.
     if is_plain_f64
-        && value.fract() == 0.0
         && (0.0..=999_999_999.0).contains(&value)
+        && (value as u32) as f64 == value
         && is_valid_string_ptr(prefix)
     {
         let prefix_blen = unsafe { (*prefix).byte_len } as usize;
@@ -1490,29 +1510,33 @@ pub(crate) fn format_number_into(value: f64, buf: &mut [u8; 32]) -> usize {
     // decides them without the i64 arm's range test and without its
     // `is_nan`/`is_infinite` pair.
     //
-    // Both halves of the guard are load-bearing, and the SECOND one is
+    // Both halves of the guard are load-bearing, and the range test is
     // load-bearing for SPEED as well as correctness: `abs() < 2^31` is what
     // lets LLVM prove the `as i32` cannot overflow and emit a bare
     // `cvttsd2si` instead of Rust's ~8-instruction SATURATING cast sequence.
-    // Written without it (guarding on an `(n as f64) == value` round trip
-    // instead) this arm MEASURED 7 instructions per call SLOWER than the code
+    // Written without it (guarding on the `(n as f64) == value` round trip
+    // alone) this arm MEASURED 7 instructions per call SLOWER than the code
     // it replaced on 6-digit values, for exactly that reason. The i64 arm
     // below gets the same proof from its own `abs() < 1e15`.
     //
-    // `fract() == 0.0` alone already excludes NaN and +-Infinity (`fract` is
-    // `self - self.trunc()`, which is NaN for both, and NaN != 0.0), and
-    // `-0.0` passes it, converts to 0 and renders "0" — the spec answer, and
-    // the same one the `value == 0.0` arm below produces.
+    // The range test excludes NaN and +-Infinity (every comparison with NaN is
+    // false), and the round trip then excludes a fraction. It replaced
+    // `fract() == 0.0`, which on the baseline x86-64 target is a libm `trunc`
+    // call — 15 instructions on every integer formatted (#10762). `-0.0`
+    // passes, converts to 0 and renders "0" — the spec answer, and the same
+    // one the `value == 0.0` arm below produces.
     //
     // Strictly additive: every value this accepts is exactly an i32, which the
     // i64 arm would have handed to these very same `fast_itoa_u32` /
     // `fast_itoa_i64` helpers. The bytes cannot differ.
-    if value.fract() == 0.0 && value.abs() < 2_147_483_648.0 {
+    if value.abs() < 2_147_483_648.0 {
         let n = value as i32;
-        if n >= 0 {
-            return fast_itoa_u32(n as u32, buf);
+        if n as f64 == value {
+            if n >= 0 {
+                return fast_itoa_u32(n as u32, buf);
+            }
+            return fast_itoa_i64(n as i64, buf);
         }
-        return fast_itoa_i64(n as i64, buf);
     }
     if value.fract() == 0.0 && value.abs() < 1e15 && !value.is_nan() && !value.is_infinite() {
         let n = value as i64;
