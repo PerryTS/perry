@@ -34,6 +34,11 @@ macro_rules! return_if_foreign {
 }
 pub(super) use return_if_foreign;
 
+/// Mirror of `perry_runtime::value::addr_class::HANDLE_BAND_MAX`: payloads
+/// below it are registry handles, at or above it heap addresses. This crate
+/// links only perry-ffi, which does not re-export the constant.
+const HANDLE_BAND_MAX: u64 = 0x100000;
+
 #[inline(always)]
 pub(crate) fn in_own_band(handle: Handle) -> bool {
     (EVENT_EMITTER_HANDLE_ID_START..EVENT_EMITTER_HANDLE_ID_END).contains(&handle)
@@ -48,7 +53,7 @@ unsafe fn is_foreign_receiver(handle: Handle) -> bool {
         return false;
     }
     let addr = handle as u64;
-    if (0x100000..=MAX_HEAP_POINTER).contains(&addr) {
+    if (HANDLE_BAND_MAX..=MAX_HEAP_POINTER).contains(&addr) {
         return true;
     }
     extern "C" {

@@ -36,7 +36,9 @@ pub(super) use return_if_foreign;
 #[inline(always)]
 pub(crate) fn is_foreign_receiver(handle: Handle) -> bool {
     let addr = handle as u64;
-    (0x100000..=POINTER_MASK_BITS).contains(&addr) && addr & 0x7 == 0
+    perry_runtime::value::addr_class::is_above_handle_band(addr as usize)
+        && addr <= POINTER_MASK_BITS
+        && addr & 0x7 == 0
 }
 
 /// Call `name(args...)` on a foreign receiver through the runtime's dynamic
