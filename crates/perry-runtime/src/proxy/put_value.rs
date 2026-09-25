@@ -349,6 +349,7 @@ pub extern "C" fn js_put_value_set(
 #[path = "put_value/packed_set.rs"]
 mod packed_set;
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
+pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 
 /// Words in a per-site static-key write cache (`[shape_token, slot]` × the
 /// four inline ways) and in its outlined poly tail. Both are views of the
@@ -415,7 +416,12 @@ pub extern "C" fn js_put_value_set_ic_miss(
     };
     if let Some(chain_key) = chain_key {
         if let Some(stored) = unsafe {
-            crate::object::chain_store::chain_store_try(cache_slot, target, chain_key, value)
+            crate::object::chain_store::chain_store_try(
+                crate::object::chain_store::ChainSite::Pic(cache_slot),
+                target,
+                chain_key,
+                value,
+            )
         } {
             return stored;
         }
@@ -453,7 +459,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
             .unwrap_or(std::ptr::null())
         };
         crate::object::chain_store::chain_store_after_miss(
-            cache_slot,
+            crate::object::chain_store::ChainSite::Pic(cache_slot),
             pre_shape,
             target_handle.get_nanbox_f64(),
             chain_key,
@@ -1061,7 +1067,12 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let chain_key = unsafe { crate::object::chain_store::interned_key_for_store(key) };
         if let Some(key_ptr) = chain_key {
             if let Some(stored) = unsafe {
-                crate::object::chain_store::chain_store_try(cache_slot, target, key_ptr, value)
+                crate::object::chain_store::chain_store_try(
+                    crate::object::chain_store::ChainSite::Pic(cache_slot),
+                    target,
+                    key_ptr,
+                    value,
+                )
             } {
                 return stored;
             }
@@ -1105,7 +1116,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
             crate::object::chain_store::interned_key_for_store(key_handle.get_nanbox_f64())
                 .unwrap_or(std::ptr::null());
         crate::object::chain_store::chain_store_after_miss(
-            cache_slot,
+            crate::object::chain_store::ChainSite::Pic(cache_slot),
             pre_shape,
             target_handle.get_nanbox_f64(),
             key_ptr,

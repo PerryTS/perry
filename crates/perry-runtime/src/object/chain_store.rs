@@ -243,22 +243,94 @@ unsafe fn eligible_key(key: *const crate::StringHeader) -> bool {
     first != b'#' && !first.is_ascii_digit()
 }
 
+/// A store site's cache, which holds the word naming its entry: the dynamic
+/// and static write PICs (word [`CHAIN_ENTRY_WORD`]) and the static-key
+/// store's packed-set way cache (word
+/// [`crate::proxy::PACKED_SET_CHAIN_WORD`]). Every static-key store site
+/// misses into the packed entry, so this lane must be reachable from both.
+#[derive(Clone, Copy)]
+pub(crate) enum ChainSite {
+    Pic(*mut crate::proxy::WritePicCacheSlot),
+    Packed(*mut crate::proxy::PackedSetWaysSlot),
+}
+
+impl ChainSite {
+    fn is_null(self) -> bool {
+        match self {
+            ChainSite::Pic(slot) => slot.is_null(),
+            ChainSite::Packed(slot) => slot.is_null(),
+        }
+    }
+
+    /// The entry word, without allocating the cache: null for a site that
+    /// has never primed.
+    ///
+    /// # Safety
+    /// The slot is null or a live cache slot of its kind.
+    unsafe fn entry_word_peek(self) -> *mut u64 {
+        match self {
+            ChainSite::Pic(slot) => {
+                if slot.is_null() {
+                    return std::ptr::null_mut();
+                }
+                let cache = crate::object::pic_slot_peek(slot);
+                if cache.is_null() {
+                    return std::ptr::null_mut();
+                }
+                (*cache).as_mut_ptr().add(CHAIN_ENTRY_WORD) as *mut u64
+            }
+            ChainSite::Packed(slot) => {
+                if slot.is_null() {
+                    return std::ptr::null_mut();
+                }
+                let cache = crate::object::pic_slot_peek(slot);
+                if cache.is_null() {
+                    return std::ptr::null_mut();
+                }
+                (*cache)
+                    .as_mut_ptr()
+                    .add(crate::proxy::PACKED_SET_CHAIN_WORD)
+            }
+        }
+    }
+
+    /// The entry word, allocating the site's cache if it has none yet.
+    ///
+    /// # Safety
+    /// The slot is null or a live cache slot of its kind.
+    unsafe fn entry_word_resolve(self) -> *mut u64 {
+        match self {
+            ChainSite::Pic(slot) => {
+                let cache = crate::object::pic_slot_resolve(slot);
+                if cache.is_null() {
+                    return std::ptr::null_mut();
+                }
+                (*cache).as_mut_ptr().add(CHAIN_ENTRY_WORD) as *mut u64
+            }
+            ChainSite::Packed(slot) => {
+                let cache = crate::proxy::packed_set_cache_resolve(slot);
+                if cache.is_null() {
+                    return std::ptr::null_mut();
+                }
+                (*cache)
+                    .as_mut_ptr()
+                    .add(crate::proxy::PACKED_SET_CHAIN_WORD)
+            }
+        }
+    }
+}
+
 /// The site's entry, if it has one and this thread may use it.
 ///
 /// # Safety
-/// `cache_slot` is null or a live write-cache slot.
+/// The site's slot is null or a live cache slot of its kind.
 #[inline]
-unsafe fn site_entry(
-    cache_slot: *mut crate::proxy::WritePicCacheSlot,
-) -> Option<*mut ChainStoreEntry> {
-    if cache_slot.is_null() {
+unsafe fn site_entry(site: ChainSite) -> Option<*mut ChainStoreEntry> {
+    let word = site.entry_word_peek();
+    if word.is_null() {
         return None;
     }
-    let cache = crate::object::pic_slot_peek(cache_slot);
-    if cache.is_null() {
-        return None;
-    }
-    let word = (*cache)[CHAIN_ENTRY_WORD] as usize;
+    let word = *word as usize;
     (word != 0).then_some(word as *mut ChainStoreEntry)
 }
 
@@ -272,14 +344,14 @@ unsafe fn site_entry(
 /// pointer above the handle band; `key` is null or a live `StringHeader`.
 #[inline]
 pub(crate) unsafe fn chain_store_proven(
-    cache_slot: *mut crate::proxy::WritePicCacheSlot,
+    site: ChainSite,
     obj: *const crate::ObjectHeader,
     key: *const crate::StringHeader,
 ) -> bool {
     if !lane_enabled() {
         return false;
     }
-    let Some(entry) = site_entry(cache_slot) else {
+    let Some(entry) = site_entry(site) else {
         return false;
     };
     let entry = *entry;
@@ -300,6 +372,38 @@ pub(crate) fn note_chain_store_hit() {
     if stats_enabled() {
         CHAIN_STORE_HITS.fetch_add(1, Ordering::Relaxed);
     }
+    #[cfg(test)]
+    CHAIN_STORE_HITS_THIS_THREAD.with(|hits| hits.set(hits.get() + 1));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Hits served on this thread: a test's own count, which the process-wide
+    /// counter cannot give while other tests run beside it.
+    static CHAIN_STORE_HITS_THIS_THREAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The process-wide prime / refusal / skip counters, for a failing test's
+/// message: which condition a site that never primed failed.
+#[cfg(test)]
+pub(crate) fn chain_store_counters_for_test() -> String {
+    let skipped: Vec<u64> = CHAIN_STORE_SKIPPED
+        .iter()
+        .map(|c| c.load(Ordering::Relaxed))
+        .collect();
+    format!(
+        "primes={} refused={} skipped(key,unchanged,kind,irregular,moved,hop)={:?} primary_agent={}",
+        CHAIN_STORE_PRIMES.load(Ordering::Relaxed),
+        CHAIN_STORE_REFUSED.load(Ordering::Relaxed),
+        skipped,
+        on_primary_agent()
+    )
+}
+
+/// Chain-verdict hits served on the calling thread.
+#[cfg(test)]
+pub(crate) fn chain_store_hits_this_thread() -> u64 {
+    CHAIN_STORE_HITS_THIS_THREAD.with(|hits| hits.get())
 }
 
 /// Record the site's verdict after the full `[[Set]]` has run.
@@ -314,11 +418,11 @@ pub(crate) fn note_chain_store_hit() {
 /// `cache_slot` is null or a live write-cache slot; `target` and `key` are
 /// live values the caller holds rooted.
 pub(crate) unsafe fn chain_store_prime(
-    cache_slot: *mut crate::proxy::WritePicCacheSlot,
+    site: ChainSite,
     target: f64,
     key: *const crate::StringHeader,
 ) {
-    if cache_slot.is_null() || !lane_enabled() || !on_primary_agent() {
+    if site.is_null() || !lane_enabled() || !on_primary_agent() {
         return;
     }
     let bits = target.to_bits();
@@ -389,20 +493,23 @@ pub(crate) unsafe fn chain_store_prime(
         note_skip(4);
         return;
     }
-    let cache = crate::object::pic_slot_resolve(cache_slot);
+    let entry_word = site.entry_word_resolve();
+    if entry_word.is_null() {
+        return;
+    }
     let fresh = ChainStoreEntry {
         key: key as usize,
         proto_id,
         validity,
         vtable_gen,
     };
-    let word = (*cache)[CHAIN_ENTRY_WORD] as usize;
+    let word = *entry_word as usize;
     if word != 0 {
         *(word as *mut ChainStoreEntry) = fresh;
     } else {
         let entry = Box::into_raw(Box::new(fresh));
         CHAIN_STORE_ENTRIES.with(|cell| (*cell.get()).push(entry));
-        (*cache)[CHAIN_ENTRY_WORD] = entry as i64;
+        *entry_word = entry as u64;
     }
     if stats_enabled() {
         CHAIN_STORE_PRIMES.fetch_add(1, Ordering::Relaxed);
@@ -488,7 +595,7 @@ pub(crate) unsafe fn pre_store_shape(target: f64) -> u32 {
 /// As [`chain_store_proven`]; `target` and `value` are live values.
 #[inline]
 pub(crate) unsafe fn chain_store_try(
-    cache_slot: *mut crate::proxy::WritePicCacheSlot,
+    site: ChainSite,
     target: f64,
     key: *const crate::StringHeader,
     value: f64,
@@ -499,7 +606,7 @@ pub(crate) unsafe fn chain_store_try(
     }
     let obj = (bits & crate::value::POINTER_MASK) as *mut crate::ObjectHeader;
     if !crate::value::addr_class::is_above_handle_band(obj as usize)
-        || !chain_store_proven(cache_slot, obj, key)
+        || !chain_store_proven(site, obj, key)
     {
         return None;
     }
@@ -525,12 +632,12 @@ pub(crate) unsafe fn chain_store_try(
 /// As [`chain_store_prime`].
 #[inline]
 pub(crate) unsafe fn chain_store_after_miss(
-    cache_slot: *mut crate::proxy::WritePicCacheSlot,
+    site: ChainSite,
     pre_shape: u32,
     target: f64,
     key: *const crate::StringHeader,
 ) {
-    if cache_slot.is_null() || pre_shape == 0 {
+    if site.is_null() || pre_shape == 0 {
         return;
     }
     if key.is_null() {
@@ -543,10 +650,10 @@ pub(crate) unsafe fn chain_store_after_miss(
     }
     let bits = target.to_bits();
     let obj = (bits & crate::value::POINTER_MASK) as *const crate::ObjectHeader;
-    if chain_store_proven(cache_slot, obj, key) {
+    if chain_store_proven(site, obj, key) {
         return;
     }
-    chain_store_prime(cache_slot, target, key);
+    chain_store_prime(site, target, key);
 }
 
 /// Walk `obj`'s prototype chain exactly as the verdict's predicate does

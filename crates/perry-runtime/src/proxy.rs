@@ -38,6 +38,7 @@ pub(crate) use put_value::{
     js_put_value_set_ic_miss, proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT,
 };
 pub use put_value::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
+pub(crate) use put_value::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
 mod json;
 mod metadata;
