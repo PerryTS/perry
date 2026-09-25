@@ -93,6 +93,16 @@ pub(crate) mod copy_decode_sabotage {
     }
 }
 
+/// The remembering arm's child for a word the visit rejected: the one
+/// `decode_heap_addr` sees, which is what `remember_evacuated_old_to_young_slot`
+/// (the coverage walk and its cross-check) decodes (#11353). NaN-boxed
+/// non-pointers and ordinary doubles leave on its tag and high-bit tests.
+#[inline(always)]
+fn unvalidated_child(bits: u64) -> Option<usize> {
+    let addr = super::barrier::decode_heap_addr(bits);
+    (addr != 0).then_some(addr)
+}
+
 impl CopyingNurseryCollector {
     /// The root visitors' form of [`Self::visit_value_bits_child`]. Always
     /// inlined too: out of line it added a call frame per root word.
@@ -222,6 +232,17 @@ impl CopyingNurseryCollector {
         // all the re-decode could still reject.
         let child = match visited {
             Some((_, Some(new_bits), true)) => self.revalidate_moved_raw(new_bits),
+            // #11353: the visit rejected the word. For a raw word that is the
+            // copier's VALIDATING decode (the address must name a plausible
+            // header), which is stricter than the predicate the post-cycle
+            // coverage walk applies to the same slot — `decode_heap_addr`
+            // accepts any address in a registered range. A stale raw word
+            // naming nursery garbage therefore went unremembered here and
+            // "needs tracking" there, while `restore_surviving_dirty_coverage`
+            // skips the objects this scan covered on the strength of the two
+            // agreeing. Ask the walk's own question; it is the write barrier's
+            // too, so this only keeps a page the barrier itself would keep.
+            None => unvalidated_child(*slot),
             other => other.map(|(addr, _, _)| addr).filter(|&addr| addr != 0),
         };
         #[cfg(test)]

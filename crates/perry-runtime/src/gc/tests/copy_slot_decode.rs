@@ -139,3 +139,69 @@ fn sabotaged_remembering_arm_is_refused_by_the_coverage_cross_check() {
          unremembered page; got {outcome:?}"
     );
 }
+
+/// #11353: an OLD parent's slot holds a RAW (untagged) word that lies inside a
+/// registered nursery range but does not name an object — the 8 bytes before
+/// it are a zeroed field, not a GC header. The copier's validating decode
+/// (`CopyingPointerSet::classify`) rejects it, so before the fix the visit
+/// remembered nothing for the slot. The post-cycle coverage walk decodes the
+/// same word with the barrier's `decode_heap_addr`, which asks only whether
+/// the address is in a registered range: nursery, so "needs tracking". The
+/// parent is small and on one dirty page, so the dirty scan reported it
+/// complete, the restore skipped it, and the cross-check found the page it
+/// would have added — the panic the full perry-runtime suite hit about once in
+/// fifty runs, when a dead old array from an earlier test carried a stale raw
+/// nursery address in slot 8 and landed on a page dirtied in
+/// `json_construction_growth_mixed_layouts_and_errors_leave_a_walkable_heap`.
+///
+/// `Err` is the collection thread's panic message.
+fn old_parent_with_unvalidated_raw_nursery_word() -> Result<(), String> {
+    std::thread::spawn(move || {
+        let _guard = CopyingNurseryTestGuard::new(1);
+        let _tenuring = crate::gc::tenuring::set_survivals_for_test(
+            crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX,
+        );
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _scan = ConservativeScanDisabledGuard::new();
+        let _roots = ShadowAndGlobalRootResetGuard;
+        let (parent, fields) = unsafe { alloc_old_test_object(1) };
+        // A live young object with two zeroed fields, kept rooted so its block
+        // stays in use. The raw word names its SECOND field: 8-aligned, inside
+        // the nursery, and preceded by a zero word, which no GC header is.
+        let (young, young_fields) = unsafe { alloc_nursery_test_object(2) };
+        js_shadow_slot_set(0, ptr_bits(young as usize));
+        let raw = unsafe {
+            *young_fields = 0;
+            *young_fields.add(1) = 0;
+            young_fields.add(1) as u64
+        };
+        unsafe { *fields = raw };
+        js_write_barrier_slot(ptr_bits(parent as usize), fields as u64, raw);
+        let pages = barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().len());
+        assert!(
+            crate::arena::pointer_in_old_gen(parent as usize)
+                && crate::arena::pointer_in_nursery(raw as usize)
+                && pages == 1,
+            "premise: an old parent on one dirty page, holding a raw nursery word"
+        );
+        let _ = gc_collect_minor();
+        assert_eq!(
+            unsafe { *fields },
+            raw,
+            "the unvalidated raw word is not a reference, so nothing rewrites it"
+        );
+    })
+    .join()
+    .map_err(|payload| {
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default()
+    })
+}
+
+#[test]
+fn a_raw_nursery_word_the_copier_rejects_is_still_remembered_for_the_coverage_walk() {
+    assert_eq!(old_parent_with_unvalidated_raw_nursery_word(), Ok(()));
+}
