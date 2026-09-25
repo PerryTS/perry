@@ -1288,16 +1288,10 @@ static KEEP_JS_REGION_GUARD_PRIME: unsafe extern "C" fn(
 pub(crate) fn mint_registered_typed_shape_id(
     keys: *const ArrayHeader,
     key_count: u32,
-    class_id: u32,
+    proto_id: u64,
 ) -> u32 {
     let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
-    if !shapes_slot_list::install_external_shape_id(
-        id,
-        keys,
-        key_count,
-        key_count,
-        class_proto_id(class_id),
-    ) {
+    if !shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id) {
         invalid_shape_facts_abort();
     }
     id
@@ -1305,19 +1299,18 @@ pub(crate) fn mint_registered_typed_shape_id(
 
 /// Install an already-minted process-global typed ShapeId in this agent (for
 /// another module or worker that reuses the same compiled class identity).
+///
+/// `proto_id` is the prototype identity the id was MINTED with (the typed
+/// registry records it): a class id's prototype identity read later can
+/// differ (a module whose codegen reused the id for an anonymous shape), and
+/// a ShapeId's facts never change.
 pub(crate) fn install_registered_typed_shape_id(
     id: u32,
     keys: *const ArrayHeader,
     key_count: u32,
-    class_id: u32,
+    proto_id: u64,
 ) -> bool {
-    shapes_slot_list::install_external_shape_id(
-        id,
-        keys,
-        key_count,
-        key_count,
-        class_proto_id(class_id),
-    )
+    shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count, proto_id)
 }
 
 // ---------------------------------------------------------------------------

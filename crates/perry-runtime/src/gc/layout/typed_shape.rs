@@ -68,6 +68,10 @@ unsafe fn mask_words<'a>(words: *const u64, word_count: u32) -> &'a [u64] {
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct RegisteredTypedShapeKey {
     class_id: u32,
+    /// The prototype identity the class id names when it registers: a shape
+    /// fact, so two registrations of one class id that name different
+    /// prototypes (per-module class ids collide) get two ShapeIds.
+    proto_id: u64,
     slot_count: u32,
     raw_f64_words: Vec<u64>,
     pointer_words: Vec<u64>,
@@ -88,6 +92,9 @@ struct RegisteredTypedShapes {
     ids_by_layout: crate::fast_hash::FastKeyHashMap<RegisteredTypedShapeKey, u32>,
     /// Bare `u32` ShapeId key -> `PtrHasher` (single multiply + avalanche).
     layouts_by_id: crate::fast_hash::PtrHashMap<u32, TypedLayoutDescriptor>,
+    /// Typed ShapeId -> the prototype identity it was minted with, for
+    /// installing it into another module's slots or another agent.
+    proto_by_id: crate::fast_hash::PtrHashMap<u32, u64>,
     /// `(class id, slot count)` -> the first typed ShapeId registered for it.
     /// Read when an importing module registers its compiled ShapeId slots.
     typed_by_class: std::collections::HashMap<(u32, u32), u32>,
@@ -166,8 +173,10 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
         eprintln!("Perry internal error: invalid pre-registered typed shape masks");
         std::process::abort();
     }
+    let proto_id = crate::object::shapes::class_proto_id(class_id);
     let key = RegisteredTypedShapeKey {
         class_id,
+        proto_id,
         slot_count,
         raw_f64_words: raw_f64_slice.to_vec(),
         pointer_words: pointer_slice.to_vec(),
@@ -183,7 +192,7 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
             shape_id,
             keys as usize as *const crate::array::ArrayHeader,
             slot_count,
-            class_id,
+            proto_id,
         ) {
             eprintln!("Perry internal error: typed ShapeId structural mismatch");
             std::process::abort();
@@ -194,10 +203,11 @@ pub extern "C" fn js_gc_typed_shape_id_for_keys(
     let shape_id = crate::object::shapes::mint_registered_typed_shape_id(
         keys as usize as *const crate::array::ArrayHeader,
         slot_count,
-        class_id,
+        proto_id,
     );
     registered.ids_by_layout.insert(key, shape_id);
     registered.layouts_by_id.insert(shape_id, descriptor);
+    registered.proto_by_id.insert(shape_id, proto_id);
     publish_to_imported_slots(&mut registered, class_id, slot_count, shape_id);
     shape_id
 }
@@ -245,8 +255,11 @@ fn publish_to_imported_slots(
         .entry((class_id, slot_count))
         .or_insert(shape_id);
     if let Some(slots) = registered.pending_imported.remove(&(class_id, slot_count)) {
+        let proto_id = registered.proto_by_id.get(&shape_id).copied();
         for slot in slots {
-            unsafe { rewrite_imported_shape_slot(slot, class_id, slot_count, shape_id) };
+            if let Some(proto_id) = proto_id {
+                unsafe { rewrite_imported_shape_slot(slot, slot_count, shape_id, proto_id) };
+            }
         }
     }
 }
@@ -256,9 +269,9 @@ fn publish_to_imported_slots(
 /// a `u32` ShapeId global and a null or `<2 x i64>` header image global.
 unsafe fn rewrite_imported_shape_slot(
     slot: ImportedShapeSlot,
-    class_id: u32,
     slot_count: u32,
     shape_id: u32,
+    proto_id: u64,
 ) {
     let keys = std::ptr::read(slot.keys_slot as *const u64);
     if keys == 0
@@ -266,7 +279,7 @@ unsafe fn rewrite_imported_shape_slot(
             shape_id,
             keys as usize as *const crate::array::ArrayHeader,
             slot_count,
-            class_id,
+            proto_id,
         )
     {
         return;
@@ -330,9 +343,11 @@ pub extern "C" fn js_register_imported_class_shape_slot(
         .get(&(class_id, slot_count))
         .copied()
     {
-        Some(shape_id) => unsafe {
-            rewrite_imported_shape_slot(slot, class_id, slot_count, shape_id)
-        },
+        Some(shape_id) => {
+            if let Some(proto_id) = registered.proto_by_id.get(&shape_id).copied() {
+                unsafe { rewrite_imported_shape_slot(slot, slot_count, shape_id, proto_id) }
+            }
+        }
         None => registered
             .pending_imported
             .entry((class_id, slot_count))
