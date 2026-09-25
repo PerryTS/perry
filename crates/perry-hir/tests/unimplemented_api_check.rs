@@ -12,6 +12,17 @@ fn lower_result(src: &str) -> Result<perry_hir::Module, String> {
     lower_result_mode(src, false)
 }
 
+/// Prefix-only builtins (`node:sqlite`, `node:test`, `node:sea`) are packages
+/// when spelled bare, so the sweep must import them with the `node:` prefix to
+/// reach the native module at all.
+fn import_specifier(module: &str) -> String {
+    if perry_hir::is_bare_prefix_only_builtin(module) {
+        format!("node:{module}")
+    } else {
+        module.to_string()
+    }
+}
+
 /// As of #5245 the default (non-strict) mode *defers* a recognized-but-
 /// unimplemented API to a throw-on-reach runtime error rather than failing the
 /// build — so the historical "must error" assertions run in strict mode, which
@@ -385,9 +396,10 @@ fn every_supported_module_rejects_bogus_member() {
         // `events` are reserved-adjacent in some lints, but plain `m`
         // works for everything. Use namespace import so the binding
         // lowers to `Expr::NativeModuleRef`.
+        let specifier = import_specifier(module);
         let src = format!(
             r#"
-            import * as m from "{module}";
+            import * as m from "{specifier}";
             const x = m.__perry_known_bogus_member_513__;
         "#
         );
@@ -449,9 +461,10 @@ fn every_supported_module_rejects_bogus_call() {
             continue;
         }
 
+        let specifier = import_specifier(module);
         let src = format!(
             r#"
-            import * as m from "{module}";
+            import * as m from "{specifier}";
             m.__perry_known_bogus_member_525__();
         "#
         );
