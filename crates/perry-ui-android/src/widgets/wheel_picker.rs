@@ -115,11 +115,13 @@ fn refresh_items(handle: i64, items: &[String]) {
             jni::jni_sig!("([Ljava/lang/String;)V"),
             &[JValue::Object(&values)],
         );
+        // Match UIPickerView: the first and last items are scroll boundaries.
+        // Reapply after changing the range so adding items cannot enable wrapping.
         let _ = env.call_method(
             view.as_obj(),
             jni::jni_str!("setWrapSelectorWheel"),
             jni::jni_sig!("(Z)V"),
-            &[JValue::Bool(items.len() > 2)],
+            &[JValue::Bool(false)],
         );
         let _ = env.call_method(
             view.as_obj(),
