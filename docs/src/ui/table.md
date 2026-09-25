@@ -4,8 +4,9 @@ The `Table` widget displays tabular data with columns, headers, and row
 selection.
 
 > **Platform support:** real implementation lives on **macOS**
-> (`NSTableView` + `NSScrollView`); the **Web** target uses an HTML
-> `<table>`. **iOS**, **Android**, **Linux/GTK4**, **Windows**, **tvOS**,
+> (`NSTableView` + `NSScrollView`) and **Android** (scrollable native widget rows);
+> the **Web** target uses an HTML
+> `<table>`. **iOS**, **Linux/GTK4**, **Windows**, **tvOS**,
 > **visionOS**, and **watchOS** link no-op stubs so cross-platform code
 > compiles everywhere — the table renders nothing and `tableGetSelectedRow`
 > returns `-1`. For production lists on platforms without a real impl,
@@ -22,6 +23,10 @@ callback receives `(row, col)` and must return a `Widget` (typically
 `Text(...)`). The runtime resolves the returned handle as the cell
 view, which lets cells render images, stacks, or composites — not just
 plain strings.
+
+Android renders all cells when the table is created or its row count is
+updated. Headers and rows share column widths, with horizontal and vertical
+scrolling when the content exceeds the available space.
 
 ## Column Headers
 
@@ -95,8 +100,11 @@ tableSetFilterText(table, "alice");
 console.log(tableGetFilterText(table));
 ```
 
-These are real impls on macOS via `NSTableView.sortDescriptors` and
-`selectedRowIndexes`; other platforms link safe-default stubs.
+These are implemented on macOS via `NSTableView.sortDescriptors` and
+`selectedRowIndexes`, and on Android. On Android, tapping a header toggles
+its sort direction and invokes the callback; multi-selection toggles rows
+on tap. The filter slot is passive on both platforms. Other platforms
+link safe-default stubs.
 
 ## Next Steps
 

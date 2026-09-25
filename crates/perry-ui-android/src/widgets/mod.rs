@@ -27,6 +27,7 @@ pub mod slider;
 pub mod spacer;
 pub mod splitview;
 pub mod tabbar;
+pub mod table;
 pub mod text;
 pub mod text_registry;
 pub mod textarea;

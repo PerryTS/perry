@@ -414,6 +414,28 @@ fn test_android_styling_codegen_ffi_signatures() {
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+
+/// Table's string getter returns a raw string pointer, while selection getters
+/// return integer indices. Check every Android Table entry against codegen.
+#[test]
+fn test_android_table_codegen_ffi_signatures() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let native = extract_native_crate_signatures(&manifest_dir.join("../perry-ui-android/src"));
+    let mut checked = 0;
+    for row in perry_dispatch::PERRY_UI_TABLE {
+        if !row.runtime.starts_with("perry_ui_table_") {
+            continue;
+        }
+        let expected = codegen_signature(row, false);
+        assert_eq!(
+            native.get(row.runtime),
+            Some(&expected),
+            "{} ABI mismatch",
+            row.runtime
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 12, "all Table operations must be covered");
 }
 
 /// Every Windows UI export that native codegen can call must use the exact

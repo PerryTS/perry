@@ -34,3 +34,6 @@ pub use state_widgets::*;
 pub use system_api::*;
 pub use tabbar_layout::*;
 pub use text_scroll::*;
+
+mod table;
+pub use table::*;

@@ -434,6 +434,16 @@ object PerryBridge {
         seekBar.progress = progress
     }
 
+    // --- Table ---
+
+    @JvmStatic
+    fun createTable(rows: Int, columns: Int, renderKey: Long): View = PerryTable.onUi {
+        PerryTable(activity, rows, columns, renderKey)
+    }
+
+    @JvmStatic
+    external fun nativeTableRenderCell(key: Long, row: Int, column: Int): View?
+
     // --- Spinner (Picker) callback ---
 
     // `perry-ui-android`'s picker.rs has always called this, but it was never
