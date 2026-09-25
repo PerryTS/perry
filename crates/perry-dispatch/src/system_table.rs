@@ -7,7 +7,8 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         method: "isDarkMode",
         runtime: "perry_system_is_dark_mode",
         args: &[],
-        ret: ReturnKind::F64,
+        // All native backends return an i64 flag; the JS API returns boolean.
+        ret: ReturnKind::I64AsBool,
     },
     // Returns the broad device form factor as a JS string: "phone",
     // "pad", "mac", "tv", "watch", "vision", or "desktop" — the contract

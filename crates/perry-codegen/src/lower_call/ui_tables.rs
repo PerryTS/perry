@@ -581,7 +581,10 @@ pub fn lower_perry_ui_table_call(
     // libperry_ui_*.a symbol. Same pending_declares mechanism the
     // cross-module call site uses for `perry_fn_*`.
     let return_type = match sig.ret {
-        UiReturnKind::Widget | UiReturnKind::Promise | UiReturnKind::I64AsF64 => I64,
+        UiReturnKind::Widget
+        | UiReturnKind::Promise
+        | UiReturnKind::I64AsF64
+        | UiReturnKind::I64AsBool => I64,
         UiReturnKind::F64 => DOUBLE,
         UiReturnKind::Void => crate::types::VOID,
         UiReturnKind::Str => I64,
@@ -622,10 +625,28 @@ pub fn lower_perry_ui_table_call(
             let raw = blk.call(I64, sig.runtime, &arg_slices);
             Ok(nanbox_string_inline(blk, &raw))
         }
+        UiReturnKind::I64AsBool => {
+            let blk = ctx.block();
+            let raw = blk.call(I64, sig.runtime, &arg_slices);
+            Ok(box_i64_boolean_result(blk, &raw))
+        }
         UiReturnKind::I64AsF64 => {
             let blk = ctx.block();
             let raw = blk.call(I64, sig.runtime, &arg_slices);
             Ok(blk.sitofp(I64, &raw, DOUBLE))
         }
     }
+}
+
+/// Convert a native integer predicate without turning its flag into a JS number.
+pub(super) fn box_i64_boolean_result(blk: &mut crate::block::LlBlock, raw: &str) -> String {
+    let nonzero = blk.icmp_ne(I64, raw, "0");
+    let tagged = blk.select(
+        I1,
+        &nonzero,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    blk.bitcast_i64_to_double(&tagged)
 }

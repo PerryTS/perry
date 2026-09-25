@@ -68,7 +68,10 @@
                 }
             }
             let return_type = match sig.ret {
-                UiReturnKind::Widget | UiReturnKind::Promise | UiReturnKind::I64AsF64 => I64,
+                UiReturnKind::Widget
+                | UiReturnKind::Promise
+                | UiReturnKind::I64AsF64
+                | UiReturnKind::I64AsBool => I64,
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
                 UiReturnKind::Str => I64,
@@ -91,6 +94,10 @@
                 UiReturnKind::Str => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(crate::expr::nanbox_string_inline(blk, &raw))
+                }
+                UiReturnKind::I64AsBool => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(crate::lower_call::ui_tables::box_i64_boolean_result(blk, &raw))
                 }
                 UiReturnKind::I64AsF64 => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
@@ -160,6 +167,7 @@
                 UiReturnKind::Widget
                 | UiReturnKind::Promise
                 | UiReturnKind::I64AsF64
+                | UiReturnKind::I64AsBool
                 | UiReturnKind::Str => I64,
                 UiReturnKind::F64 => DOUBLE,
                 UiReturnKind::Void => crate::types::VOID,
@@ -179,6 +187,10 @@
                     Ok(crate::expr::nanbox_pointer_inline(blk, &raw))
                 }
                 UiReturnKind::F64 => Ok(blk.call(DOUBLE, sig.runtime, &ref_args)),
+                UiReturnKind::I64AsBool => {
+                    let raw = blk.call(I64, sig.runtime, &ref_args);
+                    Ok(crate::lower_call::ui_tables::box_i64_boolean_result(blk, &raw))
+                }
                 UiReturnKind::I64AsF64 => {
                     let raw = blk.call(I64, sig.runtime, &ref_args);
                     Ok(blk.sitofp(I64, &raw, DOUBLE))

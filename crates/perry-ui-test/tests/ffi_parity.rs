@@ -241,9 +241,11 @@ fn codegen_signature(row: &perry_dispatch::MethodRow, has_receiver: bool) -> Abi
         ArgKind::F64 | ArgKind::Closure => AbiType::F64,
     }));
     let ret = match row.ret {
-        ReturnKind::Widget | ReturnKind::Promise | ReturnKind::Str | ReturnKind::I64AsF64 => {
-            AbiType::I64
-        }
+        ReturnKind::Widget
+        | ReturnKind::Promise
+        | ReturnKind::Str
+        | ReturnKind::I64AsF64
+        | ReturnKind::I64AsBool => AbiType::I64,
         ReturnKind::F64 => AbiType::F64,
         ReturnKind::Void => AbiType::Void,
     };
@@ -434,4 +436,25 @@ fn test_web() {
     let source = include_str!("../../perry-codegen-js/src/web_runtime.js");
     let symbols = extract_web_symbols(source);
     check_platform("Web", &symbols, |f| f.web, |f| f.web_name.unwrap_or(f.name));
+}
+
+/// System predicates share the native integer ABI on every native UI backend.
+#[test]
+fn test_dark_mode_codegen_ffi_signatures() {
+    let row = perry_dispatch::PERRY_SYSTEM_TABLE
+        .iter()
+        .find(|row| row.method == "isDarkMode")
+        .unwrap();
+    let expected = codegen_signature(row, false);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for platform in [
+        "android", "macos", "ios", "tvos", "watchos", "visionos", "gtk4", "windows",
+    ] {
+        let native =
+            extract_native_crate_signatures(&root.join(format!("../perry-ui-{platform}/src")));
+        let actual = native
+            .get(row.runtime)
+            .unwrap_or_else(|| panic!("missing predicate on {platform}"));
+        assert_eq!(actual, &expected, "isDarkMode ABI mismatch on {platform}");
+    }
 }

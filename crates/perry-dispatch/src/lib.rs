@@ -75,6 +75,8 @@ pub enum ReturnKind {
     Str,
     /// i64 result converted to plain JS number via `sitofp`.
     I64AsF64,
+    /// Native i64 zero/nonzero flag converted to a NaN-boxed JS boolean.
+    I64AsBool,
 }
 
 /// A single dispatch row: TS method name → runtime symbol + ABI shape.
