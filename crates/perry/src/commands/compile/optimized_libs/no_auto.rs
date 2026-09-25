@@ -48,13 +48,44 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     } else {
         Vec::new()
     };
+    // #10458: every archive containing runtime code must share the host
+    // feature. Otherwise the stdlib-first link can select its dlopen stub,
+    // and separately rebuilt wrappers can retain different global registries.
+    if !ctx.native_addons.is_empty() {
+        let http_pump = iteration_set.iter().any(|m| {
+            matches!(
+                m.strip_prefix("node:").unwrap_or(m.as_str()),
+                "http" | "https"
+            )
+        });
+        let mut features = vec!["perry-runtime/node-api-host"];
+        if ctx.needs_wasm_runtime {
+            features.push("perry-runtime/wasm-host");
+        }
+        let ext_crates = linked_ext_crates(&iteration_set, target);
+        let built =
+            build_coherent_stdlib(&ext_crates, target, format, verbose, http_pump, &features);
+        let (runtime, stdlib) = if let Some(built) = built {
+            replace_rebuilt_wrappers(&mut well_known_libs, built.ext_libs);
+            (Some(built.runtime), Some(built.stdlib))
+        } else {
+            (None, None)
+        };
+        return OptimizedLibs {
+            runtime,
+            stdlib,
+            prefer_well_known_before_stdlib: !well_known_libs.is_empty(),
+            well_known_libs,
+            ..OptimizedLibs::empty()
+        };
+    }
     // Issue #76 — the prebuilt runtime is built WITHOUT `wasm-host` (kept
     // out of `default` to avoid wasmi bloat on non-wasm programs). When the
     // program uses `WebAssembly.*`, rebuild the runtime with the feature on so
     // `js_webassembly_*` symbols are defined. Windows also rebuilds stdlib in
     // that Cargo invocation so its bundled runtime shares the same global
     // registries as the wasm-enabled runtime.
-    let (mut runtime, stdlib) = if ctx.needs_wasm_runtime || !ctx.native_addons.is_empty() {
+    let (mut runtime, stdlib) = if ctx.needs_wasm_runtime {
         match build_optional_runtime(ctx, target, format, verbose) {
             Some((runtime, stdlib)) => (Some(runtime), stdlib),
             None => (None, None),
@@ -79,7 +110,7 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     // identical Cargo.lock (`runtime_compat.rs`'s link-time guard exists
     // exactly for this), so a stdlib-only rebuild would leave the fresh
     // stdlib archive unlinkable against whatever `libperry_ext_http.a`
-    // `resolve_prebuilt_ext_libs` found on disk. A prior wasm/native-addon
+    // `resolve_prebuilt_ext_libs` found on disk. A prior wasm
     // rebuild above already producing a stdlib archive (Windows) takes
     // precedence; this only fills the common case where `stdlib` is `None`.
     let stdlib = stdlib.or_else(|| {
@@ -105,16 +136,7 @@ pub(crate) fn resolve_no_auto_optimized_libs(
         let built = build_http_client_pump_stdlib(&ext_crates, target, format, verbose)?;
         // Replace every wrapper `resolve_prebuilt_ext_libs` found with the one
         // just built in the same invocation.
-        let rebuilt_names: std::collections::BTreeSet<_> = built
-            .ext_libs
-            .iter()
-            .filter_map(|p| p.file_name().map(|n| n.to_owned()))
-            .collect();
-        well_known_libs.retain(|p| {
-            p.file_name()
-                .is_none_or(|name| !rebuilt_names.contains(name))
-        });
-        well_known_libs.extend(built.ext_libs);
+        replace_rebuilt_wrappers(&mut well_known_libs, built.ext_libs);
         if runtime.is_none() {
             runtime = Some(built.runtime);
         }
@@ -127,6 +149,15 @@ pub(crate) fn resolve_no_auto_optimized_libs(
         well_known_libs,
         ..OptimizedLibs::empty()
     }
+}
+
+fn replace_rebuilt_wrappers(prebuilt: &mut Vec<PathBuf>, rebuilt: Vec<PathBuf>) {
+    let names: std::collections::BTreeSet<_> = rebuilt
+        .iter()
+        .filter_map(|p| p.file_name().map(|name| name.to_owned()))
+        .collect();
+    prebuilt.retain(|p| p.file_name().is_none_or(|name| !names.contains(name)));
+    prebuilt.extend(rebuilt);
 }
 
 /// Workspace crate and archive filename of every well-known wrapper the
@@ -157,12 +188,12 @@ pub(super) fn linked_ext_crates(
     crates
 }
 
-/// Archives produced by [`build_http_client_pump_stdlib`], all from ONE cargo
+/// Archives produced by a coherent no-auto rebuild, all from ONE cargo
 /// invocation and therefore one perry-ffi and one perry-runtime.
-pub(super) struct CoherentPumpBuild {
+pub(super) struct CoherentLibraryBuild {
     pub(super) runtime: PathBuf,
     pub(super) stdlib: PathBuf,
-    /// `perry-ext-http` plus every other wrapper the program links.
+    /// Every rebuilt wrapper the program links.
     pub(super) ext_libs: Vec<PathBuf>,
 }
 
@@ -186,14 +217,27 @@ pub(super) fn build_http_client_pump_stdlib(
     target: Option<&str>,
     format: OutputFormat,
     verbose: u8,
-) -> Option<CoherentPumpBuild> {
+) -> Option<CoherentLibraryBuild> {
+    build_coherent_stdlib(ext_crates, target, format, verbose, true, &[])
+}
+
+/// Build the runtime, stdlib and every linked wrapper from one Cargo graph.
+/// Optional runtime features must reach the runtime bundled into ALL archives.
+fn build_coherent_stdlib(
+    ext_crates: &[(String, String)],
+    target: Option<&str>,
+    format: OutputFormat,
+    verbose: u8,
+    http_pump: bool,
+    runtime_features: &[&str],
+) -> Option<CoherentLibraryBuild> {
     let workspace_root = cargo_target_dir_path(find_perry_workspace_root()?);
     let stdlib_crate_dir = workspace_root.join("crates").join("perry-stdlib-static");
     let ext_http_crate_dir = workspace_root.join("crates").join("perry-ext-http");
-    if !stdlib_crate_dir.is_dir() || !ext_http_crate_dir.is_dir() {
+    if !stdlib_crate_dir.is_dir() || (http_pump && !ext_http_crate_dir.is_dir()) {
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!(
-                "  http-client-pump (no-auto): skipping rebuild — crate source not found at {} or {}",
+                "  no-auto libraries: skipping rebuild — crate source not found at {} or {}",
                 stdlib_crate_dir.display(),
                 ext_http_crate_dir.display()
             );
@@ -203,14 +247,18 @@ pub(super) fn build_http_client_pump_stdlib(
 
     if matches!(format, OutputFormat::Text) {
         println!(
-            "  http-client-pump (no-auto): rebuilding runtime + stdlib (external-http-client-pump) + perry-ext-http + every linked wrapper together"
+            "  no-auto libraries: rebuilding runtime + stdlib + every linked wrapper together"
         );
     }
 
     // Dedicated target dir so the prebuilt libperry_stdlib.a in
     // target/release is not overwritten. Cargo's incremental cache makes
     // repeat builds a no-op.
-    let relative_target_dir = PathBuf::from("target").join("perry-no-auto-http-pump");
+    let relative_target_dir = PathBuf::from("target").join(if runtime_features.is_empty() {
+        "perry-no-auto-http-pump"
+    } else {
+        "perry-optional-runtime"
+    });
     let pump_target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
     let cargo_target_dir = if cfg!(windows) {
         relative_target_dir
@@ -235,13 +283,19 @@ pub(super) fn build_http_client_pump_stdlib(
         .arg("-p")
         .arg("perry-runtime-static")
         .arg("-p")
-        .arg("perry-stdlib-static")
-        .arg("-p")
-        .arg("perry-ext-http")
-        .arg("--features")
-        .arg("perry-stdlib/external-http-client-pump");
+        .arg("perry-stdlib-static");
+    let mut features = runtime_features.to_vec();
+    if http_pump {
+        cargo_cmd.arg("-p").arg("perry-ext-http");
+        features.push("perry-stdlib/external-http-client-pump");
+    }
+    if !features.is_empty() {
+        cargo_cmd.arg("--features").arg(features.join(","));
+    }
     for (krate, _) in ext_crates {
-        if krate != "perry-ext-http" && workspace_root.join("crates").join(krate).is_dir() {
+        if (!http_pump || krate != "perry-ext-http")
+            && workspace_root.join("crates").join(krate).is_dir()
+        {
             cargo_cmd.arg("-p").arg(krate);
         }
     }
@@ -265,7 +319,7 @@ pub(super) fn build_http_client_pump_stdlib(
             None => {
                 if matches!(format, OutputFormat::Text) && verbose > 0 {
                     eprintln!(
-                        "  http-client-pump (no-auto): skipping rebuild — OHOS SDK not found (set OHOS_SDK_HOME)"
+                        "  no-auto libraries: skipping rebuild — OHOS SDK not found (set OHOS_SDK_HOME)"
                     );
                 }
                 return None;
@@ -277,15 +331,13 @@ pub(super) fn build_http_client_pump_stdlib(
         Ok(status) if status.success() => {}
         Ok(status) => {
             if matches!(format, OutputFormat::Text) {
-                eprintln!(
-                    "  http-client-pump (no-auto): cargo build for http-client-pump stdlib+ext-http failed ({status})"
-                );
+                eprintln!("  no-auto libraries: coherent library build failed ({status})");
             }
             return None;
         }
         Err(err) => {
             if matches!(format, OutputFormat::Text) {
-                eprintln!("  http-client-pump (no-auto): failed to spawn cargo ({err})");
+                eprintln!("  no-auto libraries: failed to spawn cargo ({err})");
             }
             return None;
         }
@@ -311,9 +363,15 @@ pub(super) fn build_http_client_pump_stdlib(
     let release_dir = release_dir.join("release");
     let runtime = release_dir.join(runtime_name);
     let stdlib = release_dir.join(stdlib_name);
-    let mut ext_libs = vec![release_dir.join(ext_http_name)];
+    let mut ext_libs = if http_pump {
+        vec![release_dir.join(ext_http_name)]
+    } else {
+        Vec::new()
+    };
     for (krate, filename) in ext_crates {
-        if krate != "perry-ext-http" && workspace_root.join("crates").join(krate).is_dir() {
+        if (!http_pump || krate != "perry-ext-http")
+            && workspace_root.join("crates").join(krate).is_dir()
+        {
             ext_libs.push(release_dir.join(filename));
         }
     }
@@ -324,14 +382,14 @@ pub(super) fn build_http_client_pump_stdlib(
         if !path.exists() {
             if matches!(format, OutputFormat::Text) && verbose > 0 {
                 eprintln!(
-                    "  http-client-pump (no-auto): cargo finished but {} was not produced",
+                    "  no-auto libraries: cargo finished but {} was not produced",
                     path.display()
                 );
             }
             return None;
         }
     }
-    Some(CoherentPumpBuild {
+    Some(CoherentLibraryBuild {
         runtime,
         stdlib,
         ext_libs,
@@ -739,3 +797,7 @@ pub(crate) fn build_missing_prebuilt_ext_lib(
     }
     None
 }
+
+#[cfg(all(test, unix))]
+#[path = "no_auto_addon_tests.rs"]
+mod addon_tests;
