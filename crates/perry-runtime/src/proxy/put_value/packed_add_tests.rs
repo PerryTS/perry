@@ -46,21 +46,6 @@ fn packed_add_refuse_bits_match_codegen() {
     assert_eq!(std::mem::offset_of!(crate::gc::GcHeader, _reserved), 2);
 }
 
-#[test]
-fn packed_add_meta_layout_matches_codegen() {
-    // perry-codegen META_FLAGS_OFFSET / META_ELEMENTS_OFFSET / META_REFUSE_FLAGS.
-    assert_eq!(std::mem::offset_of!(crate::object::ObjectMeta, flags), 24);
-    assert_eq!(
-        std::mem::offset_of!(crate::object::ObjectMeta, elements),
-        96
-    );
-    assert_eq!(
-        crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
-            | crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER,
-        0x60
-    );
-}
-
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)

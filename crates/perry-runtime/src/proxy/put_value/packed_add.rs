@@ -21,13 +21,12 @@
 //! The one input that is NOT a property of `S` is whether the prototype chain
 //! intercepts the write (an inherited setter, an inherited non-writable data
 //! property). That verdict is the inherited-access lane's
-//! (`object::chain_store`): every hop of the chain is MARKED as a prototype
-//! before the verdict is computed, so any later change that could flip it
-//! moves `proto_validity`, and a class-registry change moves `VTABLE_GEN`.
-//! The guard word records `proto_validity + VTABLE_GEN` read after the marking
-//! and before the predicate. Both counters only increase, so the sum is equal
-//! exactly when both are, and the emitted hit re-proves the verdict with two
-//! loads, an add and one compare. The prototype the verdict walked is the one
+//! (`object::chain_store`): every prototype hop AND every class id of the
+//! chain is MARKED before the verdict is computed, so any later change that
+//! could flip it moves the one global word `proto_validity`. The guard word
+//! records it, read after the marking and before the predicate, and the
+//! emitted hit re-proves the verdict with one load and one compare. Evaluating
+//! or registering a class moves nothing unless a verdict walked that class. The prototype the verdict walked is the one
 //! the receiver's SHAPE names, because the pre-shape compare is what admitted
 //! the receiver.
 //!
@@ -36,7 +35,10 @@
 //! (`perry-codegen/src/expr/put_value_store_ic.rs`, `emit_key_add_hit`.)
 //! The pre-shape compare proves GC kind, not forwarded, not frozen / sealed /
 //! non-extensible, the key absent, no own descriptor, the prototype, the
-//! object kind. It cannot prove per-object facts, which the hit reads:
+//! object kind, and that the receiver is neither a marked prototype nor an
+//! exotic read receiver (both marks move an object onto a private lineage,
+//! and the prime never learns one; a prototype's structural change must go
+//! through the stamp funnel, which moves the validity word). It cannot prove per-object facts, which the hit reads:
 //!
 //! * the receiver kind and the Array-subclass numeric proof, exactly as the
 //!   existing-key hit (`_reserved` and `class_id`);
@@ -46,10 +48,6 @@
 //!   placement ORs the bit in; see `write_barrier.rs`) and objects are only
 //!   ever born in the nursery or old space (`arena_alloc_gc`), so a clear bit
 //!   proves the receiver young and the note unnecessary;
-//! * no `ObjectMeta`, or one without `OBJECT_META_FLAG_IS_PROTOTYPE`,
-//!   `OBJECT_META_FLAG_EXOTIC_READ_RECEIVER` and an `elements` store: a
-//!   marked receiver's structural change must bump `proto_validity` (the
-//!   stamp funnel's other duty);
 //! * no stable tombstones and no descriptor flag (both conservative: the
 //!   shape already covers them);
 //! * the layout state: a `GC_LAYOUT_SIDE_MASK` or typed-layout receiver's
@@ -536,6 +534,21 @@ pub(crate) unsafe fn packed_add_prime(
         census(C_PRIME_UNVERIFIED);
         return;
     }
+    // A marked prototype or exotic read receiver is on a private shape lineage
+    // (`proto_validity::ensure_meta_for_mark`); never learn one of its shapes,
+    // so the emitted hit's pre-shape compare alone proves the receiver is
+    // neither. Its own structural changes must keep going through the stamp
+    // funnel, which moves the validity word for a prototype.
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && (*meta).flags
+            & (crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+                | crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
+            != 0
+    {
+        census(C_PRIME_UNVERIFIED);
+        return;
+    }
     // The chain verdict (object::chain_store's discipline): mark every hop,
     // read the generation, then ask the authoritative predicate. Both calls
     // can allocate, so receiver and key live in roots across them.
@@ -548,7 +561,6 @@ pub(crate) unsafe fn packed_add_prime(
         census(C_PRIME_INTERCEPTED);
         return;
     }
-    let generation = add_generation();
     let recv = (recv_h.get_nanbox_f64().to_bits() & POINTER_MASK) as usize;
     let class_id = (*(recv as *const crate::ObjectHeader)).class_id;
     let verdict_class = if crate::object::is_anon_shape_class_id(class_id) {
@@ -556,6 +568,11 @@ pub(crate) unsafe fn packed_add_prime(
     } else {
         class_id
     };
+    // The class side of the chain, marked like its prototype objects: an
+    // accessor registered for any of these classes from now on moves the
+    // generation this memo records.
+    crate::object::chain_store::mark_verdict_class_chain(verdict_class);
+    let generation = add_generation();
     if crate::object::class_instance_set_may_intercept(recv, verdict_class, key_h.get_nanbox_f64())
     {
         census(C_PRIME_INTERCEPTED);

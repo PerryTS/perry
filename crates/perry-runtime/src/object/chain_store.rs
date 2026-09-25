@@ -366,14 +366,21 @@ pub(crate) unsafe fn chain_store_proven(
         && entry.vtable_gen == crate::object::class_registry::vtable_generation()
 }
 
-/// `proto_validity + VTABLE_GEN`: the two words a chain verdict depends on,
-/// as one number. Both only grow, so the sum is unchanged exactly when both
-/// are. The key-add memo (`proxy::put_value::packed_add`) records it, and its
-/// emitted hit recomputes it from `PERRY_PROTO_VALIDITY` and `PERRY_VTABLE_GEN`.
+/// The one word a key-add memo's chain verdict is keyed on: `proto_validity`.
+/// It moves when a MARKED prototype object changes structurally or gains a
+/// descriptor, and when an instance accessor is registered for a class a
+/// verdict walked (`mark_verdict_class_chain`). The memo
+/// (`proxy::put_value::packed_add`) records it; its emitted hit reloads it
+/// from `PERRY_PROTO_VALIDITY`.
 #[inline]
 pub(crate) fn verdict_generation() -> u64 {
     crate::object::proto_validity::proto_validity()
-        .wrapping_add(crate::object::class_registry::vtable_generation())
+}
+
+/// Mark `class_id`'s class chain as walked by a verdict, before the verdict's
+/// generation is read (see `class_registry::mark_class_chain_for_verdicts`).
+pub(crate) fn mark_verdict_class_chain(class_id: u32) {
+    crate::object::class_registry::parent_static::mark_class_chain_for_verdicts(class_id);
 }
 
 /// Count a store the lane served.

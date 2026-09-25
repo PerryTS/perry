@@ -26,8 +26,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // gen.
 // ============================================================================
 
-/// Read by emitted code (the key-add hit) as `@PERRY_VTABLE_GEN`.
-#[export_name = "PERRY_VTABLE_GEN"]
 pub(crate) static VTABLE_GEN: AtomicU64 = AtomicU64::new(1);
 
 /// Current vtable generation — consumed by caches (method IC below, the

@@ -95,7 +95,7 @@
 //! No value is trusted from its static type: the only static skip is LLVM
 //! folding these tests for a constant.
 
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, PTR};
 
 use super::write_barrier::{
     emit_may_carry_heap_pointer_check, emit_parent_may_need_remembering_check,
@@ -153,14 +153,6 @@ pub(crate) const ADD_REFUSE_RESERVED: u32 = 0x0C80;
 /// describes, which `js_gc_key_add_layout_unknown` retires before the stamp
 /// (the transition lane's `mark_object_dynamic_shape_unknown`).
 pub(crate) const ADD_LAYOUT_RESERVED: u32 = 0x9000;
-
-/// `ObjectMeta` byte offsets of `flags` and `elements`, and the flags the hit
-/// refuses: `OBJECT_META_FLAG_IS_PROTOTYPE` (1 << 5) and
-/// `OBJECT_META_FLAG_EXOTIC_READ_RECEIVER` (1 << 6). Pinned by the runtime's
-/// `packed_add_meta_layout_matches_codegen`.
-pub(crate) const META_FLAGS_OFFSET: u64 = 24;
-pub(crate) const META_ELEMENTS_OFFSET: u64 = 96;
-pub(crate) const META_REFUSE_FLAGS: u64 = 0x60;
 
 /// The mask over the GcHeader's first 32-bit word (`obj_type | gc_flags << 8
 /// | _reserved << 16`, little-endian) whose zero admits a key-add receiver.
@@ -441,13 +433,11 @@ fn emit_key_add_hit(
     let layout_idx = ctx.new_block(&format!("{ADD_STEM}.layout"));
     let forget_idx = ctx.new_block(&format!("{ADD_STEM}.layout.forget"));
     let obj_idx = ctx.new_block(&format!("{ADD_STEM}.object"));
-    let meta_idx = ctx.new_block(&format!("{ADD_STEM}.meta"));
     let class_idx = ctx.new_block(&format!("{ADD_STEM}.class"));
     let classless_idx = ctx.new_block(&format!("{ADD_STEM}.classless"));
     let store_idx = ctx.new_block(&format!("{ADD_STEM}.hit.store"));
     let gen_label = ctx.block_label(gen_idx);
     let obj_label = ctx.block_label(obj_idx);
-    let meta_label = ctx.block_label(meta_idx);
     let class_label = ctx.block_label(class_idx);
     let classless_label = ctx.block_label(classless_idx);
     let store_label = ctx.block_label(store_idx);
@@ -464,20 +454,15 @@ fn emit_key_add_hit(
     let pre_eq = ctx.block().icmp_eq(I32, sid, &pre);
     ctx.block().cond_br(&pre_eq, &gen_label, miss_label);
 
-    // The chain verdict's generation: both counters only grow, so their sum
-    // equals the recorded one exactly when each does.
+    // The chain verdict's generation: the one global prototype-validity word.
     ctx.current_block = gen_idx;
     let guard_ptr = ctx
         .block()
         .gep(I64, packed_ref, &[(I64, &ADD_GUARD_WORD.to_string())]);
     let guard = ctx.block().load_atomic_monotonic(I64, &guard_ptr, 8);
-    let validity = ctx
+    let now = ctx
         .block()
         .load_atomic_monotonic(I64, "@PERRY_PROTO_VALIDITY", 8);
-    let vtable_gen = ctx
-        .block()
-        .load_atomic_monotonic(I64, "@PERRY_VTABLE_GEN", 8);
-    let now = ctx.block().add(I64, &validity, &vtable_gen);
     let recorded = ctx.block().lshr(I64, &guard, &ADD_SLOT_BITS.to_string());
     let gen_eq = ctx.block().icmp_eq(I64, &now, &recorded);
     ctx.block().cond_br(&gen_eq, &obj_label, miss_label);
@@ -491,37 +476,7 @@ fn emit_key_add_hit(
         .block()
         .and(I32, &hdr, &add_header_refuse_mask().to_string());
     let hdr_ok = ctx.block().icmp_eq(I32, &refused, "0");
-    ctx.block().cond_br(&hdr_ok, &meta_label, miss_label);
-
-    // Per-object metadata, when there is any (an ES5 `new F` instance
-    // records its prototype there): not a marked prototype (whose structural
-    // change must bump PROTO_VALIDITY), not an exotic read receiver, no
-    // elements store. A spill buffer does not matter: the slot is inline.
-    ctx.current_block = meta_idx;
-    let meta_off =
-        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
-    let meta_addr = ctx.block().add(I64, handle, &meta_off);
-    let meta_ptr = ctx.block().inttoptr(I64, &meta_addr);
-    let meta = ctx.block().load(PTR, &meta_ptr);
-    let no_meta = ctx.block().icmp_eq(PTR, &meta, "null");
-    let meta_chk_idx = ctx.new_block(&format!("{ADD_STEM}.meta.record"));
-    let meta_chk_label = ctx.block_label(meta_chk_idx);
-    ctx.block().cond_br(&no_meta, &class_label, &meta_chk_label);
-
-    ctx.current_block = meta_chk_idx;
-    let flags_ptr = ctx
-        .block()
-        .gep(I8, &meta, &[(I64, &META_FLAGS_OFFSET.to_string())]);
-    let flags = ctx.block().load(I64, &flags_ptr);
-    let refused = ctx.block().and(I64, &flags, &META_REFUSE_FLAGS.to_string());
-    let flags_ok = ctx.block().icmp_eq(I64, &refused, "0");
-    let elements_ptr = ctx
-        .block()
-        .gep(I8, &meta, &[(I64, &META_ELEMENTS_OFFSET.to_string())]);
-    let elements = ctx.block().load(I64, &elements_ptr);
-    let no_elements = ctx.block().icmp_eq(I64, &elements, "0");
-    let meta_ok = ctx.block().and(I1, &flags_ok, &no_elements);
-    ctx.block().cond_br(&meta_ok, &class_label, miss_label);
+    ctx.block().cond_br(&hdr_ok, &class_label, miss_label);
 
     // The receiver-kind admission, as the existing-key hit.
     ctx.current_block = class_idx;

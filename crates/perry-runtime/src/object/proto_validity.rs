@@ -107,7 +107,7 @@ per_test_global! {
     /// happened". Starts at 1 so a zeroed cache entry never matches.
     /// Read by emitted code (the key-add hit, `perry-codegen`'s
     /// `put_value_store_ic.rs`) as `@PERRY_PROTO_VALIDITY`.
-    #[export_name = "PERRY_PROTO_VALIDITY"]
+    #[cfg_attr(not(test), export_name = "PERRY_PROTO_VALIDITY")]
     static PROTO_VALIDITY: AtomicU64 = AtomicU64::new(1);
 }
 
@@ -168,7 +168,7 @@ pub(crate) fn any_prototype_marked() -> bool {
 /// re-reading through a pointer the allocation may have moved.
 #[inline]
 pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
-    if let Some(meta) = ensure_meta_for_mark(obj) {
+    if let Some(meta) = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE) {
         ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit in the meta
         // record's flags word, never a heap reference.
@@ -202,7 +202,9 @@ pub(crate) const NULL_PROTOTYPE_SERIAL: u64 = u64::MAX;
 /// # Safety
 /// As [`mark_object_as_prototype`]: allocates, and may move the owner.
 pub(crate) unsafe fn mark_exotic_read_receiver(obj: usize) {
-    if let Some(meta) = ensure_meta_for_mark(obj) {
+    if let Some(meta) =
+        ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
+    {
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
         (*meta).flags |= crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER;
     }
@@ -229,10 +231,22 @@ pub(crate) unsafe fn object_is_exotic_read_receiver(obj: usize) -> bool {
 /// its reader then answers `false` for an object the writer marked. The
 /// complete map is on `gc::OBJ_FLAG_RESERVED_BIT_MAP_SEE_DOC`.
 ///
+/// A receiver that does not yet carry `flag` first moves onto a PRIVATE shape
+/// lineage (`transition_object_shape_semantics`: a counter-unique semantic
+/// generation, which every later append, delete and descriptor transition
+/// inherits). "This object is a prototype" and "this object's reads are not
+/// answered by its shape" are thereby facts of its SHAPE: no ShapeId a marked
+/// object carries is ever carried by an unmarked one, so a shape-keyed site
+/// memo primed on an unmarked receiver can never match a marked one, and one
+/// that refuses to prime on a marked receiver never learns a marked shape.
+/// The transition runs BEFORE the flag is set, so the stamp funnel does not
+/// count it as a structural change of a marked prototype: nothing recorded a
+/// verdict through this object yet, so no validity word needs to move.
+///
 /// # Safety
 /// `obj` is a live heap address, or 0. This ALLOCATES and may move the owner,
 /// so callers must not be holding bare pointers across it.
-unsafe fn ensure_meta_for_mark(obj: usize) -> Option<*mut crate::object::ObjectMeta> {
+unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::object::ObjectMeta> {
     if obj == 0 || !crate::value::addr_class::is_plausible_heap_addr(obj) {
         return None;
     }
@@ -246,10 +260,16 @@ unsafe fn ensure_meta_for_mark(obj: usize) -> Option<*mut crate::object::ObjectM
     let (meta, _obj) = handle
         .across_mut::<crate::object::ObjectHeader, _>(|| crate::object::object_meta_ensure(object));
     if meta.is_null() {
-        None
-    } else {
-        Some(meta)
+        return None;
     }
+    if (*meta).flags & flag == 0 {
+        handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+            let current = handle.get_raw_mut_ptr::<crate::object::ObjectHeader>();
+            crate::object::shapes::transition_object_shape_semantics(current)
+        });
+    }
+    // The meta record is owned by the object and does not move with it.
+    Some((*handle.get_raw_mut_ptr::<crate::object::ObjectHeader>()).meta)
 }
 
 /// # Safety
