@@ -570,20 +570,31 @@ fn emit_key_add_hit(
     let slot = ctx.block().and(I64, &guard, &ADD_SLOT_MASK.to_string());
     // The transition lane's fix-up: a POINTER-tagged null is stored as
     // `undefined` (`fast_paths.rs`).
-    let raw_bits = ctx.block().bitcast_double_to_i64(value_double);
-    let null_ptr = ctx.block().icmp_eq(
-        I64,
-        &raw_bits,
-        &(crate::nanbox::POINTER_TAG as i64).to_string(),
-    );
-    let fixed_bits = ctx.block().select(
-        I1,
-        &null_ptr,
-        I64,
-        crate::nanbox::TAG_UNDEFINED_I64,
-        &raw_bits,
-    );
-    let fixed = ctx.block().bitcast_i64_to_double(&fixed_bits);
+    // An SSA constant is fixed up (or not) here, so the bookkeeping below
+    // still recognises it and emits no guard for a constant plain double.
+    let constant = constant_double_bits(value_double).or_else(|| constant_i64_bits(value_bits));
+    let fixed = match constant {
+        Some(bits) if bits == crate::nanbox::POINTER_TAG => ctx
+            .block()
+            .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64),
+        Some(_) => value_double.to_string(),
+        None => {
+            let raw_bits = ctx.block().bitcast_double_to_i64(value_double);
+            let null_ptr = ctx.block().icmp_eq(
+                I64,
+                &raw_bits,
+                &(crate::nanbox::POINTER_TAG as i64).to_string(),
+            );
+            let fixed_bits = ctx.block().select(
+                I1,
+                &null_ptr,
+                I64,
+                crate::nanbox::TAG_UNDEFINED_I64,
+                &raw_bits,
+            );
+            ctx.block().bitcast_i64_to_double(&fixed_bits)
+        }
+    };
     let header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
     let fields = ctx.block().add(I64, handle, &header_size);
     let fields_ptr = ctx.block().inttoptr(I64, &fields);

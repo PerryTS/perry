@@ -239,25 +239,26 @@ pub(super) fn ir() -> String {
 /// #8690: pointer-free tagged writes (SSO and booleans) skip the shared
 /// value-is-pointer bookkeeping arm. The receiver precheck must therefore
 /// reject the packed-numeric authority bit before entering the inline store.
+///
+/// The bit is a per-object fact no ShapeId carries, so the write guard tests
+/// it in the `_reserved` half-word after its ShapeId compare. `OBJ_FLAG_FROZEN`
+/// is NOT tested any more: integrity changes mint a fresh semantic generation,
+/// so a receiver still carrying the class ShapeId is not frozen
+/// (`test_gap_keyadd_store_ic`'s frozen scenario holds that at run time).
 #[test]
 fn class_field_set_precheck_blocks_packed_numeric_proof_receivers() {
     let ir = ir();
-    // The precheck masks the GcHeader's first 32 bits in ONE compare, so the
-    // `_reserved` bits it demands are `bit << 16` of that constant.
-    const PACKED_NUMERIC_PROOF: u64 = 0x80 << 16;
-    const FROZEN: u64 = 0x01 << 16;
+    const PACKED_NUMERIC_PROOF: u64 = 0x80;
     let masks: Vec<u64> = ir
         .lines()
-        .filter_map(|line| line.split_once("= and i32 "))
+        .filter_map(|line| line.split_once("= and i16 "))
         .filter_map(|(_, rest)| rest.rsplit_once(", "))
         .filter_map(|(_, constant)| constant.trim().parse::<u64>().ok())
         .collect();
     assert!(
-        masks
-            .iter()
-            .any(|mask| mask & PACKED_NUMERIC_PROOF != 0 && mask & FROZEN != 0),
-        "class-field set admission must mask OBJ_FLAG_PACKED_NUMERIC_PROOF (0x80) and \
-         OBJ_FLAG_FROZEN (0x01) out of the header word\n{ir}"
+        masks.iter().any(|mask| mask & PACKED_NUMERIC_PROOF != 0),
+        "class-field set admission must test OBJ_FLAG_PACKED_NUMERIC_PROOF (0x80) in \
+         the receiver's _reserved half-word\n{ir}"
     );
 }
 

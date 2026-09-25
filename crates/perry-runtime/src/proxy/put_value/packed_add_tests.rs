@@ -92,7 +92,12 @@ fn leaked_site() -> &'static PackedSetSite {
     Box::leak(Box::new(PackedSetSite::empty()))
 }
 
-fn miss(site: &'static PackedSetSite, target: f64, key: *const crate::StringHeader, value: f64) -> f64 {
+fn miss(
+    site: &'static PackedSetSite,
+    target: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> f64 {
     let mut cache_slot: super::super::packed_set::PackedSetWaysSlot = std::ptr::null_mut();
     js_put_value_set_packed_miss(target, key, value, 0, &mut cache_slot, &site.set)
 }
@@ -114,10 +119,21 @@ fn a_key_add_publishes_a_memo_that_serves_the_next_receiver() {
     let shapes = site.add_shapes.load(Ordering::Relaxed);
     assert_eq!((shapes as u32, (shapes >> 32) as u32), (pre, post));
     assert_eq!(site.add_guard.load(Ordering::Relaxed) & ADD_SLOT_MASK, 1);
-    assert_eq!(site.add_guard.load(Ordering::Relaxed) >> ADD_SLOT_BITS, add_generation());
+    assert_eq!(
+        site.add_guard.load(Ordering::Relaxed) >> ADD_SLOT_BITS,
+        add_generation()
+    );
     let served = unsafe { packed_add_try(site, second, 6.0) };
-    assert_eq!(served, Some(6.0), "the memo must serve a receiver of its pre-shape");
-    assert_eq!(stamp(second), post, "the served add lands on the memo's successor");
+    assert_eq!(
+        served,
+        Some(6.0),
+        "the memo must serve a receiver of its pre-shape"
+    );
+    assert_eq!(
+        stamp(second),
+        post,
+        "the served add lands on the memo's successor"
+    );
 }
 
 /// Any move of either verdict word refuses the memo: an inherited setter or
@@ -153,7 +169,13 @@ fn a_published_memo_owns_both_shapes_across_a_full_trace() {
             .cache_carrier
     };
     crate::object::shapes::clear_all_cache_carriers();
-    assert!(!carrier(post), "the clear must reset the bit this test asserts");
+    assert!(
+        !carrier(post),
+        "the clear must reset the bit this test asserts"
+    );
     note_packed_add_carriers();
-    assert!(carrier(pre) && carrier(post), "a published memo must own its pre- and post-shape");
+    assert!(
+        carrier(pre) && carrier(post),
+        "a published memo must own its pre- and post-shape"
+    );
 }
