@@ -141,21 +141,18 @@ pub extern "C" fn perry_system_get_app_icon(_path: i64) -> i64 {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_color(handle: f64, r: f64, g: f64, b: f64, a: f64) {
-    let h = widgets::decode_js_handle_f64(handle);
-    widgets::text::set_color(h, r, g, b, a);
+pub extern "C" fn perry_ui_text_set_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::text::set_color(handle, r, g, b, a);
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_font_size(handle: f64, size: f64) {
-    let h = widgets::decode_js_handle_f64(handle);
-    widgets::text::set_font_size(h, size);
+pub extern "C" fn perry_ui_text_set_font_size(handle: i64, size: f64) {
+    widgets::text::set_font_size(handle, size);
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_font_weight(handle: f64, size: f64, weight: f64) {
-    let h = widgets::decode_js_handle_f64(handle);
-    widgets::text::set_font_weight(h, size, weight);
+pub extern "C" fn perry_ui_text_set_font_weight(handle: i64, size: f64, weight: f64) {
+    widgets::text::set_font_weight(handle, size, weight);
 }
 
 #[no_mangle]
@@ -194,9 +191,8 @@ pub extern "C" fn perry_ui_text_set_text_alignment(handle: i64, alignment: i64) 
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_bordered(handle: f64, bordered: f64) {
-    let h = widgets::decode_js_handle_f64(handle);
-    widgets::button::set_bordered(h, bordered != 0.0);
+pub extern "C" fn perry_ui_button_set_bordered(handle: i64, bordered: f64) {
+    widgets::button::set_bordered(handle, bordered != 0.0);
 }
 
 #[no_mangle]
@@ -245,7 +241,7 @@ pub extern "C" fn perry_ui_scrollview_set_offset(scroll_handle: i64, offset: f64
 
 // macOS Text spacing setters are harmless on this platform.
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_letter_spacing(_handle: f64, _points: f64) {}
+pub extern "C" fn perry_ui_text_set_letter_spacing(_handle: i64, _points: f64) {}
 
 #[no_mangle]
-pub extern "C" fn perry_ui_text_set_line_height(_handle: f64, _multiple: f64) {}
+pub extern "C" fn perry_ui_text_set_line_height(_handle: i64, _multiple: f64) {}

@@ -35,10 +35,9 @@ pub extern "C" fn perry_ui_tabbar_set_selected(tabbar_handle: i64, index: i64) {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_button_set_text_color(handle: f64, r: f64, g: f64, b: f64, a: f64) {
+pub extern "C" fn perry_ui_button_set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     catch_panic_void("perry_ui_button_set_text_color", || {
-        let h = widgets::decode_js_handle_f64(handle);
-        widgets::button::set_text_color(h, r, g, b, a)
+        widgets::button::set_text_color(handle, r, g, b, a)
     });
 }
 
@@ -100,18 +99,16 @@ pub extern "C" fn perry_ui_widget_set_hugging(handle: i64, priority: f64) {
 // =============================================================================
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_width(handle: f64, width: f64) {
+pub extern "C" fn perry_ui_widget_set_width(handle: i64, width: f64) {
     catch_panic_void("perry_ui_widget_set_width", || {
-        let h = widgets::decode_js_handle_f64(handle);
-        widgets::set_width(h, width)
+        widgets::set_width(handle, width)
     });
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_height(handle: f64, height: f64) {
+pub extern "C" fn perry_ui_widget_set_height(handle: i64, height: f64) {
     catch_panic_void("perry_ui_widget_set_height", || {
-        let h = widgets::decode_js_handle_f64(handle);
-        widgets::set_height(h, height)
+        widgets::set_height(handle, height)
     });
 }
 
