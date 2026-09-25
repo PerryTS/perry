@@ -71,6 +71,7 @@ mod native_module_spread_tests;
 mod nested_namespace;
 mod object_static;
 mod os;
+mod patched_builtin_call;
 mod post_args_dispatch;
 mod prescans;
 mod reflect_args;
@@ -318,11 +319,18 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         return Ok(expr);
     }
 
-    let mut args = call
+    let args = call
         .args
         .iter()
         .map(|arg| lower_expr(ctx, &arg.expr))
         .collect::<Result<Vec<_>>>()?;
+
+    // #10848: a built-in member the program replaces anywhere must not bind
+    // to its intrinsic — call whatever the property holds at runtime.
+    let mut args = match patched_builtin_call::try_patched_builtin_call(ctx, call, args)? {
+        Ok(expr) => return Ok(expr),
+        Err(args) => args,
+    };
 
     if !has_spread {
         if let ast::Callee::Expr(callee_expr) = &call.callee {

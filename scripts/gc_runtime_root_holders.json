@@ -907,6 +907,12 @@
       "why": "#9754 remembered set: `YoungLog<u32>` = two `Vec<u32>` (live + recycled spare) holding transition-cache SLOT INDICES whose `key_ptr`/`next_keys` a minor may act on. Indices, not addresses \u2014 a `u32` cannot hold a 48-bit pointer. The pointer-bearing entries they index are visited by `scan_transition_cache_roots_mut`, which is registered."
     },
     {
+      "file": "crates/perry-runtime/src/object/native_call_method/namespace_override.rs",
+      "name": "RUNNING",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10848 reentrancy guard: a CatchStack of owned (module, method) name `String` pairs marking which native-namespace user overrides are executing on this thread (truncated by the catch savepoint on a throw). Rust-owned strings only \u2014 the override closure and the namespace it runs on are rooted in the caller's RuntimeHandleScope."
+    },
+    {
       "file": "crates/perry-runtime/src/object/native_get.rs",
       "name": "FORCE_SLOW",
       "verdict": "test_only",

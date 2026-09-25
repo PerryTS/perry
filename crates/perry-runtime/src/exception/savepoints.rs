@@ -38,6 +38,7 @@ pub(crate) mod catch_subsystem {
     pub(crate) const REGEX_FACTORY: u32 = 1 << 9;
     #[cfg(feature = "dyn-eval")]
     pub(crate) const DYN_EVAL: u32 = 1 << 10;
+    pub(crate) const NAMESPACE_OVERRIDE: u32 = 1 << 11;
 }
 
 static CATCH_SUBSYSTEMS_USED: AtomicU32 = AtomicU32::new(0);
@@ -240,6 +241,13 @@ catch_savepoints! {
     capture: crate::object::private_member_access_hints_savepoint,
     restore: crate::object::private_member_access_hints_restore,
     latch: catch_subsystem::PRIVATE_MEMBER_ACCESS_HINTS, idle: 0;
+    // #10848: a throwing native-namespace override (`console.warn = () =>
+    // { throw … }`) must not leave its pair marked running, or the override
+    // is bypassed for the rest of the thread.
+    namespace_override: usize,
+    capture: crate::object::namespace_override_stack_savepoint,
+    restore: crate::object::namespace_override_stack_restore,
+    latch: catch_subsystem::NAMESPACE_OVERRIDE, idle: 0;
     #[cfg(feature = "regex-engine")]
     regex_factory: usize,
     capture: crate::regex::site_test::active_factory_stack_savepoint,

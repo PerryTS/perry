@@ -136,6 +136,10 @@ pub(super) fn private_member_access_hints(marker: u32) {
     crate::object::test_push_catch_private_hint(marker);
 }
 
+pub(super) fn namespace_override(marker: u32) {
+    crate::object::test_push_catch_namespace_override(marker);
+}
+
 #[cfg(feature = "regex-engine")]
 pub(super) fn regex_factory(marker: u32) {
     crate::regex::site_test::test_enter_catch_factory(marker);

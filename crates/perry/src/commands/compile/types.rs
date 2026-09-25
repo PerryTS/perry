@@ -958,6 +958,17 @@ pub struct CompilationContext {
     /// type is unknown and the `SetValues`/`MapEntries` wrap is skipped at
     /// `lower_decl.rs:3737-3747`. See ECS demo-simple repro / #412.
     pub cross_module_class_field_types: HashMap<String, Vec<(String, perry_hir::types::Type)>>,
+    /// #10848: program-wide union of built-in members the program replaces
+    /// (`console.log = f`, `Object.defineProperty(Math, "max", …)`, …),
+    /// scanned from each module's AST before it is lowered and installed on
+    /// the lowering thread, so direct calls to a patched member lower as
+    /// dynamic calls instead of binding the intrinsic.
+    pub patched_builtins: perry_hir::PatchedBuiltins,
+    /// #10848: modules lowered so far in the current walk.
+    pub patched_builtins_lowered_modules: usize,
+    /// #10848: a module scanned AFTER others were already lowered added a
+    /// patch they could not see, so the walk must be re-run with the final set.
+    pub patched_builtins_grew_after_lower: bool,
     /// Cross-module class accessor names collected alongside field types.
     /// HIR lowering uses this to avoid inferring subclass `this.x = ...`
     /// constructor writes as data fields when `x` is an inherited accessor
@@ -1315,6 +1326,9 @@ impl CompilationContext {
             uses_get_builtin_module: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
+            patched_builtins: Default::default(),
+            patched_builtins_lowered_modules: 0,
+            patched_builtins_grew_after_lower: false,
             cross_module_class_accessors: HashMap::new(),
             min_windows_version: "10".to_string(),
             windows_subsystem: "auto".to_string(),

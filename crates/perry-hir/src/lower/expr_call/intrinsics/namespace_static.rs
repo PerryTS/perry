@@ -194,6 +194,11 @@ fn match_namespace_static_member(
     if !is_known_namespace_static_function(ns, name) {
         return None;
     }
+    // #10848: a replaced static must be invoked through its property value,
+    // not rewritten into the intrinsic direct call.
+    if crate::patched_builtins::namespace_member_patched(ns, name) {
+        return None;
+    }
     // #4521: the Promise combinators read the `this` constructor
     // (`NewPromiseCapability(this)` / `GetPromiseResolve(this)`), so
     // `Promise.all.call(C, …)` / `.apply` / `.bind` must NOT drop the

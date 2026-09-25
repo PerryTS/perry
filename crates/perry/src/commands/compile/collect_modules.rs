@@ -687,6 +687,19 @@ fn collect_module_one(
     let solid_module = solid_runtime
         .as_deref()
         .and_then(|runtime| perry_hir::solid_jsx::lower_solid_jsx(ast_module, runtime));
+    // #10848: fold this module's built-in member writes into the program-wide
+    // set before lowering it. A patch first seen after other modules were
+    // already lowered forces a re-walk (`rerun_collect_with_class_field_types`)
+    // so those modules' direct calls see it too.
+    let patched_before = ctx.patched_builtins.len();
+    perry_hir::scan_patched_builtins(
+        solid_module.as_ref().unwrap_or(ast_module),
+        &mut ctx.patched_builtins,
+    );
+    if ctx.patched_builtins.len() != patched_before && ctx.patched_builtins_lowered_modules > 0 {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
+    perry_hir::set_patched_builtins(std::sync::Arc::new(ctx.patched_builtins.clone()));
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
         solid_module.as_ref().unwrap_or(ast_module),
         &module_name,
@@ -707,6 +720,8 @@ fn collect_module_one(
         collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
         ..Default::default()
     });
+    ctx.patched_builtins_lowered_modules += 1;
+    perry_hir::clear_patched_builtins();
     perry_hir::clear_compile_packages_override();
     perry_hir::clear_current_module_source();
     perry_hir::clear_precompile_state();

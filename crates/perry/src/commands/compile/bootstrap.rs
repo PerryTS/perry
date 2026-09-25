@@ -201,9 +201,19 @@ pub(super) fn rerun_collect_with_class_field_types(
             changed |= entry.extend_from(&parent_accessors);
         }
     }
-    if field_map.is_empty() && accessor_map.is_empty() && !ctx.solid_client_recollect {
+    // #10848: re-walk when a built-in patch surfaced only after other modules
+    // were lowered. The set is kept (it is already the program-wide union), so
+    // the re-walk lowers every module against the final set and cannot grow it.
+    let patched_builtins_rerun = ctx.patched_builtins_grew_after_lower;
+    if field_map.is_empty()
+        && accessor_map.is_empty()
+        && !ctx.solid_client_recollect
+        && !patched_builtins_rerun
+    {
         return Ok(());
     }
+    ctx.patched_builtins_grew_after_lower = false;
+    ctx.patched_builtins_lowered_modules = 0;
     if ctx.solid_client_recollect {
         ctx.resolve_cache.clear();
         ctx.solid_client_recollect = false;

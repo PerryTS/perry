@@ -13,6 +13,7 @@ mod collection_methods;
 mod common_methods;
 mod disposal;
 mod handle_methods;
+mod namespace_override;
 mod object_proto;
 mod primitive_methods;
 mod proto_dispatch;
@@ -36,6 +37,11 @@ use bare_receiver::{
 };
 use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
+};
+#[cfg(test)]
+pub(crate) use namespace_override::test_push_catch_namespace_override;
+pub(crate) use namespace_override::{
+    namespace_override_stack_restore, namespace_override_stack_savepoint,
 };
 pub use object_proto::js_value_to_locale_string;
 pub(crate) use object_proto::{
@@ -1436,6 +1442,25 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             && crate::object::is_valid_obj_ptr(ns_ptr as *const u8)
             && (*ns_ptr).class_id == crate::object::native_module::NATIVE_MODULE_CLASS_ID
         {
+            // #10848: a method the program REPLACED on the namespace
+            // (`console.error = f`, `console[m] = f`) wins over the native
+            // implementation — every read of `console.error` already sees it
+            // (`native_namespace_user_value` consults both stores a user write
+            // can land in); the call must too.
+            if let Some(module) = crate::object::native_module::read_native_module_name(ns_ptr) {
+                if let Some(result) = namespace_override::call_native_namespace_override(
+                    &root_scope,
+                    object(),
+                    module,
+                    method_name,
+                    &refreshed_args(),
+                ) {
+                    return result;
+                }
+            }
+            // Re-read: the override probe above can allocate (and so move the
+            // namespace object).
+            let ns_ptr = jsval().as_pointer::<ObjectHeader>();
             let ns_args = refreshed_args();
             return crate::object::dispatch_native_module_method(
                 ns_ptr as *const ObjectHeader,
