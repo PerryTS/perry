@@ -720,6 +720,7 @@ def self_test() -> int:
 
     ok = _self_test_empty_ref_dispatch() and ok
     ok = _self_test_no_raise_vs() and ok
+    ok = _self_test_check_diagnostics() and ok
 
     if ok:
         print(
@@ -810,6 +811,64 @@ def _self_test_no_raise_vs() -> bool:
     return ok
 
 
+def _self_test_check_diagnostics() -> bool:
+    """Drive --check with simultaneous violations, plus passing controls (#10373)."""
+    import contextlib
+    import io
+    import tempfile
+
+    recorded = {"grown.rs": 1, "stable.rs": 1, "stale-a.rs": 1, "stale-b.rs": 1}
+    stale = [
+        f"STALE BASELINE: {name} has no findings; run --update-baseline"
+        for name in ("stale-a.rs", "stale-b.rs")
+    ]
+    per_file = [
+        "REGRESSION: grown.rs: 2 findings exceeds per-file ceiling 1",
+        "REGRESSION: new.rs: 1 findings exceeds per-file ceiling 0",
+    ]
+    cases = (
+        ("total and files", recorded, {"grown.rs": 2, "new.rs": 1, "stable.rs": 2}, [
+            "REGRESSION: 5 findings exceeds baseline 4",
+            *per_file,
+            "REGRESSION: stable.rs: 2 findings exceeds per-file ceiling 1",
+            *stale,
+        ]),
+        ("files without total", recorded, {"grown.rs": 2, "new.rs": 1, "stable.rs": 1}, [*per_file, *stale]),
+        ("stale only", recorded, {"grown.rs": 1, "stable.rs": 1}, stale),
+        ("unchanged", recorded, recorded, []),
+        ("improved", {"grown.rs": 3, "stable.rs": 1}, {"grown.rs": 1, "stable.rs": 1}, []),
+    )
+    scope = globals()
+    saved = {name: scope[name] for name in ("collect", "BASELINE")}
+    saved_argv = sys.argv
+    ok = True
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            baseline = Path(tmp) / "baseline.json"
+            scope["BASELINE"] = baseline
+            sys.argv = ["unrooted_local_shape.py", "--check"]
+            for label, ceilings, measured, expected in cases:
+                baseline.write_text(json.dumps({
+                    "schema_version": BASELINE_SCHEMA,
+                    "total": sum(ceilings.values()),
+                    "per_file": ceilings,
+                }), encoding="utf-8")
+                scope["collect"] = lambda: {name: [None] * count for name, count in measured.items()}
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    status = main()
+                if (status != int(bool(expected))
+                        or err.getvalue().splitlines() != expected
+                        or ("OK" in out.getvalue().splitlines()) != (not expected)
+                        or ("improved:" in out.getvalue()) != (label == "improved")):
+                    print(f"SELF-TEST FAIL: --check {label}: exit={status}, diagnostics={err.getvalue()!r}", file=sys.stderr)
+                    ok = False
+    finally:
+        scope.update(saved)
+        sys.argv = saved_argv
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true", help="fail if the count exceeds the baseline")
@@ -871,9 +930,12 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        # Report every actionable violation together: a total regression
+        # must not hide new files or per-file increases (#10373).
+        failed = False
         if total > base["total"]:
             print(f"REGRESSION: {total} findings exceeds baseline {base['total']}", file=sys.stderr)
-            return 1
+            failed = True
         actual_per_file = {path: len(hits) for path, hits in results.items()}
         for path, count in sorted(actual_per_file.items()):
             ceiling = int(base["per_file"].get(path, 0))
@@ -882,13 +944,15 @@ def main() -> int:
                     f"REGRESSION: {path}: {count} findings exceeds per-file ceiling {ceiling}",
                     file=sys.stderr,
                 )
-                return 1
+                failed = True
         stale = sorted(set(base["per_file"]) - set(actual_per_file))
-        if stale:
+        for path in stale:
             print(
-                f"STALE BASELINE: {stale[0]} has no findings; run --update-baseline",
+                f"STALE BASELINE: {path} has no findings; run --update-baseline",
                 file=sys.stderr,
             )
+            failed = True
+        if failed:
             return 1
         if total < base["total"]:
             print(f"improved: {total} < baseline {base['total']} -- run --update-baseline to ratchet")
