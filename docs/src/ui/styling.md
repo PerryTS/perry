@@ -255,11 +255,7 @@ Each setter takes the widget, four light RGBA components, then four dark RGBA
 components (all in `[0, 1]`):
 
 ```typescript
-import { Text, textSetDynamicColor, widgetSetDynamicBackgroundColor } from "perry/ui";
-
-const label = Text("Appearance-aware brand colors");
-textSetDynamicColor(label, 0.1, 0.2, 0.5, 1, 0.7, 0.8, 1, 1);
-widgetSetDynamicBackgroundColor(label, 0.95, 0.95, 1, 1, 0.08, 0.08, 0.15, 1);
+{{#include ../../examples/ui/styling/appearance_colors.ts}}
 ```
 
 `widgetSetDynamicBorderColor` and `buttonSetDynamicContentTintColor` accept the
